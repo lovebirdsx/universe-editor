@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Button } from '@acme/ui'
-import { formatMoney, cn } from '@acme/shared'
+import { Button } from '@universe-editor/ui'
+import { formatMoney, cn } from '@universe-editor/shared'
 
 const PRODUCTS = [
   { id: 1, name: 'Widget Pro', price: 49.99 },

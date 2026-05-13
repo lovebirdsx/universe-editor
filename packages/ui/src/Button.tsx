@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { cn } from '@acme/shared'
+import { cn } from '@universe-editor/shared'
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: 'primary' | 'secondary' | 'ghost'

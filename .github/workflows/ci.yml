@@ -10,6 +10,8 @@ jobs:
   ci:
     name: Lint / Typecheck / Test / Build
     runs-on: ubuntu-latest
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
     steps:
       - uses: actions/checkout@v4

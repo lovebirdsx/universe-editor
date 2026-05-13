@@ -1,5 +1,5 @@
 {
-  "name": "@universe-editor/ui",
+  "name": "@universe-editor/platform",
   "version": "0.0.0",
   "type": "module",
   "files": [
@@ -20,21 +20,9 @@
     "dev": "tsc --build --watch",
     "clean": "tsc --build --clean"
   },
-  "dependencies": {
-    "@universe-editor/shared": "workspace:*"
-  },
-  "peerDependencies": {
-    "react": ">=19.0.0",
-    "react-dom": ">=19.0.0"
-  },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",
-    "@testing-library/react": "catalog:",
-    "@types/react": "catalog:",
-    "@types/react-dom": "catalog:",
-    "@vitejs/plugin-react": "catalog:",
     "eslint": "catalog:",
-    "happy-dom": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"
   }

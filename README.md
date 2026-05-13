@@ -5,8 +5,8 @@
 pnpm install
 
 # 启动开发（先构建依赖包，再启动 dev 服务器）
-pnpm --filter @acme/api dev     # http://localhost:3001
-pnpm --filter @acme/web dev     # http://localhost:3000
+pnpm --filter @universe-editor/api dev     # http://localhost:3001
+pnpm --filter @universe-editor/web dev     # http://localhost:3000
 
 # 全量构建
 pnpm build
@@ -18,9 +18,9 @@ pnpm lint:fix   # 自动修复代码规范 + 格式问题
 
 # 测试
 pnpm test
-pnpm --filter @acme/ui test
-pnpm --filter @acme/api test
-pnpm --filter @acme/web test
+pnpm --filter @universe-editor/ui test
+pnpm --filter @universe-editor/api test
+pnpm --filter @universe-editor/web test
 
 # 发布新版本（Changesets）
 pnpm changeset          # 声明变更

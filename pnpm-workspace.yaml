@@ -3,10 +3,11 @@ packages:
   - 'packages/*'
 allowBuilds:
   esbuild: true
+  electron: true
 
 catalog:
   # Core
-  
+
   # Release
   '@changesets/cli': ^2.27.0
   '@hono/node-server': ^1.14.0
@@ -42,3 +43,8 @@ catalog:
   '@testing-library/react': ^16.0.0
   'happy-dom': ^17.0.0
   vitest: ^3.0.0
+
+  # Electron (desktop shell for game content editor)
+  electron: ^33.0.0
+  electron-vite: ^5.0.0
+  electron-builder: ^25.0.0

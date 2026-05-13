@@ -1,5 +1,5 @@
 import { Hono } from 'hono'
-import { formatMoney } from '@acme/shared'
+import { formatMoney } from '@universe-editor/shared'
 
 const app = new Hono()
 

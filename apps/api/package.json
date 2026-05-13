@@ -1,5 +1,5 @@
 {
-  "name": "@acme/api",
+  "name": "@universe-editor/api",
   "version": "0.0.0",
   "private": true,
   "type": "module",
@@ -14,13 +14,13 @@
     "clean": "tsc --build --clean"
   },
   "dependencies": {
-    "@acme/shared": "workspace:*",
+    "@universe-editor/shared": "workspace:*",
     "@hono/node-server": "catalog:",
     "hono": "catalog:"
   },
   "devDependencies": {
-    "@acme/config-eslint": "workspace:*",
-    "@acme/config-ts": "workspace:*",
+    "@universe-editor/config-eslint": "workspace:*",
+    "@universe-editor/config-ts": "workspace:*",
     "@types/node": "catalog:",
     "eslint": "catalog:",
     "tsx": "catalog:",
