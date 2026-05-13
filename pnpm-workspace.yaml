@@ -1,0 +1,44 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+allowBuilds:
+  esbuild: true
+
+catalog:
+  # Core
+  
+  # Release
+  '@changesets/cli': ^2.27.0
+  '@hono/node-server': ^1.14.0
+  '@types/node': ^22.0.0
+  '@types/react': ^19.0.0
+  '@types/react-dom': ^19.0.0
+  '@vitejs/plugin-react': ^4.3.0
+
+  # Lint
+  eslint: ^9.0.0
+  eslint-config-prettier: ^9.0.0
+  eslint-plugin-prettier: ^5.0.0
+  eslint-plugin-react-hooks: ^5.2.0
+  prettier: ^3.0.0
+
+  # API
+  hono: ^4.7.0
+
+  # React
+  react: ^19.0.0
+  react-dom: ^19.0.0
+
+  # Node runtime
+  tsx: ^4.19.0
+  turbo: ^2.5.0
+  typescript: ^5.8.0
+  typescript-eslint: ^8.0.0
+
+  # Build tools
+  vite: ^7.0.0
+
+  # Test
+  '@testing-library/react': ^16.0.0
+  'happy-dom': ^17.0.0
+  vitest: ^3.0.0

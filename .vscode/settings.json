@@ -1,0 +1,16 @@
+{
+  "files.eol": "\n",
+  "jestrunner.enableTestExplorer": true,
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "[typescript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "[javascript]": {
+    "editor.defaultFormatter": "esbenp.prettier-vscode"
+  },
+  "json.schemaDownload.trustedDomains": {
+    "https://unpkg.com/": true,
+    "https://turborepo.com": true
+  },
+  "js/ts.tsdk.path": "node_modules/typescript/lib"
+}

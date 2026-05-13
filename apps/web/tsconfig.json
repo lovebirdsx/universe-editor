@@ -1,0 +1,9 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@acme/config-ts/react",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src", "vite.config.ts"],
+  "references": [{ "path": "../../packages/shared" }, { "path": "../../packages/ui" }]
+}
