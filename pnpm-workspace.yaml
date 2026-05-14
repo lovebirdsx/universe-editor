@@ -32,7 +32,7 @@ catalog:
 
   # Node runtime
   tsx: ^4.19.0
-  turbo: ^2.5.0
+  turbo: ^2.9.12
   typescript: ^5.8.0
   typescript-eslint: ^8.0.0
 
