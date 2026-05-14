@@ -37,3 +37,12 @@ export * from './configuration/configurationService.js'
 
 // IPC abstraction layer
 export * from './ipc/ipc.js'
+
+// workbench service interfaces
+export * from './workbench/layoutService.js'
+export * from './workbench/viewRegistry.js'
+export * from './workbench/viewsService.js'
+export * from './workbench/editorService.js'
+export * from './workbench/statusbarService.js'
+export * from './workbench/quickInputService.js'
+export * from './workbench/outputService.js'

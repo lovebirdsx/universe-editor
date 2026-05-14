@@ -1,0 +1,99 @@
+/*
+ * Workbench layout using CSS Grid.
+ *
+ * Grid areas:
+ *   activitybar | sidebar | editor
+ *               |         | panel
+ *   statusbar (full width, bottom)
+ *
+ * CSS custom properties control resizable widths/heights.
+ * --sidebar-width  : sidebar column width (default 240px)
+ * --panel-height   : panel row height (default 200px)
+ */
+
+.workbench {
+  display: grid;
+  grid-template-rows: 1fr var(--panel-height, 200px) var(--statusbar-height, 22px);
+  grid-template-columns: var(--activitybar-width, 48px) var(--sidebar-width, 240px) 1fr;
+  grid-template-areas:
+    'activitybar sidebar editor'
+    'activitybar sidebar panel'
+    'statusbar   statusbar statusbar';
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--color-background, #1e1e1e);
+  color: var(--color-foreground, #cccccc);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 13px;
+}
+
+/* Hide panel row: collapse --panel-height to 0 */
+.workbench.panel-hidden {
+  grid-template-rows: 1fr 0 var(--statusbar-height, 22px);
+}
+
+/* Hide sidebar column */
+.workbench.sidebar-hidden {
+  grid-template-columns: var(--activitybar-width, 48px) 0 1fr;
+}
+
+/* Hide activity bar column */
+.workbench.activitybar-hidden {
+  grid-template-columns: 0 var(--sidebar-width, 240px) 1fr;
+}
+
+.activitybar {
+  grid-area: activitybar;
+  overflow: hidden;
+}
+
+.sidebar {
+  grid-area: sidebar;
+  overflow: hidden;
+  border-right: 1px solid var(--color-border, #3c3c3c);
+}
+
+.editor {
+  grid-area: editor;
+  overflow: hidden;
+  position: relative;
+}
+
+.panel {
+  grid-area: panel;
+  overflow: hidden;
+  border-top: 1px solid var(--color-border, #3c3c3c);
+}
+
+.statusbar {
+  grid-area: statusbar;
+  overflow: hidden;
+}
+
+/* Sash (resize handle) */
+.sash {
+  position: absolute;
+  z-index: 10;
+  user-select: none;
+}
+
+.sash-vertical {
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  cursor: col-resize;
+}
+
+.sash-horizontal {
+  left: 0;
+  right: 0;
+  height: 4px;
+  cursor: row-resize;
+}
+
+.sash:hover,
+.sash.dragging {
+  background: var(--color-sash-active, #007fd4);
+  opacity: 0.7;
+}

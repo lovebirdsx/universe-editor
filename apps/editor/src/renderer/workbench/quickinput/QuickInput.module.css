@@ -1,0 +1,97 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 80px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.container {
+  width: 600px;
+  max-width: 90vw;
+  background: var(--color-quick-input-bg, #252526);
+  border: 1px solid var(--color-quick-input-border, #454545);
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  max-height: 480px;
+}
+
+.inputRow {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border, #3c3c3c);
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
+.input {
+  flex: 1;
+  height: 40px;
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--color-foreground, #cccccc);
+  font-size: 14px;
+}
+
+.input::placeholder {
+  color: var(--color-input-placeholder-fg, #555555);
+}
+
+.list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 12px;
+  cursor: pointer;
+  border: none;
+  background: transparent;
+  color: var(--color-foreground, #cccccc);
+  text-align: left;
+  width: 100%;
+}
+
+.item:hover,
+.item.focused {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.item.focused {
+  outline: 1px solid var(--color-list-focus-outline, #007fd4);
+  outline-offset: -1px;
+}
+
+.itemLabel {
+  font-size: 13px;
+}
+
+.itemDesc {
+  font-size: 11px;
+  color: var(--color-description-fg, #888888);
+  margin-top: 1px;
+}
+
+.empty {
+  padding: 12px;
+  text-align: center;
+  color: var(--color-description-fg, #888888);
+  font-size: 13px;
+}
+
+.prompt {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--color-description-fg, #888888);
+  border-bottom: 1px solid var(--color-border, #3c3c3c);
+  flex-shrink: 0;
+}
