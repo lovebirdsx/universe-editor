@@ -5,6 +5,7 @@
     "composite": true,
     "declaration": true,
     "declarationMap": true,
+    "experimentalDecorators": true,
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",

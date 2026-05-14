@@ -1,7 +1,6 @@
 import { app, BrowserWindow } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { hello } from '@universe-editor/platform'
 import { registerIpcHandlers } from './ipc.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -10,7 +9,7 @@ function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    title: `Universe Editor (${hello()})`,
+    title: 'Universe Editor',
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
