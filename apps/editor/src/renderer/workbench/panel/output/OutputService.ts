@@ -3,7 +3,7 @@
  *  IOutputService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { observableValue, derived } from '@universe-editor/platform'
+import { observableValue, derived, transaction } from '@universe-editor/platform'
 import type { IOutputService, IOutputChannel } from '@universe-editor/platform'
 
 export class OutputChannel implements IOutputChannel {
@@ -49,11 +49,12 @@ export class OutputService implements IOutputService {
 
     const channel = new OutputChannel(name)
     this._channels.set(name, channel)
-    this.channelNames.set([...this.channelNames.get(), name], undefined)
-
-    if (this.activeChannelName.get() === undefined) {
-      this.activeChannelName.set(name, undefined)
-    }
+    transaction((tx) => {
+      this.channelNames.set([...this.channelNames.get(), name], tx)
+      if (this.activeChannelName.get() === undefined) {
+        this.activeChannelName.set(name, tx)
+      }
+    })
 
     return channel
   }

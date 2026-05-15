@@ -8,6 +8,7 @@ export function OutputView() {
   const channelNames = useObservable(outputService.channelNames)
   const activeChannelName = useObservable(outputService.activeChannelName)
   const content = useObservable(outputService.activeChannelContent)
+  const activeChannel = activeChannelName ? outputService.getChannel(activeChannelName) : undefined
   const contentRef = useRef<HTMLPreElement>(null)
 
   // Auto-scroll to bottom when content changes
@@ -39,8 +40,8 @@ export function OutputView() {
         </select>
         <button
           className={styles['clearBtn']}
-          onClick={() => outputService.activeChannel?.clear()}
-          disabled={!activeChannelName}
+          onClick={() => activeChannel?.clear()}
+          disabled={!activeChannel}
           title="Clear Output"
         >
           ×
