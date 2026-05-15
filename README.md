@@ -1,43 +1,45 @@
-**快速上手**
+# Universe Editor
+
+VSCode 范式的桌面游戏内容编辑器（TypeScript monorepo）。
+
+## 快速上手
 
 ```bash
-# 首次安装
-pnpm install
+pnpm install              # 首次或依赖更新后
+pnpm dev                  # 启动所有 dev（推荐）
 
-# 启动开发（先构建依赖包，再启动 dev 服务器）
-pnpm --filter @universe-editor/api dev     # http://localhost:3001
-pnpm --filter @universe-editor/web dev     # http://localhost:3000
-
-# 全量构建
-pnpm build
-
-# 检查
-pnpm typecheck  # 全量类型检查
-pnpm lint       # 检查代码规范（含 Prettier 格式）
-pnpm lint:fix   # 自动修复代码规范 + 格式问题
-
-# 测试
-pnpm test
-pnpm --filter @universe-editor/ui test
-pnpm --filter @universe-editor/api test
-pnpm --filter @universe-editor/web test
-
-# 发布新版本（Changesets）
-pnpm changeset          # 声明变更
-pnpm version-packages   # 更新版本号
-pnpm publish-packages   # 发布
+# 或单独启动
+pnpm --filter @universe-editor/editor dev     # 桌面编辑器（Electron）
+pnpm --filter @universe-editor/api dev        # http://localhost:3001
+pnpm --filter @universe-editor/web dev        # http://localhost:3000
 ```
 
-**关键架构文件**
+## 仓库结构
 
-| 文件                | 作用                                     |
-| ------------------- | ---------------------------------------- |
-| pnpm-workspace.yaml | workspace glob + catalog 版本统一管理    |
-| turbo.json          | 任务依赖图 + 缓存配置                    |
-| tsconfig.json       | Solution file（引用 shared + ui）        |
-| config-ts           | 共享 TS 预设（base / react / node）      |
-| config-eslint       | 共享 ESLint flat config                  |
-| shared              | 纯工具函数，`composite` + `declaration`  |
-| ui                  | React 组件库，引用 shared                |
-| web                 | Vite + React，`noEmit`，引用 shared + ui |
-| api                 | Hono + Node，`NodeNext`，引用 shared     |
+```
+apps/
+  api/      Hono + Node
+  web/      Vite + React
+  editor/   Electron 桌面编辑器（main / preload / renderer）
+packages/
+  shared/         纯工具函数
+  ui/             React 组件库
+  platform/       VSCode 风格内核（DI / Command / IPC / Workbench services）
+  config-ts/      共享 tsconfig 预设
+  config-eslint/  共享 ESLint flat config
+```
+
+## 常用命令
+
+| 命令 | 作用 |
+| --- | --- |
+| `pnpm check` | lint + typecheck + test + build（提交前跑这个） |
+| `pnpm build` | 全量构建 |
+| `pnpm test` | 全量测试 |
+| `pnpm typecheck` | 全量类型检查 |
+| `pnpm lint` / `lint:fix` | 代码规范 + Prettier 格式 |
+| `pnpm changeset` | 声明变更（配合 `version-packages` / `publish-packages` 发版） |
+
+技术栈：pnpm 10 · Turborepo 2 · TypeScript 5.8 · React 19 · Hono 4 · Electron 33 · Vitest 3。
+
+开发约定与陷阱详见 [CLAUDE.md](./CLAUDE.md)。
