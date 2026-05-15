@@ -14,6 +14,7 @@ import {
   IOutputService,
   ILayoutService,
   IHostService,
+  IStorageService,
   ContributionService,
   IContributionService,
   KeybindingsRegistry,
@@ -34,6 +35,7 @@ import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
 import { HostService } from './workbench/host/HostService.js'
+import { StorageService } from './workbench/StorageService.js'
 import '@fontsource/roboto/400.css'
 import '@fontsource/roboto/500.css'
 import './workbench.css'
@@ -80,6 +82,7 @@ function registerBuiltInContributions(deps: BuiltInDeps): void {
         ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
       }))
       const selected = await quickInputService.pick(commands, {
+        id: 'workbench.commandPalette',
         placeholder: 'Type a command name…',
       })
       if (selected) {
@@ -155,7 +158,8 @@ function bootstrapWorkbench(): void {
   const editorService = new EditorService()
   const statusBarService = new StatusBarService()
   const viewsService = new ViewsService()
-  const quickInputService = new QuickInputService()
+  const storageService = new StorageService()
+  const quickInputService = new QuickInputService(storageService)
   const outputService = new OutputService()
   const layoutService = new LayoutService()
   const hostService = new HostService()
@@ -165,6 +169,7 @@ function bootstrapWorkbench(): void {
   services.set(IEditorService, editorService)
   services.set(IStatusBarService, statusBarService)
   services.set(IViewsService, viewsService)
+  services.set(IStorageService, storageService)
   services.set(IQuickInputService, quickInputService)
   services.set(IOutputService, outputService)
   services.set(ILayoutService, layoutService)

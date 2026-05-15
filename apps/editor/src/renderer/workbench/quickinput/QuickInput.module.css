@@ -51,7 +51,8 @@
 
 .item {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   padding: 6px 12px;
   cursor: pointer;
   border: none;
@@ -73,12 +74,21 @@
 
 .itemLabel {
   font-size: 13px;
+  flex: 1;
 }
 
 .itemDesc {
   font-size: 11px;
   color: var(--color-description-fg, #888888);
-  margin-top: 1px;
+  margin-left: 8px;
+  flex-shrink: 0;
+}
+
+.mruIcon {
+  font-size: 11px;
+  margin-right: 6px;
+  opacity: 0.55;
+  flex-shrink: 0;
 }
 
 .empty {

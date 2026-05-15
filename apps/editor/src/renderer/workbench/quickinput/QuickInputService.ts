@@ -10,6 +10,7 @@ import type {
   IQuickPickItem,
   IPickOptions,
   IInputOptions,
+  IStorageService,
 } from '@universe-editor/platform'
 
 type ShowQuickPickFn = (state: QuickPickState | null) => void
@@ -17,6 +18,7 @@ type ShowQuickPickFn = (state: QuickPickState | null) => void
 export interface QuickPickState {
   type: 'pick' | 'input'
   items?: readonly IQuickPickItem[]
+  mruIds?: readonly string[]
   placeholder?: string | undefined
   onAccept?: (items: IQuickPickItem[]) => void
   onInput?: (value: string) => void
@@ -30,6 +32,8 @@ export class QuickInputService implements IQuickInputService {
   declare readonly _serviceBrand: undefined
 
   private _showFn: ShowQuickPickFn | null = null
+
+  constructor(private readonly _storage: IStorageService) {}
 
   /** Called by <QuickInputPortal> to register the React state setter. */
   registerShowFn(fn: ShowQuickPickFn): void {
@@ -78,34 +82,53 @@ export class QuickInputService implements IQuickInputService {
     return qp
   }
 
-  pick<T extends IQuickPickItem>(
+  async pick<T extends IQuickPickItem>(
     items: readonly T[],
     options?: IPickOptions,
   ): Promise<T | undefined> {
+    const id = options?.id
+    let mruIds: string[] = []
+    if (id) {
+      mruIds = (await this._storage.get<string[]>(`quickinput.mru.${id}`)) ?? []
+    }
+
     return new Promise((resolve) => {
       this._showFn?.({
         type: 'pick',
         items,
+        mruIds,
         placeholder: options?.placeholder,
         onAccept: (selected) => {
           this._showFn?.(null)
-          resolve(selected[0] as T | undefined)
+          const item = selected[0] as T | undefined
+          if (id && item?.id) {
+            const newMru = [item.id, ...mruIds.filter((x) => x !== item.id)].slice(0, 20)
+            void this._storage.set(`quickinput.mru.${id}`, newMru)
+          }
+          resolve(item)
         },
         onHide: () => resolve(undefined),
       })
     })
   }
 
-  input(options?: IInputOptions): Promise<string | undefined> {
+  async input(options?: IInputOptions): Promise<string | undefined> {
+    const id = options?.id
+    let storedValue: string | undefined
+    if (id) {
+      storedValue = await this._storage.get<string>(`quickinput.lastValue.${id}`)
+    }
+
     return new Promise((resolve) => {
       this._showFn?.({
         type: 'input',
         placeholder: options?.placeholder,
         inputPrompt: options?.prompt,
-        inputValue: options?.value ?? '',
+        inputValue: options?.value ?? storedValue ?? '',
         validateInput: options?.validateInput,
         onInput: (value) => {
           this._showFn?.(null)
+          if (id) void this._storage.set(`quickinput.lastValue.${id}`, value)
           resolve(value)
         },
         onHide: () => resolve(undefined),

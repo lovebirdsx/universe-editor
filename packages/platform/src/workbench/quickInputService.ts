@@ -15,12 +15,14 @@ export interface IQuickPickItem {
 }
 
 export interface IPickOptions {
+  readonly id?: string
   readonly placeholder?: string
   readonly matchOnDescription?: boolean
   readonly matchOnDetail?: boolean
 }
 
 export interface IInputOptions {
+  readonly id?: string
   readonly placeholder?: string
   readonly prompt?: string
   readonly value?: string

@@ -28,6 +28,7 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
   const [query, setQuery] = useState('')
   const [focusedIdx, setFocusedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const mruIds = state.mruIds ?? []
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -36,6 +37,15 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
   const filtered = (state.items ?? []).filter((item) =>
     fuzzyMatch(item.label + ' ' + (item.description ?? ''), query),
   )
+
+  const sortedFiltered = [...filtered].sort((a, b) => {
+    const ai = mruIds.indexOf(a.id)
+    const bi = mruIds.indexOf(b.id)
+    if (ai === -1 && bi === -1) return 0
+    if (ai === -1) return 1
+    if (bi === -1) return -1
+    return ai - bi
+  })
 
   useEffect(() => {
     setFocusedIdx(0)
@@ -55,12 +65,12 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
       onClose()
     } else if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setFocusedIdx((i) => Math.min(i + 1, filtered.length - 1))
+      setFocusedIdx((i) => Math.min(i + 1, sortedFiltered.length - 1))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
       setFocusedIdx((i) => Math.max(i - 1, 0))
     } else if (e.key === 'Enter') {
-      const item = filtered[focusedIdx]
+      const item = sortedFiltered[focusedIdx]
       if (item) accept([item])
     }
   }
@@ -79,10 +89,10 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
         />
       </div>
       <div className={styles['list']} role="listbox">
-        {filtered.length === 0 ? (
+        {sortedFiltered.length === 0 ? (
           <p className={styles['empty']}>No results</p>
         ) : (
-          filtered.map((item, idx) => (
+          sortedFiltered.map((item, idx) => (
             <button
               key={item.id}
               className={`${styles['item']} ${idx === focusedIdx ? styles['focused'] : ''}`}
@@ -91,6 +101,9 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
               onClick={() => accept([item])}
               onMouseEnter={() => setFocusedIdx(idx)}
             >
+              {!query && mruIds.includes(item.id) && (
+                <span className={styles['mruIcon']}>⏱</span>
+              )}
               <span className={styles['itemLabel']}>{item.label}</span>
               {item.description && <span className={styles['itemDesc']}>{item.description}</span>}
             </button>
