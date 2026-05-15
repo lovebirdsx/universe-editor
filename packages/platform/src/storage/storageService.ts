@@ -1,5 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Renderer-facing key-value storage service. Implementations bridge to host storage.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '../di/instantiation.js'

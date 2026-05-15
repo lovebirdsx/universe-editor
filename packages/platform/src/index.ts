@@ -38,9 +38,13 @@ export * from './configuration/configurationService.js'
 
 // IPC abstraction layer
 export * from './ipc/ipc.js'
+export * from './ipc/proxyChannel.js'
 
 // host abstraction (window / OS)
 export * from './host/index.js'
+
+// storage abstraction
+export * from './storage/storageService.js'
 
 // workbench service interfaces
 export * from './workbench/layoutService.js'
@@ -50,4 +54,3 @@ export * from './workbench/editorService.js'
 export * from './workbench/statusbarService.js'
 export * from './workbench/quickInputService.js'
 export * from './workbench/outputService.js'
-export * from './workbench/storageService.js'

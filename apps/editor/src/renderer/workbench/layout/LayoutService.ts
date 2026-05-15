@@ -3,7 +3,7 @@
  *  ILayoutService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { observableValue } from '@universe-editor/platform'
+import { IStorageService, observableValue } from '@universe-editor/platform'
 import type { ILayoutService, LayoutSizes } from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
 
@@ -28,16 +28,6 @@ interface PersistedLayout {
   sizes?: Partial<LayoutSizes>
 }
 
-type StorageApi = {
-  get: <T = unknown>(key: string) => Promise<T | undefined>
-  set: (key: string, value: unknown) => Promise<void>
-}
-
-function getStorage(): StorageApi | undefined {
-  if (typeof window === 'undefined') return undefined
-  return window.api?.storage
-}
-
 export class LayoutService implements ILayoutService {
   declare readonly _serviceBrand: undefined
 
@@ -49,6 +39,8 @@ export class LayoutService implements ILayoutService {
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
+
+  constructor(@IStorageService private readonly _storage: IStorageService) {}
 
   getVisible(part: PartId): boolean {
     return this.visible.get()[part]
@@ -72,11 +64,9 @@ export class LayoutService implements ILayoutService {
   }
 
   async load(): Promise<void> {
-    const storage = getStorage()
-    if (!storage) return
     let data: PersistedLayout | undefined
     try {
-      data = await storage.get<PersistedLayout>(STORAGE_KEY)
+      data = await this._storage.get<PersistedLayout>(STORAGE_KEY)
     } catch {
       return
     }
@@ -108,14 +98,12 @@ export class LayoutService implements ILayoutService {
       clearTimeout(this._saveTimer)
       this._saveTimer = undefined
     }
-    const storage = getStorage()
-    if (!storage) return
     const payload: PersistedLayout = {
       visible: this.visible.get(),
       sizes: this.sizes.get(),
     }
     try {
-      await storage.set(STORAGE_KEY, payload)
+      await this._storage.set(STORAGE_KEY, payload)
     } catch {
       // swallow: persistence is best-effort
     }

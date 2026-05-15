@@ -1,10 +1,25 @@
 import { app, BrowserWindow } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { registerIpcHandlers } from './ipc.js'
-import { IpcChannel } from '../shared/ipc-channels.js'
+import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
+import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainServices.js'
+import { MainStorageService } from './services/storage/storageMainService.js'
+import { MainPingService } from './services/ping/pingMainService.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// Shared singletons created lazily on first window.
+let sharedServices: SharedMainServices | null = null
+
+function getSharedServices(): SharedMainServices {
+  if (!sharedServices) {
+    sharedServices = {
+      storage: new MainStorageService(),
+      ping: new MainPingService(),
+    }
+  }
+  return sharedServices
+}
 
 function createWindow(): void {
   const isMac = process.platform === 'darwin'
@@ -24,8 +39,8 @@ function createWindow(): void {
     },
   })
 
-  win.on('maximize', () => win.webContents.send(IpcChannel.WindowMaximizeChange, true))
-  win.on('unmaximize', () => win.webContents.send(IpcChannel.WindowMaximizeChange, false))
+  const ipc = bootstrapWindowIpc(win, getSharedServices())
+  win.on('closed', () => ipc.dispose())
 
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
   if (rendererUrl) {
@@ -35,8 +50,9 @@ function createWindow(): void {
   }
 }
 
+installMainProtocolDispatcher()
+
 void app.whenReady().then(() => {
-  registerIpcHandlers()
   createWindow()
 
   app.on('activate', () => {

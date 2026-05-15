@@ -14,6 +14,7 @@ import {
   IOutputService,
   ILayoutService,
   IHostService,
+  IIpcService,
   IStorageService,
   ContributionService,
   IContributionService,
@@ -25,7 +26,12 @@ import {
   ViewContainerRegistry,
   ViewContainerLocation,
   PartId,
+  ProxyChannel,
+  normalizePlatform,
 } from '@universe-editor/platform'
+import { ServiceChannels } from '../shared/ipc/channelNames.js'
+import { IPingService } from '../shared/ipc/services.js'
+import { createRendererIpcService } from './ipc/bootstrap.js'
 import { Workbench } from './workbench/Workbench.js'
 import { CommandService } from './workbench/CommandService.js'
 import { EditorService } from './workbench/editor/EditorService.js'
@@ -34,10 +40,6 @@ import { ViewsService } from './workbench/sidebar/ViewsService.js'
 import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
-import { HostService } from './workbench/host/HostService.js'
-import { StorageService } from './workbench/StorageService.js'
-import '@fontsource/roboto/400.css'
-import '@fontsource/roboto/500.css'
 import './workbench.css'
 
 interface BuiltInDeps {
@@ -151,29 +153,49 @@ function bootstrapWorkbench(): void {
   const lifecycle = new LifecycleService()
   services.set(ILifecycleService, lifecycle)
 
+  // IPC must be available before any service that proxies main-side channels.
+  const ipcService = createRendererIpcService()
+  services.set(IIpcService, ipcService)
+
+  // Cross-process services: bind interface directly to a ProxyChannel-derived
+  // proxy. No renderer wrapper class — adding a new service is one line.
+  const platform = normalizePlatform(window.ipc?.platform)
+  services.set(
+    IHostService,
+    ProxyChannel.toService<IHostService>(ipcService.getChannel(ServiceChannels.Host), {
+      properties: new Map<string, unknown>([['platform', platform]]),
+    }),
+  )
+  services.set(
+    IStorageService,
+    ProxyChannel.toService<IStorageService>(ipcService.getChannel(ServiceChannels.Storage)),
+  )
+  services.set(
+    IPingService,
+    ProxyChannel.toService<IPingService>(ipcService.getChannel(ServiceChannels.Ping)),
+  )
+
   // Create the DI container (registers itself as IInstantiationService)
   const instantiation = new InstantiationService(services)
 
-  // Renderer-side service implementations
+  // Renderer-only service implementations (pure local state, no IPC).
   const editorService = new EditorService()
   const statusBarService = new StatusBarService()
   const viewsService = new ViewsService()
-  const storageService = new StorageService()
-  const quickInputService = new QuickInputService(storageService)
   const outputService = new OutputService()
-  const layoutService = new LayoutService()
-  const hostService = new HostService()
   const commandService = new CommandService(instantiation)
 
   services.set(ICommandService, commandService)
   services.set(IEditorService, editorService)
   services.set(IStatusBarService, statusBarService)
   services.set(IViewsService, viewsService)
-  services.set(IStorageService, storageService)
-  services.set(IQuickInputService, quickInputService)
   services.set(IOutputService, outputService)
+
+  // Services with @IStorageService dependencies go through DI.
+  const quickInputService = instantiation.createInstance(QuickInputService)
+  services.set(IQuickInputService, quickInputService)
+  const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)
-  services.set(IHostService, hostService)
 
   // Contribution service wires lifecycle → contributions auto-start
   const contributionService = new ContributionService(lifecycle, instantiation)

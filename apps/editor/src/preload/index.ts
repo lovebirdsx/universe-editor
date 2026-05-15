@@ -1,31 +1,26 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
-import { IpcChannel, type PingResult } from '../shared/ipc-channels.js'
+import { IPC_PROTOCOL_CHANNEL } from '../shared/ipc/channelNames.js'
 
-const api = {
-  ping: (rendererSentAt: number): Promise<PingResult> =>
-    ipcRenderer.invoke(IpcChannel.Ping, rendererSentAt),
-  storage: {
-    get: <T = unknown>(key: string): Promise<T | undefined> =>
-      ipcRenderer.invoke(IpcChannel.StorageGet, key) as Promise<T | undefined>,
-    set: (key: string, value: unknown): Promise<void> =>
-      ipcRenderer.invoke(IpcChannel.StorageSet, key, value) as Promise<void>,
+const bridge = {
+  send(data: Uint8Array): void {
+    ipcRenderer.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
   },
-
-  platform: process.platform,
-
-  windowMinimize: (): Promise<void> => ipcRenderer.invoke(IpcChannel.WindowMinimize),
-  windowMaximize: (): Promise<void> => ipcRenderer.invoke(IpcChannel.WindowMaximize),
-  windowClose: (): Promise<void> => ipcRenderer.invoke(IpcChannel.WindowClose),
-  windowIsMaximized: (): Promise<boolean> => ipcRenderer.invoke(IpcChannel.WindowIsMaximized),
-
-  onWindowMaximizeChange: (callback: (isMaximized: boolean) => void): (() => void) => {
-    const listener = (_: IpcRendererEvent, val: boolean) => callback(val)
-    ipcRenderer.on(IpcChannel.WindowMaximizeChange, listener)
-    return () => ipcRenderer.removeListener(IpcChannel.WindowMaximizeChange, listener)
+  onMessage(cb: (data: Uint8Array) => void): () => void {
+    const listener = (_event: IpcRendererEvent, payload: unknown): void => {
+      if (payload instanceof Uint8Array) {
+        cb(payload)
+      } else if (payload && typeof payload === 'object' && 'buffer' in (payload as object)) {
+        const buf = payload as Buffer
+        cb(new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength))
+      }
+    }
+    ipcRenderer.on(IPC_PROTOCOL_CHANNEL, listener)
+    return () => ipcRenderer.removeListener(IPC_PROTOCOL_CHANNEL, listener)
   },
+  platform: process.platform as NodeJS.Platform,
 }
 
-contextBridge.exposeInMainWorld('api', api)
+contextBridge.exposeInMainWorld('ipc', bridge)
 
-export type EditorApi = typeof api
+export type IpcBridge = typeof bridge

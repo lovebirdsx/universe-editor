@@ -1,10 +1,23 @@
+import { useEffect, useState } from 'react'
 import { IHostService } from '@universe-editor/platform'
-import { useService, useObservable } from '../useService.js'
+import { useService } from '../useService.js'
 import styles from './TitleBar.module.css'
 
 export function WindowControls() {
   const host = useService(IHostService)
-  const isMaximized = useObservable(host.isMaximized)
+  const [isMaximized, setIsMaximized] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    void host.isMaximized().then((v) => {
+      if (!cancelled) setIsMaximized(v)
+    })
+    const sub = host.onDidChangeMaximized((v) => setIsMaximized(v))
+    return () => {
+      cancelled = true
+      sub.dispose()
+    }
+  }, [host])
 
   return (
     <div className={styles['controls']}>

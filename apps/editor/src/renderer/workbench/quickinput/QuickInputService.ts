@@ -3,14 +3,13 @@
  *  IQuickInputService implementation using React portals.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter } from '@universe-editor/platform'
+import { Emitter, IStorageService } from '@universe-editor/platform'
 import type {
   IQuickInputService,
   IQuickPick,
   IQuickPickItem,
   IPickOptions,
   IInputOptions,
-  IStorageService,
 } from '@universe-editor/platform'
 
 type ShowQuickPickFn = (state: QuickPickState | null) => void
@@ -33,7 +32,7 @@ export class QuickInputService implements IQuickInputService {
 
   private _showFn: ShowQuickPickFn | null = null
 
-  constructor(private readonly _storage: IStorageService) {}
+  constructor(@IStorageService private readonly _storage: IStorageService) {}
 
   /** Called by <QuickInputPortal> to register the React state setter. */
   registerShowFn(fn: ShowQuickPickFn): void {

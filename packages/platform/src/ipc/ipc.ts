@@ -97,7 +97,25 @@ type EventMessage = {
   data: unknown
 }
 
-type IpcMessage = RequestMessage | ResponseMessage | EventMessage
+type SubscribeMessage = {
+  type: 'subscribe'
+  channel: string
+  event: string
+  arg?: unknown
+}
+
+type UnsubscribeMessage = {
+  type: 'unsubscribe'
+  channel: string
+  event: string
+}
+
+type IpcMessage =
+  | RequestMessage
+  | ResponseMessage
+  | EventMessage
+  | SubscribeMessage
+  | UnsubscribeMessage
 
 function encode(msg: IpcMessage): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(msg))
@@ -113,6 +131,7 @@ function decode(data: Uint8Array): IpcMessage {
  */
 export class ChannelClient implements IChannelClient, IDisposable {
   private _requestId = 0
+  private _disposed = false
   private readonly _pendingRequests = new Map<
     number,
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
@@ -155,17 +174,30 @@ export class ChannelClient implements IChannelClient, IDisposable {
           client._protocol.send(encode({ type: 'request', id, channel: channelName, command, arg }))
         })
       },
-      listen<T>(event: string, _arg?: unknown): Event<T> {
+      listen<T>(event: string, arg?: unknown): Event<T> {
         const key = `${channelName}:${event}`
-        if (!client._eventEmitters.has(key)) {
-          client._eventEmitters.set(key, new Emitter<unknown>())
+        let emitter = client._eventEmitters.get(key)
+        if (!emitter) {
+          emitter = new Emitter<unknown>({
+            onDidAddFirstListener: () => {
+              client._protocol.send(encode({ type: 'subscribe', channel: channelName, event, arg }))
+            },
+            onDidRemoveLastListener: () => {
+              if (client._disposed) {
+                return
+              }
+              client._protocol.send(encode({ type: 'unsubscribe', channel: channelName, event }))
+            },
+          })
+          client._eventEmitters.set(key, emitter)
         }
-        return client._eventEmitters.get(key)!.event as Event<T>
+        return emitter.event as Event<T>
       },
     }
   }
 
   dispose(): void {
+    this._disposed = true
     this._disposable.dispose()
     this._pendingRequests.clear()
     for (const emitter of this._eventEmitters.values()) {
@@ -193,10 +225,16 @@ export class ChannelServer implements IChannelServer {
   }
 
   private _handleMessage(msg: IpcMessage): void {
-    if (msg.type !== 'request') {
-      return
+    if (msg.type === 'request') {
+      this._handleRequest(msg)
+    } else if (msg.type === 'subscribe') {
+      this._handleSubscribe(msg)
+    } else if (msg.type === 'unsubscribe') {
+      this._handleUnsubscribe(msg)
     }
+  }
 
+  private _handleRequest(msg: RequestMessage): void {
     const { id, channel: channelName, command, arg } = msg
     const channel = this._channels.get(channelName)
 
@@ -220,6 +258,30 @@ export class ChannelServer implements IChannelServer {
         const error = err instanceof Error ? err.message : String(err)
         this._protocol.send(encode({ type: 'response', id, error }))
       })
+  }
+
+  private _handleSubscribe(msg: SubscribeMessage): void {
+    const { channel: channelName, event, arg } = msg
+    const channel = this._channels.get(channelName)
+    if (!channel) return
+
+    const key = `${channelName}:${event}`
+    // Re-subscription should replace any prior subscription.
+    this._eventSubscriptions.get(key)?.dispose()
+
+    const sub = channel.listen<unknown>(
+      event,
+      arg,
+    )((data) => {
+      this._protocol.send(encode({ type: 'event', channel: channelName, event, data }))
+    })
+    this._eventSubscriptions.set(key, sub)
+  }
+
+  private _handleUnsubscribe(msg: UnsubscribeMessage): void {
+    const key = `${msg.channel}:${msg.event}`
+    this._eventSubscriptions.get(key)?.dispose()
+    this._eventSubscriptions.delete(key)
   }
 
   dispose(): void {
