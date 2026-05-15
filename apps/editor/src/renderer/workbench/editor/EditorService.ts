@@ -3,109 +3,50 @@
  *  IEditorService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter } from '@universe-editor/platform'
-import type {
-  IEditorService,
-  IEditorInput,
-  IActiveEditorChangeEvent,
-  EditorState,
-  IDisposable,
-} from '@universe-editor/platform'
-
-const EMPTY_STATE: EditorState = Object.freeze({
-  openEditors: Object.freeze([]) as readonly IEditorInput[],
-  activeEditorId: undefined,
-})
+import { observableValue, derived, transaction } from '@universe-editor/platform'
+import type { IEditorService, IEditorInput } from '@universe-editor/platform'
 
 export class EditorService implements IEditorService {
   declare readonly _serviceBrand: undefined
 
-  private _state: EditorState = EMPTY_STATE
-
-  private readonly _onChange = new Emitter<void>()
-  private readonly _onDidChangeActiveEditor = new Emitter<IActiveEditorChangeEvent>()
-  private readonly _onDidOpenEditor = new Emitter<IEditorInput>()
-  private readonly _onDidCloseEditor = new Emitter<IEditorInput>()
-
-  readonly onDidChangeActiveEditor = this._onDidChangeActiveEditor.event
-  readonly onDidOpenEditor = this._onDidOpenEditor.event
-  readonly onDidCloseEditor = this._onDidCloseEditor.event
-
-  getSnapshot(): EditorState {
-    return this._state
-  }
-
-  subscribe(listener: () => void): IDisposable {
-    return this._onChange.event(listener)
-  }
-
-  get activeEditor(): IEditorInput | undefined {
-    return this._state.openEditors.find((e) => e.id === this._state.activeEditorId)
-  }
-
-  get openEditors(): readonly IEditorInput[] {
-    return this._state.openEditors
-  }
+  readonly openEditors = observableValue<readonly IEditorInput[]>('EditorService.openEditors', [])
+  readonly activeEditorId = observableValue<string | undefined>(
+    'EditorService.activeEditorId',
+    undefined,
+  )
+  readonly activeEditor = derived(this, (r) => {
+    const id = this.activeEditorId.read(r)
+    if (id === undefined) return undefined
+    return this.openEditors.read(r).find((e) => e.id === id)
+  })
 
   openEditor(input: IEditorInput): void {
-    const cur = this._state
-    const existing = cur.openEditors.find((e) => e.id === input.id)
-
-    const openEditors = existing
-      ? cur.openEditors
-      : (Object.freeze([...cur.openEditors, input]) as readonly IEditorInput[])
-
-    const wasActive = cur.activeEditorId === input.id
-    this._commit(Object.freeze({ openEditors, activeEditorId: input.id }))
-
-    if (!existing) this._onDidOpenEditor.fire(input)
-    if (!wasActive) this._onDidChangeActiveEditor.fire({ editor: this.activeEditor })
+    const existing = this.openEditors.get().find((e) => e.id === input.id)
+    transaction((tx) => {
+      if (!existing) this.openEditors.set([...this.openEditors.get(), input], tx)
+      this.activeEditorId.set(input.id, tx)
+    })
   }
 
   closeEditor(id: string): void {
-    const cur = this._state
-    const idx = cur.openEditors.findIndex((e) => e.id === id)
+    const editors = this.openEditors.get()
+    const idx = editors.findIndex((e) => e.id === id)
     if (idx === -1) return
-
-    const closed = cur.openEditors[idx]!
-    const openEditors = Object.freeze([
-      ...cur.openEditors.slice(0, idx),
-      ...cur.openEditors.slice(idx + 1),
-    ]) as readonly IEditorInput[]
-
-    let activeEditorId = cur.activeEditorId
-    let activeChanged = false
-    if (activeEditorId === id) {
-      const next = openEditors[Math.max(0, idx - 1)]
-      activeEditorId = next?.id
-      activeChanged = true
-    }
-
-    this._commit(Object.freeze({ openEditors, activeEditorId }))
-
-    this._onDidCloseEditor.fire(closed)
-    if (activeChanged) this._onDidChangeActiveEditor.fire({ editor: this.activeEditor })
+    const newEditors = [...editors.slice(0, idx), ...editors.slice(idx + 1)]
+    transaction((tx) => {
+      this.openEditors.set(newEditors, tx)
+      if (this.activeEditorId.get() === id) {
+        const next = newEditors[Math.max(0, idx - 1)]
+        this.activeEditorId.set(next?.id, tx)
+      }
+    })
   }
 
   closeAllEditors(): void {
-    const cur = this._state
-    if (cur.openEditors.length === 0) return
-
-    const closedEditors = cur.openEditors
-    const activeChanged = cur.activeEditorId !== undefined
-
-    // Single commit -> single onChange fire -> single React rerender.
-    this._commit(EMPTY_STATE)
-
-    for (const e of closedEditors) {
-      this._onDidCloseEditor.fire(e)
-    }
-    if (activeChanged) this._onDidChangeActiveEditor.fire({ editor: undefined })
-  }
-
-  private _commit(next: EditorState): void {
-    if (next === this._state) return
-    this._state = next
-    this._onChange.fire()
+    if (this.openEditors.get().length === 0) return
+    transaction((tx) => {
+      this.openEditors.set([], tx)
+      this.activeEditorId.set(undefined, tx)
+    })
   }
 }

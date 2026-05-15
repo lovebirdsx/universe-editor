@@ -8,9 +8,8 @@ import {
   PartId,
   LifecyclePhase,
 } from '@universe-editor/platform'
-import type { LayoutState, LifecycleService, InstantiationService } from '@universe-editor/platform'
-import { ServicesContext, useService, useSnapshot } from './useService.js'
-import { shallow } from './shallow.js'
+import type { LifecycleService, InstantiationService } from '@universe-editor/platform'
+import { ServicesContext, useService, useObservable } from './useService.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { ActivityBar } from './activitybar/ActivityBar.js'
 import { SideBar } from './sidebar/SideBar.js'
@@ -24,11 +23,6 @@ interface WorkbenchProps {
   lifecycle: LifecycleService
 }
 
-const layoutVisibilitySelector = (s: LayoutState) => ({
-  sidebarVisible: s.visible[PartId.SideBar] ?? true,
-  panelVisible: s.visible[PartId.Panel] ?? true,
-})
-
 function buildKeyString(e: KeyboardEvent): string {
   const parts: string[] = []
   if (e.ctrlKey) parts.push('ctrl')
@@ -41,11 +35,9 @@ function buildKeyString(e: KeyboardEvent): string {
 
 function WorkbenchShell() {
   const layoutService = useService(ILayoutService)
-  const { sidebarVisible, panelVisible } = useSnapshot(
-    layoutService,
-    layoutVisibilitySelector,
-    shallow,
-  )
+  const visible = useObservable(layoutService.visible)
+  const sidebarVisible = visible[PartId.SideBar]
+  const panelVisible = visible[PartId.Panel]
 
   return (
     <>

@@ -1,14 +1,8 @@
 import { type ComponentType } from 'react'
 import { EditorRegistry, IEditorService } from '@universe-editor/platform'
-import type { EditorState, IEditorInput } from '@universe-editor/platform'
-import { useService, useSnapshot } from '../useService.js'
-import { shallow } from '../shallow.js'
+import type { IEditorInput } from '@universe-editor/platform'
+import { useService, useObservable } from '../useService.js'
 import styles from './EditorArea.module.css'
-
-const editorAreaSelector = (s: EditorState) => ({
-  openEditors: s.openEditors,
-  activeEditor: s.openEditors.find((e) => e.id === s.activeEditorId),
-})
 
 /** Registry of React components keyed by IEditorProvider.componentKey. */
 export const editorComponentMap = new Map<string, ComponentType<{ input: IEditorInput }>>()
@@ -71,8 +65,8 @@ function EditorTab({
 
 export function EditorArea() {
   const editorService = useService(IEditorService)
-
-  const { openEditors, activeEditor } = useSnapshot(editorService, editorAreaSelector, shallow)
+  const openEditors = useObservable(editorService.openEditors)
+  const activeEditor = useObservable(editorService.activeEditor)
 
   const renderContent = () => {
     if (!activeEditor) {

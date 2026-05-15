@@ -13,8 +13,9 @@ import {
   useSyncExternalStore,
   type DependencyList,
 } from 'react'
-import type { IDisposable } from '@universe-editor/platform'
+import type { IDisposable, IObservable } from '@universe-editor/platform'
 import {
+  autorun,
   ICommandService,
   type InstantiationService,
   type ServiceIdentifier,
@@ -37,60 +38,27 @@ export function useService<T>(id: ServiceIdentifier<T>): T {
 }
 
 /**
- * Minimal contract a service must expose to be consumed via useSnapshot.
- * Matches IEditorService / IStatusBarService / ILayoutService etc.
+ * Subscribe to an IObservable and return its current value.
+ * Re-renders the component whenever the observable changes.
+ * Concurrent-safe: backed by useSyncExternalStore.
  */
-export interface ISubscribableService<TState> {
-  getSnapshot(): TState
-  subscribe(listener: () => void): IDisposable
-}
-
-/**
- * Subscribe to a service via useSyncExternalStore.
- *
- * The selector picks the slice the component cares about. `isEqual` (default
- * `Object.is`) decides whether the new selected value should trigger a rerender;
- * pass `shallow` from `./shallow.js` when the selector returns an object.
- *
- * Caches the last (state, selected) pair so that even when the underlying state
- * object hasn't changed, we return the exact same selected reference — required
- * for uSES stability in React 19 concurrent rendering.
- */
-export function useSnapshot<TState, TSelected>(
-  service: ISubscribableService<TState>,
-  selector: (state: TState) => TSelected,
-  isEqual: (a: TSelected, b: TSelected) => boolean = Object.is,
-): TSelected {
+export function useObservable<T>(obs: IObservable<T>): T {
   const subscribe = useCallback(
-    (onChange: () => void) => {
-      const d = service.subscribe(onChange)
+    (onStoreChange: () => void) => {
+      let firstRun = true
+      const d = autorun((r) => {
+        obs.read(r)
+        if (!firstRun) onStoreChange()
+        firstRun = false
+      })
       return () => d.dispose()
     },
-    [service],
+    [obs],
   )
 
-  const lastRef = useRef<{ state: TState; selected: TSelected } | null>(null)
+  const getSnapshot = useCallback(() => obs.get(), [obs])
 
-  const getSelectedSnapshot = useCallback((): TSelected => {
-    const state = service.getSnapshot()
-    const last = lastRef.current
-
-    if (last !== null && last.state === state) {
-      return last.selected
-    }
-
-    const selected = selector(state)
-    if (last !== null && isEqual(last.selected, selected)) {
-      // Same selected slice — keep the old reference so React sees no change.
-      lastRef.current = { state, selected: last.selected }
-      return last.selected
-    }
-
-    lastRef.current = { state, selected }
-    return selected
-  }, [service, selector, isEqual])
-
-  return useSyncExternalStore(subscribe, getSelectedSnapshot, getSelectedSnapshot)
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }
 
 /**

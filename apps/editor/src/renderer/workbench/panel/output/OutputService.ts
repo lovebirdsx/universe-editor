@@ -3,25 +3,16 @@
  *  IOutputService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter } from '@universe-editor/platform'
-import type {
-  IOutputService,
-  IOutputChannel,
-  OutputState,
-  IDisposable,
-} from '@universe-editor/platform'
+import { observableValue, derived } from '@universe-editor/platform'
+import type { IOutputService, IOutputChannel } from '@universe-editor/platform'
 
 export class OutputChannel implements IOutputChannel {
-  private _content = ''
-
-  private readonly _onDidAppend = new Emitter<string>()
-  readonly onDidAppend = this._onDidAppend.event
+  readonly content = observableValue<string>('OutputChannel.content', '')
 
   constructor(readonly name: string) {}
 
   append(text: string): void {
-    this._content += text
-    this._onDidAppend.fire(text)
+    this.content.set(this.content.get() + text, undefined)
   }
 
   appendLine(text: string): void {
@@ -29,41 +20,28 @@ export class OutputChannel implements IOutputChannel {
   }
 
   clear(): void {
-    this._content = ''
-    this._onDidAppend.fire('')
+    this.content.set('', undefined)
   }
 
-  getContent(): string {
-    return this._content
-  }
-
-  dispose(): void {
-    this._onDidAppend.dispose()
-  }
+  dispose(): void {}
 }
-
-const EMPTY_STATE: OutputState = Object.freeze({
-  channelNames: Object.freeze([]) as readonly string[],
-  activeChannelName: undefined,
-})
 
 export class OutputService implements IOutputService {
   declare readonly _serviceBrand: undefined
 
   private readonly _channels = new Map<string, OutputChannel>()
-  private _state: OutputState = EMPTY_STATE
 
-  private readonly _onChange = new Emitter<void>()
-  private readonly _onDidChangeActiveChannel = new Emitter<IOutputChannel | undefined>()
-  readonly onDidChangeActiveChannel = this._onDidChangeActiveChannel.event
-
-  getSnapshot(): OutputState {
-    return this._state
-  }
-
-  subscribe(listener: () => void): IDisposable {
-    return this._onChange.event(listener)
-  }
+  readonly channelNames = observableValue<readonly string[]>('OutputService.channelNames', [])
+  readonly activeChannelName = observableValue<string | undefined>(
+    'OutputService.activeChannelName',
+    undefined,
+  )
+  readonly activeChannelContent = derived(this, (r) => {
+    const name = this.activeChannelName.read(r)
+    if (!name) return ''
+    const channel = this._channels.get(name)
+    return channel ? channel.content.read(r) : ''
+  })
 
   createChannel(name: string): IOutputChannel {
     const existing = this._channels.get(name)
@@ -71,13 +49,11 @@ export class OutputService implements IOutputService {
 
     const channel = new OutputChannel(name)
     this._channels.set(name, channel)
+    this.channelNames.set([...this.channelNames.get(), name], undefined)
 
-    const channelNames = Object.freeze([...this._state.channelNames, name]) as readonly string[]
-    const activeChannelName = this._state.activeChannelName ?? name
-    const activeChanged = activeChannelName !== this._state.activeChannelName
-
-    this._commit(Object.freeze({ channelNames, activeChannelName }))
-    if (activeChanged) this._onDidChangeActiveChannel.fire(channel)
+    if (this.activeChannelName.get() === undefined) {
+      this.activeChannelName.set(name, undefined)
+    }
 
     return channel
   }
@@ -91,27 +67,13 @@ export class OutputService implements IOutputService {
   }
 
   get activeChannel(): IOutputChannel | undefined {
-    return this._state.activeChannelName === undefined
-      ? undefined
-      : this._channels.get(this._state.activeChannelName)
+    const name = this.activeChannelName.get()
+    return name === undefined ? undefined : this._channels.get(name)
   }
 
   setActiveChannel(name: string): void {
     if (!this._channels.has(name)) return
-    if (this._state.activeChannelName === name) return
-
-    this._commit(
-      Object.freeze({
-        channelNames: this._state.channelNames,
-        activeChannelName: name,
-      }),
-    )
-    this._onDidChangeActiveChannel.fire(this._channels.get(name))
-  }
-
-  private _commit(next: OutputState): void {
-    if (next === this._state) return
-    this._state = next
-    this._onChange.fire()
+    if (this.activeChannelName.get() === name) return
+    this.activeChannelName.set(name, undefined)
   }
 }

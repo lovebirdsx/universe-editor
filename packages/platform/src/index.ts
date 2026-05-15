@@ -8,6 +8,7 @@ export * from './base/event.js'
 export * from './base/lifecycle.js'
 export * from './base/linkedList.js'
 export * from './base/functional.js'
+export * from './base/observable/index.js'
 
 // dependency injection
 export * from './di/instantiation.js'

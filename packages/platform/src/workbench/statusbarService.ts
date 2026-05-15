@@ -3,7 +3,7 @@
  *  Inspired by VSCode's IStatusbarService (workbench/services/statusbar/browser/statusbar.ts).
  *--------------------------------------------------------------------------------------------*/
 
-import type { Event } from '../base/event.js'
+import type { IObservable } from '../base/observable/index.js'
 import { IDisposable } from '../base/lifecycle.js'
 import { createDecorator } from '../di/instantiation.js'
 
@@ -28,21 +28,12 @@ export interface IStoredStatusBarEntry {
   readonly entry: IStatusBarEntry
 }
 
-/** Immutable snapshot of status bar state. */
-export interface StatusBarState {
-  readonly entries: readonly IStoredStatusBarEntry[]
-}
-
 export interface IStatusBarService {
   readonly _serviceBrand: undefined
 
   addEntry(entry: IStatusBarEntry): IDisposable
 
-  getSnapshot(): StatusBarState
-  subscribe(listener: () => void): IDisposable
-
-  /** @deprecated Legacy event. Prefer subscribe + getSnapshot. */
-  readonly onDidChangeEntries: Event<void>
+  readonly entries: IObservable<readonly IStoredStatusBarEntry[]>
 }
 
 export const IStatusBarService = createDecorator<IStatusBarService>('statusBarService')

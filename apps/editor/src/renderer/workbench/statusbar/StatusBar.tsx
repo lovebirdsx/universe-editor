@@ -1,9 +1,7 @@
 import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
-import type { IStatusBarEntry, StatusBarState } from '@universe-editor/platform'
-import { useService, useSnapshot } from '../useService.js'
+import type { IStatusBarEntry } from '@universe-editor/platform'
+import { useService, useObservable } from '../useService.js'
 import styles from './StatusBar.module.css'
-
-const entriesSelector = (s: StatusBarState) => s.entries
 
 function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
   const commandService = useService(ICommandService)
@@ -28,7 +26,7 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
 
 export function StatusBar() {
   const statusBarService = useService(IStatusBarService)
-  const entries = useSnapshot(statusBarService, entriesSelector)
+  const entries = useObservable(statusBarService.entries)
 
   const leftEntries = entries
     .filter((e) => e.entry.alignment === StatusBarAlignment.Left)

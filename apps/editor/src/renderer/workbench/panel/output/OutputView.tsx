@@ -1,39 +1,21 @@
-import { useState, useEffect, useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import { IOutputService } from '@universe-editor/platform'
-import type { OutputState } from '@universe-editor/platform'
-import { useService, useSnapshot } from '../../useService.js'
-import { shallow } from '../../shallow.js'
+import { useService, useObservable } from '../../useService.js'
 import styles from './OutputView.module.css'
-
-const outputSelector = (s: OutputState) => ({
-  channelNames: s.channelNames,
-  activeChannelName: s.activeChannelName,
-})
 
 export function OutputView() {
   const outputService = useService(IOutputService)
-  const { channelNames, activeChannelName } = useSnapshot(outputService, outputSelector, shallow)
-  const activeChannel = activeChannelName ? outputService.getChannel(activeChannelName) : undefined
-
-  const [content, setContent] = useState('')
+  const channelNames = useObservable(outputService.channelNames)
+  const activeChannelName = useObservable(outputService.activeChannelName)
+  const content = useObservable(outputService.activeChannelContent)
   const contentRef = useRef<HTMLPreElement>(null)
 
+  // Auto-scroll to bottom when content changes
   useEffect(() => {
-    if (!activeChannel) {
-      setContent('')
-      return
+    if (contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight
     }
-    setContent(activeChannel.getContent())
-
-    const d = activeChannel.onDidAppend(() => {
-      setContent(activeChannel.getContent())
-      // Auto-scroll to bottom
-      if (contentRef.current) {
-        contentRef.current.scrollTop = contentRef.current.scrollHeight
-      }
-    })
-    return () => d.dispose()
-  }, [activeChannel])
+  }, [content])
 
   const handleChannelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     outputService.setActiveChannel(e.target.value)
@@ -57,8 +39,8 @@ export function OutputView() {
         </select>
         <button
           className={styles['clearBtn']}
-          onClick={() => activeChannel?.clear()}
-          disabled={!activeChannel}
+          onClick={() => outputService.activeChannel?.clear()}
+          disabled={!activeChannelName}
           title="Clear Output"
         >
           ×

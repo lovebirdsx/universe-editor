@@ -3,7 +3,7 @@
  *  Inspired by VSCode's IOutputService (workbench/contrib/output/common/output.ts).
  *--------------------------------------------------------------------------------------------*/
 
-import type { Event } from '../base/event.js'
+import type { IObservable } from '../base/observable/index.js'
 import { IDisposable } from '../base/lifecycle.js'
 import { createDecorator } from '../di/instantiation.js'
 
@@ -12,15 +12,8 @@ export interface IOutputChannel extends IDisposable {
   append(text: string): void
   appendLine(text: string): void
   clear(): void
-  /** Current accumulated content. */
-  getContent(): string
-  readonly onDidAppend: Event<string>
-}
-
-/** Immutable snapshot of output service state. */
-export interface OutputState {
-  readonly channelNames: readonly string[]
-  readonly activeChannelName: string | undefined
+  /** Reactive content: use useObservable(channel.content) in React components. */
+  readonly content: IObservable<string>
 }
 
 export interface IOutputService {
@@ -33,11 +26,10 @@ export interface IOutputService {
   readonly activeChannel: IOutputChannel | undefined
   setActiveChannel(name: string): void
 
-  getSnapshot(): OutputState
-  subscribe(listener: () => void): IDisposable
-
-  /** @deprecated Legacy event. Prefer subscribe + getSnapshot. */
-  readonly onDidChangeActiveChannel: Event<IOutputChannel | undefined>
+  readonly channelNames: IObservable<readonly string[]>
+  readonly activeChannelName: IObservable<string | undefined>
+  /** Derived: content of the active channel (empty string when no channel active). */
+  readonly activeChannelContent: IObservable<string>
 }
 
 export const IOutputService = createDecorator<IOutputService>('outputService')

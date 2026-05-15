@@ -4,8 +4,8 @@ import {
   ViewContainerLocation,
   IViewsService,
 } from '@universe-editor/platform'
-import type { IViewContainerDescriptor, ViewsState } from '@universe-editor/platform'
-import { useService, useSnapshot } from '../useService.js'
+import type { IViewContainerDescriptor } from '@universe-editor/platform'
+import { useService, useObservable } from '../useService.js'
 import styles from './ActivityBar.module.css'
 
 interface ActivityBarItemProps {
@@ -13,9 +13,6 @@ interface ActivityBarItemProps {
   isActive: boolean
   onClick: () => void
 }
-
-const sidebarActiveSelector = (s: ViewsState) =>
-  s.activeContainerByLocation[ViewContainerLocation.SideBar]
 
 function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps) {
   const [showTooltip, setShowTooltip] = useState(false)
@@ -43,7 +40,8 @@ function CodiconIcon({ name }: { name: string }) {
 
 export function ActivityBar() {
   const viewsService = useService(IViewsService)
-  const activeId = useSnapshot(viewsService, sidebarActiveSelector)
+  const activeContainerByLocation = useObservable(viewsService.activeContainerByLocation)
+  const activeId = activeContainerByLocation[ViewContainerLocation.SideBar]
   const [containers, setContainers] = useState<IViewContainerDescriptor[]>([])
 
   useEffect(() => {
