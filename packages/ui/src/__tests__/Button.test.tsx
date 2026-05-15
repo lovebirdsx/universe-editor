@@ -10,28 +10,28 @@ describe('Button', () => {
     expect(screen.getByRole('button', { name: 'Click me' })).toBeDefined()
   })
 
-  it('applies primary variant classes by default', () => {
+  it('applies primary variant by default', () => {
     render(<Button>Primary</Button>)
     const btn = screen.getByRole('button')
-    expect(btn.className).toContain('bg-blue-600')
+    expect(btn.className).toContain('ue-btn--primary')
   })
 
-  it('applies secondary variant classes', () => {
+  it('applies secondary variant', () => {
     render(<Button variant="secondary">Secondary</Button>)
     const btn = screen.getByRole('button')
-    expect(btn.className).toContain('bg-gray-200')
+    expect(btn.className).toContain('ue-btn--secondary')
   })
 
-  it('applies ghost variant classes', () => {
+  it('applies ghost variant', () => {
     render(<Button variant="ghost">Ghost</Button>)
     const btn = screen.getByRole('button')
-    expect(btn.className).toContain('bg-transparent')
+    expect(btn.className).toContain('ue-btn--ghost')
   })
 
-  it('applies sm size classes', () => {
+  it('applies sm size', () => {
     render(<Button size="sm">Small</Button>)
     const btn = screen.getByRole('button')
-    expect(btn.className).toContain('text-sm')
+    expect(btn.className).toContain('ue-btn--sm')
   })
 
   it('merges custom className', () => {

@@ -34,6 +34,8 @@ import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
 import { HostService } from './workbench/host/HostService.js'
+import '@fontsource/roboto/400.css'
+import '@fontsource/roboto/500.css'
 import './workbench.css'
 
 interface BuiltInDeps {

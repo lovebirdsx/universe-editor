@@ -1,6 +1,6 @@
 /*
- * Universe Editor — Global CSS Variables (dark theme default)
- * All workbench components reference these variables.
+ * Universe Editor — Global CSS Variables
+ * Unreal Engine 5 (Starship) dark theme. All workbench components reference these variables.
  */
 
 *, *::before, *::after {
@@ -13,82 +13,92 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #1e1e1e;
-  color: #cccccc;
+  background: #1a1a1c;
+  color: #c8c8c8;
+  font-family: var(--font-ui);
 }
 
 :root {
+  /* Typography */
+  --font-ui: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
+
   /* Base */
-  --color-background: #1e1e1e;
-  --color-foreground: #cccccc;
-  --color-border: #3c3c3c;
-  --color-focus-border: #007fd4;
+  --color-background: #1a1a1c;
+  --color-foreground: #c8c8c8;
+  --color-foreground-muted: #8a8a92;
+  --color-border: #0f0f11;
+  --color-focus-border: #0070e0;
+  --color-accent: #0070e0;
+  --color-surface: #242427;
+
+  /* Title Bar */
+  --color-titlebar: #0f0f11;
 
   /* Activity Bar */
-  --color-activitybar-bg: #333333;
-  --color-activitybar-fg: #858585;
-  --color-activitybar-fg-hover: #cccccc;
+  --color-activitybar-bg: #0f0f11;
+  --color-activitybar-fg: #8a8a92;
+  --color-activitybar-fg-hover: #c8c8c8;
   --color-activitybar-fg-active: #ffffff;
-  --color-activitybar-item-hover: rgba(255, 255, 255, 0.08);
-  --color-activitybar-active-border: #ffffff;
+  --color-activitybar-item-hover: rgba(255, 255, 255, 0.06);
+  --color-activitybar-active-border: #0070e0;
 
   /* Sidebar */
-  --color-sidebar-bg: #252526;
-  --color-sidebar-fg: #cccccc;
-  --color-sidebar-section-header-bg: #2d2d2d;
-  --color-sidebar-section-header-fg: #bbbbbb;
-  --color-sidebar-section-header-hover: #3a3a3a;
+  --color-sidebar-bg: #242427;
+  --color-sidebar-fg: #c8c8c8;
+  --color-sidebar-section-header-bg: #1a1a1c;
+  --color-sidebar-section-header-fg: #b5b5b8;
+  --color-sidebar-section-header-hover: #2f2f35;
 
   /* Editor */
-  --color-editor-bg: #1e1e1e;
-  --color-editor-fg: #cccccc;
-  --color-editor-fg-muted: #888888;
-  --color-editor-modified-border: #e2c08d;
+  --color-editor-bg: #1a1a1c;
+  --color-editor-fg: #c8c8c8;
+  --color-editor-fg-muted: #7a7a80;
+  --color-editor-modified-border: #e0f443;
 
   /* Tabs */
-  --color-tab-bar-bg: #2d2d2d;
-  --color-tab-active-bg: #1e1e1e;
-  --color-tab-active-fg: #cccccc;
-  --color-tab-active-border: #007fd4;
-  --color-tab-inactive-bg: #2d2d2d;
-  --color-tab-inactive-fg: #888888;
-  --color-tab-inactive-fg-hover: #aaaaaa;
-  --color-tab-hover-bg: #353535;
+  --color-tab-bar-bg: #0f0f11;
+  --color-tab-active-bg: #1a1a1c;
+  --color-tab-active-fg: #ffffff;
+  --color-tab-active-border: #0070e0;
+  --color-tab-inactive-bg: #0f0f11;
+  --color-tab-inactive-fg: #8a8a92;
+  --color-tab-inactive-fg-hover: #c8c8c8;
+  --color-tab-hover-bg: #1f1f22;
 
   /* Status Bar */
-  --color-statusbar-bg: #007fd4;
-  --color-statusbar-fg: #ffffff;
+  --color-statusbar-bg: #0f0f11;
+  --color-statusbar-fg: #c8c8c8;
 
   /* Panel */
-  --color-panel-bg: #1e1e1e;
-  --color-panel-tab-bar-bg: #252526;
-  --color-panel-toolbar-bg: #252526;
+  --color-panel-bg: #1a1a1c;
+  --color-panel-tab-bar-bg: #0f0f11;
+  --color-panel-toolbar-bg: #242427;
 
   /* Quick Input */
-  --color-quick-input-bg: #252526;
-  --color-quick-input-border: #454545;
-  --color-list-hover-bg: #2a2d2e;
-  --color-list-focus-outline: #007fd4;
-  --color-input-placeholder-fg: #555555;
-  --color-description-fg: #888888;
+  --color-quick-input-bg: #242427;
+  --color-quick-input-border: #2f2f35;
+  --color-list-hover-bg: #2f2f35;
+  --color-list-focus-outline: #0070e0;
+  --color-input-placeholder-fg: #5a5a5e;
+  --color-description-fg: #8a8a92;
 
   /* Tooltip */
-  --color-tooltip-bg: #252526;
-  --color-tooltip-fg: #cccccc;
+  --color-tooltip-bg: #2f2f35;
+  --color-tooltip-fg: #c8c8c8;
 
   /* Sash */
-  --color-sash-active: #007fd4;
+  --color-sash-active: #0070e0;
 
   /* Dropdown */
-  --color-dropdown-bg: #3c3c3c;
-  --color-dropdown-border: #3c3c3c;
+  --color-dropdown-bg: #2f2f35;
+  --color-dropdown-border: #0f0f11;
 
   /* Badge */
-  --color-badge-bg: #4d4d4d;
-  --color-badge-fg: #cccccc;
+  --color-badge-bg: #2f2f35;
+  --color-badge-fg: #c8c8c8;
 
   /* Toolbar */
-  --color-toolbar-hover-bg: rgba(255, 255, 255, 0.1);
+  --color-toolbar-hover-bg: rgba(255, 255, 255, 0.06);
 }
 
 /* Scrollbar */
@@ -102,24 +112,10 @@ html, body, #root {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 2px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.28);
 }
-
-/* Codicon placeholder — replace with actual Codicon font in production */
-.codicon::before {
-  font-family: monospace;
-  content: attr(class);
-  font-size: 10px;
-  opacity: 0.6;
-}
-.codicon-files::before { content: '📁'; font-size: 16px; opacity: 1; }
-.codicon-search::before { content: '🔍'; font-size: 16px; opacity: 1; }
-.codicon-extensions::before { content: '🧩'; font-size: 16px; opacity: 1; }
-.codicon-git-pull-request::before { content: '⑂'; font-size: 16px; opacity: 1; }
-.codicon-debug-alt::before { content: '⏵'; font-size: 16px; opacity: 1; }
-.codicon-settings-gear::before { content: '⚙'; font-size: 16px; opacity: 1; }

@@ -30,21 +30,21 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 6px;
+  width: 36px;
+  height: 36px;
+  border-radius: 3px;
   border: none;
   background: transparent;
-  color: var(--color-activitybar-fg, #858585);
+  color: var(--color-activitybar-fg, #8a8a92);
   cursor: pointer;
-  font-size: 18px;
+  font-size: 16px;
   transition: background 0.1s, color 0.1s;
   position: relative;
 }
 
 .item:hover {
-  color: var(--color-activitybar-fg-hover, #cccccc);
-  background: var(--color-activitybar-item-hover, rgba(255, 255, 255, 0.08));
+  color: var(--color-activitybar-fg-hover, #c8c8c8);
+  background: var(--color-activitybar-item-hover, rgba(255, 255, 255, 0.06));
 }
 
 .item.active {
@@ -59,7 +59,7 @@
   transform: translateY(-50%);
   width: 2px;
   height: 20px;
-  background: var(--color-activitybar-active-border, #ffffff);
+  background: var(--color-activitybar-active-border, #0070e0);
   border-radius: 0 2px 2px 0;
 }
 
@@ -69,13 +69,13 @@
   margin-left: 8px;
   top: 50%;
   transform: translateY(-50%);
-  background: var(--color-tooltip-bg, #252526);
-  color: var(--color-tooltip-fg, #cccccc);
+  background: var(--color-tooltip-bg, #2f2f35);
+  color: var(--color-tooltip-fg, #c8c8c8);
   padding: 4px 8px;
-  border-radius: 4px;
+  border-radius: 3px;
   white-space: nowrap;
   font-size: 12px;
   pointer-events: none;
   z-index: 100;
-  border: 1px solid var(--color-border, #3c3c3c);
+  border: 1px solid var(--color-border, #0f0f11);
 }

@@ -6,6 +6,7 @@ import {
 } from '@universe-editor/platform'
 import type { IViewContainerDescriptor } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { resolveActivityIcon } from './icon-map.js'
 import styles from './ActivityBar.module.css'
 
 interface ActivityBarItemProps {
@@ -16,6 +17,7 @@ interface ActivityBarItemProps {
 
 function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps) {
   const [showTooltip, setShowTooltip] = useState(false)
+  const Icon = resolveActivityIcon(descriptor.icon)
 
   return (
     <button
@@ -27,15 +29,10 @@ function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps
       aria-label={descriptor.label}
       aria-pressed={isActive}
     >
-      <CodiconIcon name={descriptor.icon} />
+      <Icon size={18} strokeWidth={1.75} aria-hidden />
       {showTooltip && <span className={styles['tooltip']}>{descriptor.label}</span>}
     </button>
   )
-}
-
-/** Minimal Codicon icon: renders a Unicode glyph via data attribute for CSS. */
-function CodiconIcon({ name }: { name: string }) {
-  return <span className={`codicon codicon-${name}`} aria-hidden />
 }
 
 export function ActivityBar() {

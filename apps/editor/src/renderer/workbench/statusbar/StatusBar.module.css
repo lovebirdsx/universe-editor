@@ -3,8 +3,8 @@
   align-items: center;
   width: 100%;
   height: 100%;
-  background: var(--color-statusbar-bg, #007fd4);
-  color: var(--color-statusbar-fg, #ffffff);
+  background: var(--color-statusbar-bg, #0f0f11);
+  color: var(--color-statusbar-fg, #c8c8c8);
   font-size: 12px;
   overflow: hidden;
   user-select: none;
@@ -41,5 +41,5 @@
 }
 
 .item.clickable:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }

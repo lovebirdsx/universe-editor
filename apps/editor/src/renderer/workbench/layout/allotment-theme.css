@@ -1,19 +1,19 @@
 /*
  * Dark theme overrides for allotment.
  * Allotment ships with a light default — we coerce its CSS variables to match
- * the VSCode-like dark palette used elsewhere in the workbench.
+ * the Unreal Engine 5 (Starship) dark palette used elsewhere in the workbench.
  */
 
 :root {
-  --focus-border: #007fd4;
-  --separator-border: #3c3c3c;
+  --focus-border: #0070e0;
+  --separator-border: #0f0f11;
   --sash-hover-transition-duration: 0.1s;
   --sash-hover-size: 4px;
   --sash-size: 4px;
 }
 
 .split-view-view {
-  color: var(--color-foreground, #cccccc);
+  color: var(--color-foreground, #c8c8c8);
   background: transparent;
 }
 

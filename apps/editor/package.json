@@ -16,9 +16,11 @@
     "package": "electron-builder --dir"
   },
   "dependencies": {
+    "@fontsource/roboto": "catalog:",
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/shared": "workspace:*",
-    "allotment": "catalog:"
+    "allotment": "catalog:",
+    "lucide-react": "catalog:"
   },
   "devDependencies": {
     "@testing-library/react": "catalog:",

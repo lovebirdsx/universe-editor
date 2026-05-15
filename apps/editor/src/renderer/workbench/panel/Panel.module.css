@@ -30,19 +30,28 @@
   cursor: pointer;
   border: none;
   background: transparent;
-  color: var(--color-tab-inactive-fg, #888888);
+  color: var(--color-tab-inactive-fg, #8a8a92);
   font-size: 13px;
   white-space: nowrap;
-  border-bottom: 1px solid transparent;
+  position: relative;
 }
 
 .tab.active {
-  color: var(--color-tab-active-fg, #cccccc);
-  border-bottom-color: var(--color-tab-active-border, #007fd4);
+  color: var(--color-tab-active-fg, #ffffff);
+}
+
+.tab.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-tab-active-border, #0070e0);
 }
 
 .tab:hover {
-  color: var(--color-tab-inactive-fg-hover, #aaaaaa);
+  color: var(--color-tab-inactive-fg-hover, #c8c8c8);
 }
 
 .content {
