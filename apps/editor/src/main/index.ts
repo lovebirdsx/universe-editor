@@ -2,14 +2,20 @@ import { app, BrowserWindow } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { registerIpcHandlers } from './ipc.js'
+import { IpcChannel } from '../shared/ipc-channels.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 function createWindow(): void {
+  const isMac = process.platform === 'darwin'
+
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
     title: 'Universe Editor',
+    ...(isMac
+      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 8, y: 8 } }
+      : { frame: false }),
     webPreferences: {
       preload: join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
@@ -17,6 +23,9 @@ function createWindow(): void {
       sandbox: true,
     },
   })
+
+  win.on('maximize', () => win.webContents.send(IpcChannel.WindowMaximizeChange, true))
+  win.on('unmaximize', () => win.webContents.send(IpcChannel.WindowMaximizeChange, false))
 
   const rendererUrl = process.env['ELECTRON_RENDERER_URL']
   if (rendererUrl) {

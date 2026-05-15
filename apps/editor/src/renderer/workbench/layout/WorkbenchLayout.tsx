@@ -6,6 +6,7 @@ import styles from './WorkbenchLayout.module.css'
 import './allotment-theme.css'
 
 interface WorkbenchLayoutProps {
+  titlebar: ReactNode
   activitybar: ReactNode
   sidebar: ReactNode
   editor: ReactNode
@@ -24,6 +25,7 @@ const PANEL_MIN = 100
 const PANEL_MAX = 800
 
 export function WorkbenchLayout({
+  titlebar,
   activitybar,
   sidebar,
   editor,
@@ -37,6 +39,7 @@ export function WorkbenchLayout({
 }: WorkbenchLayoutProps) {
   return (
     <div className={styles['workbench']}>
+      <div className={styles['titlebar']}>{titlebar}</div>
       <div className={styles['top']}>
         <div className={styles['activitybar']}>{activitybar}</div>
         <div className={styles['main']}>

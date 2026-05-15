@@ -8,6 +8,12 @@ export interface StorageApi {
 export interface EditorApi {
   ping: (rendererSentAt: number) => Promise<PingResult>
   storage: StorageApi
+  platform: string
+  windowMinimize: () => Promise<void>
+  windowMaximize: () => Promise<void>
+  windowClose: () => Promise<void>
+  windowIsMaximized: () => Promise<boolean>
+  onWindowMaximizeChange: (callback: (isMaximized: boolean) => void) => () => void
 }
 
 declare global {

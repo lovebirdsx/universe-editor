@@ -39,6 +39,9 @@ export * from './configuration/configurationService.js'
 // IPC abstraction layer
 export * from './ipc/ipc.js'
 
+// host abstraction (window / OS)
+export * from './host/index.js'
+
 // workbench service interfaces
 export * from './workbench/layoutService.js'
 export * from './workbench/viewRegistry.js'

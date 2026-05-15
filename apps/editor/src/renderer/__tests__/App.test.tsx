@@ -16,6 +16,12 @@ describe('<App />', () => {
         get: vi.fn().mockResolvedValue(undefined),
         set: vi.fn().mockResolvedValue(undefined),
       },
+      platform: 'linux',
+      windowMinimize: vi.fn().mockResolvedValue(undefined),
+      windowMaximize: vi.fn().mockResolvedValue(undefined),
+      windowClose: vi.fn().mockResolvedValue(undefined),
+      windowIsMaximized: vi.fn().mockResolvedValue(false),
+      onWindowMaximizeChange: vi.fn().mockReturnValue(() => undefined),
     }
   })
 

@@ -16,6 +16,11 @@ export const enum MenuId {
   TitleBar = 'titleBar',
   StatusBar = 'statusBar',
   SideBarTitle = 'sideBarTitle',
+  // Title-bar menubar dropdowns
+  MenubarFileMenu = 'menubar.file',
+  MenubarEditMenu = 'menubar.edit',
+  MenubarViewMenu = 'menubar.view',
+  MenubarHelpMenu = 'menubar.help',
 }
 
 export interface IMenuItem {

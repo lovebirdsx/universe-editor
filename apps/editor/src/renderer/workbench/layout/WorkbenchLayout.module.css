@@ -1,7 +1,7 @@
 /*
  * Workbench shell layout.
  *
- * Outer flex column: top row (activitybar + Allotment) + statusbar.
+ * Outer flex column: titlebar + top row (activitybar + Allotment) + statusbar.
  * ActivityBar is a fixed 48px column (not part of Allotment) — VSCode-style.
  * Sidebar and Panel sizing is delegated to allotment.
  */
@@ -16,6 +16,13 @@
   color: var(--color-foreground, #cccccc);
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 13px;
+}
+
+.titlebar {
+  flex: 0 0 var(--titlebar-height, 30px);
+  overflow: visible;
+  position: relative;
+  z-index: 100;
 }
 
 .top {
