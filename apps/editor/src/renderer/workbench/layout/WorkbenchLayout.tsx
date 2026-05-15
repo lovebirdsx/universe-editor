@@ -9,13 +9,16 @@ interface WorkbenchLayoutProps {
   titlebar: ReactNode
   activitybar: ReactNode
   sidebar: ReactNode
+  secondarySidebar: ReactNode
   editor: ReactNode
   panel: ReactNode
   statusbar: ReactNode
   sidebarVisible: boolean
+  secondarySidebarVisible: boolean
   panelVisible: boolean
   sizes: Readonly<LayoutSizes>
   onSidebarResize: (px: number) => void
+  onSecondarySidebarResize: (px: number) => void
   onPanelResize: (px: number) => void
 }
 
@@ -28,13 +31,16 @@ export function WorkbenchLayout({
   titlebar,
   activitybar,
   sidebar,
+  secondarySidebar,
   editor,
   panel,
   statusbar,
   sidebarVisible,
+  secondarySidebarVisible,
   panelVisible,
   sizes,
   onSidebarResize,
+  onSecondarySidebarResize,
   onPanelResize,
 }: WorkbenchLayoutProps) {
   return (
@@ -46,8 +52,11 @@ export function WorkbenchLayout({
           <Allotment
             proportionalLayout={false}
             onChange={(s) => {
-              const first = s[0]
-              if (typeof first === 'number' && sidebarVisible) onSidebarResize(first)
+              const sidebarSize = s[0]
+              const secondarySize = s[2]
+              if (typeof sidebarSize === 'number' && sidebarVisible) onSidebarResize(sidebarSize)
+              if (typeof secondarySize === 'number' && secondarySidebarVisible)
+                onSecondarySidebarResize(secondarySize)
             }}
           >
             <Allotment.Pane
@@ -79,6 +88,14 @@ export function WorkbenchLayout({
                   <div className={styles['pane']}>{panel}</div>
                 </Allotment.Pane>
               </Allotment>
+            </Allotment.Pane>
+            <Allotment.Pane
+              minSize={SIDEBAR_MIN}
+              maxSize={SIDEBAR_MAX}
+              preferredSize={sizes.secondarySidebar}
+              visible={secondarySidebarVisible}
+            >
+              <div className={styles['pane']}>{secondarySidebar}</div>
             </Allotment.Pane>
           </Allotment>
         </div>

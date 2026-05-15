@@ -7,6 +7,7 @@ import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { TitleBar } from './titlebar/TitleBar.js'
 import { ActivityBar } from './activitybar/ActivityBar.js'
 import { SideBar } from './sidebar/SideBar.js'
+import { SecondarySideBar } from './sidebar/SecondarySideBar.js'
 import { EditorArea } from './editor/EditorArea.js'
 import { Panel } from './panel/Panel.js'
 import { StatusBar } from './statusbar/StatusBar.js'
@@ -24,6 +25,7 @@ function WorkbenchShell() {
   const visible = useObservable(layoutService.visible)
   const sizes = useObservable(layoutService.sizes)
   const sidebarVisible = visible[PartId.SideBar]
+  const secondarySidebarVisible = visible[PartId.SecondarySideBar]
   const panelVisible = visible[PartId.Panel]
 
   useEffect(() => {
@@ -32,6 +34,10 @@ function WorkbenchShell() {
 
   const onSidebarResize = useCallback(
     (px: number) => layoutService.setSize('sidebar' satisfies keyof LayoutSizes, px),
+    [layoutService],
+  )
+  const onSecondarySidebarResize = useCallback(
+    (px: number) => layoutService.setSize('secondarySidebar' satisfies keyof LayoutSizes, px),
     [layoutService],
   )
   const onPanelResize = useCallback(
@@ -43,13 +49,16 @@ function WorkbenchShell() {
     <>
       <WorkbenchLayout
         sidebarVisible={sidebarVisible}
+        secondarySidebarVisible={secondarySidebarVisible}
         panelVisible={panelVisible}
         sizes={sizes}
         onSidebarResize={onSidebarResize}
+        onSecondarySidebarResize={onSecondarySidebarResize}
         onPanelResize={onPanelResize}
         titlebar={<TitleBar />}
         activitybar={<ActivityBar />}
         sidebar={<SideBar />}
+        secondarySidebar={<SecondarySideBar />}
         editor={<EditorArea />}
         panel={<Panel />}
         statusbar={<StatusBar />}

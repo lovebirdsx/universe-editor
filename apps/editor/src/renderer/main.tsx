@@ -46,12 +46,14 @@ interface BuiltInDeps {
   lifecycle: LifecycleService
   statusBar: StatusBarService
   layoutService: LayoutService
+  viewsService: ViewsService
   quickInputService: QuickInputService
   commandService: CommandService
 }
 
 function registerBuiltInContributions(deps: BuiltInDeps): void {
-  const { lifecycle, statusBar, layoutService, quickInputService, commandService } = deps
+  const { lifecycle, statusBar, layoutService, viewsService, quickInputService, commandService } =
+    deps
 
   // -- Commands + keybindings --
 
@@ -63,6 +65,24 @@ function registerBuiltInContributions(deps: BuiltInDeps): void {
   KeybindingsRegistry.registerKeybinding({
     key: 'ctrl+b',
     command: 'workbench.action.toggleSidebarVisibility',
+  })
+
+  CommandsRegistry.registerCommand(
+    'workbench.action.toggleSecondarySidebarVisibility',
+    () => {
+      layoutService.toggleVisible(PartId.SecondarySideBar)
+      if (layoutService.getVisible(PartId.SecondarySideBar)) {
+        const activeId = viewsService.getActiveViewContainerId(
+          ViewContainerLocation.SecondarySideBar,
+        )
+        if (!activeId) viewsService.openViewContainer('workbench.view.outline')
+      }
+    },
+    { description: 'Toggle Secondary Side Bar', category: 'View' },
+  )
+  KeybindingsRegistry.registerKeybinding({
+    key: 'ctrl+alt+b',
+    command: 'workbench.action.toggleSecondarySidebarVisibility',
   })
 
   CommandsRegistry.registerCommand(
@@ -111,9 +131,14 @@ function registerBuiltInContributions(deps: BuiltInDeps): void {
     order: 1,
   })
   MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
-    command: 'workbench.action.togglePanel',
+    command: 'workbench.action.toggleSecondarySidebarVisibility',
     group: '2_layout',
     order: 2,
+  })
+  MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
+    command: 'workbench.action.togglePanel',
+    group: '2_layout',
+    order: 3,
   })
 
   MenuRegistry.addMenuItem(MenuId.CommandPalette, {
@@ -121,6 +146,9 @@ function registerBuiltInContributions(deps: BuiltInDeps): void {
   })
   MenuRegistry.addMenuItem(MenuId.CommandPalette, {
     command: 'workbench.action.toggleSidebarVisibility',
+  })
+  MenuRegistry.addMenuItem(MenuId.CommandPalette, {
+    command: 'workbench.action.toggleSecondarySidebarVisibility',
   })
   MenuRegistry.addMenuItem(MenuId.CommandPalette, {
     command: 'workbench.action.togglePanel',
@@ -143,6 +171,15 @@ function registerBuiltInContributions(deps: BuiltInDeps): void {
     icon: 'files',
     order: 1,
     location: ViewContainerLocation.SideBar,
+  })
+
+  // Built-in Outline view container (secondary sidebar)
+  ViewContainerRegistry.registerViewContainer({
+    id: 'workbench.view.outline',
+    label: 'Outline',
+    icon: 'search',
+    order: 1,
+    location: ViewContainerLocation.SecondarySideBar,
   })
 }
 
@@ -206,6 +243,7 @@ function bootstrapWorkbench(): void {
     lifecycle,
     statusBar: statusBarService,
     layoutService,
+    viewsService,
     quickInputService,
     commandService,
   })

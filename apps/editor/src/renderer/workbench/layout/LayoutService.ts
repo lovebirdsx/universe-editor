@@ -13,6 +13,7 @@ const SAVE_DEBOUNCE_MS = 200
 const INITIAL_VISIBLE: Readonly<Record<PartId, boolean>> = {
   [PartId.ActivityBar]: true,
   [PartId.SideBar]: true,
+  [PartId.SecondarySideBar]: false,
   [PartId.EditorArea]: true,
   [PartId.Panel]: true,
   [PartId.StatusBar]: true,
@@ -20,6 +21,7 @@ const INITIAL_VISIBLE: Readonly<Record<PartId, boolean>> = {
 
 const INITIAL_SIZES: Readonly<LayoutSizes> = {
   sidebar: 240,
+  secondarySidebar: 300,
   panel: 200,
 }
 
@@ -85,6 +87,8 @@ export class LayoutService implements ILayoutService {
       if (data.sizes) {
         const merged = { ...this.sizes.get() }
         if (typeof data.sizes.sidebar === 'number') merged.sidebar = data.sizes.sidebar
+        if (typeof data.sizes.secondarySidebar === 'number')
+          merged.secondarySidebar = data.sizes.secondarySidebar
         if (typeof data.sizes.panel === 'number') merged.panel = data.sizes.panel
         this.sizes.set(merged, undefined)
       }

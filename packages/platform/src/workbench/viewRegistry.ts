@@ -10,7 +10,8 @@ import { IDisposable, toDisposable } from '../base/lifecycle.js'
 /** Where the container lives in the workbench layout. */
 export const enum ViewContainerLocation {
   SideBar = 0,
-  Panel = 1,
+  SecondarySideBar = 1,
+  Panel = 2,
 }
 
 export interface IViewContainerDescriptor {

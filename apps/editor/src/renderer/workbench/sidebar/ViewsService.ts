@@ -5,7 +5,7 @@
 
 import { observableValue } from '@universe-editor/platform'
 import type { IViewsService } from '@universe-editor/platform'
-import { ViewContainerLocation } from '@universe-editor/platform'
+import { ViewContainerLocation, ViewContainerRegistry } from '@universe-editor/platform'
 
 export class ViewsService implements IViewsService {
   declare readonly _serviceBrand: undefined
@@ -34,8 +34,8 @@ export class ViewsService implements IViewsService {
     return this.activeContainerByLocation.get()[location]
   }
 
-  private _getLocation(_id: string): number {
-    // Default to SideBar; Panel containers could be resolved via ViewContainerRegistry.
-    return ViewContainerLocation.SideBar
+  private _getLocation(id: string): number {
+    const descriptor = ViewContainerRegistry.getViewContainer(id)
+    return descriptor?.location ?? ViewContainerLocation.SideBar
   }
 }

@@ -30,11 +30,12 @@ describe('LayoutService', () => {
     expect(svc.getVisible(PartId.ActivityBar)).toBe(true)
     expect(svc.getVisible(PartId.SideBar)).toBe(true)
     expect(svc.getVisible(PartId.Panel)).toBe(true)
+    expect(svc.getVisible(PartId.SecondarySideBar)).toBe(false)
   })
 
   it('defaults sizes to sensible values', () => {
     const svc = new LayoutService(makeStorage())
-    expect(svc.sizes.get()).toEqual({ sidebar: 240, panel: 200 })
+    expect(svc.sizes.get()).toEqual({ sidebar: 240, secondarySidebar: 300, panel: 200 })
   })
 
   it('setVisible only notifies on actual change', () => {
@@ -84,26 +85,26 @@ describe('LayoutService', () => {
 
     svc.setSize('sidebar', 320)
     expect(spy).toHaveBeenCalledTimes(1)
-    expect(svc.sizes.get()).toEqual({ sidebar: 320, panel: 200 })
+    expect(svc.sizes.get()).toEqual({ sidebar: 320, secondarySidebar: 300, panel: 200 })
     d.dispose()
   })
 
   it('load is a no-op when storage returns undefined', async () => {
     const svc = new LayoutService(makeStorage(undefined))
     await expect(svc.load()).resolves.toBeUndefined()
-    expect(svc.sizes.get()).toEqual({ sidebar: 240, panel: 200 })
+    expect(svc.sizes.get()).toEqual({ sidebar: 240, secondarySidebar: 300, panel: 200 })
   })
 
   it('load restores visible and sizes from storage', async () => {
     const storage = makeStorage({
       visible: { [PartId.SideBar]: false },
-      sizes: { sidebar: 333, panel: 444 },
+      sizes: { sidebar: 333, secondarySidebar: 400, panel: 444 },
     })
     const svc = new LayoutService(storage)
     await svc.load()
 
     expect(svc.getVisible(PartId.SideBar)).toBe(false)
-    expect(svc.sizes.get()).toEqual({ sidebar: 333, panel: 444 })
+    expect(svc.sizes.get()).toEqual({ sidebar: 333, secondarySidebar: 400, panel: 444 })
     expect(storage.set).not.toHaveBeenCalled()
   })
 
@@ -121,7 +122,7 @@ describe('LayoutService', () => {
     expect(storage.set).toHaveBeenCalledWith(
       'workbench.layout',
       expect.objectContaining({
-        sizes: { sidebar: 270, panel: 200 },
+        sizes: expect.objectContaining({ sidebar: 270, panel: 200 }),
       }),
     )
   })

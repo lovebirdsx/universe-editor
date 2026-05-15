@@ -9,6 +9,7 @@ import { createDecorator } from '../di/instantiation.js'
 export const enum PartId {
   ActivityBar = 'activityBar',
   SideBar = 'sideBar',
+  SecondarySideBar = 'secondarySideBar',
   EditorArea = 'editorArea',
   Panel = 'panel',
   StatusBar = 'statusBar',
@@ -17,6 +18,8 @@ export const enum PartId {
 export interface LayoutSizes {
   /** SideBar width in px (excludes ActivityBar). */
   sidebar: number
+  /** SecondarySideBar width in px. */
+  secondarySidebar: number
   /** Panel height in px. */
   panel: number
 }
