@@ -1,24 +1,14 @@
 /*
- * Workbench layout using CSS Grid.
+ * Workbench shell layout.
  *
- * Grid areas:
- *   activitybar | sidebar | editor
- *               |         | panel
- *   statusbar (full width, bottom)
- *
- * CSS custom properties control resizable widths/heights.
- * --sidebar-width  : sidebar column width (default 240px)
- * --panel-height   : panel row height (default 200px)
+ * Outer flex column: top row (activitybar + Allotment) + statusbar.
+ * ActivityBar is a fixed 48px column (not part of Allotment) — VSCode-style.
+ * Sidebar and Panel sizing is delegated to allotment.
  */
 
 .workbench {
-  display: grid;
-  grid-template-rows: 1fr var(--panel-height, 200px) var(--statusbar-height, 22px);
-  grid-template-columns: var(--activitybar-width, 48px) var(--sidebar-width, 240px) 1fr;
-  grid-template-areas:
-    'activitybar sidebar editor'
-    'activitybar sidebar panel'
-    'statusbar   statusbar statusbar';
+  display: flex;
+  flex-direction: column;
   width: 100vw;
   height: 100vh;
   overflow: hidden;
@@ -28,72 +18,32 @@
   font-size: 13px;
 }
 
-/* Hide panel row: collapse --panel-height to 0 */
-.workbench.panel-hidden {
-  grid-template-rows: 1fr 0 var(--statusbar-height, 22px);
-}
-
-/* Hide sidebar column */
-.workbench.sidebar-hidden {
-  grid-template-columns: var(--activitybar-width, 48px) 0 1fr;
-}
-
-/* Hide activity bar column */
-.workbench.activitybar-hidden {
-  grid-template-columns: 0 var(--sidebar-width, 240px) 1fr;
+.top {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
 }
 
 .activitybar {
-  grid-area: activitybar;
+  flex: 0 0 var(--activitybar-width, 48px);
   overflow: hidden;
 }
 
-.sidebar {
-  grid-area: sidebar;
-  overflow: hidden;
-  border-right: 1px solid var(--color-border, #3c3c3c);
-}
-
-.editor {
-  grid-area: editor;
-  overflow: hidden;
+.main {
+  flex: 1 1 auto;
   position: relative;
+  min-width: 0;
+  overflow: hidden;
 }
 
-.panel {
-  grid-area: panel;
+.pane {
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  border-top: 1px solid var(--color-border, #3c3c3c);
 }
 
 .statusbar {
-  grid-area: statusbar;
+  flex: 0 0 var(--statusbar-height, 22px);
   overflow: hidden;
-}
-
-/* Sash (resize handle) */
-.sash {
-  position: absolute;
-  z-index: 10;
-  user-select: none;
-}
-
-.sash-vertical {
-  top: 0;
-  bottom: 0;
-  width: 4px;
-  cursor: col-resize;
-}
-
-.sash-horizontal {
-  left: 0;
-  right: 0;
-  height: 4px;
-  cursor: row-resize;
-}
-
-.sash:hover,
-.sash.dragging {
-  background: var(--color-sash-active, #007fd4);
-  opacity: 0.7;
 }

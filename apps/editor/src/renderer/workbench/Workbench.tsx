@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect } from 'react'
 import {
   ILayoutService,
   ICommandService,
@@ -8,7 +8,7 @@ import {
   PartId,
   LifecyclePhase,
 } from '@universe-editor/platform'
-import type { LifecycleService, InstantiationService } from '@universe-editor/platform'
+import type { LifecycleService, InstantiationService, LayoutSizes } from '@universe-editor/platform'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { ActivityBar } from './activitybar/ActivityBar.js'
@@ -36,14 +36,31 @@ function buildKeyString(e: KeyboardEvent): string {
 function WorkbenchShell() {
   const layoutService = useService(ILayoutService)
   const visible = useObservable(layoutService.visible)
+  const sizes = useObservable(layoutService.sizes)
   const sidebarVisible = visible[PartId.SideBar]
   const panelVisible = visible[PartId.Panel]
+
+  useEffect(() => {
+    void layoutService.load()
+  }, [layoutService])
+
+  const onSidebarResize = useCallback(
+    (px: number) => layoutService.setSize('sidebar' satisfies keyof LayoutSizes, px),
+    [layoutService],
+  )
+  const onPanelResize = useCallback(
+    (px: number) => layoutService.setSize('panel' satisfies keyof LayoutSizes, px),
+    [layoutService],
+  )
 
   return (
     <>
       <WorkbenchLayout
         sidebarVisible={sidebarVisible}
         panelVisible={panelVisible}
+        sizes={sizes}
+        onSidebarResize={onSidebarResize}
+        onPanelResize={onPanelResize}
         activitybar={<ActivityBar />}
         sidebar={<SideBar />}
         editor={<EditorArea />}

@@ -1,0 +1,30 @@
+/*
+ * Dark theme overrides for allotment.
+ * Allotment ships with a light default — we coerce its CSS variables to match
+ * the VSCode-like dark palette used elsewhere in the workbench.
+ */
+
+:root {
+  --focus-border: #007fd4;
+  --separator-border: #3c3c3c;
+  --sash-hover-transition-duration: 0.1s;
+  --sash-hover-size: 4px;
+  --sash-size: 4px;
+}
+
+.split-view-view {
+  color: var(--color-foreground, #cccccc);
+  background: transparent;
+}
+
+.sash {
+  background: transparent;
+}
+
+.sash:hover,
+.sash.hover,
+.sash.active {
+  background: var(--focus-border);
+  opacity: 0.7;
+  transition: background var(--sash-hover-transition-duration) ease-in-out;
+}

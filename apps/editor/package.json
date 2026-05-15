@@ -17,7 +17,8 @@
   },
   "dependencies": {
     "@universe-editor/platform": "workspace:*",
-    "@universe-editor/shared": "workspace:*"
+    "@universe-editor/shared": "workspace:*",
+    "allotment": "catalog:"
   },
   "devDependencies": {
     "@testing-library/react": "catalog:",

@@ -14,6 +14,13 @@ export const enum PartId {
   StatusBar = 'statusBar',
 }
 
+export interface LayoutSizes {
+  /** SideBar width in px (excludes ActivityBar). */
+  sidebar: number
+  /** Panel height in px. */
+  panel: number
+}
+
 export interface ILayoutService {
   readonly _serviceBrand: undefined
 
@@ -22,6 +29,14 @@ export interface ILayoutService {
   toggleVisible(part: PartId): void
 
   readonly visible: IObservable<Readonly<Record<PartId, boolean>>>
+
+  readonly sizes: IObservable<Readonly<LayoutSizes>>
+  setSize(key: keyof LayoutSizes, value: number): void
+
+  /** Load persisted layout (visible + sizes) from storage. Safe to call when storage is unavailable. */
+  load(): Promise<void>
+  /** Force-flush any pending persist. */
+  save(): Promise<void>
 }
 
 export const ILayoutService = createDecorator<ILayoutService>('layoutService')

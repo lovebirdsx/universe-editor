@@ -1,5 +1,9 @@
-import { useRef, useCallback, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
+import { Allotment } from 'allotment'
+import 'allotment/dist/style.css'
+import type { LayoutSizes } from '@universe-editor/platform'
 import styles from './WorkbenchLayout.module.css'
+import './allotment-theme.css'
 
 interface WorkbenchLayoutProps {
   activitybar: ReactNode
@@ -9,7 +13,15 @@ interface WorkbenchLayoutProps {
   statusbar: ReactNode
   sidebarVisible: boolean
   panelVisible: boolean
+  sizes: Readonly<LayoutSizes>
+  onSidebarResize: (px: number) => void
+  onPanelResize: (px: number) => void
 }
+
+const SIDEBAR_MIN = 170
+const SIDEBAR_MAX = 600
+const PANEL_MIN = 100
+const PANEL_MAX = 800
 
 export function WorkbenchLayout({
   activitybar,
@@ -19,114 +31,56 @@ export function WorkbenchLayout({
   statusbar,
   sidebarVisible,
   panelVisible,
+  sizes,
+  onSidebarResize,
+  onPanelResize,
 }: WorkbenchLayoutProps) {
-  const rootRef = useRef<HTMLDivElement>(null)
-
-  const classNames = [
-    styles['workbench'],
-    !sidebarVisible ? styles['sidebar-hidden'] : '',
-    !panelVisible ? styles['panel-hidden'] : '',
-  ]
-    .filter(Boolean)
-    .join(' ')
-
   return (
-    <div ref={rootRef} className={classNames}>
-      <div className={styles['activitybar']}>{activitybar}</div>
-      <div className={styles['sidebar']}>
-        {sidebarVisible && sidebar}
-        <SidebarSash containerRef={rootRef} />
-      </div>
-      <div className={styles['editor']}>{editor}</div>
-      <div className={styles['panel']}>
-        {panelVisible && panel}
-        <PanelSash containerRef={rootRef} />
+    <div className={styles['workbench']}>
+      <div className={styles['top']}>
+        <div className={styles['activitybar']}>{activitybar}</div>
+        <div className={styles['main']}>
+          <Allotment
+            proportionalLayout={false}
+            onChange={(s) => {
+              const first = s[0]
+              if (typeof first === 'number' && sidebarVisible) onSidebarResize(first)
+            }}
+          >
+            <Allotment.Pane
+              minSize={SIDEBAR_MIN}
+              maxSize={SIDEBAR_MAX}
+              preferredSize={sizes.sidebar}
+              visible={sidebarVisible}
+            >
+              <div className={styles['pane']}>{sidebar}</div>
+            </Allotment.Pane>
+            <Allotment.Pane>
+              <Allotment
+                vertical
+                proportionalLayout={false}
+                onChange={(s) => {
+                  const second = s[1]
+                  if (typeof second === 'number' && panelVisible) onPanelResize(second)
+                }}
+              >
+                <Allotment.Pane>
+                  <div className={styles['pane']}>{editor}</div>
+                </Allotment.Pane>
+                <Allotment.Pane
+                  minSize={PANEL_MIN}
+                  maxSize={PANEL_MAX}
+                  preferredSize={sizes.panel}
+                  visible={panelVisible}
+                >
+                  <div className={styles['pane']}>{panel}</div>
+                </Allotment.Pane>
+              </Allotment>
+            </Allotment.Pane>
+          </Allotment>
+        </div>
       </div>
       <div className={styles['statusbar']}>{statusbar}</div>
     </div>
-  )
-}
-
-// -------- Sash components --------
-
-interface SashProps {
-  containerRef: React.RefObject<HTMLDivElement | null>
-}
-
-function SidebarSash({ containerRef }: SashProps) {
-  const dragging = useRef(false)
-
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      dragging.current = true
-      const startX = e.clientX
-      const root = containerRef.current
-      if (!root) return
-
-      const startWidth = parseInt(
-        getComputedStyle(root).getPropertyValue('--sidebar-width') || '240',
-        10,
-      )
-
-      const onMove = (ev: MouseEvent) => {
-        const delta = ev.clientX - startX
-        const next = Math.max(120, Math.min(600, startWidth + delta))
-        root.style.setProperty('--sidebar-width', `${next}px`)
-      }
-      const onUp = () => {
-        dragging.current = false
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
-    },
-    [containerRef],
-  )
-
-  return (
-    <div
-      className={`${styles['sash']} ${styles['sash-vertical']}`}
-      style={{ right: 0 }}
-      onMouseDown={onMouseDown}
-    />
-  )
-}
-
-function PanelSash({ containerRef }: SashProps) {
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault()
-      const startY = e.clientY
-      const root = containerRef.current
-      if (!root) return
-
-      const startHeight = parseInt(
-        getComputedStyle(root).getPropertyValue('--panel-height') || '200',
-        10,
-      )
-
-      const onMove = (ev: MouseEvent) => {
-        const delta = startY - ev.clientY
-        const next = Math.max(60, Math.min(600, startHeight + delta))
-        root.style.setProperty('--panel-height', `${next}px`)
-      }
-      const onUp = () => {
-        window.removeEventListener('mousemove', onMove)
-        window.removeEventListener('mouseup', onUp)
-      }
-      window.addEventListener('mousemove', onMove)
-      window.addEventListener('mouseup', onUp)
-    },
-    [containerRef],
-  )
-
-  return (
-    <div
-      className={`${styles['sash']} ${styles['sash-horizontal']}`}
-      style={{ top: 0 }}
-      onMouseDown={onMouseDown}
-    />
   )
 }

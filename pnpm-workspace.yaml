@@ -30,6 +30,9 @@ catalog:
   react: ^19.0.0
   react-dom: ^19.0.0
 
+  # UI
+  allotment: ^1.20.0
+
   # Node runtime
   tsx: ^4.19.0
   turbo: ^2.9.14

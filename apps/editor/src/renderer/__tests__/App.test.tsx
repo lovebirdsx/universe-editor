@@ -12,6 +12,10 @@ describe('<App />', () => {
     }
     window.api = {
       ping: vi.fn().mockResolvedValue(result),
+      storage: {
+        get: vi.fn().mockResolvedValue(undefined),
+        set: vi.fn().mockResolvedValue(undefined),
+      },
     }
   })
 
