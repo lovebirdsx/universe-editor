@@ -1,35 +1,25 @@
-import { useState, useEffect, type ComponentType } from 'react'
+import { type ComponentType } from 'react'
 import {
   ViewContainerRegistry,
   ViewRegistry,
   IViewsService,
   ViewContainerLocation,
 } from '@universe-editor/platform'
-import type { IViewContainerDescriptor } from '@universe-editor/platform'
-import { useService } from '../useService.js'
+import type { ViewsState } from '@universe-editor/platform'
+import { useService, useSnapshot } from '../useService.js'
 import { ViewPane } from './ViewPane.js'
 import styles from './SideBar.module.css'
 
 /** Registry of React components keyed by IViewDescriptor.componentKey. */
 export const viewComponentMap = new Map<string, ComponentType>()
 
+const sidebarActiveSelector = (s: ViewsState) =>
+  s.activeContainerByLocation[ViewContainerLocation.SideBar]
+
 export function SideBar() {
   const viewsService = useService(IViewsService)
-  const [activeContainer, setActiveContainer] = useState<IViewContainerDescriptor | undefined>(
-    undefined,
-  )
-
-  useEffect(() => {
-    const disposable = viewsService.onDidChangeViewContainerVisibility((e) => {
-      if (e.location !== ViewContainerLocation.SideBar) return
-      if (e.visible) {
-        setActiveContainer(ViewContainerRegistry.getViewContainer(e.containerId))
-      } else {
-        setActiveContainer((prev) => (prev?.id === e.containerId ? undefined : prev))
-      }
-    })
-    return () => disposable.dispose()
-  }, [viewsService])
+  const activeId = useSnapshot(viewsService, sidebarActiveSelector)
+  const activeContainer = activeId ? ViewContainerRegistry.getViewContainer(activeId) : undefined
 
   if (!activeContainer) {
     return <aside className={styles['sidebar']} />

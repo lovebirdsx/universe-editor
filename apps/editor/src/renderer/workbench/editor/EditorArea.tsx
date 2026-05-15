@@ -1,8 +1,14 @@
-import { useState, useEffect, type ComponentType } from 'react'
+import { type ComponentType } from 'react'
 import { EditorRegistry, IEditorService } from '@universe-editor/platform'
-import type { IEditorInput } from '@universe-editor/platform'
-import { useService } from '../useService.js'
+import type { EditorState, IEditorInput } from '@universe-editor/platform'
+import { useService, useSnapshot } from '../useService.js'
+import { shallow } from '../shallow.js'
 import styles from './EditorArea.module.css'
+
+const editorAreaSelector = (s: EditorState) => ({
+  openEditors: s.openEditors,
+  activeEditor: s.openEditors.find((e) => e.id === s.activeEditorId),
+})
 
 /** Registry of React components keyed by IEditorProvider.componentKey. */
 export const editorComponentMap = new Map<string, ComponentType<{ input: IEditorInput }>>()
@@ -65,23 +71,8 @@ function EditorTab({
 
 export function EditorArea() {
   const editorService = useService(IEditorService)
-  const [openEditors, setOpenEditors] = useState<readonly IEditorInput[]>([])
-  const [activeEditor, setActiveEditor] = useState<IEditorInput | undefined>(undefined)
 
-  useEffect(() => {
-    setOpenEditors(editorService.openEditors)
-    setActiveEditor(editorService.activeEditor)
-
-    const d1 = editorService.onDidOpenEditor(() => setOpenEditors(editorService.openEditors))
-    const d2 = editorService.onDidCloseEditor(() => setOpenEditors(editorService.openEditors))
-    const d3 = editorService.onDidChangeActiveEditor((e) => setActiveEditor(e.editor))
-
-    return () => {
-      d1.dispose()
-      d2.dispose()
-      d3.dispose()
-    }
-  }, [editorService])
+  const { openEditors, activeEditor } = useSnapshot(editorService, editorAreaSelector, shallow)
 
   const renderContent = () => {
     if (!activeEditor) {

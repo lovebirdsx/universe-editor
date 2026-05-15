@@ -22,11 +22,26 @@ export interface IStatusBarEntry {
   readonly priority: number
 }
 
+/** Entry as kept by the service: stable id + the original entry. */
+export interface IStoredStatusBarEntry {
+  readonly id: number
+  readonly entry: IStatusBarEntry
+}
+
+/** Immutable snapshot of status bar state. */
+export interface StatusBarState {
+  readonly entries: readonly IStoredStatusBarEntry[]
+}
+
 export interface IStatusBarService {
   readonly _serviceBrand: undefined
 
   addEntry(entry: IStatusBarEntry): IDisposable
 
+  getSnapshot(): StatusBarState
+  subscribe(listener: () => void): IDisposable
+
+  /** @deprecated Legacy event. Prefer subscribe + getSnapshot. */
   readonly onDidChangeEntries: Event<void>
 }
 

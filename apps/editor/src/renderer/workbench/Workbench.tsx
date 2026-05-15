@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
 import {
   ILayoutService,
   ICommandService,
@@ -8,8 +8,9 @@ import {
   PartId,
   LifecyclePhase,
 } from '@universe-editor/platform'
-import type { LifecycleService, InstantiationService } from '@universe-editor/platform'
-import { ServicesContext } from './useService.js'
+import type { LayoutState, LifecycleService, InstantiationService } from '@universe-editor/platform'
+import { ServicesContext, useService, useSnapshot } from './useService.js'
+import { shallow } from './shallow.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { ActivityBar } from './activitybar/ActivityBar.js'
 import { SideBar } from './sidebar/SideBar.js'
@@ -23,6 +24,11 @@ interface WorkbenchProps {
   lifecycle: LifecycleService
 }
 
+const layoutVisibilitySelector = (s: LayoutState) => ({
+  sidebarVisible: s.visible[PartId.SideBar] ?? true,
+  panelVisible: s.visible[PartId.Panel] ?? true,
+})
+
 function buildKeyString(e: KeyboardEvent): string {
   const parts: string[] = []
   if (e.ctrlKey) parts.push('ctrl')
@@ -33,26 +39,37 @@ function buildKeyString(e: KeyboardEvent): string {
   return parts.join('+')
 }
 
-export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
-  const [sidebarVisible, setSidebarVisible] = useState(true)
-  const [panelVisible, setPanelVisible] = useState(true)
+function WorkbenchShell() {
+  const layoutService = useService(ILayoutService)
+  const { sidebarVisible, panelVisible } = useSnapshot(
+    layoutService,
+    layoutVisibilitySelector,
+    shallow,
+  )
 
+  return (
+    <>
+      <WorkbenchLayout
+        sidebarVisible={sidebarVisible}
+        panelVisible={panelVisible}
+        activitybar={<ActivityBar />}
+        sidebar={<SideBar />}
+        editor={<EditorArea />}
+        panel={<Panel />}
+        statusbar={<StatusBar />}
+      />
+      <QuickInputPortal />
+    </>
+  )
+}
+
+export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
   // Advance lifecycle after mount
   useEffect(() => {
     lifecycle.setPhase(LifecyclePhase.Restored)
     const id = requestIdleCallback(() => lifecycle.setPhase(LifecyclePhase.Eventually))
     return () => cancelIdleCallback(id)
   }, [lifecycle])
-
-  // Subscribe to layout visibility changes
-  useEffect(() => {
-    const layoutService = instantiation.invokeFunction((a) => a.get(ILayoutService))
-    const d = layoutService.onDidChangePartVisibility((e) => {
-      if (e.part === PartId.SideBar) setSidebarVisible(e.visible)
-      if (e.part === PartId.Panel) setPanelVisible(e.visible)
-    })
-    return () => d.dispose()
-  }, [instantiation])
 
   // Global keyboard handler: resolve keybinding → execute command
   useEffect(() => {
@@ -99,16 +116,7 @@ export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
 
   return (
     <ServicesContext.Provider value={instantiation}>
-      <WorkbenchLayout
-        sidebarVisible={sidebarVisible}
-        panelVisible={panelVisible}
-        activitybar={<ActivityBar />}
-        sidebar={<SideBar />}
-        editor={<EditorArea />}
-        panel={<Panel />}
-        statusbar={<StatusBar />}
-      />
-      <QuickInputPortal />
+      <WorkbenchShell />
     </ServicesContext.Provider>
   )
 }

@@ -55,6 +55,17 @@ export interface IActiveEditorChangeEvent {
   readonly editor: IEditorInput | undefined
 }
 
+/**
+ * Immutable snapshot of editor state. Returned by IEditorService.getSnapshot().
+ *
+ * Reference is stable when nothing changed — required for useSyncExternalStore
+ * compatibility (see plan §11).
+ */
+export interface EditorState {
+  readonly openEditors: readonly IEditorInput[]
+  readonly activeEditorId: string | undefined
+}
+
 export interface IEditorService {
   readonly _serviceBrand: undefined
 
@@ -62,9 +73,16 @@ export interface IEditorService {
   closeEditor(id: string): void
   closeAllEditors(): void
 
+  /** Pull the current state. Reference is stable across calls when nothing changed. */
+  getSnapshot(): EditorState
+  /** Notified on every state change. Pair with getSnapshot for useSyncExternalStore. */
+  subscribe(listener: () => void): IDisposable
+
+  // Convenience getters (read through the same snapshot).
   readonly activeEditor: IEditorInput | undefined
   readonly openEditors: readonly IEditorInput[]
 
+  // Legacy events kept for non-React consumers (commands, IPC, contributions).
   readonly onDidChangeActiveEditor: Event<IActiveEditorChangeEvent>
   readonly onDidOpenEditor: Event<IEditorInput>
   readonly onDidCloseEditor: Event<IEditorInput>

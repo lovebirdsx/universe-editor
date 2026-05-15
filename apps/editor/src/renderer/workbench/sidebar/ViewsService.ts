@@ -4,42 +4,84 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '@universe-editor/platform'
-import type { IViewsService, IViewContainerVisibilityChangeEvent } from '@universe-editor/platform'
+import type {
+  IViewsService,
+  IViewContainerVisibilityChangeEvent,
+  ViewsState,
+  IDisposable,
+} from '@universe-editor/platform'
 import { ViewContainerLocation } from '@universe-editor/platform'
+
+const EMPTY_STATE: ViewsState = Object.freeze({
+  activeContainerByLocation: Object.freeze({}) as Readonly<Record<number, string | undefined>>,
+})
 
 export class ViewsService implements IViewsService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _activeContainerIds = new Map<number, string>()
+  private _state: ViewsState = EMPTY_STATE
 
-  private readonly _emitter = new Emitter<IViewContainerVisibilityChangeEvent>()
-  readonly onDidChangeViewContainerVisibility = this._emitter.event
+  private readonly _onChange = new Emitter<void>()
+  private readonly _onDidChangeViewContainerVisibility =
+    new Emitter<IViewContainerVisibilityChangeEvent>()
+  readonly onDidChangeViewContainerVisibility = this._onDidChangeViewContainerVisibility.event
+
+  getSnapshot(): ViewsState {
+    return this._state
+  }
+
+  subscribe(listener: () => void): IDisposable {
+    return this._onChange.event(listener)
+  }
 
   openViewContainer(containerId: string): void {
     const location = this._getLocation(containerId)
-    const prev = this._activeContainerIds.get(location)
+    const prev = this._state.activeContainerByLocation[location]
     if (prev === containerId) return
-    this._activeContainerIds.set(location, containerId)
-    this._emitter.fire({ containerId, visible: true, location })
+
+    this._commit(
+      Object.freeze({
+        activeContainerByLocation: Object.freeze({
+          ...this._state.activeContainerByLocation,
+          [location]: containerId,
+        }),
+      }),
+    )
+
+    this._onDidChangeViewContainerVisibility.fire({ containerId, visible: true, location })
     if (prev !== undefined) {
-      this._emitter.fire({ containerId: prev, visible: false, location })
+      this._onDidChangeViewContainerVisibility.fire({
+        containerId: prev,
+        visible: false,
+        location,
+      })
     }
   }
 
   closeViewContainer(containerId: string): void {
     const location = this._getLocation(containerId)
-    const current = this._activeContainerIds.get(location)
+    const current = this._state.activeContainerByLocation[location]
     if (current !== containerId) return
-    this._activeContainerIds.delete(location)
-    this._emitter.fire({ containerId, visible: false, location })
+
+    const next = { ...this._state.activeContainerByLocation }
+    delete next[location]
+    this._commit(Object.freeze({ activeContainerByLocation: Object.freeze(next) }))
+
+    this._onDidChangeViewContainerVisibility.fire({ containerId, visible: false, location })
   }
 
   getActiveViewContainerId(location: number): string | undefined {
-    return this._activeContainerIds.get(location)
+    return this._state.activeContainerByLocation[location]
   }
 
   private _getLocation(_id: string): number {
     // Default to SideBar; Panel containers could be resolved via ViewContainerRegistry.
     return ViewContainerLocation.SideBar
+  }
+
+  private _commit(next: ViewsState): void {
+    if (next === this._state) return
+    this._state = next
+    this._onChange.fire()
   }
 }

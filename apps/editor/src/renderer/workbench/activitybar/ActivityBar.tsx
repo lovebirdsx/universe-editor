@@ -4,8 +4,8 @@ import {
   ViewContainerLocation,
   IViewsService,
 } from '@universe-editor/platform'
-import type { IViewContainerDescriptor } from '@universe-editor/platform'
-import { useService } from '../useService.js'
+import type { IViewContainerDescriptor, ViewsState } from '@universe-editor/platform'
+import { useService, useSnapshot } from '../useService.js'
 import styles from './ActivityBar.module.css'
 
 interface ActivityBarItemProps {
@@ -13,6 +13,9 @@ interface ActivityBarItemProps {
   isActive: boolean
   onClick: () => void
 }
+
+const sidebarActiveSelector = (s: ViewsState) =>
+  s.activeContainerByLocation[ViewContainerLocation.SideBar]
 
 function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps) {
   const [showTooltip, setShowTooltip] = useState(false)
@@ -40,8 +43,8 @@ function CodiconIcon({ name }: { name: string }) {
 
 export function ActivityBar() {
   const viewsService = useService(IViewsService)
+  const activeId = useSnapshot(viewsService, sidebarActiveSelector)
   const [containers, setContainers] = useState<IViewContainerDescriptor[]>([])
-  const [activeId, setActiveId] = useState<string | undefined>(undefined)
 
   useEffect(() => {
     const refresh = () => {
@@ -52,21 +55,12 @@ export function ActivityBar() {
     return () => disposable.dispose()
   }, [])
 
-  useEffect(() => {
-    const disposable = viewsService.onDidChangeViewContainerVisibility((e) => {
-      if (e.visible) setActiveId(e.containerId)
-      else if (activeId === e.containerId) setActiveId(undefined)
-    })
-    return () => disposable.dispose()
-  }, [viewsService, activeId])
-
   const handleClick = useCallback(
     (id: string) => {
       if (activeId === id) {
         viewsService.closeViewContainer(id)
       } else {
         viewsService.openViewContainer(id)
-        setActiveId(id)
       }
     },
     [viewsService, activeId],

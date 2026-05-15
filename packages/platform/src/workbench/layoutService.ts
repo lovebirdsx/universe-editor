@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Event } from '../base/event.js'
+import { IDisposable } from '../base/lifecycle.js'
 import { createDecorator } from '../di/instantiation.js'
 
 export const enum PartId {
@@ -19,6 +20,11 @@ export interface IPartVisibilityChangeEvent {
   readonly visible: boolean
 }
 
+/** Immutable snapshot of part visibility. */
+export interface LayoutState {
+  readonly visible: Readonly<Record<PartId, boolean>>
+}
+
 export interface ILayoutService {
   readonly _serviceBrand: undefined
 
@@ -26,6 +32,10 @@ export interface ILayoutService {
   setVisible(part: PartId, visible: boolean): void
   toggleVisible(part: PartId): void
 
+  getSnapshot(): LayoutState
+  subscribe(listener: () => void): IDisposable
+
+  /** @deprecated Legacy event. Prefer subscribe + getSnapshot. */
   readonly onDidChangePartVisibility: Event<IPartVisibilityChangeEvent>
 }
 

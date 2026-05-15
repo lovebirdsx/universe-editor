@@ -1,38 +1,32 @@
 import { useState, useEffect, useRef } from 'react'
 import { IOutputService } from '@universe-editor/platform'
-import type { IOutputChannel } from '@universe-editor/platform'
-import { useService } from '../../useService.js'
-import { OutputChannel } from './OutputService.js'
+import type { OutputState } from '@universe-editor/platform'
+import { useService, useSnapshot } from '../../useService.js'
+import { shallow } from '../../shallow.js'
 import styles from './OutputView.module.css'
+
+const outputSelector = (s: OutputState) => ({
+  channelNames: s.channelNames,
+  activeChannelName: s.activeChannelName,
+})
 
 export function OutputView() {
   const outputService = useService(IOutputService)
-  const [channels, setChannels] = useState<readonly IOutputChannel[]>([])
-  const [activeChannel, setActiveChannel] = useState<IOutputChannel | undefined>(undefined)
+  const { channelNames, activeChannelName } = useSnapshot(outputService, outputSelector, shallow)
+  const activeChannel = activeChannelName ? outputService.getChannel(activeChannelName) : undefined
+
   const [content, setContent] = useState('')
   const contentRef = useRef<HTMLPreElement>(null)
-
-  useEffect(() => {
-    setChannels(outputService.getChannels())
-    setActiveChannel(outputService.activeChannel)
-
-    const d1 = outputService.onDidChangeActiveChannel((ch) => {
-      setActiveChannel(ch)
-      setChannels(outputService.getChannels())
-    })
-    return () => d1.dispose()
-  }, [outputService])
 
   useEffect(() => {
     if (!activeChannel) {
       setContent('')
       return
     }
-    const concrete = activeChannel as OutputChannel
-    setContent(concrete.getContent())
+    setContent(activeChannel.getContent())
 
     const d = activeChannel.onDidAppend(() => {
-      setContent(concrete.getContent())
+      setContent(activeChannel.getContent())
       // Auto-scroll to bottom
       if (contentRef.current) {
         contentRef.current.scrollTop = contentRef.current.scrollHeight
@@ -50,16 +44,16 @@ export function OutputView() {
       <div className={styles['toolbar']}>
         <select
           className={styles['channelSelect']}
-          value={activeChannel?.name ?? ''}
+          value={activeChannelName ?? ''}
           onChange={handleChannelChange}
           aria-label="Select output channel"
         >
-          {channels.map((ch) => (
-            <option key={ch.name} value={ch.name}>
-              {ch.name}
+          {channelNames.map((name) => (
+            <option key={name} value={name}>
+              {name}
             </option>
           ))}
-          {channels.length === 0 && <option value="">No channels</option>}
+          {channelNames.length === 0 && <option value="">No channels</option>}
         </select>
         <button
           className={styles['clearBtn']}

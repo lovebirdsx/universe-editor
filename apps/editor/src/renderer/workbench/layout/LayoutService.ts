@@ -4,34 +4,62 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter } from '@universe-editor/platform'
-import type { ILayoutService, IPartVisibilityChangeEvent } from '@universe-editor/platform'
+import type {
+  ILayoutService,
+  IPartVisibilityChangeEvent,
+  LayoutState,
+  IDisposable,
+} from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
+
+const INITIAL_STATE: LayoutState = Object.freeze({
+  visible: Object.freeze({
+    [PartId.ActivityBar]: true,
+    [PartId.SideBar]: true,
+    [PartId.EditorArea]: true,
+    [PartId.Panel]: true,
+    [PartId.StatusBar]: true,
+  }),
+})
 
 export class LayoutService implements ILayoutService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _visible = new Map<PartId, boolean>([
-    [PartId.ActivityBar, true],
-    [PartId.SideBar, true],
-    [PartId.EditorArea, true],
-    [PartId.Panel, true],
-    [PartId.StatusBar, true],
-  ])
+  private _state: LayoutState = INITIAL_STATE
 
-  private readonly _emitter = new Emitter<IPartVisibilityChangeEvent>()
-  readonly onDidChangePartVisibility = this._emitter.event
+  private readonly _onChange = new Emitter<void>()
+  private readonly _onDidChangePartVisibility = new Emitter<IPartVisibilityChangeEvent>()
+  readonly onDidChangePartVisibility = this._onDidChangePartVisibility.event
+
+  getSnapshot(): LayoutState {
+    return this._state
+  }
+
+  subscribe(listener: () => void): IDisposable {
+    return this._onChange.event(listener)
+  }
 
   getVisible(part: PartId): boolean {
-    return this._visible.get(part) ?? true
+    return this._state.visible[part] ?? true
   }
 
   setVisible(part: PartId, visible: boolean): void {
-    if (this._visible.get(part) === visible) return
-    this._visible.set(part, visible)
-    this._emitter.fire({ part, visible })
+    if (this._state.visible[part] === visible) return
+    this._commit(
+      Object.freeze({
+        visible: Object.freeze({ ...this._state.visible, [part]: visible }),
+      }),
+    )
+    this._onDidChangePartVisibility.fire({ part, visible })
   }
 
   toggleVisible(part: PartId): void {
     this.setVisible(part, !this.getVisible(part))
+  }
+
+  private _commit(next: LayoutState): void {
+    if (next === this._state) return
+    this._state = next
+    this._onChange.fire()
   }
 }

@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react'
 import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
-import type { IStatusBarEntry } from '@universe-editor/platform'
-import { useService } from '../useService.js'
-import { StatusBarService } from './StatusBarService.js'
+import type { IStatusBarEntry, StatusBarState } from '@universe-editor/platform'
+import { useService, useSnapshot } from '../useService.js'
 import styles from './StatusBar.module.css'
+
+const entriesSelector = (s: StatusBarState) => s.entries
 
 function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
   const commandService = useService(ICommandService)
@@ -28,15 +28,7 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
 
 export function StatusBar() {
   const statusBarService = useService(IStatusBarService)
-  const [, forceUpdate] = useState(0)
-
-  useEffect(() => {
-    const disposable = statusBarService.onDidChangeEntries(() => forceUpdate((n) => n + 1))
-    return () => disposable.dispose()
-  }, [statusBarService])
-
-  const concreteService = statusBarService as StatusBarService
-  const entries = concreteService.getEntries()
+  const entries = useSnapshot(statusBarService, entriesSelector)
 
   const leftEntries = entries
     .filter((e) => e.entry.alignment === StatusBarAlignment.Left)
