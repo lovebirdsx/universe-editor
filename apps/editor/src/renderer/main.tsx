@@ -27,6 +27,8 @@ import {
   ViewContainerLocation,
   PartId,
   ProxyChannel,
+  DisposableTracker,
+  setDisposableTracker,
   normalizePlatform,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
@@ -184,6 +186,20 @@ function registerBuiltInContributions(deps: BuiltInDeps): void {
 }
 
 function bootstrapWorkbench(): void {
+  // Dev-only: track Disposable leaks. Report on beforeunload.
+  if (import.meta.env.DEV) {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    window.addEventListener('beforeunload', () => {
+      const report = tracker.computeLeakingDisposables()
+      if (report) {
+        console.warn(
+          `[renderer] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
+        )
+      }
+    })
+  }
+
   const services = new ServiceCollection()
 
   // Platform services

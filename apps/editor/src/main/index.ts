@@ -1,12 +1,25 @@
 import { app, BrowserWindow } from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainServices.js'
 import { MainStorageService } from './services/storage/storageMainService.js'
 import { MainPingService } from './services/ping/pingMainService.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// Dev-only: track Disposable leaks. Report on process exit.
+if (import.meta.env.DEV) {
+  const tracker = new DisposableTracker()
+  setDisposableTracker(tracker)
+  process.on('exit', () => {
+    const report = tracker.computeLeakingDisposables()
+    if (report) {
+      console.warn(`[main] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`)
+    }
+  })
+}
 
 // Shared singletons created lazily on first window.
 let sharedServices: SharedMainServices | null = null

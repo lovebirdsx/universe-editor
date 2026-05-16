@@ -1,11 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Microsoft Corporation. All rights reserved.
  *  Licensed under the MIT License. See License.txt in the project root for license information.
- *  Adapted from Microsoft VSCode for Universe Editor (Trace and delayed instantiation removed).
+ *  Adapted from Microsoft VSCode for Universe Editor (Trace removed).
  *  Source: https://github.com/microsoft/vscode/blob/main/src/vs/platform/instantiation/common/instantiationService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { DisposableStore, dispose, isDisposable } from '../base/lifecycle.js'
+import { GlobalIdleValue } from '../base/async.js'
+import { Event } from '../base/event.js'
+import {
+  DisposableStore,
+  IDisposable,
+  dispose,
+  isDisposable,
+  toDisposable,
+} from '../base/lifecycle.js'
+import { LinkedList } from '../base/linkedList.js'
 import { SyncDescriptor, SyncDescriptor0 } from './descriptors.js'
 import { Graph } from './graph.js'
 import {
@@ -264,6 +273,7 @@ export class InstantiationService implements IInstantiationService {
             data.id,
             data.desc.ctor,
             data.desc.staticArguments,
+            data.desc.supportsDelayedInstantiation,
           )
           this._setCreatedServiceInstance(data.id, instance)
         }
@@ -279,11 +289,23 @@ export class InstantiationService implements IInstantiationService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ctor: any,
     args: unknown[] = [],
+    supportsDelayedInstantiation: boolean = false,
   ): T {
     if (this._services.get(id) instanceof SyncDescriptor) {
-      return this._createServiceInstance(id, ctor, args, this._servicesToMaybeDispose)
+      return this._createServiceInstance(
+        id,
+        ctor,
+        args,
+        supportsDelayedInstantiation,
+        this._servicesToMaybeDispose,
+      )
     } else if (this._parent) {
-      return this._parent._createServiceInstanceWithOwner(id, ctor, args)
+      return this._parent._createServiceInstanceWithOwner(
+        id,
+        ctor,
+        args,
+        supportsDelayedInstantiation,
+      )
     } else {
       throw new Error(`illegalState - creating UNKNOWN service instance ${ctor.name}`)
     }
@@ -294,11 +316,104 @@ export class InstantiationService implements IInstantiationService {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ctor: any,
     args: unknown[] = [],
+    supportsDelayedInstantiation: boolean,
     disposeBucket: Set<unknown>,
   ): T {
-    const result = this._createInstance<T>(ctor, args)
-    disposeBucket.add(result)
-    return result
+    if (!supportsDelayedInstantiation) {
+      // eager instantiation
+      const result = this._createInstance<T>(ctor, args)
+      disposeBucket.add(result)
+      return result
+    }
+
+    // Lazy instantiation: build a Proxy backed by GlobalIdleValue. The real
+    // instance is created on first non-event property access (or when the
+    // idle callback fires, whichever comes first). Until then, `onDid*` /
+    // `onWill*` event subscribers are kept in `earlyListeners` and reattached
+    // to the real service upon materialization.
+    //
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
+    const self = this
+
+    type EarlyListenerData = {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      listener: Parameters<Event<any>>
+      disposable: IDisposable | undefined
+    }
+    const earlyListeners = new Map<string, LinkedList<EarlyListenerData>>()
+
+    const idle = new GlobalIdleValue<T>(() => {
+      const result = self._createInstance<T>(ctor, args)
+
+      // re-attach early listeners to the real service
+      for (const [key, values] of earlyListeners) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const candidate = (result as any)[key]
+        if (typeof candidate === 'function') {
+          for (const value of values) {
+            value.disposable = candidate.apply(result, value.listener)
+          }
+        }
+      }
+      earlyListeners.clear()
+      disposeBucket.add(result)
+      return result
+    })
+
+    return new Proxy(Object.create(null), {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      get(target: any, key: PropertyKey): unknown {
+        if (!idle.isInitialized) {
+          if (typeof key === 'string' && (key.startsWith('onDid') || key.startsWith('onWill'))) {
+            let list = earlyListeners.get(key)
+            if (!list) {
+              list = new LinkedList()
+              earlyListeners.set(key, list)
+            }
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const event: Event<any> = (callback, thisArg, disposables) => {
+              if (idle.isInitialized) {
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                return (idle.value as any)[key](callback, thisArg, disposables)
+              }
+              const entry: EarlyListenerData = {
+                listener: [callback, thisArg, disposables],
+                disposable: undefined,
+              }
+              const rm = list!.push(entry)
+              return toDisposable(() => {
+                rm()
+                entry.disposable?.dispose()
+              })
+            }
+            return event
+          }
+        }
+
+        if (key in target) {
+          return target[key]
+        }
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const obj = idle.value as any
+        let prop = obj[key]
+        if (typeof prop !== 'function') {
+          return prop
+        }
+        prop = prop.bind(obj)
+        target[key] = prop
+        return prop
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      set(_target: T, p: PropertyKey, value: any): boolean {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ;(idle.value as any)[p] = value
+        return true
+      },
+      getPrototypeOf(_target: T) {
+        return ctor.prototype
+      },
+    }) as T
   }
 
   private _throwIfStrict(msg: string, printWarning: boolean): void {

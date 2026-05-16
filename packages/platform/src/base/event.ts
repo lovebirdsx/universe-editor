@@ -104,6 +104,132 @@ export namespace Event {
   export function toPromise<T>(event: Event<T>): Promise<T> {
     return new Promise((resolve) => once(event)(resolve))
   }
+
+  /**
+   * Debounce an event. Multiple `fire()`s within `delay` ms collapse into a
+   * single output, computed by repeatedly calling `merge(last, current)`.
+   *
+   * @param leading                 fire immediately on the first event in a window
+   * @param flushOnListenerRemove   flush pending output when a listener is removed
+   *                                (useful when the listener owns the only reference)
+   */
+  export function debounce<I, O>(
+    event: Event<I>,
+    merge: (last: O | undefined, event: I) => O,
+    delay: number = 100,
+    leading: boolean = false,
+    flushOnListenerRemove: boolean = false,
+    disposable?: DisposableStore,
+  ): Event<O> {
+    let subscription: IDisposable | undefined
+    let output: O | undefined = undefined
+    let handle: ReturnType<typeof setTimeout> | undefined = undefined
+    let numDebouncedCalls = 0
+    let doFire: ((value: O | undefined) => void) | undefined
+
+    const emitter = new Emitter<O>({
+      onWillAddFirstListener() {
+        subscription = event((cur) => {
+          numDebouncedCalls++
+          output = merge(output, cur)
+          if (leading && handle === undefined) {
+            emitter.fire(output)
+            output = undefined
+          }
+          doFire = (value) => {
+            const _output = value
+            output = undefined
+            handle = undefined
+            if (!leading || numDebouncedCalls > 1) {
+              emitter.fire(_output as O)
+            }
+            numDebouncedCalls = 0
+          }
+          if (handle !== undefined) {
+            clearTimeout(handle)
+          }
+          handle = setTimeout(() => doFire?.(output), delay)
+        })
+      },
+      onWillRemoveListener() {
+        if (flushOnListenerRemove && numDebouncedCalls > 0) {
+          doFire?.(output)
+        }
+      },
+      onDidRemoveLastListener() {
+        doFire = undefined
+        subscription?.dispose()
+        subscription = undefined
+        if (handle !== undefined) {
+          clearTimeout(handle)
+          handle = undefined
+        }
+        output = undefined
+        numDebouncedCalls = 0
+      },
+    })
+
+    disposable?.add(emitter)
+    return emitter.event
+  }
+
+  /**
+   * Throttle an event. The first event in a window fires immediately (if
+   * `leading`), subsequent events within `delay` ms are merged via `merge`
+   * and emitted once at the window's end (if `trailing`).
+   */
+  export function throttle<I, O>(
+    event: Event<I>,
+    merge: (last: O | undefined, event: I) => O,
+    delay: number = 100,
+    leading: boolean = true,
+    trailing: boolean = true,
+    disposable?: DisposableStore,
+  ): Event<O> {
+    let subscription: IDisposable | undefined
+    let pending: O | undefined = undefined
+    let handle: ReturnType<typeof setTimeout> | undefined = undefined
+    let inWindow = false
+
+    const emitter = new Emitter<O>({
+      onWillAddFirstListener() {
+        subscription = event((cur) => {
+          if (!inWindow) {
+            inWindow = true
+            if (leading) {
+              emitter.fire(merge(undefined, cur))
+            } else {
+              pending = merge(pending, cur)
+            }
+            handle = setTimeout(() => {
+              const out = pending
+              pending = undefined
+              handle = undefined
+              inWindow = false
+              if (trailing && out !== undefined) {
+                emitter.fire(out)
+              }
+            }, delay)
+          } else {
+            pending = merge(pending, cur)
+          }
+        })
+      },
+      onDidRemoveLastListener() {
+        if (handle !== undefined) {
+          clearTimeout(handle)
+          handle = undefined
+        }
+        inWindow = false
+        pending = undefined
+        subscription?.dispose()
+        subscription = undefined
+      },
+    })
+
+    disposable?.add(emitter)
+    return emitter.event
+  }
 }
 
 export interface EmitterOptions {
@@ -223,5 +349,100 @@ export class Emitter<T> {
         this._options?.onDidRemoveLastListener?.()
       }
     }
+  }
+}
+
+export interface PauseableEmitterOptions<T> extends EmitterOptions {
+  /**
+   * If provided, events buffered while paused are collapsed into a single
+   * event when resuming. Otherwise each buffered event is fired in order.
+   */
+  merge?: (input: T[]) => T
+}
+
+/**
+ * Emitter that can be paused. While paused, `fire()` calls are queued; on
+ * resume the queue is flushed (one-by-one, or via the `merge` option as a
+ * single combined event). `pause()` calls nest — `resume()` only releases
+ * the queue when the pause count returns to zero.
+ */
+export class PauseableEmitter<T> extends Emitter<T> {
+  private _isPaused = 0
+  protected _eventQueue = new LinkedList<T>()
+  private readonly _mergeFn: ((input: T[]) => T) | undefined
+
+  public get isPaused(): boolean {
+    return this._isPaused !== 0
+  }
+
+  constructor(options?: PauseableEmitterOptions<T>) {
+    super(options)
+    this._mergeFn = options?.merge
+  }
+
+  pause(): void {
+    this._isPaused++
+  }
+
+  resume(): void {
+    if (this._isPaused !== 0 && --this._isPaused === 0) {
+      if (this._mergeFn) {
+        if (this._eventQueue.size > 0) {
+          const events = Array.from(this._eventQueue)
+          this._eventQueue.clear()
+          super.fire(this._mergeFn(events))
+        }
+      } else {
+        while (this._isPaused === 0 && this._eventQueue.size !== 0) {
+          super.fire(this._eventQueue.shift() as T)
+        }
+      }
+    }
+  }
+
+  override fire(event: T): void {
+    if (this._isPaused !== 0) {
+      this._eventQueue.push(event)
+    } else {
+      super.fire(event)
+    }
+  }
+}
+
+/**
+ * Relays events from a swappable input event to a single output event. When
+ * the relay has no listeners, no subscription is held on the input — this
+ * keeps the upstream emitter quiet and avoids leaks. Assign a new event to
+ * `input` at any time; the active subscription transfers automatically.
+ */
+export class Relay<T> implements IDisposable {
+  private listening = false
+  private inputEvent: Event<T> = Event.None
+  private inputEventListener: IDisposable = Disposable.None
+
+  private readonly emitter = new Emitter<T>({
+    onDidAddFirstListener: () => {
+      this.listening = true
+      this.inputEventListener = this.inputEvent(this.emitter.fire, this.emitter)
+    },
+    onDidRemoveLastListener: () => {
+      this.listening = false
+      this.inputEventListener.dispose()
+    },
+  })
+
+  public readonly event: Event<T> = this.emitter.event
+
+  set input(event: Event<T>) {
+    this.inputEvent = event
+    if (this.listening) {
+      this.inputEventListener.dispose()
+      this.inputEventListener = event(this.emitter.fire, this.emitter)
+    }
+  }
+
+  dispose(): void {
+    this.inputEventListener.dispose()
+    this.emitter.dispose()
   }
 }

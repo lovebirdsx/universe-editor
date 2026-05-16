@@ -2,15 +2,18 @@
  *  Tests for packages/platform/src/base/lifecycle.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   combinedDisposable,
   Disposable,
   DisposableStore,
+  DisposableTracker,
   dispose,
+  GCBasedDisposableTracker,
   isDisposable,
   markAsSingleton,
   MutableDisposable,
+  setDisposableTracker,
   toDisposable,
 } from '../../base/lifecycle.js'
 
@@ -188,5 +191,94 @@ describe('markAsSingleton', () => {
   it('returns the same disposable', () => {
     const d = toDisposable(() => {})
     expect(markAsSingleton(d)).toBe(d)
+  })
+})
+
+describe('DisposableTracker', () => {
+  afterEach(() => setDisposableTracker(null))
+
+  it('reports a tracked disposable as leaking when not disposed', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const d = toDisposable(() => {})
+    const report = tracker.computeLeakingDisposables()
+    expect(report).toBeDefined()
+    expect(report!.leaks.length).toBe(1)
+    // dispose to clean up
+    d.dispose()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('does not report disposables that were disposed', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    toDisposable(() => {}).dispose()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('rooted children of a singleton are excluded', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const root = new DisposableStore()
+    markAsSingleton(root)
+    root.add(toDisposable(() => {}))
+    root.add(toDisposable(() => {}))
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('Disposable subclass: dispose() releases all children, no leak', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    class Foo extends Disposable {
+      constructor() {
+        super()
+        this._register(toDisposable(() => {}))
+        this._register(toDisposable(() => {}))
+      }
+    }
+    const f = new Foo()
+    f.dispose()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('MutableDisposable: swapping value disposes old and re-parents new', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const md = new MutableDisposable<{ dispose(): void }>()
+    md.value = toDisposable(() => {})
+    md.value = toDisposable(() => {})
+    md.dispose()
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
+  })
+
+  it('clearAndLeak unparents the value (leak reported)', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const md = new MutableDisposable<{ dispose(): void }>()
+    md.value = toDisposable(() => {})
+    md.clearAndLeak()
+    md.dispose()
+    // the leaked value is no longer parented and was never disposed
+    const report = tracker.computeLeakingDisposables()
+    expect(report).toBeDefined()
+    expect(report!.leaks.length).toBe(1)
+  })
+
+  it('details string includes a stack frame', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    toDisposable(() => {})
+    const report = tracker.computeLeakingDisposables()
+    expect(report!.details).toMatch(/Leak #1/)
+  })
+})
+
+describe('GCBasedDisposableTracker', () => {
+  afterEach(() => setDisposableTracker(null))
+
+  it('does not throw when installed and exercised', () => {
+    setDisposableTracker(new GCBasedDisposableTracker())
+    const d = toDisposable(() => {})
+    expect(() => d.dispose()).not.toThrow()
   })
 })
