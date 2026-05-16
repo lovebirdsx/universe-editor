@@ -638,3 +638,112 @@ editor 包新增：
 - **不**引入主进程独立 PreferencesService / settings.json
 - **不**新增 MenubarPreferencesMenu（菜单栏接入留主题 8/9）
 
+
+
+## 九、After 主题 8（Menubar + Chord 键位）
+
+继主题 6 之后，渲染端在 6/2026-05-16 新增了「2 段 chord 键位 + File/Help 菜单功能贡献」。
+
+### 改造范围
+
+| 类别 | 文件 |
+|---|---|
+| Platform 内核 | `packages/platform/src/command/keybindingRegistry.ts`（chord trie + `resolveKeystroke` 状态机）<br>`packages/platform/src/command/action.ts`（`keybinding.primary` 接受 `string \| readonly [string,string]`）<br>`packages/platform/src/host/hostService.ts`（新增 `toggleDevTools()`） |
+| 主进程 | `apps/editor/src/main/services/host/hostMainService.ts`（实现 `toggleDevTools` → `webContents.toggleDevTools()`） |
+| 渲染端 | `apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts`（chord 状态机 + 1.5s 超时 + status bar 反馈）<br>`apps/editor/src/renderer/workbench/titlebar/keybindingFormat.ts`（formatKey / formatChord，新文件）<br>`apps/editor/src/renderer/workbench/titlebar/useTitleBarMenus.ts`（菜单 shortcut 渲染支持 chord） |
+| 命令 | `apps/editor/src/renderer/actions/preferencesActions.ts`（OpenSettings：新增 `[Ctrl+K, Ctrl+S]` chord 别名 + 进入 File 菜单 5_preferences 组）<br>`apps/editor/src/renderer/actions/windowActions.ts`（新增 CloseWindow / ToggleDevTools / About）<br>`apps/editor/src/renderer/actions/index.ts`（3 条新 `registerAction2`） |
+
+### KeybindingsRegistry 新型
+
+```ts
+// 内部存储统一为 chords[]（1 或 2 元素）
+interface IResolvedKeybindingItem {
+  chords: readonly string[]
+  command: string
+  when: ContextKeyExpression | undefined
+  isNegated: boolean
+}
+
+// 状态机式 API
+type KeystrokeResolution =
+  | { kind: 'execute'; command: string }
+  | { kind: 'enter-chord'; pending: readonly string[] }
+  | { kind: 'no-match' }
+
+KeybindingsRegistry.resolveKeystroke(key, ctx?, pending?): KeystrokeResolution
+```
+
+- 无 pending：单笔优先 `execute`，否则若有 2-chord 起始即 `enter-chord`，都无即 `no-match`
+- 有 pending：仅匹配 `chords[0] === pending[0] && chords[1] === key`；失败 `no-match`，**不**回退到首笔
+- `resolveKeybinding(key, ctx?)` 保留，内部退化为单笔查找；`IKeybindingItem.key`（旧）与 `IKeybindingItem.chords`（新）互斥
+
+### 渲染端 chord 状态机
+
+`useGlobalKeybindingHandler` 内 ref：
+
+```ts
+{ key: string; entry: IDisposable; timer: Timeout } | null
+```
+
+时序：
+1. keydown → `buildKeyString`（忽略孤立 modifier）
+2. `resolveKeystroke(key, ctx, pending?)`
+3. `execute` → `preventDefault` + `executeCommand` + `clearChord()`
+4. `enter-chord` → `preventDefault` + `clearChord()` + `statusBar.addEntry(text=...) + setTimeout(1500)` + 写入 pending
+5. `no-match` 且 pending 非空 → `preventDefault` + `clearChord()`（吞键，对齐 VSCode）
+6. 卸载 hook / 超时 → `clearChord()` 同时 dispose status bar entry 与 clearTimeout
+
+status bar 文案：`(Ctrl+K) was pressed. Waiting for second key…`（左对齐、priority 10000）。
+
+### 新增 Action2（共 3 条）
+
+| Command ID | 键位 | 菜单 | 实现 |
+|---|---|---|---|
+| `workbench.action.closeWindow` | `Ctrl+Shift+W` | MenubarFileMenu / `z_window` | `IHostService.closeWindow()` |
+| `workbench.action.toggleDevTools` | `Ctrl+Shift+I` | MenubarHelpMenu / `5_tools` | `IHostService.toggleDevTools()` |
+| `workbench.action.about` | — | MenubarHelpMenu / `z_about` | `console.info` 占位 |
+
+OpenSettings 同步追加：
+- 第二条键位 `[Ctrl+K, Ctrl+S]`（chord）作为 VSCode 兼容别名
+- MenubarFileMenu / `5_preferences` 项
+
+> Ctrl+W 已被 `CloseActiveEditorAction` 占用（主题 5），故 CloseWindow 使用 Ctrl+Shift+W 避免冲突。
+
+### Menubar 视觉
+
+- 由「File / Edit / View / Help 四个空菜单 + 4 个 View 项」→「File 2 group（preferences + window） / Edit 仍空 / View 4 项 / Help 2 group（tools + about）」
+- 单笔显示：`Ctrl+,`；chord 显示：`Ctrl+K Ctrl+S`（空格分隔）
+
+### 测试覆盖
+
+| | After 主题 6 | After 主题 8 |
+|---|---|---|
+| `@universe-editor/platform` 测试数 | 388 | **398**（+10：chord 注册 / 状态机 / when / 大小写 / 单笔优先 / dispose / 多 chord 共享首键） |
+| `@universe-editor/editor` 测试数 | 149 | **168**（+19） |
+| 总测试数 | 537 | **566** |
+
+editor 包新增 / 扩展：
+
+- `workbench/titlebar/__tests__/keybindingFormat.test.ts`（5）：formatKey / Cmd 映射 / 多字母 / chord / 单元素
+- `workbench/__tests__/useGlobalKeybindingHandler.test.tsx`：原 7 用例 + 新 5 chord 用例（状态栏出现 / 命中 / 中止 / 超时 / 卸载清理 / 忽略孤立 modifier）
+- `actions/__tests__/preferencesActions.test.ts`：+2（chord 别名 + File 菜单贡献）
+- `actions/__tests__/windowActions.test.ts`（6）：CloseWindow / ToggleDevTools / About 的注册 + 触发
+- `workbench/__tests__/hostProxy.test.ts`：FakeHost 增加 `toggleDevTools`；method-forward 用例增加该方法
+- `main/__tests__/services/hostMainService.test.ts`：+1（`toggleDevTools` 走 `webContents`）
+
+### 集成验证
+
+- `pnpm check`（lint + typecheck + test + build）：✅ 全绿
+- 既有命令 / 单笔键位 / 菜单 API 调用方零修改
+- Settings 持久化（主题 6）、Editor Group（主题 5）、ContextKey（主题 4）等全部继续工作
+
+### 边界（按计划保持的"不做"清单）
+
+- **不**实现 3 段及以上 chord（VSCode 也是 2 段封顶）
+- **不**实现 Edit 菜单内容（无文本编辑器，留给 FileEditor 主题）
+- **不**实现 mac 平台 native menubar
+- **不**实现 keybinding 用户自定义 / keybindings.json
+- **不**实现真正的 About 对话框
+- **不**改 `IStatusBarService` 接口；用既有 `addEntry/dispose`
+- **不**新增 contextkey "inChord"；chord 反馈用 statusbar
+- **不**实现菜单项的 enabled/visible 反应式更新

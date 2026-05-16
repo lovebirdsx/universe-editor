@@ -37,6 +37,7 @@ export interface IHostService {
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<void>
   closeWindow(): Promise<void>
+  toggleDevTools(): Promise<void>
 }
 
 export const IHostService = createDecorator<IHostService>('hostService')

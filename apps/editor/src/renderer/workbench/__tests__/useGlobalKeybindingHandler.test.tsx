@@ -1,14 +1,16 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, render } from '@testing-library/react'
 import {
   ContextKeyService,
   ICommandService,
   IContextKeyService,
+  IStatusBarService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
   type IDisposable,
 } from '@universe-editor/platform'
+import { StatusBarService } from '../statusbar/StatusBarService.js'
 import { ServicesContext } from '../useService.js'
 import { useGlobalKeybindingHandler } from '../useGlobalKeybindingHandler.js'
 
@@ -20,11 +22,13 @@ function TestHost() {
 function createHarness() {
   const executeCommand = vi.fn().mockResolvedValue(undefined)
   const commandService = { _serviceBrand: undefined, executeCommand }
+  const statusBar = new StatusBarService()
   const services = new ServiceCollection()
   services.set(ICommandService, commandService as never)
   services.set(IContextKeyService, new ContextKeyService())
+  services.set(IStatusBarService, statusBar)
   const instantiation = new InstantiationService(services)
-  return { executeCommand, instantiation }
+  return { executeCommand, instantiation, statusBar }
 }
 
 interface DispatchOpts extends KeyboardEventInit {
@@ -140,5 +144,100 @@ describe('useGlobalKeybindingHandler', () => {
 
     dispatch({ ctrlKey: true, key: 'b' })
     expect(executeCommand).not.toHaveBeenCalled()
+  })
+})
+
+describe('useGlobalKeybindingHandler — chord support', () => {
+  let disposables: IDisposable[] = []
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    disposables.forEach((d) => d.dispose())
+    disposables = []
+    document.body.innerHTML = ''
+  })
+
+  function bindChord(chords: readonly [string, string], command: string) {
+    disposables.push(KeybindingsRegistry.registerKeybinding({ chords, command }))
+  }
+
+  function mountHost(instantiation: InstantiationService) {
+    return render(
+      <ServicesContext.Provider value={instantiation}>
+        <TestHost />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  it('shows status bar entry on first chord stroke and clears on completion', () => {
+    const { executeCommand, instantiation, statusBar } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'chord.openSettings')
+    mountHost(instantiation)
+
+    const first = dispatch({ ctrlKey: true, key: 'k' })
+    expect(first.preventDefault).toHaveBeenCalled()
+    expect(statusBar.entries.get()).toHaveLength(1)
+    expect(statusBar.entries.get()[0]!.entry.text).toContain('Ctrl+K')
+    expect(executeCommand).not.toHaveBeenCalled()
+
+    const second = dispatch({ ctrlKey: true, key: 's' })
+    expect(second.preventDefault).toHaveBeenCalled()
+    expect(executeCommand).toHaveBeenCalledWith('chord.openSettings')
+    expect(statusBar.entries.get()).toHaveLength(0)
+  })
+
+  it('non-matching second stroke aborts the chord without firing a command', () => {
+    const { executeCommand, instantiation, statusBar } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'chord.openSettings')
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: 'k' })
+    expect(statusBar.entries.get()).toHaveLength(1)
+
+    dispatch({ key: 'x' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(statusBar.entries.get()).toHaveLength(0)
+  })
+
+  it('chord pending entry auto-clears after 1.5s timeout', () => {
+    const { executeCommand, instantiation, statusBar } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'chord.openSettings')
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: 'k' })
+    expect(statusBar.entries.get()).toHaveLength(1)
+
+    act(() => {
+      vi.advanceTimersByTime(1600)
+    })
+
+    expect(statusBar.entries.get()).toHaveLength(0)
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('cleans up pending chord on unmount', () => {
+    const { instantiation, statusBar } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'chord.openSettings')
+    const view = mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: 'k' })
+    expect(statusBar.entries.get()).toHaveLength(1)
+
+    view.unmount()
+    expect(statusBar.entries.get()).toHaveLength(0)
+  })
+
+  it('ignores standalone modifier keydown events', () => {
+    const { executeCommand, instantiation, statusBar } = createHarness()
+    bindChord(['ctrl+k', 'ctrl+s'], 'chord.openSettings')
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: 'Control' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(statusBar.entries.get()).toHaveLength(0)
   })
 })

@@ -48,6 +48,13 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
+  toggleDevTools(): Promise<void> {
+    if (!this._win.isDestroyed()) {
+      this._win.webContents.toggleDevTools()
+    }
+    return Promise.resolve()
+  }
+
   dispose(): void {
     if (!this._win.isDestroyed()) {
       this._win.removeListener('maximize', this._onMaximize)

@@ -28,8 +28,11 @@ export interface IAction2Menu {
 }
 
 export interface IAction2Keybinding {
-  /** Platform-neutral key string, e.g. "ctrl+b". */
-  primary: string
+  /**
+   * Platform-neutral key string for a single stroke (e.g. "ctrl+b"),
+   * or a 2-element tuple for a chord (e.g. ["ctrl+k", "ctrl+s"]).
+   */
+  primary: string | readonly [string, string]
   when?: ContextKeyExpression | string
 }
 
@@ -134,7 +137,7 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
   for (const kb of asArray(desc.keybinding)) {
     const when = combineWhen(desc.precondition, kb.when)
     const item: IKeybindingItem = {
-      key: kb.primary,
+      ...(typeof kb.primary === 'string' ? { key: kb.primary } : { chords: kb.primary }),
       command: desc.id,
       ...(when !== undefined ? { when } : {}),
     }

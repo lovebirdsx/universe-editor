@@ -29,6 +29,7 @@ import {
   SplitEditorUpAction,
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
+import { AboutAction, CloseWindowAction, ToggleDevToolsAction } from './windowActions.js'
 
 // Layout
 registerAction2(ToggleSidebarVisibilityAction)
@@ -62,3 +63,8 @@ registerAction2(FocusLastGroupAction)
 
 // Preferences
 registerAction2(OpenSettingsAction)
+
+// Window / Help
+registerAction2(CloseWindowAction)
+registerAction2(ToggleDevToolsAction)
+registerAction2(AboutAction)

@@ -298,3 +298,127 @@ describe('KeybindingsRegistry — when filtering', () => {
     d1.dispose()
   })
 })
+
+describe('KeybindingsRegistry — chord bindings', () => {
+  it('registers a chord and reports enter-chord on first stroke', () => {
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+s'],
+      command: 'chord.openKeybindings',
+    })
+    const r = KeybindingsRegistry.resolveKeystroke('ctrl+k')
+    expect(r.kind).toBe('enter-chord')
+    if (r.kind === 'enter-chord') expect(r.pending).toEqual(['ctrl+k'])
+    d.dispose()
+  })
+
+  it('matches the second stroke when pending is supplied', () => {
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+s'],
+      command: 'chord.openKeybindings',
+    })
+    const r = KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])
+    expect(r).toEqual({ kind: 'execute', command: 'chord.openKeybindings' })
+    d.dispose()
+  })
+
+  it('second stroke mismatch yields no-match (no fallback)', () => {
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+s'],
+      command: 'chord.openKeybindings',
+    })
+    const r = KeybindingsRegistry.resolveKeystroke('ctrl+x', undefined, ['ctrl+k'])
+    expect(r.kind).toBe('no-match')
+    d.dispose()
+  })
+
+  it('single-stroke takes priority when both exist on the same first key', () => {
+    const d1 = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+s'],
+      command: 'chord.cmd',
+    })
+    const d2 = KeybindingsRegistry.registerKeybinding({
+      key: 'ctrl+k',
+      command: 'single.cmd',
+    })
+    const r = KeybindingsRegistry.resolveKeystroke('ctrl+k')
+    expect(r).toEqual({ kind: 'execute', command: 'single.cmd' })
+    d2.dispose()
+    d1.dispose()
+  })
+
+  it('legacy resolveKeybinding ignores chord items', () => {
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+m'],
+      command: 'chord.only',
+    })
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+k')).toBeUndefined()
+    d.dispose()
+  })
+
+  it('when-clause filters chord candidates', () => {
+    const svc = new ContextKeyService()
+    svc.set('chord.allowed', false)
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+t'],
+      command: 'chord.guarded',
+      when: 'chord.allowed',
+    })
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc).kind).toBe('no-match')
+    svc.set('chord.allowed', true)
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc).kind).toBe('enter-chord')
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+t', svc, ['ctrl+k'])).toEqual({
+      kind: 'execute',
+      command: 'chord.guarded',
+    })
+    d.dispose()
+    svc.dispose()
+  })
+
+  it('chord lookup normalizes case and modifier order', () => {
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['Ctrl+K', 'SHIFT+CTRL+P'],
+      command: 'chord.norm',
+    })
+    const r1 = KeybindingsRegistry.resolveKeystroke('ctrl+k')
+    expect(r1.kind).toBe('enter-chord')
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+p', undefined, ['ctrl+k'])).toEqual({
+      kind: 'execute',
+      command: 'chord.norm',
+    })
+    d.dispose()
+  })
+
+  it('dispose removes chord; later strokes no-match', () => {
+    const d = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+q'],
+      command: 'chord.gone',
+    })
+    d.dispose()
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k').kind).toBe('no-match')
+  })
+
+  it('two chords sharing a first key both addressable', () => {
+    const d1 = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+s'],
+      command: 'chord.s',
+    })
+    const d2 = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+o'],
+      command: 'chord.o',
+    })
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])).toEqual({
+      kind: 'execute',
+      command: 'chord.s',
+    })
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+o', undefined, ['ctrl+k'])).toEqual({
+      kind: 'execute',
+      command: 'chord.o',
+    })
+    d2.dispose()
+    d1.dispose()
+  })
+
+  it('no pending and unknown first key returns no-match', () => {
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+unused').kind).toBe('no-match')
+  })
+})

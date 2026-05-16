@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Simplified keybinding registry. Supports single-combo bindings with
- *  context-key when-clauses. Chord bindings deferred to a later milestone.
+ *  Keybinding registry. Supports single-stroke and 2-stroke "chord" bindings
+ *  (e.g. `Ctrl+K Ctrl+S`), with context-key when-clauses.
  *--------------------------------------------------------------------------------------------*/
 
 import { IDisposable, toDisposable } from '../base/lifecycle.js'
@@ -10,11 +10,20 @@ import { ContextKeyExpr, ContextKeyExpression } from './contextKeyExpr.js'
 
 /**
  * Simplified keybinding descriptor. Uses a platform-neutral string format:
- * e.g. "ctrl+k", "meta+shift+p", "f1"
+ * e.g. "ctrl+k", "meta+shift+p", "f1". A `chords` tuple expresses a 2-stroke
+ * chord; `key` (legacy single-stroke) is still accepted and stored as a
+ * 1-element chord internally.
  */
 export interface IKeybindingItem {
-  /** Platform-neutral key combination string. */
-  key: string
+  /**
+   * Platform-neutral key combination string for a single-stroke binding.
+   * Mutually exclusive with `chords`.
+   */
+  key?: string
+  /**
+   * 2-stroke chord, e.g. ['ctrl+k', 'ctrl+s']. Mutually exclusive with `key`.
+   */
+  chords?: readonly [string, string]
   /** The command to execute. */
   command: string
   /**
@@ -27,11 +36,23 @@ export interface IKeybindingItem {
 }
 
 interface IResolvedKeybindingItem {
-  key: string
+  chords: readonly string[]
   command: string
   when: ContextKeyExpression | undefined
   isNegated: boolean
 }
+
+/**
+ * Result of feeding one keystroke to {@link KeybindingsRegistryImpl.resolveKeystroke}.
+ * - `execute`  → command fully resolved, fire it.
+ * - `enter-chord` → first half of a 2-stroke chord matched, caller should hold
+ *   `pending` and feed the next keystroke alongside it.
+ * - `no-match` → nothing matched.
+ */
+export type KeystrokeResolution =
+  | { kind: 'execute'; command: string }
+  | { kind: 'enter-chord'; pending: readonly string[] }
+  | { kind: 'no-match' }
 
 /**
  * Normalizes a key string to lowercase with sorted modifier order.
@@ -54,12 +75,18 @@ function resolveWhen(when: IKeybindingItem['when']): ContextKeyExpression | unde
   return when
 }
 
+function itemChords(item: IKeybindingItem): readonly string[] {
+  if (item.chords) return [normalizeKey(item.chords[0]), normalizeKey(item.chords[1])]
+  if (item.key !== undefined) return [normalizeKey(item.key)]
+  throw new Error('Keybinding item requires either `key` or `chords`.')
+}
+
 class KeybindingsRegistryImpl {
   private readonly _items: IResolvedKeybindingItem[] = []
 
   registerKeybinding(item: IKeybindingItem): IDisposable {
     const resolved: IResolvedKeybindingItem = {
-      key: normalizeKey(item.key),
+      chords: itemChords(item),
       command: item.command,
       when: resolveWhen(item.when),
       isNegated: item.isNegated ?? false,
@@ -75,16 +102,16 @@ class KeybindingsRegistryImpl {
   }
 
   /**
-   * Returns all bindings whose key matches, sorted newest-first.
-   * For backward compatibility with tests that introspected the items.
+   * Returns all bindings whose key matches, sorted newest-first. Single-stroke
+   * bindings only — chord items are excluded for legacy callers.
    */
   getBindingsForKey(key: string): IKeybindingItem[] {
     const normalized = normalizeKey(key)
     return [...this._items]
       .reverse()
-      .filter((item) => item.key === normalized)
+      .filter((item) => item.chords.length === 1 && item.chords[0] === normalized)
       .map((it) => ({
-        key: it.key,
+        key: it.chords[0]!,
         command: it.command,
         ...(it.when !== undefined ? { when: it.when } : {}),
         ...(it.isNegated ? { isNegated: it.isNegated } : {}),
@@ -92,16 +119,17 @@ class KeybindingsRegistryImpl {
   }
 
   /**
-   * Returns the command bound to the given key, or undefined if none.
-   * If a context-key service is provided, when-clauses are evaluated against it
-   * and bindings whose when-clause is false are skipped.
+   * Returns the command bound to the given single key, or undefined if none.
+   * Backward-compatible single-stroke lookup; chord items are not considered.
+   * Use {@link resolveKeystroke} for chord-aware state-machine resolution.
    */
   resolveKeybinding(key: string, contextKeyService?: IContextKeyService): string | undefined {
     const normalized = normalizeKey(key)
     // Iterate in reverse (newest first) so later registrations win.
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
-      if (binding.key !== normalized) continue
+      if (binding.chords.length !== 1) continue
+      if (binding.chords[0] !== normalized) continue
       if (binding.isNegated) continue
       if (binding.when !== undefined && contextKeyService) {
         if (!contextKeyService.contextMatchesRules(binding.when)) continue
@@ -111,13 +139,66 @@ class KeybindingsRegistryImpl {
     return undefined
   }
 
+  /**
+   * Feed a keystroke through the chord state machine.
+   * Caller passes `pending = [firstChord]` when continuing a chord, undefined
+   * (or empty) for a fresh keystroke. Behaviour:
+   * - If a single-stroke binding matches → `execute`.
+   * - Else if at least one 2-stroke chord starts with `key` → `enter-chord`.
+   * - When `pending` is supplied: matches against 2-stroke chords whose
+   *   `chords[0] === pending[0] && chords[1] === key`.
+   */
+  resolveKeystroke(
+    key: string,
+    contextKeyService?: IContextKeyService,
+    pending?: readonly string[],
+  ): KeystrokeResolution {
+    const normalized = normalizeKey(key)
+
+    if (pending && pending.length > 0) {
+      const first = normalizeKey(pending[0]!)
+      for (let i = this._items.length - 1; i >= 0; i--) {
+        const binding = this._items[i]!
+        if (binding.chords.length !== 2) continue
+        if (binding.chords[0] !== first || binding.chords[1] !== normalized) continue
+        if (binding.isNegated) continue
+        if (binding.when !== undefined && contextKeyService) {
+          if (!contextKeyService.contextMatchesRules(binding.when)) continue
+        }
+        return { kind: 'execute', command: binding.command }
+      }
+      return { kind: 'no-match' }
+    }
+
+    // Single-stroke first: 1-chord matches take priority over 2-chord starts.
+    const singleHit = this.resolveKeybinding(normalized, contextKeyService)
+    if (singleHit !== undefined) return { kind: 'execute', command: singleHit }
+
+    for (let i = this._items.length - 1; i >= 0; i--) {
+      const binding = this._items[i]!
+      if (binding.chords.length !== 2) continue
+      if (binding.chords[0] !== normalized) continue
+      if (binding.isNegated) continue
+      if (binding.when !== undefined && contextKeyService) {
+        if (!contextKeyService.contextMatchesRules(binding.when)) continue
+      }
+      return { kind: 'enter-chord', pending: [normalized] }
+    }
+    return { kind: 'no-match' }
+  }
+
   getAllKeybindings(): readonly IKeybindingItem[] {
-    return this._items.map((it) => ({
-      key: it.key,
-      command: it.command,
-      ...(it.when !== undefined ? { when: it.when } : {}),
-      ...(it.isNegated ? { isNegated: it.isNegated } : {}),
-    }))
+    return this._items.map((it) => {
+      const base = {
+        command: it.command,
+        ...(it.when !== undefined ? { when: it.when } : {}),
+        ...(it.isNegated ? { isNegated: it.isNegated } : {}),
+      }
+      if (it.chords.length === 2) {
+        return { ...base, chords: [it.chords[0]!, it.chords[1]!] as [string, string] }
+      }
+      return { ...base, key: it.chords[0]! }
+    })
   }
 }
 

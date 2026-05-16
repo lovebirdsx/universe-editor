@@ -77,4 +77,20 @@ describe('OpenSettingsAction', () => {
     expect(g1.editors).toHaveLength(1)
     expect(g1.editors[0]).toBeInstanceOf(SettingsEditorInput)
   })
+
+  it('also resolves via the Ctrl+K Ctrl+S chord', () => {
+    disposables.push(registerAction2(OpenSettingsAction))
+    const first = KeybindingsRegistry.resolveKeystroke('ctrl+k')
+    expect(first.kind).toBe('enter-chord')
+    const second = KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])
+    expect(second).toEqual({ kind: 'execute', command: OpenSettingsAction.ID })
+  })
+
+  it('contributes to MenubarFileMenu under group 5_preferences', () => {
+    disposables.push(registerAction2(OpenSettingsAction))
+    const items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu)
+    const entry = items.find((i) => i.command === OpenSettingsAction.ID)
+    expect(entry).toBeDefined()
+    expect(entry?.group).toBe('5_preferences')
+  })
 })

@@ -3,7 +3,12 @@
  *  Preferences-related Action2 commands.
  *--------------------------------------------------------------------------------------------*/
 
-import { Action2, IEditorGroupsService, type ServicesAccessor } from '@universe-editor/platform'
+import {
+  Action2,
+  IEditorGroupsService,
+  MenuId,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
 import { SettingsEditorInput } from '../workbench/preferences/SettingsEditorInput.js'
 
 export class OpenSettingsAction extends Action2 {
@@ -13,7 +18,8 @@ export class OpenSettingsAction extends Action2 {
       id: OpenSettingsAction.ID,
       title: 'Open Settings',
       category: 'Preferences',
-      keybinding: { primary: 'ctrl+,' },
+      keybinding: [{ primary: 'ctrl+,' }, { primary: ['ctrl+k', 'ctrl+s'] }],
+      menu: { id: MenuId.MenubarFileMenu, group: '5_preferences', order: 1 },
       f1: true,
     })
   }

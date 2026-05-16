@@ -13,6 +13,7 @@ import {
 } from '@universe-editor/platform'
 import type { IMenuItem, MenuId } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { formatChord, formatKey } from './keybindingFormat.js'
 
 export interface ResolvedMenuItem {
   command: string
@@ -35,26 +36,11 @@ function resolveShortcut(command: string): string | undefined {
   const all = KeybindingsRegistry.getAllKeybindings()
   for (let i = all.length - 1; i >= 0; i--) {
     const kb = all[i]
-    if (kb && kb.command === command && !kb.isNegated) {
-      return formatKey(kb.key)
-    }
+    if (!kb || kb.command !== command || kb.isNegated) continue
+    if (kb.chords) return formatChord(kb.chords)
+    if (kb.key !== undefined) return formatKey(kb.key)
   }
   return undefined
-}
-
-function formatKey(key: string): string {
-  return key
-    .split('+')
-    .map((part) => {
-      const lower = part.toLowerCase()
-      if (lower === 'ctrl') return 'Ctrl'
-      if (lower === 'alt') return 'Alt'
-      if (lower === 'shift') return 'Shift'
-      if (lower === 'meta') return 'Cmd'
-      if (lower.length === 1) return lower.toUpperCase()
-      return lower.charAt(0).toUpperCase() + lower.slice(1)
-    })
-    .join('+')
 }
 
 function resolveSections(menuId: MenuId, ctx: IContextKeyService): ResolvedMenuSection[] {

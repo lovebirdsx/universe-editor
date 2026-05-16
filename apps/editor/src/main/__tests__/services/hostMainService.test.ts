@@ -14,6 +14,7 @@ interface FakeWin {
   on(event: string, handler: () => void): void
   removeListener(event: string, handler: () => void): void
   isDestroyed(): boolean
+  readonly webContents: { toggleDevTools(): void }
   __fire(event: 'maximize' | 'unmaximize'): void
 }
 
@@ -41,6 +42,11 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     },
     close() {
       calls.push('close')
+    },
+    webContents: {
+      toggleDevTools() {
+        calls.push('toggleDevTools')
+      },
     },
     on(event, handler) {
       const arr = listeners[event] ?? (listeners[event] = [])
@@ -94,6 +100,15 @@ describe('MainHostService', () => {
     win.maximize()
     win.unmaximize()
     expect(events).toEqual([true, false])
+    service.dispose()
+  })
+
+  it('toggleDevTools delegates to webContents.toggleDevTools', async () => {
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.toggleDevTools()
+    expect(win.calls).toEqual(['toggleDevTools'])
     service.dispose()
   })
 })
