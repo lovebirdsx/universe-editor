@@ -45,6 +45,8 @@ import {
   SaveFileAction,
   SaveFileAsAction,
 } from './fileActions.js'
+import { NewUntitledFileAction } from './newUntitledFileAction.js'
+import { RevealActiveFileInExplorerAction } from './revealActions.js'
 
 // Layout
 registerAction2(ToggleSidebarVisibilityAction)
@@ -89,10 +91,12 @@ registerAction2(CloseFolderAction)
 registerAction2(SaveFileAction)
 registerAction2(SaveFileAsAction)
 registerAction2(OpenFileAction)
+registerAction2(NewUntitledFileAction)
 registerAction2(NewFileAction)
 registerAction2(NewFolderAction)
 registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
+registerAction2(RevealActiveFileInExplorerAction)
 
 // Window / Help
 registerAction2(CloseWindowAction)

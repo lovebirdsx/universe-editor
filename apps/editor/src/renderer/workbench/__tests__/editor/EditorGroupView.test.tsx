@@ -7,10 +7,12 @@ import { fireEvent, render, screen } from '@testing-library/react'
 import {
   EditorInput,
   EditorRegistry,
+  ICommandService,
   IDialogService,
   InstantiationService,
   ServiceCollection,
   URI,
+  type ICommandService as ICommandServiceType,
   type IConfirmResult,
   type IDialogService as IDialogServiceType,
 } from '@universe-editor/platform'
@@ -24,9 +26,17 @@ const stubDialog: IDialogServiceType = {
   prompt: async () => undefined,
 }
 
+const stubCommand: ICommandServiceType = {
+  _serviceBrand: undefined,
+  async executeCommand() {
+    return undefined
+  },
+}
+
 function renderWithServices(node: React.ReactNode) {
   const services = new ServiceCollection()
   services.set(IDialogService, stubDialog)
+  services.set(ICommandService, stubCommand)
   const inst = new InstantiationService(services)
   return render(<ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>)
 }

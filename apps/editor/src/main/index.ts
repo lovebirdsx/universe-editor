@@ -7,6 +7,7 @@ import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainS
 import { MainStorageService } from './services/storage/storageMainService.js'
 import { MainPingService } from './services/ping/pingMainService.js'
 import { FileSystemMainService } from './services/files/fileSystemMainService.js'
+import { FileWatcherMainService } from './services/fileWatcher/fileWatcherMainService.js'
 import { WorkspaceMainService } from './services/workspace/workspaceMainService.js'
 import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
 
@@ -34,6 +35,7 @@ function getSharedServices(): SharedMainServices {
       storage,
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(),
+      fileWatcher: new FileWatcherMainService(),
       workspace: new WorkspaceMainService(storage, new ElectronFolderDialog()),
     }
   }

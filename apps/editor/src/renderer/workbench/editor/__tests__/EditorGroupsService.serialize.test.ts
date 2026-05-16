@@ -17,6 +17,7 @@ import {
 import { EditorGroupsService, type ISerializedEditorGroupsState } from '../EditorGroupsService.js'
 import { FileEditorInput } from '../FileEditorInput.js'
 import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
+import { UntitledEditorInput } from '../UntitledEditorInput.js'
 
 class FakeEditorInput extends EditorInput {
   static readonly TYPE_ID = 'fake.test.editor'
@@ -174,6 +175,47 @@ describe('EditorGroupsService serialization', () => {
     expect(dst.groups[0]?.count).toBe(1)
     expect(dst.groups[0]?.activeEditor?.typeId).toBe(FakeEditorInput.TYPE_ID)
     dst.dispose()
+  })
+
+  it('toJSON filters out untitled editors and recomputes activeIndex', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditorInput()
+    const u = new UntitledEditorInput()
+    const b = new OtherEditorInput()
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(u)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.setActive(b)
+    const json = svc.toJSON()
+    if (json.grid.root.type === 'branch') {
+      const leaf = json.grid.root.children?.[0]
+      if (leaf?.type === 'leaf' && leaf.data) {
+        expect(leaf.data.editors).toHaveLength(2)
+        expect(leaf.data.editors.every((e) => e.typeId !== 'untitled')).toBe(true)
+        // a is at 0, b is at 1 in the persisted list; active was b.
+        expect(leaf.data.activeIndex).toBe(1)
+      }
+    }
+    svc.dispose()
+  })
+
+  it('toJSON falls back to activeIndex 0 when only untitled is active', () => {
+    const svc = new EditorGroupsService()
+    const a = new FakeEditorInput()
+    const u = new UntitledEditorInput()
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(u)
+    svc.activeGroup.setActive(u)
+    const json = svc.toJSON()
+    if (json.grid.root.type === 'branch') {
+      const leaf = json.grid.root.children?.[0]
+      if (leaf?.type === 'leaf' && leaf.data) {
+        expect(leaf.data.editors).toHaveLength(1)
+        expect(leaf.data.editors[0]?.typeId).toBe(FakeEditorInput.TYPE_ID)
+        expect(leaf.data.activeIndex).toBe(0)
+      }
+    }
+    svc.dispose()
   })
 
   it('toJSON → restore → toJSON is shape-stable', () => {

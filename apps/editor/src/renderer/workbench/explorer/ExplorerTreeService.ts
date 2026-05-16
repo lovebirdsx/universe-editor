@@ -13,7 +13,9 @@ import {
   createDecorator,
   type Event,
   type IDirectoryEntry,
+  type IFileChangeEvent,
   IFileService,
+  IFileWatcherService,
   IWorkspaceService,
   URI,
 } from '@universe-editor/platform'
@@ -49,6 +51,7 @@ function sortEntries(entries: readonly IDirectoryEntry[], parent: URI): IExplore
 export class ExplorerTreeService extends Disposable {
   private _root: URI | null = null
   private readonly _nodes = new Map<string, NodeState>()
+  private _selected: URI | null = null
 
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange: Event<void> = this._onDidChange.event
@@ -56,14 +59,54 @@ export class ExplorerTreeService extends Disposable {
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileService private readonly _fileService: IFileService,
+    @IFileWatcherService private readonly _watcher: IFileWatcherService,
   ) {
     super()
     this._setRoot(this._workspace.current?.folder ?? null)
     this._register(this._workspace.onDidChangeWorkspace((w) => this._setRoot(w?.folder ?? null)))
+    this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))
   }
 
   get root(): URI | null {
     return this._root
+  }
+
+  get selectedResource(): URI | null {
+    return this._selected
+  }
+
+  setSelection(resource: URI | null): void {
+    const before = this._selected?.toString()
+    const after = resource?.toString()
+    if (before === after) return
+    this._selected = resource
+    this._onDidChange.fire()
+  }
+
+  /**
+   * Expand every ancestor of `target`, set it as the selected node, and fire a
+   * dom event so the row can scroll into view. Returns false when there is no
+   * workspace open or the target lies outside it.
+   */
+  async reveal(target: URI): Promise<boolean> {
+    if (!this._root) return false
+    if (!isDescendant(this._root, target)) return false
+    const chain: URI[] = []
+    let cursor: URI | null = parentOf(target)
+    while (cursor && cursor.toString() !== this._root.toString()) {
+      chain.unshift(cursor)
+      cursor = parentOf(cursor)
+    }
+    chain.unshift(this._root)
+    for (const dir of chain) {
+      await this.expand(dir)
+    }
+    this._selected = target
+    this._onDidChange.fire()
+    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+      document.dispatchEvent(new CustomEvent('explorer:reveal', { detail: target.toString() }))
+    }
+    return true
   }
 
   /** Synchronous snapshot of a node. Returns a fresh default state for unknown URIs. */
@@ -161,12 +204,34 @@ export class ExplorerTreeService extends Disposable {
   private _setRoot(root: URI | null): void {
     this._root = root
     this._nodes.clear()
+    this._selected = null
     if (root) {
       const node = this._ensureNode(root)
       node.expanded = true
       void this._loadChildren(root, node).then(() => this._onDidChange.fire())
+      void this._watcher.watch(root.toJSON()).catch(() => {
+        // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+      })
+    } else {
+      void this._watcher.unwatch().catch(() => {})
     }
     this._onDidChange.fire()
+  }
+
+  private _onWatcherEvents(events: readonly IFileChangeEvent[]): void {
+    if (!this._root || events.length === 0) return
+    const seen = new Set<string>()
+    for (const ev of events) {
+      const resource = URI.revive(ev.resource)
+      if (!resource) continue
+      const parent = parentOf(resource)
+      if (!parent) continue
+      const key = parent.toString()
+      if (seen.has(key)) continue
+      if (!this._nodes.has(key)) continue
+      seen.add(key)
+      void this.refresh(parent)
+    }
   }
 
   private _ensureNode(resource: URI): NodeState {
@@ -204,4 +269,12 @@ function parentOf(resource: URI): URI | null {
     authority: resource.authority,
     path: parentPath,
   })
+}
+
+function isDescendant(root: URI, target: URI): boolean {
+  if (root.scheme !== target.scheme) return false
+  if (root.authority !== target.authority) return false
+  const rootPath = root.path.endsWith('/') ? root.path : root.path + '/'
+  const targetPath = target.path
+  return targetPath === root.path || targetPath.startsWith(rootPath)
 }

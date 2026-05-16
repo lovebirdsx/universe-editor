@@ -13,6 +13,7 @@ import {
   IDialogService,
   IEditorGroupsService,
   IFileService,
+  IFileWatcherService,
   IHostService,
   IInstantiationService,
   IWorkspaceService,
@@ -28,6 +29,7 @@ import {
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileService as IFileServiceType,
+  type IFileWatcherService as IFileWatcherServiceType,
   type IHostService as IHostServiceType,
   type IPromptOptions,
   type IShowOpenFileOptions,
@@ -53,6 +55,15 @@ import {
 // ---------------------------------------------------------------------------
 // Fakes
 // ---------------------------------------------------------------------------
+
+function makeNoopWatcher(): IFileWatcherServiceType {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeFiles: new Emitter<readonly never[]>().event,
+    async watch() {},
+    async unwatch() {},
+  } as unknown as IFileWatcherServiceType
+}
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType & {
   files: Set<string>
@@ -217,6 +228,7 @@ function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Har
 
   const services = new ServiceCollection()
   services.set(IFileService, fs)
+  services.set(IFileWatcherService, makeNoopWatcher())
   services.set(IWorkspaceService, ws)
   services.set(IDialogService, dialog)
   services.set(IHostService, host)

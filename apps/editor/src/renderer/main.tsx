@@ -13,6 +13,7 @@ import {
   IEditorService,
   IEditorGroupsService,
   IFileService,
+  IFileWatcherService,
   IStatusBarService,
   IViewsService,
   IQuickInputService,
@@ -106,6 +107,10 @@ function bootstrapWorkbench(): void {
   services.set(
     IFileService,
     ProxyChannel.toService<IFileService>(ipcService.getChannel(ServiceChannels.FileSystem)),
+  )
+  services.set(
+    IFileWatcherService,
+    ProxyChannel.toService<IFileWatcherService>(ipcService.getChannel(ServiceChannels.FileWatcher)),
   )
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),

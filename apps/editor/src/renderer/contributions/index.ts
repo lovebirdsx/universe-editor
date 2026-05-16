@@ -15,6 +15,7 @@ import { ContextKeyContribution } from './ContextKeyContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
 import { StatusBarDefaultsContribution } from './StatusBarDefaultsContribution.js'
 import { FileEditorStatusContribution } from '../workbench/statusbar/FileEditorStatusContribution.js'
+import { ExternalChangeWatcher } from '../workbench/editor/ExternalChangeWatcher.js'
 import { WorkspaceRecentMenuContribution } from '../services/workspace/workspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from '../services/workspace/workspaceRestoreContribution.js'
 
@@ -64,6 +65,15 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
+// External-change watcher — subscribes to the file watcher and reconciles
+// open FileEditorInputs with disk on every batch. AfterRestore so any
+// previously-open editors are already attached to groups.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.externalChangeWatcher',
+  ExternalChangeWatcher,
+  WorkbenchPhase.AfterRestore,
+)
+
 // The File → Open Recent submenu reflects IWorkspaceService.recent and only
 // becomes useful once user-driven workspace state is in play, so register at
 // AfterRestore alongside other UI-seeding contributions.
@@ -89,6 +99,7 @@ export {
   SettingsContribution,
   StatusBarDefaultsContribution,
   FileEditorStatusContribution,
+  ExternalChangeWatcher,
   WorkspaceRecentMenuContribution,
   WorkspaceRestoreContribution,
 }

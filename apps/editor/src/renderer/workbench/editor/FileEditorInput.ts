@@ -6,6 +6,7 @@
 
 import {
   EditorInput,
+  IDialogService,
   IFileService,
   IInstantiationService,
   URI,
@@ -29,6 +30,8 @@ export class FileEditorInput extends EditorInput {
   /** Last-known on-disk text. Updated by `resolve()` and `save()`. */
   private _backupContent = ''
   private _resolved = false
+  /** Last-known on-disk mtime in epoch ms. Used to detect external changes. */
+  private _lastKnownMtime = 0
   private _language: string
 
   constructor(
@@ -68,12 +71,17 @@ export class FileEditorInput extends EditorInput {
     const text = await this._fileService.readFileText(this._resource)
     this._backupContent = text
     this._resolved = true
+    await this._refreshMtime()
     return text
   }
 
   /** True once `resolve()` has succeeded at least once. */
   get isResolved(): boolean {
     return this._resolved
+  }
+
+  get lastKnownMtime(): number {
+    return this._lastKnownMtime
   }
 
   override async save(): Promise<boolean> {
@@ -83,6 +91,7 @@ export class FileEditorInput extends EditorInput {
     await this._fileService.writeFile(this._resource, text)
     this._backupContent = text
     this.setDirty(false)
+    await this._refreshMtime()
     return true
   }
 
@@ -94,6 +103,58 @@ export class FileEditorInput extends EditorInput {
     }
     model.setValue(this._backupContent)
     this.setDirty(false)
+  }
+
+  /**
+   * Compare the on-disk mtime to the last-known one. If the file changed and
+   * the buffer is clean, silently reload it; if dirty, prompt the user to
+   * discard local changes. Returns the action taken.
+   */
+  async checkExternalChange(
+    dialog: IDialogService,
+  ): Promise<'unchanged' | 'reloaded' | 'kept' | 'gone'> {
+    let stat
+    try {
+      stat = await this._fileService.stat(this._resource)
+    } catch {
+      return 'gone'
+    }
+    if (stat.mtime === this._lastKnownMtime) return 'unchanged'
+
+    const text = await this._fileService.readFileText(this._resource)
+    const model = MonacoModelRegistry.peek(this._resource)
+
+    if (!this.isDirty) {
+      this._backupContent = text
+      this._lastKnownMtime = stat.mtime
+      if (model && model.getValue() !== text) model.setValue(text)
+      return 'reloaded'
+    }
+
+    const result = await dialog.confirm({
+      message: `文件 "${basename(this._resource.fsPath)}" 在外部已修改。`,
+      detail: '是否放弃当前更改并从磁盘重新加载?',
+      primaryButton: '重新加载',
+      cancelButton: '保留当前更改',
+      type: 'warning',
+    })
+    if (result.confirmed) {
+      this._backupContent = text
+      this._lastKnownMtime = stat.mtime
+      if (model) model.setValue(text)
+      this.setDirty(false)
+      return 'reloaded'
+    }
+    return 'kept'
+  }
+
+  private async _refreshMtime(): Promise<void> {
+    try {
+      const s = await this._fileService.stat(this._resource)
+      this._lastKnownMtime = s.mtime
+    } catch {
+      this._lastKnownMtime = 0
+    }
   }
 
   override serialize(): ISerializedFileEditor {

@@ -7,17 +7,25 @@
  *  clicking on any of its tabs / content area.
  *--------------------------------------------------------------------------------------------*/
 
-import { useSyncExternalStore, type ComponentType } from 'react'
+import {
+  useSyncExternalStore,
+  useState,
+  type ComponentType,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import {
   EditorInput,
   EditorRegistry,
+  ICommandService,
   IDialogService,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
+  URI,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { closeEditorWithConfirm } from './closeEditorWithConfirm.js'
+import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
 import styles from './EditorArea.module.css'
 
 export interface EditorGroupViewProps {
@@ -58,18 +66,28 @@ function useActiveGroup(groupsService: IEditorGroupsService): IEditorGroup {
 function EditorTab({
   input,
   isActive,
+  isPreview,
   onActivate,
+  onPin,
   onClose,
+  onContextMenu,
 }: {
   input: EditorInput
   isActive: boolean
+  isPreview: boolean
   onActivate: () => void
+  onPin: () => void
   onClose: () => void
+  onContextMenu: (e: ReactMouseEvent) => void
 }) {
   return (
     <div
-      className={`${styles['tab']} ${isActive ? styles['active'] : ''}`}
+      className={`${styles['tab']} ${isActive ? styles['active'] : ''} ${
+        isPreview ? (styles['preview'] ?? '') : ''
+      }`}
       onClick={onActivate}
+      onDoubleClick={onPin}
+      onContextMenu={onContextMenu}
       role="tab"
       aria-selected={isActive}
     >
@@ -99,6 +117,8 @@ export function EditorGroupView({
   const activeGroup = useActiveGroup(groupsService)
   const isActiveGroup = activeGroup === group
   const dialogService = useService(IDialogService)
+  const commandService = useService(ICommandService)
+  const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null)
 
   const handleFocus = () => {
     if (!isActiveGroup) groupsService.activateGroup(group)
@@ -131,13 +151,31 @@ export function EditorGroupView({
               key={e.id}
               input={e}
               isActive={group.activeEditor?.id === e.id}
+              isPreview={group.previewEditor === e}
               onActivate={() => group.setActive(e)}
+              onPin={() => group.pinEditor(e)}
               onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
+              onContextMenu={(ev) => {
+                ev.preventDefault()
+                const resourceLike = (e as unknown as { resource?: URI }).resource
+                setTabMenu({
+                  x: ev.clientX,
+                  y: ev.clientY,
+                  resource: resourceLike instanceof URI ? resourceLike : null,
+                })
+              }}
             />
           ))}
         </div>
       )}
       <div className={styles['editorContent']}>{renderContent()}</div>
+      {tabMenu && (
+        <EditorTabContextMenu
+          state={tabMenu}
+          commandService={commandService}
+          onClose={() => setTabMenu(null)}
+        />
+      )}
     </div>
   )
 }

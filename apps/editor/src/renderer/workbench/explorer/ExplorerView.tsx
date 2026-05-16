@@ -59,11 +59,11 @@ export function ExplorerView() {
     )
   }
 
-  const openFile = (resource: URI) => {
+  const openFile = (resource: URI, options?: { preview?: boolean }) => {
     void (async () => {
       if (!(await confirmLargeFile(resource, fileService, dialogService))) return
       const input = instantiation.createInstance(FileEditorInput, resource)
-      editorService.openEditor(input)
+      editorService.openEditor(input, { pinned: options?.preview !== true })
     })()
   }
 

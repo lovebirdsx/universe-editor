@@ -7,6 +7,7 @@
 
 import {
   Action2,
+  ICommandService,
   IDialogService,
   IEditorGroupsService,
   IFileService,
@@ -19,6 +20,8 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { UntitledEditorInput } from '../workbench/editor/UntitledEditorInput.js'
+import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { confirmLargeFile } from '../workbench/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../workbench/explorer/ExplorerTreeService.js'
 
@@ -52,6 +55,10 @@ export class SaveFileAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const active = groups.activeGroup.activeEditor
     if (!active) return
+    if (active instanceof UntitledEditorInput) {
+      await accessor.get(ICommandService).executeCommand(SaveFileAsAction.ID)
+      return
+    }
     await active.save?.()
   }
 }
@@ -71,16 +78,24 @@ export class SaveFileAsAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const groups = accessor.get(IEditorGroupsService)
     const active = groups.activeGroup.activeEditor
-    if (!(active instanceof FileEditorInput)) return
+    if (!(active instanceof FileEditorInput) && !(active instanceof UntitledEditorInput)) return
     const host = accessor.get(IHostService)
     const fileService = accessor.get(IFileService)
     const inst = accessor.get(IInstantiationService)
 
-    const picked = reviveUri(await host.showSaveFileDialog({ defaultPath: active.resource.fsPath }))
+    const defaultPath =
+      active instanceof FileEditorInput ? active.resource.fsPath : active.getName() + '.txt'
+    const picked = reviveUri(await host.showSaveFileDialog({ defaultPath }))
     if (!picked) return
 
-    // Resolve current text via the existing model; fall back to disk if unsaved.
-    const text = active.isResolved ? await readActiveText(active) : await active.resolve()
+    // Resolve current text via the existing model; fall back to disk (file) or
+    // empty (untitled) if unsaved.
+    const text =
+      active instanceof FileEditorInput
+        ? active.isResolved
+          ? await readActiveText(active)
+          : await active.resolve()
+        : await readUntitledText(active)
     await fileService.writeFile(picked, text)
 
     // Replace the editor with one bound to the new resource. The original input
@@ -89,6 +104,11 @@ export class SaveFileAsAction extends Action2 {
     groups.activeGroup.openEditor(newInput, { activate: true })
     groups.activeGroup.closeEditor(active)
   }
+}
+
+async function readUntitledText(input: UntitledEditorInput): Promise<string> {
+  const model = MonacoModelRegistry.peek(input.resource)
+  return model?.getValue() ?? ''
 }
 
 async function readActiveText(input: FileEditorInput): Promise<string> {

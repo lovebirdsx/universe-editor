@@ -11,6 +11,8 @@
 
 import { useEffect, useRef } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
+import { IEditorGroupsService } from '@universe-editor/platform'
+import { useService } from '../useService.js'
 import { monaco } from './monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from './FileEditorInput.js'
@@ -19,6 +21,7 @@ import styles from './FileEditor.module.css'
 
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
+  const groupsService = useService(IEditorGroupsService)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
 
@@ -59,6 +62,14 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       if (editorRef.current) FileEditorRegistry.register(fileInput, editorRef.current)
       contentSub = model.onDidChangeContent(() => {
         fileInput.setDirty(model.getValue() !== fileInput.backupContent)
+        // First edit upgrades a preview tab to pinned. pinEditor is a no-op
+        // when the input isn't currently the group's preview slot.
+        for (const g of groupsService.groups) {
+          if (g.previewEditor === fileInput) {
+            g.pinEditor(fileInput)
+            break
+          }
+        }
       })
     })()
 

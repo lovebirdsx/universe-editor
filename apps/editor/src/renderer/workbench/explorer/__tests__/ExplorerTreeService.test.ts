@@ -6,14 +6,18 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import {
   Emitter,
   IFileService,
+  IFileWatcherService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
   type IDirectoryEntry,
+  type IFileChangeEvent,
   type IFileService as IFileServiceType,
+  type IFileWatcherService as IFileWatcherServiceType,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
+  type UriComponents,
 } from '@universe-editor/platform'
 import { ExplorerTreeService } from '../ExplorerTreeService.js'
 
@@ -108,10 +112,32 @@ class FakeWorkspaceService implements IWorkspaceServiceType {
   }
 }
 
-function makeInst(fs: IFileServiceType, ws: IWorkspaceServiceType): InstantiationService {
+class FakeWatcher implements IFileWatcherServiceType {
+  declare readonly _serviceBrand: undefined
+  private readonly _emitter = new Emitter<readonly IFileChangeEvent[]>()
+  readonly onDidChangeFiles = this._emitter.event
+  readonly watched: UriComponents[] = []
+  unwatchCalls = 0
+  async watch(folder: UriComponents): Promise<void> {
+    this.watched.push(folder)
+  }
+  async unwatch(): Promise<void> {
+    this.unwatchCalls++
+  }
+  fire(events: readonly IFileChangeEvent[]): void {
+    this._emitter.fire(events)
+  }
+}
+
+function makeInst(
+  fs: IFileServiceType,
+  ws: IWorkspaceServiceType,
+  watcher: IFileWatcherServiceType,
+): InstantiationService {
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
+  services.set(IFileWatcherService, watcher)
   return new InstantiationService(services)
 }
 
@@ -124,6 +150,7 @@ function flush(): Promise<void> {
 describe('ExplorerTreeService', () => {
   let fs: FakeFs
   let ws: FakeWorkspaceService
+  let watcher: FakeWatcher
   let inst: InstantiationService
 
   beforeEach(() => {
@@ -137,7 +164,8 @@ describe('ExplorerTreeService', () => {
       ],
     })
     ws = new FakeWorkspaceService(root)
-    inst = makeInst(fs, ws)
+    watcher = new FakeWatcher()
+    inst = makeInst(fs, ws, watcher)
   })
 
   it('seeds root expansion and lists children on construction', async () => {
@@ -253,5 +281,85 @@ describe('ExplorerTreeService', () => {
     const src = URI.joinPath(root, 'src')
     await tree.expand(src)
     expect(count).toBeGreaterThan(0)
+  })
+
+  it('watcher event with a known parent triggers refresh', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    fs.calls.list.length = 0
+    fs.dirs.set(root.toString(), [
+      ...(fs.dirs.get(root.toString()) ?? []),
+      { name: 'new.txt', isFile: true, isDirectory: false },
+    ])
+    watcher.fire([{ type: 'modified', resource: URI.joinPath(root, 'new.txt').toJSON() }])
+    await flush()
+    expect(fs.calls.list).toContain(root.toString())
+    expect(tree.getChildren(root)?.some((c) => c.name === 'new.txt')).toBe(true)
+  })
+
+  it('watcher event for an unknown parent is ignored', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    fs.calls.list.length = 0
+    const stranger = URI.file('/elsewhere/x.txt')
+    watcher.fire([{ type: 'modified', resource: stranger.toJSON() }])
+    await flush()
+    expect(fs.calls.list).toHaveLength(0)
+    expect(tree).toBeDefined()
+  })
+
+  it('switching workspace re-arms the watcher on the new root', async () => {
+    inst.createInstance(ExplorerTreeService)
+    await flush()
+    expect(watcher.watched.map((u) => URI.revive(u)?.toString())).toContain(root.toString())
+    const other = URI.file('/other')
+    fs.dirs.set(other.toString(), [])
+    ws.setRoot(other)
+    await flush()
+    expect(watcher.watched.map((u) => URI.revive(u)?.toString())).toContain(other.toString())
+  })
+
+  it('reveal on a direct child of the root selects it', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const target = URI.joinPath(root, 'README.md')
+    const ok = await tree.reveal(target)
+    expect(ok).toBe(true)
+    expect(tree.selectedResource?.toString()).toBe(target.toString())
+    expect(tree.isExpanded(root)).toBe(true)
+  })
+
+  it('reveal expands every ancestor before selecting', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const src = URI.joinPath(root, 'src')
+    expect(tree.isExpanded(src)).toBe(false)
+    const target = URI.joinPath(src, 'index.ts')
+    const ok = await tree.reveal(target)
+    expect(ok).toBe(true)
+    expect(tree.isExpanded(src)).toBe(true)
+    expect(tree.selectedResource?.toString()).toBe(target.toString())
+  })
+
+  it('reveal returns false for a target outside the workspace', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const ok = await tree.reveal(URI.file('/elsewhere/x.txt'))
+    expect(ok).toBe(false)
+    expect(tree.selectedResource).toBeNull()
+  })
+
+  it('setSelection updates selectedResource and fires onDidChange', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    let fired = 0
+    tree.onDidChange(() => fired++)
+    const target = URI.joinPath(root, 'README.md')
+    tree.setSelection(target)
+    expect(tree.selectedResource?.toString()).toBe(target.toString())
+    expect(fired).toBeGreaterThan(0)
+    fired = 0
+    tree.setSelection(target)
+    expect(fired).toBe(0)
   })
 })

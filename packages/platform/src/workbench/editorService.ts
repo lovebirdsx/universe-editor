@@ -184,10 +184,17 @@ export const EditorRegistry: IEditorRegistry = new EditorRegistryImpl()
 
 // -------- IEditorService --------
 
+export interface IOpenEditorServiceOptions {
+  /** Activate the editor after opening (default: true). */
+  activate?: boolean
+  /** Pin the editor (default: true). false opens into the active group's preview slot. */
+  pinned?: boolean
+}
+
 export interface IEditorService {
   readonly _serviceBrand: undefined
 
-  openEditor(input: IEditorInput): void
+  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void
   closeEditor(id: string): void
   closeAllEditors(): void
 

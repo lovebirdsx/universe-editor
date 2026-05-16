@@ -45,6 +45,11 @@
   background: var(--color-list-hover-bg, #2a2d2e);
 }
 
+.row.selected {
+  background: var(--color-list-active-bg, #094771);
+  color: var(--color-list-active-fg, #ffffff);
+}
+
 .twisty {
   display: inline-block;
   width: 12px;

@@ -53,6 +53,7 @@ export * from './storage/storageService.js'
 
 // filesystem abstraction
 export * from './files/fileService.js'
+export * from './files/fileWatcher.js'
 
 // modal dialog abstraction
 export * from './dialog/dialogService.js'

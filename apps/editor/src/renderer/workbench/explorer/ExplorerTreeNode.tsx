@@ -5,7 +5,7 @@
  *  the editor on click.
  *--------------------------------------------------------------------------------------------*/
 
-import type { MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import type { URI } from '@universe-editor/platform'
 import type { ExplorerTreeService } from './ExplorerTreeService.js'
 import styles from './ExplorerView.module.css'
@@ -16,7 +16,7 @@ interface Props {
   readonly isDirectory: boolean
   readonly depth: number
   readonly tree: ExplorerTreeService
-  readonly onOpenFile: (resource: URI) => void
+  readonly onOpenFile: (resource: URI, options?: { preview?: boolean }) => void
   readonly onContextMenu: (
     e: ReactMouseEvent,
     target: { resource: URI; isDirectory: boolean } | null,
@@ -35,23 +35,45 @@ export function ExplorerTreeNode({
   const expanded = isDirectory ? tree.isExpanded(resource) : false
   const children = isDirectory && expanded ? tree.getChildren(resource) : null
   const indent = { paddingLeft: `${depth * 12 + 6}px` }
+  const isSelected = tree.selectedResource?.toString() === resource.toString()
+  const rowRef = useRef<HTMLDivElement>(null)
+  const key = resource.toString()
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail
+      if (detail === key) {
+        rowRef.current?.scrollIntoView({ block: 'nearest' })
+      }
+    }
+    document.addEventListener('explorer:reveal', handler)
+    return () => document.removeEventListener('explorer:reveal', handler)
+  }, [key])
 
   const onClick = () => {
+    tree.setSelection(resource)
     if (isDirectory) {
       void tree.toggle(resource)
     } else {
-      onOpenFile(resource)
+      onOpenFile(resource, { preview: true })
     }
+  }
+
+  const onDoubleClick = () => {
+    if (!isDirectory) onOpenFile(resource, { preview: false })
   }
 
   return (
     <>
       <div
+        ref={rowRef}
         role="treeitem"
         aria-expanded={isDirectory ? expanded : undefined}
-        className={styles['row']}
+        aria-selected={isSelected}
+        className={`${styles['row']} ${isSelected ? (styles['selected'] ?? '') : ''}`}
         style={indent}
         onClick={onClick}
+        onDoubleClick={onDoubleClick}
         onContextMenu={(e) => onContextMenu(e, { resource, isDirectory })}
       >
         <span className={styles['twisty']} aria-hidden="true">

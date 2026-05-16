@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/renderer/workbench/explorer/ExplorerView.tsx
+ *  Tests for ExplorerView — preview semantics on single vs double click (主题 11 WP2).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -23,6 +23,7 @@ import {
   type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type IObservable,
+  type IOpenEditorServiceOptions,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -62,28 +63,25 @@ class FakeWorkspace implements IWorkspaceServiceType {
   readonly onDidChangeRecent = new Emitter<readonly never[]>().event
   current: IWorkspace | null
   readonly recent = [] as never[]
-  openFolderCalls = 0
   constructor(folder: URI | null) {
     this.current = folder ? { folder, name: 'ws' } : null
   }
-  async openFolder() {
-    this.openFolderCalls++
-  }
+  async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}
 }
 
 class FakeEditor {
   declare readonly _serviceBrand: undefined
-  opened: IEditorInput[] = []
+  opened: Array<{ input: IEditorInput; options: IOpenEditorServiceOptions | undefined }> = []
   openEditors: IObservable<readonly IEditorInput[]> = observableValue<readonly IEditorInput[]>(
     'fake.openEditors',
     [],
   )
   activeEditorId = observableValue<string | undefined>('fake.activeId', undefined)
   activeEditor = observableValue<IEditorInput | undefined>('fake.active', undefined)
-  openEditor(input: IEditorInput) {
-    this.opened.push(input)
+  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions) {
+    this.opened.push({ input, options })
   }
   closeEditor() {}
   closeAllEditors() {}
@@ -91,13 +89,10 @@ class FakeEditor {
 
 class FakeCommand {
   declare readonly _serviceBrand: undefined
-  readonly calls: Array<{ id: string; args: unknown }> = []
   registerCommand() {
     return { dispose() {} }
   }
-  async executeCommand(id: string, args: unknown) {
-    this.calls.push({ id, args })
-  }
+  async executeCommand() {}
 }
 
 function makeNoopWatcher(): IFileWatcherServiceType {
@@ -109,10 +104,9 @@ function makeNoopWatcher(): IFileWatcherServiceType {
   } as unknown as IFileWatcherServiceType
 }
 
-function renderView(opts: { folder: URI | null; fs?: IFileServiceType }) {
+function renderView(folder: URI, fs: IFileServiceType) {
   const services = new ServiceCollection()
-  const fs = opts.fs ?? makeFs()
-  const ws = new FakeWorkspace(opts.folder)
+  const ws = new FakeWorkspace(folder)
   const editor = new FakeEditor()
   const command = new FakeCommand()
   const dialog: IDialogServiceType = {
@@ -134,41 +128,33 @@ function renderView(opts: { folder: URI | null; fs?: IFileServiceType }) {
       <ExplorerView />
     </ServicesContext.Provider>,
   )
-  return { ...result, ws, editor, command, fs }
+  return { ...result, editor }
 }
 
 afterEach(() => cleanup())
 
-describe('ExplorerView', () => {
-  it('shows the empty state when there is no workspace', () => {
-    const { ws } = renderView({ folder: null })
-    expect(screen.getByText(/You have not yet opened a folder/i)).toBeTruthy()
-    fireEvent.click(screen.getByRole('button', { name: /Open Folder/i }))
-    expect(ws.openFolderCalls).toBe(1)
-  })
-
-  it('renders root + children when a folder is open', async () => {
-    const root = URI.file('/ws')
-    const fs = makeFs({
-      [root.toString()]: [
-        { name: 'src', isFile: false, isDirectory: true },
-        { name: 'README.md', isFile: true, isDirectory: false },
-      ],
-    })
-    renderView({ folder: root, fs })
-    // initial load is async; let it settle
-    await screen.findByText('README.md')
-    expect(screen.getByText('src')).toBeTruthy()
-  })
-
-  it('clicking a file opens it through IEditorService', async () => {
+describe('ExplorerView — preview', () => {
+  it('single-click opens with pinned:false (preview)', async () => {
     const root = URI.file('/ws')
     const fs = makeFs({
       [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
     })
-    const { editor } = renderView({ folder: root, fs })
+    const { editor } = renderView(root, fs)
     fireEvent.click(await screen.findByText('README.md'))
     await waitFor(() => expect(editor.opened).toHaveLength(1))
-    expect(editor.opened[0]?.type ?? (editor.opened[0] as { typeId?: string }).typeId).toBe('file')
+    expect(editor.opened[0]?.options?.pinned).toBe(false)
+  })
+
+  it('double-click opens with pinned:true', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'README.md', isFile: true, isDirectory: false }],
+    })
+    const { editor } = renderView(root, fs)
+    const label = await screen.findByText('README.md')
+    fireEvent.doubleClick(label)
+    // dblclick in jsdom also fires a click event first; both should reach the handler.
+    await waitFor(() => expect(editor.opened.length).toBeGreaterThanOrEqual(1))
+    expect(editor.opened.some((o) => o.options?.pinned === true)).toBe(true)
   })
 })

@@ -10,6 +10,7 @@ import {
   combinedDisposable,
   type IDisposable,
   type IFileService,
+  type IFileWatcherService,
   type IHostServiceWire,
   type IStorageService,
   type IWorkspaceServiceWire,
@@ -24,6 +25,7 @@ export interface SharedMainServices {
   readonly storage: IStorageService
   readonly ping: IPingService
   readonly fileSystem: IFileService
+  readonly fileWatcher: IFileWatcherService
   readonly workspace: IWorkspaceServiceWire
 }
 
@@ -44,6 +46,7 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(shared.storage))
   server.registerChannel(ServiceChannels.Ping, ProxyChannel.fromService(shared.ping))
   server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(shared.fileSystem))
+  server.registerChannel(ServiceChannels.FileWatcher, ProxyChannel.fromService(shared.fileWatcher))
   server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(shared.workspace))
 
   const all = combinedDisposable(server, host, protoDisposable)

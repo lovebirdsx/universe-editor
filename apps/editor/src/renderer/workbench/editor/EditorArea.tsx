@@ -18,6 +18,7 @@ import { WelcomeEditorInput } from './WelcomeEditorInput.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
 import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditor } from './FileEditor.js'
+import { UntitledEditorInput } from './UntitledEditorInput.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from './EditorGroupsService.js'
@@ -48,6 +49,12 @@ EditorRegistry.registerEditorProvider({
   typeId: FileEditorInput.TYPE_ID,
   componentKey: 'file',
   deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
+})
+EditorRegistry.registerEditorProvider({
+  typeId: UntitledEditorInput.TYPE_ID,
+  componentKey: 'file',
+  // Untitled inputs are session-only — toJSON filters them out, so no
+  // deserialize is wired here.
 })
 
 export function EditorArea({ part }: { part?: IPart | undefined } = {}) {

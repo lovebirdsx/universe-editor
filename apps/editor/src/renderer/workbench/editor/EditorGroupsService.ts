@@ -73,6 +73,9 @@ class EditorGroup implements IEditorGroup, IGridView {
   get activeEditor() {
     return this.model.activeEditor
   }
+  get previewEditor() {
+    return this.model.previewEditor
+  }
   get count() {
     return this.model.count
   }
@@ -97,6 +100,12 @@ class EditorGroup implements IEditorGroup, IGridView {
   }
   setActive(editor: EditorInput): void {
     this.model.setActive(editor)
+  }
+  pinEditor(editor: EditorInput): void {
+    this.model.pinEditor(editor)
+  }
+  isPinned(editor: EditorInput): boolean {
+    return this.model.isPinned(editor)
   }
   getEditorByIndex(index: number) {
     return this.model.getEditorByIndex(index)
@@ -318,13 +327,17 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   // Persistence --------------------------------------------------------------
 
   toJSON(): ISerializedEditorGroupsState {
-    const grid = this._grid.serialize((group) => ({
-      editors: group.editors.map((e) => ({
-        typeId: e.typeId,
-        data: e.serialize?.() ?? null,
-      })),
-      activeIndex: group.activeEditor ? Math.max(0, group.editors.indexOf(group.activeEditor)) : 0,
-    })) as ISerializedGrid<ISerializedEditorGroupData>
+    const grid = this._grid.serialize((group) => {
+      const persistable = group.editors.filter((e) => e.typeId !== 'untitled')
+      const activeIdx = group.activeEditor ? persistable.indexOf(group.activeEditor) : -1
+      return {
+        editors: persistable.map((e) => ({
+          typeId: e.typeId,
+          data: e.serialize?.() ?? null,
+        })),
+        activeIndex: activeIdx >= 0 ? activeIdx : 0,
+      }
+    }) as ISerializedGrid<ISerializedEditorGroupData>
     const activeId = this.activeGroup.id
     return { grid, activeGroupId: activeId }
   }

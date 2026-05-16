@@ -12,6 +12,7 @@ import {
   IEditorGroupsService,
   IEditorInput,
   IEditorService,
+  IOpenEditorServiceOptions,
   URI,
   derived,
   observableValue,
@@ -84,13 +85,16 @@ export class EditorService implements IEditorService {
     })
   }
 
-  openEditor(input: IEditorInput): void {
+  openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void {
     const group = this._groupsService.activeGroup
     const existing = group.editors.find((e) => e.id === input.id)
     if (existing) {
-      group.setActive(existing)
+      if (options?.pinned === true && group.previewEditor === existing) {
+        group.pinEditor(existing)
+      }
+      if (options?.activate !== false) group.setActive(existing)
     } else {
-      group.openEditor(new LegacyEditorInput(input))
+      group.openEditor(new LegacyEditorInput(input), options)
     }
     this._sync()
   }
