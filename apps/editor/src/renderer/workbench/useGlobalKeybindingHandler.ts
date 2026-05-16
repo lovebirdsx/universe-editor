@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect } from 'react'
-import { ICommandService, KeybindingsRegistry } from '@universe-editor/platform'
+import { ICommandService, IContextKeyService, KeybindingsRegistry } from '@universe-editor/platform'
 import { useService } from './useService.js'
 
 function buildKeyString(e: KeyboardEvent): string {
@@ -33,12 +33,13 @@ function hasFunctionalModifier(e: KeyboardEvent): boolean {
 
 export function useGlobalKeybindingHandler(): void {
   const commandService = useService(ICommandService)
+  const contextKeyService = useService(IContextKeyService)
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (isEditableTarget(e.target) && !hasFunctionalModifier(e)) return
       const key = buildKeyString(e)
-      const commandId = KeybindingsRegistry.resolveKeybinding(key)
+      const commandId = KeybindingsRegistry.resolveKeybinding(key, contextKeyService)
       if (!commandId) return
       e.preventDefault()
       e.stopPropagation()
@@ -47,5 +48,5 @@ export function useGlobalKeybindingHandler(): void {
 
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [commandService])
+  }, [commandService, contextKeyService])
 }

@@ -29,6 +29,8 @@ export * from './command/commandRegistry.js'
 export * from './command/menuRegistry.js'
 export * from './command/keybindingRegistry.js'
 export * from './command/contextKey.js'
+export * from './command/contextKeyExpr.js'
+export * from './command/action.js'
 
 // workbench contributions
 export * from './contribution/contribution.js'

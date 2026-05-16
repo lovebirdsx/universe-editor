@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render } from '@testing-library/react'
 import {
+  ContextKeyService,
   ICommandService,
+  IContextKeyService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
@@ -20,6 +22,7 @@ function createHarness() {
   const commandService = { _serviceBrand: undefined, executeCommand }
   const services = new ServiceCollection()
   services.set(ICommandService, commandService as never)
+  services.set(IContextKeyService, new ContextKeyService())
   const instantiation = new InstantiationService(services)
   return { executeCommand, instantiation }
 }

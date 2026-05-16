@@ -229,3 +229,72 @@ describe('ContextKeyService', () => {
     svc.dispose()
   })
 })
+
+describe('MenuRegistry — when filtering', () => {
+  it('filters items whose when-clause evaluates to false', () => {
+    const svc = new ContextKeyService()
+    svc.set('isVisible', true)
+    const d1 = MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
+      command: 'when.test.visible',
+      when: 'isVisible',
+    })
+    const d2 = MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
+      command: 'when.test.hidden',
+      when: '!isVisible',
+    })
+
+    const items = MenuRegistry.getMenuItems(MenuId.MenubarViewMenu, svc).map((i) => i.command)
+    expect(items).toContain('when.test.visible')
+    expect(items).not.toContain('when.test.hidden')
+
+    d1.dispose()
+    d2.dispose()
+    svc.dispose()
+  })
+
+  it('without contextKeyService returns all items (backward compat)', () => {
+    const d1 = MenuRegistry.addMenuItem(MenuId.MenubarFileMenu, {
+      command: 'when.compat.a',
+      when: 'never',
+    })
+    const items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu).map((i) => i.command)
+    expect(items).toContain('when.compat.a')
+    d1.dispose()
+  })
+})
+
+describe('KeybindingsRegistry — when filtering', () => {
+  it('resolveKeybinding picks the binding whose when matches', () => {
+    const svc = new ContextKeyService()
+    svc.set('mode', 'edit')
+    const d1 = KeybindingsRegistry.registerKeybinding({
+      key: 'ctrl+w',
+      command: 'cmd.edit',
+      when: "mode == 'edit'",
+    })
+    const d2 = KeybindingsRegistry.registerKeybinding({
+      key: 'ctrl+w',
+      command: 'cmd.view',
+      when: "mode == 'view'",
+    })
+    // newer-first iteration: cmd.view registered last, but its when fails →
+    // falls back to cmd.edit.
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+w', svc)).toBe('cmd.edit')
+    svc.set('mode', 'view')
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+w', svc)).toBe('cmd.view')
+    d2.dispose()
+    d1.dispose()
+    svc.dispose()
+  })
+
+  it('without contextKeyService preserves legacy behaviour', () => {
+    const d1 = KeybindingsRegistry.registerKeybinding({
+      key: 'ctrl+y',
+      command: 'cmd.legacy',
+      when: 'something',
+    })
+    // No service → when-clause ignored, binding resolves.
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+y')).toBe('cmd.legacy')
+    d1.dispose()
+  })
+})

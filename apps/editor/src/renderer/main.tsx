@@ -7,6 +7,8 @@ import {
   LifecyclePhase,
   ILifecycleService,
   ICommandService,
+  IContextKeyService,
+  ContextKeyService,
   IEditorService,
   IStatusBarService,
   IViewsService,
@@ -59,6 +61,11 @@ function bootstrapWorkbench(): void {
   // Platform services
   const lifecycle = new LifecycleService()
   services.set(ILifecycleService, lifecycle)
+
+  // ContextKey service is consumed by menus, keybindings, and Action2 preconditions.
+  // No dependencies on other services — safe to set this early.
+  const contextKeyService = new ContextKeyService()
+  services.set(IContextKeyService, contextKeyService)
 
   // IPC must be available before any service that proxies main-side channels.
   const ipcService = createRendererIpcService()

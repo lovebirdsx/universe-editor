@@ -4,9 +4,15 @@
  *  sections (grouped, with label + shortcut filled in).
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useRef, useSyncExternalStore } from 'react'
-import { CommandsRegistry, KeybindingsRegistry, MenuRegistry } from '@universe-editor/platform'
+import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
+import {
+  CommandsRegistry,
+  IContextKeyService,
+  KeybindingsRegistry,
+  MenuRegistry,
+} from '@universe-editor/platform'
 import type { IMenuItem, MenuId } from '@universe-editor/platform'
+import { useService } from '../useService.js'
 
 export interface ResolvedMenuItem {
   command: string
@@ -51,8 +57,8 @@ function formatKey(key: string): string {
     .join('+')
 }
 
-function resolveSections(menuId: MenuId): ResolvedMenuSection[] {
-  const items = MenuRegistry.getMenuItems(menuId)
+function resolveSections(menuId: MenuId, ctx: IContextKeyService): ResolvedMenuSection[] {
+  const items = MenuRegistry.getMenuItems(menuId, ctx)
   const sections: ResolvedMenuSection[] = []
   let current: ResolvedMenuSection | undefined
 
@@ -74,24 +80,37 @@ function resolveSections(menuId: MenuId): ResolvedMenuSection[] {
 }
 
 export function useMenuItems(menuId: MenuId): ResolvedMenuSection[] {
+  const contextKeyService = useService(IContextKeyService)
   const cacheRef = useRef<{ menuId: MenuId; resolved: ResolvedMenuSection[] } | null>(null)
 
-  // Recompute synchronously when the menuId argument changes between renders,
-  // so getSnapshot has a stable reference to return on first read.
+  // Recompute synchronously when the menuId argument changes between renders.
   if (cacheRef.current === null || cacheRef.current.menuId !== menuId) {
-    cacheRef.current = { menuId, resolved: resolveSections(menuId) }
+    cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
   }
+
+  // Refresh cache whenever the context-key service changes identity (e.g. test
+  // scaffolding rebuilds the DI container).
+  useEffect(() => {
+    cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
+  }, [menuId, contextKeyService])
 
   const subscribe = useCallback(
     (onChange: () => void) => {
-      const d = MenuRegistry.onDidChangeMenu((changed) => {
+      const d1 = MenuRegistry.onDidChangeMenu((changed) => {
         if (changed !== menuId) return
-        cacheRef.current = { menuId, resolved: resolveSections(menuId) }
+        cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
         onChange()
       })
-      return () => d.dispose()
+      const d2 = contextKeyService.onDidChangeContext(() => {
+        cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
+        onChange()
+      })
+      return () => {
+        d1.dispose()
+        d2.dispose()
+      }
     },
-    [menuId],
+    [menuId, contextKeyService],
   )
 
   const getSnapshot = useCallback(() => cacheRef.current!.resolved, [])

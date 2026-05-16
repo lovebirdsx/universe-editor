@@ -276,3 +276,119 @@ Contribution → Phase 调度表：
 - **不**清理 `Panel.tsx` 的 `BUILT_IN_TABS` 硬编码（主题 5 范畴）
 - **不**新增可选的 `registerWorkbenchContribution(id, ctor, phase)` 包装函数（直接 `ContributionsRegistry.registerContribution` 已足够清晰）
 
+---
+
+## After 主题 4：Action / WhenContext 体系（2026-05-16）
+
+「主题 4」把命令系统的「when 这条线」真正闭合：表达式从「正则手撕的 4 种语法」升级为 VSCode 全量 grammar（15 种 AST 节点 + Scanner + Parser）；`ContextKeyService` 引入强类型 `IContextKey<T>` handle；`MenuRegistry` / `KeybindingsRegistry` 在 `when` 字段上**真正过滤**；新增 `Action2` 抽象一次性声明 command + keybinding + menu；4 个内置命令全部迁移到 Action2，3 个旧 contribution 删除。
+
+### ContextKeyExpr 表达式体系
+
+| 维度 | Before | After |
+|---|---|---|
+| 表达式语法 | 4 种（bare key / `==` / `!=` / `!key`），正则手撕 | **15 种 AST 节点 + 完整 Scanner + 递归下降 Parser**（VSCode 全量 grammar） |
+| 节点种类 | — | False / True / Defined / Not / Equals / NotEquals / Regex / NotRegex / And / Or / In / NotIn / Greater / GreaterEquals / Smaller / SmallerEquals |
+| 操作符 | `==` `!=` `!` 仅 | 加 `<` `<=` `>` `>=` `=~` `in` `not in` `&&` `\|\|` `()` |
+| 字面量 | 仅 bare 值 | bare 值 / 单引号字符串（含转义）/ 正则 `/.../flags` / `true` / `false` / 数字 |
+| 错误恢复 | — | Parser 遇语法错返回 undefined（VSCode 一致，不抛异常） |
+| 规约 | — | And/Or 自动去重、扁平化嵌套、True/False 短路、`x && !x → false` / `x \|\| !x → true` |
+| 序列化往返 | — | `deserialize(expr.serialize()).equals(expr)` |
+| 模块行数 | 0 | `contextKeyExpr.ts` 970 / `contextKeyScanner.ts` 380 / `contextKeyParser.ts` 358 |
+
+### ContextKeyService API 表面
+
+| API | Before | After |
+|---|---|---|
+| `set(key, value)` | ✅ | ✅ |
+| `get(key)` | ✅（含 parent fallback） | ✅ |
+| `remove(key)` | ✅ | ✅ |
+| `evaluate(when: string): boolean` | ✅（仅 4 种语法） | ✅（内部走 `ContextKeyExpr.deserialize(when)?.evaluate(getContext())`） |
+| `onDidChangeContext` | ✅ | ✅（支持 parent → scoped 传播） |
+| `createScoped(overrides?)` | ✅ | ✅（dispose 时清空本地 keys） |
+| `createKey<T>(name, default)` | **缺失** | ✅ 新增（返回 `IContextKey<T>` handle，支持 `set / reset / get`） |
+| `contextMatchesRules(expr \| undefined)` | **缺失** | ✅ 新增（`undefined` 视作永真，VSCode 语义） |
+| `getContext()` | **缺失** | ✅ 新增（返回 `IContext` 快照视图，含 parent fallback） |
+
+API 表面：**3 个核心方法 → 6 个**（+ `createKey` / `contextMatchesRules` / `getContext`）。旧调用方零迁移。
+
+### MenuRegistry / KeybindingsRegistry when 过滤
+
+| 维度 | Before | After |
+|---|---|---|
+| `IMenuItem.when` 字段类型 | `string \| undefined`（仅占位） | `ContextKeyExpression \| string \| undefined`（构造时反序列化） |
+| `MenuRegistry.getMenuItems(menuId)` | 全量返回 | 重载 `(menuId, contextKeyService?)`：传 service 则按 `when.evaluate(ctx)` 过滤 |
+| `IKeybindingItem.when` 字段类型 | `string \| undefined` | `ContextKeyExpression \| string \| undefined` |
+| `KeybindingsRegistry.resolveKeybinding(key)` | 接受 `Record<string, unknown>` 做 truthy 检查 | 重载 `(key, contextKeyService?)`：传 service 则跳过 `when.evaluate(ctx) === false` 的 binding；不传则忽略 when（向后兼容） |
+| TitleBar 菜单 `when` 是否生效 | ❌ `useTitleBarMenus.resolveSections()` 完全忽略 | ✅ 注入 `IContextKeyService`，订阅 `onDidChangeContext` + `onDidChangeMenu`，按 when 过滤后渲染 |
+| Keybinding `when` 是否生效 | ❌ `useGlobalKeybindingHandler` 调用时不传 contextKeys | ✅ 调用 `resolveKeybinding(key, contextKeyService)` |
+
+### Action2 一站式声明
+
+| 维度 | Before | After |
+|---|---|---|
+| 命令注册路径 | **3 个 contribution 分裂**：`LayoutCommandsContribution`（command + keybinding）/ `MenuPlacementsContribution`（菜单）/ `CommandPaletteContribution`（命令面板） | **1 个 `actions/` 目录**：`layoutActions.ts`（4 个 Action2 子类）+ `actions/index.ts`（registerAction2 调用汇总） |
+| `Action2` 抽象 | 缺失 | ✅ 新增（`packages/platform/src/command/action.ts`，145 行） |
+| `registerAction2(ctor)` | 缺失 | ✅ 一次调用同时落 `CommandsRegistry` / `KeybindingsRegistry` / `MenuRegistry`，返回 combinedDisposable |
+| `IAction2Options` 声明字段 | — | `id` / `title` / `category` / `icon` / `precondition` / `menu` / `keybinding` / `f1`（f1=true 自动追加 CommandPalette menu item） |
+| precondition + menu.when 组合 | — | 内部 `combineWhen` helper：`undefined && X → X` / `X && undefined → X` / 两者都在 → `ContextKeyExpr.and(a, b)` |
+
+迁移后 4 个内置命令的注册总入口：
+- `apps/editor/src/renderer/actions/layoutActions.ts` — 4 个 `Action2` 子类（ToggleSidebarVisibility / ToggleSecondarySidebarVisibility / TogglePanel / ShowCommands）
+- `apps/editor/src/renderer/actions/index.ts` — 4 行 `registerAction2(...)`
+- 旧 `LayoutCommandsContribution.ts` / `CommandPaletteContribution.ts` / `MenuPlacementsContribution.ts` **全部删除**
+
+### 默认 ContextKey（4 类，全部接入）
+
+`ContextKeyContribution`（Phase `BlockStartup`）通过 `@IContextKeyService` `@IHostService` `@ILayoutService` `@IEditorService` `@ILifecycleService` 注入，统一管理：
+
+| 类别 | Key | 来源 |
+|---|---|---|
+| 平台标识 | `isWindows` / `isMac` / `isLinux` | `host.platform` 启动时一次性 set |
+| 部件可见性 | `sideBarVisible` / `secondarySideBarVisible` / `panelVisible` | `autorun(layoutService.visible.<part>)` |
+| 编辑器状态 | `activeEditorId`（string）/ `hasActiveEditor`（boolean） | `autorun(editorService.activeEditor)` |
+| Lifecycle 阶段 | `workbenchReady` / `workbenchRestored` | `lifecycle.when(Ready/Restored).then(handle.set(true))` |
+
+### main.tsx 行数
+
+| 维度 | Before（主题 3） | After 主题 2 | After 主题 4 |
+|---|---|---|---|
+| `apps/editor/src/renderer/main.tsx` 行数 | 282 | 136 | **143**（+7：注入 ContextKeyService） |
+
+### DI 注入
+
+| 服务 | Before | After |
+|---|---|---|
+| `IContextKeyService` 注册到 InstantiationService | ❌ 零生产引用 | ✅ `main.tsx` 在 lifecycle 之后立即注入 `new ContextKeyService()` |
+| `useGlobalKeybindingHandler` 注入 `IContextKeyService` | ❌ | ✅ |
+| `useTitleBarMenus` 注入 `IContextKeyService` | ❌ | ✅（订阅 `onDidChangeContext` 触发重渲染） |
+
+### 测试覆盖
+
+| | Before（主题 2 完成时） | After 主题 4 |
+|---|---|---|
+| `@universe-editor/platform` 测试数 | 213 | **297**（+84） |
+| `@universe-editor/editor` 测试数 | 74 | **81**（+7） |
+| 新增测试套件 | — | `contextKeyExpr.test.ts`（39）/ `contextKeyService.test.ts`（16）/ `commandRegistry.test.ts` 追加 4（when 过滤）/ `action.test.ts`（6）/ `layoutActions.test.ts`（7）/ `ContextKeyContribution.test.ts`（6）/ `useGlobalKeybindingHandler.test.tsx` 改造（注入 ContextKeyService） |
+| 删除测试 | — | `LayoutCommandsContribution.test.ts`（被 `layoutActions.test.ts` 取代） |
+
+### 集成验证
+
+- `pnpm check`（lint + typecheck + test + build）：✅ 全绿
+- 桌面端 `electron-vite build`：✅（main 6.52 kB / preload 0.77 kB / renderer 806.97 kB JS + 25.27 kB CSS）
+- 命令保持等价：Ctrl+B / Ctrl+Alt+B / Ctrl+J / Ctrl+Shift+P 与原有 contribution 同名同行为
+- View 菜单四项条目仍在 TitleBar 显示，命令面板 `Show All Commands` 仍能开
+- 表达式向后兼容：旧 `evaluate(string)` 入口保留，旧 `IMenuItem.when: string` / `IKeybindingItem.when: string` 字段保留字符串口
+
+### 边界（按计划保持的"不做"清单）
+
+- **不**支持表达式中的「自定义函数调用」
+- **不**实现 `ContextKey` 的 priority / override 模型（保留主题 1 的 parent 链查找语义）
+- **不**实现 keybinding 的 chord（双 key 组合 Ctrl+K Ctrl+S）—— 留主题 8
+- **不**移植 `IKeybindingService` 解析器/上下文匹配链（KeybindingsRegistry 直接调 contextKeyService 已足够）
+- **不**实现 VSCode 的 `localize` 国际化（title 仅取字符串 `.value`）
+- **不**为 ActivityBar 视图切换、Tab 拖拽等动作创建 Action2（主题 5 / 主题 8）
+- **不**触动 status bar 默认 entry（保留 `StatusBarDefaultsContribution`）
+- **不**改 `BuiltInViewContainersContribution`（仍走纯注册）
+- **不**外露 Parser 的 `errors[]` 输出通道（VSCode 有，本主题暂不暴露）
+- **不**改造 `TitleBar.tsx:9` 的 `host.platform === 'darwin'` 直接比对为 ContextKey（一处常量判定不强求；isMac key 已就绪，后续按需切换）
+

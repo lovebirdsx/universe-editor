@@ -7,11 +7,18 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
+// Side-effect: registers all built-in Action2's with the global registries.
+import '../actions/index.js'
 import { BuiltInViewContainersContribution } from './BuiltInViewContainersContribution.js'
-import { CommandPaletteContribution } from './CommandPaletteContribution.js'
-import { LayoutCommandsContribution } from './LayoutCommandsContribution.js'
-import { MenuPlacementsContribution } from './MenuPlacementsContribution.js'
+import { ContextKeyContribution } from './ContextKeyContribution.js'
 import { StatusBarDefaultsContribution } from './StatusBarDefaultsContribution.js'
+
+// ContextKey defaults must seed before any contribution evaluates a when-clause.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.contextKey',
+  ContextKeyContribution,
+  WorkbenchPhase.BlockStartup,
+)
 
 // ViewContainers need to exist before any UI tries to read them (ActivityBar
 // derives its icons from the registry on first render), so register at startup.
@@ -21,23 +28,6 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
-// Commands + keybindings + menus can be registered before the window appears.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.layoutCommands',
-  LayoutCommandsContribution,
-  WorkbenchPhase.BlockRestore,
-)
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.commandPalette',
-  CommandPaletteContribution,
-  WorkbenchPhase.BlockRestore,
-)
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.menuPlacements',
-  MenuPlacementsContribution,
-  WorkbenchPhase.BlockRestore,
-)
-
 // Status bar defaults run after restore — the status bar is mounted by then.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.statusBarDefaults',
@@ -45,10 +35,4 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-export {
-  BuiltInViewContainersContribution,
-  CommandPaletteContribution,
-  LayoutCommandsContribution,
-  MenuPlacementsContribution,
-  StatusBarDefaultsContribution,
-}
+export { BuiltInViewContainersContribution, ContextKeyContribution, StatusBarDefaultsContribution }
