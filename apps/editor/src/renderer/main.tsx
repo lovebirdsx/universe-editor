@@ -15,6 +15,7 @@ import {
   IFileService,
   IFileWatcherService,
   IStatusBarService,
+  ITextSearchService,
   IViewsService,
   IQuickInputService,
   IOutputService,
@@ -52,6 +53,7 @@ import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from './workbench/explorer/ExplorerTreeService.js'
+import { TextSearchService } from './workbench/search/TextSearchService.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
 // Side-effect import: registers built-in contributions with ContributionsRegistry.
 import './contributions/index.js'
@@ -155,6 +157,10 @@ function bootstrapWorkbench(): void {
   // IWorkspaceService + IFileService so it must be created via DI.
   const explorerTreeService = instantiation.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, explorerTreeService)
+
+  // Workspace-wide text search. Reads via IFileService + IWorkspaceService.
+  const textSearchService = instantiation.createInstance(TextSearchService)
+  services.set(ITextSearchService, textSearchService)
 
   // Kick off async load of user settings from storage. Once it resolves,
   // ConfigurationService fires onDidChangeConfiguration so any subscribers

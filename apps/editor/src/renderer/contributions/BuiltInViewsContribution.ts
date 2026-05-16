@@ -21,5 +21,15 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
         order: 1,
       }),
     )
+
+    this._register(
+      ViewRegistry.registerView({
+        id: 'workbench.view.search.results',
+        name: 'Search',
+        containerId: 'workbench.view.search',
+        componentKey: 'search.results',
+        order: 1,
+      }),
+    )
   }
 }

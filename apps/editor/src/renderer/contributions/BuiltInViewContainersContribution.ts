@@ -32,6 +32,16 @@ export class BuiltInViewContainersContribution
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.search',
+        label: 'Search',
+        icon: 'search',
+        order: 2,
+        location: ViewContainerLocation.SideBar,
+      }),
+    )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.outline',
         label: 'Outline',
         icon: 'search',

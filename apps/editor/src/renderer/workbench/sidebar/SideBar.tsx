@@ -10,11 +10,13 @@ import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { ViewPane } from './ViewPane.js'
 import { ExplorerView } from '../explorer/ExplorerView.js'
+import { SearchView } from '../search/SearchView.js'
 import styles from './SideBar.module.css'
 
 /** Registry of React components keyed by IViewDescriptor.componentKey. */
 export const viewComponentMap = new Map<string, ComponentType>()
 viewComponentMap.set('explorer.tree', ExplorerView)
+viewComponentMap.set('search.results', SearchView)
 
 export function SideBar({ part }: { part?: IPart | undefined } = {}) {
   const viewsService = useService(IViewsService)

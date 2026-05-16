@@ -47,6 +47,13 @@ import {
 } from './fileActions.js'
 import { NewUntitledFileAction } from './newUntitledFileAction.js'
 import { RevealActiveFileInExplorerAction } from './revealActions.js'
+import {
+  FindInFileAction,
+  FindInFilesAction,
+  FindNextAction,
+  FindPreviousAction,
+  FindReplaceInFileAction,
+} from './searchActions.js'
 
 // Layout
 registerAction2(ToggleSidebarVisibilityAction)
@@ -102,3 +109,10 @@ registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(CloseWindowAction)
 registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)
+
+// Search
+registerAction2(FindInFilesAction)
+registerAction2(FindInFileAction)
+registerAction2(FindReplaceInFileAction)
+registerAction2(FindNextAction)
+registerAction2(FindPreviousAction)
