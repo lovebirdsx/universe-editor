@@ -25,6 +25,7 @@ import {
   type ISerializedGrid,
   type ISerializedGridNode,
   Orientation,
+  type ServicesAccessor,
   observableValue,
   transaction,
 } from '@universe-editor/platform'
@@ -318,7 +319,10 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
 
   toJSON(): ISerializedEditorGroupsState {
     const grid = this._grid.serialize((group) => ({
-      editors: group.editors.map((e) => ({ typeId: e.typeId, data: null })),
+      editors: group.editors.map((e) => ({
+        typeId: e.typeId,
+        data: e.serialize?.() ?? null,
+      })),
       activeIndex: group.activeEditor ? Math.max(0, group.editors.indexOf(group.activeEditor)) : 0,
     })) as ISerializedGrid<ISerializedEditorGroupData>
     const activeId = this.activeGroup.id
@@ -333,8 +337,12 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
    *
    * Unknown editor `typeId`s are skipped silently (forward-compatibility with
    * future editor providers that may not be registered on older builds).
+   *
+   * The optional `accessor` is forwarded to `EditorRegistry.deserialize` so
+   * providers that need to construct service-dependent inputs (e.g. the file
+   * editor needing `IFileService`) can reach the DI graph.
    */
-  restore(state: ISerializedEditorGroupsState): void {
+  restore(state: ISerializedEditorGroupsState, accessor?: ServicesAccessor): void {
     // 1. Tear down existing groups beyond the first; close all editors in the
     //    first group so it can be reused as the seed leaf.
     for (let i = this._groups.length - 1; i >= 1; i--) {
@@ -372,7 +380,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       }
       const hydrated: EditorInput[] = []
       for (const e of leaf.data.editors) {
-        const input = EditorRegistry.deserialize(e.typeId, e.data)
+        const input = EditorRegistry.deserialize(e.typeId, e.data, accessor)
         if (input) hydrated.push(input)
       }
       hydrated.forEach((input) => target.openEditor(input, { activate: false }))

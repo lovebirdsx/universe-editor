@@ -11,10 +11,13 @@ import { useSyncExternalStore, type ComponentType } from 'react'
 import {
   EditorInput,
   EditorRegistry,
+  IDialogService,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
 } from '@universe-editor/platform'
+import { useService } from '../useService.js'
+import { closeEditorWithConfirm } from './closeEditorWithConfirm.js'
 import styles from './EditorArea.module.css'
 
 export interface EditorGroupViewProps {
@@ -95,6 +98,7 @@ export function EditorGroupView({
   useGroupVersion(group)
   const activeGroup = useActiveGroup(groupsService)
   const isActiveGroup = activeGroup === group
+  const dialogService = useService(IDialogService)
 
   const handleFocus = () => {
     if (!isActiveGroup) groupsService.activateGroup(group)
@@ -128,7 +132,7 @@ export function EditorGroupView({
               input={e}
               isActive={group.activeEditor?.id === e.id}
               onActivate={() => group.setActive(e)}
-              onClose={() => group.closeEditor(e)}
+              onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
             />
           ))}
         </div>

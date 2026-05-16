@@ -3,12 +3,16 @@
  *  Host service implementation operating on a specific BrowserWindow.
  *--------------------------------------------------------------------------------------------*/
 
-import { type BrowserWindow } from 'electron'
+import { dialog, type BrowserWindow } from 'electron'
 import {
   Emitter,
+  URI,
   type Event,
   type IDisposable,
   type IHostServiceWire,
+  type IShowOpenFileOptions,
+  type IShowSaveFileOptions,
+  type UriComponents,
 } from '@universe-editor/platform'
 
 export class MainHostService implements IHostServiceWire, IDisposable {
@@ -53,6 +57,27 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       this._win.webContents.toggleDevTools()
     }
     return Promise.resolve()
+  }
+
+  async showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<UriComponents | null> {
+    const result = await dialog.showOpenDialog(this._win, {
+      properties: ['openFile'],
+      ...(opts?.title !== undefined ? { title: opts.title } : {}),
+      ...(opts?.defaultPath !== undefined ? { defaultPath: opts.defaultPath } : {}),
+    })
+    if (result.canceled || result.filePaths.length === 0) return null
+    const picked = result.filePaths[0]
+    if (!picked) return null
+    return URI.file(picked).toJSON()
+  }
+
+  async showSaveFileDialog(opts?: IShowSaveFileOptions): Promise<UriComponents | null> {
+    const result = await dialog.showSaveDialog(this._win, {
+      ...(opts?.title !== undefined ? { title: opts.title } : {}),
+      ...(opts?.defaultPath !== undefined ? { defaultPath: opts.defaultPath } : {}),
+    })
+    if (result.canceled || !result.filePath) return null
+    return URI.file(result.filePath).toJSON()
   }
 
   dispose(): void {

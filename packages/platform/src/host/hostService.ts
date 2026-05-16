@@ -5,6 +5,7 @@
 
 import type { Event } from '../base/event.js'
 import { createDecorator } from '../di/instantiation.js'
+import type { URI, UriComponents } from '../base/uri.js'
 
 export type HostPlatform = 'win32' | 'darwin' | 'linux' | 'unknown'
 
@@ -38,6 +39,29 @@ export interface IHostService {
   toggleMaximizeWindow(): Promise<void>
   closeWindow(): Promise<void>
   toggleDevTools(): Promise<void>
+
+  /**
+   * OS file picker. Returns the chosen file's URI, or null if the user
+   * cancelled. Implementations use the native dialog tied to the focused
+   * BrowserWindow.
+   */
+  showOpenFileDialog(opts?: IShowOpenFileOptions): Promise<URI | UriComponents | null>
+
+  /**
+   * OS save-as picker. Returns the chosen file's URI, or null if the user
+   * cancelled.
+   */
+  showSaveFileDialog(opts?: IShowSaveFileOptions): Promise<URI | UriComponents | null>
+}
+
+export interface IShowOpenFileOptions {
+  readonly defaultPath?: string
+  readonly title?: string
+}
+
+export interface IShowSaveFileOptions {
+  readonly defaultPath?: string
+  readonly title?: string
 }
 
 export const IHostService = createDecorator<IHostService>('hostService')

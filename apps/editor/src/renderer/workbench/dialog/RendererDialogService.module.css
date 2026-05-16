@@ -1,0 +1,99 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  min-width: 360px;
+  max-width: 560px;
+  background: var(--color-dialog-bg, #2d2d30);
+  color: var(--color-dialog-fg, #cccccc);
+  border: 1px solid var(--color-dialog-border, #454545);
+  border-radius: 4px;
+  padding: 20px 24px 16px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.detail {
+  margin: -4px 0 0;
+  font-size: 12px;
+  color: var(--color-dialog-detail-fg, #aaaaaa);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  background: var(--color-input-bg, #3c3c3c);
+  color: var(--color-input-fg, #cccccc);
+  border: 1px solid var(--color-input-border, #3c3c3c);
+  border-radius: 2px;
+  font-size: 13px;
+  outline: none;
+}
+
+.input:focus {
+  border-color: var(--color-focus-border, #007fd4);
+}
+
+.buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.btn,
+.btnPrimary {
+  min-width: 80px;
+  padding: 5px 14px;
+  font-size: 12px;
+  border-radius: 2px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  outline: none;
+}
+
+.btn {
+  background: var(--color-button-secondary-bg, #3a3d41);
+  color: var(--color-button-secondary-fg, #cccccc);
+  border-color: var(--color-button-secondary-border, #3a3d41);
+}
+
+.btn:hover {
+  background: var(--color-button-secondary-hover-bg, #45494e);
+}
+
+.btnPrimary {
+  background: var(--color-button-bg, #0e639c);
+  color: var(--color-button-fg, #ffffff);
+  border-color: var(--color-button-bg, #0e639c);
+}
+
+.btnPrimary:hover {
+  background: var(--color-button-hover-bg, #1177bb);
+}
+
+.btn:focus-visible,
+.btnPrimary:focus-visible {
+  outline: 1px solid var(--color-focus-border, #007fd4);
+  outline-offset: 1px;
+}

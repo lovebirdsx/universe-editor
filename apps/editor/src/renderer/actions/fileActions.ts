@@ -1,0 +1,293 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  File-system Action2 commands: Save / Save As / Open File / New File /
+ *  New Folder / Rename / Delete. Most of these can be driven from either the
+ *  command palette (no args) or the Explorer right-click menu (target args).
+ *--------------------------------------------------------------------------------------------*/
+
+import {
+  Action2,
+  IDialogService,
+  IEditorGroupsService,
+  IFileService,
+  IHostService,
+  IInstantiationService,
+  IWorkspaceService,
+  MenuId,
+  URI,
+  type ServicesAccessor,
+  type UriComponents,
+} from '@universe-editor/platform'
+import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { confirmLargeFile } from '../workbench/editor/largeFileGuard.js'
+import { IExplorerTreeService } from '../workbench/explorer/ExplorerTreeService.js'
+
+function reviveUri(value: URI | UriComponents | null): URI | null {
+  if (!value) return null
+  return value instanceof URI ? value : (URI.revive(value) as URI)
+}
+
+function basename(path: string): string {
+  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return slash === -1 ? path : path.slice(slash + 1)
+}
+
+// ---------------------------------------------------------------------------
+// Save / Save As
+// ---------------------------------------------------------------------------
+
+export class SaveFileAction extends Action2 {
+  static readonly ID = 'workbench.action.files.save'
+  constructor() {
+    super({
+      id: SaveFileAction.ID,
+      title: 'Save',
+      category: 'File',
+      keybinding: { primary: 'ctrl+s' },
+      menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 1 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const groups = accessor.get(IEditorGroupsService)
+    const active = groups.activeGroup.activeEditor
+    if (!active) return
+    await active.save?.()
+  }
+}
+
+export class SaveFileAsAction extends Action2 {
+  static readonly ID = 'workbench.action.files.saveAs'
+  constructor() {
+    super({
+      id: SaveFileAsAction.ID,
+      title: 'Save As…',
+      category: 'File',
+      keybinding: { primary: 'ctrl+shift+s' },
+      menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 2 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const groups = accessor.get(IEditorGroupsService)
+    const active = groups.activeGroup.activeEditor
+    if (!(active instanceof FileEditorInput)) return
+    const host = accessor.get(IHostService)
+    const fileService = accessor.get(IFileService)
+    const inst = accessor.get(IInstantiationService)
+
+    const picked = reviveUri(await host.showSaveFileDialog({ defaultPath: active.resource.fsPath }))
+    if (!picked) return
+
+    // Resolve current text via the existing model; fall back to disk if unsaved.
+    const text = active.isResolved ? await readActiveText(active) : await active.resolve()
+    await fileService.writeFile(picked, text)
+
+    // Replace the editor with one bound to the new resource. The original input
+    // is closed; its dirty state goes with it.
+    const newInput = inst.createInstance(FileEditorInput, picked)
+    groups.activeGroup.openEditor(newInput, { activate: true })
+    groups.activeGroup.closeEditor(active)
+  }
+}
+
+async function readActiveText(input: FileEditorInput): Promise<string> {
+  // FileEditorInput.save reads through MonacoModelRegistry.peek which returns
+  // null if no model has been acquired. Resolve as fallback.
+  const text = await input.resolve()
+  return text
+}
+
+// ---------------------------------------------------------------------------
+// Open File
+// ---------------------------------------------------------------------------
+
+export class OpenFileAction extends Action2 {
+  static readonly ID = 'workbench.action.files.openFile'
+  constructor() {
+    super({
+      id: OpenFileAction.ID,
+      title: 'Open File…',
+      category: 'File',
+      keybinding: { primary: 'ctrl+o' },
+      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 0 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const host = accessor.get(IHostService)
+    const workspace = accessor.get(IWorkspaceService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+    const fileService = accessor.get(IFileService)
+    const dialog = accessor.get(IDialogService)
+
+    const picked = reviveUri(
+      await host.showOpenFileDialog({
+        ...(workspace.current ? { defaultPath: workspace.current.folder.fsPath } : {}),
+      }),
+    )
+    if (!picked) return
+    if (!(await confirmLargeFile(picked, fileService, dialog))) return
+    const input = inst.createInstance(FileEditorInput, picked)
+    groups.activeGroup.openEditor(input, { activate: true })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Explorer CRUD: New File / New Folder / Rename / Delete
+// ---------------------------------------------------------------------------
+
+interface IParentArg {
+  readonly parent?: URI | UriComponents
+}
+interface ITargetArg {
+  readonly target?: URI | UriComponents
+  readonly isDirectory?: boolean
+}
+
+function resolveParent(accessor: ServicesAccessor, args: IParentArg | undefined): URI | null {
+  const explicit = args?.parent ? reviveUri(args.parent) : null
+  if (explicit) return explicit
+  const workspace = accessor.get(IWorkspaceService)
+  return workspace.current?.folder ?? null
+}
+
+export class NewFileAction extends Action2 {
+  static readonly ID = 'workbench.files.action.newFile'
+  constructor() {
+    super({
+      id: NewFileAction.ID,
+      title: 'New File…',
+      category: 'File',
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const parent = resolveParent(accessor, args[0] as IParentArg)
+    if (!parent) return
+    const dialog = accessor.get(IDialogService)
+    const tree = accessor.get(IExplorerTreeService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+
+    const name = await dialog.prompt({ title: 'New File', placeholder: 'Name' })
+    if (!name) return
+    try {
+      const created = await tree.createFile(parent, name)
+      const input = inst.createInstance(FileEditorInput, created)
+      groups.activeGroup.openEditor(input, { activate: true })
+    } catch (err) {
+      await dialog.confirm({
+        message: 'Failed to create file',
+        detail: err instanceof Error ? err.message : String(err),
+        type: 'error',
+      })
+    }
+  }
+}
+
+export class NewFolderAction extends Action2 {
+  static readonly ID = 'workbench.files.action.newFolder'
+  constructor() {
+    super({
+      id: NewFolderAction.ID,
+      title: 'New Folder…',
+      category: 'File',
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const parent = resolveParent(accessor, args[0] as IParentArg)
+    if (!parent) return
+    const dialog = accessor.get(IDialogService)
+    const tree = accessor.get(IExplorerTreeService)
+
+    const name = await dialog.prompt({ title: 'New Folder', placeholder: 'Name' })
+    if (!name) return
+    try {
+      await tree.createFolder(parent, name)
+    } catch (err) {
+      await dialog.confirm({
+        message: 'Failed to create folder',
+        detail: err instanceof Error ? err.message : String(err),
+        type: 'error',
+      })
+    }
+  }
+}
+
+export class RenameFileAction extends Action2 {
+  static readonly ID = 'workbench.files.action.rename'
+  constructor() {
+    super({
+      id: RenameFileAction.ID,
+      title: 'Rename…',
+      category: 'File',
+      keybinding: { primary: 'f2' },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const target = reviveUri((args[0] as ITargetArg | undefined)?.target ?? null)
+    if (!target) return
+    const dialog = accessor.get(IDialogService)
+    const tree = accessor.get(IExplorerTreeService)
+
+    const current = basename(target.fsPath)
+    const next = await dialog.prompt({
+      title: 'Rename',
+      initialValue: current,
+    })
+    if (!next || next === current) return
+    try {
+      await tree.rename(target, next)
+    } catch (err) {
+      await dialog.confirm({
+        message: 'Failed to rename',
+        detail: err instanceof Error ? err.message : String(err),
+        type: 'error',
+      })
+    }
+  }
+}
+
+export class DeleteFileAction extends Action2 {
+  static readonly ID = 'workbench.files.action.delete'
+  constructor() {
+    super({
+      id: DeleteFileAction.ID,
+      title: 'Delete',
+      category: 'File',
+      keybinding: { primary: 'delete' },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const a = (args[0] as ITargetArg | undefined) ?? {}
+    const target = reviveUri(a.target ?? null)
+    if (!target) return
+    const isDirectory = !!a.isDirectory
+    const dialog = accessor.get(IDialogService)
+    const tree = accessor.get(IExplorerTreeService)
+
+    const confirmed = await dialog.confirm({
+      message: `Are you sure you want to delete "${basename(target.fsPath)}"?`,
+      detail: isDirectory
+        ? 'This will permanently delete the folder and all of its contents.'
+        : 'You can restore it from the system trash if your platform supports it.',
+      primaryButton: 'Delete',
+      type: 'warning',
+    })
+    if (!confirmed.confirmed) return
+    try {
+      await tree.delete(target, { recursive: isDirectory })
+    } catch (err) {
+      await dialog.confirm({
+        message: 'Failed to delete',
+        detail: err instanceof Error ? err.message : String(err),
+        type: 'error',
+      })
+    }
+  }
+}

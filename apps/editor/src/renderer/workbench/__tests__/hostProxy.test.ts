@@ -47,6 +47,12 @@ class FakeHost implements IHostServiceWire {
   toggleDevTools(): Promise<void> {
     return this.devTools()
   }
+  showOpenFileDialog(): Promise<null> {
+    return Promise.resolve(null)
+  }
+  showSaveFileDialog(): Promise<null> {
+    return Promise.resolve(null)
+  }
   fire(v: boolean): void {
     this._emitter.fire(v)
   }

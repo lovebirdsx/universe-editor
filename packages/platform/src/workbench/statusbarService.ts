@@ -28,10 +28,19 @@ export interface IStoredStatusBarEntry {
   readonly entry: IStatusBarEntry
 }
 
+/**
+ * Handle returned by `IStatusBarService.addEntry`. Lets the caller swap the
+ * entry's data in-place without losing its slot (the underlying id is stable
+ * across updates, so React keys remain valid).
+ */
+export interface IStatusBarEntryAccessor extends IDisposable {
+  update(entry: IStatusBarEntry): void
+}
+
 export interface IStatusBarService {
   readonly _serviceBrand: undefined
 
-  addEntry(entry: IStatusBarEntry): IDisposable
+  addEntry(entry: IStatusBarEntry): IStatusBarEntryAccessor
 
   readonly entries: IObservable<readonly IStoredStatusBarEntry[]>
 }

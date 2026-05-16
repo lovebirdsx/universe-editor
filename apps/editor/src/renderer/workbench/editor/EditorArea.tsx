@@ -16,6 +16,8 @@ import { SettingsEditor } from '../preferences/SettingsEditor.js'
 import { SettingsEditorInput } from '../preferences/SettingsEditorInput.js'
 import { WelcomeEditorInput } from './WelcomeEditorInput.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
+import { FileEditorInput } from './FileEditorInput.js'
+import { FileEditor } from './FileEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from './EditorGroupsService.js'
@@ -27,6 +29,7 @@ export const editorComponentMap = new Map<string, ComponentType<{ input: IEditor
 // Register built-in welcome editor
 editorComponentMap.set('welcome', WelcomeEditor)
 editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEditorInput }>)
+editorComponentMap.set('file', FileEditor)
 
 // Editor providers map typeId → componentKey so EditorGroupView can resolve the
 // React component for any IEditorInput. `deserialize` lets the restore pipeline
@@ -40,6 +43,11 @@ EditorRegistry.registerEditorProvider({
   typeId: SettingsEditorInput.TYPE_ID,
   componentKey: 'settings',
   deserialize: () => SettingsEditorInput.deserialize(),
+})
+EditorRegistry.registerEditorProvider({
+  typeId: FileEditorInput.TYPE_ID,
+  componentKey: 'file',
+  deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
 })
 
 export function EditorArea({ part }: { part?: IPart | undefined } = {}) {

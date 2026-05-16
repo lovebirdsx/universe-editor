@@ -93,4 +93,77 @@ describe('FileSystemMainService', () => {
     // simulate how ProxyChannel would deliver the args after JSON round-trip
     await expect(service.readFileText(components as unknown as URI)).resolves.toBe('ok')
   })
+
+  // -------- delete --------
+
+  it('delete removes a file', async () => {
+    const target = URI.file(join(root, 'gone.txt'))
+    await service.writeFile(target, 'x')
+    await service.delete(target)
+    await expect(service.exists(target)).resolves.toBe(false)
+  })
+
+  it('delete removes an empty directory', async () => {
+    const dir = URI.file(join(root, 'empty'))
+    await service.createDirectory(dir)
+    await service.delete(dir)
+    await expect(service.exists(dir)).resolves.toBe(false)
+  })
+
+  it('delete with recursive=true removes a non-empty directory', async () => {
+    const dir = URI.file(join(root, 'tree'))
+    await service.createDirectory(dir)
+    await service.writeFile(URI.file(join(root, 'tree', 'a.txt')), 'a')
+    await service.delete(dir, { recursive: true })
+    await expect(service.exists(dir)).resolves.toBe(false)
+  })
+
+  it('delete without recursive on a non-empty directory throws ENOTEMPTY', async () => {
+    const dir = URI.file(join(root, 'tree2'))
+    await service.createDirectory(dir)
+    await service.writeFile(URI.file(join(root, 'tree2', 'a.txt')), 'a')
+    await expect(service.delete(dir)).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'ENOTEMPTY',
+    })
+  })
+
+  it('delete on missing path throws ENOENT', async () => {
+    const missing = URI.file(join(root, 'nope.txt'))
+    await expect(service.delete(missing)).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'ENOENT',
+    })
+  })
+
+  // -------- rename --------
+
+  it('rename moves a file', async () => {
+    const src = URI.file(join(root, 'a.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await service.writeFile(src, 'hi')
+    await service.rename(src, dst)
+    await expect(service.exists(src)).resolves.toBe(false)
+    await expect(service.readFileText(dst)).resolves.toBe('hi')
+  })
+
+  it('rename to an existing target without overwrite throws EEXIST', async () => {
+    const src = URI.file(join(root, 'a.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await service.writeFile(src, 'hi')
+    await service.writeFile(dst, 'taken')
+    await expect(service.rename(src, dst)).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'EEXIST',
+    })
+  })
+
+  it('rename of a missing source throws ENOENT', async () => {
+    const src = URI.file(join(root, 'missing.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await expect(service.rename(src, dst)).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'ENOENT',
+    })
+  })
 })

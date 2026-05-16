@@ -8,10 +8,12 @@ import {
   Action2,
   GroupDirection,
   GroupLocation,
+  IDialogService,
   IEditorGroupsService,
   MenuId,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { closeEditorWithConfirm } from '../workbench/editor/closeEditorWithConfirm.js'
 
 // ---------------------------------------------------------------------------
 // Close group
@@ -30,10 +32,11 @@ export class CloseActiveEditorAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
+  override async run(accessor: ServicesAccessor): Promise<void> {
     const groups = accessor.get(IEditorGroupsService)
     const editor = groups.activeGroup.activeEditor
-    if (editor) groups.activeGroup.closeEditor(editor)
+    if (editor)
+      await closeEditorWithConfirm(editor, groups.activeGroup, accessor.get(IDialogService))
   }
 }
 

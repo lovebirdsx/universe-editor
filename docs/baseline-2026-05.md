@@ -747,3 +747,65 @@ editor 包新增 / 扩展：
 - **不**改 `IStatusBarService` 接口；用既有 `addEntry/dispose`
 - **不**新增 contextkey "inChord"；chord 反馈用 statusbar
 - **不**实现菜单项的 enabled/visible 反应式更新
+
+---
+
+## 十、After 主题 10：FileEditor + Explorer（2026-05-16）
+
+主题 10 把 fs 网关从「平台能力」变成「用户体验」。在它之前，editor 是个会打开文件夹但什么都看不到的壳；之后第一次真正像一个编辑器。
+
+### 新增 / 改造（按工作包）
+
+- **WP1（platform）**：`EditorInput` 增可选 `save?()` / `revert?()` / `serialize?()`；`IFileService` 增 `delete(uri, {recursive?})` / `rename(src, dst, {overwrite?})`，错误码加 `ENOTEMPTY`；新增 `IDialogService`（`confirm` 三按钮 + `prompt`）；`IEditorProvider.deserialize` 加可选 `accessor`。
+- **WP2（主进程）**：`FileSystemMainService` 实现 delete/rename；renderer `index.html` CSP 放行 `worker-src blob: 'self'`；`electron.vite.config.ts` 加 `renderer.worker.format = 'es'` 让 Vite `?worker` 出 ESM chunk。
+- **WP3（Monaco + FileEditorInput）**：`MonacoLoader`（单例 + `editor.worker` / `json.worker` 通过 `?worker` self-host），`MonacoModelRegistry`（URI→ITextModel 引用计数，多 group 共享一个 model），`FileEditorInput`（含 `backupContent` / `language` / `save` / `revert` / `serialize`），`FileEditor.tsx`（Monaco 容器 + 输入切换只 `setModel`）。`EditorGroupsService.toJSON` 改用 `e.serialize?.() ?? null`，restore 透传 `ServicesAccessor`。
+- **WP4（Explorer + Dialog）**：`ExplorerTreeService`（DI 单例 `IExplorerTreeService`，订阅 `IWorkspaceService` 重置树根，懒 list + 缓存）、`ExplorerView` / `ExplorerTreeNode` / `ExplorerContextMenu`、`RendererDialogService`（React portal，Esc 取消 / Enter 主按钮）。SideBar `viewComponentMap` 注册 `explorer.tree`；`BuiltInViewsContribution` 注册 view。
+- **WP5（fileActions + close-with-confirm）**：7 个 Action2：`Save (Ctrl+S)` / `SaveAs (Ctrl+Shift+S)` / `OpenFile (Ctrl+O)` / `NewFile` / `NewFolder` / `Rename (F2)` / `Delete`。`closeEditorWithConfirm` 工具函数封装脏文件三按钮 confirm（保存 / 不保存 / 取消），EditorGroupView tab × 与 `CloseActiveEditorAction (Ctrl+W)` 都走它。Explorer 右键经 `ICommandService.executeCommand(actionId, { target | parent })` 进入 actions。
+- **WP6（StatusBar + 大文件 + 文档）**：`FileEditorStatusContribution`（AfterRestore）订阅 `IEditorService.activeEditor`，typeId='file' 时注册 3 entry（cursor priority 100 / language 90 / encoding 80 "UTF-8"），非 file 类型 dispose；`IStatusBarService.addEntry` 改返回 `IStatusBarEntryAccessor`（`update(entry)` + `dispose()`），cursor 用 `update` 原地刷新。`FileEditorRegistry` 维护 FileEditorInput → Monaco editor 实例的反查表（split view 多挂载时 last-write-wins）。`largeFileGuard` 在 OpenFile + Explorer 单击前 `fs.stat`，>2MB 弹 confirm。
+
+### 行为速写
+
+- **打开文件**：Explorer 单击 → pinned tab 直接打开（本主题不做 preview tab）；`Ctrl+O` 经 `IHostService.showOpenFileDialog` 拿到 URI 后同样路径；大于 2MB 提示。
+- **跨 group 共享 model**：split 后两个 group 打开同一文件，编辑实时同步（共享 TextModel + 引用计数）。
+- **脏关闭**：tab × / `Ctrl+W` 走 `closeEditorWithConfirm` → `保存 / 不保存 / 取消`；save 返回 false 时保留 tab，不关闭。
+- **保存语义**：`Ctrl+S` → `FileEditorInput.save()` 从 `MonacoModelRegistry.peek()` 取文本，`writeFile` 后重置 dirty；`Ctrl+Shift+S` 弹保存对话框，写新路径后 open 新 input + close 旧 input。
+- **持久化**：editor group toJSON 调 `e.serialize?.()`，FileEditorInput 输出 `{ resource: UriComponents }`；reload 后重新构造同 URI 的 input，回到 disk 内容（不做 hot exit）。
+
+### 测试覆盖
+
+| | After 主题 8 | After 主题 10 |
+|---|---|---|
+| `@universe-editor/platform` 测试数 | 398 | **401**（+3：accessor / deserialize 信号 / 接口纯类型扩展不计入） |
+| `@universe-editor/editor` 测试数 | 168 | **282**（+114：含 fs delete/rename main 测试、Monaco / FileEditorInput / ExplorerTree / Dialog / fileActions / closeEditorWithConfirm / FileEditorStatus / largeFileGuard 等） |
+| 总测试数 | 566 | **683** |
+
+新增 / 扩展的测试文件（renderer 主要）：
+
+- `main/services/files/__tests__/fileSystemMainService.test.ts`：+8（delete 文件 / 空目录 / 非空 + recursive / 非空 → ENOTEMPTY / 不存在 → ENOENT / rename 文件 / EEXIST / 源不存在 ENOENT）
+- `workbench/editor/__tests__/FileEditorInput.test.ts`（9）/ `MonacoModelRegistry.test.ts`（4）/ `EditorGroupsService.serialize.test.ts`（含 FileEditorInput round-trip）
+- `workbench/explorer/__tests__/ExplorerTreeService.test.ts`（11）/ `ExplorerView.test.tsx`（3）
+- `workbench/dialog/__tests__/RendererDialogService.test.tsx`（6）
+- `workbench/editor/__tests__/closeEditorWithConfirm.test.ts`（5）
+- `actions/__tests__/fileActions.test.ts`（13）
+- `workbench/__tests__/contributions/FileEditorStatusContribution.test.ts`（4）
+- `workbench/__tests__/editor/largeFileGuard.test.ts`（4）
+- `workbench/__tests__/StatusBarService.test.ts`：+2（update / update-after-dispose）
+
+### 集成验证
+
+- `pnpm lint` + `pnpm typecheck` + `pnpm test`：✅ 全绿（401 + 282）
+- 既有 Welcome / Settings input 不实现新钩子，靠 `serialize?.() ?? null` 兼容旧 group 存档
+- ContextKey / Menu / Keybinding / Editor Group / Workspace 既有路径零回归
+
+### 边界（按计划保持的"不做"清单）
+
+- **不**实现 untitled 文件（Ctrl+N 暂缺，留主题 11）
+- **不**实现 preview tab（单击即 pinned）
+- **不**实现 hot exit（dirty 内容不持久化）
+- **不**实现 file watcher（外部 fs 改动不感知）
+- **不**实现窗口级关闭 dirty 拦截
+- **不**实现多编码 / BOM 切换（UTF-8 only）
+- **不**接 IntelliSense（仅 editor.worker + json.worker；TS/CSS/HTML 走 monarch 语法着色）
+- **不**实现 Outline / 搜索面板 / drag-drop / git decoration / diff editor / Reveal in Explorer
+- **不**实现 path-traversal 沙箱
+

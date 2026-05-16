@@ -32,7 +32,13 @@ function ensureFile(resource: URI): URI {
 function mapError(err: unknown, fallbackMessage: string): FileSystemError {
   const e = err as NodeJS.ErrnoException
   const code = e?.code
-  if (code === 'ENOENT' || code === 'EACCES' || code === 'EISDIR' || code === 'EEXIST') {
+  if (
+    code === 'ENOENT' ||
+    code === 'EACCES' ||
+    code === 'EISDIR' ||
+    code === 'EEXIST' ||
+    code === 'ENOTEMPTY'
+  ) {
     return new FileSystemError(e.message ?? fallbackMessage, code)
   }
   return new FileSystemError(e?.message ?? fallbackMessage, 'UNKNOWN')
@@ -122,6 +128,49 @@ export class FileSystemMainService implements IFileService {
       await fs.mkdir(uri.fsPath, { recursive: true })
     } catch (err) {
       throw mapError(err, 'createDirectory failed')
+    }
+  }
+
+  async delete(resource: RawUri, opts?: { recursive?: boolean }): Promise<void> {
+    const uri = ensureFile(reviveUri(resource))
+    const recursive = opts?.recursive === true
+    try {
+      const s = await fs.stat(uri.fsPath)
+      if (s.isDirectory()) {
+        if (recursive) {
+          await fs.rm(uri.fsPath, { recursive: true, force: false })
+        } else {
+          // rmdir surfaces ENOTEMPTY for non-empty directories on all platforms.
+          await fs.rmdir(uri.fsPath)
+        }
+      } else {
+        await fs.unlink(uri.fsPath)
+      }
+    } catch (err) {
+      throw mapError(err, 'delete failed')
+    }
+  }
+
+  async rename(source: RawUri, target: RawUri, opts?: { overwrite?: boolean }): Promise<void> {
+    const src = ensureFile(reviveUri(source))
+    const dst = ensureFile(reviveUri(target))
+    const overwrite = opts?.overwrite === true
+    try {
+      if (!overwrite) {
+        let exists = true
+        try {
+          await fs.access(dst.fsPath)
+        } catch {
+          exists = false
+        }
+        if (exists) {
+          throw new FileSystemError(`Target already exists: ${dst.fsPath}`, 'EEXIST')
+        }
+      }
+      await fs.rename(src.fsPath, dst.fsPath)
+    } catch (err) {
+      if (err instanceof FileSystemError) throw err
+      throw mapError(err, 'rename failed')
     }
   }
 }

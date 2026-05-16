@@ -6,7 +6,13 @@
 import { createDecorator } from '../di/instantiation.js'
 import type { URI } from '../base/uri.js'
 
-export type FileSystemErrorCode = 'ENOENT' | 'EACCES' | 'EISDIR' | 'EEXIST' | 'UNKNOWN'
+export type FileSystemErrorCode =
+  | 'ENOENT'
+  | 'EACCES'
+  | 'EISDIR'
+  | 'EEXIST'
+  | 'ENOTEMPTY'
+  | 'UNKNOWN'
 
 export class FileSystemError extends Error {
   readonly code: FileSystemErrorCode
@@ -48,6 +54,20 @@ export interface IFileService {
   stat(resource: URI): Promise<IFileStat>
   list(resource: URI): Promise<IDirectoryEntry[]>
   createDirectory(resource: URI): Promise<void>
+
+  /**
+   * Deletes a file or directory. For directories, callers must opt in with
+   * `recursive: true` to remove non-empty trees; otherwise removing a
+   * non-empty directory throws `FileSystemError('ENOTEMPTY')`.
+   */
+  delete(resource: URI, opts?: { recursive?: boolean }): Promise<void>
+
+  /**
+   * Renames or moves `source` to `target`. Without `overwrite: true`, an
+   * existing target throws `FileSystemError('EEXIST')`. Cross-device moves
+   * are not guaranteed and may throw `UNKNOWN`.
+   */
+  rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void>
 }
 
 export const IFileService = createDecorator<IFileService>('fileService')

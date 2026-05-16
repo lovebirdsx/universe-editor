@@ -36,6 +36,15 @@ import {
   OpenFolderAction,
   OpenRecentAction,
 } from './workspaceActions.js'
+import {
+  DeleteFileAction,
+  NewFileAction,
+  NewFolderAction,
+  OpenFileAction,
+  RenameFileAction,
+  SaveFileAction,
+  SaveFileAsAction,
+} from './fileActions.js'
 
 // Layout
 registerAction2(ToggleSidebarVisibilityAction)
@@ -75,6 +84,15 @@ registerAction2(OpenFolderAction)
 registerAction2(OpenRecentAction)
 registerAction2(ClearRecentWorkspacesAction)
 registerAction2(CloseFolderAction)
+
+// Files
+registerAction2(SaveFileAction)
+registerAction2(SaveFileAsAction)
+registerAction2(OpenFileAction)
+registerAction2(NewFileAction)
+registerAction2(NewFolderAction)
+registerAction2(RenameFileAction)
+registerAction2(DeleteFileAction)
 
 // Window / Help
 registerAction2(CloseWindowAction)

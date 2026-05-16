@@ -4,8 +4,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { EditorInput, EditorRegistry, GroupDirection, URI } from '@universe-editor/platform'
+import {
+  EditorInput,
+  EditorRegistry,
+  GroupDirection,
+  IFileService,
+  InstantiationService,
+  ServiceCollection,
+  URI,
+  type IFileService as IFileServiceType,
+} from '@universe-editor/platform'
 import { EditorGroupsService, type ISerializedEditorGroupsState } from '../EditorGroupsService.js'
+import { FileEditorInput } from '../FileEditorInput.js'
+import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 
 class FakeEditorInput extends EditorInput {
   static readonly TYPE_ID = 'fake.test.editor'
@@ -182,5 +193,90 @@ describe('EditorGroupsService serialization', () => {
       expect(json2.grid.root.children?.length ?? 0).toBe(json1.grid.root.children?.length ?? 0)
     }
     dst.dispose()
+  })
+
+  // --- FileEditorInput round-trip via accessor ----------------------------
+
+  describe('FileEditorInput round-trip', () => {
+    function makeFs(): IFileServiceType {
+      return {
+        _serviceBrand: undefined,
+        async readFile() {
+          return new Uint8Array()
+        },
+        async readFileText() {
+          return ''
+        },
+        async writeFile() {},
+        async exists() {
+          return true
+        },
+        async stat() {
+          throw new Error('not implemented')
+        },
+        async list() {
+          return []
+        },
+        async createDirectory() {},
+        async delete() {},
+        async rename() {},
+      } as IFileServiceType
+    }
+
+    let cleanupProvider: (() => void) | undefined
+
+    beforeEach(() => {
+      const d = EditorRegistry.registerEditorProvider({
+        typeId: FileEditorInput.TYPE_ID,
+        componentKey: 'file',
+        deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
+      })
+      cleanupProvider = () => d.dispose()
+    })
+
+    afterEach(() => {
+      cleanupProvider?.()
+      cleanupProvider = undefined
+      MonacoModelRegistry._resetForTests()
+    })
+
+    it('toJSON serialises a FileEditorInput via its serialize() hook', () => {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const svc = new EditorGroupsService()
+      const input = inst.createInstance(FileEditorInput, URI.file('/tmp/a.json'))
+      svc.activeGroup.openEditor(input)
+      const json = svc.toJSON()
+      if (json.grid.root.type === 'branch') {
+        const leaf = json.grid.root.children?.[0]
+        if (leaf?.type === 'leaf' && leaf.data) {
+          expect(leaf.data.editors[0]?.typeId).toBe('file')
+          expect(
+            (leaf.data.editors[0]?.data as { resource: { scheme: string } }).resource.scheme,
+          ).toBe('file')
+        }
+      }
+      svc.dispose()
+    })
+
+    it('restore rehydrates a FileEditorInput when given an accessor', () => {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const svc = new EditorGroupsService()
+      const original = inst.createInstance(FileEditorInput, URI.file('/tmp/restore-me.json'))
+      svc.activeGroup.openEditor(original)
+      const state = svc.toJSON()
+      svc.dispose()
+
+      const dst = new EditorGroupsService()
+      inst.invokeFunction((accessor) => dst.restore(state, accessor))
+      expect(dst.groups[0]?.count).toBe(1)
+      const restored = dst.groups[0]?.activeEditor
+      expect(restored).toBeInstanceOf(FileEditorInput)
+      expect(restored?.resource?.toString()).toBe(URI.file('/tmp/restore-me.json').toString())
+      dst.dispose()
+    })
   })
 })

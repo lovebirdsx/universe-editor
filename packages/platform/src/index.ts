@@ -54,6 +54,9 @@ export * from './storage/storageService.js'
 // filesystem abstraction
 export * from './files/fileService.js'
 
+// modal dialog abstraction
+export * from './dialog/dialogService.js'
+
 // workspace state
 export * from './workspace/workspaceService.js'
 

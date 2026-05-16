@@ -7,6 +7,7 @@
 import {
   Disposable,
   IEditorGroupsService,
+  IInstantiationService,
   IStorageService,
   IWorkspaceService,
   type IDisposable,
@@ -34,6 +35,7 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
     @IStorageService private readonly _storage: IStorageService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IWorkspaceService _workspace: IWorkspaceService,
+    @IInstantiationService private readonly _instantiation: IInstantiationService,
   ) {
     super()
 
@@ -75,7 +77,9 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
     try {
       const raw = await this._storage.get<PersistedWorkspaceState>(WORKSPACE_STATE_STORAGE_KEY)
       if (!raw || !raw.groups) return
-      ;(this._groups as EditorGroupsService).restore(raw.groups)
+      this._instantiation.invokeFunction((accessor) => {
+        ;(this._groups as EditorGroupsService).restore(raw.groups, accessor)
+      })
     } catch (err) {
       console.warn('[WorkspaceRestoreContribution] failed to restore workspace state', err)
     }

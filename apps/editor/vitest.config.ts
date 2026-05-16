@@ -1,5 +1,9 @@
 import { defineConfig } from 'vitest/config'
 import react from '@vitejs/plugin-react'
+import { fileURLToPath } from 'node:url'
+
+const monacoStub = fileURLToPath(new URL('./test-stubs/monaco-editor.ts', import.meta.url))
+const workerStub = fileURLToPath(new URL('./test-stubs/monaco-worker.ts', import.meta.url))
 
 export default defineConfig({
   test: {
@@ -13,6 +17,15 @@ export default defineConfig({
       },
       {
         plugins: [react()],
+        resolve: {
+          alias: [
+            {
+              find: /^monaco-editor\/esm\/.+\?worker$/,
+              replacement: workerStub,
+            },
+            { find: /^monaco-editor$/, replacement: monacoStub },
+          ],
+        },
         test: {
           name: 'renderer',
           environment: 'happy-dom',

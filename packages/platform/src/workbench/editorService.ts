@@ -7,6 +7,7 @@ import type { IObservable } from '../base/observable/index.js'
 import { Emitter, Event } from '../base/event.js'
 import { Disposable, IDisposable, toDisposable } from '../base/lifecycle.js'
 import { createDecorator } from '../di/instantiation.js'
+import type { ServicesAccessor } from '../di/instantiation.js'
 import { URI } from '../base/uri.js'
 
 // -------- IEditorInput (legacy structural type, kept for backwards compatibility) --------
@@ -74,6 +75,27 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   }
 
   /**
+   * Persist the input's current contents. Inputs that wrap real resources
+   * (e.g. files) implement this; virtual inputs (Welcome, Settings) leave it
+   * undefined. Returns `true` on success, `false` on user cancel / failure.
+   */
+  save?(): Promise<boolean>
+
+  /**
+   * Discard in-memory edits and reload the underlying resource so that
+   * `isDirty` returns to `false`. Optional, mirrors `save`.
+   */
+  revert?(): Promise<void>
+
+  /**
+   * Returns a JSON-serialisable snapshot of this input for persistence.
+   * `EditorGroupsService.toJSON` falls back to `null` when an input does not
+   * implement this hook, preserving backwards compatibility with virtual
+   * inputs that have no meaningful state.
+   */
+  serialize?(): unknown
+
+  /**
    * Equality by stable identity. Two inputs match when they share the same
    * resource URI, or when their `id`s are equal. Subclasses can override
    * for richer semantics (e.g. side-by-side editors).
@@ -116,19 +138,23 @@ export interface IEditorProvider {
    * EditorInputs from persisted JSON. Returns `null` if the data cannot be
    * deserialized (e.g. resource no longer exists); the restore pipeline skips
    * null entries rather than crashing.
+   *
+   * The optional `accessor` lets providers reach into DI (e.g. to obtain
+   * `IInstantiationService.createInstance`) when constructing inputs that
+   * require services.
    */
-  deserialize?(data: unknown): EditorInput | null
+  deserialize?(data: unknown, accessor?: ServicesAccessor): EditorInput | null
 }
 
 export interface IEditorRegistry {
   registerEditorProvider(provider: IEditorProvider): IDisposable
   getProvider(typeId: string): IEditorProvider | undefined
   /**
-   * Convenience wrapper around `getProvider(typeId)?.deserialize?.(data)`.
+   * Convenience wrapper around `getProvider(typeId)?.deserialize?.(data, accessor)`.
    * Returns null when no provider is registered or the provider lacks a
    * `deserialize` hook.
    */
-  deserialize(typeId: string, data: unknown): EditorInput | null
+  deserialize(typeId: string, data: unknown, accessor?: ServicesAccessor): EditorInput | null
 }
 
 class EditorRegistryImpl implements IEditorRegistry {
@@ -143,11 +169,11 @@ class EditorRegistryImpl implements IEditorRegistry {
     return this._providers.get(typeId)
   }
 
-  deserialize(typeId: string, data: unknown): EditorInput | null {
+  deserialize(typeId: string, data: unknown, accessor?: ServicesAccessor): EditorInput | null {
     const provider = this._providers.get(typeId)
     if (!provider || !provider.deserialize) return null
     try {
-      return provider.deserialize(data)
+      return provider.deserialize(data, accessor)
     } catch {
       return null
     }

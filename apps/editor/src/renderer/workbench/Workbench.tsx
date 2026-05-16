@@ -1,5 +1,5 @@
 import { useCallback, useEffect } from 'react'
-import { ILayoutService, PartId, LifecyclePhase } from '@universe-editor/platform'
+import { IDialogService, ILayoutService, PartId, LifecyclePhase } from '@universe-editor/platform'
 import type { LifecycleService, InstantiationService, LayoutSizes } from '@universe-editor/platform'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
@@ -12,6 +12,7 @@ import { EditorArea } from './editor/EditorArea.js'
 import { Panel } from './panel/Panel.js'
 import { StatusBar } from './statusbar/StatusBar.js'
 import { QuickInputPortal } from './quickinput/QuickInput.js'
+import { DialogHost, type RendererDialogService } from './dialog/RendererDialogService.js'
 
 interface WorkbenchProps {
   instantiation: InstantiationService
@@ -22,6 +23,7 @@ function WorkbenchShell() {
   useGlobalKeybindingHandler()
 
   const layoutService = useService(ILayoutService)
+  const dialogService = useService(IDialogService) as RendererDialogService
   const visible = useObservable(layoutService.visible)
   const sizes = useObservable(layoutService.sizes)
   const sidebarVisible = visible[PartId.SideBar]
@@ -73,6 +75,7 @@ function WorkbenchShell() {
         statusbar={<StatusBar part={statusBarPart} />}
       />
       <QuickInputPortal />
+      <DialogHost service={dialogService} />
     </>
   )
 }

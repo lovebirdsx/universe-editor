@@ -4,9 +4,32 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { EditorInput, EditorRegistry, URI } from '@universe-editor/platform'
+import {
+  EditorInput,
+  EditorRegistry,
+  IDialogService,
+  InstantiationService,
+  ServiceCollection,
+  URI,
+  type IConfirmResult,
+  type IDialogService as IDialogServiceType,
+} from '@universe-editor/platform'
 import { EditorGroupView } from '../../editor/EditorGroupView.js'
 import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
+import { ServicesContext } from '../../useService.js'
+
+const stubDialog: IDialogServiceType = {
+  _serviceBrand: undefined,
+  confirm: async (): Promise<IConfirmResult> => ({ confirmed: false, choice: 'cancel' }),
+  prompt: async () => undefined,
+}
+
+function renderWithServices(node: React.ReactNode) {
+  const services = new ServiceCollection()
+  services.set(IDialogService, stubDialog)
+  const inst = new InstantiationService(services)
+  return render(<ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>)
+}
 
 class FakeEditor extends EditorInput {
   constructor(private readonly _name: string) {
@@ -34,7 +57,7 @@ const map = new Map<string, React.ComponentType<{ input: { label: string } }>>([
 describe('EditorGroupView', () => {
   it('renders fallback when group has no editors', () => {
     const svc = new EditorGroupsService()
-    render(
+    renderWithServices(
       <EditorGroupView
         group={svc.activeGroup}
         groupsService={svc}
@@ -49,7 +72,7 @@ describe('EditorGroupView', () => {
     const svc = new EditorGroupsService()
     svc.activeGroup.openEditor(new FakeEditor('a'))
     svc.activeGroup.openEditor(new FakeEditor('b'))
-    render(
+    renderWithServices(
       <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
     )
     expect(screen.getAllByRole('tab').length).toBe(2)
@@ -61,7 +84,7 @@ describe('EditorGroupView', () => {
     const b = new FakeEditor('b')
     svc.activeGroup.openEditor(a)
     svc.activeGroup.openEditor(b)
-    render(
+    renderWithServices(
       <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
     )
     const tabs = screen.getAllByRole('tab')
@@ -75,7 +98,7 @@ describe('EditorGroupView', () => {
     // svc.activeGroup is still the first group
     const onChange = vi.fn()
     svc.onDidActiveGroupChange(onChange)
-    const { container } = render(
+    const { container } = renderWithServices(
       <EditorGroupView group={second} groupsService={svc} componentMap={map as never} />,
     )
     fireEvent.mouseDown(container.firstElementChild!)
@@ -89,7 +112,7 @@ describe('EditorGroupView', () => {
     const reg = EditorRegistry.registerEditorProvider({ typeId: 'fake', componentKey: 'fake' })
     try {
       svc.activeGroup.openEditor(a)
-      render(
+      renderWithServices(
         <EditorGroupView group={svc.activeGroup} groupsService={svc} componentMap={map as never} />,
       )
       expect(screen.getByTestId('fake-editor').textContent).toBe('a')

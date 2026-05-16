@@ -9,6 +9,7 @@ import {
   ICommandService,
   IContextKeyService,
   ContextKeyService,
+  IDialogService,
   IEditorService,
   IEditorGroupsService,
   IFileService,
@@ -43,8 +44,13 @@ import { ViewsService } from './workbench/sidebar/ViewsService.js'
 import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
+import { RendererDialogService } from './workbench/dialog/RendererDialogService.js'
 import { UserSettingsSync } from './workbench/configuration/UserSettingsSync.js'
 import { RendererWorkspaceService } from './workbench/workspace/RendererWorkspaceService.js'
+import {
+  ExplorerTreeService,
+  IExplorerTreeService,
+} from './workbench/explorer/ExplorerTreeService.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
 // Side-effect import: registers built-in contributions with ContributionsRegistry.
 import './contributions/index.js'
@@ -135,6 +141,15 @@ function bootstrapWorkbench(): void {
   services.set(IQuickInputService, quickInputService)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)
+
+  // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
+  const dialogService = new RendererDialogService()
+  services.set(IDialogService, dialogService)
+
+  // Explorer tree state — single instance for the renderer; depends on
+  // IWorkspaceService + IFileService so it must be created via DI.
+  const explorerTreeService = instantiation.createInstance(ExplorerTreeService)
+  services.set(IExplorerTreeService, explorerTreeService)
 
   // Kick off async load of user settings from storage. Once it resolves,
   // ConfigurationService fires onDidChangeConfiguration so any subscribers
