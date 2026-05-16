@@ -1,8 +1,15 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  EditorArea — top-level Part container; renders the grid of editor groups.
+ *--------------------------------------------------------------------------------------------*/
+
 import { type ComponentType } from 'react'
-import { EditorRegistry, IEditorService } from '@universe-editor/platform'
-import type { IEditorInput, IPart } from '@universe-editor/platform'
-import { useService, useObservable } from '../useService.js'
+import { IEditorGroupsService, IEditorInput, type IPart } from '@universe-editor/platform'
+import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
+import { EditorGroupView } from './EditorGroupView.js'
+import { GridLayout } from './GridLayout.js'
+import { EditorGroupsService } from './EditorGroupsService.js'
 import styles from './EditorArea.module.css'
 
 /** Registry of React components keyed by IEditorProvider.componentKey. */
@@ -25,94 +32,37 @@ function WelcomeEditor(_props: { input: IEditorInput }) {
           <kbd className={styles['kbd']}>Ctrl+`</kbd>
           <span>Toggle Output Panel</span>
         </li>
+        <li className={styles['shortcutItem']}>
+          <kbd className={styles['kbd']}>Ctrl+\</kbd>
+          <span>Split Editor</span>
+        </li>
       </ul>
     </div>
   )
 }
 
-function EditorTab({
-  input,
-  isActive,
-  onActivate,
-  onClose,
-}: {
-  input: IEditorInput
-  isActive: boolean
-  onActivate: () => void
-  onClose: () => void
-}) {
-  return (
-    <div
-      className={`${styles['tab']} ${isActive ? styles['active'] : ''}`}
-      onClick={onActivate}
-      role="tab"
-      aria-selected={isActive}
-    >
-      {input.isDirty && <span className={styles['dirtyDot']} title="Unsaved changes" />}
-      <span className={styles['tabLabel']}>{input.label}</span>
-      <button
-        className={styles['closeBtn']}
-        onClick={(e) => {
-          e.stopPropagation()
-          onClose()
-        }}
-        aria-label={`Close ${input.label}`}
-      >
-        ×
-      </button>
-    </div>
-  )
-}
-
 export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
-  const editorService = useService(IEditorService)
-  const openEditors = useObservable(editorService.openEditors)
-  const activeEditor = useObservable(editorService.activeEditor)
+  const groupsService = useService(IEditorGroupsService) as EditorGroupsService
   const containerRef = usePartContainer(part)
 
-  const renderContent = () => {
-    if (!activeEditor) {
-      return (
-        <WelcomeEditor
-          input={{ id: '_welcome', type: 'welcome', label: 'Welcome', isDirty: false }}
-        />
-      )
-    }
-    const provider = EditorRegistry.getProvider(activeEditor.type)
-    if (!provider) {
-      return (
-        <div className={styles['welcome']}>
-          <p>No editor provider registered for type: {activeEditor.type}</p>
-        </div>
-      )
-    }
-    const Component = editorComponentMap.get(provider.componentKey)
-    if (!Component) {
-      return (
-        <div className={styles['welcome']}>
-          <p>Editor component not found: {provider.componentKey}</p>
-        </div>
-      )
-    }
-    return <Component input={activeEditor} />
-  }
+  const welcomeFallback = (
+    <WelcomeEditor input={{ id: '_welcome', type: 'welcome', label: 'Welcome', isDirty: false }} />
+  )
 
   return (
-    <div ref={containerRef} className={styles['editorArea']}>
-      {openEditors.length > 0 && (
-        <div className={styles['tabBar']} role="tablist">
-          {openEditors.map((e) => (
-            <EditorTab
-              key={e.id}
-              input={e}
-              isActive={activeEditor?.id === e.id}
-              onActivate={() => editorService.openEditor(e)}
-              onClose={() => editorService.closeEditor(e.id)}
-            />
-          ))}
-        </div>
-      )}
-      <div className={styles['editorContent']}>{renderContent()}</div>
+    <div ref={containerRef} className={styles['editorAreaRoot']}>
+      <GridLayout
+        grid={groupsService.grid}
+        viewFactory={(group) => (
+          <EditorGroupView
+            key={group.id}
+            group={group}
+            groupsService={groupsService}
+            componentMap={editorComponentMap}
+            fallback={welcomeFallback}
+          />
+        )}
+      />
     </div>
   )
 }

@@ -4,6 +4,9 @@
  *   - isWindows / isMac / isLinux  (platform identity)
  *   - sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
+ *   - editorPartMultipleEditorGroups / editorIsOpen
+ *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
+ *   - activeEditorIsFirstInGroup / activeEditorIsLastInGroup / activeEditorIsDirty
  *   - workbenchReady / workbenchRestored                        (lifecycle gates)
  *--------------------------------------------------------------------------------------------*/
 
@@ -11,6 +14,7 @@ import {
   autorun,
   Disposable,
   IContextKeyService,
+  IEditorGroupsService,
   IEditorService,
   IHostService,
   ILayoutService,
@@ -26,6 +30,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     @IHostService hostService: IHostService,
     @ILayoutService layoutService: ILayoutService,
     @IEditorService editorService: IEditorService,
+    @IEditorGroupsService editorGroupsService: IEditorGroupsService,
     @ILifecycleService lifecycleService: ILifecycleService,
   ) {
     super()
@@ -67,6 +72,69 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         }
       }),
     )
+
+    // -- group-level editor keys
+    const editorPartMultipleEditorGroups = contextKeyService.createKey<boolean>(
+      'editorPartMultipleEditorGroups',
+      false,
+    )
+    const editorIsOpen = contextKeyService.createKey<boolean>('editorIsOpen', false)
+    const groupEditorsCount = contextKeyService.createKey<number>('groupEditorsCount', 0)
+    const activeEditorGroupIndex = contextKeyService.createKey<number>('activeEditorGroupIndex', 0)
+    const activeEditorGroupEmpty = contextKeyService.createKey<boolean>(
+      'activeEditorGroupEmpty',
+      true,
+    )
+    const activeEditorIsFirstInGroup = contextKeyService.createKey<boolean>(
+      'activeEditorIsFirstInGroup',
+      false,
+    )
+    const activeEditorIsLastInGroup = contextKeyService.createKey<boolean>(
+      'activeEditorIsLastInGroup',
+      false,
+    )
+    const activeEditorIsDirty = contextKeyService.createKey<boolean>('activeEditorIsDirty', false)
+
+    const syncGroupKeys = () => {
+      const active = editorGroupsService.activeGroup
+      const allGroups = editorGroupsService.groups
+      editorPartMultipleEditorGroups.set(allGroups.length > 1)
+      const anyOpen = allGroups.some((g) => g.count > 0)
+      editorIsOpen.set(anyOpen)
+      groupEditorsCount.set(active.count)
+      activeEditorGroupIndex.set(active.index)
+      activeEditorGroupEmpty.set(active.count === 0)
+      const activeEditor = active.activeEditor
+      activeEditorIsFirstInGroup.set(activeEditor !== undefined && active.isFirst(activeEditor))
+      activeEditorIsLastInGroup.set(activeEditor !== undefined && active.isLast(activeEditor))
+      activeEditorIsDirty.set(activeEditor?.isDirty === true)
+    }
+
+    // Subscribe to all group / editor mutations.
+    const subscribeActiveGroup = () => {
+      const group = editorGroupsService.activeGroup
+      const a = group.onDidChangeModel(syncGroupKeys)
+      const b = group.onDidActiveEditorChange(syncGroupKeys)
+      return () => {
+        a.dispose()
+        b.dispose()
+      }
+    }
+    let unsubscribeActive = subscribeActiveGroup()
+    this._register({
+      dispose: () => unsubscribeActive(),
+    })
+    this._register(
+      editorGroupsService.onDidActiveGroupChange(() => {
+        unsubscribeActive()
+        unsubscribeActive = subscribeActiveGroup()
+        syncGroupKeys()
+      }),
+    )
+    this._register(editorGroupsService.onDidAddGroup(syncGroupKeys))
+    this._register(editorGroupsService.onDidRemoveGroup(syncGroupKeys))
+    this._register(editorGroupsService.onDidMoveGroup(syncGroupKeys))
+    syncGroupKeys()
 
     // -- lifecycle phase keys
     const workbenchReady = contextKeyService.createKey<boolean>('workbenchReady', false)

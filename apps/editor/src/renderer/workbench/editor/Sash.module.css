@@ -1,0 +1,22 @@
+.sash {
+  position: relative;
+  flex-shrink: 0;
+  z-index: 5;
+  background: transparent;
+  transition: background 120ms ease;
+}
+
+.sash.vertical {
+  width: 4px;
+  cursor: ew-resize;
+}
+
+.sash.horizontal {
+  height: 4px;
+  cursor: ns-resize;
+}
+
+.sash:hover,
+.sash.active {
+  background: var(--color-sash-active, #0070e0);
+}

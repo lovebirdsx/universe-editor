@@ -1,10 +1,29 @@
-.editorArea {
+.editorAreaRoot {
   display: flex;
-  flex-direction: column;
   width: 100%;
   height: 100%;
   background: var(--color-editor-bg, #1e1e1e);
   overflow: hidden;
+}
+
+.editorArea {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  background: var(--color-editor-bg, #1e1e1e);
+  overflow: hidden;
+  position: relative;
+}
+
+.editorArea.groupActive::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--color-tab-active-border, #0070e0);
+  opacity: 0.35;
 }
 
 .tabBar {

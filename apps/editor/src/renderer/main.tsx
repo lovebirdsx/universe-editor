@@ -10,6 +10,7 @@ import {
   IContextKeyService,
   ContextKeyService,
   IEditorService,
+  IEditorGroupsService,
   IStatusBarService,
   IViewsService,
   IQuickInputService,
@@ -31,6 +32,7 @@ import { createRendererIpcService } from './ipc/bootstrap.js'
 import { Workbench } from './workbench/Workbench.js'
 import { CommandService } from './workbench/CommandService.js'
 import { EditorService } from './workbench/editor/EditorService.js'
+import { EditorGroupsService } from './workbench/editor/EditorGroupsService.js'
 import { StatusBarService } from './workbench/statusbar/StatusBarService.js'
 import { ViewsService } from './workbench/sidebar/ViewsService.js'
 import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
@@ -93,13 +95,15 @@ function bootstrapWorkbench(): void {
   const instantiation = new InstantiationService(services)
 
   // Renderer-only service implementations (pure local state, no IPC).
-  const editorService = new EditorService()
+  const editorGroupsService = new EditorGroupsService()
+  const editorService = new EditorService(editorGroupsService)
   const statusBarService = new StatusBarService()
   const viewsService = new ViewsService()
   const outputService = new OutputService()
   const commandService = new CommandService(instantiation)
 
   services.set(ICommandService, commandService)
+  services.set(IEditorGroupsService, editorGroupsService)
   services.set(IEditorService, editorService)
   services.set(IStatusBarService, statusBarService)
   services.set(IViewsService, viewsService)

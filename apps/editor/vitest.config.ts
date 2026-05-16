@@ -17,6 +17,7 @@ export default defineConfig({
           name: 'renderer',
           environment: 'happy-dom',
           include: ['src/renderer/**/*.test.{ts,tsx}'],
+          setupFiles: ['./vitest.renderer-setup.ts'],
         },
       },
     ],

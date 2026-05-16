@@ -392,3 +392,133 @@ API 表面：**3 个核心方法 → 6 个**（+ `createKey` / `contextMatchesRu
 - **不**外露 Parser 的 `errors[]` 输出通道（VSCode 有，本主题暂不暴露）
 - **不**改造 `TitleBar.tsx:9` 的 `host.platform === 'darwin'` 直接比对为 ContextKey（一处常量判定不强求；isMac key 已就绪，后续按需切换）
 
+---
+
+## 七、After 主题 5（Editor Groups：split editor / 多分组）
+
+### EditorService API 表面
+
+| 维度 | Before（主题 4） | After 主题 5 |
+|---|---|---|
+| `IEditorService` 方法数 | 5（`openEditors` / `activeEditorId` / `activeEditor` / `openEditor` / `closeEditor` / `closeAllEditors`） | **保留全 5 个（兼容层），内部代理到 `IEditorGroupsService.activeGroup`** |
+| `IEditorInput` 形态 | 结构体（5 字段：`id / type / label / isDirty / meta`） | 结构体保留；新增抽象基类 `EditorInput`（`abstract typeId / resource / getName()` + `matches()` + `onDidChangeDirty` + `onWillDispose`） |
+| `IEditorGroupsService` | ❌ 不存在 | ✅ **10+ API**：`activeGroup` / `groups` / `count` / `orientation` / `addGroup` / `removeGroup` / `moveGroup` / `activateGroup` / `findGroup` / `moveEditor` / `copyEditor` / `setGroupOrientation` / `arrangeGroups` + 4 个事件 |
+| `IEditorGroup` 接口 | ❌ | ✅ **10+ API**：`id / index / isActive / editors / activeEditor / count` + `openEditor` / `closeEditor` / `closeAllEditors` / `moveEditor` / `setActive` / `getEditorByIndex` / `indexOf` / `isFirst` / `isLast` + 2 个事件 |
+| URI 类 | ❌ | ✅ `URI`（`scheme / authority / path / query / fragment` + `parse` / `file` / `from` / `joinPath` / `with` / `toString` / `toJSON` / `revive`） |
+
+### Grid 容器与 UI
+
+| 维度 | Before | After |
+|---|---|---|
+| `Grid<T>` 二叉树容器 | ❌ | ✅ `packages/platform/src/base/grid.ts`：`addView / removeView / moveView / swapViews / resizeView / serialize / deserialize` |
+| `Sash.tsx` 拖拽分隔条 | ❌ | ✅ `apps/editor/src/renderer/workbench/editor/Sash.tsx`（mousedown/move/up + 全局 cursor + active 视觉态） |
+| `GridLayout.tsx` 递归渲染 | ❌ | ✅ 用 `useSyncExternalStore(grid.onDidChange)` 订阅，二叉树渲染嵌套 flex + Sash |
+| `EditorGroupView.tsx` | ❌（单 div tab bar 直挂 EditorArea） | ✅ 每个 group 独立 React 组件：tab bar + 内容区 + 点击激活 + isActive 视觉态 |
+| `EditorArea.tsx` | 单一水平 tab bar + 单 content 区 | 用 `GridLayout` + 每个叶子渲染 `EditorGroupView` |
+
+### 命令注册（Action2）
+
+| 类别 | Before 主题 5 | After 主题 5 |
+|---|---|---|
+| Layout | 4（ToggleSidebar / ToggleSecondarySidebar / TogglePanel / ShowCommands） | 4（不变） |
+| Editor — Close | 0 | **4**（CloseActiveEditor `Ctrl+W` / CloseAll / CloseOthers / CloseToTheRight） |
+| Editor — Tab 导航 | 0 | **4**（Next `Ctrl+Tab` / Previous `Ctrl+Shift+Tab` / FirstInGroup / LastInGroup） |
+| Editor — Split | 0 | **4**（SplitRight `Ctrl+\\` / SplitDown `Ctrl+K` / SplitLeft / SplitUp） |
+| Editor — Group 焦点 | 0 | **4**（FocusNext / FocusPrevious / FocusFirst / FocusLast） |
+| 总数 | 4 | **20** |
+
+所有 16 个 Editor 命令均挂 `f1: true`（命令面板可见），并按需挂 `precondition`：
+- `hasActiveEditor` — Close 单个、Tab 导航
+- `editorIsOpen` — CloseAll、FirstInGroup、LastInGroup
+- `hasActiveEditor && !activeEditorIsLastInGroup` — CloseEditorsToTheRight
+- `editorPartMultipleEditorGroups` — Focus 系列
+- `Ctrl+W / Ctrl+\\ / Ctrl+Tab / Ctrl+Shift+Tab / Ctrl+K` 与既有 `Ctrl+B / Ctrl+Alt+B / Ctrl+J / Ctrl+Shift+P` 无冲突
+
+### ContextKey（新增 8 个 group 级 key）
+
+`ContextKeyContribution` 构造函数由 5 参变为 6 参（追加 `@IEditorGroupsService`），表追加：
+
+| 类别 | Key | 来源 |
+|---|---|---|
+| 多分组拓扑 | `editorPartMultipleEditorGroups`（boolean） | `groups.length > 1` |
+| 全局开关 | `editorIsOpen`（boolean） | 任一 group 有 editor |
+| 活动组内 | `groupEditorsCount`（number） | `activeGroup.count` |
+| 活动组内 | `activeEditorGroupIndex`（number） | `activeGroup.index` |
+| 活动组内 | `activeEditorGroupEmpty`（boolean） | `activeGroup.count === 0` |
+| 活动 editor 位置 | `activeEditorIsFirstInGroup` / `activeEditorIsLastInGroup`（boolean） | `activeGroup.isFirst/isLast(activeEditor)` |
+| 活动 editor 状态 | `activeEditorIsDirty`（boolean） | `activeEditor?.isDirty === true` |
+
+订阅策略：
+- 监听 `onDidActiveGroupChange / onDidAddGroup / onDidRemoveGroup / onDidMoveGroup` 触发 `syncGroupKeys()`
+- 监听当前 active group 的 `onDidChangeModel / onDidActiveEditorChange`，active 切换时重订阅
+
+### DI 注入
+
+| 服务 | Before | After |
+|---|---|---|
+| `IEditorGroupsService` | ❌ 不存在 | ✅ `main.tsx` 在 `IEditorService` **之前**注入 `new EditorGroupsService()` |
+| `IEditorService` 构造 | `new EditorService()` | `new EditorService(editorGroupsService)` |
+| `ContextKeyContribution` 注入 | 5 参 | 6 参（追加 `@IEditorGroupsService`） |
+
+### 新增模块
+
+| 路径 | 行数（≈） | 用途 |
+|---|---|---|
+| `packages/platform/src/base/uri.ts` | ~200 | URI 类 |
+| `packages/platform/src/base/grid.ts` | ~400 | SerializableGrid 二叉树 |
+| `packages/platform/src/workbench/editorGroupModel.ts` | ~250 | 单 group 数据模型 + MRU |
+| `packages/platform/src/workbench/editorGroupsService.ts` | ~80（接口 + 枚举） | IEditorGroupsService / IEditorGroup / GroupDirection / GroupLocation 等 |
+| `apps/editor/src/renderer/workbench/editor/EditorGroupsService.ts` | ~280 | 服务实现（Grid + 适配器） |
+| `apps/editor/src/renderer/workbench/editor/EditorGroupView.tsx` | ~120 | 单 group React 组件 |
+| `apps/editor/src/renderer/workbench/editor/GridLayout.tsx` | ~150 | Grid 递归渲染 |
+| `apps/editor/src/renderer/workbench/editor/Sash.tsx` | ~80 | 拖拽分隔条 |
+| `apps/editor/src/renderer/workbench/editor/WelcomeEditorInput.ts` | ~25 | 内置 Welcome EditorInput 子类 |
+| `apps/editor/src/renderer/actions/editorActions.ts` | ~280 | 16 个 Action2 |
+
+### 测试覆盖
+
+| | Before（主题 4 完成时） | After 主题 5 |
+|---|---|---|
+| `@universe-editor/platform` 测试数 | 297 | **383**（+86） |
+| `@universe-editor/editor` 测试数 | 81 | **129**（+48） |
+| 总测试数 | 378 | **512** |
+
+新增测试套件：
+
+- platform：
+  - `base/uri.test.ts`（URI 解析 / 构造 / 序列化往返）
+  - `base/grid.test.ts`（grid 拓扑 + resize + serialize 往返）
+  - `workbench/editorInput.test.ts`（EditorInput 基类 + matches / onDidChangeDirty / onWillDispose）
+  - `workbench/editorGroupModel.test.ts`（open/close/move/setActive + MRU + 事件）
+- editor：
+  - `actions/__tests__/editorActions.test.ts`（17：16 个 Action2 行为 + 注册元数据）
+  - `workbench/__tests__/editor/EditorGroupsService.test.ts`（14：activeGroup / addGroup / 移动 / 复制 / findGroup）
+  - `workbench/__tests__/editor/EditorGroupView.test.tsx`（5：tab 渲染 + 点击切 active + 多 group active 视觉态）
+  - `workbench/__tests__/editor/Sash.test.tsx`（6：mousedown/move/up + active class + 边界）
+  - `workbench/__tests__/contributions/ContextKeyContribution.test.ts`（6 → **12**：追加 group 级 key 用例）
+  - `workbench/__tests__/EditorService.test.ts`（沿用兼容口径，旧 7 用例通过）
+
+测试隔离：renderer project 新增 `vitest.renderer-setup.ts`，每个测试 `afterEach(cleanup)`，避免 happy-dom 残留 DOM 跨用例污染。
+
+### 集成验证
+
+- `pnpm check`（lint + typecheck + test + build）：✅ 全绿
+- 桌面端 `electron-vite build`：✅（main 6.52 kB / preload 0.77 kB / renderer 855.31 kB JS + 26.07 kB CSS）
+- 命令保持等价：旧 4 个 layout 命令的键位 / behaviour 不变
+- 新键位 `Ctrl+W` / `Ctrl+\\` / `Ctrl+Tab` / `Ctrl+Shift+Tab` 通过 `KeybindingsRegistry.resolveKeybinding` 测试断言
+- 兼容层：旧 `IEditorService` 7 个 `EditorService.test.ts` 用例全部通过
+
+### 边界（按计划保持的"不做"清单）
+
+- **不**实现 preview 编辑器（单击预览 / 双击 pin）
+- **不**实现 sticky tabs（钉在左侧）
+- **不**实现 transient editors
+- **不**实现 editor 标题右键菜单 / 标签拖拽重排序 UI
+- **不**实现 chord 键位（`Ctrl+K Ctrl+W` 等）—— 留主题 8
+- **不**实现 editor group 最大化 / 隐藏（API 占位但暂未绑 UI）
+- **不**实现 `EditorResolverService`（沿用 `editorComponentMap` 单一注册）
+- **不**实现 diff editor / side-by-side editor
+- **不**实现 EditorInput 序列化恢复（留主题 9 workspace state）
+- **不**接入文件系统（FileEditorInput 留主题 6/7）
+- **不**改 StatusBar 显示 active editor 信息
+
