@@ -38,7 +38,7 @@ describe('OpenSettingsAction', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+,')).toBe(OpenSettingsAction.ID)
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => i.command === OpenSettingsAction.ID,
+        (i) => 'command' in i && i.command === OpenSettingsAction.ID,
       ),
     ).toBe(true)
   })
@@ -89,7 +89,7 @@ describe('OpenSettingsAction', () => {
   it('contributes to MenubarFileMenu under group 5_preferences', () => {
     disposables.push(registerAction2(OpenSettingsAction))
     const items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu)
-    const entry = items.find((i) => i.command === OpenSettingsAction.ID)
+    const entry = items.find((i) => 'command' in i && i.command === OpenSettingsAction.ID)
     expect(entry).toBeDefined()
     expect(entry?.group).toBe('5_preferences')
   })

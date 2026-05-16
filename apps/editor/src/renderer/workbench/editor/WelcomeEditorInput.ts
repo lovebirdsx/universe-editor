@@ -10,6 +10,10 @@ const WELCOME_URI = URI.from({ scheme: 'universe', path: '/welcome' })
 export class WelcomeEditorInput extends EditorInput {
   static readonly TYPE_ID = 'welcome'
 
+  static deserialize(): WelcomeEditorInput {
+    return new WelcomeEditorInput()
+  }
+
   get typeId(): string {
     return WelcomeEditorInput.TYPE_ID
   }

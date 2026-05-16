@@ -37,12 +37,12 @@ describe('Built-in layout Action2s', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+b')).toBe(ToggleSidebarVisibilityAction.ID)
     expect(
       MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some(
-        (i) => i.command === ToggleSidebarVisibilityAction.ID,
+        (i) => 'command' in i && i.command === ToggleSidebarVisibilityAction.ID,
       ),
     ).toBe(true)
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => i.command === ToggleSidebarVisibilityAction.ID,
+        (i) => 'command' in i && i.command === ToggleSidebarVisibilityAction.ID,
       ),
     ).toBe(true)
   })
@@ -124,7 +124,7 @@ describe('Built-in layout Action2s', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+b', ctx)).toBeUndefined()
     expect(
       MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some(
-        (i) => i.command === ToggleSidebarVisibilityAction.ID,
+        (i) => 'command' in i && i.command === ToggleSidebarVisibilityAction.ID,
       ),
     ).toBe(false)
     ctx.dispose()

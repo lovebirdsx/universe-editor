@@ -10,20 +10,30 @@ import {
   IContextKeyService,
   KeybindingsRegistry,
   MenuRegistry,
+  isSubmenuEntry,
 } from '@universe-editor/platform'
-import type { IMenuItem, MenuId } from '@universe-editor/platform'
+import type { IMenuItem, ISubmenuItem, MenuId } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { formatChord, formatKey } from './keybindingFormat.js'
 
-export interface ResolvedMenuItem {
+export interface ResolvedCommandItem {
+  kind: 'command'
   command: string
   label: string
   shortcut?: string
 }
 
+export interface ResolvedSubmenuItem {
+  kind: 'submenu'
+  submenu: MenuId
+  label: string
+}
+
+export type ResolvedMenuEntry = ResolvedCommandItem | ResolvedSubmenuItem
+
 export interface ResolvedMenuSection {
   group: string
-  items: ResolvedMenuItem[]
+  items: ResolvedMenuEntry[]
 }
 
 function resolveLabel(item: IMenuItem): string {
@@ -43,6 +53,21 @@ function resolveShortcut(command: string): string | undefined {
   return undefined
 }
 
+function resolveSubmenuEntry(entry: ISubmenuItem): ResolvedSubmenuItem {
+  return { kind: 'submenu', submenu: entry.submenu, label: entry.title }
+}
+
+function resolveCommandEntry(entry: IMenuItem): ResolvedCommandItem {
+  const resolved: ResolvedCommandItem = {
+    kind: 'command',
+    command: entry.command,
+    label: resolveLabel(entry),
+  }
+  const shortcut = resolveShortcut(entry.command)
+  if (shortcut !== undefined) resolved.shortcut = shortcut
+  return resolved
+}
+
 function resolveSections(menuId: MenuId, ctx: IContextKeyService): ResolvedMenuSection[] {
   const items = MenuRegistry.getMenuItems(menuId, ctx)
   const sections: ResolvedMenuSection[] = []
@@ -54,13 +79,7 @@ function resolveSections(menuId: MenuId, ctx: IContextKeyService): ResolvedMenuS
       current = { group, items: [] }
       sections.push(current)
     }
-    const resolved: ResolvedMenuItem = {
-      command: item.command,
-      label: resolveLabel(item),
-    }
-    const shortcut = resolveShortcut(item.command)
-    if (shortcut !== undefined) resolved.shortcut = shortcut
-    current.items.push(resolved)
+    current.items.push(isSubmenuEntry(item) ? resolveSubmenuEntry(item) : resolveCommandEntry(item))
   }
   return sections
 }
@@ -74,16 +93,16 @@ export function useMenuItems(menuId: MenuId): ResolvedMenuSection[] {
     cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
   }
 
-  // Refresh cache whenever the context-key service changes identity (e.g. test
-  // scaffolding rebuilds the DI container).
   useEffect(() => {
     cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
   }, [menuId, contextKeyService])
 
   const subscribe = useCallback(
     (onChange: () => void) => {
-      const d1 = MenuRegistry.onDidChangeMenu((changed) => {
-        if (changed !== menuId) return
+      // Submenu entries may reference other MenuIds, so we listen for any
+      // change to invalidate this hook's cache. The set of MenuIds rendered
+      // in nested popovers is small, and resolveSections is cheap.
+      const d1 = MenuRegistry.onDidChangeMenu(() => {
         cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
         onChange()
       })

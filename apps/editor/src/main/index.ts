@@ -6,6 +6,9 @@ import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainServices.js'
 import { MainStorageService } from './services/storage/storageMainService.js'
 import { MainPingService } from './services/ping/pingMainService.js'
+import { FileSystemMainService } from './services/files/fileSystemMainService.js'
+import { WorkspaceMainService } from './services/workspace/workspaceMainService.js'
+import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -26,9 +29,12 @@ let sharedServices: SharedMainServices | null = null
 
 function getSharedServices(): SharedMainServices {
   if (!sharedServices) {
+    const storage = new MainStorageService()
     sharedServices = {
-      storage: new MainStorageService(),
+      storage,
       ping: new MainPingService(),
+      fileSystem: new FileSystemMainService(),
+      workspace: new WorkspaceMainService(storage, new ElectronFolderDialog()),
     }
   }
   return sharedServices

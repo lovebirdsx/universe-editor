@@ -9,6 +9,10 @@ const SETTINGS_URI = URI.from({ scheme: 'universe', path: '/settings' })
 export class SettingsEditorInput extends EditorInput {
   static readonly TYPE_ID = 'settings'
 
+  static deserialize(): SettingsEditorInput {
+    return new SettingsEditorInput()
+  }
+
   override get typeId(): string {
     return SettingsEditorInput.TYPE_ID
   }

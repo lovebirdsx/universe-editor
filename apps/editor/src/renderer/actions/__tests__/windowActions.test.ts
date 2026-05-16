@@ -55,12 +55,12 @@ describe('windowActions', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+w')).toBe(CloseWindowAction.ID)
     expect(
       MenuRegistry.getMenuItems(MenuId.MenubarFileMenu).some(
-        (i) => i.command === CloseWindowAction.ID,
+        (i) => 'command' in i && i.command === CloseWindowAction.ID,
       ),
     ).toBe(true)
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => i.command === CloseWindowAction.ID,
+        (i) => 'command' in i && i.command === CloseWindowAction.ID,
       ),
     ).toBe(true)
   })
@@ -76,7 +76,7 @@ describe('windowActions', () => {
     disposables.push(registerAction2(ToggleDevToolsAction))
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+i')).toBe(ToggleDevToolsAction.ID)
     const helpItems = MenuRegistry.getMenuItems(MenuId.MenubarHelpMenu)
-    const entry = helpItems.find((i) => i.command === ToggleDevToolsAction.ID)
+    const entry = helpItems.find((i) => 'command' in i && i.command === ToggleDevToolsAction.ID)
     expect(entry).toBeDefined()
     expect(entry?.group).toBe('5_tools')
   })
@@ -91,7 +91,7 @@ describe('windowActions', () => {
   it('registers About in Help menu without a keybinding', () => {
     disposables.push(registerAction2(AboutAction))
     const helpItems = MenuRegistry.getMenuItems(MenuId.MenubarHelpMenu)
-    const entry = helpItems.find((i) => i.command === AboutAction.ID)
+    const entry = helpItems.find((i) => 'command' in i && i.command === AboutAction.ID)
     expect(entry).toBeDefined()
     expect(entry?.group).toBe('z_about')
   })

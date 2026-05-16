@@ -8,6 +8,7 @@ import {
   Disposable,
   EditorGroupModel,
   EditorInput,
+  EditorRegistry,
   Emitter,
   Event,
   GroupDirection,
@@ -21,6 +22,8 @@ import {
   IFindGroupScope,
   IGridView,
   IOpenEditorOptions,
+  type ISerializedGrid,
+  type ISerializedGridNode,
   Orientation,
   observableValue,
   transaction,
@@ -310,4 +313,116 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     }
     return undefined
   }
+
+  // Persistence --------------------------------------------------------------
+
+  toJSON(): ISerializedEditorGroupsState {
+    const grid = this._grid.serialize((group) => ({
+      editors: group.editors.map((e) => ({ typeId: e.typeId, data: null })),
+      activeIndex: group.activeEditor ? Math.max(0, group.editors.indexOf(group.activeEditor)) : 0,
+    })) as ISerializedGrid<ISerializedEditorGroupData>
+    const activeId = this.activeGroup.id
+    return { grid, activeGroupId: activeId }
+  }
+
+  /**
+   * Replace the current grid + groups with the contents of `state`. Existing
+   * editors are closed and groups disposed; the React tree continues to track
+   * the same `_grid` object, since views are added/removed via the grid's
+   * public API so its `onDidChange` event keeps GridLayout in sync.
+   *
+   * Unknown editor `typeId`s are skipped silently (forward-compatibility with
+   * future editor providers that may not be registered on older builds).
+   */
+  restore(state: ISerializedEditorGroupsState): void {
+    // 1. Tear down existing groups beyond the first; close all editors in the
+    //    first group so it can be reused as the seed leaf.
+    for (let i = this._groups.length - 1; i >= 1; i--) {
+      const g = this._groups[i]!
+      this._grid.removeView(g)
+      this._groups.splice(i, 1)
+      const mruIdx = this._mru.indexOf(g)
+      if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
+      g.model.dispose()
+      this._onDidRemoveGroup.fire(g)
+    }
+    const seed = this._groups[0]!
+    seed.closeAllEditors()
+
+    // 2. Walk the serialized tree in depth-first order; the first leaf
+    //    populates the seed group, subsequent leaves call addGroup() against
+    //    the previous leaf's group with a direction derived from the parent
+    //    branch's orientation.
+    const visitOrder: { data: ISerializedEditorGroupData; direction?: Direction }[] = []
+    collectLeavesInOrder(state.grid.root, undefined, visitOrder)
+
+    let restoredActive: EditorGroup | undefined
+    visitOrder.forEach((leaf, index) => {
+      let target: EditorGroup
+      if (index === 0) {
+        target = seed
+      } else {
+        const dir = leaf.direction ?? Direction.Right
+        const newGroup = new EditorGroup(new EditorGroupModel(), this)
+        this._grid.addView(newGroup, 200, this._groups[index - 1]!, dir)
+        this._groups.push(newGroup)
+        this._mru.push(newGroup)
+        this._onDidAddGroup.fire(newGroup)
+        target = newGroup
+      }
+      const hydrated: EditorInput[] = []
+      for (const e of leaf.data.editors) {
+        const input = EditorRegistry.deserialize(e.typeId, e.data)
+        if (input) hydrated.push(input)
+      }
+      hydrated.forEach((input) => target.openEditor(input, { activate: false }))
+      const activeIdx = Math.min(leaf.data.activeIndex, hydrated.length - 1)
+      if (activeIdx >= 0 && hydrated[activeIdx]) target.setActive(hydrated[activeIdx]!)
+      if (target.id === state.activeGroupId) restoredActive = target
+    })
+
+    // 3. Restore the active group (fall back to the first).
+    const nextActive = restoredActive ?? this._groups[0]!
+    this._activeGroup.set(nextActive, undefined)
+    this._onDidActiveGroupChange.fire(nextActive)
+  }
+}
+
+// Persistence helpers --------------------------------------------------------
+
+export interface ISerializedEditorInputData {
+  readonly typeId: string
+  readonly data: unknown
+}
+
+export interface ISerializedEditorGroupData {
+  readonly editors: readonly ISerializedEditorInputData[]
+  readonly activeIndex: number
+}
+
+export interface ISerializedEditorGroupsState {
+  readonly grid: ISerializedGrid<ISerializedEditorGroupData>
+  readonly activeGroupId: number
+}
+
+function collectLeavesInOrder(
+  node: ISerializedGridNode<unknown>,
+  parentOrientation: Orientation | undefined,
+  out: { data: ISerializedEditorGroupData; direction?: Direction }[],
+  childIndex = 0,
+): void {
+  if (node.type === 'leaf') {
+    const data = node.data as ISerializedEditorGroupData
+    if (out.length === 0 || childIndex === 0 || parentOrientation === undefined) {
+      out.push({ data })
+    } else {
+      const dir = parentOrientation === Orientation.Horizontal ? Direction.Right : Direction.Down
+      out.push({ data, direction: dir })
+    }
+    return
+  }
+  const orient = node.orientation ?? Orientation.Horizontal
+  ;(node.children ?? []).forEach((child, i) => {
+    collectLeavesInOrder(child, orient, out, i)
+  })
 }

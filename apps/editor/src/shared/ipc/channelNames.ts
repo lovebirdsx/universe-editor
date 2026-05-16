@@ -11,6 +11,8 @@ export const ServiceChannels = {
   Host: 'host',
   Storage: 'storage',
   Ping: 'ping',
+  FileSystem: 'fileSystem',
+  Workspace: 'workspace',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

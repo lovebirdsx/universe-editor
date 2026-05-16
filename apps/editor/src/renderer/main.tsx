@@ -11,6 +11,7 @@ import {
   ContextKeyService,
   IEditorService,
   IEditorGroupsService,
+  IFileService,
   IStatusBarService,
   IViewsService,
   IQuickInputService,
@@ -20,6 +21,8 @@ import {
   IIpcService,
   IStorageService,
   IConfigurationService,
+  IWorkspaceService,
+  type IWorkspaceServiceWire,
   ConfigurationService,
   ContributionService,
   IContributionService,
@@ -41,6 +44,7 @@ import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
 import { UserSettingsSync } from './workbench/configuration/UserSettingsSync.js'
+import { RendererWorkspaceService } from './workbench/workspace/RendererWorkspaceService.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
 // Side-effect import: registers built-in contributions with ContributionsRegistry.
 import './contributions/index.js'
@@ -93,6 +97,15 @@ function bootstrapWorkbench(): void {
     IPingService,
     ProxyChannel.toService<IPingService>(ipcService.getChannel(ServiceChannels.Ping)),
   )
+  services.set(
+    IFileService,
+    ProxyChannel.toService<IFileService>(ipcService.getChannel(ServiceChannels.FileSystem)),
+  )
+  const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
+    ipcService.getChannel(ServiceChannels.Workspace),
+  )
+  const workspaceService = new RendererWorkspaceService(workspaceWire)
+  services.set(IWorkspaceService, workspaceService)
 
   // Configuration core. UserSettingsSync (below) bridges the User layer to
   // IStorageService so user settings persist across restarts.

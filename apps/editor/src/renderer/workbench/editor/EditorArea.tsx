@@ -14,6 +14,8 @@ import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { SettingsEditor } from '../preferences/SettingsEditor.js'
 import { SettingsEditorInput } from '../preferences/SettingsEditorInput.js'
+import { WelcomeEditorInput } from './WelcomeEditorInput.js'
+import { WelcomeEditor } from './WelcomeEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from './EditorGroupsService.js'
@@ -27,35 +29,18 @@ editorComponentMap.set('welcome', WelcomeEditor)
 editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEditorInput }>)
 
 // Editor providers map typeId → componentKey so EditorGroupView can resolve the
-// React component for any IEditorInput.
-EditorRegistry.registerEditorProvider({ typeId: 'welcome', componentKey: 'welcome' })
+// React component for any IEditorInput. `deserialize` lets the restore pipeline
+// hydrate built-in inputs back from persisted state.
+EditorRegistry.registerEditorProvider({
+  typeId: WelcomeEditorInput.TYPE_ID,
+  componentKey: 'welcome',
+  deserialize: () => WelcomeEditorInput.deserialize(),
+})
 EditorRegistry.registerEditorProvider({
   typeId: SettingsEditorInput.TYPE_ID,
   componentKey: 'settings',
+  deserialize: () => SettingsEditorInput.deserialize(),
 })
-
-function WelcomeEditor(_props: { input: IEditorInput }) {
-  return (
-    <div className={styles['welcome']}>
-      <h1>Universe Editor</h1>
-      <p>A VSCode-paradigm game content editor.</p>
-      <ul className={styles['shortcutList']}>
-        <li className={styles['shortcutItem']}>
-          <kbd className={styles['kbd']}>Ctrl+Shift+P</kbd>
-          <span>Open Command Palette</span>
-        </li>
-        <li className={styles['shortcutItem']}>
-          <kbd className={styles['kbd']}>Ctrl+`</kbd>
-          <span>Toggle Output Panel</span>
-        </li>
-        <li className={styles['shortcutItem']}>
-          <kbd className={styles['kbd']}>Ctrl+\</kbd>
-          <span>Split Editor</span>
-        </li>
-      </ul>
-    </div>
-  )
-}
 
 export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
   const groupsService = useService(IEditorGroupsService) as EditorGroupsService

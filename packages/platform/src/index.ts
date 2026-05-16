@@ -51,6 +51,12 @@ export * from './host/index.js'
 // storage abstraction
 export * from './storage/storageService.js'
 
+// filesystem abstraction
+export * from './files/fileService.js'
+
+// workspace state
+export * from './workspace/workspaceService.js'
+
 // workbench service interfaces
 export * from './workbench/layoutService.js'
 export * from './workbench/part.js'

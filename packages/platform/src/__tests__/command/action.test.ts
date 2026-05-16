@@ -7,7 +7,7 @@ import { CommandsRegistry } from '../../command/commandRegistry.js'
 import { ContextKeyService } from '../../command/contextKey.js'
 import { Action2, registerAction2 } from '../../command/action.js'
 import { KeybindingsRegistry } from '../../command/keybindingRegistry.js'
-import { MenuId, MenuRegistry } from '../../command/menuRegistry.js'
+import { type IMenuItem, MenuId, MenuRegistry } from '../../command/menuRegistry.js'
 
 class SimpleAction extends Action2 {
   static readonly ID = 'test.action.simple'
@@ -64,9 +64,13 @@ describe('Action2 / registerAction2', () => {
       expect(CommandsRegistry.getCommand(SimpleAction.ID)).toBeDefined()
       expect(CommandsRegistry.getCommand(SimpleAction.ID)?.metadata?.category).toBe('Test')
       expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+s')).toBe(SimpleAction.ID)
-      const viewItems = MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).map((i) => i.command)
+      const viewItems = MenuRegistry.getMenuItems(MenuId.MenubarViewMenu)
+        .filter((i): i is IMenuItem => 'command' in i)
+        .map((i) => i.command)
       expect(viewItems).toContain(SimpleAction.ID)
-      const paletteItems = MenuRegistry.getMenuItems(MenuId.CommandPalette).map((i) => i.command)
+      const paletteItems = MenuRegistry.getMenuItems(MenuId.CommandPalette)
+        .filter((i): i is IMenuItem => 'command' in i)
+        .map((i) => i.command)
       expect(paletteItems).toContain(SimpleAction.ID)
     } finally {
       d.dispose()
@@ -90,16 +94,20 @@ describe('Action2 / registerAction2', () => {
     const d = registerAction2(PreconditionedAction)
     try {
       const svc = new ContextKeyService()
+      const fileCommands = (): string[] =>
+        MenuRegistry.getMenuItems(MenuId.MenubarFileMenu, svc)
+          .filter((i): i is IMenuItem => 'command' in i)
+          .map((i) => i.command)
       // Both keys missing: must not pass.
-      let items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu, svc).map((i) => i.command)
+      let items = fileCommands()
       expect(items).not.toContain(PreconditionedAction.ID)
 
       svc.set('isReady', true)
-      items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu, svc).map((i) => i.command)
+      items = fileCommands()
       expect(items).not.toContain(PreconditionedAction.ID)
 
       svc.set('lang', 'json')
-      items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu, svc).map((i) => i.command)
+      items = fileCommands()
       expect(items).toContain(PreconditionedAction.ID)
       svc.dispose()
     } finally {
@@ -126,12 +134,12 @@ describe('Action2 / registerAction2', () => {
     try {
       expect(
         MenuRegistry.getMenuItems(MenuId.MenubarEditMenu).some(
-          (i) => i.command === MultiTargetAction.ID,
+          (i) => 'command' in i && i.command === MultiTargetAction.ID,
         ),
       ).toBe(true)
       expect(
         MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some(
-          (i) => i.command === MultiTargetAction.ID,
+          (i) => 'command' in i && i.command === MultiTargetAction.ID,
         ),
       ).toBe(true)
       expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+1')).toBe(MultiTargetAction.ID)
@@ -147,10 +155,14 @@ describe('Action2 / registerAction2', () => {
     expect(CommandsRegistry.getCommand(SimpleAction.ID)).toBeUndefined()
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+s')).toBeUndefined()
     expect(
-      MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some((i) => i.command === SimpleAction.ID),
+      MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some(
+        (i) => 'command' in i && i.command === SimpleAction.ID,
+      ),
     ).toBe(false)
     expect(
-      MenuRegistry.getMenuItems(MenuId.CommandPalette).some((i) => i.command === SimpleAction.ID),
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === SimpleAction.ID,
+      ),
     ).toBe(false)
   })
 })

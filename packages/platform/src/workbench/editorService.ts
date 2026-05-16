@@ -111,11 +111,24 @@ export interface IEditorProvider {
    * The renderer maintains a `editorComponentMap` keyed by this value.
    */
   readonly componentKey: string
+  /**
+   * Optional hydration hook used by EditorGroupsService.restore() to rebuild
+   * EditorInputs from persisted JSON. Returns `null` if the data cannot be
+   * deserialized (e.g. resource no longer exists); the restore pipeline skips
+   * null entries rather than crashing.
+   */
+  deserialize?(data: unknown): EditorInput | null
 }
 
 export interface IEditorRegistry {
   registerEditorProvider(provider: IEditorProvider): IDisposable
   getProvider(typeId: string): IEditorProvider | undefined
+  /**
+   * Convenience wrapper around `getProvider(typeId)?.deserialize?.(data)`.
+   * Returns null when no provider is registered or the provider lacks a
+   * `deserialize` hook.
+   */
+  deserialize(typeId: string, data: unknown): EditorInput | null
 }
 
 class EditorRegistryImpl implements IEditorRegistry {
@@ -128,6 +141,16 @@ class EditorRegistryImpl implements IEditorRegistry {
 
   getProvider(typeId: string): IEditorProvider | undefined {
     return this._providers.get(typeId)
+  }
+
+  deserialize(typeId: string, data: unknown): EditorInput | null {
+    const provider = this._providers.get(typeId)
+    if (!provider || !provider.deserialize) return null
+    try {
+      return provider.deserialize(data)
+    } catch {
+      return null
+    }
   }
 }
 

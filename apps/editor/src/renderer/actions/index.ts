@@ -30,6 +30,12 @@ import {
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
 import { AboutAction, CloseWindowAction, ToggleDevToolsAction } from './windowActions.js'
+import {
+  ClearRecentWorkspacesAction,
+  CloseFolderAction,
+  OpenFolderAction,
+  OpenRecentAction,
+} from './workspaceActions.js'
 
 // Layout
 registerAction2(ToggleSidebarVisibilityAction)
@@ -63,6 +69,12 @@ registerAction2(FocusLastGroupAction)
 
 // Preferences
 registerAction2(OpenSettingsAction)
+
+// Workspace
+registerAction2(OpenFolderAction)
+registerAction2(OpenRecentAction)
+registerAction2(ClearRecentWorkspacesAction)
+registerAction2(CloseFolderAction)
 
 // Window / Help
 registerAction2(CloseWindowAction)

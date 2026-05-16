@@ -79,7 +79,7 @@ describe('Built-in editor Action2s', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+w')).toBe(CloseActiveEditorAction.ID)
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => i.command === CloseActiveEditorAction.ID,
+        (i) => 'command' in i && i.command === CloseActiveEditorAction.ID,
       ),
     ).toBe(true)
   })
@@ -243,7 +243,7 @@ describe('Built-in editor Action2s', () => {
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+\\')).toBe(SplitEditorRightAction.ID)
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => i.command === SplitEditorRightAction.ID,
+        (i) => 'command' in i && i.command === SplitEditorRightAction.ID,
       ),
     ).toBe(true)
   })

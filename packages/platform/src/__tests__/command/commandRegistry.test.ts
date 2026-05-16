@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { CommandsRegistry } from '../../command/commandRegistry.js'
-import { MenuId, MenuRegistry } from '../../command/menuRegistry.js'
+import { type IMenuItem, MenuId, MenuRegistry } from '../../command/menuRegistry.js'
 import { KeybindingsRegistry } from '../../command/keybindingRegistry.js'
 import { ContextKeyService } from '../../command/contextKey.js'
 
@@ -66,7 +66,7 @@ describe('MenuRegistry', () => {
       group: 'navigation',
     })
     const items = MenuRegistry.getMenuItems(MenuId.CommandPalette)
-    expect(items.some((i) => i.command === 'test.menu1')).toBe(true)
+    expect(items.some((i) => 'command' in i && i.command === 'test.menu1')).toBe(true)
     d.dispose()
   })
 
@@ -76,7 +76,7 @@ describe('MenuRegistry', () => {
     })
     d.dispose()
     const items = MenuRegistry.getMenuItems(MenuId.EditorTitle)
-    expect(items.some((i) => i.command === 'test.menu2')).toBe(false)
+    expect(items.some((i) => 'command' in i && i.command === 'test.menu2')).toBe(false)
   })
 
   it('items are sorted by group then order', () => {
@@ -96,9 +96,9 @@ describe('MenuRegistry', () => {
       order: 1,
     })
 
-    const items = MenuRegistry.getMenuItems(MenuId.TitleBar).filter((i) =>
-      ['a-cmd', 'b-cmd', 'z-cmd'].includes(i.command),
-    )
+    const items = MenuRegistry.getMenuItems(MenuId.TitleBar)
+      .filter((i): i is IMenuItem => 'command' in i)
+      .filter((i) => ['a-cmd', 'b-cmd', 'z-cmd'].includes(i.command))
 
     expect(items.map((i) => i.command)).toEqual(['a-cmd', 'b-cmd', 'z-cmd'])
 
@@ -111,6 +111,57 @@ describe('MenuRegistry', () => {
     const spy = vi.fn()
     const sub = MenuRegistry.onDidChangeMenu(spy)
     const d = MenuRegistry.addMenuItem(MenuId.StatusBar, { command: 'x' })
+    expect(spy).toHaveBeenCalled()
+    d.dispose()
+    sub.dispose()
+  })
+
+  it('addSubmenuItem inserts a submenu entry alongside command items', () => {
+    const d1 = MenuRegistry.addMenuItem(MenuId.MenubarFileMenu, {
+      command: 'sub.test.cmd',
+      group: '1_a',
+    })
+    const d2 = MenuRegistry.addSubmenuItem(MenuId.MenubarFileMenu, {
+      submenu: MenuId.MenubarFileOpenRecentMenu,
+      title: 'Open Recent',
+      group: '1_a',
+      order: 5,
+    })
+    const items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu)
+    const subs = items.filter((i): i is { submenu: MenuId; title: string } => 'submenu' in i)
+    expect(subs.some((s) => s.submenu === MenuId.MenubarFileOpenRecentMenu)).toBe(true)
+    expect(subs.find((s) => s.submenu === MenuId.MenubarFileOpenRecentMenu)?.title).toBe(
+      'Open Recent',
+    )
+    d1.dispose()
+    d2.dispose()
+  })
+
+  it('addSubmenuItem entries can be disposed independently', () => {
+    const d = MenuRegistry.addSubmenuItem(MenuId.MenubarViewMenu, {
+      submenu: MenuId.MenubarFileOpenRecentMenu,
+      title: 'Disposable Sub',
+    })
+    expect(
+      MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some(
+        (i) => 'submenu' in i && i.title === 'Disposable Sub',
+      ),
+    ).toBe(true)
+    d.dispose()
+    expect(
+      MenuRegistry.getMenuItems(MenuId.MenubarViewMenu).some(
+        (i) => 'submenu' in i && i.title === 'Disposable Sub',
+      ),
+    ).toBe(false)
+  })
+
+  it('addSubmenuItem fires onDidChangeMenu', () => {
+    const spy = vi.fn()
+    const sub = MenuRegistry.onDidChangeMenu(spy)
+    const d = MenuRegistry.addSubmenuItem(MenuId.MenubarHelpMenu, {
+      submenu: MenuId.MenubarFileOpenRecentMenu,
+      title: 'X',
+    })
     expect(spy).toHaveBeenCalled()
     d.dispose()
     sub.dispose()
@@ -243,7 +294,9 @@ describe('MenuRegistry — when filtering', () => {
       when: '!isVisible',
     })
 
-    const items = MenuRegistry.getMenuItems(MenuId.MenubarViewMenu, svc).map((i) => i.command)
+    const items = MenuRegistry.getMenuItems(MenuId.MenubarViewMenu, svc)
+      .filter((i): i is IMenuItem => 'command' in i)
+      .map((i) => i.command)
     expect(items).toContain('when.test.visible')
     expect(items).not.toContain('when.test.hidden')
 
@@ -257,7 +310,9 @@ describe('MenuRegistry — when filtering', () => {
       command: 'when.compat.a',
       when: 'never',
     })
-    const items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu).map((i) => i.command)
+    const items = MenuRegistry.getMenuItems(MenuId.MenubarFileMenu)
+      .filter((i): i is IMenuItem => 'command' in i)
+      .map((i) => i.command)
     expect(items).toContain('when.compat.a')
     d1.dispose()
   })

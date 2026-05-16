@@ -9,8 +9,10 @@ import {
   ChannelServer,
   combinedDisposable,
   type IDisposable,
+  type IFileService,
   type IHostServiceWire,
   type IStorageService,
+  type IWorkspaceServiceWire,
   ProxyChannel,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
@@ -21,6 +23,8 @@ import { MainHostService } from '../services/host/hostMainService.js'
 export interface SharedMainServices {
   readonly storage: IStorageService
   readonly ping: IPingService
+  readonly fileSystem: IFileService
+  readonly workspace: IWorkspaceServiceWire
 }
 
 /**
@@ -39,6 +43,8 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(host))
   server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(shared.storage))
   server.registerChannel(ServiceChannels.Ping, ProxyChannel.fromService(shared.ping))
+  server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(shared.fileSystem))
+  server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(shared.workspace))
 
   const all = combinedDisposable(server, host, protoDisposable)
   return Object.assign(all, { host })

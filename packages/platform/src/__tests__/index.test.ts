@@ -64,7 +64,9 @@ describe('platform public API surface', () => {
   it('exports menu registry', () => {
     const d = MenuRegistry.addMenuItem(MenuId.CommandPalette, { command: 'smoke.menu' })
     expect(
-      MenuRegistry.getMenuItems(MenuId.CommandPalette).some((i) => i.command === 'smoke.menu'),
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === 'smoke.menu',
+      ),
     ).toBe(true)
     d.dispose()
   })
