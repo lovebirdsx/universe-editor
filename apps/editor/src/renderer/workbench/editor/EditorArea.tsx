@@ -4,9 +4,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type ComponentType } from 'react'
-import { IEditorGroupsService, IEditorInput, type IPart } from '@universe-editor/platform'
+import {
+  EditorRegistry,
+  IEditorGroupsService,
+  IEditorInput,
+  type IPart,
+} from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
+import { SettingsEditor } from '../preferences/SettingsEditor.js'
+import { SettingsEditorInput } from '../preferences/SettingsEditorInput.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from './EditorGroupsService.js'
@@ -17,6 +24,15 @@ export const editorComponentMap = new Map<string, ComponentType<{ input: IEditor
 
 // Register built-in welcome editor
 editorComponentMap.set('welcome', WelcomeEditor)
+editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEditorInput }>)
+
+// Editor providers map typeId → componentKey so EditorGroupView can resolve the
+// React component for any IEditorInput.
+EditorRegistry.registerEditorProvider({ typeId: 'welcome', componentKey: 'welcome' })
+EditorRegistry.registerEditorProvider({
+  typeId: SettingsEditorInput.TYPE_ID,
+  componentKey: 'settings',
+})
 
 function WelcomeEditor(_props: { input: IEditorInput }) {
   return (

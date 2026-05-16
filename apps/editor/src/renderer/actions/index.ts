@@ -28,6 +28,7 @@ import {
   SplitEditorRightAction,
   SplitEditorUpAction,
 } from './editorActions.js'
+import { OpenSettingsAction } from './preferencesActions.js'
 
 // Layout
 registerAction2(ToggleSidebarVisibilityAction)
@@ -58,3 +59,6 @@ registerAction2(FocusNextGroupAction)
 registerAction2(FocusPreviousGroupAction)
 registerAction2(FocusFirstGroupAction)
 registerAction2(FocusLastGroupAction)
+
+// Preferences
+registerAction2(OpenSettingsAction)

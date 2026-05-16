@@ -11,6 +11,7 @@ import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform
 import '../actions/index.js'
 import { BuiltInViewContainersContribution } from './BuiltInViewContainersContribution.js'
 import { ContextKeyContribution } from './ContextKeyContribution.js'
+import { SettingsContribution } from './SettingsContribution.js'
 import { StatusBarDefaultsContribution } from './StatusBarDefaultsContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
@@ -28,6 +29,14 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
+// Configuration schema must be registered before any UI consumes it (Settings
+// editor reads `getConfigurationNodes()` on mount).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.settings',
+  SettingsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
 // Status bar defaults run after restore — the status bar is mounted by then.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.statusBarDefaults',
@@ -35,4 +44,9 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-export { BuiltInViewContainersContribution, ContextKeyContribution, StatusBarDefaultsContribution }
+export {
+  BuiltInViewContainersContribution,
+  ContextKeyContribution,
+  SettingsContribution,
+  StatusBarDefaultsContribution,
+}

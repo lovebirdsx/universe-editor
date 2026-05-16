@@ -19,6 +19,8 @@ import {
   IHostService,
   IIpcService,
   IStorageService,
+  IConfigurationService,
+  ConfigurationService,
   ContributionService,
   IContributionService,
   ProxyChannel,
@@ -38,6 +40,7 @@ import { ViewsService } from './workbench/sidebar/ViewsService.js'
 import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
+import { UserSettingsSync } from './workbench/configuration/UserSettingsSync.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
 // Side-effect import: registers built-in contributions with ContributionsRegistry.
 import './contributions/index.js'
@@ -91,6 +94,11 @@ function bootstrapWorkbench(): void {
     ProxyChannel.toService<IPingService>(ipcService.getChannel(ServiceChannels.Ping)),
   )
 
+  // Configuration core. UserSettingsSync (below) bridges the User layer to
+  // IStorageService so user settings persist across restarts.
+  const configurationService = new ConfigurationService()
+  services.set(IConfigurationService, configurationService)
+
   // Create the DI container (registers itself as IInstantiationService)
   const instantiation = new InstantiationService(services)
 
@@ -114,6 +122,12 @@ function bootstrapWorkbench(): void {
   services.set(IQuickInputService, quickInputService)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)
+
+  // Kick off async load of user settings from storage. Once it resolves,
+  // ConfigurationService fires onDidChangeConfiguration so any subscribers
+  // (Settings editor, theme contributions) refresh — no need to await here.
+  const userSettingsSync = instantiation.createInstance(UserSettingsSync)
+  void userSettingsSync.initialize()
 
   // Instantiate the six workbench Parts. Each Part auto-registers with the
   // LayoutService on construction; React lookups (`getPart`) resolve them.

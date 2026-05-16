@@ -139,6 +139,80 @@ describe('ConfigurationService', () => {
     svc.dispose()
   })
 
+  it('loadLayer fires onDidChangeConfiguration for changed keys only', () => {
+    const svc = new ConfigurationService()
+    svc.loadLayer(ConfigurationTarget.User, { a: 1, b: 2 })
+
+    const affected: string[] = []
+    const sub = svc.onDidChangeConfiguration((e) => {
+      for (const k of ['a', 'b', 'c']) {
+        if (e.affectsConfiguration(k)) affected.push(k)
+      }
+    })
+
+    // a unchanged (still 1), b changes 2->3, c new
+    svc.loadLayer(ConfigurationTarget.User, { a: 1, b: 3, c: 4 })
+    expect(affected.sort()).toEqual(['b', 'c'])
+    sub.dispose()
+    svc.dispose()
+  })
+
+  it('loadLayer with identical data does NOT fire', () => {
+    const svc = new ConfigurationService()
+    svc.loadLayer(ConfigurationTarget.User, { x: 1 })
+
+    let fired = 0
+    const sub = svc.onDidChangeConfiguration(() => fired++)
+    svc.loadLayer(ConfigurationTarget.User, { x: 1 })
+    expect(fired).toBe(0)
+    sub.dispose()
+    svc.dispose()
+  })
+
+  it('loadLayer fires for removed keys whose effective value changes', () => {
+    const svc = new ConfigurationService()
+    svc.loadLayer(ConfigurationTarget.User, { a: 1, b: 2 })
+
+    const affected: string[] = []
+    const sub = svc.onDidChangeConfiguration((e) => {
+      for (const k of ['a', 'b']) {
+        if (e.affectsConfiguration(k)) affected.push(k)
+      }
+    })
+
+    svc.loadLayer(ConfigurationTarget.User, { a: 1 })
+    expect(affected).toEqual(['b'])
+    sub.dispose()
+    svc.dispose()
+  })
+
+  it('loadLayer effective-value comparison: lower layer change masked by higher', () => {
+    const svc = new ConfigurationService()
+    svc.update('m.x', 99, ConfigurationTarget.Memory)
+    svc.loadLayer(ConfigurationTarget.User, { 'm.x': 1 })
+
+    let fired = 0
+    const sub = svc.onDidChangeConfiguration(() => fired++)
+    // User layer changes, but Memory still wins → effective value stays 99
+    svc.loadLayer(ConfigurationTarget.User, { 'm.x': 2 })
+    expect(fired).toBe(0)
+    expect(svc.get('m.x')).toBe(99)
+    sub.dispose()
+    svc.dispose()
+  })
+
+  it('getLayerSnapshot returns a shallow copy', () => {
+    const svc = new ConfigurationService()
+    svc.loadLayer(ConfigurationTarget.User, { a: 1, b: 2 })
+
+    const snap = svc.getLayerSnapshot(ConfigurationTarget.User) as Record<string, unknown>
+    expect(snap).toEqual({ a: 1, b: 2 })
+
+    snap['a'] = 999
+    expect(svc.get('a')).toBe(1) // internal state unchanged
+    svc.dispose()
+  })
+
   it('auto-picks up defaults from newly registered configuration', () => {
     const svc = new ConfigurationService()
     expect(svc.get('auto.x')).toBeUndefined()

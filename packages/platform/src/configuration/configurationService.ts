@@ -42,6 +42,16 @@ export interface IConfigurationService {
    */
   update(key: string, value: unknown, target?: ConfigurationTarget): void
 
+  /**
+   * Bulk-load an entire layer (e.g. reading user settings from disk).
+   */
+  loadLayer(target: ConfigurationTarget, data: Record<string, unknown>): void
+
+  /**
+   * Return a shallow snapshot of the given layer. Safe to mutate by callers.
+   */
+  getLayerSnapshot(target: ConfigurationTarget): Readonly<Record<string, unknown>>
+
   /** Fired whenever a configuration value changes. */
   readonly onDidChangeConfiguration: Event<IConfigurationChangeEvent>
 }
@@ -122,25 +132,39 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
 
   /**
    * Bulk-load an entire layer (e.g. reading user settings from disk).
+   * Compares effective values (post-layer-merge) before/after to fire only for
+   * keys whose visible value actually changed.
    */
   loadLayer(target: ConfigurationTarget, data: Record<string, unknown>): void {
-    const changedKeys = new Set<string>()
-
-    // Track which keys effectively change
-    for (const key of Object.keys({ ...this._layers[target], ...data })) {
-      const before = this.get(key)
-      const after = data[key] ?? undefined
-      if (before !== after) {
-        changedKeys.add(key)
-      }
+    if (!this._layers[target]) {
+      throw new Error(`Unknown configuration target: ${target}`)
     }
+    const oldKeys = Object.keys(this._layers[target] ?? {})
+    const newKeys = Object.keys(data)
+    const allKeys = new Set([...oldKeys, ...newKeys])
+
+    const before = new Map<string, unknown>()
+    for (const k of allKeys) before.set(k, this.get(k))
 
     this._layers[target] = { ...data }
+
+    const changedKeys = new Set<string>()
+    for (const k of allKeys) {
+      if (this.get(k) !== before.get(k)) changedKeys.add(k)
+    }
 
     if (changedKeys.size > 0) {
       this._onDidChangeConfiguration.fire({
         affectsConfiguration: (k) => changedKeys.has(k),
       })
     }
+  }
+
+  getLayerSnapshot(target: ConfigurationTarget): Readonly<Record<string, unknown>> {
+    const layer = this._layers[target]
+    if (!layer) {
+      throw new Error(`Unknown configuration target: ${target}`)
+    }
+    return { ...layer }
   }
 }

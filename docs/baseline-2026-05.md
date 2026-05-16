@@ -522,3 +522,119 @@ API 表面：**3 个核心方法 → 6 个**（+ `createKey` / `contextMatchesRu
 - **不**接入文件系统（FileEditorInput 留主题 6/7）
 - **不**改 StatusBar 显示 active editor 信息
 
+---
+
+## After 主题 6：Settings UI（2026-05-16）
+
+主题 6 把内核里的 `IConfigurationService` + `ConfigurationRegistry` 接到消费端：注入 DI、通过 `IStorageService` 持久化 User layer、注册一组内置 schema、新增 `SettingsEditorInput` + 表单驱动的 `SettingsEditor`、`Preferences: Open Settings`（`Ctrl+,`）。
+
+### ConfigurationService 接入路径
+
+```
+main.tsx
+  └─ new ConfigurationService()              ← Default/User/Project/Memory 四层
+       services.set(IConfigurationService, …)
+  └─ inst.createInstance(UserSettingsSync)   ← @IConfigurationService + @IStorageService
+       └─ initialize() → storage.get('workbench.userSettings') → loadLayer(User)
+       └─ onDidChangeConfiguration → storage.set('workbench.userSettings', snapshot)
+```
+
+`ConfigurationService` 新增公共 API：
+
+| API | 用途 |
+|---|---|
+| `loadLayer(target, data)` | 整层批量装载（如启动时反序列化）；按效应值对比仅对真正变化的 key 触发事件 |
+| `getLayerSnapshot(target)` | 返回该层浅拷贝；`UserSettingsSync` 持久化时使用 |
+
+`loadLayer` 现在比较 **effective value**（穿越层级合并后的结果），避免 User 改动被 Memory 屏蔽时误触发，或被屏蔽时漏触发。
+
+### 内置 schema（3 节点 / 8 项）
+
+`SettingsContribution` 在 `WorkbenchPhase.BlockStartup` 阶段注册：
+
+| 节点 | Key | 类型 | 默认 |
+|---|---|---|---|
+| workbench | `workbench.colorTheme` | enum: dark / light | `dark` |
+| workbench | `workbench.sideBar.location` | enum: left / right | `left` |
+| editor | `editor.fontSize` | number 8–32 | `14` |
+| editor | `editor.tabSize` | number 1–8 | `4` |
+| editor | `editor.wordWrap` | boolean | `false` |
+| editor | `editor.minimap.enabled` | boolean | `true` |
+| files | `files.autoSave` | enum: off / afterDelay / onFocusChange | `off` |
+| files | `files.autoSaveDelay` | number ≥ 100 | `1000` |
+
+未来扩展直接 `ConfigurationRegistry.registerConfiguration({...})` 即可，无需改 UI。
+
+### Settings 编辑器
+
+| 文件 | 行数 | 说明 |
+|---|---|---|
+| `apps/editor/src/renderer/workbench/preferences/SettingsEditorInput.ts` | ~25 | `EditorInput` 子类，资源 `universe:/settings` |
+| `apps/editor/src/renderer/workbench/preferences/SettingsEditor.tsx` | ~155 | 表单视图（顶部搜索 + 按 node 分组） |
+| `apps/editor/src/renderer/workbench/preferences/SettingsEditor.module.css` | ~110 | UE5 暗色风格 |
+| `apps/editor/src/renderer/workbench/configuration/UserSettingsSync.ts` | ~40 | DI wrapper：load on boot + write on change |
+| `apps/editor/src/renderer/contributions/SettingsContribution.ts` | ~95 | 内置 schema 注册 |
+| `apps/editor/src/renderer/actions/preferencesActions.ts` | ~40 | `OpenSettingsAction` |
+
+控件按 schema 派发：`enum` → `<select>`；`boolean` → `<input type=checkbox>`；`number` → `<input type=number min/max>`；`string` → `<input type=text>`；其它 → `Not editable in form view`。编辑写入 `ConfigurationTarget.User`，立即被 `UserSettingsSync` 回写到 storage。
+
+### 新增命令（21 个 → 22 个）
+
+| ID | 键位 | 来源 |
+|---|---|---|
+| `workbench.action.openSettings` | `Ctrl+,` | `OpenSettingsAction`（跨 group 去重：已存在则激活原 group + 原 tab） |
+
+### EditorRegistry provider 注册
+
+`EditorArea.tsx` 顶部统一登记，避免组件 map 与 typeId 解耦：
+
+```ts
+EditorRegistry.registerEditorProvider({ typeId: 'welcome',  componentKey: 'welcome' })
+EditorRegistry.registerEditorProvider({ typeId: 'settings', componentKey: 'settings' })
+editorComponentMap.set('welcome',  WelcomeEditor)
+editorComponentMap.set('settings', SettingsEditor)
+```
+
+（顺手补齐了主题 5 漏注册的 welcome provider。）
+
+### 测试覆盖
+
+| | After 主题 5 | After 主题 6 |
+|---|---|---|
+| `@universe-editor/platform` 测试数 | 383 | **388**（+5：`loadLayer` 效应值比对 4 用例 + `getLayerSnapshot` 1 用例） |
+| `@universe-editor/editor` 测试数 | 129 | **149**（+20） |
+| 总测试数 | 512 | **537** |
+
+editor 包新增：
+
+- `workbench/configuration/__tests__/UserSettingsSync.test.ts`（6）：load / fallback / User-target 持久化 / Memory-target 触发但 snapshot 仍是 User 视图 / 多次更新 / dispose 解绑
+- `workbench/__tests__/contributions/SettingsContribution.test.ts`（3）：3 节点注册 / 8 项默认 / dispose 全部移除
+- `workbench/__tests__/preferences/SettingsEditor.test.tsx`（7）：分节 / 控件类型派发 / 搜索过滤 / number/boolean/enum 编辑回写 / 外部 update 同步
+- `actions/__tests__/preferencesActions.test.ts`（4）：注册元数据 / 打开 tab / 同 group 复用 / 跨 group 复用 + 激活原 group
+
+### 持久化流程
+
+- key：`workbench.userSettings`（常量在 `UserSettingsSync.USER_SETTINGS_KEY`）
+- 通道：`IStorageService`（ProxyChannel → 主进程 `userData/state.json`）
+- payload：`config.getLayerSnapshot(User)`（仅 User 层快照；Memory / Default 不入盘）
+- 触发：任意 `onDidChangeConfiguration` 均写一次。User layer 没改的事件也会写——payload 不变所以无副作用
+- 加载：启动时异步读 storage → `loadLayer(User, raw)` → 触发 `onDidChangeConfiguration` → `SettingsEditor` 自动重渲染
+
+### 集成验证
+
+- `pnpm check`（lint + typecheck + test + build）：✅ 全绿
+- 桌面端打包：main 6.52 kB / preload 0.77 kB / renderer 869.64 kB JS + 28.29 kB CSS
+- 既有命令 / 键位 / EditorService 兼容层保持不变
+
+### 边界（按计划保持的"不做"清单）
+
+- **不**新增 IPC 通道；user settings 走 `IStorageService` 既有路径
+- **不**实现 project / workspace 层 settings
+- **不**实现 JSON 编辑器视图
+- **不**实现 schema validation 错误展示（无效值仍写入）
+- **不**支持嵌套 `object` / `array` 表单编辑（占位 readonly）
+- **不**实现 reset to default 按钮
+- **不**让 settings 修改即时影响 UI 主题 / fontSize 等（消费方需另行订阅 `onDidChangeConfiguration`；本主题只验证写入 + 持久化）
+- **不**引入主进程独立 PreferencesService / settings.json
+- **不**新增 MenubarPreferencesMenu（菜单栏接入留主题 8/9）
+
