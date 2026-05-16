@@ -3,8 +3,8 @@
  *  ILayoutService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { IStorageService, observableValue } from '@universe-editor/platform'
-import type { ILayoutService, LayoutSizes } from '@universe-editor/platform'
+import { Emitter, IStorageService, observableValue, toDisposable } from '@universe-editor/platform'
+import type { IDisposable, ILayoutService, IPart, LayoutSizes } from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
 
 const STORAGE_KEY = 'workbench.layout'
@@ -41,6 +41,10 @@ export class LayoutService implements ILayoutService {
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
+
+  private readonly _parts = new Map<PartId, IPart>()
+  private readonly _onDidRegisterPart = new Emitter<IPart>()
+  readonly onDidRegisterPart = this._onDidRegisterPart.event
 
   constructor(@IStorageService private readonly _storage: IStorageService) {}
 
@@ -120,5 +124,31 @@ export class LayoutService implements ILayoutService {
       this._saveTimer = undefined
       void this.save()
     }, SAVE_DEBOUNCE_MS)
+  }
+
+  // -- Part registry --------------------------------------------------------
+
+  registerPart(part: IPart): IDisposable {
+    const existing = this._parts.get(part.id)
+    if (existing && existing !== part) {
+      throw new Error(
+        `[LayoutService] Part '${part.id}' is already registered; unregister the previous instance first.`,
+      )
+    }
+    this._parts.set(part.id, part)
+    this._onDidRegisterPart.fire(part)
+    return toDisposable(() => {
+      if (this._parts.get(part.id) === part) {
+        this._parts.delete(part.id)
+      }
+    })
+  }
+
+  getPart<T extends IPart = IPart>(id: PartId): T | undefined {
+    return this._parts.get(id) as T | undefined
+  }
+
+  getParts(): readonly IPart[] {
+    return [...this._parts.values()]
   }
 }

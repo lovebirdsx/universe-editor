@@ -5,27 +5,30 @@ import {
   IViewsService,
   ViewContainerLocation,
 } from '@universe-editor/platform'
+import type { IPart } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { usePartContainer } from '../usePartContainer.js'
 import { ViewPane } from './ViewPane.js'
 import styles from './SideBar.module.css'
 
 /** Registry of React components keyed by IViewDescriptor.componentKey. */
 export const viewComponentMap = new Map<string, ComponentType>()
 
-export function SideBar() {
+export function SideBar({ part }: { part?: IPart | undefined } = {}) {
   const viewsService = useService(IViewsService)
   const activeContainerByLocation = useObservable(viewsService.activeContainerByLocation)
   const activeId = activeContainerByLocation[ViewContainerLocation.SideBar]
   const activeContainer = activeId ? ViewContainerRegistry.getViewContainer(activeId) : undefined
+  const containerRef = usePartContainer<HTMLElement>(part)
 
   if (!activeContainer) {
-    return <aside className={styles['sidebar']} />
+    return <aside ref={containerRef} className={styles['sidebar']} />
   }
 
   const views = ViewRegistry.getViewsForContainer(activeContainer.id)
 
   return (
-    <aside className={styles['sidebar']}>
+    <aside ref={containerRef} className={styles['sidebar']}>
       <div className={styles['header']}>{activeContainer.label}</div>
       <div className={styles['views']}>
         {views.length === 0 ? (

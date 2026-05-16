@@ -1,6 +1,7 @@
 import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
-import type { IStatusBarEntry } from '@universe-editor/platform'
+import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { usePartContainer } from '../usePartContainer.js'
 import styles from './StatusBar.module.css'
 
 function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
@@ -24,9 +25,10 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
   )
 }
 
-export function StatusBar() {
+export function StatusBar({ part }: { part?: IPart | undefined } = {}) {
   const statusBarService = useService(IStatusBarService)
   const entries = useObservable(statusBarService.entries)
+  const containerRef = usePartContainer<HTMLElement>(part)
 
   const leftEntries = entries
     .filter((e) => e.entry.alignment === StatusBarAlignment.Left)
@@ -37,7 +39,7 @@ export function StatusBar() {
     .sort((a, b) => b.entry.priority - a.entry.priority)
 
   return (
-    <footer className={styles['statusbar']} aria-label="Status Bar">
+    <footer ref={containerRef} className={styles['statusbar']} aria-label="Status Bar">
       <div className={styles['left']}>
         {leftEntries.map((e) => (
           <StatusBarItem key={e.id} entry={e.entry} />

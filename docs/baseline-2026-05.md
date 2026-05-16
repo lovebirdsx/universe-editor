@@ -216,3 +216,63 @@ packages/platform/src/base/observable/observables/derivedImpl.ts
 - 未实现 `MicrotaskDelay` 哨兵分支（保留可选参数预留接口）
 - 未对历史代码做"清零泄漏"扫荡（tracker 启用后若发现泄漏，单独建 issue）
 
+---
+
+## After 主题 2：Part 抽象 + Contribution 驱动（2026-05-16）
+
+「主题 2」把六大部件升级为「一等公民」（`IPart` / `Part` 基类 + `ILayoutService` 注册表），同时把 `apps/editor/src/renderer/main.tsx` 里 184 行的 `registerBuiltInContributions(deps)` 巨函数拆成 5 个独立的 `IWorkbenchContribution` 类，交给 `ContributionService` 按 lifecycle phase 自动驱动。
+
+### Part 抽象层
+
+| 维度 | Before | After |
+|---|---|---|
+| `IPart` 接口 | 缺失（六大部件只是普通 React 组件） | ✅ 新增（`packages/platform/src/workbench/part.ts`） |
+| `Part` 基类（`Disposable` 子类，可见性 Observable + 容器/焦点 API） | 缺失 | ✅ 新增（含 `_attachContainer` / `_setFocusTarget` internal API） |
+| `IPartContainerElement` 结构类型 | 缺失 | ✅ 新增（避免 platform 包依赖 `lib.dom`） |
+| 容器元素由 React 注入的桥（`usePartContainer`） | 缺失 | ✅ 新增（`apps/editor/src/renderer/workbench/usePartContainer.ts`） |
+| 六个具体 Part 类（ActivityBar / SideBar / SecondarySideBar / EditorArea / Panel / StatusBar） | 缺失 | ✅ 新增（`apps/editor/src/renderer/workbench/parts/index.ts`，皆走 `@ILayoutService` DI） |
+| `ILayoutService.registerPart / getPart / getParts / onDidRegisterPart` | 缺失 | ✅ 新增（4 个新 API；现有 6 个 API 零改动） |
+| React 组件 ↔ Part 联动 | — | 六个组件签名追加 `part?: IPart \| undefined`，用 `useRef` + `usePartContainer` 把 DOM 推给 Part 实例 |
+
+### Contribution 化
+
+| 维度 | Before | After |
+|---|---|---|
+| `ContributionsRegistry.registerContribution` 调用方 | **0** | **5**（5 个内置 contribution） |
+| 内置注册路径 | 184 行的 `registerBuiltInContributions(deps)` 函数 + 单点调用 | 5 个独立 contribution 类 + `contributions/index.ts` 单点 side-effect import |
+| `main.tsx` 行数 | 282 | **136**（-146 / -52%） |
+| 命令/键绑定/菜单注册位置 | `main.tsx` 内联 | `LayoutCommandsContribution` / `CommandPaletteContribution` / `MenuPlacementsContribution` |
+| ViewContainer 注册位置 | `main.tsx` 内联 | `BuiltInViewContainersContribution`（Phase `BlockStartup`） |
+| 默认 status bar entry 注册 | `lifecycle.when(Ready).then(...)` 内联 | `StatusBarDefaultsContribution`（Phase `AfterRestore`） |
+| 命令处理函数风格 | 闭包捕获 `layoutService` 等 | VSCode 风格：使用 `ServicesAccessor` 参数 `accessor.get(IXxx)` 取服务 |
+
+Contribution → Phase 调度表：
+- `BlockStartup` (Starting)：`BuiltInViewContainersContribution`
+- `BlockRestore` (Ready)：`LayoutCommandsContribution` / `CommandPaletteContribution` / `MenuPlacementsContribution`
+- `AfterRestore` (Restored)：`StatusBarDefaultsContribution`
+
+### 测试覆盖
+
+| | Before（主题 3 完成时） | After |
+|---|---|---|
+| `@universe-editor/platform` 测试数 | 204 | **213**（+9：`part.test.ts`） |
+| `@universe-editor/editor` 测试数 | 53 | **74**（+21） |
+| 新增测试套件 | — | `part.test.ts` (9) / `LayoutService.parts.test.ts` (7) / `Parts.test.ts` (5) / `LayoutCommandsContribution.test.ts` (6) / `BuiltInViewContainersContribution.test.ts` (3) |
+
+### 集成验证
+
+- `pnpm check`（lint + typecheck + test + build）：✅ 全绿
+- 桌面端 `electron-vite build`：✅（main 6.52 kB / preload 0.77 kB / renderer 757.14 kB）
+- 既有六个 React 组件 / CSS / ViewContainer-driven 渲染逻辑零回归
+- 命令保持等价：Ctrl+B / Ctrl+Alt+B / Ctrl+J / Ctrl+Shift+P 与原有 `registerBuiltInContributions` 同名同行为
+
+### 边界（按计划保持的"不做"清单）
+
+- **不**改造 TitleBar / MenuBar 为 Part（当前不受 LayoutService 管控，留待后续 banner / chat bar 主题）
+- **不**移植 VSCode 的 `PartLayout` 嵌套（header/content/footer 子区域计算）
+- **不**移植 `Themable / Component` 继承链（样式仍由 CSS Module + 全局 CSS Variables 控制）
+- **不**实现 ID-based `lazy: true` Contribution 高级选项（5 个内置 contribution 都是同步小任务，足够）
+- **不**做 `PartId` → `PartDescriptor` 对象迁移（`const enum` 保持，对内调用零改动）
+- **不**清理 `Panel.tsx` 的 `BUILT_IN_TABS` 硬编码（主题 5 范畴）
+- **不**新增可选的 `registerWorkbenchContribution(id, ctor, phase)` 包装函数（直接 `ContributionsRegistry.registerContribution` 已足够清晰）
+

@@ -1,7 +1,8 @@
 import { type ComponentType } from 'react'
 import { EditorRegistry, IEditorService } from '@universe-editor/platform'
-import type { IEditorInput } from '@universe-editor/platform'
+import type { IEditorInput, IPart } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { usePartContainer } from '../usePartContainer.js'
 import styles from './EditorArea.module.css'
 
 /** Registry of React components keyed by IEditorProvider.componentKey. */
@@ -63,10 +64,11 @@ function EditorTab({
   )
 }
 
-export function EditorArea() {
+export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
   const editorService = useService(IEditorService)
   const openEditors = useObservable(editorService.openEditors)
   const activeEditor = useObservable(editorService.activeEditor)
+  const containerRef = usePartContainer(part)
 
   const renderContent = () => {
     if (!activeEditor) {
@@ -96,7 +98,7 @@ export function EditorArea() {
   }
 
   return (
-    <div className={styles['editorArea']}>
+    <div ref={containerRef} className={styles['editorArea']}>
       {openEditors.length > 0 && (
         <div className={styles['tabBar']} role="tablist">
           {openEditors.map((e) => (

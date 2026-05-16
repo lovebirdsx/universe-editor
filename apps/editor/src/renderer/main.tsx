@@ -18,14 +18,6 @@ import {
   IStorageService,
   ContributionService,
   IContributionService,
-  KeybindingsRegistry,
-  CommandsRegistry,
-  MenuRegistry,
-  MenuId,
-  StatusBarAlignment,
-  ViewContainerRegistry,
-  ViewContainerLocation,
-  PartId,
   ProxyChannel,
   DisposableTracker,
   setDisposableTracker,
@@ -42,148 +34,10 @@ import { ViewsService } from './workbench/sidebar/ViewsService.js'
 import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
+import { ALL_PART_CTORS } from './workbench/parts/index.js'
+// Side-effect import: registers built-in contributions with ContributionsRegistry.
+import './contributions/index.js'
 import './workbench.css'
-
-interface BuiltInDeps {
-  lifecycle: LifecycleService
-  statusBar: StatusBarService
-  layoutService: LayoutService
-  viewsService: ViewsService
-  quickInputService: QuickInputService
-  commandService: CommandService
-}
-
-function registerBuiltInContributions(deps: BuiltInDeps): void {
-  const { lifecycle, statusBar, layoutService, viewsService, quickInputService, commandService } =
-    deps
-
-  // -- Commands + keybindings --
-
-  CommandsRegistry.registerCommand(
-    'workbench.action.toggleSidebarVisibility',
-    () => layoutService.toggleVisible(PartId.SideBar),
-    { description: 'Toggle Primary Side Bar', category: 'View' },
-  )
-  KeybindingsRegistry.registerKeybinding({
-    key: 'ctrl+b',
-    command: 'workbench.action.toggleSidebarVisibility',
-  })
-
-  CommandsRegistry.registerCommand(
-    'workbench.action.toggleSecondarySidebarVisibility',
-    () => {
-      layoutService.toggleVisible(PartId.SecondarySideBar)
-      if (layoutService.getVisible(PartId.SecondarySideBar)) {
-        const activeId = viewsService.getActiveViewContainerId(
-          ViewContainerLocation.SecondarySideBar,
-        )
-        if (!activeId) viewsService.openViewContainer('workbench.view.outline')
-      }
-    },
-    { description: 'Toggle Secondary Side Bar', category: 'View' },
-  )
-  KeybindingsRegistry.registerKeybinding({
-    key: 'ctrl+alt+b',
-    command: 'workbench.action.toggleSecondarySidebarVisibility',
-  })
-
-  CommandsRegistry.registerCommand(
-    'workbench.action.togglePanel',
-    () => layoutService.toggleVisible(PartId.Panel),
-    { description: 'Toggle Panel', category: 'View' },
-  )
-  KeybindingsRegistry.registerKeybinding({
-    key: 'ctrl+j',
-    command: 'workbench.action.togglePanel',
-  })
-
-  CommandsRegistry.registerCommand(
-    'workbench.action.showCommands',
-    async () => {
-      const commands = [...CommandsRegistry.getCommands().values()].map((cmd) => ({
-        id: cmd.id,
-        label: cmd.metadata?.description ?? cmd.id,
-        ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
-      }))
-      const selected = await quickInputService.pick(commands, {
-        id: 'workbench.commandPalette',
-        placeholder: 'Type a command name…',
-      })
-      if (selected) {
-        void commandService.executeCommand(selected.id)
-      }
-    },
-    { description: 'Show All Commands', category: 'View' },
-  )
-  KeybindingsRegistry.registerKeybinding({
-    key: 'ctrl+shift+p',
-    command: 'workbench.action.showCommands',
-  })
-
-  // -- Menu placements --
-
-  MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
-    command: 'workbench.action.showCommands',
-    group: '1_open',
-    order: 1,
-  })
-  MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
-    command: 'workbench.action.toggleSidebarVisibility',
-    group: '2_layout',
-    order: 1,
-  })
-  MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
-    command: 'workbench.action.toggleSecondarySidebarVisibility',
-    group: '2_layout',
-    order: 2,
-  })
-  MenuRegistry.addMenuItem(MenuId.MenubarViewMenu, {
-    command: 'workbench.action.togglePanel',
-    group: '2_layout',
-    order: 3,
-  })
-
-  MenuRegistry.addMenuItem(MenuId.CommandPalette, {
-    command: 'workbench.action.showCommands',
-  })
-  MenuRegistry.addMenuItem(MenuId.CommandPalette, {
-    command: 'workbench.action.toggleSidebarVisibility',
-  })
-  MenuRegistry.addMenuItem(MenuId.CommandPalette, {
-    command: 'workbench.action.toggleSecondarySidebarVisibility',
-  })
-  MenuRegistry.addMenuItem(MenuId.CommandPalette, {
-    command: 'workbench.action.togglePanel',
-  })
-
-  // Default status bar entries (added when lifecycle reaches Ready)
-  void lifecycle.when(LifecyclePhase.Ready).then(() => {
-    statusBar.addEntry({
-      text: 'Status Bar',
-      tooltip: 'This is the status bar',
-      alignment: StatusBarAlignment.Right,
-      priority: 100,
-    })
-  })
-
-  // Built-in Explorer view container
-  ViewContainerRegistry.registerViewContainer({
-    id: 'workbench.view.explorer',
-    label: 'Explorer',
-    icon: 'files',
-    order: 1,
-    location: ViewContainerLocation.SideBar,
-  })
-
-  // Built-in Outline view container (secondary sidebar)
-  ViewContainerRegistry.registerViewContainer({
-    id: 'workbench.view.outline',
-    label: 'Outline',
-    icon: 'search',
-    order: 1,
-    location: ViewContainerLocation.SecondarySideBar,
-  })
-}
 
 function bootstrapWorkbench(): void {
   // Dev-only: track Disposable leaks. Report on beforeunload.
@@ -250,25 +104,22 @@ function bootstrapWorkbench(): void {
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)
 
-  // Contribution service wires lifecycle → contributions auto-start
+  // Instantiate the six workbench Parts. Each Part auto-registers with the
+  // LayoutService on construction; React lookups (`getPart`) resolve them.
+  for (const Ctor of ALL_PART_CTORS) {
+    instantiation.createInstance(Ctor)
+  }
+
+  // ContributionService wires lifecycle → built-in contributions auto-instantiate.
+  // The side-effect import at the top of this file populated the registry.
   const contributionService = new ContributionService(lifecycle, instantiation)
   services.set(IContributionService, contributionService)
-
-  // Register built-in contributions
-  registerBuiltInContributions({
-    lifecycle,
-    statusBar: statusBarService,
-    layoutService,
-    viewsService,
-    quickInputService,
-    commandService,
-  })
 
   // Create default output channel
   const mainChannel = outputService.createChannel('Universe Editor')
   mainChannel.appendLine('[Workbench] Starting up…')
 
-  // Advance to Ready before mounting React
+  // Advance to Ready before mounting React (triggers BlockRestore contributions)
   lifecycle.setPhase(LifecyclePhase.Ready)
 
   // Mount

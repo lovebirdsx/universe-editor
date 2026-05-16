@@ -4,8 +4,9 @@ import {
   ViewContainerLocation,
   IViewsService,
 } from '@universe-editor/platform'
-import type { IViewContainerDescriptor } from '@universe-editor/platform'
+import type { IPart, IViewContainerDescriptor } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { usePartContainer } from '../usePartContainer.js'
 import { resolveActivityIcon } from './icon-map.js'
 import styles from './ActivityBar.module.css'
 
@@ -35,11 +36,12 @@ function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps
   )
 }
 
-export function ActivityBar() {
+export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
   const viewsService = useService(IViewsService)
   const activeContainerByLocation = useObservable(viewsService.activeContainerByLocation)
   const activeId = activeContainerByLocation[ViewContainerLocation.SideBar]
   const [containers, setContainers] = useState<IViewContainerDescriptor[]>([])
+  const containerRef = usePartContainer<HTMLElement>(part)
 
   useEffect(() => {
     const refresh = () => {
@@ -62,7 +64,7 @@ export function ActivityBar() {
   )
 
   return (
-    <nav className={styles['activitybar']} aria-label="Activity Bar">
+    <nav ref={containerRef} className={styles['activitybar']} aria-label="Activity Bar">
       <div className={styles['items']}>
         {containers.map((c) => (
           <ActivityBarItem

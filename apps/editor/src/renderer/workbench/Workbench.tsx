@@ -28,6 +28,15 @@ function WorkbenchShell() {
   const secondarySidebarVisible = visible[PartId.SecondarySideBar]
   const panelVisible = visible[PartId.Panel]
 
+  // Look up Parts registered by main.tsx's bootstrap. Parts are singletons —
+  // they live for the lifetime of the workbench, so this lookup happens once.
+  const activityBarPart = layoutService.getPart(PartId.ActivityBar)
+  const sideBarPart = layoutService.getPart(PartId.SideBar)
+  const secondarySideBarPart = layoutService.getPart(PartId.SecondarySideBar)
+  const editorAreaPart = layoutService.getPart(PartId.EditorArea)
+  const panelPart = layoutService.getPart(PartId.Panel)
+  const statusBarPart = layoutService.getPart(PartId.StatusBar)
+
   useEffect(() => {
     void layoutService.load()
   }, [layoutService])
@@ -56,12 +65,12 @@ function WorkbenchShell() {
         onSecondarySidebarResize={onSecondarySidebarResize}
         onPanelResize={onPanelResize}
         titlebar={<TitleBar />}
-        activitybar={<ActivityBar />}
-        sidebar={<SideBar />}
-        secondarySidebar={<SecondarySideBar />}
-        editor={<EditorArea />}
-        panel={<Panel />}
-        statusbar={<StatusBar />}
+        activitybar={<ActivityBar part={activityBarPart} />}
+        sidebar={<SideBar part={sideBarPart} />}
+        secondarySidebar={<SecondarySideBar part={secondarySideBarPart} />}
+        editor={<EditorArea part={editorAreaPart} />}
+        panel={<Panel part={panelPart} />}
+        statusbar={<StatusBar part={statusBarPart} />}
       />
       <QuickInputPortal />
     </>

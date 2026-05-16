@@ -49,6 +49,7 @@ export * from './storage/storageService.js'
 
 // workbench service interfaces
 export * from './workbench/layoutService.js'
+export * from './workbench/part.js'
 export * from './workbench/viewRegistry.js'
 export * from './workbench/viewsService.js'
 export * from './workbench/editorService.js'
