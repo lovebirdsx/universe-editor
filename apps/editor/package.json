@@ -18,7 +18,6 @@
   "dependencies": {
     "@fontsource/roboto": "catalog:",
     "@universe-editor/platform": "workspace:*",
-    "@universe-editor/shared": "workspace:*",
     "allotment": "catalog:",
     "lucide-react": "catalog:",
     "monaco-editor": "catalog:"

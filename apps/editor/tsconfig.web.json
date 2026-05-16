@@ -13,7 +13,6 @@
   },
   "include": ["src/renderer", "src/shared"],
   "references": [
-    { "path": "../../packages/shared" },
     { "path": "../../packages/platform" }
   ]
 }
