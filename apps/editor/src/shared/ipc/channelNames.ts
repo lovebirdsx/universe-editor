@@ -14,6 +14,7 @@ export const ServiceChannels = {
   FileSystem: 'fileSystem',
   FileWatcher: 'fileWatcher',
   Workspace: 'workspace',
+  UserData: 'userData',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

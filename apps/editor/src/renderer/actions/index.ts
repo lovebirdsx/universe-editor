@@ -31,7 +31,11 @@ import {
   SplitEditorUpAction,
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
-import { OpenKeybindingsEditorAction } from './preferencesActions.js'
+import {
+  OpenKeybindingsEditorAction,
+  OpenKeybindingsJsonAction,
+  OpenSettingsJsonAction,
+} from './preferencesActions.js'
 import { AboutAction, CloseWindowAction, ToggleDevToolsAction } from './windowActions.js'
 import {
   ClearRecentWorkspacesAction,
@@ -95,6 +99,8 @@ registerAction2(FocusActiveEditorGroupAction)
 // Preferences
 registerAction2(OpenSettingsAction)
 registerAction2(OpenKeybindingsEditorAction)
+registerAction2(OpenSettingsJsonAction)
+registerAction2(OpenKeybindingsJsonAction)
 
 // Workspace
 registerAction2(OpenFolderAction)

@@ -1,9 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  User keybinding overrides: load from storage on startup, apply to
- *  KeybindingsRegistry at runtime, persist changes back to storage.
+ *  File-backed user keybinding overrides. Reads keybindings.json on startup
+ *  and on every external edit, applies entries to KeybindingsRegistry, and
+ *  persists changes back when setKeybinding()/resetKeybinding() are called.
+ *
+ *  File format mirrors VSCode:
+ *    [
+ *      { "key": "ctrl+shift+b", "command": "workbench.action.foo", "when": "..." },
+ *      { "key": "ctrl+k", "command": "-workbench.action.bar" }   // "-" = disable default
+ *    ]
  *--------------------------------------------------------------------------------------------*/
 
+import { parse, type ParseError } from 'jsonc-parser'
 import {
   createDecorator,
   Disposable,
@@ -11,8 +19,10 @@ import {
   type Event,
   type IDisposable,
   IStorageService,
+  IUserDataFilesService,
   KeybindingsRegistry,
   type IKeybindingItem,
+  UserDataFile,
 } from '@universe-editor/platform'
 import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
 
@@ -23,23 +33,75 @@ export interface IUserKeybindingEntry {
   when?: string
 }
 
+interface FileKeybindingEntry {
+  key?: string
+  command: string
+  when?: string
+}
+
 export interface IUserKeybindingsService {
   readonly _serviceBrand: undefined
   readonly onDidChange: Event<void>
   readonly userEntries: readonly IUserKeybindingEntry[]
-  /** Load persisted entries and apply them. Call once during bootstrap. */
   initialize(): Promise<void>
   setKeybinding(command: string, key: string | null, when?: string): void
   resetKeybinding(command: string): void
   getUserEntry(command: string): IUserKeybindingEntry | undefined
-  /** Formatted display string for the command's default (pre-user) keybinding. */
   getDefaultKey(command: string): string | undefined
 }
 
 export const IUserKeybindingsService =
   createDecorator<IUserKeybindingsService>('userKeybindingsService')
 
-const STORAGE_KEY = 'workbench.userKeybindings'
+const LEGACY_STORAGE_KEY = 'workbench.userKeybindings'
+
+function entryToFile(entry: IUserKeybindingEntry): FileKeybindingEntry {
+  if (entry.key === null) {
+    return {
+      command: '-' + entry.command,
+      ...(entry.when !== undefined ? { when: entry.when } : {}),
+    }
+  }
+  return {
+    key: entry.key,
+    command: entry.command,
+    ...(entry.when !== undefined ? { when: entry.when } : {}),
+  }
+}
+
+function fileToEntry(raw: FileKeybindingEntry): IUserKeybindingEntry | null {
+  if (typeof raw.command !== 'string' || raw.command.length === 0) return null
+  if (raw.command.startsWith('-')) {
+    const cmd = raw.command.slice(1)
+    if (cmd.length === 0) return null
+    return {
+      command: cmd,
+      key: null,
+      ...(typeof raw.when === 'string' ? { when: raw.when } : {}),
+    }
+  }
+  if (typeof raw.key !== 'string' || raw.key.length === 0) return null
+  return {
+    command: raw.command,
+    key: raw.key,
+    ...(typeof raw.when === 'string' ? { when: raw.when } : {}),
+  }
+}
+
+function parseKeybindingsFile(text: string): IUserKeybindingEntry[] {
+  if (text.trim() === '') return []
+  const errors: ParseError[] = []
+  const parsed: unknown = parse(text, errors, { allowTrailingComma: true })
+  if (errors.length > 0 || !Array.isArray(parsed)) return []
+  const result: IUserKeybindingEntry[] = []
+  for (const raw of parsed) {
+    if (raw && typeof raw === 'object') {
+      const entry = fileToEntry(raw as FileKeybindingEntry)
+      if (entry) result.push(entry)
+    }
+  }
+  return result
+}
 
 export class UserKeybindingsService extends Disposable implements IUserKeybindingsService {
   declare readonly _serviceBrand: undefined
@@ -51,11 +113,17 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   private readonly _registrationDisposables = new Map<string, IDisposable>()
   private readonly _defaultSnapshot = new Map<string, string>()
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {
+  /** Suspend file write-back while we apply an external file change. */
+  private _suspendWriteBack = false
+
+  constructor(
+    @IStorageService private readonly _storage: IStorageService,
+    @IUserDataFilesService private readonly _files: IUserDataFilesService,
+  ) {
     super()
-    // Snapshot defaults now — all registerAction2() calls have already run (they
-    // execute synchronously when their modules are imported, which happens before
-    // bootstrapWorkbench() runs).
+    // Snapshot defaults now — all registerAction2() calls have already run
+    // synchronously when their modules were imported, which happens before
+    // bootstrapWorkbench() runs.
     this._takeDefaultSnapshot()
   }
 
@@ -74,10 +142,15 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   }
 
   async initialize(): Promise<void> {
-    const stored = (await this._storage.get<IUserKeybindingEntry[]>(STORAGE_KEY)) ?? []
-    for (const entry of stored) {
-      this._applyEntry(entry)
-    }
+    await this._migrateLegacyKeybindings()
+    await this._reloadFromFile()
+
+    this._register(
+      this._files.onDidChangeFile((file) => {
+        if (file !== UserDataFile.Keybindings) return
+        void this._reloadFromFile()
+      }),
+    )
   }
 
   get userEntries(): readonly IUserKeybindingEntry[] {
@@ -99,7 +172,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
       ...(when !== undefined ? { when } : {}),
     }
     this._applyEntry(entry)
-    this._save()
+    void this._writeFile()
     this._onDidChange.fire()
   }
 
@@ -110,7 +183,24 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
       this._registrationDisposables.delete(command)
     }
     this._userEntries.delete(command)
-    this._save()
+    void this._writeFile()
+    this._onDidChange.fire()
+  }
+
+  private async _reloadFromFile(): Promise<void> {
+    if (this._suspendWriteBack) return
+    const text = await this._files.read(UserDataFile.Keybindings)
+    const entries = parseKeybindingsFile(text)
+    this._suspendWriteBack = true
+    try {
+      // Drop all previous user-applied registrations.
+      for (const d of this._registrationDisposables.values()) d.dispose()
+      this._registrationDisposables.clear()
+      this._userEntries.clear()
+      for (const entry of entries) this._applyEntry(entry)
+    } finally {
+      this._suspendWriteBack = false
+    }
     this._onDidChange.fire()
   }
 
@@ -125,7 +215,6 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._userEntries.set(entry.command, entry)
 
     if (entry.key === null) {
-      // Disable all current (default) bindings for this command.
       const toNegate: IKeybindingItem[] = KeybindingsRegistry.getAllKeybindings().filter(
         (kb) => kb.command === entry.command && !kb.isNegated,
       )
@@ -150,7 +239,6 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
         dispose: () => disposables.forEach((d) => d.dispose()),
       })
     } else {
-      // Register new binding (LIFO means it takes priority over defaults).
       const d = KeybindingsRegistry.registerKeybinding({
         key: entry.key,
         command: entry.command,
@@ -160,8 +248,21 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     }
   }
 
-  private _save(): void {
-    void this._storage.set(STORAGE_KEY, [...this._userEntries.values()])
+  private async _writeFile(): Promise<void> {
+    const fileEntries = [...this._userEntries.values()].map(entryToFile)
+    const body = `// User keybinding overrides — edit and save to apply immediately.\n${JSON.stringify(fileEntries, null, 2)}\n`
+    await this._files.write(UserDataFile.Keybindings, body)
+  }
+
+  private async _migrateLegacyKeybindings(): Promise<void> {
+    const existing = await this._files.read(UserDataFile.Keybindings)
+    if (existing.trim() !== '') return
+    const legacy = await this._storage.get<IUserKeybindingEntry[]>(LEGACY_STORAGE_KEY)
+    if (!Array.isArray(legacy) || legacy.length === 0) return
+    const fileEntries = legacy.map(entryToFile)
+    const body = `// User keybindings — migrated from previous storage on first launch.\n${JSON.stringify(fileEntries, null, 2)}\n`
+    await this._files.write(UserDataFile.Keybindings, body)
+    await this._storage.set(LEGACY_STORAGE_KEY, [])
   }
 
   override dispose(): void {

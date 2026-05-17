@@ -24,6 +24,7 @@ import {
   IIpcService,
   IStorageService,
   IConfigurationService,
+  IUserDataFilesService,
   IWorkspaceService,
   type IWorkspaceServiceWire,
   ConfigurationService,
@@ -122,6 +123,10 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(
     IFileWatcherService,
     ProxyChannel.toService<IFileWatcherService>(ipcService.getChannel(ServiceChannels.FileWatcher)),
+  )
+  services.set(
+    IUserDataFilesService,
+    ProxyChannel.toService<IUserDataFilesService>(ipcService.getChannel(ServiceChannels.UserData)),
   )
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),

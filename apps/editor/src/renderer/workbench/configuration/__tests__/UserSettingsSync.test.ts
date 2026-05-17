@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   ConfigurationService,
   ConfigurationTarget,
+  Emitter,
   IConfigurationService,
   IStorageService,
+  IUserDataFilesService,
   InstantiationService,
   ServiceCollection,
+  URI,
+  UserDataFile,
+  type UriComponents,
 } from '@universe-editor/platform'
 import { UserSettingsSync, USER_SETTINGS_KEY } from '../UserSettingsSync.js'
 
@@ -25,7 +30,60 @@ class FakeStorage implements IStorageService {
   }
 }
 
-function makeInstance(storage: FakeStorage): {
+class FakeUserData implements IUserDataFilesService {
+  declare readonly _serviceBrand: undefined
+  files = new Map<UserDataFile, string>()
+  writeCalls: Array<{ file: UserDataFile; content: string }> = []
+  setValueCalls: Array<{ file: UserDataFile; path: readonly (string | number)[]; value: unknown }> =
+    []
+  private readonly _emitter = new Emitter<UserDataFile>()
+  readonly onDidChangeFile = this._emitter.event
+
+  async read(file: UserDataFile): Promise<string> {
+    return this.files.get(file) ?? ''
+  }
+  async write(file: UserDataFile, content: string): Promise<void> {
+    this.files.set(file, content)
+    this.writeCalls.push({ file, content })
+  }
+  async setValue(
+    file: UserDataFile,
+    path: readonly (string | number)[],
+    value: unknown,
+  ): Promise<boolean> {
+    this.setValueCalls.push({ file, path, value })
+    // Naive in-memory model: only handle single-key top-level object updates.
+    const current = this.files.get(file) ?? ''
+    let obj: Record<string, unknown> = {}
+    if (current.trim() !== '') {
+      try {
+        obj = JSON.parse(current.replace(/^\/\/[^\n]*\n/gm, ''))
+      } catch {
+        obj = {}
+      }
+    }
+    if (path.length === 1 && typeof path[0] === 'string') {
+      if (value === undefined) {
+        delete obj[path[0]]
+      } else {
+        obj[path[0]] = value
+      }
+    }
+    this.files.set(file, JSON.stringify(obj, null, 2))
+    return true
+  }
+  async getFileUri(_file: UserDataFile): Promise<UriComponents | null> {
+    return URI.file('/fake/path').toJSON()
+  }
+  fire(file: UserDataFile): void {
+    this._emitter.fire(file)
+  }
+}
+
+function makeInstance(
+  storage: FakeStorage,
+  files: FakeUserData,
+): {
   sync: UserSettingsSync
   config: ConfigurationService
 } {
@@ -33,16 +91,21 @@ function makeInstance(storage: FakeStorage): {
   const services = new ServiceCollection()
   services.set(IConfigurationService, config)
   services.set(IStorageService, storage)
+  services.set(IUserDataFilesService, files)
   const inst = new InstantiationService(services)
   const sync = inst.createInstance(UserSettingsSync)
   return { sync, config }
 }
 
 describe('UserSettingsSync', () => {
-  it('initialize() loads stored user settings into the User layer', async () => {
+  it('initialize() loads settings.json into the User layer', async () => {
     const storage = new FakeStorage()
-    storage.preset(USER_SETTINGS_KEY, { 'editor.fontSize': 16, 'workbench.colorTheme': 'light' })
-    const { sync, config } = makeInstance(storage)
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.Settings,
+      '// hello\n{ "editor.fontSize": 16, "workbench.colorTheme": "light" }',
+    )
+    const { sync, config } = makeInstance(storage, files)
 
     await sync.initialize()
     expect(config.get('editor.fontSize')).toBe(16)
@@ -51,65 +114,75 @@ describe('UserSettingsSync', () => {
     config.dispose()
   })
 
-  it('initialize() falls back to {} when storage has no entry', async () => {
+  it('initialize() falls back to {} when settings.json is empty', async () => {
     const storage = new FakeStorage()
-    const { sync, config } = makeInstance(storage)
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
     await sync.initialize()
     expect(config.get('anything')).toBeUndefined()
     sync.dispose()
     config.dispose()
   })
 
-  it('User-layer update is persisted to storage', async () => {
+  it('migrates legacy storage entry into settings.json on first launch', async () => {
     const storage = new FakeStorage()
-    const { sync, config } = makeInstance(storage)
+    storage.preset(USER_SETTINGS_KEY, { 'editor.fontSize': 16 })
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+
+    await sync.initialize()
+    expect(config.get('editor.fontSize')).toBe(16)
+    expect(files.files.get(UserDataFile.Settings)).toContain('"editor.fontSize": 16')
+    expect(await storage.get(USER_SETTINGS_KEY)).toEqual({})
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('User-layer update is persisted to settings.json via setValue', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
     await sync.initialize()
 
     config.update('editor.fontSize', 18, ConfigurationTarget.User)
-    expect(storage.setCalls).toHaveLength(1)
-    expect(storage.setCalls[0]?.key).toBe(USER_SETTINGS_KEY)
-    expect(storage.setCalls[0]?.value).toEqual({ 'editor.fontSize': 18 })
+    // Allow async writeback to fire.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(files.setValueCalls).toHaveLength(1)
+    expect(files.setValueCalls[0]?.path).toEqual(['editor.fontSize'])
+    expect(files.setValueCalls[0]?.value).toBe(18)
     sync.dispose()
     config.dispose()
   })
 
-  it('Memory-target update also triggers storage write (User layer unchanged but snapshot still written)', async () => {
-    // The current sync is naive: it writes on EVERY change event. That is OK
-    // because the snapshot is the User layer only; a Memory write fires the
-    // event but the persisted payload stays correct.
+  it('external file change reloads the User layer', async () => {
     const storage = new FakeStorage()
-    const { sync, config } = makeInstance(storage)
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
     await sync.initialize()
+    expect(config.get('editor.fontSize')).toBeUndefined()
 
-    config.update('foo', 'bar', ConfigurationTarget.Memory)
-    expect(storage.setCalls).toHaveLength(1)
-    expect(storage.setCalls[0]?.value).toEqual({})
+    files.files.set(UserDataFile.Settings, '{ "editor.fontSize": 22 }')
+    files.fire(UserDataFile.Settings)
+    // onDidChangeFile -> async reload; flush microtasks.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(config.get('editor.fontSize')).toBe(22)
     sync.dispose()
     config.dispose()
   })
 
-  it('multiple updates are each persisted', async () => {
+  it('after dispose, no further setValue writes happen', async () => {
     const storage = new FakeStorage()
-    const { sync, config } = makeInstance(storage)
-    await sync.initialize()
-
-    config.update('a', 1, ConfigurationTarget.User)
-    config.update('b', 2, ConfigurationTarget.User)
-    expect(storage.setCalls).toHaveLength(2)
-    expect(storage.setCalls[1]?.value).toEqual({ a: 1, b: 2 })
-    sync.dispose()
-    config.dispose()
-  })
-
-  it('after dispose, further updates do not write to storage', async () => {
-    const storage = new FakeStorage()
-    const { sync, config } = makeInstance(storage)
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
     await sync.initialize()
     sync.dispose()
 
-    storage.setCalls.length = 0
+    files.setValueCalls.length = 0
     config.update('x', 1, ConfigurationTarget.User)
-    expect(storage.setCalls).toHaveLength(0)
+    await Promise.resolve()
+    expect(files.setValueCalls).toHaveLength(0)
     config.dispose()
   })
 })

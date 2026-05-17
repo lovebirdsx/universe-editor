@@ -36,6 +36,9 @@ catalog:
   '@fontsource/roboto': ^5.1.0
   monaco-editor: ^0.52.0
 
+  # JSON with comments (settings.json / keybindings.json)
+  jsonc-parser: ^3.3.1
+
   # Node runtime
   tsx: ^4.19.0
   turbo: ^2.9.14

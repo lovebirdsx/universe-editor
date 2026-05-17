@@ -51,6 +51,9 @@ export * from './host/index.js'
 // storage abstraction
 export * from './storage/storageService.js'
 
+// user data files (settings.json / keybindings.json)
+export * from './userdata/userDataFilesService.js'
+
 // filesystem abstraction
 export * from './files/fileService.js'
 export * from './files/fileWatcher.js'

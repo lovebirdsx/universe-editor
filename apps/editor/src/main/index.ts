@@ -11,6 +11,7 @@ import { FileSystemMainService } from './services/files/fileSystemMainService.js
 import { FileWatcherMainService } from './services/fileWatcher/fileWatcherMainService.js'
 import { WorkspaceMainService } from './services/workspace/workspaceMainService.js'
 import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
+import { UserDataMainService } from './services/userData/userDataMainService.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -32,12 +33,14 @@ let sharedServices: SharedMainServices | null = null
 function getSharedServices(): SharedMainServices {
   if (!sharedServices) {
     const storage = new MainStorageService()
+    const workspace = new WorkspaceMainService(storage, new ElectronFolderDialog())
     sharedServices = {
       storage,
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(),
       fileWatcher: new FileWatcherMainService(),
-      workspace: new WorkspaceMainService(storage, new ElectronFolderDialog()),
+      workspace,
+      userData: new UserDataMainService(workspace),
     }
   }
   return sharedServices
