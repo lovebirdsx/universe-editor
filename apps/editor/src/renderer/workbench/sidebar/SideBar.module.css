@@ -5,6 +5,7 @@
   height: 100%;
   background: var(--color-sidebar-bg, #252526);
   overflow: hidden;
+  outline: none;
 }
 
 .header {

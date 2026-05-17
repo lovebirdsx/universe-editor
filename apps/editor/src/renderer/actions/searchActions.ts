@@ -35,17 +35,20 @@ export class FindInFilesAction extends Action2 {
     const sidebarVisible = layoutService.getVisible(PartId.SideBar)
     const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
     if (sidebarVisible && activeId === 'workbench.view.search') {
-      layoutService.setVisible(PartId.SideBar, false)
+      if (layoutService.getPart(PartId.SideBar)?.isFocused()) {
+        layoutService.setVisible(PartId.SideBar, false)
+        return
+      }
     } else {
       viewsService.openViewContainer('workbench.view.search')
       if (!sidebarVisible) {
         layoutService.setVisible(PartId.SideBar, true)
       }
-      if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-        document.dispatchEvent(
-          new CustomEvent(SEARCH_FOCUS_INPUT_EVENT, { detail: args?.query ?? null }),
-        )
-      }
+    }
+    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+      document.dispatchEvent(
+        new CustomEvent(SEARCH_FOCUS_INPUT_EVENT, { detail: args?.query ?? null }),
+      )
     }
   }
 }

@@ -40,6 +40,29 @@ describe('FindInFilesAction', () => {
     }
   })
 
+  function makeLayoutService(visible: boolean, focused: boolean) {
+    const part = { focus: vi.fn(), isFocused: vi.fn().mockReturnValue(focused) }
+    const setVisible = vi.fn()
+    const mock = {
+      _serviceBrand: undefined,
+      getVisible: vi.fn().mockReturnValue(visible),
+      setVisible,
+      toggleVisible: vi.fn(),
+      getPart: vi.fn().mockReturnValue(part),
+    } as never
+    return { mock, setVisible, part }
+  }
+
+  function makeViewsService(activeId: string | undefined) {
+    const openViewContainer = vi.fn()
+    const mock = {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId: vi.fn().mockReturnValue(activeId),
+    } as never
+    return { mock, openViewContainer }
+  }
+
   it('registers command, keybinding, and F1 menu entry', () => {
     disposables.push(registerAction2(FindInFilesAction))
     expect(CommandsRegistry.getCommand(FindInFilesAction.ID)).toBeDefined()
@@ -51,23 +74,12 @@ describe('FindInFilesAction', () => {
     ).toBe(true)
   })
 
-  it('run() opens the search ViewContainer and dispatches the focus event', async () => {
-    const openViewContainer = vi.fn()
-    const setVisible = vi.fn()
-    const getVisible = vi.fn().mockReturnValue(false)
-    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
+  it('run() shows SideBar and dispatches focus event when hidden', async () => {
+    const layout = makeLayoutService(false, false)
+    const views = makeViewsService(undefined)
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible,
-      setVisible,
-      toggleVisible: vi.fn(),
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
@@ -83,27 +95,42 @@ describe('FindInFilesAction', () => {
     })
 
     document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.search')
-    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
+    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.search')
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
     expect(fired).toBe('foo')
   })
 
-  it('run() hides SideBar when it is visible and search is the active container', async () => {
-    const setVisible = vi.fn()
-    const openViewContainer = vi.fn()
-    const getActiveViewContainerId = vi.fn().mockReturnValue('workbench.view.search')
+  it('run() dispatches focus event when search is visible but SideBar not focused', async () => {
+    const layout = makeLayoutService(true, false)
+    const views = makeViewsService('workbench.view.search')
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible: vi.fn().mockReturnValue(true),
-      setVisible,
-      toggleVisible: vi.fn(),
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(FindInFilesAction))
+
+    let fired: string | null | undefined = 'unset'
+    const listener = (e: Event) => {
+      fired = (e as CustomEvent<string | null>).detail
+    }
+    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+    })
+
+    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
+    expect(fired).toBeNull()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+    expect(views.openViewContainer).not.toHaveBeenCalled()
+  })
+
+  it('run() hides SideBar when search is active and SideBar is focused', async () => {
+    const layout = makeLayoutService(true, true)
+    const views = makeViewsService('workbench.view.search')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
@@ -117,27 +144,17 @@ describe('FindInFilesAction', () => {
     })
     document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
 
-    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
-    expect(openViewContainer).not.toHaveBeenCalled()
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
+    expect(views.openViewContainer).not.toHaveBeenCalled()
     expect(fired).toBe('unset')
   })
 
-  it('run() switches to search without hiding when SideBar is visible with a different container', async () => {
-    const setVisible = vi.fn()
-    const openViewContainer = vi.fn()
-    const getActiveViewContainerId = vi.fn().mockReturnValue('workbench.view.explorer')
+  it('run() switches to search and dispatches focus event when a different container is active', async () => {
+    const layout = makeLayoutService(true, false)
+    const views = makeViewsService('workbench.view.explorer')
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible: vi.fn().mockReturnValue(true),
-      setVisible,
-      toggleVisible: vi.fn(),
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
@@ -151,26 +168,17 @@ describe('FindInFilesAction', () => {
     })
     document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
 
-    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.search')
-    expect(setVisible).not.toHaveBeenCalled()
+    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.search')
+    expect(layout.setVisible).not.toHaveBeenCalled()
     expect(fired).not.toBe('unset')
   })
 
   it('run() with no query dispatches null detail', async () => {
-    const openViewContainer = vi.fn()
-    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
+    const layout = makeLayoutService(false, false)
+    const views = makeViewsService(undefined)
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible: () => true,
-      setVisible: vi.fn(),
-      toggleVisible: vi.fn(),
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 

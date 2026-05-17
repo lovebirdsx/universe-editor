@@ -43,12 +43,17 @@ export class ShowExplorerAction extends Action2 {
     const sidebarVisible = layoutService.getVisible(PartId.SideBar)
     const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
     if (sidebarVisible && activeId === 'workbench.view.explorer') {
-      layoutService.setVisible(PartId.SideBar, false)
+      if (layoutService.getPart(PartId.SideBar)?.isFocused()) {
+        layoutService.setVisible(PartId.SideBar, false)
+      } else {
+        layoutService.getPart(PartId.SideBar)?.focus()
+      }
     } else {
       viewsService.openViewContainer('workbench.view.explorer')
       if (!sidebarVisible) {
         layoutService.setVisible(PartId.SideBar, true)
       }
+      layoutService.getPart(PartId.SideBar)?.focus()
     }
   }
 }

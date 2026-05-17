@@ -271,6 +271,32 @@ describe('ShowExplorerAction', () => {
     while (disposables.length > 0) disposables.pop()?.dispose()
   })
 
+  function makePart(focused: boolean) {
+    return { focus: vi.fn(), isFocused: vi.fn().mockReturnValue(focused) }
+  }
+
+  function makeLayoutService(visible: boolean, focused: boolean) {
+    const part = makePart(focused)
+    const setVisible = vi.fn()
+    const mock = {
+      _serviceBrand: undefined,
+      getVisible: vi.fn().mockReturnValue(visible),
+      setVisible,
+      getPart: vi.fn().mockReturnValue(part),
+    } as never
+    return { mock, setVisible, part }
+  }
+
+  function makeViewsService(activeId: string | undefined) {
+    const openViewContainer = vi.fn()
+    const mock = {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId: vi.fn().mockReturnValue(activeId),
+    } as never
+    return { mock, openViewContainer }
+  }
+
   it('registerAction2(ShowExplorerAction) wires command + keybinding ctrl+shift+e + F1 menu', () => {
     disposables.push(registerAction2(ShowExplorerAction))
     expect(CommandsRegistry.getCommand(ShowExplorerAction.ID)).toBeDefined()
@@ -282,22 +308,12 @@ describe('ShowExplorerAction', () => {
     ).toBe(true)
   })
 
-  it('run() makes SideBar visible when it is hidden, then opens explorer container', async () => {
-    const setVisible = vi.fn()
-    const getVisible = vi.fn().mockReturnValue(false)
-    const openViewContainer = vi.fn()
-    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
+  it('run() shows SideBar and focuses when it is hidden', async () => {
+    const layout = makeLayoutService(false, false)
+    const views = makeViewsService(undefined)
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible,
-      setVisible,
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(ShowExplorerAction))
 
@@ -305,29 +321,17 @@ describe('ShowExplorerAction', () => {
       CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
-    expect(getVisible).toHaveBeenCalledWith(PartId.SideBar)
-    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
-    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
+    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
+    expect(layout.part.focus).toHaveBeenCalled()
   })
 
-  it('run() hides SideBar when it is visible and explorer is the active container', async () => {
-    const setVisible = vi.fn()
-    const getVisible = vi.fn().mockReturnValue(true)
-    const openViewContainer = vi.fn()
-    const getActiveViewContainerId = vi
-      .fn()
-      .mockReturnValue('workbench.view.explorer')
+  it('run() focuses SideBar when visible with explorer active but not focused', async () => {
+    const layout = makeLayoutService(true, false)
+    const views = makeViewsService('workbench.view.explorer')
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible,
-      setVisible,
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(ShowExplorerAction))
 
@@ -335,26 +339,16 @@ describe('ShowExplorerAction', () => {
       CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
-    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
-    expect(openViewContainer).not.toHaveBeenCalled()
+    expect(layout.part.focus).toHaveBeenCalled()
+    expect(layout.setVisible).not.toHaveBeenCalled()
   })
 
-  it('run() switches to explorer without toggling when SideBar is visible with a different container', async () => {
-    const setVisible = vi.fn()
-    const getVisible = vi.fn().mockReturnValue(true)
-    const openViewContainer = vi.fn()
-    const getActiveViewContainerId = vi.fn().mockReturnValue('workbench.view.search')
+  it('run() hides SideBar when visible with explorer active and focused', async () => {
+    const layout = makeLayoutService(true, true)
+    const views = makeViewsService('workbench.view.explorer')
     const services = new ServiceCollection()
-    services.set(ILayoutService, {
-      _serviceBrand: undefined,
-      getVisible,
-      setVisible,
-    } as never)
-    services.set(IViewsService, {
-      _serviceBrand: undefined,
-      openViewContainer,
-      getActiveViewContainerId,
-    } as never)
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(ShowExplorerAction))
 
@@ -362,7 +356,26 @@ describe('ShowExplorerAction', () => {
       CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
-    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
-    expect(setVisible).not.toHaveBeenCalled()
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
+    expect(views.openViewContainer).not.toHaveBeenCalled()
+    expect(layout.part.focus).not.toHaveBeenCalled()
+  })
+
+  it('run() switches to explorer and focuses when SideBar is visible with a different container', async () => {
+    const layout = makeLayoutService(true, false)
+    const views = makeViewsService('workbench.view.search')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, layout.mock)
+    services.set(IViewsService, views.mock)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExplorerAction))
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+    })
+
+    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
+    expect(layout.setVisible).not.toHaveBeenCalled()
+    expect(layout.part.focus).toHaveBeenCalled()
   })
 })

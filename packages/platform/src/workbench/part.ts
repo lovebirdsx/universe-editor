@@ -22,6 +22,7 @@ import type { ILayoutService, PartId } from './layoutService.js'
  */
 export interface IPartContainerElement {
   focus(): void
+  contains?(node: unknown): boolean
 }
 
 export interface IPart extends IDisposable {
@@ -36,6 +37,8 @@ export interface IPart extends IDisposable {
   getContainer(): IPartContainerElement | undefined
   /** Focus the part's main interactive region. No-op if not mounted. */
   focus(): void
+  /** Returns true if the part's container currently contains the active focus target. */
+  isFocused(): boolean
   /** Optional layout callback for future dimension-driven parts. */
   layout?(dimension: { width: number; height: number }): void
 }
@@ -80,6 +83,14 @@ export abstract class Part extends Disposable implements IPart {
   focus(): void {
     const target = this._focusTarget ?? this._container
     target?.focus()
+  }
+
+  isFocused(): boolean {
+    const container = this._container
+    if (!container) return false
+    const g = globalThis as unknown as { document?: { activeElement: unknown } }
+    const active = g.document?.activeElement ?? null
+    return typeof container.contains === 'function' && container.contains(active)
   }
 
   /** @internal Called by the view layer when the container mounts / unmounts. */
