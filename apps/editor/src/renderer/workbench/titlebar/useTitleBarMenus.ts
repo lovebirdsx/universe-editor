@@ -8,13 +8,12 @@ import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
 import {
   CommandsRegistry,
   IContextKeyService,
-  KeybindingsRegistry,
   MenuRegistry,
   isSubmenuEntry,
 } from '@universe-editor/platform'
 import type { IMenuItem, ISubmenuItem, MenuId } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import { formatChord, formatKey } from './keybindingFormat.js'
+import { resolveShortcut } from './keybindingFormat.js'
 
 export interface ResolvedCommandItem {
   kind: 'command'
@@ -40,17 +39,6 @@ function resolveLabel(item: IMenuItem): string {
   if (item.title) return item.title
   const cmd = CommandsRegistry.getCommand(item.command)
   return cmd?.metadata?.description ?? item.command
-}
-
-function resolveShortcut(command: string): string | undefined {
-  const all = KeybindingsRegistry.getAllKeybindings()
-  for (let i = all.length - 1; i >= 0; i--) {
-    const kb = all[i]
-    if (!kb || kb.command !== command || kb.isNegated) continue
-    if (kb.chords) return formatChord(kb.chords)
-    if (kb.key !== undefined) return formatKey(kb.key)
-  }
-  return undefined
 }
 
 function resolveSubmenuEntry(entry: ISubmenuItem): ResolvedSubmenuItem {

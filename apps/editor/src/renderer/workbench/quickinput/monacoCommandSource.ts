@@ -22,6 +22,27 @@ export function isMonacoCommandItem(item: IQuickPickItem): item is MonacoCommand
   return (item as Partial<MonacoCommandItem>)._monaco === true
 }
 
+interface MonacoKeybindingService {
+  lookupKeybinding(commandId: string): { getLabel(): string | null } | null
+}
+
+function getMonacoKeybindingLabel(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  actionId: string,
+): string | undefined {
+  try {
+    const bag = editor as unknown as {
+      _standaloneKeybindingService?: MonacoKeybindingService
+      _keybindingService?: MonacoKeybindingService
+    }
+    const svc = bag._standaloneKeybindingService ?? bag._keybindingService
+    const label = svc?.lookupKeybinding(actionId)?.getLabel()
+    return label ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
 export function collectMonacoCommands(groupsService: IEditorGroupsService): MonacoCommandItem[] {
   const active = groupsService.activeGroup.activeEditor
   if (!(active instanceof FileEditorInput)) return []
@@ -30,12 +51,16 @@ export function collectMonacoCommands(groupsService: IEditorGroupsService): Mona
   return editor
     .getSupportedActions()
     .filter((action) => action.isSupported())
-    .map((action) => ({
-      id: action.id,
-      label: action.label || action.id,
-      description: 'Monaco',
-      _monaco: true,
-      _editor: editor,
-      _actionId: action.id,
-    }))
+    .map((action) => {
+      const keybinding = getMonacoKeybindingLabel(editor, action.id)
+      return {
+        id: action.id,
+        label: action.label || action.id,
+        description: 'Monaco',
+        ...(keybinding !== undefined ? { keybinding } : {}),
+        _monaco: true as const,
+        _editor: editor,
+        _actionId: action.id,
+      }
+    })
 }

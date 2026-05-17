@@ -23,6 +23,7 @@ import {
   isMonacoCommandItem,
   type MonacoCommandItem,
 } from '../workbench/quickinput/monacoCommandSource.js'
+import { resolveShortcut } from '../workbench/titlebar/keybindingFormat.js'
 
 export class ToggleSidebarVisibilityAction extends Action2 {
   static readonly ID = 'workbench.action.toggleSidebarVisibility'
@@ -99,11 +100,15 @@ export class ShowCommandsAction extends Action2 {
     const groupsService = accessor.get(IEditorGroupsService)
 
     const registryItems: IQuickPickItem[] = [...CommandsRegistry.getCommands().values()].map(
-      (cmd) => ({
-        id: cmd.id,
-        label: cmd.metadata?.description ?? cmd.id,
-        ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
-      }),
+      (cmd) => {
+        const keybinding = resolveShortcut(cmd.id)
+        return {
+          id: cmd.id,
+          label: cmd.metadata?.description ?? cmd.id,
+          ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
+          ...(keybinding !== undefined ? { keybinding } : {}),
+        }
+      },
     )
     const monacoItems: MonacoCommandItem[] = collectMonacoCommands(groupsService)
     // De-dupe: a Monaco action id can collide with a project command id; prefer

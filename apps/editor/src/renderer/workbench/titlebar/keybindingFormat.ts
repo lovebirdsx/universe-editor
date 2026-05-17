@@ -4,6 +4,8 @@
  *  in human-readable form for menus / tooltips / status bar.
  *--------------------------------------------------------------------------------------------*/
 
+import { KeybindingsRegistry } from '@universe-editor/platform'
+
 export function formatKey(key: string): string {
   return key
     .split('+')
@@ -21,4 +23,15 @@ export function formatKey(key: string): string {
 
 export function formatChord(chords: readonly string[]): string {
   return chords.map(formatKey).join(' ')
+}
+
+export function resolveShortcut(command: string): string | undefined {
+  const all = KeybindingsRegistry.getAllKeybindings()
+  for (let i = all.length - 1; i >= 0; i--) {
+    const kb = all[i]
+    if (!kb || kb.command !== command || kb.isNegated) continue
+    if (kb.chords) return formatChord(kb.chords)
+    if (kb.key !== undefined) return formatKey(kb.key)
+  }
+  return undefined
 }

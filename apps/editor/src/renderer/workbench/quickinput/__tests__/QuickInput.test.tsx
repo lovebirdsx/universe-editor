@@ -52,4 +52,18 @@ describe('QuickPickPanel prefix mode', () => {
     expect(screen.queryByText('Format Document')).toBeNull()
     expect(screen.getByText('Go to Line')).toBeTruthy()
   })
+
+  it('renders keybinding hint when item has keybinding field', () => {
+    const state = makeState({
+      items: [{ id: 'cmd.format', label: 'Format Document', keybinding: 'Ctrl+Shift+P' }],
+    })
+    render(<QuickPickPanel state={state} onClose={() => undefined} />)
+    expect(screen.getByText('Ctrl+Shift+P')).toBeTruthy()
+  })
+
+  it('does not render keybinding when item has no keybinding field', () => {
+    render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
+    // default items have no keybinding; no unexpected keybinding text should appear
+    expect(screen.queryByText('Ctrl+')).toBeNull()
+  })
 })

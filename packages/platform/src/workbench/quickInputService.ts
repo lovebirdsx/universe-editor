@@ -12,6 +12,7 @@ export interface IQuickPickItem {
   readonly label: string
   readonly description?: string
   readonly detail?: string
+  readonly keybinding?: string
 }
 
 export interface IPickOptions {

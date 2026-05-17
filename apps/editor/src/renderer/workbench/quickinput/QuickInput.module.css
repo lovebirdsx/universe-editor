@@ -84,6 +84,15 @@
   flex-shrink: 0;
 }
 
+.itemKeybinding {
+  font-size: 11px;
+  font-family: monospace;
+  color: var(--color-keybinding-fg, #888888);
+  margin-left: 16px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
 .mruIcon {
   font-size: 11px;
   margin-right: 6px;

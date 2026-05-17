@@ -116,6 +116,9 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
               {!query && mruIds.includes(item.id) && <span className={styles['mruIcon']}>⏱</span>}
               <span className={styles['itemLabel']}>{item.label}</span>
               {item.description && <span className={styles['itemDesc']}>{item.description}</span>}
+              {item.keybinding && (
+                <span className={styles['itemKeybinding']}>{item.keybinding}</span>
+              )}
             </button>
           ))
         )}

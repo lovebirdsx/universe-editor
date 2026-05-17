@@ -33,6 +33,21 @@ function makeFakeEditor(actions: ReadonlyArray<Partial<monaco.editor.IEditorActi
   } as unknown as monaco.editor.IStandaloneCodeEditor
 }
 
+function makeFakeEditorWithKeybindings(
+  actions: ReadonlyArray<Partial<monaco.editor.IEditorAction>>,
+  keybindings: Record<string, string>,
+  field: '_standaloneKeybindingService' | '_keybindingService' = '_standaloneKeybindingService',
+) {
+  const editor = makeFakeEditor(actions) as unknown as Record<string, unknown>
+  editor[field] = {
+    lookupKeybinding: (id: string) => {
+      const label = keybindings[id]
+      return label !== undefined ? { getLabel: () => label } : null
+    },
+  }
+  return editor as unknown as monaco.editor.IStandaloneCodeEditor
+}
+
 afterEach(() => {
   FileEditorRegistry._resetForTests()
 })
@@ -79,6 +94,53 @@ describe('collectMonacoCommands', () => {
       _actionId: 'editor.action.formatDocument',
     })
     expect(items.every(isMonacoCommandItem)).toBe(true)
+  })
+
+  it('populates keybinding field when _standaloneKeybindingService provides a label (real Monaco field)', () => {
+    const input = new FileEditorInput(URI.file('/x.ts'), fileServiceStub)
+    const editor = makeFakeEditorWithKeybindings(
+      [{ id: 'editor.action.formatDocument', label: 'Format Document' }],
+      { 'editor.action.formatDocument': 'Alt+Shift+F' },
+      '_standaloneKeybindingService',
+    )
+    FileEditorRegistry.register(input, editor)
+
+    const items = collectMonacoCommands(makeGroupsService(input))
+    expect(items[0]?.keybinding).toBe('Alt+Shift+F')
+  })
+
+  it('populates keybinding field when _keybindingService provides a label (fallback)', () => {
+    const input = new FileEditorInput(URI.file('/x.ts'), fileServiceStub)
+    const editor = makeFakeEditorWithKeybindings(
+      [{ id: 'editor.action.formatDocument', label: 'Format Document' }],
+      { 'editor.action.formatDocument': 'Alt+Shift+F' },
+      '_keybindingService',
+    )
+    FileEditorRegistry.register(input, editor)
+
+    const items = collectMonacoCommands(makeGroupsService(input))
+    expect(items[0]?.keybinding).toBe('Alt+Shift+F')
+  })
+
+  it('leaves keybinding undefined when no binding is registered for the action', () => {
+    const input = new FileEditorInput(URI.file('/x.ts'), fileServiceStub)
+    const editor = makeFakeEditorWithKeybindings(
+      [{ id: 'editor.action.gotoLine', label: 'Go to Line' }],
+      {},
+    )
+    FileEditorRegistry.register(input, editor)
+
+    const items = collectMonacoCommands(makeGroupsService(input))
+    expect(items[0]?.keybinding).toBeUndefined()
+  })
+
+  it('leaves keybinding undefined and does not throw when no keybinding service is present', () => {
+    const input = new FileEditorInput(URI.file('/x.ts'), fileServiceStub)
+    const editor = makeFakeEditor([{ id: 'editor.action.gotoLine', label: 'Go to Line' }])
+    FileEditorRegistry.register(input, editor)
+
+    const items = collectMonacoCommands(makeGroupsService(input))
+    expect(items[0]?.keybinding).toBeUndefined()
   })
 })
 

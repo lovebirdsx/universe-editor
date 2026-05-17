@@ -200,6 +200,48 @@ describe('Built-in layout Action2s', () => {
     expect(count).toBe(1)
   })
 
+  it('ShowCommands attaches keybinding hint to commands that have bindings', async () => {
+    const pick = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: undefined },
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowCommandsAction))
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
+      await cmd.handler(accessor)
+    })
+    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
+    const item = items?.find((i) => i.id === ShowCommandsAction.ID)
+    // ShowCommandsAction registers [ctrl+shift+p, f1]; resolveShortcut returns the last-registered binding
+    expect(item?.keybinding).toBe('F1')
+  })
+
+  it('ShowCommands leaves keybinding undefined for commands without bindings', async () => {
+    const pick = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: undefined },
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(CommandsRegistry.registerCommand('demo.nokeybinding', () => undefined))
+    disposables.push(registerAction2(ShowCommandsAction))
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
+      await cmd.handler(accessor)
+    })
+    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
+    const item = items?.find((i) => i.id === 'demo.nokeybinding')
+    expect(item?.keybinding).toBeUndefined()
+  })
+
   it('dispose unregisters everything', () => {
     const d = registerAction2(ToggleSidebarVisibilityAction)
     d.dispose()
