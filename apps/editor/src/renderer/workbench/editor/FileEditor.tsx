@@ -11,7 +11,7 @@
 
 import { useEffect, useRef } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
-import { IEditorGroupsService } from '@universe-editor/platform'
+import { ICommandService, IEditorGroupsService } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { monaco } from './monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
@@ -22,6 +22,7 @@ import styles from './FileEditor.module.css'
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
+  const commandService = useService(ICommandService)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
 
@@ -38,12 +39,17 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       insertSpaces: true,
       readOnly: false,
     })
+    // Hijack Monaco's built-in F1 (StandaloneCommandsQuickAccess) so the
+    // global, unified command palette wins regardless of focus.
+    ed.addCommand(monaco.KeyCode.F1, () => {
+      void commandService.executeCommand('workbench.action.showCommands')
+    })
     editorRef.current = ed
     return () => {
       ed.dispose()
       editorRef.current = null
     }
-  }, [])
+  }, [commandService])
 
   // Wire the active input -> model swap + dirty tracking.
   useEffect(() => {

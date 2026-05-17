@@ -16,8 +16,10 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
           setModel: () => {},
           dispose: () => {},
           getModel: () => null,
+          addCommand: () => null,
         }),
       },
+      KeyCode: { F1: 0 },
     },
   }
 })
@@ -53,6 +55,7 @@ vi.mock('../../editor/FileEditorRegistry.js', () => {
 import { cleanup, render } from '@testing-library/react'
 import {
   EditorInput,
+  ICommandService,
   IEditorGroupsService,
   IFileService,
   InstantiationService,
@@ -120,6 +123,10 @@ describe('FileEditor — auto-pin on first edit', () => {
   it('calls pinEditor on the group that owns the input when content changes', async () => {
     const services = new ServiceCollection()
     services.set(IFileService, makeFs())
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: async () => undefined,
+    } as never)
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     const group = new FakeGroup(input)

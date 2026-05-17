@@ -24,8 +24,11 @@ function fuzzyMatch(text: string, query: string): boolean {
   return qi === q.length
 }
 
-function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: () => void }) {
-  const [query, setQuery] = useState('')
+// Exported for unit tests so prefix / filtering behavior can be exercised
+// without booting the full portal + service plumbing.
+export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: () => void }) {
+  const prefix = state.prefix ?? ''
+  const [query, setQuery] = useState(prefix)
   const [focusedIdx, setFocusedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const mruIds = state.mruIds ?? []
@@ -34,9 +37,15 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
     inputRef.current?.focus()
   }, [])
 
-  const filtered = (state.items ?? []).filter((item) =>
-    fuzzyMatch(item.label + ' ' + (item.description ?? ''), query),
-  )
+  const prefixActive = prefix.length > 0 && query.startsWith(prefix)
+  const prefixMissing = prefix.length > 0 && !query.startsWith(prefix)
+  const filterText = prefixActive ? query.slice(prefix.length) : prefix.length > 0 ? '' : query
+
+  const filtered = prefixMissing
+    ? []
+    : (state.items ?? []).filter((item) =>
+        fuzzyMatch(item.label + ' ' + (item.description ?? ''), filterText),
+      )
 
   const sortedFiltered = [...filtered].sort((a, b) => {
     const ai = mruIds.indexOf(a.id)
@@ -90,7 +99,9 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
         />
       </div>
       <div className={styles['list']} role="listbox">
-        {sortedFiltered.length === 0 ? (
+        {prefixMissing ? (
+          <p className={styles['empty']}>Type {`'${prefix}'`} followed by a command name</p>
+        ) : sortedFiltered.length === 0 ? (
           <p className={styles['empty']}>No results</p>
         ) : (
           sortedFiltered.map((item, idx) => (

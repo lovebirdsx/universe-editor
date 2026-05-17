@@ -19,6 +19,13 @@ export interface IPickOptions {
   readonly placeholder?: string
   readonly matchOnDescription?: boolean
   readonly matchOnDetail?: boolean
+  /**
+   * Optional prefix string identifying the picker's mode (VSCode-style quick
+   * access, e.g. ">" for commands). When set, the input is prefilled with this
+   * prefix and filtering only happens against the remainder; if the user wipes
+   * the prefix away, the list is suppressed and a hint is shown instead.
+   */
+  readonly prefix?: string
 }
 
 export interface IInputOptions {

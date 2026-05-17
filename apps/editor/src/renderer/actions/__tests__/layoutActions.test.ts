@@ -4,6 +4,8 @@ import {
   ContextKeyService,
   ICommandService,
   IContextKeyService,
+  IEditorGroupsService,
+  IFileService,
   ILayoutService,
   IQuickInputService,
   IViewsService,
@@ -13,8 +15,10 @@ import {
   MenuRegistry,
   PartId,
   ServiceCollection,
+  URI,
   registerAction2,
   type IDisposable,
+  type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
   ShowCommandsAction,
@@ -22,6 +26,8 @@ import {
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
 } from '../../actions/layoutActions.js'
+import { FileEditorInput } from '../../workbench/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../workbench/editor/FileEditorRegistry.js'
 
 describe('Built-in layout Action2s', () => {
   const disposables: IDisposable[] = []
@@ -105,6 +111,10 @@ describe('Built-in layout Action2s', () => {
     const services = new ServiceCollection()
     services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
     services.set(ICommandService, { _serviceBrand: undefined, executeCommand } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: undefined },
+    } as never)
     const inst = new InstantiationService(services)
     disposables.push(CommandsRegistry.registerCommand('demo.cmd', () => undefined))
     disposables.push(registerAction2(ShowCommandsAction))
@@ -113,7 +123,81 @@ describe('Built-in layout Action2s', () => {
       await cmd.handler(accessor)
     })
     expect(pick).toHaveBeenCalled()
+    const pickedOptions = pick.mock.calls[0]?.[1] as { prefix?: string } | undefined
+    expect(pickedOptions?.prefix).toBe('>')
     expect(executeCommand).toHaveBeenCalledWith('demo.cmd')
+  })
+
+  it('ShowCommands includes Monaco actions from the active FileEditor', async () => {
+    const input = new FileEditorInput(URI.file('/a.ts'), {} as IFileService)
+    const fakeEditor = {
+      getSupportedActions: () => [
+        {
+          id: 'editor.action.formatDocument',
+          label: 'Format Document',
+          alias: '',
+          metadata: undefined,
+          isSupported: () => true,
+          run: () => Promise.resolve(),
+        },
+      ],
+    }
+    FileEditorRegistry.register(input, fakeEditor as never)
+    disposables.push({ dispose: () => FileEditorRegistry._resetForTests() })
+
+    const pick = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: input },
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowCommandsAction))
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
+      await cmd.handler(accessor)
+    })
+    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
+    expect(items?.some((i) => i.id === 'editor.action.formatDocument')).toBe(true)
+  })
+
+  it('ShowCommands deduplicates Monaco actions already registered as project commands', async () => {
+    const input = new FileEditorInput(URI.file('/a.ts'), {} as IFileService)
+    const fakeEditor = {
+      getSupportedActions: () => [
+        {
+          id: 'demo.collide',
+          label: 'Monaco Collide',
+          alias: '',
+          metadata: undefined,
+          isSupported: () => true,
+          run: () => Promise.resolve(),
+        },
+      ],
+    }
+    FileEditorRegistry.register(input, fakeEditor as never)
+    disposables.push({ dispose: () => FileEditorRegistry._resetForTests() })
+    disposables.push(CommandsRegistry.registerCommand('demo.collide', () => undefined))
+
+    const pick = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: input },
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowCommandsAction))
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
+      await cmd.handler(accessor)
+    })
+    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
+    const count = items?.filter((i) => i.id === 'demo.collide').length ?? 0
+    expect(count).toBe(1)
   })
 
   it('dispose unregisters everything', () => {

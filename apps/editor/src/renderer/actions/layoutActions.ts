@@ -7,6 +7,7 @@
 import {
   Action2,
   ICommandService,
+  IEditorGroupsService,
   ILayoutService,
   IQuickInputService,
   IViewsService,
@@ -14,8 +15,14 @@ import {
   PartId,
   ViewContainerLocation,
   CommandsRegistry,
+  type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import {
+  collectMonacoCommands,
+  isMonacoCommandItem,
+  type MonacoCommandItem,
+} from '../workbench/quickinput/monacoCommandSource.js'
 
 export class ToggleSidebarVisibilityAction extends Action2 {
   static readonly ID = 'workbench.action.toggleSidebarVisibility'
@@ -81,7 +88,7 @@ export class ShowCommandsAction extends Action2 {
       id: ShowCommandsAction.ID,
       title: 'Show All Commands',
       category: 'View',
-      keybinding: { primary: 'ctrl+shift+p' },
+      keybinding: [{ primary: 'ctrl+shift+p' }, { primary: 'f1' }],
       menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 1 },
       f1: true,
     })
@@ -89,16 +96,33 @@ export class ShowCommandsAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const quickInputService = accessor.get(IQuickInputService)
     const commandService = accessor.get(ICommandService)
-    const commands = [...CommandsRegistry.getCommands().values()].map((cmd) => ({
-      id: cmd.id,
-      label: cmd.metadata?.description ?? cmd.id,
-      ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
-    }))
-    const selected = await quickInputService.pick(commands, {
+    const groupsService = accessor.get(IEditorGroupsService)
+
+    const registryItems: IQuickPickItem[] = [...CommandsRegistry.getCommands().values()].map(
+      (cmd) => ({
+        id: cmd.id,
+        label: cmd.metadata?.description ?? cmd.id,
+        ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
+      }),
+    )
+    const monacoItems: MonacoCommandItem[] = collectMonacoCommands(groupsService)
+    // De-dupe: a Monaco action id can collide with a project command id; prefer
+    // the project command (project intent wins, Monaco is a fallback source).
+    const projectIds = new Set(registryItems.map((i) => i.id))
+    const items: IQuickPickItem[] = [
+      ...registryItems,
+      ...monacoItems.filter((m) => !projectIds.has(m.id)),
+    ]
+
+    const selected = await quickInputService.pick(items, {
       id: 'workbench.commandPalette',
       placeholder: 'Type a command name…',
+      prefix: '>',
     })
-    if (selected) {
+    if (!selected) return
+    if (isMonacoCommandItem(selected)) {
+      void selected._editor.getAction(selected._actionId)?.run()
+    } else {
       void commandService.executeCommand(selected.id)
     }
   }

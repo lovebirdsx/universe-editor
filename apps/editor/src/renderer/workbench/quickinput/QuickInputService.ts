@@ -19,6 +19,7 @@ export interface QuickPickState {
   items?: readonly IQuickPickItem[]
   mruIds?: readonly string[]
   placeholder?: string | undefined
+  prefix?: string | undefined
   onAccept?: (items: IQuickPickItem[]) => void
   onInput?: (value: string) => void
   onHide?: () => void
@@ -97,6 +98,7 @@ export class QuickInputService implements IQuickInputService {
         items,
         mruIds,
         placeholder: options?.placeholder,
+        prefix: options?.prefix,
         onAccept: (selected) => {
           this._showFn?.(null)
           const item = selected[0] as T | undefined
