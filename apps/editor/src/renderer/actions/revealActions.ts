@@ -61,6 +61,9 @@ export class RevealInOSExplorerAction extends Action2 {
       id: RevealInOSExplorerAction.ID,
       title: 'Open Containing Folder',
       category: 'File',
+      keybinding: {
+        primary: 'alt+shift+e',
+      },
       menu: [{ id: MenuId.EditorTabContext, group: 'reveal', order: 2 }],
       f1: true,
     })
