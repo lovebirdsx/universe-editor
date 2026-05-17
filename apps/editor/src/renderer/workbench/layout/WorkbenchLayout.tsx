@@ -62,11 +62,19 @@ export function WorkbenchLayout({
   // the sidebar pane instead of the editor pane).
   const prevSecVisibleRef = useRef(secondarySidebarVisible)
   const sizeSnapshotRef = useRef<[number, number, number]>(currentSizesRef.current)
-  // Keep preferred size in a ref to avoid stale closure in the useEffect.
-  const secondaryPreferredSizeRef = useRef(sizes.secondarySidebar)
-  secondaryPreferredSizeRef.current = sizes.secondarySidebar
+  // Live secondary size captured at hide-time from Allotment, not from the
+  // service. Avoids using sizes.secondarySidebar which can be transiently
+  // corrupted to 0 if Allotment fires onChange with a stale closure while
+  // the pane is being hidden.
+  const lastSecondarySizeRef = useRef(sizes.secondarySidebar)
 
   if (prevSecVisibleRef.current !== secondarySidebarVisible) {
+    // Transitioning visible → hidden: capture the live Allotment size before
+    // any effect or onChange callback can overwrite it with 0.
+    if (prevSecVisibleRef.current && !secondarySidebarVisible) {
+      const liveSize = currentSizesRef.current[2]
+      if (liveSize > 0) lastSecondarySizeRef.current = liveSize
+    }
     sizeSnapshotRef.current = currentSizesRef.current
     prevSecVisibleRef.current = secondarySidebarVisible
   }
@@ -78,7 +86,7 @@ export function WorkbenchLayout({
     const correction = computeResizeAfterSecondaryToggle(
       sizeSnapshotRef.current,
       secondarySidebarVisible,
-      secondaryPreferredSizeRef.current,
+      lastSecondarySizeRef.current,
     )
     if (correction) allotmentRef.current?.resize(correction)
   }, [secondarySidebarVisible])
@@ -110,8 +118,9 @@ export function WorkbenchLayout({
               currentSizesRef.current = [s[0]!, s[1]!, s[2]!]
               const sidebarSize = s[0]
               const secondarySize = s[2]
-              if (typeof sidebarSize === 'number' && sidebarVisible) onSidebarResize(sidebarSize)
-              if (typeof secondarySize === 'number' && secondarySidebarVisible)
+              if (typeof sidebarSize === 'number' && sidebarSize > 0 && sidebarVisible)
+                onSidebarResize(sidebarSize)
+              if (typeof secondarySize === 'number' && secondarySize > 0 && secondarySidebarVisible)
                 onSecondarySidebarResize(secondarySize)
             }}
           >
