@@ -18,6 +18,7 @@ import { FileEditorStatusContribution } from '../workbench/statusbar/FileEditorS
 import { ExternalChangeWatcher } from '../workbench/editor/ExternalChangeWatcher.js'
 import { WorkspaceRecentMenuContribution } from '../services/workspace/workspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from '../services/workspace/workspaceRestoreContribution.js'
+import { WorkspaceExplorerRevealContribution } from '../services/workspace/workspaceExplorerRevealContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -83,6 +84,13 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
+// Reveal Explorer whenever a folder is opened so the user sees the file tree.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workspaceExplorerReveal',
+  WorkspaceExplorerRevealContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the
 // EditorArea, otherwise users see the default empty grid flash. BlockRestore
 // runs at LifecyclePhase.Ready which the bootstrap toggles before mount.
@@ -102,4 +110,5 @@ export {
   ExternalChangeWatcher,
   WorkspaceRecentMenuContribution,
   WorkspaceRestoreContribution,
+  WorkspaceExplorerRevealContribution,
 }

@@ -38,4 +38,14 @@ export class WorkbenchPO {
   async lifecyclePhase(): Promise<string> {
     return this.page.evaluate(() => window.__E2E__!.getLifecyclePhase())
   }
+
+  /** Open a workspace folder directly, bypassing the native dialog. */
+  async openWorkspace(fsPath: string): Promise<void> {
+    await this.page.evaluate((p) => window.__E2E__!.openWorkspace(p), fsPath)
+  }
+
+  /** Return the current workspace folder's fsPath, or undefined if none. */
+  async getCurrentWorkspacePath(): Promise<string | undefined> {
+    return this.page.evaluate(() => window.__E2E__!.getCurrentWorkspacePath())
+  }
 }

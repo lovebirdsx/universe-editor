@@ -194,6 +194,7 @@ function bootstrapWorkbench(): void {
     lifecycleService: lifecycle,
     editorService,
     statusBarService,
+    workspaceService,
   })
 
   // Mount

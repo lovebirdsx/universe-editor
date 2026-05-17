@@ -10,11 +10,13 @@
 import {
   LifecyclePhase,
   StatusBarAlignment,
+  URI,
   type ICommandService,
   type IContextKeyService,
   type IEditorService,
   type ILifecycleService,
   type IStatusBarService,
+  type IWorkspaceService,
 } from '@universe-editor/platform'
 import {
   E2E_PROBE_ENABLED_KEY,
@@ -30,6 +32,7 @@ export interface E2EProbeServices {
   readonly lifecycleService: ILifecycleService
   readonly editorService: IEditorService
   readonly statusBarService: IStatusBarService
+  readonly workspaceService: IWorkspaceService
 }
 
 function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
@@ -62,6 +65,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         text: entry.text,
         alignment: entry.alignment === StatusBarAlignment.Right ? 'right' : 'left',
       })),
+    openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
+    getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
   }
 
   window[E2E_PROBE_KEY] = probe

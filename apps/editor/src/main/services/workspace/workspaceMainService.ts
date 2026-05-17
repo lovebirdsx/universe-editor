@@ -107,7 +107,8 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
 
   async openFolder(folder?: URI | UriComponents): Promise<void> {
     let resolved: URI | null
-    if (folder === undefined) {
+    // JSON.stringify([undefined]) → "[null]" over IPC, so treat null same as undefined.
+    if (folder == null) {
       resolved = await this._folderDialog.showOpenFolderDialog()
       if (!resolved) return
     } else {

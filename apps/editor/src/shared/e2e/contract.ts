@@ -38,6 +38,13 @@ export interface E2EProbe {
   getActiveEditorUri(): string | undefined
   /** Snapshot of currently visible status bar entries. */
   getStatusBarEntries(): E2EStatusBarEntry[]
+  /**
+   * Opens a workspace by file-system path, bypassing the native folder dialog.
+   * Use this in E2E tests instead of triggering the real dialog.
+   */
+  openWorkspace(fsPath: string): Promise<void>
+  /** Returns the current workspace folder's fsPath, or undefined if none is open. */
+  getCurrentWorkspacePath(): string | undefined
 }
 
 declare global {

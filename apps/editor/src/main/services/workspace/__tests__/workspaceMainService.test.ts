@@ -87,6 +87,18 @@ describe('WorkspaceMainService', () => {
     svc.dispose()
   })
 
+  // JSON.stringify([undefined]) → "[null]" over IPC, so the main process receives
+  // null instead of undefined when the renderer calls openFolder() with no args.
+  it('openFolder(null) — IPC path — delegates to the folder dialog same as undefined', async () => {
+    const dialog = makeDialog(URI.file('/tmp/ipc-picked'))
+    const svc = new WorkspaceMainService(makeStorage(), dialog)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await svc.openFolder(null as any)
+    expect(dialog.calls).toBe(1)
+    await expect(svc.getCurrent()).resolves.toMatchObject({ name: 'ipc-picked' })
+    svc.dispose()
+  })
+
   it('opening the same folder twice keeps a single recent entry at the head', async () => {
     const svc = new WorkspaceMainService(makeStorage(), makeDialog())
     const a = URI.file('/tmp/a')
