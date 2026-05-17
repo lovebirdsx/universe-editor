@@ -74,7 +74,7 @@ export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
   )
 
   return (
-    <div ref={containerRef} className={styles['editorAreaRoot']}>
+    <div ref={containerRef} className={styles['editorAreaRoot']} data-testid="part-editorArea">
       <GridLayout
         grid={groupsService.grid}
         viewFactory={(group) => (

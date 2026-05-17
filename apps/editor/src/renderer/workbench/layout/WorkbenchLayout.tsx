@@ -1,9 +1,10 @@
-import { useRef, type ReactNode } from 'react'
+import { useEffect, useRef, type ReactNode } from 'react'
 import { Allotment, type AllotmentHandle } from 'allotment'
 import 'allotment/dist/style.css'
 import type { LayoutSizes } from '@universe-editor/platform'
 import styles from './WorkbenchLayout.module.css'
 import './allotment-theme.css'
+import { computeResizeAfterSecondaryToggle } from './resizeUtils.js'
 
 interface WorkbenchLayoutProps {
   titlebar: ReactNode
@@ -53,6 +54,35 @@ export function WorkbenchLayout({
   const isInitializedRef = useRef(false)
   const initialSizesRef = useRef(sizes)
 
+  // Track live [sidebar, editor, secondary] sizes reported by Allotment.
+  const currentSizesRef = useRef<[number, number, number]>([sizes.sidebar, 0, 0])
+
+  // When secondarySidebarVisible changes, capture the pre-change sizes so
+  // we can override Allotment's redistribution (which gives freed space to
+  // the sidebar pane instead of the editor pane).
+  const prevSecVisibleRef = useRef(secondarySidebarVisible)
+  const sizeSnapshotRef = useRef<[number, number, number]>(currentSizesRef.current)
+  // Keep preferred size in a ref to avoid stale closure in the useEffect.
+  const secondaryPreferredSizeRef = useRef(sizes.secondarySidebar)
+  secondaryPreferredSizeRef.current = sizes.secondarySidebar
+
+  if (prevSecVisibleRef.current !== secondarySidebarVisible) {
+    sizeSnapshotRef.current = currentSizesRef.current
+    prevSecVisibleRef.current = secondarySidebarVisible
+  }
+
+  // After each secondarySidebarVisible flip, Allotment may distribute the
+  // freed/needed space to the wrong pane. Correct it by explicitly resizing.
+  useEffect(() => {
+    if (!isInitializedRef.current) return
+    const correction = computeResizeAfterSecondaryToggle(
+      sizeSnapshotRef.current,
+      secondarySidebarVisible,
+      secondaryPreferredSizeRef.current,
+    )
+    if (correction) allotmentRef.current?.resize(correction)
+  }, [secondarySidebarVisible])
+
   return (
     <div className={styles['workbench']}>
       <div className={styles['titlebar']}>{titlebar}</div>
@@ -77,6 +107,7 @@ export function WorkbenchLayout({
                 })
                 return
               }
+              currentSizesRef.current = [s[0]!, s[1]!, s[2]!]
               const sidebarSize = s[0]
               const secondarySize = s[2]
               if (typeof sidebarSize === 'number' && sidebarVisible) onSidebarResize(sidebarSize)
