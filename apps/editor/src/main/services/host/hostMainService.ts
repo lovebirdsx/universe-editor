@@ -3,7 +3,7 @@
  *  Host service implementation operating on a specific BrowserWindow.
  *--------------------------------------------------------------------------------------------*/
 
-import { dialog, type BrowserWindow } from 'electron'
+import { dialog, shell, type BrowserWindow } from 'electron'
 import {
   Emitter,
   URI,
@@ -78,6 +78,11 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     })
     if (result.canceled || !result.filePath) return null
     return URI.file(result.filePath).toJSON()
+  }
+
+  showItemInFolder(fsPath: string): Promise<void> {
+    shell.showItemInFolder(fsPath)
+    return Promise.resolve()
   }
 
   dispose(): void {

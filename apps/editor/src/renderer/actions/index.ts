@@ -55,7 +55,7 @@ import {
   SaveFileAsAction,
 } from './fileActions.js'
 import { NewUntitledFileAction } from './newUntitledFileAction.js'
-import { RevealActiveFileInExplorerAction } from './revealActions.js'
+import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from './revealActions.js'
 import {
   FindInFileAction,
   FindInFilesAction,
@@ -120,6 +120,7 @@ registerAction2(NewFolderAction)
 registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
 registerAction2(RevealActiveFileInExplorerAction)
+registerAction2(RevealInOSExplorerAction)
 
 // Window / Help
 registerAction2(CloseWindowAction)

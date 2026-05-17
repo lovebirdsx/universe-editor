@@ -3,11 +3,13 @@
  *  RevealActiveFileInExplorerAction — reveals the active file in the Explorer
  *  tree (tab right-click entry and F1 command palette). Ctrl+Shift+E is owned
  *  by ShowExplorerAction (show/hide toggle); this action has no default binding.
+ *  RevealInOSExplorerAction — opens the OS file manager with the file selected.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Action2,
   IEditorGroupsService,
+  IHostService,
   IViewsService,
   MenuId,
   URI,
@@ -49,5 +51,29 @@ export class RevealActiveFileInExplorerAction extends Action2 {
     if (!resource || resource.scheme !== 'file') return
     accessor.get(IViewsService).openViewContainer('workbench.view.explorer')
     await accessor.get(IExplorerTreeService).reveal(resource)
+  }
+}
+
+export class RevealInOSExplorerAction extends Action2 {
+  static readonly ID = 'workbench.files.action.revealInOsExplorer'
+  constructor() {
+    super({
+      id: RevealInOSExplorerAction.ID,
+      title: 'Open Containing Folder',
+      category: 'File',
+      menu: [{ id: MenuId.EditorTabContext, group: 'reveal', order: 2 }],
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const explicit = reviveResource((args[0] as IRevealArgs | undefined)?.resource)
+    let resource: URI | null = explicit
+    if (!resource) {
+      const groups = accessor.get(IEditorGroupsService)
+      const active = groups.activeGroup.activeEditor
+      if (active instanceof FileEditorInput) resource = active.resource
+    }
+    if (!resource || resource.scheme !== 'file') return
+    await accessor.get(IHostService).showItemInFolder(resource.fsPath)
   }
 }

@@ -41,6 +41,12 @@ export interface IHostService {
   toggleDevTools(): Promise<void>
 
   /**
+   * Show the given file path in the OS file manager (Explorer / Finder / Files)
+   * with the item selected. The path must be an absolute fs path.
+   */
+  showItemInFolder(fsPath: string): Promise<void>
+
+  /**
    * OS file picker. Returns the chosen file's URI, or null if the user
    * cancelled. Implementations use the native dialog tied to the focused
    * BrowserWindow.

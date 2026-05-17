@@ -174,6 +174,7 @@ class FakeHostService implements IHostServiceType {
     this.saveCalls.push(opts ?? {})
     return this.saveResult
   }
+  async showItemInFolder(_fsPath: string) {}
 }
 
 interface FakeGroup extends IEditorGroup {
