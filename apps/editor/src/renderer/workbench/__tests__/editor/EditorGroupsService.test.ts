@@ -160,3 +160,67 @@ describe('EditorGroupsService', () => {
     expect(svc.activeGroup.count).toBe(1)
   })
 })
+
+describe('EditorGroupsService — auto-close empty group', () => {
+  it('closing the last editor in a secondary group removes it automatically', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    const a = make('a')
+    second.openEditor(a)
+    svc.activateGroup(second)
+    second.closeEditor(a)
+    await Promise.resolve()
+    expect(svc.count).toBe(1)
+    expect(svc.groups).toContain(first)
+    expect(svc.groups).not.toContain(second)
+  })
+
+  it('closing the last editor in the only group does NOT remove it', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const a = make('a')
+    first.openEditor(a)
+    first.closeEditor(a)
+    await Promise.resolve()
+    expect(svc.count).toBe(1)
+  })
+
+  it('auto-close fires onDidRemoveGroup', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    const a = make('a')
+    second.openEditor(a)
+    const spy = vi.fn()
+    svc.onDidRemoveGroup(spy)
+    second.closeEditor(a)
+    await Promise.resolve()
+    expect(spy).toHaveBeenCalledOnce()
+  })
+
+  it('auto-close transfers focus to another group', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    const a = make('a')
+    second.openEditor(a)
+    svc.activateGroup(second)
+    second.closeEditor(a)
+    await Promise.resolve()
+    expect(svc.activeGroup).toBe(first)
+  })
+
+  it('group with multiple editors is not removed when only one editor is closed', async () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    const a = make('a')
+    const b = make('b')
+    second.openEditor(a)
+    second.openEditor(b)
+    second.closeEditor(a)
+    await Promise.resolve()
+    expect(svc.count).toBe(2)
+  })
+})

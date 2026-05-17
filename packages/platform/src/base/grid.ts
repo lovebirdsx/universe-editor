@@ -95,13 +95,27 @@ function insertBefore(direction: Direction): boolean {
 export class Grid<T extends IGridView> {
   private _root: GridBranchNode<T>
   private readonly _leaves = new Map<string, GridLeafNode<T>>()
+  private _version = 0
 
   private readonly _onDidChange = new Emitter<void>()
   readonly onDidChange: Event<void> = this._onDidChange.event
 
+  /** Monotonically increasing counter; changes on every structural or size update. */
+  get version(): number {
+    return this._version
+  }
+
+  private _notifyChange(): void {
+    this._version++
+    this._onDidChange.fire()
+  }
+
   constructor(view: T, orientation: Orientation = Orientation.Horizontal) {
     this._root = new GridBranchNode<T>(orientation, 1)
-    const leaf = new GridLeafNode<T>(view, 1)
+    // Start with a large flex size so that pixel deltas from Sash drags are
+    // proportionally meaningful and the pixel-based min/max constraints in
+    // resizeView work correctly without a unit mismatch.
+    const leaf = new GridLeafNode<T>(view, 500)
     leaf.parent = this._root
     this._root.children.push(leaf)
     this._leaves.set(view.viewId, leaf)
@@ -139,18 +153,20 @@ export class Grid<T extends IGridView> {
     const newLeaf = new GridLeafNode<T>(newView, size)
 
     if (parent.orientation === desired) {
-      // Append sibling next to target.
+      // Append sibling next to target; give the new leaf the same flex size
+      // as the target so both panels share the space equally.
       const idx = parent.children.indexOf(target)
       const insertAt = before ? idx : idx + 1
+      newLeaf.size = target.size
       newLeaf.parent = parent
       parent.children.splice(insertAt, 0, newLeaf)
     } else {
       // Replace the target leaf with a new branch of the desired orientation
-      // containing the target and the new leaf.
+      // containing the target and the new leaf.  Both children start with the
+      // same size so they split the available space equally.
       const newBranch = new GridBranchNode<T>(desired, target.size)
       newBranch.parent = parent
-      target.size = 1
-      newLeaf.size = 1
+      newLeaf.size = target.size
       target.parent = newBranch
       newLeaf.parent = newBranch
       newBranch.children.push(before ? newLeaf : target, before ? target : newLeaf)
@@ -159,7 +175,7 @@ export class Grid<T extends IGridView> {
     }
 
     this._leaves.set(newView.viewId, newLeaf)
-    this._onDidChange.fire()
+    this._notifyChange()
   }
 
   removeView(view: T): T | undefined {
@@ -175,7 +191,7 @@ export class Grid<T extends IGridView> {
     // Collapse branch with a single remaining child into that child (except root).
     this._maybeCollapse(parent)
 
-    this._onDidChange.fire()
+    this._notifyChange()
     return view
   }
 
@@ -239,7 +255,7 @@ export class Grid<T extends IGridView> {
     const tmpSize = la.size
     la.size = lb.size
     lb.size = tmpSize
-    this._onDidChange.fire()
+    this._notifyChange()
   }
 
   resizeView(view: T, size: { width?: number; height?: number }): void {
@@ -265,7 +281,7 @@ export class Grid<T extends IGridView> {
     if (!sibling) return
     leaf.size = clamped
     sibling.size = Math.max(1, sibling.size - delta)
-    this._onDidChange.fire()
+    this._notifyChange()
   }
 
   serialize(toData: (view: T) => unknown): ISerializedGrid<unknown> {

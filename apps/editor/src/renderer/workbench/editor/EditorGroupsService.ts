@@ -28,6 +28,7 @@ import {
   type ServicesAccessor,
   observableValue,
   transaction,
+  type IDisposable,
 } from '@universe-editor/platform'
 
 /**
@@ -147,6 +148,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   private readonly _groups: EditorGroup[] = []
   private readonly _mru: EditorGroup[] = []
   private _orientation: GroupOrientation = GroupOrientation.Horizontal
+  private readonly _groupWatchers = new Map<number, IDisposable>()
 
   private readonly _activeGroup: ReturnType<typeof observableValue<EditorGroup>>
 
@@ -174,6 +176,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     this._mru.push(initial)
     this._grid = new Grid<EditorGroup>(initial, Orientation.Horizontal)
     this._activeGroup = observableValue<EditorGroup>('activeGroup', initial)
+    this._watchGroup(initial)
   }
 
   get activeGroup(): IEditorGroup {
@@ -260,6 +263,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     this._groups.push(newGroup)
     this._mru.push(newGroup)
     this._onDidAddGroup.fire(newGroup)
+    this._watchGroup(newGroup)
     return newGroup
   }
 
@@ -267,6 +271,8 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     if (this._groups.length <= 1) return // protect: keep at least one group
     const target = this._resolve(group)
     if (!target) return
+    this._groupWatchers.get(target.id)?.dispose()
+    this._groupWatchers.delete(target.id)
     this._grid.removeView(target)
     const idx = this._groups.indexOf(target)
     if (idx !== -1) this._groups.splice(idx, 1)
@@ -311,6 +317,19 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   }
 
   // Helpers ------------------------------------------------------------------
+
+  private _watchGroup(group: EditorGroup): void {
+    const d = group.model.onDidChangeModel(() => {
+      if (group.count === 0 && this._groups.length > 1) {
+        queueMicrotask(() => {
+          if (group.count === 0 && this._groups.includes(group)) {
+            this.removeGroup(group)
+          }
+        })
+      }
+    })
+    this._groupWatchers.set(group.id, d)
+  }
 
   private _resolve(group: IEditorGroup | number): EditorGroup | undefined {
     if (typeof group === 'number') return this._groups.find((g) => g.id === group)
@@ -389,6 +408,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
         this._groups.push(newGroup)
         this._mru.push(newGroup)
         this._onDidAddGroup.fire(newGroup)
+        this._watchGroup(newGroup)
         target = newGroup
       }
       const hydrated: EditorInput[] = []

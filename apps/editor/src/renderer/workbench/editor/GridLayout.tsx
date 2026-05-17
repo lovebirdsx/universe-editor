@@ -7,7 +7,7 @@
  *  resize adjacent leaves.
  *--------------------------------------------------------------------------------------------*/
 
-import { useSyncExternalStore, type ReactNode, type CSSProperties } from 'react'
+import { useRef, useSyncExternalStore, type ReactNode, type CSSProperties } from 'react'
 import {
   Grid,
   GridBranchNode,
@@ -29,7 +29,7 @@ function useGridVersion<T extends IGridView>(grid: Grid<T>): number {
       const d = grid.onDidChange(() => onChange())
       return () => d.dispose()
     },
-    () => grid.getViews().length,
+    () => grid.version,
   )
 }
 
@@ -39,34 +39,22 @@ function totalSize<T extends IGridView>(children: GridNode<T>[]): number {
   return sum
 }
 
-function renderNode<T extends IGridView>(
-  grid: Grid<T>,
-  node: GridNode<T>,
-  viewFactory: (view: T) => ReactNode,
-): ReactNode {
-  if (node.kind === 'leaf') {
-    return (
-      <div
-        key={`leaf-${node.view.viewId}`}
-        className="grid-leaf"
-        style={{ flex: `${node.size} 1 0`, minWidth: 0, minHeight: 0, display: 'flex' }}
-      >
-        {viewFactory(node.view)}
-      </div>
-    )
-  }
-
-  return renderBranch(grid, node, viewFactory)
-}
-
-function renderBranch<T extends IGridView>(
-  grid: Grid<T>,
-  branch: GridBranchNode<T>,
-  viewFactory: (view: T) => ReactNode,
-): ReactNode {
+// BranchNode is a React component (not a plain function) so it can hold a ref
+// to the container div and compute a proportional flex delta from the raw pixel
+// delta emitted by Sash.  This prevents the unit mismatch that would otherwise
+// occur when flex sizes and pixel deltas are added directly.
+function BranchNode<T extends IGridView>({
+  grid,
+  branch,
+  viewFactory,
+}: {
+  grid: Grid<T>
+  branch: GridBranchNode<T>
+  viewFactory: (view: T) => ReactNode
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
   const isHorizontal = branch.orientation === Orientation.Horizontal
   const flexDir = isHorizontal ? 'row' : 'column'
-  const total = totalSize(branch.children) || 1
   const style: CSSProperties = {
     display: 'flex',
     flexDirection: flexDir,
@@ -88,16 +76,17 @@ function renderBranch<T extends IGridView>(
           orientation={isHorizontal ? 'vertical' : 'horizontal'}
           onResize={(delta) => {
             if (!left) return
-            // Convert a pixel delta into a proportional resize. Without explicit
-            // sizes, we treat the current size as a unit and add the delta in
-            // the same unit space (1 px ≈ 1 unit, which the layout then
-            // normalises through flex).
+            const el = containerRef.current
+            const containerPx = el ? (isHorizontal ? el.offsetWidth : el.offsetHeight) : 0
+            if (containerPx === 0) return
+            // Convert the raw pixel delta to a proportional flex-unit delta so
+            // that the resize feels 1:1 regardless of the panel's actual size.
+            const flexTotal = totalSize(branch.children) || 1
+            const flexDelta = (delta / containerPx) * flexTotal
             const dim = isHorizontal
-              ? { width: child.size + delta }
-              : { height: child.size + delta }
+              ? { width: child.size + flexDelta }
+              : { height: child.size + flexDelta }
             grid.resizeView(left.view, dim)
-            // Suppress unused total warning while keeping calc clarity.
-            void total
           }}
         />,
       )
@@ -105,9 +94,36 @@ function renderBranch<T extends IGridView>(
   })
 
   return (
-    <div key={`branch-${branch.orientation}`} className="grid-branch" style={style}>
+    <div ref={containerRef} className="grid-branch" style={style}>
       {items}
     </div>
+  )
+}
+
+function renderNode<T extends IGridView>(
+  grid: Grid<T>,
+  node: GridNode<T>,
+  viewFactory: (view: T) => ReactNode,
+): ReactNode {
+  if (node.kind === 'leaf') {
+    return (
+      <div
+        key={`leaf-${node.view.viewId}`}
+        className="grid-leaf"
+        style={{ flex: `${node.size} 1 0`, minWidth: 0, minHeight: 0, display: 'flex' }}
+      >
+        {viewFactory(node.view)}
+      </div>
+    )
+  }
+
+  return (
+    <BranchNode
+      key={`branch-${leftmostLeaf(node)?.view.viewId ?? node.orientation}`}
+      grid={grid}
+      branch={node}
+      viewFactory={viewFactory}
+    />
   )
 }
 
@@ -122,5 +138,5 @@ function leftmostLeaf<T extends IGridView>(node: GridNode<T>): GridLeafNode<T> |
 
 export function GridLayout<T extends IGridView>({ grid, viewFactory }: GridLayoutProps<T>) {
   useGridVersion(grid)
-  return <>{renderBranch(grid, grid.root, viewFactory)}</>
+  return <BranchNode grid={grid} branch={grid.root} viewFactory={viewFactory} />
 }

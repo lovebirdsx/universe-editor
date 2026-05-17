@@ -89,6 +89,14 @@ describe('Grid — addView', () => {
     grid.addView(new V('b'), 100, a, Direction.Right)
     expect(spy).toHaveBeenCalledOnce()
   })
+
+  it('version increments on addView', () => {
+    const a = new V('a')
+    const grid = new Grid(a)
+    const before = grid.version
+    grid.addView(new V('b'), 100, a, Direction.Right)
+    expect(grid.version).toBe(before + 1)
+  })
 })
 
 describe('Grid — removeView', () => {
@@ -173,6 +181,41 @@ describe('Grid — swapViews', () => {
     grid.onDidChange(spy)
     grid.swapViews(a, b)
     expect(spy).toHaveBeenCalledOnce()
+  })
+})
+
+describe('Grid — addView equal split', () => {
+  it('sibling split ignores the passed size and matches the target size instead', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    const targetSize = grid.getLeafSize(a)
+    grid.addView(b, 9999, a, Direction.Right) // large size arg should be ignored
+    expect(grid.getLeafSize(b)).toBe(targetSize)
+    expect(grid.getLeafSize(a)).toBe(targetSize)
+  })
+
+  it('else-branch split gives both children equal size', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    const targetSize = grid.getLeafSize(a)
+    grid.addView(b, 9999, a, Direction.Down) // vertical creates a new sub-branch
+    // a's size within the new branch should still equal its original size
+    expect(grid.getLeafSize(a)).toBe(targetSize)
+    // b should match
+    expect(grid.getLeafSize(b)).toBe(targetSize)
+  })
+
+  it('sequential right splits each produce an equal-sized panel', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const c = new V('c')
+    const grid = new Grid(a)
+    grid.addView(b, 100, a, Direction.Right)
+    grid.addView(c, 100, b, Direction.Right)
+    // All three are siblings in the horizontal root; b and c have equal sizes.
+    expect(grid.getLeafSize(b)).toBe(grid.getLeafSize(c))
   })
 })
 
