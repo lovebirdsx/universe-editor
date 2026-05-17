@@ -119,7 +119,10 @@ export class EditorService implements IEditorService {
         }
         if (options?.activate !== false) group.setActive(existing)
       } else {
-        group.openEditor(new LegacyEditorInput(input), options)
+        group.openEditor(
+          input instanceof EditorInput ? input : new LegacyEditorInput(input),
+          options,
+        )
       }
     } finally {
       this._suppressGroupSync--
