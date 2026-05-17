@@ -133,7 +133,6 @@ async function bootstrapWorkbench(): Promise<void> {
   const editorGroupsService = new EditorGroupsService()
   const editorService = new EditorService(editorGroupsService)
   const statusBarService = new StatusBarService()
-  const viewsService = new ViewsService()
   const outputService = new OutputService()
   const commandService = new CommandService(instantiation)
 
@@ -141,10 +140,11 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IEditorGroupsService, editorGroupsService)
   services.set(IEditorService, editorService)
   services.set(IStatusBarService, statusBarService)
-  services.set(IViewsService, viewsService)
   services.set(IOutputService, outputService)
 
   // Services with @IStorageService dependencies go through DI.
+  const viewsService = instantiation.createInstance(ViewsService)
+  services.set(IViewsService, viewsService)
   const quickInputService = instantiation.createInstance(QuickInputService)
   services.set(IQuickInputService, quickInputService)
   const layoutService = instantiation.createInstance(LayoutService)
@@ -198,10 +198,10 @@ async function bootstrapWorkbench(): Promise<void> {
     layoutService,
   })
 
-  // Load persisted layout before mounting React so Allotment starts with the
+  // Load persisted layout and view state before mounting React so Allotment starts with the
   // correct preferredSize. Allotment 1.20.5 only reads preferredSize on mount
   // (or pane-show); changing it after mount is silently ignored.
-  await layoutService.load()
+  await Promise.all([layoutService.load(), viewsService.load()])
 
   // Mount
   const rootEl = document.getElementById('root')
