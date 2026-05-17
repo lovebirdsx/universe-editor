@@ -7,6 +7,7 @@
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
+    "e2e": "turbo run e2e",
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint:fix",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build",

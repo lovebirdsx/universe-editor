@@ -68,10 +68,33 @@ export class EditorService implements IEditorService {
     return this.openEditors.read(r).find((e) => e.id === id)
   })
 
+  private _suppressGroupSync = 0
+
   constructor(groupsService?: IEditorGroupsService) {
     this._groupsService = groupsService ?? new EditorGroupsService()
     this._sync()
-    this._groupsService.onDidActiveGroupChange(() => this._sync())
+    // Re-sync on every active-group transition AND on every editor change within
+    // the active group — otherwise actions that call `group.openEditor()` directly
+    // (e.g. NewUntitledFileAction) would not be reflected in activeEditor / openEditors.
+    let unsubscribeActive = this._subscribeActiveGroup()
+    this._groupsService.onDidActiveGroupChange(() => {
+      unsubscribeActive()
+      unsubscribeActive = this._subscribeActiveGroup()
+      this._sync()
+    })
+  }
+
+  private _subscribeActiveGroup(): () => void {
+    const group = this._groupsService.activeGroup
+    const handler = () => {
+      if (this._suppressGroupSync === 0) this._sync()
+    }
+    const a = group.onDidChangeModel(handler)
+    const b = group.onDidActiveEditorChange(handler)
+    return () => {
+      a.dispose()
+      b.dispose()
+    }
   }
 
   private _sync(): void {
@@ -88,13 +111,18 @@ export class EditorService implements IEditorService {
   openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void {
     const group = this._groupsService.activeGroup
     const existing = group.editors.find((e) => e.id === input.id)
-    if (existing) {
-      if (options?.pinned === true && group.previewEditor === existing) {
-        group.pinEditor(existing)
+    this._suppressGroupSync++
+    try {
+      if (existing) {
+        if (options?.pinned === true && group.previewEditor === existing) {
+          group.pinEditor(existing)
+        }
+        if (options?.activate !== false) group.setActive(existing)
+      } else {
+        group.openEditor(new LegacyEditorInput(input), options)
       }
-      if (options?.activate !== false) group.setActive(existing)
-    } else {
-      group.openEditor(new LegacyEditorInput(input), options)
+    } finally {
+      this._suppressGroupSync--
     }
     this._sync()
   }
@@ -103,7 +131,12 @@ export class EditorService implements IEditorService {
     const group = this._groupsService.activeGroup
     const target = group.editors.find((e) => e.id === id)
     if (target) {
-      group.closeEditor(target)
+      this._suppressGroupSync++
+      try {
+        group.closeEditor(target)
+      } finally {
+        this._suppressGroupSync--
+      }
       this._sync()
     }
   }
@@ -111,7 +144,12 @@ export class EditorService implements IEditorService {
   closeAllEditors(): void {
     const group = this._groupsService.activeGroup
     if (group.editors.length === 0) return
-    group.closeAllEditors()
+    this._suppressGroupSync++
+    try {
+      group.closeAllEditors()
+    } finally {
+      this._suppressGroupSync--
+    }
     this._sync()
   }
 }

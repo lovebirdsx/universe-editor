@@ -58,6 +58,7 @@ import { ALL_PART_CTORS } from './workbench/parts/index.js'
 // Side-effect import: registers built-in contributions with ContributionsRegistry.
 import './contributions/index.js'
 import './workbench.css'
+import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
 function bootstrapWorkbench(): void {
   // Dev-only: track Disposable leaks. Report on beforeunload.
@@ -185,6 +186,15 @@ function bootstrapWorkbench(): void {
 
   // Advance to Ready before mounting React (triggers BlockRestore contributions)
   lifecycle.setPhase(LifecyclePhase.Ready)
+
+  // E2E probe: only attaches when the app was launched with UNIVERSE_E2E=1.
+  installE2EProbeIfEnabled({
+    commandService,
+    contextKeyService,
+    lifecycleService: lifecycle,
+    editorService,
+    statusBarService,
+  })
 
   // Mount
   const rootEl = document.getElementById('root')

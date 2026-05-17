@@ -10,6 +10,10 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --build",
     "test": "vitest run",
+    "e2e": "playwright test -c e2e/playwright.config.ts",
+    "e2e:headed": "playwright test -c e2e/playwright.config.ts --headed",
+    "e2e:ui": "playwright test -c e2e/playwright.config.ts --ui",
+    "e2e:install": "playwright install-deps",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
     "clean": "tsc --build --clean",
@@ -23,6 +27,7 @@
     "monaco-editor": "catalog:"
   },
   "devDependencies": {
+    "@playwright/test": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/node": "catalog:",
     "@types/react": "catalog:",

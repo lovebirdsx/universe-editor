@@ -9,3 +9,7 @@ release/
 !.env.example
 coverage/
 .next/
+
+# Playwright
+playwright-report/
+test-results/

@@ -37,3 +37,63 @@ jobs:
 
       - name: Build
         run: pnpm build
+
+  e2e:
+    name: E2E Smoke (${{ matrix.os }})
+    needs: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Playwright bundles its own browsers — for `_electron` tests we only need
+      # the Linux system libs (libnss3, libgtk, etc). On Windows nothing extra
+      # is needed.
+      - name: Install Playwright system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: pnpm --filter @universe-editor/editor exec playwright install-deps
+
+      - name: Build
+        run: pnpm build
+
+      - name: Run E2E smoke (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor e2e
+
+      - name: Run E2E smoke (Windows)
+        if: runner.os == 'Windows'
+        run: pnpm --filter @universe-editor/editor e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: apps/editor/e2e/playwright-report
+          retention-days: 14
+          if-no-files-found: ignore
+
+      - name: Upload Playwright test results (traces / videos / screenshots)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces-${{ matrix.os }}
+          path: apps/editor/e2e/test-results
+          retention-days: 14
+          if-no-files-found: ignore
