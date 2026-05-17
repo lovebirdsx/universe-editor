@@ -30,6 +30,7 @@ import {
   transaction,
   type IDisposable,
 } from '@universe-editor/platform'
+import { EditorViewStateCache } from './EditorViewStateCache.js'
 
 /**
  * Adapter that satisfies both IEditorGroup and IGridView for a single
@@ -349,12 +350,15 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     const grid = this._grid.serialize((group) => {
       const persistable = group.editors.filter((e) => e.typeId !== 'untitled')
       const activeIdx = group.activeEditor ? persistable.indexOf(group.activeEditor) : -1
+      const uris = persistable.map((e) => e.resource?.toString() ?? '').filter(Boolean)
+      const viewStates = EditorViewStateCache.snapshotGroup(group.id, uris)
       return {
         editors: persistable.map((e) => ({
           typeId: e.typeId,
           data: e.serialize?.() ?? null,
         })),
         activeIndex: activeIdx >= 0 ? activeIdx : 0,
+        ...(Object.keys(viewStates).length > 0 && { viewStates }),
       }
     }) as ISerializedGrid<ISerializedEditorGroupData>
     const activeId = this.activeGroup.id
@@ -419,6 +423,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       hydrated.forEach((input) => target.openEditor(input, { activate: false }))
       const activeIdx = Math.min(leaf.data.activeIndex, hydrated.length - 1)
       if (activeIdx >= 0 && hydrated[activeIdx]) target.setActive(hydrated[activeIdx]!)
+      if (leaf.data.viewStates) EditorViewStateCache.restoreGroup(target.id, leaf.data.viewStates)
       if (target.id === state.activeGroupId) restoredActive = target
     })
 
@@ -439,6 +444,7 @@ export interface ISerializedEditorInputData {
 export interface ISerializedEditorGroupData {
   readonly editors: readonly ISerializedEditorInputData[]
   readonly activeIndex: number
+  readonly viewStates?: Readonly<Record<string, unknown>>
 }
 
 export interface ISerializedEditorGroupsState {

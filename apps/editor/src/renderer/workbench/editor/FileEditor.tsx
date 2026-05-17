@@ -12,13 +12,15 @@
  *  resolve, the component renders a lightweight loading placeholder.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
 import { ICommandService, IEditorGroupsService } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
+import { EditorGroupContext } from './EditorGroupContext.js'
+import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import styles from './FileEditor.module.css'
@@ -27,6 +29,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
   const commandService = useService(ICommandService)
+  const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
@@ -66,12 +69,24 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     }
   }, [monacoNs, commandService])
 
-  // Wire the active input -> model swap + dirty tracking.
+  // Wire the active input -> model swap + dirty tracking + viewState save/restore.
   useEffect(() => {
     if (!monacoNs) return
     let cancelled = false
     let contentSub: IDisposable | undefined
+    let cursorSub: IDisposable | undefined
+    let scrollSub: IDisposable | undefined
     let acquired = false
+
+    const groupId = group?.id
+    const resourceUri = fileInput.resource.toString()
+
+    // Flush current viewState into cache — called on cursor/scroll change and on cleanup.
+    const flushViewState = () => {
+      if (groupId === undefined) return
+      const state = editorRef.current?.saveViewState()
+      if (state) EditorViewStateCache.save(groupId, resourceUri, state)
+    }
 
     void (async () => {
       const text = await fileInput.resolve().catch(() => '')
@@ -81,7 +96,25 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       // If the model existed already (other split), keep its buffer rather
       // than overwriting from disk. If we just created it, its buffer == text.
       editorRef.current?.setModel(model)
-      if (editorRef.current) FileEditorRegistry.register(fileInput, editorRef.current)
+
+      // Restore previously saved viewState (cursor, selection, scroll).
+      if (groupId !== undefined && editorRef.current) {
+        const saved = EditorViewStateCache.load(groupId, resourceUri)
+        if (saved) {
+          editorRef.current.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
+        }
+      }
+
+      if (editorRef.current) {
+        FileEditorRegistry.register(fileInput, editorRef.current)
+        if (groupsService.activeGroup.activeEditor === fileInput) {
+          editorRef.current.focus()
+        }
+        // Keep cache live so toJSON() always captures the latest position.
+        cursorSub = editorRef.current.onDidChangeCursorPosition(flushViewState)
+        scrollSub = editorRef.current.onDidScrollChange(flushViewState)
+      }
+
       contentSub = model.onDidChangeContent(() => {
         fileInput.setDirty(model.getValue() !== fileInput.backupContent)
         // First edit upgrades a preview tab to pinned. pinEditor is a no-op
@@ -97,11 +130,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
     return () => {
       cancelled = true
+      // Final flush before this input is swapped out or component unmounts.
+      flushViewState()
       contentSub?.dispose()
+      cursorSub?.dispose()
+      scrollSub?.dispose()
       if (editorRef.current) FileEditorRegistry.unregister(fileInput, editorRef.current)
       if (acquired) MonacoModelRegistry.release(fileInput.resource)
     }
-  }, [monacoNs, fileInput, groupsService.groups])
+  }, [monacoNs, fileInput, groupsService.groups, group, groupsService.activeGroup.activeEditor])
 
   if (!monacoNs) {
     return (

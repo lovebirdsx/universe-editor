@@ -8,10 +8,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  useEffect,
+  useRef,
   useSyncExternalStore,
   useState,
-  useRef,
-  useEffect,
   type ComponentType,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
@@ -27,7 +27,10 @@ import {
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { closeEditorWithConfirm } from './closeEditorWithConfirm.js'
+import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
+import { FileEditorInput } from './FileEditorInput.js'
+import { FileEditorRegistry } from './FileEditorRegistry.js'
 import styles from './EditorArea.module.css'
 
 export interface EditorGroupViewProps {
@@ -168,6 +171,15 @@ export function EditorGroupView({
     tabBarRef.current?.scrollBy({ left: direction === 'left' ? -150 : 150, behavior: 'smooth' })
   }
 
+  // When this group becomes active (e.g. user returns from sidebar without changing file),
+  // focus the Monaco editor so keyboard input goes to the editor immediately.
+  const activeEditor = group.activeEditor
+  useEffect(() => {
+    if (!isActiveGroup) return
+    if (!(activeEditor instanceof FileEditorInput)) return
+    FileEditorRegistry.get(activeEditor)?.focus()
+  }, [isActiveGroup, activeEditor])
+
   const renderContent = () => {
     const active = group.activeEditor
     if (!active) return fallback ?? null
@@ -179,7 +191,11 @@ export function EditorGroupView({
     if (!Component) {
       return <div className={styles['welcome']}>Component "{provider.componentKey}" missing</div>
     }
-    return <Component input={active} />
+    return (
+      <EditorGroupContext.Provider value={group}>
+        <Component input={active} />
+      </EditorGroupContext.Provider>
+    )
   }
 
   return (
