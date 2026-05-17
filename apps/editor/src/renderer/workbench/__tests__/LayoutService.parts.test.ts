@@ -14,6 +14,7 @@ function makePart(id: PartId): IPart {
   return {
     id,
     role: 'region',
+    isFocused: () => false,
     visible: { get: () => true } as unknown as IPart['visible'],
     onDidVisibilityChange: () => ({ dispose() {} }),
     getContainer: () => undefined,

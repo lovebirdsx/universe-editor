@@ -16,7 +16,6 @@ import {
   PartId,
   ServiceCollection,
   URI,
-  ViewContainerLocation,
   registerAction2,
   type IDisposable,
   type IQuickPickItem,

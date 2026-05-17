@@ -26,7 +26,14 @@ export function SideBar({ part }: { part?: IPart | undefined } = {}) {
   const containerRef = usePartContainer<HTMLElement>(part)
 
   if (!activeContainer) {
-    return <aside ref={containerRef} className={styles['sidebar']} data-testid="part-sidebar" tabIndex={-1} />
+    return (
+      <aside
+        ref={containerRef}
+        className={styles['sidebar']}
+        data-testid="part-sidebar"
+        tabIndex={-1}
+      />
+    )
   }
 
   const views = ViewRegistry.getViewsForContainer(activeContainer.id)
