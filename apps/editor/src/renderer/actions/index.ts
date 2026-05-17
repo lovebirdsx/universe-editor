@@ -17,6 +17,7 @@ import {
   CloseEditorsToTheRightAction,
   CloseOtherEditorsAction,
   FirstEditorInGroupAction,
+  FocusActiveEditorGroupAction,
   FocusFirstGroupAction,
   FocusLastGroupAction,
   FocusNextGroupAction,
@@ -89,6 +90,7 @@ registerAction2(FocusNextGroupAction)
 registerAction2(FocusPreviousGroupAction)
 registerAction2(FocusFirstGroupAction)
 registerAction2(FocusLastGroupAction)
+registerAction2(FocusActiveEditorGroupAction)
 
 // Preferences
 registerAction2(OpenSettingsAction)

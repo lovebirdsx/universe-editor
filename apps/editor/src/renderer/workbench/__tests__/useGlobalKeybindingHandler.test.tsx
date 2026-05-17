@@ -241,3 +241,65 @@ describe('useGlobalKeybindingHandler — chord support', () => {
     expect(statusBar.entries.get()).toHaveLength(0)
   })
 })
+
+describe('useGlobalKeybindingHandler — ESC always fires globally', () => {
+  let disposables: IDisposable[] = []
+
+  afterEach(() => {
+    disposables.forEach((d) => d.dispose())
+    disposables = []
+    document.body.innerHTML = ''
+  })
+
+  function bind(key: string, command: string) {
+    disposables.push(KeybindingsRegistry.registerKeybinding({ key, command }))
+  }
+
+  function mountHost(instantiation: InstantiationService) {
+    return render(
+      <ServicesContext.Provider value={instantiation}>
+        <TestHost />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  // ESC 必须能穿透 isEditableTarget 守卫，这样当焦点在 Output 面板的 <select>
+  // 或其他非编辑类但被归为"editable"的元素上时，ESC 仍能将焦点还给编辑器。
+
+  it('fires escape-bound command even when a SELECT element is focused', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('escape', 'test.focusEditor')
+    mountHost(instantiation)
+
+    const select = document.createElement('select')
+    document.body.appendChild(select)
+    dispatch({ key: 'Escape', from: select })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.focusEditor')
+  })
+
+  it('fires escape-bound command even when an INPUT element is focused', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('escape', 'test.focusEditor')
+    mountHost(instantiation)
+
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    dispatch({ key: 'Escape', from: input })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.focusEditor')
+  })
+
+  it('fires escape-bound command even when a contenteditable div is focused', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('escape', 'test.focusEditor')
+    mountHost(instantiation)
+
+    const div = document.createElement('div')
+    div.contentEditable = 'true'
+    document.body.appendChild(div)
+    dispatch({ key: 'Escape', from: div })
+
+    expect(executeCommand).toHaveBeenCalledWith('test.focusEditor')
+  })
+})

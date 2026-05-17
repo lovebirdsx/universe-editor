@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   EditorInput,
@@ -18,6 +18,7 @@ import {
   CloseEditorsToTheRightAction,
   CloseOtherEditorsAction,
   FirstEditorInGroupAction,
+  FocusActiveEditorGroupAction,
   FocusFirstGroupAction,
   FocusLastGroupAction,
   FocusNextGroupAction,
@@ -31,6 +32,8 @@ import {
   SplitEditorUpAction,
 } from '../editorActions.js'
 import { EditorGroupsService } from '../../workbench/editor/EditorGroupsService.js'
+import { FileEditorInput } from '../../workbench/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../workbench/editor/FileEditorRegistry.js'
 
 class TestEditor extends EditorInput {
   constructor(private readonly _name: string) {
@@ -246,5 +249,51 @@ describe('Built-in editor Action2s', () => {
         (i) => 'command' in i && i.command === SplitEditorRightAction.ID,
       ),
     ).toBe(true)
+  })
+})
+
+describe('FocusActiveEditorGroupAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+    FileEditorRegistry._resetForTests()
+  })
+
+  it('registers escape keybinding and is f1', () => {
+    disposables.push(registerAction2(FocusActiveEditorGroupAction))
+    expect(KeybindingsRegistry.resolveKeybinding('escape')).toBe(FocusActiveEditorGroupAction.ID)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === FocusActiveEditorGroupAction.ID,
+      ),
+    ).toBe(true)
+  })
+
+  it('run() calls focus() on the active Monaco editor when a FileEditorInput is active', () => {
+    const svc = new EditorGroupsService()
+    // Object.create bypasses DI constructor; instanceof check still passes.
+    const input = Object.create(FileEditorInput.prototype) as FileEditorInput
+    svc.activeGroup.openEditor(input)
+
+    const focus = vi.fn()
+    FileEditorRegistry.register(input, { focus } as never)
+
+    exec(FocusActiveEditorGroupAction, svc)
+
+    expect(focus).toHaveBeenCalledOnce()
+  })
+
+  it('run() does not throw when no Monaco editor is registered for the active input', () => {
+    const svc = new EditorGroupsService()
+    const input = Object.create(FileEditorInput.prototype) as FileEditorInput
+    svc.activeGroup.openEditor(input)
+    // FileEditorRegistry has no entry → optional-chain must not crash
+    expect(() => exec(FocusActiveEditorGroupAction, svc)).not.toThrow()
+  })
+
+  it('run() is a no-op when the active editor is not a FileEditorInput', () => {
+    const svc = new EditorGroupsService()
+    svc.activeGroup.openEditor(new TestEditor('x'))
+    expect(() => exec(FocusActiveEditorGroupAction, svc)).not.toThrow()
   })
 })

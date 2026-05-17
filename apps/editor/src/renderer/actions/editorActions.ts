@@ -14,6 +14,8 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { closeEditorWithConfirm } from '../workbench/editor/closeEditorWithConfirm.js'
+import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../workbench/editor/FileEditorRegistry.js'
 
 // ---------------------------------------------------------------------------
 // Close group
@@ -336,5 +338,25 @@ export class FocusLastGroupAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const last = groups.findGroup({ location: GroupLocation.Last })
     if (last) groups.activateGroup(last)
+  }
+}
+
+export class FocusActiveEditorGroupAction extends Action2 {
+  static readonly ID = 'workbench.action.focusActiveEditorGroup'
+  constructor() {
+    super({
+      id: FocusActiveEditorGroupAction.ID,
+      title: 'Focus Active Editor Group',
+      category: 'View',
+      keybinding: { primary: 'escape' },
+      precondition: 'hasActiveEditor',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const activeEditor = accessor.get(IEditorGroupsService).activeGroup.activeEditor
+    if (activeEditor instanceof FileEditorInput) {
+      FileEditorRegistry.get(activeEditor)?.focus()
+    }
   }
 }

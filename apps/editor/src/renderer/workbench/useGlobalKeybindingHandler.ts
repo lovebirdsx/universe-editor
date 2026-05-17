@@ -81,9 +81,11 @@ export function useGlobalKeybindingHandler(): void {
     }
 
     const handler = (e: KeyboardEvent) => {
-      if (isEditableTarget(e.target) && !hasFunctionalModifier(e)) return
-      // Ignore standalone modifier keydown events; they only matter combined.
       if (isModifierOnly(e.key)) return
+      // ESC is always processed globally even from editable targets (INPUT / SELECT /
+      // contentEditable). Without this exception, pressing ESC inside the Output panel's
+      // channel <select> would be silently swallowed and never reach the focus-editor action.
+      if (e.key !== 'Escape' && isEditableTarget(e.target) && !hasFunctionalModifier(e)) return
 
       const key = buildKeyString(e)
       const pending = pendingRef.current
