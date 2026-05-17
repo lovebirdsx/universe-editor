@@ -143,8 +143,11 @@ class KeybindingsRegistryImpl {
    * Feed a keystroke through the chord state machine.
    * Caller passes `pending = [firstChord]` when continuing a chord, undefined
    * (or empty) for a fresh keystroke. Behaviour:
-   * - If a single-stroke binding matches → `execute`.
-   * - Else if at least one 2-stroke chord starts with `key` → `enter-chord`.
+   * - **Chord-first**: if any 2-stroke chord starts with `key` and its
+   *   when-clause passes, returns `enter-chord` — even when a single-stroke
+   *   binding shares the same key. This matches VSCode's behaviour: a chord
+   *   prefix shadows the single-stroke binding so the chord remains reachable.
+   * - If no active chord prefix exists, a single-stroke binding is executed.
    * - When `pending` is supplied: matches against 2-stroke chords whose
    *   `chords[0] === pending[0] && chords[1] === key`.
    */
@@ -170,10 +173,10 @@ class KeybindingsRegistryImpl {
       return { kind: 'no-match' }
     }
 
-    // Single-stroke first: 1-chord matches take priority over 2-chord starts.
-    const singleHit = this.resolveKeybinding(normalized, contextKeyService)
-    if (singleHit !== undefined) return { kind: 'execute', command: singleHit }
-
+    // Chord-first: if any 2-stroke chord starts with this key and its
+    // when-clause is satisfied, enter chord mode. This prevents a competing
+    // single-stroke binding on the same key from swallowing the chord's
+    // first stroke.
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
       if (binding.chords.length !== 2) continue
@@ -184,6 +187,11 @@ class KeybindingsRegistryImpl {
       }
       return { kind: 'enter-chord', pending: [normalized] }
     }
+
+    // No active chord prefix — fall through to single-stroke.
+    const singleHit = this.resolveKeybinding(normalized, contextKeyService)
+    if (singleHit !== undefined) return { kind: 'execute', command: singleHit }
+
     return { kind: 'no-match' }
   }
 

@@ -29,6 +29,7 @@ import {
   SplitEditorUpAction,
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
+import { OpenKeybindingsEditorAction } from './preferencesActions.js'
 import { AboutAction, CloseWindowAction, ToggleDevToolsAction } from './windowActions.js'
 import {
   ClearRecentWorkspacesAction,
@@ -89,6 +90,7 @@ registerAction2(FocusLastGroupAction)
 
 // Preferences
 registerAction2(OpenSettingsAction)
+registerAction2(OpenKeybindingsEditorAction)
 
 // Workspace
 registerAction2(OpenFolderAction)

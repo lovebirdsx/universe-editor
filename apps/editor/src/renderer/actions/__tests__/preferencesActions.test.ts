@@ -78,12 +78,9 @@ describe('OpenSettingsAction', () => {
     expect(g1.editors[0]).toBeInstanceOf(SettingsEditorInput)
   })
 
-  it('also resolves via the Ctrl+K Ctrl+S chord', () => {
+  it('registers with Ctrl+, keybinding', () => {
     disposables.push(registerAction2(OpenSettingsAction))
-    const first = KeybindingsRegistry.resolveKeystroke('ctrl+k')
-    expect(first.kind).toBe('enter-chord')
-    const second = KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])
-    expect(second).toEqual({ kind: 'execute', command: OpenSettingsAction.ID })
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+,')).toBe(OpenSettingsAction.ID)
   })
 
   it('contributes to MenubarFileMenu under group 5_preferences', () => {

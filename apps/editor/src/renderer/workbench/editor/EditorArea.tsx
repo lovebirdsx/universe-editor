@@ -14,6 +14,8 @@ import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { SettingsEditor } from '../preferences/SettingsEditor.js'
 import { SettingsEditorInput } from '../preferences/SettingsEditorInput.js'
+import { KeybindingsEditor } from '../keybindings/KeybindingsEditor.js'
+import { KeybindingsEditorInput } from '../keybindings/KeybindingsEditorInput.js'
 import { WelcomeEditorInput } from './WelcomeEditorInput.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
 import { FileEditorInput } from './FileEditorInput.js'
@@ -30,6 +32,7 @@ export const editorComponentMap = new Map<string, ComponentType<{ input: IEditor
 // Register built-in welcome editor
 editorComponentMap.set('welcome', WelcomeEditor)
 editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEditorInput }>)
+editorComponentMap.set('keybindings', KeybindingsEditor as ComponentType<{ input: IEditorInput }>)
 editorComponentMap.set('file', FileEditor)
 
 // Editor providers map typeId → componentKey so EditorGroupView can resolve the
@@ -44,6 +47,11 @@ EditorRegistry.registerEditorProvider({
   typeId: SettingsEditorInput.TYPE_ID,
   componentKey: 'settings',
   deserialize: () => SettingsEditorInput.deserialize(),
+})
+EditorRegistry.registerEditorProvider({
+  typeId: KeybindingsEditorInput.TYPE_ID,
+  componentKey: 'keybindings',
+  deserialize: () => KeybindingsEditorInput.deserialize(),
 })
 EditorRegistry.registerEditorProvider({
   typeId: FileEditorInput.TYPE_ID,

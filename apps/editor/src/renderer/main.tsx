@@ -48,6 +48,10 @@ import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
 import { RendererDialogService } from './workbench/dialog/RendererDialogService.js'
 import { UserSettingsSync } from './workbench/configuration/UserSettingsSync.js'
+import {
+  UserKeybindingsService,
+  IUserKeybindingsService,
+} from './workbench/keybindings/UserKeybindingsService.js'
 import { RendererWorkspaceService } from './workbench/workspace/RendererWorkspaceService.js'
 import {
   ExplorerTreeService,
@@ -175,6 +179,13 @@ async function bootstrapWorkbench(): Promise<void> {
   // (Settings editor, theme contributions) refresh — no need to await here.
   const userSettingsSync = instantiation.createInstance(UserSettingsSync)
   void userSettingsSync.initialize()
+
+  // User keybinding overrides. Must be created after all actions are registered
+  // (they run at module-load time via side-effect imports) so the default
+  // snapshot in the constructor captures all built-in keybindings.
+  const userKeybindingsService = instantiation.createInstance(UserKeybindingsService)
+  services.set(IUserKeybindingsService, userKeybindingsService)
+  void userKeybindingsService.initialize()
 
   // Instantiate the six workbench Parts. Each Part auto-registers with the
   // LayoutService on construction; React lookups (`getPart`) resolve them.

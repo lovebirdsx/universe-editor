@@ -386,7 +386,9 @@ describe('KeybindingsRegistry — chord bindings', () => {
     d.dispose()
   })
 
-  it('single-stroke takes priority when both exist on the same first key', () => {
+  it('chord-first: chord prefix shadows a single-stroke on the same first key', () => {
+    // VSCode behaviour: if a chord starts with the pressed key, always enter
+    // chord mode — even when a single-stroke binding shares that key.
     const d1 = KeybindingsRegistry.registerKeybinding({
       chords: ['ctrl+k', 'ctrl+s'],
       command: 'chord.cmd',
@@ -395,10 +397,57 @@ describe('KeybindingsRegistry — chord bindings', () => {
       key: 'ctrl+k',
       command: 'single.cmd',
     })
+    // Pressing ctrl+k should enter chord mode, not execute single.cmd.
     const r = KeybindingsRegistry.resolveKeystroke('ctrl+k')
-    expect(r).toEqual({ kind: 'execute', command: 'single.cmd' })
+    expect(r.kind).toBe('enter-chord')
+    // Second stroke completes the chord.
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])).toEqual({
+      kind: 'execute',
+      command: 'chord.cmd',
+    })
+    // After removing the chord, the single-stroke is reachable again.
+    d1.dispose()
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toEqual({
+      kind: 'execute',
+      command: 'single.cmd',
+    })
+    d2.dispose()
+  })
+
+  it('single-stroke fires when chord when-clause is not satisfied', () => {
+    // If the chord's when-clause is false, its first key no longer blocks
+    // the single-stroke binding.
+    const svc = new ContextKeyService()
+    svc.set('chord.active', false)
+    const d1 = KeybindingsRegistry.registerKeybinding({
+      key: 'ctrl+k',
+      command: 'single.cmd',
+    })
+    const d2 = KeybindingsRegistry.registerKeybinding({
+      chords: ['ctrl+k', 'ctrl+s'],
+      command: 'chord.cmd',
+      when: 'chord.active',
+    })
+    // when-clause false → chord not reachable → single-stroke fires
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc)).toEqual({
+      kind: 'execute',
+      command: 'single.cmd',
+    })
+    // when-clause true → chord shadows single-stroke
+    svc.set('chord.active', true)
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc).kind).toBe('enter-chord')
     d2.dispose()
     d1.dispose()
+    svc.dispose()
+  })
+
+  it('single-stroke fires when no chord exists for that key', () => {
+    const d = KeybindingsRegistry.registerKeybinding({ key: 'ctrl+k', command: 'single.only' })
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toEqual({
+      kind: 'execute',
+      command: 'single.only',
+    })
+    d.dispose()
   })
 
   it('legacy resolveKeybinding ignores chord items', () => {
