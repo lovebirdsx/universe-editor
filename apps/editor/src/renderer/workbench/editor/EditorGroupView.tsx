@@ -37,8 +37,8 @@ export interface EditorGroupViewProps {
   fallback?: React.ReactNode
 }
 
-/** Subscribes to a group's model + active changes and returns a tick value. */
-function useGroupVersion(group: IEditorGroup): number {
+/** Subscribes to a group's model + active changes and returns a snapshot string. */
+function useGroupVersion(group: IEditorGroup): string {
   return useSyncExternalStore(
     (onChange) => {
       const a = group.onDidChangeModel(() => onChange())
@@ -48,7 +48,7 @@ function useGroupVersion(group: IEditorGroup): number {
         b.dispose()
       }
     },
-    () => group.editors.length * 31 + (group.activeEditor ? 1 : 0),
+    () => `${group.editors.length}:${group.activeEditor?.id ?? ''}`,
   )
 }
 
