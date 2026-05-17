@@ -10,6 +10,8 @@
 import {
   useSyncExternalStore,
   useState,
+  useRef,
+  useEffect,
   type ComponentType,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
@@ -113,15 +115,57 @@ export function EditorGroupView({
   componentMap,
   fallback,
 }: EditorGroupViewProps) {
-  useGroupVersion(group)
+  const groupVersion = useGroupVersion(group)
   const activeGroup = useActiveGroup(groupsService)
   const isActiveGroup = activeGroup === group
   const dialogService = useService(IDialogService)
   const commandService = useService(ICommandService)
   const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null)
+  const tabBarRef = useRef<HTMLDivElement>(null)
+  const [canScrollLeft, setCanScrollLeft] = useState(false)
+  const [canScrollRight, setCanScrollRight] = useState(false)
 
   const handleFocus = () => {
     if (!isActiveGroup) groupsService.activateGroup(group)
+  }
+
+  // When the active tab changes or tabs are added/removed, ensure the active tab is visible.
+  useEffect(() => {
+    const el = tabBarRef.current
+    if (!el) return
+    const activeTab = el.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (!activeTab) return
+    const elLeft = el.scrollLeft
+    const elRight = elLeft + el.clientWidth
+    const tabLeft = activeTab.offsetLeft
+    const tabRight = tabLeft + activeTab.offsetWidth
+    if (tabLeft < elLeft) {
+      el.scrollLeft = tabLeft
+    } else if (tabRight > elRight) {
+      el.scrollLeft = tabRight - el.clientWidth
+    }
+  }, [groupVersion])
+
+  // Keep scroll-arrow visibility in sync with the tab bar's scroll state.
+  useEffect(() => {
+    const el = tabBarRef.current
+    if (!el) return
+    const update = () => {
+      setCanScrollLeft(el.scrollLeft > 0)
+      setCanScrollRight(Math.ceil(el.scrollLeft + el.clientWidth) < el.scrollWidth)
+    }
+    update()
+    el.addEventListener('scroll', update, { passive: true })
+    const ro = new ResizeObserver(update)
+    ro.observe(el)
+    return () => {
+      el.removeEventListener('scroll', update)
+      ro.disconnect()
+    }
+  }, [])
+
+  const scrollTabs = (direction: 'left' | 'right') => {
+    tabBarRef.current?.scrollBy({ left: direction === 'left' ? -150 : 150, behavior: 'smooth' })
   }
 
   const renderContent = () => {
@@ -145,27 +189,49 @@ export function EditorGroupView({
       data-group-id={group.id}
     >
       {group.editors.length > 0 && (
-        <div className={styles['tabBar']} role="tablist">
-          {group.editors.map((e) => (
-            <EditorTab
-              key={e.id}
-              input={e}
-              isActive={group.activeEditor?.id === e.id}
-              isPreview={group.previewEditor === e}
-              onActivate={() => group.setActive(e)}
-              onPin={() => group.pinEditor(e)}
-              onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
-              onContextMenu={(ev) => {
-                ev.preventDefault()
-                const resourceLike = (e as unknown as { resource?: URI }).resource
-                setTabMenu({
-                  x: ev.clientX,
-                  y: ev.clientY,
-                  resource: resourceLike instanceof URI ? resourceLike : null,
-                })
-              }}
-            />
-          ))}
+        <div className={styles['tabBarWrapper']}>
+          {canScrollLeft && (
+            <button
+              className={styles['tabScrollBtn']}
+              onClick={() => scrollTabs('left')}
+              aria-label="Scroll tabs left"
+              tabIndex={-1}
+            >
+              ‹
+            </button>
+          )}
+          <div ref={tabBarRef} className={styles['tabBar']} role="tablist">
+            {group.editors.map((e) => (
+              <EditorTab
+                key={e.id}
+                input={e}
+                isActive={group.activeEditor?.id === e.id}
+                isPreview={group.previewEditor === e}
+                onActivate={() => group.setActive(e)}
+                onPin={() => group.pinEditor(e)}
+                onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
+                onContextMenu={(ev) => {
+                  ev.preventDefault()
+                  const resourceLike = (e as unknown as { resource?: URI }).resource
+                  setTabMenu({
+                    x: ev.clientX,
+                    y: ev.clientY,
+                    resource: resourceLike instanceof URI ? resourceLike : null,
+                  })
+                }}
+              />
+            ))}
+          </div>
+          {canScrollRight && (
+            <button
+              className={styles['tabScrollBtn']}
+              onClick={() => scrollTabs('right')}
+              aria-label="Scroll tabs right"
+              tabIndex={-1}
+            >
+              ›
+            </button>
+          )}
         </div>
       )}
       <div className={styles['editorContent']}>{renderContent()}</div>
