@@ -79,7 +79,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       if (editorRef.current) FileEditorRegistry.unregister(fileInput, editorRef.current)
       if (acquired) MonacoModelRegistry.release(fileInput.resource)
     }
-  }, [fileInput])
+  }, [fileInput, groupsService.groups])
 
   return <div ref={containerRef} className={styles['fileEditor']} data-testid="file-editor" />
 }
