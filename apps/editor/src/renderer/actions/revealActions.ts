@@ -1,9 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  RevealActiveFileInExplorerAction — Ctrl+Shift+E (and the tab right-click
- *  entry) activates the Explorer container, expands ancestors, and selects the
- *  resource. Falls back to the active editor's resource when no argument is
- *  supplied.
+ *  RevealActiveFileInExplorerAction — reveals the active file in the Explorer
+ *  tree (tab right-click entry and F1 command palette). Ctrl+Shift+E is owned
+ *  by ShowExplorerAction (show/hide toggle); this action has no default binding.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -33,9 +32,8 @@ export class RevealActiveFileInExplorerAction extends Action2 {
   constructor() {
     super({
       id: RevealActiveFileInExplorerAction.ID,
-      title: '在资源管理器中显示活动文件',
+      title: 'Reveal Active File in Explorer',
       category: 'File',
-      keybinding: { primary: 'ctrl+shift+e' },
       menu: [{ id: MenuId.EditorTabContext, group: 'reveal', order: 1 }],
       f1: true,
     })
@@ -49,7 +47,7 @@ export class RevealActiveFileInExplorerAction extends Action2 {
       if (active instanceof FileEditorInput) resource = active.resource
     }
     if (!resource || resource.scheme !== 'file') return
-    accessor.get(IViewsService).openViewContainer('explorer')
+    accessor.get(IViewsService).openViewContainer('workbench.view.explorer')
     await accessor.get(IExplorerTreeService).reveal(resource)
   }
 }

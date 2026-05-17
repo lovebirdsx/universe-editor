@@ -17,6 +17,7 @@ import {
   PartId,
   ServiceCollection,
   URI,
+  ViewContainerLocation,
   registerAction2,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -54,6 +55,7 @@ describe('FindInFilesAction', () => {
     const openViewContainer = vi.fn()
     const setVisible = vi.fn()
     const getVisible = vi.fn().mockReturnValue(false)
+    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
     const services = new ServiceCollection()
     services.set(ILayoutService, {
       _serviceBrand: undefined,
@@ -64,6 +66,7 @@ describe('FindInFilesAction', () => {
     services.set(IViewsService, {
       _serviceBrand: undefined,
       openViewContainer,
+      getActiveViewContainerId,
     } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
@@ -85,8 +88,77 @@ describe('FindInFilesAction', () => {
     expect(fired).toBe('foo')
   })
 
+  it('run() hides SideBar when it is visible and search is the active container', async () => {
+    const setVisible = vi.fn()
+    const openViewContainer = vi.fn()
+    const getActiveViewContainerId = vi.fn().mockReturnValue('workbench.view.search')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible: vi.fn().mockReturnValue(true),
+      setVisible,
+      toggleVisible: vi.fn(),
+    } as never)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId,
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(FindInFilesAction))
+
+    let fired: string | null | undefined = 'unset'
+    const listener = (e: Event) => {
+      fired = (e as CustomEvent<string | null>).detail
+    }
+    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+    })
+    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
+
+    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
+    expect(openViewContainer).not.toHaveBeenCalled()
+    expect(fired).toBe('unset')
+  })
+
+  it('run() switches to search without hiding when SideBar is visible with a different container', async () => {
+    const setVisible = vi.fn()
+    const openViewContainer = vi.fn()
+    const getActiveViewContainerId = vi.fn().mockReturnValue('workbench.view.explorer')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible: vi.fn().mockReturnValue(true),
+      setVisible,
+      toggleVisible: vi.fn(),
+    } as never)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId,
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(FindInFilesAction))
+
+    let fired: string | null | undefined = 'unset'
+    const listener = (e: Event) => {
+      fired = (e as CustomEvent<string | null>).detail
+    }
+    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+    })
+    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
+
+    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.search')
+    expect(setVisible).not.toHaveBeenCalled()
+    expect(fired).not.toBe('unset')
+  })
+
   it('run() with no query dispatches null detail', async () => {
     const openViewContainer = vi.fn()
+    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
     const services = new ServiceCollection()
     services.set(ILayoutService, {
       _serviceBrand: undefined,
@@ -97,6 +169,7 @@ describe('FindInFilesAction', () => {
     services.set(IViewsService, {
       _serviceBrand: undefined,
       openViewContainer,
+      getActiveViewContainerId,
     } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))

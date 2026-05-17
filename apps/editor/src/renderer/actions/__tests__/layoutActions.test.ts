@@ -16,12 +16,14 @@ import {
   PartId,
   ServiceCollection,
   URI,
+  ViewContainerLocation,
   registerAction2,
   type IDisposable,
   type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
   ShowCommandsAction,
+  ShowExplorerAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
@@ -260,5 +262,107 @@ describe('Built-in layout Action2s', () => {
   // type import — the value is used in actions/index.ts at runtime.
   it('IContextKeyService decorator is available', () => {
     expect(IContextKeyService).toBeDefined()
+  })
+})
+
+describe('ShowExplorerAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('registerAction2(ShowExplorerAction) wires command + keybinding ctrl+shift+e + F1 menu', () => {
+    disposables.push(registerAction2(ShowExplorerAction))
+    expect(CommandsRegistry.getCommand(ShowExplorerAction.ID)).toBeDefined()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+e')).toBe(ShowExplorerAction.ID)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === ShowExplorerAction.ID,
+      ),
+    ).toBe(true)
+  })
+
+  it('run() makes SideBar visible when it is hidden, then opens explorer container', async () => {
+    const setVisible = vi.fn()
+    const getVisible = vi.fn().mockReturnValue(false)
+    const openViewContainer = vi.fn()
+    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
+    const services = new ServiceCollection()
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible,
+      setVisible,
+    } as never)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId,
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExplorerAction))
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+    })
+
+    expect(getVisible).toHaveBeenCalledWith(PartId.SideBar)
+    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
+    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
+  })
+
+  it('run() hides SideBar when it is visible and explorer is the active container', async () => {
+    const setVisible = vi.fn()
+    const getVisible = vi.fn().mockReturnValue(true)
+    const openViewContainer = vi.fn()
+    const getActiveViewContainerId = vi
+      .fn()
+      .mockReturnValue('workbench.view.explorer')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible,
+      setVisible,
+    } as never)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId,
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExplorerAction))
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+    })
+
+    expect(setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
+    expect(openViewContainer).not.toHaveBeenCalled()
+  })
+
+  it('run() switches to explorer without toggling when SideBar is visible with a different container', async () => {
+    const setVisible = vi.fn()
+    const getVisible = vi.fn().mockReturnValue(true)
+    const openViewContainer = vi.fn()
+    const getActiveViewContainerId = vi.fn().mockReturnValue('workbench.view.search')
+    const services = new ServiceCollection()
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      getVisible,
+      setVisible,
+    } as never)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      openViewContainer,
+      getActiveViewContainerId,
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowExplorerAction))
+
+    await inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+    })
+
+    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
+    expect(setVisible).not.toHaveBeenCalled()
   })
 })

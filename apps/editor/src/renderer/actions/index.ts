@@ -6,6 +6,7 @@
 import { registerAction2 } from '@universe-editor/platform'
 import {
   ShowCommandsAction,
+  ShowExplorerAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
@@ -63,6 +64,7 @@ registerAction2(ToggleSidebarVisibilityAction)
 registerAction2(ToggleSecondarySidebarVisibilityAction)
 registerAction2(TogglePanelAction)
 registerAction2(ShowCommandsAction)
+registerAction2(ShowExplorerAction)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)

@@ -94,7 +94,7 @@ describe('RevealActiveFileInExplorerAction', () => {
     const input = makeFileInput(target)
     const h = makeHarness(input)
     await run(h.inst, RevealActiveFileInExplorerAction.ID)
-    expect(h.views.openedContainers).toEqual(['explorer'])
+    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 
@@ -102,7 +102,7 @@ describe('RevealActiveFileInExplorerAction', () => {
     const target = URI.file('/ws/lib/util.ts')
     const h = makeHarness()
     await run(h.inst, RevealActiveFileInExplorerAction.ID, { resource: target.toJSON() })
-    expect(h.views.openedContainers).toEqual(['explorer'])
+    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
     expect(h.tree.revealed).toEqual([target.toString()])
   })
 

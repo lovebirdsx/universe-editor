@@ -3,6 +3,8 @@ import {
   ViewContainerRegistry,
   ViewContainerLocation,
   IViewsService,
+  ILayoutService,
+  PartId,
 } from '@universe-editor/platform'
 import type { IPart, IViewContainerDescriptor } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
@@ -39,6 +41,7 @@ function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps
 
 export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
   const viewsService = useService(IViewsService)
+  const layoutService = useService(ILayoutService)
   const activeContainerByLocation = useObservable(viewsService.activeContainerByLocation)
   const activeId = activeContainerByLocation[ViewContainerLocation.SideBar]
   const [containers, setContainers] = useState<IViewContainerDescriptor[]>([])
@@ -55,13 +58,17 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
 
   const handleClick = useCallback(
     (id: string) => {
-      if (activeId === id) {
-        viewsService.closeViewContainer(id)
+      const sidebarVisible = layoutService.getVisible(PartId.SideBar)
+      if (activeId === id && sidebarVisible) {
+        layoutService.setVisible(PartId.SideBar, false)
       } else {
         viewsService.openViewContainer(id)
+        if (!sidebarVisible) {
+          layoutService.setVisible(PartId.SideBar, true)
+        }
       }
     },
-    [viewsService, activeId],
+    [viewsService, layoutService, activeId],
   )
 
   return (

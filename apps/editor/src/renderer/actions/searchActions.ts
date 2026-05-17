@@ -9,6 +9,7 @@ import {
   ILayoutService,
   IViewsService,
   PartId,
+  ViewContainerLocation,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
@@ -21,7 +22,7 @@ export class FindInFilesAction extends Action2 {
   constructor() {
     super({
       id: FindInFilesAction.ID,
-      title: '在文件中查找',
+      title: 'Find in Files',
       category: 'Search',
       keybinding: { primary: 'ctrl+shift+f' },
       f1: true,
@@ -31,14 +32,20 @@ export class FindInFilesAction extends Action2 {
   override run(accessor: ServicesAccessor, args?: { query?: string }): void {
     const layoutService = accessor.get(ILayoutService)
     const viewsService = accessor.get(IViewsService)
-    if (!layoutService.getVisible(PartId.SideBar)) {
-      layoutService.setVisible(PartId.SideBar, true)
-    }
-    viewsService.openViewContainer('workbench.view.search')
-    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-      document.dispatchEvent(
-        new CustomEvent(SEARCH_FOCUS_INPUT_EVENT, { detail: args?.query ?? null }),
-      )
+    const sidebarVisible = layoutService.getVisible(PartId.SideBar)
+    const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
+    if (sidebarVisible && activeId === 'workbench.view.search') {
+      layoutService.setVisible(PartId.SideBar, false)
+    } else {
+      viewsService.openViewContainer('workbench.view.search')
+      if (!sidebarVisible) {
+        layoutService.setVisible(PartId.SideBar, true)
+      }
+      if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+        document.dispatchEvent(
+          new CustomEvent(SEARCH_FOCUS_INPUT_EVENT, { detail: args?.query ?? null }),
+        )
+      }
     }
   }
 }
@@ -57,7 +64,7 @@ export class FindInFileAction extends Action2 {
   constructor() {
     super({
       id: FindInFileAction.ID,
-      title: '查找',
+      title: 'Find',
       category: 'Editor',
       keybinding: { primary: 'ctrl+f' },
       precondition: 'hasActiveEditor',
@@ -74,7 +81,7 @@ export class FindReplaceInFileAction extends Action2 {
   constructor() {
     super({
       id: FindReplaceInFileAction.ID,
-      title: '替换',
+      title: 'Replace',
       category: 'Editor',
       keybinding: { primary: 'ctrl+h' },
       precondition: 'hasActiveEditor',
@@ -91,7 +98,7 @@ export class FindNextAction extends Action2 {
   constructor() {
     super({
       id: FindNextAction.ID,
-      title: '查找下一个',
+      title: 'Find Next',
       category: 'Editor',
       keybinding: { primary: 'f3' },
       precondition: 'hasActiveEditor',
@@ -108,7 +115,7 @@ export class FindPreviousAction extends Action2 {
   constructor() {
     super({
       id: FindPreviousAction.ID,
-      title: '查找上一个',
+      title: 'Find Previous',
       category: 'Editor',
       keybinding: { primary: 'shift+f3' },
       precondition: 'hasActiveEditor',

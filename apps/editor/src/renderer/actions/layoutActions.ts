@@ -25,6 +25,34 @@ import {
 } from '../workbench/quickinput/monacoCommandSource.js'
 import { resolveShortcut } from '../workbench/titlebar/keybindingFormat.js'
 
+export class ShowExplorerAction extends Action2 {
+  static readonly ID = 'workbench.view.explorer'
+  constructor() {
+    super({
+      id: ShowExplorerAction.ID,
+      title: 'Show Explorer',
+      category: 'View',
+      keybinding: { primary: 'ctrl+shift+e' },
+      menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 2 },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    const sidebarVisible = layoutService.getVisible(PartId.SideBar)
+    const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
+    if (sidebarVisible && activeId === 'workbench.view.explorer') {
+      layoutService.setVisible(PartId.SideBar, false)
+    } else {
+      viewsService.openViewContainer('workbench.view.explorer')
+      if (!sidebarVisible) {
+        layoutService.setVisible(PartId.SideBar, true)
+      }
+    }
+  }
+}
+
 export class ToggleSidebarVisibilityAction extends Action2 {
   static readonly ID = 'workbench.action.toggleSidebarVisibility'
   constructor() {

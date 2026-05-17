@@ -325,7 +325,7 @@ export class OpenRecentFilesAction extends Action2 {
       id: OpenRecentFilesAction.ID,
       title: 'Open Recent File…',
       category: 'File',
-      keybinding: { primary: 'ctrl+shift+r' },
+      keybinding: { primary: 'ctrl+p' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 2 },
       f1: true,
     })
