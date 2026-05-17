@@ -26,6 +26,15 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     plugins: [react()],
+    optimizeDeps: {
+      esbuildOptions: {
+        tsconfigRaw: {
+          compilerOptions: {
+            experimentalDecorators: true,
+          },
+        },
+      },
+    },
     worker: {
       format: 'es',
     },
