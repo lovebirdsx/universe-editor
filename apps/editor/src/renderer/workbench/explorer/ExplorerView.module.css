@@ -96,3 +96,9 @@
   background: var(--color-menu-selection-bg, #094771);
   color: var(--color-menu-selection-fg, #ffffff);
 }
+
+.menuSeparator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--color-menu-border, #454545);
+}

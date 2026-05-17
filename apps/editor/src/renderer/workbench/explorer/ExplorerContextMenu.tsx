@@ -32,6 +32,8 @@ interface MenuItem {
   readonly run: () => void
 }
 
+type MenuEntry = MenuItem | { readonly id: string; readonly separator: true }
+
 export function ExplorerContextMenu({ state, rootResource, tree, commandService, onClose }: Props) {
   const ref = useRef<HTMLUListElement>(null)
 
@@ -61,7 +63,7 @@ export function ExplorerContextMenu({ state, rootResource, tree, commandService,
     void commandService.executeCommand(commandId, args)
   }
 
-  const items: MenuItem[] = []
+  const items: MenuEntry[] = []
   items.push({
     id: 'newFile',
     label: 'New File',
@@ -73,6 +75,7 @@ export function ExplorerContextMenu({ state, rootResource, tree, commandService,
     run: () => run('workbench.files.action.newFolder', { parent: newParent }),
   })
   if (target) {
+    items.push({ id: 'sep1', separator: true })
     items.push({
       id: 'rename',
       label: 'Rename',
@@ -87,6 +90,20 @@ export function ExplorerContextMenu({ state, rootResource, tree, commandService,
           isDirectory: isDir,
         }),
     })
+    items.push({ id: 'sep2', separator: true })
+    if (!isDir) {
+      items.push({
+        id: 'openWithDefaultApp',
+        label: 'Open with Default Application',
+        run: () => run('workbench.files.action.openWithDefaultApp', { target: target.resource }),
+      })
+    }
+    items.push({
+      id: 'revealInFolder',
+      label: 'Reveal in File Explorer',
+      run: () => run('workbench.files.action.revealInOsExplorer', { resource: target.resource }),
+    })
+    items.push({ id: 'sep3', separator: true })
   }
   items.push({
     id: 'refresh',
@@ -99,11 +116,15 @@ export function ExplorerContextMenu({ state, rootResource, tree, commandService,
 
   return createPortal(
     <ul ref={ref} role="menu" className={styles['menu']} style={{ top: state.y, left: state.x }}>
-      {items.map((it) => (
-        <li key={it.id} role="menuitem" className={styles['menuItem']} onClick={it.run}>
-          {it.label}
-        </li>
-      ))}
+      {items.map((it) =>
+        'separator' in it ? (
+          <li key={it.id} role="separator" className={styles['menuSeparator']} />
+        ) : (
+          <li key={it.id} role="menuitem" className={styles['menuItem']} onClick={it.run}>
+            {it.label}
+          </li>
+        ),
+      )}
     </ul>,
     document.body,
   )

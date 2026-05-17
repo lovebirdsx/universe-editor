@@ -85,6 +85,10 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
+  openWithDefaultApp(path: string): Promise<string> {
+    return shell.openPath(path)
+  }
+
   dispose(): void {
     if (!this._win.isDestroyed()) {
       this._win.removeListener('maximize', this._onMaximize)

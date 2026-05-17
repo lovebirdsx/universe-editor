@@ -56,6 +56,9 @@ class FakeHost implements IHostServiceWire {
   showItemInFolder(): Promise<void> {
     return Promise.resolve()
   }
+  openWithDefaultApp(_path: string): Promise<string> {
+    return Promise.resolve('')
+  }
   fire(v: boolean): void {
     this._emitter.fire(v)
   }

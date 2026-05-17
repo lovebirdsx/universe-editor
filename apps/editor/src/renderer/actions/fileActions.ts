@@ -383,3 +383,29 @@ export class ClearRecentFilesAction extends Action2 {
     accessor.get(IRecentFilesService).clear()
   }
 }
+
+// ---------------------------------------------------------------------------
+// Shell integration: Open with Default App
+// ---------------------------------------------------------------------------
+
+export class OpenWithDefaultAppAction extends Action2 {
+  static readonly ID = 'workbench.files.action.openWithDefaultApp'
+  constructor() {
+    super({
+      id: OpenWithDefaultAppAction.ID,
+      title: 'Open with Default Application',
+      category: 'File',
+      f1: false,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const target = reviveUri((args[0] as ITargetArg | undefined)?.target ?? null)
+    if (!target) return
+    const host = accessor.get(IHostService)
+    const err = await host.openWithDefaultApp(target.fsPath)
+    if (err) {
+      const dialog = accessor.get(IDialogService)
+      await dialog.confirm({ message: 'Unable to open file', detail: err, type: 'error' })
+    }
+  }
+}

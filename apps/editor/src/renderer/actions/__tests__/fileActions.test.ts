@@ -175,6 +175,9 @@ class FakeHostService implements IHostServiceType {
     return this.saveResult
   }
   async showItemInFolder(_fsPath: string) {}
+  async openWithDefaultApp(_path: string) {
+    return ''
+  }
 }
 
 interface FakeGroup extends IEditorGroup {

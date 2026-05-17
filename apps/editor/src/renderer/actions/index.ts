@@ -44,12 +44,13 @@ import {
   OpenRecentAction,
 } from './workspaceActions.js'
 import {
+  ClearRecentFilesAction,
   DeleteFileAction,
   NewFileAction,
   NewFolderAction,
   OpenFileAction,
   OpenRecentFilesAction,
-  ClearRecentFilesAction,
+  OpenWithDefaultAppAction,
   RenameFileAction,
   SaveFileAction,
   SaveFileAsAction,
@@ -119,6 +120,7 @@ registerAction2(NewFileAction)
 registerAction2(NewFolderAction)
 registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
+registerAction2(OpenWithDefaultAppAction)
 registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
 

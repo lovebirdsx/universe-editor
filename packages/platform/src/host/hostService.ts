@@ -58,6 +58,12 @@ export interface IHostService {
    * cancelled.
    */
   showSaveFileDialog(opts?: IShowSaveFileOptions): Promise<URI | UriComponents | null>
+
+  /**
+   * Open the file at `path` with the OS default application.
+   * Returns an error string on failure, or empty string on success.
+   */
+  openWithDefaultApp(path: string): Promise<string>
 }
 
 export interface IShowOpenFileOptions {
