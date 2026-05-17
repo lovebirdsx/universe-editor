@@ -55,6 +55,10 @@ import {
 } from './workbench/explorer/ExplorerTreeService.js'
 import { TextSearchService } from './workbench/search/TextSearchService.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
+import {
+  IRecentFilesService,
+  RecentFilesService,
+} from './services/recentFiles/recentFilesService.js'
 // Side-effect import: registers built-in contributions with ContributionsRegistry.
 import './contributions/index.js'
 import './workbench.css'
@@ -149,6 +153,9 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IQuickInputService, quickInputService)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)
+
+  const recentFilesService = instantiation.createInstance(RecentFilesService)
+  services.set(IRecentFilesService, recentFilesService)
 
   // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
   const dialogService = new RendererDialogService()

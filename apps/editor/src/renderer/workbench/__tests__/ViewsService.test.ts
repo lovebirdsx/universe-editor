@@ -1,5 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { ViewContainerLocation, ViewContainerRegistry, type IStorageService } from '@universe-editor/platform'
+import {
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  type IStorageService,
+} from '@universe-editor/platform'
 import { ViewsService } from '../sidebar/ViewsService.js'
 
 const stubStorage: IStorageService = {

@@ -19,6 +19,7 @@ import { ExternalChangeWatcher } from '../workbench/editor/ExternalChangeWatcher
 import { WorkspaceRecentMenuContribution } from '../services/workspace/workspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from '../services/workspace/workspaceRestoreContribution.js'
 import { WorkspaceExplorerRevealContribution } from '../services/workspace/workspaceExplorerRevealContribution.js'
+import { RecentFilesContribution } from './RecentFilesContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -91,6 +92,13 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
+// Track recently opened files and provide quick-open access to them.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.recentFiles',
+  RecentFilesContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the
 // EditorArea, otherwise users see the default empty grid flash. BlockRestore
 // runs at LifecyclePhase.Ready which the bootstrap toggles before mount.
@@ -111,4 +119,5 @@ export {
   WorkspaceRecentMenuContribution,
   WorkspaceRestoreContribution,
   WorkspaceExplorerRevealContribution,
+  RecentFilesContribution,
 }

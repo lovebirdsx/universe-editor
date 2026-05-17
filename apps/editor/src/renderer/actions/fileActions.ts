@@ -13,12 +13,14 @@ import {
   IFileService,
   IHostService,
   IInstantiationService,
+  IQuickInputService,
   IWorkspaceService,
   MenuId,
   URI,
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
+import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../workbench/editor/UntitledEditorInput.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
@@ -309,5 +311,75 @@ export class DeleteFileAction extends Action2 {
         type: 'error',
       })
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recent Files
+// ---------------------------------------------------------------------------
+
+export class OpenRecentFilesAction extends Action2 {
+  static readonly ID = 'workbench.action.openRecentFile'
+  constructor() {
+    super({
+      id: OpenRecentFilesAction.ID,
+      title: 'Open Recent File…',
+      category: 'File',
+      keybinding: { primary: 'ctrl+shift+r' },
+      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 2 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const recentFiles = accessor.get(IRecentFilesService)
+    const quickInput = accessor.get(IQuickInputService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+
+    const items = await recentFiles.getAll()
+    if (items.length === 0) return
+
+    const pickItems = items.map((f) => ({
+      id: f.uri.toString(),
+      label: f.name,
+      description: f.uri.fsPath,
+    }))
+
+    const pick = await quickInput.pick(pickItems, {
+      id: 'workbench.recentFiles',
+      placeholder: 'Open Recent File…',
+    })
+    if (!pick) return
+
+    const uri = URI.parse(pick.id)
+
+    // Activate if already open in any group.
+    for (const group of groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+          groups.activateGroup(group)
+          group.setActive(editor)
+          return
+        }
+      }
+    }
+
+    const input = inst.createInstance(FileEditorInput, uri)
+    groups.activeGroup.openEditor(input, { activate: true })
+  }
+}
+
+export class ClearRecentFilesAction extends Action2 {
+  static readonly ID = 'workbench.action.clearRecentFiles'
+  constructor() {
+    super({
+      id: ClearRecentFilesAction.ID,
+      title: 'Clear Recently Opened Files',
+      category: 'File',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IRecentFilesService).clear()
   }
 }

@@ -41,6 +41,8 @@ import {
   NewFileAction,
   NewFolderAction,
   OpenFileAction,
+  OpenRecentFilesAction,
+  ClearRecentFilesAction,
   RenameFileAction,
   SaveFileAction,
   SaveFileAsAction,
@@ -98,6 +100,8 @@ registerAction2(CloseFolderAction)
 registerAction2(SaveFileAction)
 registerAction2(SaveFileAsAction)
 registerAction2(OpenFileAction)
+registerAction2(OpenRecentFilesAction)
+registerAction2(ClearRecentFilesAction)
 registerAction2(NewUntitledFileAction)
 registerAction2(NewFileAction)
 registerAction2(NewFolderAction)
