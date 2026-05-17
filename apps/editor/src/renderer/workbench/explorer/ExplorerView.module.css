@@ -5,6 +5,7 @@
   font-size: 13px;
   color: var(--color-sidebar-fg, #cccccc);
   user-select: none;
+  outline: none;
 }
 
 .empty {

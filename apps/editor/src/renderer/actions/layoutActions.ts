@@ -25,6 +25,8 @@ import {
 } from '../workbench/quickinput/monacoCommandSource.js'
 import { resolveShortcut } from '../workbench/titlebar/keybindingFormat.js'
 
+export const EXPLORER_FOCUS_VIEW_EVENT = 'explorer:focus-view'
+
 export class ShowExplorerAction extends Action2 {
   static readonly ID = 'workbench.view.explorer'
   constructor() {
@@ -42,11 +44,17 @@ export class ShowExplorerAction extends Action2 {
     const viewsService = accessor.get(IViewsService)
     const sidebarVisible = layoutService.getVisible(PartId.SideBar)
     const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
+    const dispatchFocus = () => {
+      if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+        document.dispatchEvent(new CustomEvent(EXPLORER_FOCUS_VIEW_EVENT))
+      }
+    }
     if (sidebarVisible && activeId === 'workbench.view.explorer') {
       if (layoutService.getPart(PartId.SideBar)?.isFocused()) {
         layoutService.setVisible(PartId.SideBar, false)
       } else {
         layoutService.getPart(PartId.SideBar)?.focus()
+        dispatchFocus()
       }
     } else {
       viewsService.openViewContainer('workbench.view.explorer')
@@ -54,6 +62,7 @@ export class ShowExplorerAction extends Action2 {
         layoutService.setVisible(PartId.SideBar, true)
       }
       layoutService.getPart(PartId.SideBar)?.focus()
+      dispatchFocus()
     }
   }
 }

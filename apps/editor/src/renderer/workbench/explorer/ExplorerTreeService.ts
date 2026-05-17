@@ -75,12 +75,52 @@ export class ExplorerTreeService extends Disposable {
     return this._selected
   }
 
+  /**
+   * Parent of `resource` inside the workspace, or null when `resource` is the
+   * root (or lives outside the workspace).
+   */
+  getParent(resource: URI): URI | null {
+    if (!this._root) return null
+    if (resource.toString() === this._root.toString()) return null
+    const parent = parentOf(resource)
+    if (!parent) return null
+    if (!isDescendant(this._root, parent) && parent.toString() !== this._root.toString()) {
+      return null
+    }
+    return parent
+  }
+
+  /**
+   * Flat, top-to-bottom list of every node currently rendered in the tree,
+   * including the workspace root. Used by keyboard navigation to compute
+   * up/down/home/end targets.
+   */
+  getVisibleEntries(): IExplorerEntry[] {
+    if (!this._root) return []
+    const out: IExplorerEntry[] = []
+    out.push({ resource: this._root, name: '', isDirectory: true })
+    this._collectVisible(this._root, out)
+    return out
+  }
+
+  private _collectVisible(parent: URI, acc: IExplorerEntry[]): void {
+    const node = this._nodes.get(parent.toString())
+    if (!node || !node.expanded || !node.children) return
+    for (const child of node.children) {
+      acc.push(child)
+      if (child.isDirectory) this._collectVisible(child.resource, acc)
+    }
+  }
+
   setSelection(resource: URI | null): void {
     const before = this._selected?.toString()
     const after = resource?.toString()
     if (before === after) return
     this._selected = resource
     this._onDidChange.fire()
+    if (resource && typeof document !== 'undefined' && typeof CustomEvent === 'function') {
+      document.dispatchEvent(new CustomEvent('explorer:reveal', { detail: after }))
+    }
   }
 
   /**
