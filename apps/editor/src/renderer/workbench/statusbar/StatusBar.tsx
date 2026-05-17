@@ -39,7 +39,12 @@ export function StatusBar({ part }: { part?: IPart | undefined } = {}) {
     .sort((a, b) => b.entry.priority - a.entry.priority)
 
   return (
-    <footer ref={containerRef} className={styles['statusbar']} aria-label="Status Bar">
+    <footer
+      ref={containerRef}
+      className={styles['statusbar']}
+      aria-label="Status Bar"
+      data-testid="part-statusbar"
+    >
       <div className={styles['left']}>
         {leftEntries.map((e) => (
           <StatusBarItem key={e.id} entry={e.entry} />

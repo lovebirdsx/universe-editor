@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC_PROTOCOL_CHANNEL } from '../shared/ipc/channelNames.js'
+import { E2E_PROBE_ARGV_FLAG, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 
 const bridge = {
   send(data: Uint8Array): void {
@@ -22,5 +23,9 @@ const bridge = {
 }
 
 contextBridge.exposeInMainWorld('ipc', bridge)
+
+if (process.argv.includes(E2E_PROBE_ARGV_FLAG)) {
+  contextBridge.exposeInMainWorld(E2E_PROBE_ENABLED_KEY, true)
+}
 
 export type IpcBridge = typeof bridge

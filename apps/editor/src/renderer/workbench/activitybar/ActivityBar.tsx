@@ -29,6 +29,7 @@ function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps
       title={descriptor.label}
       aria-label={descriptor.label}
       aria-pressed={isActive}
+      data-testid={`activitybar-item-${descriptor.id}`}
     >
       <Icon size={18} strokeWidth={1.75} aria-hidden />
       {showTooltip && <span className={styles['tooltip']}>{descriptor.label}</span>}
@@ -64,7 +65,12 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
   )
 
   return (
-    <nav ref={containerRef} className={styles['activitybar']} aria-label="Activity Bar">
+    <nav
+      ref={containerRef}
+      className={styles['activitybar']}
+      aria-label="Activity Bar"
+      data-testid="part-activitybar"
+    >
       <div className={styles['items']}>
         {containers.map((c) => (
           <ActivityBarItem

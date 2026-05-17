@@ -81,5 +81,5 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     }
   }, [fileInput])
 
-  return <div ref={containerRef} className={styles['fileEditor']} />
+  return <div ref={containerRef} className={styles['fileEditor']} data-testid="file-editor" />
 }

@@ -76,7 +76,7 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
   }
 
   return (
-    <div className={styles['container']} role="dialog" aria-modal>
+    <div className={styles['container']} role="dialog" aria-modal data-testid="quick-input">
       <div className={styles['inputRow']}>
         <input
           ref={inputRef}
@@ -86,6 +86,7 @@ function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: ()
           onKeyDown={handleKey}
           placeholder={state.placeholder ?? 'Type to filter…'}
           aria-label={state.placeholder ?? 'Quick pick input'}
+          data-testid="quick-input-field"
         />
       </div>
       <div className={styles['list']} role="listbox">
@@ -137,7 +138,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
   }
 
   return (
-    <div className={styles['container']} role="dialog" aria-modal>
+    <div className={styles['container']} role="dialog" aria-modal data-testid="quick-input">
       {state.inputPrompt && <p className={styles['prompt']}>{state.inputPrompt}</p>}
       <div className={styles['inputRow']}>
         <input
@@ -176,7 +177,11 @@ export function QuickInputPortal() {
   if (!panelState) return null
 
   return createPortal(
-    <div className={styles['overlay']} onClick={() => setPanelState(null)}>
+    <div
+      className={styles['overlay']}
+      onClick={() => setPanelState(null)}
+      data-testid="quick-input-overlay"
+    >
       <div onClick={(e) => e.stopPropagation()}>
         {panelState.type === 'pick' ? (
           <QuickPickPanel state={panelState} onClose={() => setPanelState(null)} />

@@ -20,7 +20,7 @@ export function Panel({ part }: { part?: IPart | undefined } = {}) {
   const ActiveComponent = activeTab?.component ?? null
 
   return (
-    <div ref={containerRef} className={styles['panel']}>
+    <div ref={containerRef} className={styles['panel']} data-testid="part-panel">
       <div className={styles['tabBar']} role="tablist">
         {BUILT_IN_TABS.map((tab) => (
           <button
@@ -29,6 +29,7 @@ export function Panel({ part }: { part?: IPart | undefined } = {}) {
             role="tab"
             aria-selected={activeTabId === tab.id}
             onClick={() => setActiveTabId(tab.id)}
+            data-testid={`panel-tab-${tab.id}`}
           >
             {tab.label}
           </button>

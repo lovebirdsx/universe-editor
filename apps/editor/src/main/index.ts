@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path'
 import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainServices.js'
+import { E2E_PROBE_ARGV_FLAG } from '../shared/e2e/contract.js'
 import { MainStorageService } from './services/storage/storageMainService.js'
 import { MainPingService } from './services/ping/pingMainService.js'
 import { FileSystemMainService } from './services/files/fileSystemMainService.js'
@@ -42,6 +43,8 @@ function getSharedServices(): SharedMainServices {
   return sharedServices
 }
 
+const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
+
 function createWindow(): void {
   const isMac = process.platform === 'darwin'
 
@@ -57,6 +60,7 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      ...(e2eEnabled ? { additionalArguments: [E2E_PROBE_ARGV_FLAG] } : {}),
     },
   })
 
