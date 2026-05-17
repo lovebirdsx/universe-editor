@@ -25,6 +25,12 @@ export interface E2EStatusBarEntry {
   readonly alignment: 'left' | 'right'
 }
 
+export interface E2ELayoutSizes {
+  readonly sidebar: number
+  readonly secondarySidebar: number
+  readonly panel: number
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -45,6 +51,12 @@ export interface E2EProbe {
   openWorkspace(fsPath: string): Promise<void>
   /** Returns the current workspace folder's fsPath, or undefined if none is open. */
   getCurrentWorkspacePath(): string | undefined
+  /** Returns current layout sizes (sidebar/secondarySidebar/panel in px). */
+  getLayoutSizes(): E2ELayoutSizes
+  /** Programmatically set a layout size (triggers debounced persist). */
+  setLayoutSize(key: 'sidebar' | 'secondarySidebar' | 'panel', value: number): void
+  /** Force-flush any pending layout save. Resolves when data is on disk. */
+  flushLayoutSave(): Promise<void>
 }
 
 declare global {

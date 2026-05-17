@@ -146,4 +146,26 @@ describe('LayoutService', () => {
     await vi.advanceTimersByTimeAsync(500)
     expect(storage.set).toHaveBeenCalledTimes(1)
   })
+
+  it('round-trip: sidebar resize persists and is restored on next load', async () => {
+    // Session 1: user drags sidebar to 350px, app saves on debounce
+    let savedPayload: unknown
+    const storage1 = makeStorage()
+    storage1.set.mockImplementation((_key: string, value: unknown) => {
+      savedPayload = value
+      return Promise.resolve()
+    })
+    const svc1 = new LayoutService(storage1)
+    svc1.setSize('sidebar', 350)
+    await vi.advanceTimersByTimeAsync(250)
+    expect(storage1.set).toHaveBeenCalledTimes(1)
+
+    // Session 2: new LayoutService instance with same storage, loads persisted state
+    const storage2 = makeStorage(savedPayload)
+    const svc2 = new LayoutService(storage2)
+    await svc2.load()
+
+    expect(svc2.sizes.get().sidebar).toBe(350)
+    expect(storage2.set).not.toHaveBeenCalled()
+  })
 })

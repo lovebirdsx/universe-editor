@@ -14,6 +14,7 @@ import {
   type ICommandService,
   type IContextKeyService,
   type IEditorService,
+  type ILayoutService,
   type ILifecycleService,
   type IStatusBarService,
   type IWorkspaceService,
@@ -33,6 +34,7 @@ export interface E2EProbeServices {
   readonly editorService: IEditorService
   readonly statusBarService: IStatusBarService
   readonly workspaceService: IWorkspaceService
+  readonly layoutService: ILayoutService
 }
 
 function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
@@ -67,6 +69,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
       })),
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
+    getLayoutSizes: () => ({ ...services.layoutService.sizes.get() }),
+    setLayoutSize: (key, value) => services.layoutService.setSize(key, value),
+    flushLayoutSave: () => services.layoutService.save(),
   }
 
   window[E2E_PROBE_KEY] = probe

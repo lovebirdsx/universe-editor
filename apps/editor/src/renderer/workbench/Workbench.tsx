@@ -39,10 +39,6 @@ function WorkbenchShell() {
   const panelPart = layoutService.getPart(PartId.Panel)
   const statusBarPart = layoutService.getPart(PartId.StatusBar)
 
-  useEffect(() => {
-    void layoutService.load()
-  }, [layoutService])
-
   const onSidebarResize = useCallback(
     (px: number) => layoutService.setSize('sidebar' satisfies keyof LayoutSizes, px),
     [layoutService],

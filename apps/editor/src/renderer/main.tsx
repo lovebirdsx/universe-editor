@@ -60,7 +60,7 @@ import './contributions/index.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
-function bootstrapWorkbench(): void {
+async function bootstrapWorkbench(): Promise<void> {
   // Dev-only: track Disposable leaks. Report on beforeunload.
   if (import.meta.env.DEV) {
     const tracker = new DisposableTracker()
@@ -195,7 +195,13 @@ function bootstrapWorkbench(): void {
     editorService,
     statusBarService,
     workspaceService,
+    layoutService,
   })
+
+  // Load persisted layout before mounting React so Allotment starts with the
+  // correct preferredSize. Allotment 1.20.5 only reads preferredSize on mount
+  // (or pane-show); changing it after mount is silently ignored.
+  await layoutService.load()
 
   // Mount
   const rootEl = document.getElementById('root')
@@ -208,4 +214,4 @@ function bootstrapWorkbench(): void {
   )
 }
 
-bootstrapWorkbench()
+void bootstrapWorkbench()
