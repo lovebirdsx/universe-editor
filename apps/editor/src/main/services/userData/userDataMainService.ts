@@ -19,7 +19,6 @@ import {
   Disposable,
   Emitter,
   type Event,
-  type IDisposable,
   type IUserDataFilesService,
   URI,
   UserDataFile,
@@ -67,7 +66,6 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   readonly onDidChangeFile: Event<UserDataFile> = this._onDidChangeFile.event
 
   private readonly _slots = new Map<UserDataFile, WatchSlot>()
-  private _workspaceListener: IDisposable | null = null
 
   constructor(private readonly _workspace: WorkspaceMainService) {
     super()
@@ -77,17 +75,19 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._installSlot(UserDataFile.Keybindings, join(userData, 'keybindings.json'))
 
     // Project settings track the active workspace.
-    this._workspaceListener = this._workspace.onDidChangeWorkspace((ws) => {
-      this._teardownSlot(UserDataFile.ProjectSettings)
-      if (ws) {
-        const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
-        this._installSlot(UserDataFile.ProjectSettings, projectPath)
-        this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
-      } else {
-        // Workspace closed — let subscribers reset their Project layer.
-        this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
-      }
-    })
+    this._register(
+      this._workspace.onDidChangeWorkspace((ws) => {
+        this._teardownSlot(UserDataFile.ProjectSettings)
+        if (ws) {
+          const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
+          this._installSlot(UserDataFile.ProjectSettings, projectPath)
+          this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
+        } else {
+          // Workspace closed — let subscribers reset their Project layer.
+          this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
+        }
+      }),
+    )
     // Initial hydration: subscribe via getCurrent() so first-launch with a
     // restored workspace also installs the project slot.
     void this._workspace.getCurrent().then((ws) => {
@@ -99,8 +99,6 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   override dispose(): void {
-    this._workspaceListener?.dispose()
-    this._workspaceListener = null
     for (const file of [...this._slots.keys()]) {
       this._teardownSlot(file)
     }

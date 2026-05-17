@@ -29,18 +29,21 @@ if (import.meta.env.DEV) {
 
 // Shared singletons created lazily on first window.
 let sharedServices: SharedMainServices | null = null
+let sharedUserData: UserDataMainService | null = null
 
 function getSharedServices(): SharedMainServices {
   if (!sharedServices) {
     const storage = new MainStorageService()
     const workspace = new WorkspaceMainService(storage, new ElectronFolderDialog())
+    const userData = new UserDataMainService(workspace)
+    sharedUserData = userData
     sharedServices = {
       storage,
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(),
       fileWatcher: new FileWatcherMainService(),
       workspace,
-      userData: new UserDataMainService(workspace),
+      userData,
     }
   }
   return sharedServices
@@ -90,4 +93,8 @@ void app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
+})
+
+app.on('will-quit', () => {
+  sharedUserData?.dispose()
 })
