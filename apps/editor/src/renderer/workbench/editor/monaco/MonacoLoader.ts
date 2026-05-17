@@ -1,38 +1,47 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Monaco loader — installs MonacoEnvironment with self-hosted workers.
- *
- *  Vite's `?worker` import compiles each worker entry to a separate chunk and
- *  exposes it as a constructor that produces a Worker instance (under the hood
- *  it uses `blob:` URLs in dev and module workers in prod). We only ship the
- *  editor + json workers — TS / CSS / HTML files still get syntax tokenisation
- *  through Monaco's built-in monarch grammars, but lose IntelliSense.
+ *  Monaco loader — lazy-loads the monaco-editor package on demand to keep the
+ *  initial renderer bundle small. Workers are loaded in parallel via Vite's
+ *  `?worker` suffix (separate chunks, instantiated under blob: URLs in dev).
  *--------------------------------------------------------------------------------------------*/
 
-import * as monaco from 'monaco-editor'
-import EditorWorker from 'monaco-editor/esm/vs/editor/editor.worker?worker'
-import JsonWorker from 'monaco-editor/esm/vs/language/json/json.worker?worker'
+import type * as monaco from 'monaco-editor'
 
-let _installed = false
+export type { monaco }
 
-function install(): void {
-  if (_installed) return
-  _installed = true
-  ;(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
-    getWorker(_workerId, label) {
-      if (label === 'json') return new JsonWorker()
-      return new EditorWorker()
-    },
+let _monaco: typeof monaco | undefined
+let _monacoPromise: Promise<typeof monaco> | undefined
+
+async function loadMonaco(): Promise<typeof monaco> {
+  if (_monaco) return _monaco
+  if (!_monacoPromise) {
+    _monacoPromise = (async () => {
+      const [monacoMod, EditorWorker, JsonWorker] = await Promise.all([
+        import('monaco-editor'),
+        import('monaco-editor/esm/vs/editor/editor.worker?worker'),
+        import('monaco-editor/esm/vs/language/json/json.worker?worker'),
+      ])
+      ;(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
+        getWorker(_workerId, label) {
+          if (label === 'json') return new JsonWorker.default()
+          return new EditorWorker.default()
+        },
+      }
+      _monaco = monacoMod
+      return monacoMod
+    })()
   }
+  return _monacoPromise
 }
 
-install()
-
-export { monaco }
-
 export const MonacoLoader = {
-  ensureInitialized(): typeof monaco {
-    install()
-    return monaco
+  ensureInitialized(): Promise<typeof monaco> {
+    return loadMonaco()
+  },
+  get(): typeof monaco {
+    if (!_monaco) {
+      throw new Error('[MonacoLoader] not initialized; call ensureInitialized() first')
+    }
+    return _monaco
   },
 }

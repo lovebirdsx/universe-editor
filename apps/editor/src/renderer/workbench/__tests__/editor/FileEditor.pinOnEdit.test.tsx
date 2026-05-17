@@ -9,17 +9,21 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../editor/monaco/MonacoLoader.js', () => {
+  const monacoStub = {
+    editor: {
+      create: () => ({
+        setModel: () => {},
+        dispose: () => {},
+        getModel: () => null,
+        addCommand: () => null,
+      }),
+    },
+    KeyCode: { F1: 0 },
+  }
   return {
-    monaco: {
-      editor: {
-        create: () => ({
-          setModel: () => {},
-          dispose: () => {},
-          getModel: () => null,
-          addCommand: () => null,
-        }),
-      },
-      KeyCode: { F1: 0 },
+    MonacoLoader: {
+      ensureInitialized: () => Promise.resolve(monacoStub),
+      get: () => monacoStub,
     },
   }
 })

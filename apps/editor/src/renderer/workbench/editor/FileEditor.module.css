@@ -5,3 +5,13 @@
   min-height: 0;
   background: var(--color-editor-bg, #1e1e1e);
 }
+
+.fileEditorLoading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: var(--color-fg-muted, #888);
+  font-size: 12px;
+}

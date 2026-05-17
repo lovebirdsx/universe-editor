@@ -9,7 +9,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '@universe-editor/platform'
-import { monaco } from './MonacoLoader.js'
+import type { monaco } from './MonacoLoader.js'
+import { MonacoLoader } from './MonacoLoader.js'
 
 const LANG_BY_EXT: Record<string, string> = {
   '.json': 'json',
@@ -67,9 +68,10 @@ class Registry {
       existing.refs++
       return existing.model
     }
-    const uri = monaco.Uri.parse(resource.toString())
+    const m = MonacoLoader.get()
+    const uri = m.Uri.parse(resource.toString())
     const language = languageForResource(resource)
-    const model = monaco.editor.createModel(text, language, uri)
+    const model = m.editor.createModel(text, language, uri)
     this._entries.set(key, { model, refs: 1 })
     return model
   }
