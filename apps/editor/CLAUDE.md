@@ -172,6 +172,45 @@ entry.dispose()
 
 参考：`src/renderer/workbench/statusbar/FileEditorStatusContribution.ts`、`src/renderer/workbench/search/SearchView.tsx`
 
+## 套路 F：加一个 E2E 冒烟场景
+
+冒烟栈在 `apps/editor/e2e/`：Playwright + `_electron`，spec 通过 `window.__E2E__` 探针调服务，不戳 DOM。三层安全门：`UNIVERSE_E2E=1` → main argv `--enable-e2e-probe` → preload 经 `contextBridge` 暴露——production 构建天然剥除。
+
+**1. 新建 spec**：`apps/editor/e2e/specs/smoke.myThing.spec.ts`
+```ts
+import { test, expect } from '../fixtures/electronApp.js'
+
+test.describe('@p0 my thing', () => {
+  test('does the thing', async ({ workbench }) => {
+    await workbench.runCommand('workbench.action.doMyThing')
+    await expect.poll(() => workbench.getContextKey<boolean>('myThingActive')).toBe(true)
+  })
+})
+```
+
+**2. 复用 fixture / PO**：`fixtures/electronApp.ts` 启动 Electron + 等探针装配；`pages/WorkbenchPO.ts` 聚合 ActivityBar / SideBar / StatusBar / QuickInput / EditorArea / Panel 六个 PO，外加 `runCommand` / `getContextKey` / `lifecyclePhase` 三个直通探针的快捷方法。
+
+**3. 定位优先级**：ARIA role → `data-testid`（约定 `part-<id>` / `activitybar-item-<id>` / `view-<id>` / `quick-input` / `statusbar-entry-<id>`）→ 命令 + ContextKey（最稳定）→ CSS class（兜底）。**禁止**断言 Monaco 内部 DOM 结构；要拿编辑器状态走 `getActiveEditorUri()`。
+
+**4. 探针 API 不够用**：先扩 `src/shared/e2e/contract.ts` 契约，再在 `src/renderer/e2e/probe.ts` 实现。保持白名单原则——不暴露 fs/exec/任意 IPC 给 spec。
+
+**5. 跑**：
+```bash
+pnpm --filter @universe-editor/editor build      # e2e 跑的是 out/ 产物
+pnpm --filter @universe-editor/editor e2e
+pnpm --filter @universe-editor/editor e2e:ui     # 本地交互调试
+pnpm --filter @universe-editor/editor e2e -- --grep "@p0"
+```
+
+**标签**：`@p0` 失败阻塞 CI；`@p1` 仅产报告。CI 在 ubuntu + windows 双跑（`.github/workflows/ci.yml` 的 `e2e` job）。
+
+**踩坑**：
+- 部件可见性走 ContextKey + `expect.poll(...)`，不要 `toBeVisible()`——Allotment.Pane 用 CSS visibility 隐藏后代，DOM 可见性会误判
+- 长任务命令（如 `showCommands` 内部 await 用户输入）必须 fire-and-forget：`page.evaluate(() => { void window.__E2E__!.runCommand(id) })`，否则死锁
+- spec 内**禁止** mock 任何 main/renderer 服务；单测内**禁止** spawn Electron——边界严格分开
+
+参考：`apps/editor/e2e/specs/smoke.startup.spec.ts`、`smoke.output.spec.ts`、`smoke.commandPalette.spec.ts`
+
 ## 编辑器输入三件套
 
 - **`FileEditorInput`**：editor input 描述（URI + 元数据），可序列化恢复
@@ -187,6 +226,8 @@ entry.dispose()
 - **renderer**（happy-dom）：覆盖 `src/renderer/**/__tests__/`，Monaco 走桩（避免真实加载 worker）
 
 `pnpm --filter @universe-editor/editor test` 跑全部；`vitest --project main` 只跑一边。
+
+E2E 冒烟独立于 vitest，跑的是 `out/` 产物——见**套路 F**。
 
 ## 常见踩坑
 

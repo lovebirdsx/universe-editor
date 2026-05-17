@@ -24,6 +24,7 @@ packages/
 | 加跨进程服务 | `apps/editor/src/main/services/` + `apps/editor/src/renderer/main.tsx` | `apps/editor/CLAUDE.md`（套路 C） | `ProxyChannel.fromService` / `toService`，通道名走 `shared/ipc/channelNames.ts` |
 | 加 Contribution（生命周期挂钩） | `apps/editor/src/renderer/contributions/` | `apps/editor/CLAUDE.md`（套路 D） | 选 `WorkbenchPhase`，在 `contributions/index.ts` 注册 |
 | 加 StatusBar 条目 | `apps/editor/src/renderer/workbench/statusbar/` | `apps/editor/CLAUDE.md`（套路 E） | `addEntry` + accessor `update/dispose` 生命周期 |
+| 加 E2E 冒烟场景 | `apps/editor/e2e/specs/` | `apps/editor/CLAUDE.md`（套路 F） | Playwright + `_electron`，通过 `window.__E2E__` 探针调服务；`@p0` 阻塞 CI |
 | 加 platform 内核 API（DI/Event/Command） | `packages/platform/src/` | `packages/platform/CLAUDE.md` | **必须**在 `packages/platform/src/index.ts` re-export |
 | 调整 tsconfig 预设 | `packages/config-ts/` | `packages/config-ts/CLAUDE.md` | strict 三件套不可在子包覆盖关掉 |
 | 调整 ESLint 规则 | `packages/config-eslint/` | `packages/config-eslint/CLAUDE.md` | flat config；base + react 两套 |
@@ -62,4 +63,4 @@ Prettier：无分号、单引号、`trailingComma: all`、宽度 100。默认不
 
 ## CI
 
-`.github/workflows/ci.yml` 在 push/PR 到 `main` 时按顺序跑 `lint → typecheck → test → build`。CI 设置了 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`，`pnpm-workspace.yaml` 的 `allowBuilds` 显式允许 `electron` / `esbuild` 的 install hook（pnpm 10 默认拒绝）。
+`.github/workflows/ci.yml` 在 push/PR 到 `main` 时按顺序跑 `lint → typecheck → test → build`，随后触发独立的 `e2e` job（matrix: ubuntu + windows，Linux 用 `xvfb-run`，失败上传 `playwright-traces-<os>` artifact）。CI 设置了 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/`，`pnpm-workspace.yaml` 的 `allowBuilds` 显式允许 `electron` / `esbuild` 的 install hook（pnpm 10 默认拒绝）。
