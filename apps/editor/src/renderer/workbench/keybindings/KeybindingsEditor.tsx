@@ -9,6 +9,7 @@ import { CommandsRegistry, KeybindingsRegistry } from '@universe-editor/platform
 import { useService } from '../useService.js'
 import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
 import { IUserKeybindingsService } from './UserKeybindingsService.js'
+import { MONACO_COMMAND_CATALOG } from '../editor/monaco/monacoCommandCatalog.js'
 import styles from './KeybindingsEditor.module.css'
 
 function buildKeyString(e: KeyboardEvent): string {
@@ -272,5 +273,8 @@ function getEffectiveKey(command: string, svc: IUserKeybindingsService): string 
     if (kb.chords) return formatChord(kb.chords)
     if (kb.key !== undefined) return formatKey(kb.key)
   }
-  return undefined
+
+  // Fall back to Monaco command catalog for built-in editor commands.
+  const monacoEntry = MONACO_COMMAND_CATALOG.find((c) => c.id === command)
+  return monacoEntry?.defaultKey ? formatKey(monacoEntry.defaultKey) : undefined
 }

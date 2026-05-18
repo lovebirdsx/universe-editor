@@ -21,6 +21,7 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
         restoreViewState: () => {},
         onDidChangeCursorPosition: () => ({ dispose: () => {} }),
         onDidScrollChange: () => ({ dispose: () => {} }),
+        getContainerDomNode: () => document.createElement('div'),
       }),
     },
     KeyCode: { F1: 0 },

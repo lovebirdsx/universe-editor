@@ -23,10 +23,16 @@ import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
+import {
+  MONACO_COMMAND_CATALOG,
+  buildKeyStringFromEvent,
+  normalizeKey,
+} from './monaco/monacoCommandCatalog.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
+import { IUserKeybindingsService } from '../keybindings/UserKeybindingsService.js'
 import styles from './FileEditor.module.css'
 
 export function FileEditor({ input }: { input: IEditorInput }) {
@@ -34,6 +40,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const groupsService = useService(IEditorGroupsService)
   const commandService = useService(ICommandService)
   const configService = useService(IConfigurationService)
+  const userKeybindingsSvc = useService(IUserKeybindingsService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -71,12 +78,29 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     ed.addCommand(monacoNs.KeyCode.F1, () => {
       void commandService.executeCommand('workbench.action.showCommands')
     })
+    // Bridge: intercept catalog commands whose default keybinding has been
+    // overridden by the user. Capture phase fires before Monaco's own handlers.
+    const container = ed.getContainerDomNode()
+    const bridgeHandler = (e: KeyboardEvent) => {
+      const key = normalizeKey(buildKeyStringFromEvent(e))
+      for (const cmd of MONACO_COMMAND_CATALOG) {
+        if (!cmd.defaultKey) continue
+        if (normalizeKey(cmd.defaultKey) !== key) continue
+        if (userKeybindingsSvc.getUserEntry(cmd.id) !== undefined) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
+      }
+    }
+    container.addEventListener('keydown', bridgeHandler, true)
     editorRef.current = ed
     return () => {
+      container.removeEventListener('keydown', bridgeHandler, true)
       ed.dispose()
       editorRef.current = null
     }
-  }, [monacoNs, commandService, configService])
+  }, [monacoNs, commandService, userKeybindingsSvc, configService])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {

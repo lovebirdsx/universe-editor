@@ -21,11 +21,20 @@ import { WorkspaceRestoreContribution } from '../services/workspace/workspaceRes
 import { WorkspaceExplorerRevealContribution } from '../services/workspace/workspaceExplorerRevealContribution.js'
 import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
+import { MonacoCommandsContribution } from './MonacoCommandsContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.contextKey',
   ContextKeyContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Monaco editor built-in commands — registered at startup so they appear in
+// Keyboard Shortcuts before any editor is opened.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.monacoCommands',
+  MonacoCommandsContribution,
   WorkbenchPhase.BlockStartup,
 )
 
@@ -130,4 +139,5 @@ export {
   WorkspaceExplorerRevealContribution,
   ExplorerAutoRevealContribution,
   RecentFilesContribution,
+  MonacoCommandsContribution,
 }
