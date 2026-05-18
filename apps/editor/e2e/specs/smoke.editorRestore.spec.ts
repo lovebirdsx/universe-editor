@@ -71,10 +71,29 @@ async function launchWithState(userDataDir: string) {
     env: { ...process.env, UNIVERSE_E2E: '1', NODE_ENV: process.env['NODE_ENV'] ?? 'production' },
   })
   const page = await app.firstWindow()
+  // firstWindow() can return before the renderer's first navigation commits;
+  // wait for the real document before probing window globals, otherwise
+  // page.evaluate may race with a context swap and throw "Execution context
+  // was destroyed, most likely because of a navigation."
+  await page.waitForLoadState('domcontentloaded')
   await page.waitForFunction(() =>
     Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
-  await page.evaluate(() => window.__E2E__!.whenRestored())
+  // Retry once if the renderer happens to navigate (e.g. devtools reload)
+  // between probe detection and evaluate — that's the only realistic cause
+  // here, and a single retry after re-waiting for the probe is sufficient.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await page.evaluate(() => window.__E2E__!.whenRestored())
+      break
+    } catch (err) {
+      if (attempt === 1 || !/Execution context was destroyed/.test(String(err))) throw err
+      await page.waitForLoadState('domcontentloaded')
+      await page.waitForFunction(() =>
+        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+      )
+    }
+  }
   return { app, page }
 }
 
@@ -108,7 +127,14 @@ test.describe('@p1 editor restore', () => {
         await app.close()
       }
     } finally {
-      rmSync(userDataDir, { recursive: true, force: true })
+      // Windows: Electron's LevelDB / Local Storage files can linger briefly
+      // after app.close(); a stray EBUSY here doesn't invalidate the assertion
+      // and the OS will reclaim the temp dir, so don't fail the test on cleanup.
+      try {
+        rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      } catch {
+        /* noop — temp dir cleanup is best-effort */
+      }
     }
   })
 })

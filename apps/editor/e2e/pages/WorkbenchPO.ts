@@ -40,7 +40,21 @@ export class WorkbenchPO {
   }
 
   async waitForRestored(): Promise<void> {
-    await this.page.evaluate(() => window.__E2E__!.whenRestored())
+    // 偶发：fixture 的 firstWindow() 可能在首次导航 commit 前返回，
+    // 此时若评估正好与上下文切换重合，会抛 "Execution context was destroyed"。
+    // 重新等探针就绪再评估一次即可恢复。
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await this.page.evaluate(() => window.__E2E__!.whenRestored())
+        return
+      } catch (err) {
+        if (attempt === 1 || !/Execution context was destroyed/.test(String(err))) throw err
+        await this.page.waitForLoadState('domcontentloaded')
+        await this.page.waitForFunction(() =>
+          Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+        )
+      }
+    }
   }
 
   /** Open a workspace folder directly, bypassing the native dialog. */
