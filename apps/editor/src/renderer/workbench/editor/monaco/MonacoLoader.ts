@@ -12,6 +12,26 @@ export type { monaco }
 let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
 
+type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas']>
+
+let _extraSchemas: JsonSchemas = []
+
+const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'schemas'> = {
+  validate: true,
+  allowComments: true,
+  trailingCommas: 'warning',
+  schemaValidation: 'error',
+  schemaRequest: 'warning',
+}
+
+function pushJsonDiagnostics(): void {
+  if (!_monaco) return
+  _monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+    ...BASE_JSON_DIAGNOSTICS,
+    schemas: _extraSchemas,
+  })
+}
+
 async function loadMonaco(): Promise<typeof monaco> {
   if (_monaco) return _monaco
   if (!_monacoPromise) {
@@ -27,14 +47,8 @@ async function loadMonaco(): Promise<typeof monaco> {
           return new EditorWorker.default()
         },
       }
-      monacoMod.languages.json.jsonDefaults.setDiagnosticsOptions({
-        validate: true,
-        allowComments: true,
-        trailingCommas: 'warning',
-        schemaValidation: 'error',
-        schemaRequest: 'warning',
-      })
       _monaco = monacoMod
+      pushJsonDiagnostics()
       return monacoMod
     })()
   }
@@ -50,5 +64,14 @@ export const MonacoLoader = {
       throw new Error('[MonacoLoader] not initialized; call ensureInitialized() first')
     }
     return _monaco
+  },
+  /**
+   * Replace the JSON schemas Monaco's JSON language service uses. Bridges that
+   * derive schemas from platform registries call this whenever the source data
+   * changes. Pass an empty array to clear.
+   */
+  setJsonSchemas(schemas: JsonSchemas): void {
+    _extraSchemas = schemas
+    pushJsonDiagnostics()
   },
 }

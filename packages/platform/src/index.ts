@@ -40,6 +40,7 @@ export * from './contribution/contribution.js'
 // configuration system
 export * from './configuration/configurationRegistry.js'
 export * from './configuration/configurationService.js'
+export * from './configuration/jsonSchemaRegistry.js'
 
 // IPC abstraction layer
 export * from './ipc/ipc.js'

@@ -3,6 +3,7 @@
  *  Inspired by VSCode's CommandsRegistry (platform/commands/common/commands.ts).
  *--------------------------------------------------------------------------------------------*/
 
+import { Emitter, Event } from '../base/event.js'
 import { IDisposable, toDisposable } from '../base/lifecycle.js'
 import { LinkedList } from '../base/linkedList.js'
 import { createDecorator, ServicesAccessor } from '../di/instantiation.js'
@@ -23,6 +24,8 @@ export interface ICommand {
 }
 
 export interface ICommandRegistry {
+  /** Fired when a command is added or removed. */
+  readonly onDidChangeCommands: Event<void>
   registerCommand(id: string, handler: ICommandHandler, metadata?: ICommandMetadata): IDisposable
   registerCommand(command: ICommand): IDisposable
   getCommand(id: string): ICommand | undefined
@@ -42,6 +45,8 @@ export const ICommandService = createDecorator<ICommandService>('commandService'
  */
 class CommandsRegistryImpl implements ICommandRegistry {
   private readonly _commands = new Map<string, LinkedList<ICommand>>()
+  private readonly _onDidChangeCommands = new Emitter<void>()
+  readonly onDidChangeCommands = this._onDidChangeCommands.event
 
   registerCommand(
     idOrCommand: string | ICommand,
@@ -68,12 +73,14 @@ class CommandsRegistryImpl implements ICommandRegistry {
 
     const list = this._commands.get(id)!
     const removeFn = list.unshift(cmd) // stack: newest first
+    this._onDidChangeCommands.fire()
 
     return toDisposable(() => {
       removeFn()
       if (list.isEmpty()) {
         this._commands.delete(id)
       }
+      this._onDidChangeCommands.fire()
     })
   }
 

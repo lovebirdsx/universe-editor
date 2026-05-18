@@ -57,6 +57,16 @@ describe('CommandsRegistry', () => {
     expect(cmd?.metadata?.description).toBe('A test command')
     d.dispose()
   })
+
+  it('fires onDidChangeCommands on register and dispose', () => {
+    const spy = vi.fn()
+    const sub = CommandsRegistry.onDidChangeCommands(spy)
+    const d = CommandsRegistry.registerCommand('test.cmd6', vi.fn())
+    expect(spy).toHaveBeenCalledTimes(1)
+    d.dispose()
+    expect(spy).toHaveBeenCalledTimes(2)
+    sub.dispose()
+  })
 })
 
 describe('MenuRegistry', () => {

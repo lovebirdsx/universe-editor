@@ -21,6 +21,7 @@ import { WorkspaceExplorerRevealContribution } from '../services/workspace/works
 import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { MonacoCommandsContribution } from './MonacoCommandsContribution.js'
+import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -58,6 +59,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.settings',
   SettingsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// JSON Schema bridge — derives schemas for settings.json / keybindings.json
+// from the live ConfigurationRegistry / CommandsRegistry and feeds them to
+// Monaco's JSON language service. BlockStartup so the schemas are ready
+// before any settings.json editor opens.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.jsonSchemaBridge',
+  JsonSchemaBridgeContribution,
   WorkbenchPhase.BlockStartup,
 )
 
@@ -131,4 +142,5 @@ export {
   ExplorerAutoRevealContribution,
   RecentFilesContribution,
   MonacoCommandsContribution,
+  JsonSchemaBridgeContribution,
 }
