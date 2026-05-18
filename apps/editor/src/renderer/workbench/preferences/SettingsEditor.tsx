@@ -74,7 +74,11 @@ function PropertyRow({ configKey, schema, value, onChange }: RowProps) {
       />
     )
   } else {
-    control = <span className={styles['readonly']}>Not editable in form view</span>
+    control = (
+      <span className={styles['readonly']}>
+        {localize('settings.readonly', 'Not editable in form view')}
+      </span>
+    )
   }
 
   return (

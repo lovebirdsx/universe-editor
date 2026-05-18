@@ -6,7 +6,7 @@
  *  with completion + hover docs for every registered command id.
  *--------------------------------------------------------------------------------------------*/
 
-import { CommandsRegistry, type IJSONSchema } from '@universe-editor/platform'
+import { CommandsRegistry, localize, type IJSONSchema } from '@universe-editor/platform'
 
 export function buildKeybindingsJsonSchema(): IJSONSchema {
   const commandIds: string[] = []
@@ -27,7 +27,14 @@ export function buildKeybindingsJsonSchema(): IJSONSchema {
   // Include "-id" removal variants so the existing template scaffolding
   // ("Prefix command with '-' to disable a default binding") completes too.
   const allIds = [...sortedIds, ...sortedIds.map((id) => `-${id}`)]
-  const allDescs = [...sortedDescs, ...sortedDescs.map((d) => `Remove default binding (${d})`)]
+  const allDescs = [
+    ...sortedDescs,
+    ...sortedDescs.map((d) =>
+      localize('keybindings.schema.removeBinding.desc', 'Remove default binding ({desc})', {
+        desc: d,
+      }),
+    ),
+  ]
 
   return {
     type: 'array',
@@ -36,20 +43,32 @@ export function buildKeybindingsJsonSchema(): IJSONSchema {
       properties: {
         key: {
           type: 'string',
-          description: 'Keybinding chord, e.g. "ctrl+shift+p" or "ctrl+k ctrl+s".',
+          description: localize(
+            'keybindings.schema.key.description',
+            'Keybinding chord, e.g. "ctrl+shift+p" or "ctrl+k ctrl+s".',
+          ),
         },
         command: {
           type: 'string',
-          description: 'Command id to invoke. Prefix with "-" to remove a default binding.',
+          description: localize(
+            'keybindings.schema.command.description',
+            'Command id to invoke. Prefix with "-" to remove a default binding.',
+          ),
           enum: allIds,
           enumDescriptions: allDescs,
         },
         when: {
           type: 'string',
-          description: 'Context-key expression that gates this binding.',
+          description: localize(
+            'keybindings.schema.when.description',
+            'Context-key expression that gates this binding.',
+          ),
         },
         args: {
-          description: 'Arguments forwarded to the command handler.',
+          description: localize(
+            'keybindings.schema.args.description',
+            'Arguments forwarded to the command handler.',
+          ),
         },
       },
       required: ['key', 'command'],

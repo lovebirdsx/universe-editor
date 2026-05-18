@@ -45,7 +45,10 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               dark: localize('settings.enum.dark', 'Dark'),
               light: localize('settings.enum.light', 'Light'),
             },
-            description: 'Workbench color theme.',
+            description: localize(
+              'settings.workbench.colorTheme.description',
+              'Workbench color theme.',
+            ),
           },
           'workbench.sideBar.location': {
             type: 'string',
@@ -55,7 +58,10 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               left: localize('settings.enum.left', 'Left'),
               right: localize('settings.enum.right', 'Right'),
             },
-            description: 'Side bar location.',
+            description: localize(
+              'settings.workbench.sideBarLocation.description',
+              'Side bar location.',
+            ),
           },
         },
       }),
@@ -71,24 +77,36 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             default: 14,
             minimum: 8,
             maximum: 32,
-            description: 'Controls the editor font size in pixels.',
+            description: localize(
+              'settings.editor.fontSize.description',
+              'Controls the editor font size in pixels.',
+            ),
           },
           'editor.tabSize': {
             type: 'number',
             default: 4,
             minimum: 1,
             maximum: 8,
-            description: 'Number of spaces a tab is equal to.',
+            description: localize(
+              'settings.editor.tabSize.description',
+              'Number of spaces a tab is equal to.',
+            ),
           },
           'editor.wordWrap': {
             type: 'boolean',
             default: false,
-            description: 'Controls whether lines wrap.',
+            description: localize(
+              'settings.editor.wordWrap.description',
+              'Controls whether lines wrap.',
+            ),
           },
           'editor.minimap.enabled': {
             type: 'boolean',
             default: true,
-            description: 'Controls whether the minimap is shown.',
+            description: localize(
+              'settings.editor.minimap.description',
+              'Controls whether the minimap is shown.',
+            ),
           },
         },
       }),
@@ -108,13 +126,19 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               afterDelay: localize('settings.enum.afterDelay', 'After Delay'),
               onFocusChange: localize('settings.enum.onFocusChange', 'On Focus Change'),
             },
-            description: 'Controls auto save of dirty files.',
+            description: localize(
+              'settings.files.autoSave.description',
+              'Controls auto save of dirty files.',
+            ),
           },
           'files.autoSaveDelay': {
             type: 'number',
             default: 1000,
             minimum: 100,
-            description: 'Auto save delay in milliseconds (when autoSave=afterDelay).',
+            description: localize(
+              'settings.files.autoSaveDelay.description',
+              'Auto save delay in milliseconds (when autoSave=afterDelay).',
+            ),
           },
         },
       }),
@@ -128,8 +152,10 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
           'explorer.autoReveal': {
             type: 'boolean',
             default: true,
-            description:
+            description: localize(
+              'settings.explorer.autoReveal.description',
               'Controls whether the Explorer should automatically reveal and select files when opening them.',
+            ),
           },
         },
       }),
