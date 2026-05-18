@@ -97,3 +97,34 @@ jobs:
           path: apps/editor/e2e/test-results
           retention-days: 14
           if-no-files-found: ignore
+
+  package-windows:
+    name: Package Windows Executable
+    needs: ci
+    runs-on: windows-latest
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build Windows release artifacts
+        run: pnpm --filter @universe-editor/editor package:win
+
+      - name: Upload Windows release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: universe-editor-windows-release
+          path: apps/editor/release
+          retention-days: 14
+          if-no-files-found: error

@@ -2,6 +2,8 @@
   "name": "@universe-editor/editor",
   "version": "0.0.0",
   "private": true,
+  "description": "VSCode-style desktop game content editor.",
+  "author": "Universe Editor Contributors",
   "type": "module",
   "main": "out/main/index.js",
   "scripts": {
@@ -17,7 +19,10 @@
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
     "clean": "tsc --build --clean",
-    "package": "electron-builder --dir"
+    "package": "pnpm run package:win",
+    "package:win": "pnpm run build && electron-builder --win nsis dir",
+    "package:win:dir": "pnpm run build && electron-builder --win dir",
+    "package:win:installer": "pnpm run build && electron-builder --win nsis"
   },
   "dependencies": {
     "@fontsource/roboto": "catalog:",

@@ -1,13 +1,20 @@
-# electron-builder configuration (M0: not invoked in CI; populated for completeness)
 appId: io.universe.editor
 productName: Universe Editor
 directories:
   output: release
+artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 files:
   - out/**/*
   - package.json
 win:
-  target: nsis
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: dir
+      arch:
+        - x64
+  executableName: Universe Editor
 mac:
   target: dmg
 linux:
