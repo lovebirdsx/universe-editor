@@ -44,12 +44,10 @@ class LegacyEditorInput extends EditorInput {
 function toLegacy(editor: EditorInput | undefined): IEditorInput | undefined {
   if (!editor) return undefined
   if (editor instanceof LegacyEditorInput) return editor.input
-  return {
-    id: editor.id,
-    type: editor.type,
-    label: editor.label,
-    isDirty: editor.isDirty,
-  }
+  // EditorInput implements IEditorInput structurally via getters. Returning
+  // the instance itself preserves `instanceof FileEditorInput` checks in
+  // downstream consumers (ExplorerAutoRevealContribution, FileEditorStatusContribution).
+  return editor
 }
 
 export class EditorService implements IEditorService {

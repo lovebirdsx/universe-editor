@@ -40,15 +40,40 @@
   cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
+  position: relative;
 }
 
 .row:hover {
   background: var(--color-list-hover-bg, #2a2d2e);
 }
 
+/* Active editor: the file currently open in the focused editor tab.
+   Rendered as a thin accent bar on the left + subtle background tint so it
+   reads independently from the user's tree selection. */
+.row.active {
+  background: var(--color-list-inactive-selection-bg, rgba(58, 61, 65, 0.6));
+}
+
+.row.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--color-list-active-bar, #007acc);
+}
+
+/* Selection: rows that are operation targets (single click, Ctrl/Shift-click multi-select). */
 .row.selected {
   background: var(--color-list-active-bg, #094771);
   color: var(--color-list-active-fg, #ffffff);
+}
+
+/* Focus: the single keyboard-cursor row. Coexists with .selected/.active via outline. */
+.row.focused {
+  outline: 1px solid var(--color-list-focus-outline, #007fd4);
+  outline-offset: -1px;
 }
 
 .twisty {

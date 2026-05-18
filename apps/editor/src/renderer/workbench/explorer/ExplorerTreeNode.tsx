@@ -35,9 +35,19 @@ export function ExplorerTreeNode({
   const expanded = isDirectory ? tree.isExpanded(resource) : false
   const children = isDirectory && expanded ? tree.getChildren(resource) : null
   const indent = { paddingLeft: `${depth * 12 + 6}px` }
-  const isSelected = tree.selectedResource?.toString() === resource.toString()
-  const rowRef = useRef<HTMLDivElement>(null)
   const key = resource.toString()
+  const isActiveEditor = tree.activeEditorResource?.toString() === key
+  const isSelected = tree.selection.some((u) => u.toString() === key)
+  const isFocused = tree.focused?.toString() === key
+  const className = [
+    styles['row'],
+    isActiveEditor && styles['active'],
+    isSelected && styles['selected'],
+    isFocused && styles['focused'],
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const rowRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     const handler = (e: Event) => {
@@ -50,8 +60,18 @@ export function ExplorerTreeNode({
     return () => document.removeEventListener('explorer:reveal', handler)
   }, [key])
 
-  const onClick = () => {
-    tree.setSelection(resource)
+  const onClick = (e: ReactMouseEvent) => {
+    // Modifier-keyed clicks toggle / extend the selection without opening files.
+    if (e.shiftKey) {
+      const anchor = tree.focused ?? resource
+      tree.selectRange(anchor, resource)
+      return
+    }
+    if (e.ctrlKey || e.metaKey) {
+      tree.toggleInSelection(resource)
+      return
+    }
+    tree.setSelection([resource], resource)
     if (isDirectory) {
       void tree.toggle(resource)
     } else {
@@ -59,7 +79,8 @@ export function ExplorerTreeNode({
     }
   }
 
-  const onDoubleClick = () => {
+  const onDoubleClick = (e: ReactMouseEvent) => {
+    if (e.shiftKey || e.ctrlKey || e.metaKey) return
     if (!isDirectory) onOpenFile(resource, { preview: false })
   }
 
@@ -70,7 +91,8 @@ export function ExplorerTreeNode({
         role="treeitem"
         aria-expanded={isDirectory ? expanded : undefined}
         aria-selected={isSelected}
-        className={`${styles['row']} ${isSelected ? (styles['selected'] ?? '') : ''}`}
+        aria-current={isActiveEditor ? 'page' : undefined}
+        className={className}
         style={indent}
         onClick={onClick}
         onDoubleClick={onDoubleClick}

@@ -19,6 +19,7 @@ import { ExternalChangeWatcher } from '../workbench/editor/ExternalChangeWatcher
 import { WorkspaceRecentMenuContribution } from '../services/workspace/workspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from '../services/workspace/workspaceRestoreContribution.js'
 import { WorkspaceExplorerRevealContribution } from '../services/workspace/workspaceExplorerRevealContribution.js'
+import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
@@ -92,6 +93,14 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
+// Auto-reveal active editor's file in the Explorer + mark it as "active" in the
+// tree. Runs AfterRestore so IEditorService + ExplorerTreeService are ready.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.explorerAutoReveal',
+  ExplorerAutoRevealContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
 // Track recently opened files and provide quick-open access to them.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.recentFiles',
@@ -119,5 +128,6 @@ export {
   WorkspaceRecentMenuContribution,
   WorkspaceRestoreContribution,
   WorkspaceExplorerRevealContribution,
+  ExplorerAutoRevealContribution,
   RecentFilesContribution,
 }

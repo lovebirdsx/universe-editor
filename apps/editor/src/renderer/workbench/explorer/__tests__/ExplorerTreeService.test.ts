@@ -362,4 +362,122 @@ describe('ExplorerTreeService', () => {
     tree.setSelection(target)
     expect(fired).toBe(0)
   })
+
+  it('setSelection with an array stores every entry and sets focus to the last by default', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const a = URI.joinPath(root, 'README.md')
+    const b = URI.joinPath(root, 'src')
+    tree.setSelection([a, b])
+    expect(tree.selection.map((u) => u.toString())).toEqual([a.toString(), b.toString()])
+    expect(tree.focused?.toString()).toBe(b.toString())
+  })
+
+  it('setSelection honors an explicit focus argument', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const a = URI.joinPath(root, 'README.md')
+    const b = URI.joinPath(root, 'src')
+    tree.setSelection([a, b], a)
+    expect(tree.focused?.toString()).toBe(a.toString())
+  })
+
+  it('setFocus updates focus alone, leaving the selection untouched', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const a = URI.joinPath(root, 'README.md')
+    const b = URI.joinPath(root, 'src')
+    tree.setSelection([a], a)
+    tree.setFocus(b)
+    expect(tree.focused?.toString()).toBe(b.toString())
+    expect(tree.selection.map((u) => u.toString())).toEqual([a.toString()])
+  })
+
+  it('toggleInSelection adds when absent and removes when present', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const a = URI.joinPath(root, 'README.md')
+    const b = URI.joinPath(root, 'src')
+    tree.setSelection([a], a)
+    tree.toggleInSelection(b)
+    expect(tree.selection.map((u) => u.toString()).sort()).toEqual(
+      [a.toString(), b.toString()].sort(),
+    )
+    expect(tree.focused?.toString()).toBe(b.toString())
+    tree.toggleInSelection(b)
+    expect(tree.selection.map((u) => u.toString())).toEqual([a.toString()])
+    expect(tree.focused?.toString()).toBe(b.toString())
+  })
+
+  it('selectRange spans the inclusive range between anchor and target in visible order', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(URI.joinPath(root, 'src'))
+    const visible = tree.getVisibleEntries()
+    // [root, src, index.ts, README.md]
+    const anchor = visible[1]!.resource // src
+    const target = visible[3]!.resource // README.md
+    tree.selectRange(anchor, target)
+    expect(tree.selection.map((u) => u.toString())).toEqual([
+      visible[1]!.resource.toString(),
+      visible[2]!.resource.toString(),
+      visible[3]!.resource.toString(),
+    ])
+    expect(tree.focused?.toString()).toBe(target.toString())
+  })
+
+  it('selectRange works in reverse order too', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(URI.joinPath(root, 'src'))
+    const visible = tree.getVisibleEntries()
+    const anchor = visible[3]!.resource
+    const target = visible[1]!.resource
+    tree.selectRange(anchor, target)
+    expect(tree.selection.map((u) => u.toString())).toEqual([
+      visible[1]!.resource.toString(),
+      visible[2]!.resource.toString(),
+      visible[3]!.resource.toString(),
+    ])
+    expect(tree.focused?.toString()).toBe(target.toString())
+  })
+
+  it('setActiveEditorResource fires onDidChange and exposes the value', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    let fired = 0
+    tree.onDidChange(() => fired++)
+    const target = URI.joinPath(root, 'README.md')
+    tree.setActiveEditorResource(target)
+    expect(tree.activeEditorResource?.toString()).toBe(target.toString())
+    expect(fired).toBeGreaterThan(0)
+    fired = 0
+    tree.setActiveEditorResource(target)
+    expect(fired).toBe(0)
+  })
+
+  it('reveal sets focus and replaces the selection with the single target', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const a = URI.joinPath(root, 'README.md')
+    const b = URI.joinPath(URI.joinPath(root, 'src'), 'index.ts')
+    tree.setSelection([a, URI.joinPath(root, 'src')])
+    await tree.reveal(b)
+    expect(tree.focused?.toString()).toBe(b.toString())
+    expect(tree.selection.map((u) => u.toString())).toEqual([b.toString()])
+  })
+
+  it('switching workspace folders resets every selection-related state', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    tree.setSelection([URI.joinPath(root, 'README.md')])
+    tree.setActiveEditorResource(URI.joinPath(root, 'README.md'))
+    const other = URI.file('/other')
+    fs.dirs.set(other.toString(), [])
+    ws.setRoot(other)
+    await flush()
+    expect(tree.selection).toEqual([])
+    expect(tree.focused).toBeNull()
+    expect(tree.activeEditorResource).toBeNull()
+  })
 })

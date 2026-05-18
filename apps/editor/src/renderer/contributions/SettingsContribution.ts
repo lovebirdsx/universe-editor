@@ -90,5 +90,20 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
         },
       }),
     )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'explorer',
+        title: 'Explorer',
+        properties: {
+          'explorer.autoReveal': {
+            type: 'boolean',
+            default: true,
+            description:
+              'Controls whether the Explorer should automatically reveal and select files when opening them.',
+          },
+        },
+      }),
+    )
   }
 }

@@ -100,9 +100,9 @@ export function ExplorerView() {
     if (e.altKey || e.ctrlKey || e.metaKey) return
     const visible = tree.getVisibleEntries()
     if (visible.length === 0) return
-    const selectedKey = tree.selectedResource?.toString()
-    const currentIndex = selectedKey
-      ? visible.findIndex((v) => v.resource.toString() === selectedKey)
+    const focusedKey = tree.focused?.toString()
+    const currentIndex = focusedKey
+      ? visible.findIndex((v) => v.resource.toString() === focusedKey)
       : -1
     const current = currentIndex >= 0 ? visible[currentIndex] : undefined
 
@@ -115,7 +115,11 @@ export function ExplorerView() {
       const clamped = Math.max(0, Math.min(visible.length - 1, index))
       const target = visible[clamped]
       if (!target) return
-      void tree.reveal(target.resource)
+      if (e.shiftKey && tree.focused) {
+        tree.selectRange(tree.focused, target.resource)
+      } else {
+        tree.setSelection([target.resource], target.resource)
+      }
     }
 
     switch (e.key) {
@@ -149,7 +153,7 @@ export function ExplorerView() {
         if (current.isDirectory) {
           if (tree.isExpanded(current.resource)) {
             const next = visible[currentIndex + 1]
-            if (next) tree.setSelection(next.resource)
+            if (next) tree.setSelection([next.resource], next.resource)
           } else {
             void tree.expand(current.resource)
           }
@@ -162,7 +166,7 @@ export function ExplorerView() {
           tree.collapse(current.resource)
         } else {
           const parent = tree.getParent(current.resource)
-          if (parent) tree.setSelection(parent)
+          if (parent) tree.setSelection([parent], parent)
         }
         return
       case 'Enter':
