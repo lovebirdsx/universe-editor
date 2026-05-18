@@ -200,9 +200,10 @@ export class LastEditorInGroupAction extends Action2 {
 function splitInDirection(accessor: ServicesAccessor, direction: GroupDirection): void {
   const groups = accessor.get(IEditorGroupsService)
   const source = groups.activeGroup
-  const newGroup = groups.addGroup(source, direction)
   const active = source.activeEditor
-  if (active) groups.copyEditor(active, newGroup)
+  if (!active) return
+  const newGroup = groups.addGroup(source, direction)
+  groups.copyEditor(active, newGroup)
   groups.activateGroup(newGroup)
 }
 

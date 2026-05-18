@@ -196,6 +196,22 @@ describe('Built-in editor Action2s', () => {
     expect(svc.groups).toHaveLength(4)
   })
 
+  it('SplitEditorRight does nothing when active group has no editors', () => {
+    const svc = new EditorGroupsService()
+    exec(SplitEditorRightAction, svc)
+    expect(svc.groups).toHaveLength(1)
+  })
+
+  it('Split actions all do nothing when active group has no editors', () => {
+    const svc = new EditorGroupsService()
+    exec(SplitEditorDownAction, svc)
+    expect(svc.groups).toHaveLength(1)
+    exec(SplitEditorLeftAction, svc)
+    expect(svc.groups).toHaveLength(1)
+    exec(SplitEditorUpAction, svc)
+    expect(svc.groups).toHaveLength(1)
+  })
+
   it('FocusNextGroup activates the next group with wrap', () => {
     const svc = new EditorGroupsService()
     const g1 = svc.activeGroup
