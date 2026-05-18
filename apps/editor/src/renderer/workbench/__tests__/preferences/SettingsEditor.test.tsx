@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { fireEvent, render, act } from '@testing-library/react'
+import { fireEvent, render, act, waitFor } from '@testing-library/react'
 import {
   ConfigurationRegistry,
   ConfigurationService,
@@ -11,6 +11,7 @@ import {
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
 import { SettingsEditor } from '../../preferences/SettingsEditor.js'
+import { SETTINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../../preferences/preferencesFocus.js'
 
 function mount() {
   const config = new ConfigurationService()
@@ -83,6 +84,32 @@ describe('SettingsEditor', () => {
     expect(container.querySelector('[data-key="editor.fontSize"]')).toBeTruthy()
     expect(container.querySelector('[data-key="editor.wordWrap"]')).toBeNull()
     expect(container.querySelector('[data-key="files.autoSave"]')).toBeNull()
+  })
+
+  it('focuses the search input on mount', async () => {
+    registerSeedSchema()
+    const { container } = mount()
+    const search = container.querySelector('input[type=search]') as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(search))
+  })
+
+  it('re-focuses the search input when the focus event fires', async () => {
+    registerSeedSchema()
+    const { container } = mount()
+    const search = container.querySelector('input[type=search]') as HTMLInputElement
+    await waitFor(() => expect(document.activeElement).toBe(search))
+
+    const other = document.createElement('button')
+    document.body.appendChild(other)
+    other.focus()
+    expect(document.activeElement).toBe(other)
+
+    act(() => {
+      document.dispatchEvent(new Event(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT))
+    })
+
+    await waitFor(() => expect(document.activeElement).toBe(search))
+    other.remove()
   })
 
   it('editing a number writes to the User layer', () => {

@@ -4,7 +4,7 @@
  *  ConfigurationNode; control type is chosen from the JSON-schema entry.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useReducer, useState, type JSX } from 'react'
+import { useEffect, useMemo, useReducer, useRef, useState, type JSX } from 'react'
 import {
   ConfigurationRegistry,
   ConfigurationTarget,
@@ -13,6 +13,7 @@ import {
   type IConfigurationPropertySchema,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { SETTINGS_EDITOR_FOCUS_SEARCH_EVENT } from './preferencesFocus.js'
 import styles from './SettingsEditor.module.css'
 
 interface RowProps {
@@ -90,6 +91,18 @@ export function SettingsEditor() {
   const config = useService(IConfigurationService)
   const [query, setQuery] = useState('')
   const [, bump] = useReducer((n: number) => n + 1, 0)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    const focusSearch = () => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+
+    focusSearch()
+    document.addEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+    return () => document.removeEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+  }, [])
 
   // Re-render whenever schema registry changes or any configuration value changes.
   useEffect(() => {
@@ -126,6 +139,7 @@ export function SettingsEditor() {
     <div className={styles['root']}>
       <div className={styles['header']}>
         <input
+          ref={searchInputRef}
           className={styles['search']}
           type="search"
           placeholder={`Search settings (${totalKeys})`}

@@ -16,6 +16,10 @@ import {
 import { SettingsEditorInput } from '../workbench/preferences/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../workbench/keybindings/KeybindingsEditorInput.js'
 import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import {
+  dispatchKeybindingsEditorFocusSearch,
+  dispatchSettingsEditorFocusSearch,
+} from '../workbench/preferences/preferencesFocus.js'
 
 const SETTINGS_JSON_TEMPLATE = `// User settings — edit and save to apply immediately.
 // Available keys are declared by ConfigurationRegistry.
@@ -86,12 +90,14 @@ export class OpenSettingsAction extends Action2 {
         if (editor instanceof SettingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
+          dispatchSettingsEditorFocusSearch()
           return
         }
       }
     }
 
     groups.activeGroup.openEditor(new SettingsEditorInput())
+    dispatchSettingsEditorFocusSearch()
   }
 }
 
@@ -116,12 +122,14 @@ export class OpenKeybindingsEditorAction extends Action2 {
         if (editor instanceof KeybindingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
+          dispatchKeybindingsEditorFocusSearch()
           return
         }
       }
     }
 
     groups.activeGroup.openEditor(new KeybindingsEditorInput())
+    dispatchKeybindingsEditorFocusSearch()
   }
 }
 

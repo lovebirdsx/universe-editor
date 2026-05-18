@@ -8,6 +8,7 @@ import { useEffect, useReducer, useRef, useState, type JSX } from 'react'
 import { CommandsRegistry, KeybindingsRegistry } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
+import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferences/preferencesFocus.js'
 import { IUserKeybindingsService } from './UserKeybindingsService.js'
 import { MONACO_COMMAND_CATALOG } from '../editor/monaco/monacoCommandCatalog.js'
 import styles from './KeybindingsEditor.module.css'
@@ -114,6 +115,19 @@ export function KeybindingsEditor(): JSX.Element {
   const [query, setQuery] = useState('')
   const [, bump] = useReducer((n: number) => n + 1, 0)
   const [recordingCommand, setRecordingCommand] = useState<string | null>(null)
+  const searchInputRef = useRef<HTMLInputElement | null>(null)
+
+  useEffect(() => {
+    const focusSearch = () => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+
+    focusSearch()
+    document.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+    return () =>
+      document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+  }, [])
 
   // Re-render on user keybinding changes.
   useEffect(() => {
@@ -153,6 +167,7 @@ export function KeybindingsEditor(): JSX.Element {
     <div className={styles['root']}>
       <div className={styles['header']}>
         <input
+          ref={searchInputRef}
           className={styles['search']}
           type="search"
           placeholder={`Search keybindings (${allCommands.length})`}
