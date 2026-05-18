@@ -20,11 +20,19 @@ describe('SearchResultsTree', () => {
   it('groups matches by file and shows match counts', () => {
     const results: IFileMatch[] = [
       makeMatch('/ws/a.ts', 1, 'foo bar'),
-      makeMatch('/ws/b.ts', 2, 'foo'),
+      makeMatch('/ws/package.json', 2, 'foo'),
     ]
     render(<SearchResultsTree results={results} onActivateMatch={() => {}} />)
     expect(screen.getByText('a.ts')).toBeTruthy()
-    expect(screen.getByText('b.ts')).toBeTruthy()
+    expect(screen.getByText('package.json')).toBeTruthy()
+    expect(
+      screen.getByText('a.ts').parentElement?.querySelector('[data-file-icon="file-typescript"]'),
+    ).toBeTruthy()
+    expect(
+      screen
+        .getByText('package.json')
+        .parentElement?.querySelector('[data-file-icon="file-package"]'),
+    ).toBeTruthy()
   })
 
   it('clicking a match row invokes the activate callback', () => {

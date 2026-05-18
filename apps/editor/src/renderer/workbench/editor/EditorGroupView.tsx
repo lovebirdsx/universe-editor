@@ -31,6 +31,7 @@ import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
 import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
+import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './EditorArea.module.css'
 
 export interface EditorGroupViewProps {
@@ -88,6 +89,11 @@ function EditorTab({
   onClose: () => void
   onContextMenu: (e: ReactMouseEvent) => void
 }) {
+  const resource = input.resource
+  const showsFileIcon = resource && (resource.scheme === 'file' || resource.scheme === 'untitled')
+  const languageId =
+    'language' in input && typeof input.language === 'string' ? input.language : undefined
+
   return (
     <div
       className={`${styles['tab']} ${isActive ? styles['active'] : ''} ${
@@ -100,6 +106,15 @@ function EditorTab({
       aria-selected={isActive}
     >
       {input.isDirty && <span className={styles['dirtyDot']} title="Unsaved changes" />}
+      {showsFileIcon && resource && (
+        <FileIcon
+          resource={resource}
+          isDirectory={false}
+          languageId={languageId}
+          className={styles['tabIcon']}
+          size={14}
+        />
+      )}
       <span className={styles['tabLabel']}>{input.label}</span>
       <button
         className={styles['closeBtn']}

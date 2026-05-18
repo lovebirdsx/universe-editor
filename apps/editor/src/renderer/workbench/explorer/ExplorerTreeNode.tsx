@@ -8,6 +8,7 @@
 import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import type { URI } from '@universe-editor/platform'
 import type { ExplorerTreeService } from './ExplorerTreeService.js'
+import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './ExplorerView.module.css'
 
 interface Props {
@@ -102,7 +103,7 @@ export function ExplorerTreeNode({
           {isDirectory ? (expanded ? '▾' : '▸') : ''}
         </span>
         <span className={styles['icon']} aria-hidden="true">
-          {isDirectory ? '📁' : '📄'}
+          <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />
         </span>
         <span className={styles['label']}>{name}</span>
       </div>

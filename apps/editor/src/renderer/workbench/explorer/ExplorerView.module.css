@@ -85,10 +85,11 @@
 }
 
 .icon {
-  display: inline-block;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 18px;
-  text-align: center;
-  font-size: 12px;
+  flex-shrink: 0;
 }
 
 .label {

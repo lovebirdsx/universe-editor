@@ -13,12 +13,9 @@ import {
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
-import { MonacoModelRegistry, languageForResource } from './monaco/MonacoModelRegistry.js'
-
-function basename(path: string): string {
-  const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  return slash === -1 ? path : path.slice(slash + 1)
-}
+import { basenameOfResource } from '../files/resourceInfo.js'
+import { languageForResource } from '../files/resourceLanguage.js'
+import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 
 interface ISerializedFileEditor {
   readonly resource: UriComponents
@@ -51,7 +48,7 @@ export class FileEditorInput extends EditorInput {
   }
 
   override getName(): string {
-    return basename(this._resource.fsPath)
+    return basenameOfResource(this._resource)
   }
 
   get backupContent(): string {
@@ -132,7 +129,7 @@ export class FileEditorInput extends EditorInput {
     }
 
     const result = await dialog.confirm({
-      message: `文件 "${basename(this._resource.fsPath)}" 在外部已修改。`,
+      message: `文件 "${basenameOfResource(this._resource)}" 在外部已修改。`,
       detail: '是否放弃当前更改并从磁盘重新加载?',
       primaryButton: '重新加载',
       cancelButton: '保留当前更改',

@@ -161,6 +161,25 @@ describe('ExplorerView', () => {
     expect(screen.getByText('src')).toBeTruthy()
   })
 
+  it('renders themed file icons instead of emoji fallbacks', async () => {
+    const root = URI.file('/ws')
+    const fs = makeFs({
+      [root.toString()]: [
+        { name: 'src', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+    })
+    renderView({ folder: root, fs })
+
+    const folderRow = (await screen.findByText('src')).closest('[role="treeitem"]')
+    const fileRow = screen.getByText('README.md').closest('[role="treeitem"]')
+
+    expect(screen.queryByText('📁')).toBeFalsy()
+    expect(screen.queryByText('📄')).toBeFalsy()
+    expect(folderRow?.querySelector('[data-file-icon="folder-src"]')).toBeTruthy()
+    expect(fileRow?.querySelector('[data-file-icon="file-readme"]')).toBeTruthy()
+  })
+
   it('clicking a file opens it through IEditorService', async () => {
     const root = URI.file('/ws')
     const fs = makeFs({

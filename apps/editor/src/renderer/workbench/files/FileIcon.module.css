@@ -1,0 +1,31 @@
+.fileIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-file-icon-default, var(--color-foreground-muted, #8a8a92));
+}
+
+.tone-folder {
+  color: var(--color-file-icon-folder, var(--color-sidebar-fg, #c8c8c8));
+}
+
+.tone-folderSpecial {
+  color: var(--color-file-icon-folder-special, #8fb0d9);
+}
+
+.tone-code {
+  color: var(--color-file-icon-code, #7fb0e6);
+}
+
+.tone-config {
+  color: var(--color-file-icon-config, #c7b07a);
+}
+
+.tone-markdown {
+  color: var(--color-file-icon-markdown, #7fbf9f);
+}
+
+.tone-special {
+  color: var(--color-file-icon-special, #9fbbd9);
+}

@@ -48,6 +48,13 @@ html, body, #root {
   --color-sidebar-section-header-bg: #1a1a1c;
   --color-sidebar-section-header-fg: #b5b5b8;
   --color-sidebar-section-header-hover: #2f2f35;
+  --color-file-icon-default: #8a8a92;
+  --color-file-icon-folder: #c8c8c8;
+  --color-file-icon-folder-special: #90adc9;
+  --color-file-icon-code: #7eaed9;
+  --color-file-icon-config: #c3ae79;
+  --color-file-icon-markdown: #7fb395;
+  --color-file-icon-special: #9ab4cf;
 
   /* Editor */
   --color-editor-bg: #1a1a1c;

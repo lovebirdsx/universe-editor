@@ -5,6 +5,8 @@
 
 import { useState } from 'react'
 import { URI, type IFileMatch, type ITextSearchMatch } from '@universe-editor/platform'
+import { FileIcon } from '../files/fileIconTheme.js'
+import { basenameOfResource, dirnameOfResource } from '../files/resourceInfo.js'
 import styles from './SearchView.module.css'
 
 export interface SearchResultsTreeProps {
@@ -15,18 +17,6 @@ export interface SearchResultsTreeProps {
     | undefined
   onReplaceFile?: ((resource: URI) => void) | undefined
   replaceVisible?: boolean
-}
-
-function basenameOf(uri: URI): string {
-  const path = uri.fsPath
-  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  return idx >= 0 ? path.slice(idx + 1) : path
-}
-
-function dirnameOf(uri: URI): string {
-  const path = uri.fsPath
-  const idx = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
-  return idx >= 0 ? path.slice(0, idx) : ''
 }
 
 function highlight(preview: string, ranges: readonly { startColumn: number; endColumn: number }[]) {
@@ -73,13 +63,19 @@ function FileGroup({
           type="button"
           className={styles['fileToggle']}
           aria-expanded={expanded}
-          aria-label={`Toggle ${basenameOf(resource)}`}
+          aria-label={`Toggle ${basenameOfResource(resource)}`}
           onClick={() => setExpanded((v) => !v)}
         >
           {expanded ? '▾' : '▸'}
         </button>
-        <span className={styles['fileName']}>{basenameOf(resource)}</span>
-        <span className={styles['filePath']}>{dirnameOf(resource)}</span>
+        <FileIcon
+          resource={resource}
+          isDirectory={false}
+          className={styles['fileHeaderIcon']}
+          size={14}
+        />
+        <span className={styles['fileName']}>{basenameOfResource(resource)}</span>
+        <span className={styles['filePath']}>{dirnameOfResource(resource)}</span>
         <span className={styles['fileCount']} aria-label={`${total} matches`}>
           {total}
         </span>
@@ -88,7 +84,7 @@ function FileGroup({
             type="button"
             className={styles['replaceBtn']}
             title="Replace All in File"
-            aria-label={`Replace all in ${basenameOf(resource)}`}
+            aria-label={`Replace all in ${basenameOfResource(resource)}`}
             onClick={() => onReplaceFile(resource)}
           >
             ⇄

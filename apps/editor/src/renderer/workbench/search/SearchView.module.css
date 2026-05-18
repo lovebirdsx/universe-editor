@@ -224,6 +224,10 @@
   font-weight: 600;
 }
 
+.fileHeaderIcon {
+  flex-shrink: 0;
+}
+
 .filePath {
   color: var(--text-secondary, #9d9d9d);
   font-size: 11px;

@@ -180,4 +180,25 @@ describe('EditorGroupView — tab switching', () => {
 
     svc.dispose()
   })
+
+  it('renders file icons in tabs from the shared resolver', () => {
+    const svc = new EditorGroupsService()
+    const group = svc.activeGroup
+    const a = new TabTestInput('Alpha', URI.file('/test/alpha.ts'))
+    const b = new TabTestInput('Beta', URI.file('/test/package.json'))
+    group.openEditor(a)
+    group.openEditor(b)
+
+    render(
+      <ServicesContext.Provider value={makeFakeInstantiation()}>
+        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+      </ServicesContext.Provider>,
+    )
+
+    const tabs = screen.getAllByRole('tab')
+    expect(tabs[0]?.querySelector('[data-file-icon="file-typescript"]')).toBeTruthy()
+    expect(tabs[1]?.querySelector('[data-file-icon="file-package"]')).toBeTruthy()
+
+    svc.dispose()
+  })
 })
