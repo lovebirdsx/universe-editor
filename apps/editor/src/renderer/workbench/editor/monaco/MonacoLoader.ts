@@ -6,6 +6,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as monaco from 'monaco-editor'
+import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
+import { applyMonacoNls } from './monacoNlsBootstrap.js'
 
 export type { monaco }
 
@@ -36,6 +38,7 @@ async function loadMonaco(): Promise<typeof monaco> {
   if (_monaco) return _monaco
   if (!_monacoPromise) {
     _monacoPromise = (async () => {
+      applyMonacoNls(getCurrentLocale())
       const [monacoMod, EditorWorker, JsonWorker] = await Promise.all([
         import('monaco-editor'),
         import('monaco-editor/esm/vs/editor/editor.worker?worker'),

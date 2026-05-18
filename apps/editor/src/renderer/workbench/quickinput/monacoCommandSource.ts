@@ -5,6 +5,10 @@
  *  palette can offer items like "Format Document" or "Go to Line" without
  *  pre-registering them into CommandsRegistry. Monaco actions are bound to a
  *  specific editor instance, so we resolve them lazily at palette open time.
+ *
+ *  Localization: Monaco's NLS globals are set up by monacoNlsBootstrap before
+ *  the editor module loads, so `action.label` already returns the localized
+ *  string in the active language.
  *--------------------------------------------------------------------------------------------*/
 
 import { localize, type IEditorGroupsService, type IQuickPickItem } from '@universe-editor/platform'

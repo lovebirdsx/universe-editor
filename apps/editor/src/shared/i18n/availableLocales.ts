@@ -45,3 +45,13 @@ export function getLocaleMessages(locale: SupportedLocale): MessageMap {
   if (locale === 'zh-CN') return ZH_CN_MESSAGES
   return EN_US_MESSAGES
 }
+
+let _currentLocale: SupportedLocale = DEFAULT_LOCALE
+
+export function setCurrentLocale(locale: SupportedLocale): void {
+  _currentLocale = locale
+}
+
+export function getCurrentLocale(): SupportedLocale {
+  return _currentLocale
+}

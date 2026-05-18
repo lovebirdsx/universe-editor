@@ -7,6 +7,7 @@ import {
   DISPLAY_LANGUAGE_SETTING_KEY,
   getLocaleMessages,
   resolveDisplayLanguage,
+  setCurrentLocale,
   type SupportedLocale,
 } from './availableLocales.js'
 
@@ -29,6 +30,7 @@ export function configureEditorNls(locale: SupportedLocale): SupportedLocale {
     messages: getLocaleMessages(locale),
     fallbackMessages: getLocaleMessages(DEFAULT_LOCALE),
   })
+  setCurrentLocale(locale)
   return locale
 }
 
