@@ -4,6 +4,7 @@
  *   - isWindows / isMac / isLinux  (platform identity)
  *   - sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
+ *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
  *   - activeEditorIsFirstInGroup / activeEditorIsLastInGroup / activeEditorIsDirty
@@ -72,6 +73,12 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         }
       }),
     )
+
+    // True when a Monaco widget (textarea / find widget / IntelliSense / snippet input)
+    // holds DOM focus. Drives ESC routing: when true the global ESC binding bows out
+    // so Monaco's own ESC handling (cancel multi-cursor, close find widget, etc.) can
+    // fire via natural event bubbling. Written by FileEditor through onDidFocus/BlurEditorWidget.
+    contextKeyService.createKey<boolean>('editorFocus', false)
 
     // -- group-level editor keys
     const editorPartMultipleEditorGroups = contextKeyService.createKey<boolean>(

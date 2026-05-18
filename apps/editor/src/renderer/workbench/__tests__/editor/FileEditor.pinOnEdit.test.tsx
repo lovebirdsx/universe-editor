@@ -21,6 +21,8 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => {
         restoreViewState: () => {},
         onDidChangeCursorPosition: () => ({ dispose: () => {} }),
         onDidScrollChange: () => ({ dispose: () => {} }),
+        onDidFocusEditorWidget: () => ({ dispose: () => {} }),
+        onDidBlurEditorWidget: () => ({ dispose: () => {} }),
         getContainerDomNode: () => document.createElement('div'),
       }),
     },
@@ -64,9 +66,11 @@ vi.mock('../../editor/FileEditorRegistry.js', () => {
 
 import { cleanup, render } from '@testing-library/react'
 import {
+  ContextKeyService,
   EditorInput,
   ICommandService,
   IConfigurationService,
+  IContextKeyService,
   IEditorGroupsService,
   IFileService,
   InstantiationService,
@@ -146,6 +150,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       loadLayer: () => {},
       getLayerSnapshot: () => ({}),
     } as never)
+    services.set(IContextKeyService, new ContextKeyService())
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     const group = new FakeGroup(input)

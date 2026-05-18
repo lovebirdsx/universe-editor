@@ -350,7 +350,7 @@ export class FocusActiveEditorGroupAction extends Action2 {
       id: FocusActiveEditorGroupAction.ID,
       title: 'Focus Active Editor Group',
       category: 'View',
-      keybinding: { primary: 'escape', when: '!quickInputVisible' },
+      keybinding: { primary: 'escape', when: '!quickInputVisible && !editorFocus' },
       precondition: 'hasActiveEditor',
       f1: true,
     })

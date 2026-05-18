@@ -126,3 +126,50 @@ describe('CloseQuickInputAction.run', () => {
     expect(hide).toHaveBeenCalledOnce()
   })
 })
+
+describe('ESC routing by editorFocus contextKey', () => {
+  // When Monaco holds DOM focus, the global FocusActiveEditorGroupAction must
+  // bow out so Monaco's own ESC handling (cancel multi-cursor, close find widget,
+  // dismiss IntelliSense) can fire via natural event bubbling. This is the
+  // regression that prompted introducing the `editorFocus` contextKey.
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('does NOT resolve to FocusActiveEditorGroupAction when editorFocus=true', () => {
+    disposables.push(registerAction2(FocusActiveEditorGroupAction))
+    disposables.push(registerAction2(CloseQuickInputAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('hasActiveEditor', true)
+    ctx.createKey<boolean>('quickInputVisible', false)
+    ctx.createKey<boolean>('editorFocus', true)
+
+    // Neither binding matches → ESC bubbles up to Monaco unmolested.
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBeUndefined()
+  })
+
+  it('routes ESC to FocusActiveEditorGroupAction when editorFocus=false', () => {
+    disposables.push(registerAction2(FocusActiveEditorGroupAction))
+    disposables.push(registerAction2(CloseQuickInputAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('hasActiveEditor', true)
+    ctx.createKey<boolean>('quickInputVisible', false)
+    ctx.createKey<boolean>('editorFocus', false)
+
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBe(
+      FocusActiveEditorGroupAction.ID,
+    )
+  })
+
+  it('quickInputVisible wins over editorFocus (defense in depth)', () => {
+    disposables.push(registerAction2(FocusActiveEditorGroupAction))
+    disposables.push(registerAction2(CloseQuickInputAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('hasActiveEditor', true)
+    ctx.createKey<boolean>('quickInputVisible', true)
+    ctx.createKey<boolean>('editorFocus', true)
+
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBe(CloseQuickInputAction.ID)
+  })
+})

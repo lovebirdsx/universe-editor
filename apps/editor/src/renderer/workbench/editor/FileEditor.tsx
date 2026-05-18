@@ -17,6 +17,7 @@ import type { IDisposable, IEditorInput } from '@universe-editor/platform'
 import {
   ICommandService,
   IConfigurationService,
+  IContextKeyService,
   IEditorGroupsService,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -40,6 +41,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const groupsService = useService(IEditorGroupsService)
   const commandService = useService(ICommandService)
   const configService = useService(IConfigurationService)
+  const contextKeyService = useService(IContextKeyService)
   const userKeybindingsSvc = useService(IUserKeybindingsService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -78,6 +80,16 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     ed.addCommand(monacoNs.KeyCode.F1, () => {
       void commandService.executeCommand('workbench.action.showCommands')
     })
+    // Bridge Monaco widget focus → `editorFocus` contextKey, so the global ESC
+    // binding (FocusActiveEditorGroupAction) bows out while Monaco has focus and
+    // Monaco's own ESC handling (cancel multi-cursor, close find widget, dismiss
+    // IntelliSense) can fire via event bubbling.
+    const focusSub = ed.onDidFocusEditorWidget(() => {
+      contextKeyService.set('editorFocus', true)
+    })
+    const blurSub = ed.onDidBlurEditorWidget(() => {
+      contextKeyService.set('editorFocus', false)
+    })
     // Bridge: intercept catalog commands whose default keybinding has been
     // overridden by the user. Capture phase fires before Monaco's own handlers.
     const container = ed.getContainerDomNode()
@@ -96,11 +108,16 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     container.addEventListener('keydown', bridgeHandler, true)
     editorRef.current = ed
     return () => {
+      focusSub.dispose()
+      blurSub.dispose()
+      // Monaco's dispose() does not guarantee a final blur event; reset
+      // explicitly so an unmount-while-focused doesn't leave a stale true.
+      contextKeyService.set('editorFocus', false)
       container.removeEventListener('keydown', bridgeHandler, true)
       ed.dispose()
       editorRef.current = null
     }
-  }, [monacoNs, commandService, userKeybindingsSvc, configService])
+  }, [monacoNs, commandService, userKeybindingsSvc, configService, contextKeyService])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {
