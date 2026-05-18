@@ -14,7 +14,11 @@
 
 import { useContext, useEffect, useRef, useState } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
-import { ICommandService, IEditorGroupsService } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IConfigurationService,
+  IEditorGroupsService,
+} from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
@@ -29,6 +33,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
   const commandService = useService(ICommandService)
+  const configService = useService(IConfigurationService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -47,11 +52,12 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // Create the standalone editor once monaco is ready; never recreate on input change.
   useEffect(() => {
     if (!monacoNs || !containerRef.current) return
+    const minimapEnabled = configService.get<boolean>('editor.minimap.enabled') ?? true
     const ed = monacoNs.editor.create(containerRef.current, {
       theme: 'vs-dark',
       automaticLayout: true,
       fontSize: 13,
-      minimap: { enabled: true },
+      minimap: { enabled: minimapEnabled },
       scrollBeyondLastLine: false,
       tabSize: 2,
       insertSpaces: true,
@@ -70,7 +76,18 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       ed.dispose()
       editorRef.current = null
     }
-  }, [monacoNs, commandService])
+  }, [monacoNs, commandService, configService])
+
+  // Apply config changes to the live editor instance.
+  useEffect(() => {
+    const disposable = configService.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('editor.minimap.enabled')) {
+        const enabled = configService.get<boolean>('editor.minimap.enabled') ?? true
+        editorRef.current?.updateOptions({ minimap: { enabled } })
+      }
+    })
+    return () => disposable.dispose()
+  }, [configService])
 
   // Wire the active input -> model swap + dirty tracking + viewState save/restore.
   useEffect(() => {

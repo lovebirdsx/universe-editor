@@ -65,6 +65,7 @@ import { cleanup, render } from '@testing-library/react'
 import {
   EditorInput,
   ICommandService,
+  IConfigurationService,
   IEditorGroupsService,
   IFileService,
   InstantiationService,
@@ -135,6 +136,14 @@ describe('FileEditor — auto-pin on first edit', () => {
     services.set(ICommandService, {
       _serviceBrand: undefined,
       executeCommand: async () => undefined,
+    } as never)
+    services.set(IConfigurationService, {
+      _serviceBrand: undefined,
+      get: () => true,
+      update: () => {},
+      onDidChangeConfiguration: () => ({ dispose: () => {} }),
+      loadLayer: () => {},
+      getLayerSnapshot: () => ({}),
     } as never)
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))

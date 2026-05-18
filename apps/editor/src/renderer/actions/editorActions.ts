@@ -6,8 +6,10 @@
 
 import {
   Action2,
+  ConfigurationTarget,
   GroupDirection,
   GroupLocation,
+  IConfigurationService,
   IDialogService,
   IEditorGroupsService,
   MenuId,
@@ -358,5 +360,27 @@ export class FocusActiveEditorGroupAction extends Action2 {
     if (activeEditor instanceof FileEditorInput) {
       FileEditorRegistry.get(activeEditor)?.focus()
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Minimap
+// ---------------------------------------------------------------------------
+
+export class ToggleMinimapAction extends Action2 {
+  static readonly ID = 'editor.action.toggleMinimap'
+  constructor() {
+    super({
+      id: ToggleMinimapAction.ID,
+      title: 'Toggle Minimap',
+      category: 'View',
+      menu: { id: MenuId.MenubarViewMenu, group: '3_editor', order: 1 },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const config = accessor.get(IConfigurationService)
+    const current = config.get<boolean>('editor.minimap.enabled') ?? true
+    config.update('editor.minimap.enabled', !current, ConfigurationTarget.User)
   }
 }

@@ -30,6 +30,7 @@ import {
   SplitEditorLeftAction,
   SplitEditorRightAction,
   SplitEditorUpAction,
+  ToggleMinimapAction,
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
 import {
@@ -73,6 +74,9 @@ registerAction2(ToggleSecondarySidebarVisibilityAction)
 registerAction2(TogglePanelAction)
 registerAction2(ShowCommandsAction)
 registerAction2(ShowExplorerAction)
+
+// Editor — view
+registerAction2(ToggleMinimapAction)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)
