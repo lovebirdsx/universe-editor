@@ -5,9 +5,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 5_000 },
   retries: process.env['CI'] ? 1 : 0,
-  // Electron 当前只起一个窗口，多 worker 会抢焦点;
-  // M1 阶段保持串行,后续可按 spec 隔离 launch.
-  workers: 1,
+  workers: 4,
   fullyParallel: false,
   reporter: process.env['CI']
     ? [['github'], ['html', { open: 'never', outputFolder: 'playwright-report' }]]
