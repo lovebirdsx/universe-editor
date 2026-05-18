@@ -34,6 +34,8 @@ export interface E2ELayoutSizes {
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
+  /** Resolves once React has mounted and the workbench reached LifecyclePhase.Restored. */
+  whenRestored(): Promise<void>
   /** Returns the current lifecycle phase name. */
   getLifecyclePhase(): E2ELifecyclePhase
   /** Looks up a ContextKey value (falls back through scopes). */

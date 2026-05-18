@@ -39,6 +39,10 @@ export class WorkbenchPO {
     return this.page.evaluate(() => window.__E2E__!.getLifecyclePhase())
   }
 
+  async waitForRestored(): Promise<void> {
+    await this.page.evaluate(() => window.__E2E__!.whenRestored())
+  }
+
   /** Open a workspace folder directly, bypassing the native dialog. */
   async openWorkspace(fsPath: string): Promise<void> {
     await this.page.evaluate((p) => window.__E2E__!.openWorkspace(p), fsPath)

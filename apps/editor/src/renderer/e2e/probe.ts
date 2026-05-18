@@ -57,6 +57,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
 
   const probe: E2EProbe = {
     whenReady: () => services.lifecycleService.when(LifecyclePhase.Ready),
+    whenRestored: () => services.lifecycleService.when(LifecyclePhase.Restored),
     getLifecyclePhase: () => phaseToName(services.lifecycleService.phase),
     getContextKey: (key) => services.contextKeyService.get(key),
     runCommand: (id, ...args) => services.commandService.executeCommand(id, ...args),

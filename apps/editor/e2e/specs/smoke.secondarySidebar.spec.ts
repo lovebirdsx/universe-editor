@@ -16,8 +16,7 @@ test.describe('@p1 secondary sidebar layout', () => {
   test('sidebar width is unchanged after show → hide secondary sidebar', async ({ workbench }) => {
     const { page } = workbench
 
-    // Ensure probe is ready.
-    await page.evaluate(() => window.__E2E__!.whenReady())
+    await workbench.waitForRestored()
 
     // 1. Capture the initial sidebar size from LayoutService.
     const before = await page.evaluate(() => window.__E2E__!.getLayoutSizes())
@@ -50,7 +49,7 @@ test.describe('@p1 secondary sidebar layout', () => {
   test('secondary sidebar restores its size after hide → show', async ({ workbench }) => {
     const { page } = workbench
 
-    await page.evaluate(() => window.__E2E__!.whenReady())
+    await workbench.waitForRestored()
 
     // Show secondary sidebar and wait for its size to settle.
     await page.evaluate((cmd) => {
@@ -70,7 +69,11 @@ test.describe('@p1 secondary sidebar layout', () => {
     await page.evaluate((cmd) => {
       void window.__E2E__!.runCommand(cmd)
     }, TOGGLE_CMD)
-    await page.waitForTimeout(300)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('secondarySideBarVisible')), {
+        timeout: 3000,
+      })
+      .toBe(false)
 
     // Show again — must restore to the same size.
     await page.evaluate((cmd) => {
@@ -87,7 +90,7 @@ test.describe('@p1 secondary sidebar layout', () => {
   test('editor area recovers its width after hide secondary sidebar', async ({ workbench }) => {
     const { page } = workbench
 
-    await page.evaluate(() => window.__E2E__!.whenReady())
+    await workbench.waitForRestored()
 
     // Measure editor area via DOM (the Allotment pane wrapping it).
     const getEditorWidth = () =>
@@ -96,6 +99,7 @@ test.describe('@p1 secondary sidebar layout', () => {
         return el ? Math.round(el.getBoundingClientRect().width) : null
       })
 
+    await expect.poll(getEditorWidth, { timeout: 3000 }).toBeGreaterThan(0)
     const editorWidthBefore = await getEditorWidth()
     expect(editorWidthBefore).toBeGreaterThan(0)
 
@@ -103,12 +107,21 @@ test.describe('@p1 secondary sidebar layout', () => {
     await page.evaluate((cmd) => {
       void window.__E2E__!.runCommand(cmd)
     }, TOGGLE_CMD)
-    await page.waitForTimeout(300)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getLayoutSizes().secondarySidebar), {
+        timeout: 3000,
+      })
+      .toBeGreaterThan(0)
 
     // Hide secondary sidebar.
     await page.evaluate((cmd) => {
       void window.__E2E__!.runCommand(cmd)
     }, TOGGLE_CMD)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getContextKey('secondarySideBarVisible')), {
+        timeout: 3000,
+      })
+      .toBe(false)
 
     // Editor width should recover to within 2px of the original.
     await expect
