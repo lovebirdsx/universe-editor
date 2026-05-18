@@ -10,7 +10,9 @@ import {
   ConfigurationRegistry,
   Disposable,
   IWorkbenchContribution,
+  localize,
 } from '@universe-editor/platform'
+import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -19,18 +21,40 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
     this._register(
       ConfigurationRegistry.registerConfiguration({
         id: 'workbench',
-        title: 'Workbench',
+        title: localize('settings.title.workbench', 'Workbench'),
         properties: {
+          [DISPLAY_LANGUAGE_SETTING_KEY]: {
+            type: 'string',
+            default: 'auto',
+            enum: ['auto', 'en-US', 'zh-CN'],
+            enumItemLabels: {
+              auto: localize('settings.enum.auto', 'Use System Language'),
+              'en-US': localize('settings.enum.en-US', 'English'),
+              'zh-CN': localize('settings.enum.zh-CN', 'Simplified Chinese'),
+            },
+            description: localize(
+              'settings.language.description',
+              'Controls the display language. Changes require a restart.',
+            ),
+          },
           'workbench.colorTheme': {
             type: 'string',
             default: 'dark',
             enum: ['dark', 'light'],
+            enumItemLabels: {
+              dark: localize('settings.enum.dark', 'Dark'),
+              light: localize('settings.enum.light', 'Light'),
+            },
             description: 'Workbench color theme.',
           },
           'workbench.sideBar.location': {
             type: 'string',
             default: 'left',
             enum: ['left', 'right'],
+            enumItemLabels: {
+              left: localize('settings.enum.left', 'Left'),
+              right: localize('settings.enum.right', 'Right'),
+            },
             description: 'Side bar location.',
           },
         },
@@ -40,7 +64,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
     this._register(
       ConfigurationRegistry.registerConfiguration({
         id: 'editor',
-        title: 'Editor',
+        title: localize('settings.editor', 'Editor'),
         properties: {
           'editor.fontSize': {
             type: 'number',
@@ -73,12 +97,17 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
     this._register(
       ConfigurationRegistry.registerConfiguration({
         id: 'files',
-        title: 'Files',
+        title: localize('settings.files', 'Files'),
         properties: {
           'files.autoSave': {
             type: 'string',
             default: 'off',
             enum: ['off', 'afterDelay', 'onFocusChange'],
+            enumItemLabels: {
+              off: localize('settings.enum.off', 'Off'),
+              afterDelay: localize('settings.enum.afterDelay', 'After Delay'),
+              onFocusChange: localize('settings.enum.onFocusChange', 'On Focus Change'),
+            },
             description: 'Controls auto save of dirty files.',
           },
           'files.autoSaveDelay': {
@@ -94,7 +123,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
     this._register(
       ConfigurationRegistry.registerConfiguration({
         id: 'explorer',
-        title: 'Explorer',
+        title: localize('settings.explorer', 'Explorer'),
         properties: {
           'explorer.autoReveal': {
             type: 'boolean',

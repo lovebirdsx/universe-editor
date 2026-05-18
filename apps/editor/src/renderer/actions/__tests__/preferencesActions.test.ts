@@ -1,20 +1,31 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   CommandsRegistry,
+  ConfigurationService,
+  ConfigurationTarget,
   GroupDirection,
+  IDialogService,
   IEditorGroupsService,
+  IConfigurationService,
   InstantiationService,
+  IQuickInputService,
   KeybindingsRegistry,
   MenuId,
   MenuRegistry,
   ServiceCollection,
   registerAction2,
+  type IQuickPickItem,
   type IDisposable,
 } from '@universe-editor/platform'
-import { OpenKeybindingsEditorAction, OpenSettingsAction } from '../preferencesActions.js'
+import {
+  ConfigureDisplayLanguageAction,
+  OpenKeybindingsEditorAction,
+  OpenSettingsAction,
+} from '../preferencesActions.js'
 import { KeybindingsEditorInput } from '../../workbench/keybindings/KeybindingsEditorInput.js'
 import { SettingsEditorInput } from '../../workbench/preferences/SettingsEditorInput.js'
 import { EditorGroupsService } from '../../workbench/editor/EditorGroupsService.js'
+import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../../shared/i18n/availableLocales.js'
 
 function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.ID): void {
   const services = new ServiceCollection()
@@ -23,6 +34,14 @@ function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.
   inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(id)!
     cmd.handler(accessor)
+  })
+}
+
+async function runActionWithServices(services: ServiceCollection, id: string): Promise<void> {
+  const inst = new InstantiationService(services)
+  await inst.invokeFunction(async (accessor) => {
+    const cmd = CommandsRegistry.getCommand(id)!
+    await cmd.handler(accessor)
   })
 }
 
@@ -159,5 +178,62 @@ describe('OpenKeybindingsEditorAction', () => {
     const entry = items.find((i) => 'command' in i && i.command === OpenKeybindingsEditorAction.ID)
     expect(entry).toBeDefined()
     expect(entry?.group).toBe('5_preferences')
+  })
+})
+
+describe('ConfigureDisplayLanguageAction', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('writes workbench.language to the user layer and shows a restart notice', async () => {
+    disposables.push(registerAction2(ConfigureDisplayLanguageAction))
+
+    const config = new ConfigurationService()
+    const quickInput = {
+      _serviceBrand: undefined,
+      createQuickPick: () => {
+        throw new Error('not used')
+      },
+      async pick<T extends IQuickPickItem>(_items: readonly T[]): Promise<T | undefined> {
+        return {
+          id: 'zh-CN',
+          label: 'Simplified Chinese',
+          description: 'Display the editor UI in Simplified Chinese.',
+          value: 'zh-CN',
+        } as unknown as T
+      },
+      async input() {
+        return undefined
+      },
+      hide() {},
+    } satisfies IQuickInputService
+    const dialogCalls: Array<{ message: string; detail?: string }> = []
+    const dialog: IDialogService = {
+      _serviceBrand: undefined,
+      async confirm(opts) {
+        dialogCalls.push({ message: opts.message, ...(opts.detail ? { detail: opts.detail } : {}) })
+        return { confirmed: true, choice: 'primary' }
+      },
+      async prompt() {
+        return undefined
+      },
+    }
+
+    const services = new ServiceCollection()
+    services.set(IConfigurationService, config)
+    services.set(IQuickInputService, quickInput)
+    services.set(IDialogService, dialog)
+
+    await runActionWithServices(services, ConfigureDisplayLanguageAction.ID)
+
+    expect(config.get(DISPLAY_LANGUAGE_SETTING_KEY)).toBe('zh-CN')
+    expect(config.getLayerSnapshot(ConfigurationTarget.User)[DISPLAY_LANGUAGE_SETTING_KEY]).toBe(
+      'zh-CN',
+    )
+    expect(dialogCalls).toHaveLength(1)
+    expect(dialogCalls[0]?.message).toBe('Display language updated.')
   })
 })

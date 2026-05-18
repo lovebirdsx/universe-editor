@@ -10,6 +10,7 @@ import {
   IViewsService,
   PartId,
   ViewContainerLocation,
+  localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
@@ -22,8 +23,8 @@ export class FindInFilesAction extends Action2 {
   constructor() {
     super({
       id: FindInFilesAction.ID,
-      title: 'Find in Files',
-      category: 'Search',
+      title: localize('action.findInFiles.title', 'Find in Files'),
+      category: localize('command.category.search', 'Search'),
       keybinding: { primary: 'ctrl+shift+f' },
       f1: true,
     })
@@ -67,8 +68,8 @@ export class FindInFileAction extends Action2 {
   constructor() {
     super({
       id: FindInFileAction.ID,
-      title: 'Find',
-      category: 'Editor',
+      title: localize('action.find.title', 'Find'),
+      category: localize('command.category.editor', 'Editor'),
       keybinding: { primary: 'ctrl+f' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -84,8 +85,8 @@ export class FindReplaceInFileAction extends Action2 {
   constructor() {
     super({
       id: FindReplaceInFileAction.ID,
-      title: 'Replace',
-      category: 'Editor',
+      title: localize('action.replace.title', 'Replace'),
+      category: localize('command.category.editor', 'Editor'),
       keybinding: { primary: 'ctrl+h' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -101,8 +102,8 @@ export class FindNextAction extends Action2 {
   constructor() {
     super({
       id: FindNextAction.ID,
-      title: 'Find Next',
-      category: 'Editor',
+      title: localize('action.findNext.title', 'Find Next'),
+      category: localize('command.category.editor', 'Editor'),
       keybinding: { primary: 'f3' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -118,8 +119,8 @@ export class FindPreviousAction extends Action2 {
   constructor() {
     super({
       id: FindPreviousAction.ID,
-      title: 'Find Previous',
-      category: 'Editor',
+      title: localize('action.findPrevious.title', 'Find Previous'),
+      category: localize('command.category.editor', 'Editor'),
       keybinding: { primary: 'shift+f3' },
       precondition: 'hasActiveEditor',
       f1: true,

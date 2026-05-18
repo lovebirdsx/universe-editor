@@ -9,6 +9,7 @@ import {
   IQuickInputService,
   IWorkspaceService,
   MenuId,
+  localize,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -18,8 +19,8 @@ export class OpenFolderAction extends Action2 {
   constructor() {
     super({
       id: OpenFolderAction.ID,
-      title: 'Open Folder…',
-      category: 'File',
+      title: localize('action.openFolder.title', 'Open Folder…'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: ['ctrl+k', 'ctrl+o'] },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 1 },
       f1: true,
@@ -36,8 +37,8 @@ export class CloseFolderAction extends Action2 {
   constructor() {
     super({
       id: CloseFolderAction.ID,
-      title: 'Close Folder',
-      category: 'File',
+      title: localize('action.closeFolder.title', 'Close Folder'),
+      category: localize('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -56,8 +57,8 @@ export class OpenRecentAction extends Action2 {
   constructor() {
     super({
       id: OpenRecentAction.ID,
-      title: 'Open Recent…',
-      category: 'File',
+      title: localize('action.openRecent.title', 'Open Recent…'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+r' },
       f1: true,
     })
@@ -74,7 +75,9 @@ export class OpenRecentAction extends Action2 {
       description: r.folder.fsPath,
       index,
     }))
-    const pick = await quickInput.pick<RecentPickItem>(items, { placeholder: 'Open Recent' })
+    const pick = await quickInput.pick<RecentPickItem>(items, {
+      placeholder: localize('quickInput.openRecent.placeholder', 'Open Recent'),
+    })
     if (!pick) return
     const target = recent[pick.index]
     if (target) await workspace.openFolder(target.folder)
@@ -86,8 +89,8 @@ export class ClearRecentWorkspacesAction extends Action2 {
   constructor() {
     super({
       id: ClearRecentWorkspacesAction.ID,
-      title: 'Clear Recently Opened',
-      category: 'File',
+      title: localize('action.clearRecentWorkspaces.title', 'Clear Recently Opened'),
+      category: localize('command.category.file', 'File'),
       f1: true,
     })
   }

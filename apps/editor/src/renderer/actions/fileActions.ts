@@ -17,6 +17,7 @@ import {
   IWorkspaceService,
   MenuId,
   URI,
+  localize,
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -46,8 +47,8 @@ export class SaveFileAction extends Action2 {
   constructor() {
     super({
       id: SaveFileAction.ID,
-      title: 'Save',
-      category: 'File',
+      title: localize('action.save.title', 'Save'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+s' },
       menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 1 },
       f1: true,
@@ -70,8 +71,8 @@ export class SaveFileAsAction extends Action2 {
   constructor() {
     super({
       id: SaveFileAsAction.ID,
-      title: 'Save As…',
-      category: 'File',
+      title: localize('action.saveAs.title', 'Save As…'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+shift+s' },
       menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 2 },
       f1: true,
@@ -129,8 +130,8 @@ export class OpenFileAction extends Action2 {
   constructor() {
     super({
       id: OpenFileAction.ID,
-      title: 'Open File…',
-      category: 'File',
+      title: localize('action.openFile.title', 'Open File…'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+o' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 0 },
       f1: true,
@@ -180,8 +181,8 @@ export class NewFileAction extends Action2 {
   constructor() {
     super({
       id: NewFileAction.ID,
-      title: 'New File…',
-      category: 'File',
+      title: localize('action.newFile.title', 'New File…'),
+      category: localize('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -193,7 +194,10 @@ export class NewFileAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
 
-    const name = await dialog.prompt({ title: 'New File', placeholder: 'Name' })
+    const name = await dialog.prompt({
+      title: localize('dialog.file.prompt.newFile', 'New File'),
+      placeholder: localize('common.name', 'Name'),
+    })
     if (!name) return
     try {
       const created = await tree.createFile(parent, name)
@@ -201,7 +205,7 @@ export class NewFileAction extends Action2 {
       groups.activeGroup.openEditor(input, { activate: true })
     } catch (err) {
       await dialog.confirm({
-        message: 'Failed to create file',
+        message: localize('dialog.file.create.error.file', 'Failed to create file'),
         detail: err instanceof Error ? err.message : String(err),
         type: 'error',
       })
@@ -214,8 +218,8 @@ export class NewFolderAction extends Action2 {
   constructor() {
     super({
       id: NewFolderAction.ID,
-      title: 'New Folder…',
-      category: 'File',
+      title: localize('action.newFolder.title', 'New Folder…'),
+      category: localize('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -225,13 +229,16 @@ export class NewFolderAction extends Action2 {
     const dialog = accessor.get(IDialogService)
     const tree = accessor.get(IExplorerTreeService)
 
-    const name = await dialog.prompt({ title: 'New Folder', placeholder: 'Name' })
+    const name = await dialog.prompt({
+      title: localize('dialog.file.prompt.newFolder', 'New Folder'),
+      placeholder: localize('common.name', 'Name'),
+    })
     if (!name) return
     try {
       await tree.createFolder(parent, name)
     } catch (err) {
       await dialog.confirm({
-        message: 'Failed to create folder',
+        message: localize('dialog.file.create.error.folder', 'Failed to create folder'),
         detail: err instanceof Error ? err.message : String(err),
         type: 'error',
       })
@@ -244,8 +251,8 @@ export class RenameFileAction extends Action2 {
   constructor() {
     super({
       id: RenameFileAction.ID,
-      title: 'Rename…',
-      category: 'File',
+      title: localize('action.rename.title', 'Rename…'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'f2' },
       f1: true,
     })
@@ -258,7 +265,7 @@ export class RenameFileAction extends Action2 {
 
     const current = basename(target.fsPath)
     const next = await dialog.prompt({
-      title: 'Rename',
+      title: localize('dialog.file.prompt.rename', 'Rename'),
       initialValue: current,
     })
     if (!next || next === current) return
@@ -266,7 +273,7 @@ export class RenameFileAction extends Action2 {
       await tree.rename(target, next)
     } catch (err) {
       await dialog.confirm({
-        message: 'Failed to rename',
+        message: localize('dialog.file.rename.error', 'Failed to rename'),
         detail: err instanceof Error ? err.message : String(err),
         type: 'error',
       })
@@ -279,8 +286,8 @@ export class DeleteFileAction extends Action2 {
   constructor() {
     super({
       id: DeleteFileAction.ID,
-      title: 'Delete',
-      category: 'File',
+      title: localize('action.deleteFile.title', 'Delete'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'delete' },
       f1: true,
     })
@@ -294,11 +301,21 @@ export class DeleteFileAction extends Action2 {
     const tree = accessor.get(IExplorerTreeService)
 
     const confirmed = await dialog.confirm({
-      message: `Are you sure you want to delete "${basename(target.fsPath)}"?`,
+      message: localize(
+        'dialog.file.delete.confirm.message',
+        'Are you sure you want to delete "{name}"?',
+        { name: basename(target.fsPath) },
+      ),
       detail: isDirectory
-        ? 'This will permanently delete the folder and all of its contents.'
-        : 'You can restore it from the system trash if your platform supports it.',
-      primaryButton: 'Delete',
+        ? localize(
+            'dialog.file.delete.confirm.detail.directory',
+            'This will permanently delete the folder and all of its contents.',
+          )
+        : localize(
+            'dialog.file.delete.confirm.detail.file',
+            'You can restore it from the system trash if your platform supports it.',
+          ),
+      primaryButton: localize('common.delete', 'Delete'),
       type: 'warning',
     })
     if (!confirmed.confirmed) return
@@ -306,7 +323,7 @@ export class DeleteFileAction extends Action2 {
       await tree.delete(target, { recursive: isDirectory })
     } catch (err) {
       await dialog.confirm({
-        message: 'Failed to delete',
+        message: localize('dialog.file.delete.error', 'Failed to delete'),
         detail: err instanceof Error ? err.message : String(err),
         type: 'error',
       })
@@ -323,8 +340,8 @@ export class OpenRecentFilesAction extends Action2 {
   constructor() {
     super({
       id: OpenRecentFilesAction.ID,
-      title: 'Open Recent File…',
-      category: 'File',
+      title: localize('action.openRecentFile.title', 'Open Recent File…'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+p' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 2 },
       f1: true,
@@ -347,7 +364,7 @@ export class OpenRecentFilesAction extends Action2 {
 
     const pick = await quickInput.pick(pickItems, {
       id: 'workbench.recentFiles',
-      placeholder: 'Open Recent File…',
+      placeholder: localize('quickInput.openRecentFile.placeholder', 'Open Recent File…'),
     })
     if (!pick) return
 
@@ -374,8 +391,8 @@ export class ClearRecentFilesAction extends Action2 {
   constructor() {
     super({
       id: ClearRecentFilesAction.ID,
-      title: 'Clear Recently Opened Files',
-      category: 'File',
+      title: localize('action.clearRecentFiles.title', 'Clear Recently Opened Files'),
+      category: localize('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -393,8 +410,8 @@ export class OpenWithDefaultAppAction extends Action2 {
   constructor() {
     super({
       id: OpenWithDefaultAppAction.ID,
-      title: 'Open with Default Application',
-      category: 'File',
+      title: localize('action.openWithDefaultApplication.title', 'Open with Default Application'),
+      category: localize('command.category.file', 'File'),
       f1: false,
     })
   }
@@ -405,7 +422,11 @@ export class OpenWithDefaultAppAction extends Action2 {
     const err = await host.openWithDefaultApp(target.fsPath)
     if (err) {
       const dialog = accessor.get(IDialogService)
-      await dialog.confirm({ message: 'Unable to open file', detail: err, type: 'error' })
+      await dialog.confirm({
+        message: localize('dialog.file.open.error', 'Unable to open file'),
+        detail: err,
+        type: 'error',
+      })
     }
   }
 }

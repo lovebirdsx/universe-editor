@@ -1,7 +1,9 @@
 import { app, BrowserWindow } from 'electron'
+import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
+import { DisposableTracker, localize, setDisposableTracker } from '@universe-editor/platform'
+import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainServices.js'
 import { E2E_PROBE_ARGV_FLAG } from '../shared/e2e/contract.js'
@@ -57,7 +59,7 @@ function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
-    title: 'Universe Editor',
+    title: localize('app.name', 'Universe Editor'),
     ...(isMac
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 8, y: 8 } }
       : { frame: false }),
@@ -83,7 +85,17 @@ function createWindow(): void {
 
 installMainProtocolDispatcher()
 
-void app.whenReady().then(() => {
+async function loadMainSettingsText(): Promise<string> {
+  try {
+    return await fs.readFile(join(app.getPath('userData'), 'settings.json'), 'utf8')
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
+    throw err
+  }
+}
+
+void app.whenReady().then(async () => {
+  initializeMainNls(await loadMainSettingsText(), app.getLocale())
   createWindow()
 
   app.on('activate', () => {

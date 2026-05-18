@@ -7,7 +7,7 @@
 
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
-import type { ICommandService, URI } from '@universe-editor/platform'
+import { localize, type ICommandService, type URI } from '@universe-editor/platform'
 import type { ExplorerTreeService } from './ExplorerTreeService.js'
 import styles from './ExplorerView.module.css'
 
@@ -66,24 +66,24 @@ export function ExplorerContextMenu({ state, rootResource, tree, commandService,
   const items: MenuEntry[] = []
   items.push({
     id: 'newFile',
-    label: 'New File',
+    label: localize('explorer.context.newFile', 'New File'),
     run: () => run('workbench.files.action.newFile', { parent: newParent }),
   })
   items.push({
     id: 'newFolder',
-    label: 'New Folder',
+    label: localize('explorer.context.newFolder', 'New Folder'),
     run: () => run('workbench.files.action.newFolder', { parent: newParent }),
   })
   if (target) {
     items.push({ id: 'sep1', separator: true })
     items.push({
       id: 'rename',
-      label: 'Rename',
+      label: localize('explorer.context.rename', 'Rename'),
       run: () => run('workbench.files.action.rename', { target: target.resource }),
     })
     items.push({
       id: 'delete',
-      label: 'Delete',
+      label: localize('explorer.context.delete', 'Delete'),
       run: () =>
         run('workbench.files.action.delete', {
           target: target.resource,
@@ -94,20 +94,23 @@ export function ExplorerContextMenu({ state, rootResource, tree, commandService,
     if (!isDir) {
       items.push({
         id: 'openWithDefaultApp',
-        label: 'Open with Default Application',
+        label: localize(
+          'explorer.context.openWithDefaultApplication',
+          'Open with Default Application',
+        ),
         run: () => run('workbench.files.action.openWithDefaultApp', { target: target.resource }),
       })
     }
     items.push({
       id: 'revealInFolder',
-      label: 'Reveal in File Explorer',
+      label: localize('explorer.context.revealInFileExplorer', 'Reveal in File Explorer'),
       run: () => run('workbench.files.action.revealInOsExplorer', { resource: target.resource }),
     })
     items.push({ id: 'sep3', separator: true })
   }
   items.push({
     id: 'refresh',
-    label: 'Refresh',
+    label: localize('explorer.context.refresh', 'Refresh'),
     run: () => {
       onClose()
       void tree.refresh(target?.isDirectory ? target.resource : rootResource)

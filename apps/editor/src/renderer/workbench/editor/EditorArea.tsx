@@ -8,6 +8,7 @@ import {
   EditorRegistry,
   IEditorGroupsService,
   IEditorInput,
+  localize,
   type IPart,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -70,7 +71,14 @@ export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
   const containerRef = usePartContainer(part)
 
   const welcomeFallback = (
-    <WelcomeEditor input={{ id: '_welcome', type: 'welcome', label: 'Welcome', isDirty: false }} />
+    <WelcomeEditor
+      input={{
+        id: '_welcome',
+        type: 'welcome',
+        label: localize('app.name', 'Universe Editor'),
+        isDirty: false,
+      }}
+    />
   )
 
   return (

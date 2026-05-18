@@ -11,6 +11,7 @@ import {
   IWorkbenchContribution,
   ViewContainerLocation,
   ViewContainerRegistry,
+  localize,
 } from '@universe-editor/platform'
 
 export class BuiltInViewContainersContribution
@@ -23,7 +24,7 @@ export class BuiltInViewContainersContribution
     this._register(
       ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.explorer',
-        label: 'Explorer',
+        label: localize('viewContainer.explorer', 'Explorer'),
         icon: 'files',
         order: 1,
         location: ViewContainerLocation.SideBar,
@@ -33,7 +34,7 @@ export class BuiltInViewContainersContribution
     this._register(
       ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.search',
-        label: 'Search',
+        label: localize('viewContainer.search', 'Search'),
         icon: 'search',
         order: 2,
         location: ViewContainerLocation.SideBar,
@@ -43,7 +44,7 @@ export class BuiltInViewContainersContribution
     this._register(
       ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.outline',
-        label: 'Outline',
+        label: localize('viewContainer.outline', 'Outline'),
         icon: 'search',
         order: 1,
         location: ViewContainerLocation.SecondarySideBar,

@@ -15,6 +15,7 @@ import {
   IWorkbenchContribution,
   StatusBarAlignment,
   autorun,
+  localize,
   type IDisposable,
   type IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
@@ -74,14 +75,14 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
     if (!this._languageEntry) {
       this._languageEntry = this._statusBarService.addEntry({
         text: languageLabel(input.language),
-        tooltip: 'Editor Language',
+        tooltip: localize('status.editorLanguage', 'Editor Language'),
         alignment: StatusBarAlignment.Right,
         priority: 90,
       })
     } else {
       this._languageEntry.update({
         text: languageLabel(input.language),
-        tooltip: 'Editor Language',
+        tooltip: localize('status.editorLanguage', 'Editor Language'),
         alignment: StatusBarAlignment.Right,
         priority: 90,
       })
@@ -89,7 +90,7 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
     if (!this._encodingEntry) {
       this._encodingEntry = this._statusBarService.addEntry({
         text: 'UTF-8',
-        tooltip: 'Editor Encoding',
+        tooltip: localize('status.editorEncoding', 'Editor Encoding'),
         alignment: StatusBarAlignment.Right,
         priority: 80,
       })
@@ -127,14 +128,14 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
     if (!this._cursorEntry) {
       this._cursorEntry = this._statusBarService.addEntry({
         text,
-        tooltip: 'Cursor Position',
+        tooltip: localize('status.cursorPosition', 'Cursor Position'),
         alignment: StatusBarAlignment.Right,
         priority: 100,
       })
     } else {
       this._cursorEntry.update({
         text,
-        tooltip: 'Cursor Position',
+        tooltip: localize('status.cursorPosition', 'Cursor Position'),
         alignment: StatusBarAlignment.Right,
         priority: 100,
       })

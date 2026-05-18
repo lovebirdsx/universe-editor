@@ -9,6 +9,7 @@ import {
   ConfigurationRegistry,
   ConfigurationTarget,
   IConfigurationService,
+  localize,
   type IConfigurationNode,
   type IConfigurationPropertySchema,
 } from '@universe-editor/platform'
@@ -35,7 +36,7 @@ function PropertyRow({ configKey, schema, value, onChange }: RowProps) {
       >
         {schema.enum.map((opt) => (
           <option key={String(opt)} value={String(opt)}>
-            {String(opt)}
+            {schema.enumItemLabels?.[String(opt)] ?? String(opt)}
           </option>
         ))}
       </select>
@@ -142,14 +143,18 @@ export function SettingsEditor() {
           ref={searchInputRef}
           className={styles['search']}
           type="search"
-          placeholder={`Search settings (${totalKeys})`}
+          placeholder={localize('settings.search.placeholder', 'Search settings ({count})', {
+            count: totalKeys,
+          })}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
       <div className={styles['body']}>
         {filtered.length === 0 ? (
-          <div className={styles['empty']}>No matching settings.</div>
+          <div className={styles['empty']}>
+            {localize('settings.empty', 'No matching settings.')}
+          </div>
         ) : (
           filtered.map((node) => (
             <section key={node.id} className={styles['section']}>

@@ -23,27 +23,27 @@ test.describe('@p1 secondary sidebar layout', () => {
     const before = await page.evaluate(() => window.__E2E__!.getLayoutSizes())
 
     // 2. Show secondary sidebar.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
 
     // Wait until secondary sidebar size settles (editor should shrink by ~secondarySidebar px).
     await expect
-      .poll(
-        () => page.evaluate(() => window.__E2E__!.getLayoutSizes()),
-        { timeout: 3000 },
-      )
+      .poll(() => page.evaluate(() => window.__E2E__!.getLayoutSizes()), { timeout: 3000 })
       .toMatchObject({ secondarySidebar: before.secondarySidebar })
 
     // 3. Hide secondary sidebar.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
 
     // 4. After hiding, sidebar must return to its original width.
     //    We poll to let the useEffect correction resize settle.
     await expect
-      .poll(
-        () =>
-          page.evaluate(() => window.__E2E__!.getLayoutSizes().sidebar),
-        { timeout: 3000, message: 'sidebar width should be unchanged after hide' },
-      )
+      .poll(() => page.evaluate(() => window.__E2E__!.getLayoutSizes().sidebar), {
+        timeout: 3000,
+        message: 'sidebar width should be unchanged after hide',
+      })
       .toBe(before.sidebar)
   })
 
@@ -53,29 +53,34 @@ test.describe('@p1 secondary sidebar layout', () => {
     await page.evaluate(() => window.__E2E__!.whenReady())
 
     // Show secondary sidebar and wait for its size to settle.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
     await expect
-      .poll(
-        () => page.evaluate(() => window.__E2E__!.getLayoutSizes().secondarySidebar),
-        { timeout: 3000 },
-      )
+      .poll(() => page.evaluate(() => window.__E2E__!.getLayoutSizes().secondarySidebar), {
+        timeout: 3000,
+      })
       .toBeGreaterThan(0)
 
-    const sizeAfterShow = await page.evaluate(() =>
-      window.__E2E__!.getLayoutSizes().secondarySidebar,
+    const sizeAfterShow = await page.evaluate(
+      () => window.__E2E__!.getLayoutSizes().secondarySidebar,
     )
 
     // Hide secondary sidebar.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
     await page.waitForTimeout(300)
 
     // Show again — must restore to the same size.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
     await expect
-      .poll(
-        () => page.evaluate(() => window.__E2E__!.getLayoutSizes().secondarySidebar),
-        { timeout: 3000, message: 'secondary sidebar should restore previous size after hide → show' },
-      )
+      .poll(() => page.evaluate(() => window.__E2E__!.getLayoutSizes().secondarySidebar), {
+        timeout: 3000,
+        message: 'secondary sidebar should restore previous size after hide → show',
+      })
       .toBe(sizeAfterShow)
   })
 
@@ -95,11 +100,15 @@ test.describe('@p1 secondary sidebar layout', () => {
     expect(editorWidthBefore).toBeGreaterThan(0)
 
     // Show secondary sidebar.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
     await page.waitForTimeout(300)
 
     // Hide secondary sidebar.
-    await page.evaluate((cmd) => { void window.__E2E__!.runCommand(cmd) }, TOGGLE_CMD)
+    await page.evaluate((cmd) => {
+      void window.__E2E__!.runCommand(cmd)
+    }, TOGGLE_CMD)
 
     // Editor width should recover to within 2px of the original.
     await expect

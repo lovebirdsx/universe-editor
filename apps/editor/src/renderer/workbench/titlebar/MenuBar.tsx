@@ -1,15 +1,8 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
-import { ICommandService, MenuId } from '@universe-editor/platform'
+import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { useMenuItems, type ResolvedMenuSection } from './useTitleBarMenus.js'
 import styles from './TitleBar.module.css'
-
-const TOP_LEVEL: ReadonlyArray<{ label: string; menuId: MenuId }> = [
-  { label: 'File', menuId: MenuId.MenubarFileMenu },
-  { label: 'Edit', menuId: MenuId.MenubarEditMenu },
-  { label: 'View', menuId: MenuId.MenubarViewMenu },
-  { label: 'Help', menuId: MenuId.MenubarHelpMenu },
-]
 
 interface DropdownContentsProps {
   sections: ResolvedMenuSection[]
@@ -20,7 +13,11 @@ function DropdownContents({ sections, onExecute }: DropdownContentsProps) {
   const [openSubmenu, setOpenSubmenu] = useState<string | null>(null)
 
   if (sections.length === 0) {
-    return <div className={`${styles['dropdown-item']} ${styles['disabled']}`}>(empty)</div>
+    return (
+      <div className={`${styles['dropdown-item']} ${styles['disabled']}`}>
+        {localize('titleBar.empty', '(empty)')}
+      </div>
+    )
   }
   return (
     <>
@@ -120,6 +117,12 @@ function MenuGroup({ label, menuId, isOpen, onToggle, onClose }: MenuGroupProps)
 }
 
 export function MenuBar() {
+  const topLevel: ReadonlyArray<{ label: string; menuId: MenuId }> = [
+    { label: localize('menu.file', 'File'), menuId: MenuId.MenubarFileMenu },
+    { label: localize('menu.edit', 'Edit'), menuId: MenuId.MenubarEditMenu },
+    { label: localize('menu.view', 'View'), menuId: MenuId.MenubarViewMenu },
+    { label: localize('menu.help', 'Help'), menuId: MenuId.MenubarHelpMenu },
+  ]
   const [openMenu, setOpenMenu] = useState<string | null>(null)
   const containerRef = useRef<HTMLElement>(null)
 
@@ -149,8 +152,12 @@ export function MenuBar() {
   const handleClose = useCallback(() => setOpenMenu(null), [])
 
   return (
-    <nav ref={containerRef} className={styles['menubar']} aria-label="Menu bar">
-      {TOP_LEVEL.map((entry) => (
+    <nav
+      ref={containerRef}
+      className={styles['menubar']}
+      aria-label={localize('menuBar.ariaLabel', 'Menu bar')}
+    >
+      {topLevel.map((entry) => (
         <MenuGroup
           key={entry.label}
           label={entry.label}

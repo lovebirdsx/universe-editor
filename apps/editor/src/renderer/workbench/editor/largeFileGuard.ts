@@ -6,7 +6,12 @@
  *  open should be aborted.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IDialogService, IFileService, URI } from '@universe-editor/platform'
+import {
+  localize,
+  type IDialogService,
+  type IFileService,
+  type URI,
+} from '@universe-editor/platform'
 
 export const LARGE_FILE_THRESHOLD = 2 * 1024 * 1024
 
@@ -33,9 +38,14 @@ export async function confirmLargeFile(
   }
   if (size <= LARGE_FILE_THRESHOLD) return true
   const result = await dialogService.confirm({
-    message: `The file is ${formatSize(size)}. Open anyway?`,
-    detail: 'Large files may cause the editor to become unresponsive.',
-    primaryButton: 'Open',
+    message: localize('dialog.largeFile.message', 'The file is {size}. Open anyway?', {
+      size: formatSize(size),
+    }),
+    detail: localize(
+      'dialog.largeFile.detail',
+      'Large files may cause the editor to become unresponsive.',
+    ),
+    primaryButton: localize('common.open', 'Open'),
     type: 'warning',
   })
   return result.confirmed

@@ -14,6 +14,7 @@ export interface IConfigurationPropertySchema {
   default?: unknown
   description?: string
   enum?: unknown[]
+  enumItemLabels?: Readonly<Record<string, string>>
   minimum?: number
   maximum?: number
   items?: IConfigurationPropertySchema

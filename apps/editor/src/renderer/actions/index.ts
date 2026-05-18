@@ -34,6 +34,7 @@ import {
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
 import {
+  ConfigureDisplayLanguageAction,
   OpenKeybindingsEditorAction,
   OpenKeybindingsJsonAction,
   OpenSettingsJsonAction,
@@ -109,6 +110,7 @@ registerAction2(OpenSettingsAction)
 registerAction2(OpenKeybindingsEditorAction)
 registerAction2(OpenSettingsJsonAction)
 registerAction2(OpenKeybindingsJsonAction)
+registerAction2(ConfigureDisplayLanguageAction)
 
 // Workspace
 registerAction2(OpenFolderAction)

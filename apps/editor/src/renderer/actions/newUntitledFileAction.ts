@@ -8,6 +8,7 @@ import {
   IEditorGroupsService,
   IInstantiationService,
   MenuId,
+  localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { UntitledEditorInput } from '../workbench/editor/UntitledEditorInput.js'
@@ -17,8 +18,8 @@ export class NewUntitledFileAction extends Action2 {
   constructor() {
     super({
       id: NewUntitledFileAction.ID,
-      title: 'New File',
-      category: 'File',
+      title: localize('action.newUntitledFile.title', 'New File'),
+      category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+n' },
       menu: { id: MenuId.MenubarFileMenu, group: '1_new', order: 0 },
       f1: true,

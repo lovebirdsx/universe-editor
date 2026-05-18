@@ -6,7 +6,12 @@
  *  service-free.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, IWorkbenchContribution, ViewRegistry } from '@universe-editor/platform'
+import {
+  Disposable,
+  IWorkbenchContribution,
+  ViewRegistry,
+  localize,
+} from '@universe-editor/platform'
 
 export class BuiltInViewsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -15,7 +20,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
     this._register(
       ViewRegistry.registerView({
         id: 'workbench.view.explorer.tree',
-        name: 'Files',
+        name: localize('view.files', 'Files'),
         containerId: 'workbench.view.explorer',
         componentKey: 'explorer.tree',
         order: 1,
@@ -25,7 +30,7 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
     this._register(
       ViewRegistry.registerView({
         id: 'workbench.view.search.results',
-        name: 'Search',
+        name: localize('view.search', 'Search'),
         containerId: 'workbench.view.search',
         componentKey: 'search.results',
         order: 1,

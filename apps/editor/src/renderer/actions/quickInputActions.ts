@@ -5,14 +5,19 @@
  *  key while a panel is showing.
  *--------------------------------------------------------------------------------------------*/
 
-import { Action2, IQuickInputService, type ServicesAccessor } from '@universe-editor/platform'
+import {
+  Action2,
+  IQuickInputService,
+  localize,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
 
 export class CloseQuickInputAction extends Action2 {
   static readonly ID = 'workbench.action.closeQuickInput'
   constructor() {
     super({
       id: CloseQuickInputAction.ID,
-      title: 'Close Quick Input',
+      title: localize('action.closeQuickInput.title', 'Close Quick Input'),
       keybinding: { primary: 'escape', when: 'quickInputVisible' },
     })
   }

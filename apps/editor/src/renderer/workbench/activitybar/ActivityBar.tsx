@@ -5,6 +5,7 @@ import {
   IViewsService,
   ILayoutService,
   PartId,
+  localize,
 } from '@universe-editor/platform'
 import type { IPart, IViewContainerDescriptor } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
@@ -76,7 +77,7 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
     <nav
       ref={containerRef}
       className={styles['activitybar']}
-      aria-label="Activity Bar"
+      aria-label={localize('menu.activityBar', 'Activity Bar')}
       data-testid="part-activitybar"
     >
       <div className={styles['items']}>

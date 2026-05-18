@@ -32,13 +32,14 @@ import {
   IContributionService,
   ProxyChannel,
   DisposableTracker,
+  localize,
   setDisposableTracker,
   normalizePlatform,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { IPingService } from '../shared/ipc/services.js'
+import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
-import { Workbench } from './workbench/Workbench.js'
 import { CommandService } from './workbench/CommandService.js'
 import { EditorService } from './workbench/editor/EditorService.js'
 import { EditorGroupsService } from './workbench/editor/EditorGroupsService.js'
@@ -64,8 +65,6 @@ import {
   IRecentFilesService,
   RecentFilesService,
 } from './services/recentFiles/recentFilesService.js'
-// Side-effect import: registers built-in contributions with ContributionsRegistry.
-import './contributions/index.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
@@ -128,6 +127,10 @@ async function bootstrapWorkbench(): Promise<void> {
     IUserDataFilesService,
     ProxyChannel.toService<IUserDataFilesService>(ipcService.getChannel(ServiceChannels.UserData)),
   )
+  await initializeRendererNls(
+    services.get(IUserDataFilesService) as IUserDataFilesService,
+    window.navigator.language,
+  )
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),
   )
@@ -188,6 +191,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // User keybinding overrides. Must be created after all actions are registered
   // (they run at module-load time via side-effect imports) so the default
   // snapshot in the constructor captures all built-in keybindings.
+  await import('./contributions/index.js')
   const userKeybindingsService = instantiation.createInstance(UserKeybindingsService)
   services.set(IUserKeybindingsService, userKeybindingsService)
   void userKeybindingsService.initialize()
@@ -204,7 +208,7 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IContributionService, contributionService)
 
   // Create default output channel
-  const mainChannel = outputService.createChannel('Universe Editor')
+  const mainChannel = outputService.createChannel(localize('app.name', 'Universe Editor'))
   mainChannel.appendLine('[Workbench] Starting up…')
 
   // Advance to Ready before mounting React (triggers BlockRestore contributions)
@@ -229,6 +233,8 @@ async function bootstrapWorkbench(): Promise<void> {
   // Mount
   const rootEl = document.getElementById('root')
   if (!rootEl) throw new Error('[bootstrap] #root element not found')
+
+  const { Workbench } = await import('./workbench/Workbench.js')
 
   createRoot(rootEl).render(
     <StrictMode>

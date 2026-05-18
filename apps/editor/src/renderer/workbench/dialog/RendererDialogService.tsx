@@ -10,6 +10,7 @@ import { createPortal } from 'react-dom'
 import {
   Disposable,
   Emitter,
+  localize,
   type IConfirmOptions,
   type IConfirmResult,
   type IDialogService,
@@ -103,8 +104,8 @@ function ConfirmDialog({
   opts: IConfirmOptions
   onResolve: (r: IConfirmResult) => void
 }) {
-  const primary = opts.primaryButton ?? 'OK'
-  const cancel = opts.cancelButton ?? 'Cancel'
+  const primary = opts.primaryButton ?? localize('dialog.default.ok', 'OK')
+  const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
   const secondary = opts.secondaryButton
   return (
     <div
@@ -199,10 +200,10 @@ function PromptDialog({
             className={styles['btnPrimary']}
             onClick={() => onResolve(inputEl?.value ?? '')}
           >
-            OK
+            {localize('dialog.default.ok', 'OK')}
           </button>
           <button type="button" className={styles['btn']} onClick={() => onResolve(undefined)}>
-            Cancel
+            {localize('dialog.default.cancel', 'Cancel')}
           </button>
         </div>
       </div>

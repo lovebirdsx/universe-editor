@@ -13,6 +13,7 @@ import {
   IDialogService,
   IEditorGroupsService,
   MenuId,
+  localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { closeEditorWithConfirm } from '../workbench/editor/closeEditorWithConfirm.js'
@@ -28,8 +29,8 @@ export class CloseActiveEditorAction extends Action2 {
   constructor() {
     super({
       id: CloseActiveEditorAction.ID,
-      title: 'Close Editor',
-      category: 'View',
+      title: localize('action.closeActiveEditor.title', 'Close Editor'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+w' },
       precondition: 'hasActiveEditor',
       menu: { id: MenuId.EditorTitle, group: '1_close', order: 1 },
@@ -49,8 +50,8 @@ export class CloseAllEditorsAction extends Action2 {
   constructor() {
     super({
       id: CloseAllEditorsAction.ID,
-      title: 'Close All Editors',
-      category: 'View',
+      title: localize('action.closeAllEditors.title', 'Close All Editors'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorIsOpen',
       menu: { id: MenuId.EditorTitle, group: '1_close', order: 4 },
       f1: true,
@@ -67,8 +68,8 @@ export class CloseOtherEditorsAction extends Action2 {
   constructor() {
     super({
       id: CloseOtherEditorsAction.ID,
-      title: 'Close Other Editors',
-      category: 'View',
+      title: localize('action.closeOtherEditors.title', 'Close Other Editors'),
+      category: localize('command.category.view', 'View'),
       precondition: 'hasActiveEditor',
       menu: { id: MenuId.EditorTitle, group: '1_close', order: 2 },
       f1: true,
@@ -89,8 +90,8 @@ export class CloseEditorsToTheRightAction extends Action2 {
   constructor() {
     super({
       id: CloseEditorsToTheRightAction.ID,
-      title: 'Close Editors to the Right',
-      category: 'View',
+      title: localize('action.closeEditorsToTheRight.title', 'Close Editors to the Right'),
+      category: localize('command.category.view', 'View'),
       precondition: 'hasActiveEditor && !activeEditorIsLastInGroup',
       menu: { id: MenuId.EditorTitle, group: '1_close', order: 3 },
       f1: true,
@@ -117,8 +118,8 @@ export class NextEditorAction extends Action2 {
   constructor() {
     super({
       id: NextEditorAction.ID,
-      title: 'Open Next Editor',
-      category: 'View',
+      title: localize('action.nextEditor.title', 'Open Next Editor'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+tab' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -139,8 +140,8 @@ export class PreviousEditorAction extends Action2 {
   constructor() {
     super({
       id: PreviousEditorAction.ID,
-      title: 'Open Previous Editor',
-      category: 'View',
+      title: localize('action.previousEditor.title', 'Open Previous Editor'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+shift+tab' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -161,8 +162,8 @@ export class FirstEditorInGroupAction extends Action2 {
   constructor() {
     super({
       id: FirstEditorInGroupAction.ID,
-      title: 'Open First Editor in Group',
-      category: 'View',
+      title: localize('action.firstEditorInGroup.title', 'Open First Editor in Group'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorIsOpen',
       f1: true,
     })
@@ -179,8 +180,8 @@ export class LastEditorInGroupAction extends Action2 {
   constructor() {
     super({
       id: LastEditorInGroupAction.ID,
-      title: 'Open Last Editor in Group',
-      category: 'View',
+      title: localize('action.lastEditorInGroup.title', 'Open Last Editor in Group'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorIsOpen',
       f1: true,
     })
@@ -210,8 +211,8 @@ export class SplitEditorRightAction extends Action2 {
   constructor() {
     super({
       id: SplitEditorRightAction.ID,
-      title: 'Split Editor Right',
-      category: 'View',
+      title: localize('action.splitEditorRight.title', 'Split Editor Right'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+\\' },
       f1: true,
     })
@@ -226,8 +227,8 @@ export class SplitEditorDownAction extends Action2 {
   constructor() {
     super({
       id: SplitEditorDownAction.ID,
-      title: 'Split Editor Down',
-      category: 'View',
+      title: localize('action.splitEditorDown.title', 'Split Editor Down'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+k' },
       f1: true,
     })
@@ -242,8 +243,8 @@ export class SplitEditorLeftAction extends Action2 {
   constructor() {
     super({
       id: SplitEditorLeftAction.ID,
-      title: 'Split Editor Left',
-      category: 'View',
+      title: localize('action.splitEditorLeft.title', 'Split Editor Left'),
+      category: localize('command.category.view', 'View'),
       f1: true,
     })
   }
@@ -257,8 +258,8 @@ export class SplitEditorUpAction extends Action2 {
   constructor() {
     super({
       id: SplitEditorUpAction.ID,
-      title: 'Split Editor Up',
-      category: 'View',
+      title: localize('action.splitEditorUp.title', 'Split Editor Up'),
+      category: localize('command.category.view', 'View'),
       f1: true,
     })
   }
@@ -276,8 +277,8 @@ export class FocusNextGroupAction extends Action2 {
   constructor() {
     super({
       id: FocusNextGroupAction.ID,
-      title: 'Focus Next Group',
-      category: 'View',
+      title: localize('action.focusNextGroup.title', 'Focus Next Group'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorPartMultipleEditorGroups',
       f1: true,
     })
@@ -294,8 +295,8 @@ export class FocusPreviousGroupAction extends Action2 {
   constructor() {
     super({
       id: FocusPreviousGroupAction.ID,
-      title: 'Focus Previous Group',
-      category: 'View',
+      title: localize('action.focusPreviousGroup.title', 'Focus Previous Group'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorPartMultipleEditorGroups',
       f1: true,
     })
@@ -312,8 +313,8 @@ export class FocusFirstGroupAction extends Action2 {
   constructor() {
     super({
       id: FocusFirstGroupAction.ID,
-      title: 'Focus First Group',
-      category: 'View',
+      title: localize('action.focusFirstGroup.title', 'Focus First Group'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorPartMultipleEditorGroups',
       f1: true,
     })
@@ -330,8 +331,8 @@ export class FocusLastGroupAction extends Action2 {
   constructor() {
     super({
       id: FocusLastGroupAction.ID,
-      title: 'Focus Last Group',
-      category: 'View',
+      title: localize('action.focusLastGroup.title', 'Focus Last Group'),
+      category: localize('command.category.view', 'View'),
       precondition: 'editorPartMultipleEditorGroups',
       f1: true,
     })
@@ -348,8 +349,8 @@ export class FocusActiveEditorGroupAction extends Action2 {
   constructor() {
     super({
       id: FocusActiveEditorGroupAction.ID,
-      title: 'Focus Active Editor Group',
-      category: 'View',
+      title: localize('action.focusActiveEditorGroup.title', 'Focus Active Editor Group'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'escape', when: '!quickInputVisible && !editorFocus' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -372,8 +373,8 @@ export class ToggleMinimapAction extends Action2 {
   constructor() {
     super({
       id: ToggleMinimapAction.ID,
-      title: 'Toggle Minimap',
-      category: 'View',
+      title: localize('action.toggleMinimap.title', 'Toggle Minimap'),
+      category: localize('command.category.view', 'View'),
       menu: { id: MenuId.MenubarViewMenu, group: '3_editor', order: 1 },
       f1: true,
     })

@@ -23,6 +23,9 @@ export * from './di/instantiationService.js'
 // logging
 export * from './log/log.js'
 
+// localization
+export * from './nls/nls.js'
+
 // application lifecycle phases
 export * from './lifecycle/lifecycleService.js'
 

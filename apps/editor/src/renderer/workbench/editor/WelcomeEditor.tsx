@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useSyncExternalStore } from 'react'
-import { IEditorInput, IWorkspaceService } from '@universe-editor/platform'
+import { IEditorInput, IWorkspaceService, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import styles from './EditorArea.module.css'
 
@@ -24,25 +24,25 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
 
   return (
     <div className={styles['welcome']}>
-      <h1>Universe Editor</h1>
-      <p>A VSCode-paradigm game content editor.</p>
+      <h1>{localize('app.name', 'Universe Editor')}</h1>
+      <p>{localize('app.description', 'A VSCode-paradigm game content editor.')}</p>
       <ul className={styles['shortcutList']}>
         <li className={styles['shortcutItem']}>
           <kbd className={styles['kbd']}>Ctrl+Shift+P</kbd>
-          <span>Open Command Palette</span>
+          <span>{localize('welcome.commandPalette', 'Open Command Palette')}</span>
         </li>
         <li className={styles['shortcutItem']}>
           <kbd className={styles['kbd']}>Ctrl+`</kbd>
-          <span>Toggle Output Panel</span>
+          <span>{localize('welcome.outputPanel', 'Toggle Output Panel')}</span>
         </li>
         <li className={styles['shortcutItem']}>
           <kbd className={styles['kbd']}>Ctrl+\</kbd>
-          <span>Split Editor</span>
+          <span>{localize('welcome.splitEditor', 'Split Editor')}</span>
         </li>
       </ul>
       {visible.length > 0 && (
         <section className={styles['welcome-recent']}>
-          <h2>Recent</h2>
+          <h2>{localize('welcome.recent', 'Recent')}</h2>
           <ul>
             {visible.map((entry) => (
               <li key={entry.folder.toString()}>

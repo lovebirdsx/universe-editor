@@ -7,7 +7,7 @@
  *  specific editor instance, so we resolve them lazily at palette open time.
  *--------------------------------------------------------------------------------------------*/
 
-import type { IEditorGroupsService, IQuickPickItem } from '@universe-editor/platform'
+import { localize, type IEditorGroupsService, type IQuickPickItem } from '@universe-editor/platform'
 import type { monaco } from '../editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
@@ -56,7 +56,7 @@ export function collectMonacoCommands(groupsService: IEditorGroupsService): Mona
       return {
         id: action.id,
         label: action.label || action.id,
-        description: 'Monaco',
+        description: localize('monaco.commandSource', 'Monaco'),
         ...(keybinding !== undefined ? { keybinding } : {}),
         _monaco: true as const,
         _editor: editor,

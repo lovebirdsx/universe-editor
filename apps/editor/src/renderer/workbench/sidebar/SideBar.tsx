@@ -4,6 +4,7 @@ import {
   ViewRegistry,
   IViewsService,
   ViewContainerLocation,
+  localize,
 } from '@universe-editor/platform'
 import type { IPart } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
@@ -49,7 +50,7 @@ export function SideBar({ part }: { part?: IPart | undefined } = {}) {
       <div className={styles['header']}>{activeContainer.label}</div>
       <div className={styles['views']}>
         {views.length === 0 ? (
-          <p className={styles['empty']}>No views registered.</p>
+          <p className={styles['empty']}>{localize('sidebar.empty', 'No views registered.')}</p>
         ) : (
           views.map((v) => {
             const Component = viewComponentMap.get(v.componentKey)

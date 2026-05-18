@@ -15,6 +15,7 @@ import {
   PartId,
   ViewContainerLocation,
   CommandsRegistry,
+  localize,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -32,8 +33,8 @@ export class ShowExplorerAction extends Action2 {
   constructor() {
     super({
       id: ShowExplorerAction.ID,
-      title: 'Show Explorer',
-      category: 'View',
+      title: localize('action.showExplorer.title', 'Show Explorer'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+shift+e' },
       menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 2 },
       f1: true,
@@ -72,8 +73,8 @@ export class ToggleActivityBarVisibilityAction extends Action2 {
   constructor() {
     super({
       id: ToggleActivityBarVisibilityAction.ID,
-      title: 'Toggle Activity Bar',
-      category: 'View',
+      title: localize('action.toggleActivityBar.title', 'Toggle Activity Bar'),
+      category: localize('command.category.view', 'View'),
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 0 },
       f1: true,
     })
@@ -88,8 +89,8 @@ export class ToggleSidebarVisibilityAction extends Action2 {
   constructor() {
     super({
       id: ToggleSidebarVisibilityAction.ID,
-      title: 'Toggle Primary Side Bar',
-      category: 'View',
+      title: localize('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+b' },
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 1 },
       f1: true,
@@ -105,8 +106,8 @@ export class ToggleSecondarySidebarVisibilityAction extends Action2 {
   constructor() {
     super({
       id: ToggleSecondarySidebarVisibilityAction.ID,
-      title: 'Toggle Secondary Side Bar',
-      category: 'View',
+      title: localize('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+b' },
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 2 },
       f1: true,
@@ -128,8 +129,8 @@ export class TogglePanelAction extends Action2 {
   constructor() {
     super({
       id: TogglePanelAction.ID,
-      title: 'Toggle Panel',
-      category: 'View',
+      title: localize('action.togglePanel.title', 'Toggle Panel'),
+      category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+j' },
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 3 },
       f1: true,
@@ -145,8 +146,8 @@ export class ShowCommandsAction extends Action2 {
   constructor() {
     super({
       id: ShowCommandsAction.ID,
-      title: 'Show All Commands',
-      category: 'View',
+      title: localize('action.showAllCommands.title', 'Show All Commands'),
+      category: localize('command.category.view', 'View'),
       keybinding: [{ primary: 'ctrl+shift+p' }, { primary: 'f1' }],
       menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 1 },
       f1: true,
@@ -179,7 +180,7 @@ export class ShowCommandsAction extends Action2 {
 
     const selected = await quickInputService.pick(items, {
       id: 'workbench.commandPalette',
-      placeholder: 'Type a command name…',
+      placeholder: localize('quickInput.commandPalette.placeholder', 'Type a command name…'),
       prefix: '>',
     })
     if (!selected) return

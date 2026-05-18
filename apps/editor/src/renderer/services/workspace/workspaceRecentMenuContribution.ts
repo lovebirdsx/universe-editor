@@ -14,6 +14,7 @@ import {
   MenuId,
   MenuRegistry,
   combinedDisposable,
+  localize,
   toDisposable,
   type IDisposable,
   type IRecentWorkspace,
@@ -33,7 +34,7 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
     this._register(
       MenuRegistry.addSubmenuItem(MenuId.MenubarFileMenu, {
         submenu: MenuId.MenubarFileOpenRecentMenu,
-        title: 'Open Recent',
+        title: localize('action.openRecent.title', 'Open Recent…'),
         group: '2_open',
         order: 2,
       }),
@@ -44,7 +45,7 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
     this._register(
       MenuRegistry.addMenuItem(MenuId.MenubarFileOpenRecentMenu, {
         command: ClearRecentWorkspacesAction.ID,
-        title: 'Clear Recently Opened',
+        title: localize('action.clearRecentWorkspaces.title', 'Clear Recently Opened'),
         group: TRAILING_GROUP,
         order: 1,
       }),
