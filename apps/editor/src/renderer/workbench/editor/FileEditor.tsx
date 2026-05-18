@@ -24,17 +24,37 @@ import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
-import {
-  MONACO_COMMAND_CATALOG,
-  buildKeyStringFromEvent,
-  normalizeKey,
-} from './monaco/monacoCommandCatalog.js'
+import { getAllMonacoDefaultKeybindings } from './monaco/monacoActionsBridge.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { IUserKeybindingsService } from '../keybindings/UserKeybindingsService.js'
 import styles from './FileEditor.module.css'
+
+// Canonical key-string normalization that matches KeybindingsRegistry's
+// internal form (lexicographic modifier order: alt → ctrl → meta → shift)
+// and the form `decodeMonacoKeybinding` emits.
+function normalizeKey(key: string): string {
+  const parts = key
+    .toLowerCase()
+    .split('+')
+    .map((s) => s.trim())
+  const modifiers = new Set(['ctrl', 'alt', 'shift', 'meta'])
+  const mods = parts.filter((p) => modifiers.has(p)).sort()
+  const rest = parts.filter((p) => !modifiers.has(p))
+  return [...mods, ...rest].join('+')
+}
+
+function buildKeyStringFromEvent(e: KeyboardEvent): string {
+  const parts: string[] = []
+  if (e.altKey) parts.push('alt')
+  if (e.ctrlKey) parts.push('ctrl')
+  if (e.metaKey) parts.push('meta')
+  if (e.shiftKey) parts.push('shift')
+  parts.push(e.key.toLowerCase())
+  return parts.join('+')
+}
 
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
@@ -90,15 +110,19 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     const blurSub = ed.onDidBlurEditorWidget(() => {
       contextKeyService.set('editorFocus', false)
     })
-    // Bridge: intercept catalog commands whose default keybinding has been
-    // overridden by the user. Capture phase fires before Monaco's own handlers.
+    // Bridge: when the user has rebound a Monaco built-in command to a new
+    // key, swallow monaco's *original* default key in the capture phase so
+    // monaco's internal dispatch doesn't also fire the action. The default
+    // keys come from monacoActionsBridge's side-table.
     const container = ed.getContainerDomNode()
     const bridgeHandler = (e: KeyboardEvent) => {
       const key = normalizeKey(buildKeyStringFromEvent(e))
-      for (const cmd of MONACO_COMMAND_CATALOG) {
-        if (!cmd.defaultKey) continue
-        if (normalizeKey(cmd.defaultKey) !== key) continue
-        if (userKeybindingsSvc.getUserEntry(cmd.id) !== undefined) {
+      for (const [commandId, decoded] of getAllMonacoDefaultKeybindings()) {
+        // Only single-stroke defaults matter for this bridge — monaco's
+        // own chord state would need to be observed for two-stroke ones.
+        if (decoded.key === undefined) continue
+        if (normalizeKey(decoded.key) !== key) continue
+        if (userKeybindingsSvc.getUserEntry(commandId) !== undefined) {
           e.preventDefault()
           e.stopPropagation()
           return

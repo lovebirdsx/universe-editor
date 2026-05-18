@@ -1,6 +1,7 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
+import { monacoNlsPlugin } from './build/plugins/monacoNlsPlugin'
 
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
 
@@ -50,7 +51,7 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     cacheDir: resolve(__dirname, 'node_modules/.vite-editor'),
-    plugins: [react()],
+    plugins: [monacoNlsPlugin(), react()],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,

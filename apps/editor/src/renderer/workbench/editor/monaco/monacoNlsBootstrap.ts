@@ -1,47 +1,43 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  monacoNlsBootstrap — Monaco 0.52+ reads its localized strings from
- *  globalThis._VSCODE_NLS_MESSAGES (an index array) and _VSCODE_NLS_LANGUAGE.
- *  The translation files shipped under monaco-editor/dev/vs/nls.messages.<lang>.js
- *  are AMD-wrapped, but their factory body simply assigns the array onto
- *  globalThis. We strip the AMD wrapper at runtime via a temporary `define`
- *  shim so the assignment runs and the editor picks the locale up the first
- *  time it loads.
+ *  monacoNlsBootstrap — install a translation dictionary onto
+ *  `globalThis.__MONACO_NLS__` before monaco-editor is imported. The companion
+ *  Vite plugin (`build/plugins/monacoNlsPlugin.ts`) patches monaco's `nls.js`
+ *  so that string-keyed `localize(key, fallback, …)` and `localize2(…)` calls
+ *  consult this table before falling back to the inline English message.
+ *
+ *  Why not `_VSCODE_NLS_MESSAGES`? That global is an *index* array consumed by
+ *  monaco's AMD/legacy build pipeline. The ESM bundle keeps string keys, so the
+ *  array is never indexed — see the bug test in __tests__/monacoNlsBootstrap.test.ts.
  *--------------------------------------------------------------------------------------------*/
 
-import zhCnSource from 'monaco-editor/dev/vs/nls.messages.zh-cn.js?raw'
+import zhCnRaw from '../../../vendor/monaco-nls/zh-cn.json?raw'
 import type { SupportedLocale } from '../../../../shared/i18n/availableLocales.js'
 
-interface IMonacoNlsEntry {
-  readonly language: string
-  readonly source: string
+type Dict = Readonly<Record<string, string>>
+
+let _zhCn: Dict | null = null
+function getZhCn(): Dict {
+  if (_zhCn === null) _zhCn = JSON.parse(zhCnRaw) as Dict
+  return _zhCn
 }
 
-const SOURCES: Partial<Record<SupportedLocale, IMonacoNlsEntry>> = {
-  'zh-CN': { language: 'zh-cn', source: zhCnSource },
+const DICTIONARIES: Partial<Record<SupportedLocale, () => Dict>> = {
+  'zh-CN': getZhCn,
 }
 
 let _applied = false
 
+export function resetMonacoNlsForTests(): void {
+  _applied = false
+  const g = globalThis as unknown as { __MONACO_NLS__?: unknown }
+  delete g.__MONACO_NLS__
+}
+
 export function applyMonacoNls(locale: SupportedLocale): void {
   if (_applied) return
   _applied = true
-  const entry = SOURCES[locale]
-  if (!entry) return
-
-  const g = globalThis as unknown as {
-    define?: unknown
-    _VSCODE_NLS_LANGUAGE?: string
-  }
-  const prevDefine = g.define
-  g.define = (_deps: unknown, factory: () => void) => {
-    factory()
-  }
-  try {
-    new Function(entry.source)()
-  } finally {
-    if (prevDefine === undefined) delete g.define
-    else g.define = prevDefine
-  }
-  g._VSCODE_NLS_LANGUAGE = entry.language
+  const load = DICTIONARIES[locale]
+  if (!load) return
+  ;(globalThis as unknown as { __MONACO_NLS__: Dict }).__MONACO_NLS__ = load()
 }

@@ -7,6 +7,7 @@
 
 import type * as monaco from 'monaco-editor'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
+import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 
 export type { monaco }
@@ -52,6 +53,14 @@ async function loadMonaco(): Promise<typeof monaco> {
       }
       _monaco = monacoMod
       pushJsonDiagnostics()
+      // Mirror every monaco-internal EditorAction + core command into our
+      // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
+      // editor can list and rebind them. Fire-and-forget — failure here
+      // would only mean the shortcuts editor shows fewer entries, the
+      // editor itself still works.
+      void bridgeAllMonacoActions().catch((err) => {
+        console.error('[MonacoLoader] bridgeAllMonacoActions failed', err)
+      })
       return monacoMod
     })()
   }

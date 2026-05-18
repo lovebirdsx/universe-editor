@@ -10,7 +10,7 @@ import { useService } from '../useService.js'
 import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
 import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferences/preferencesFocus.js'
 import { IUserKeybindingsService } from './UserKeybindingsService.js'
-import { MONACO_COMMAND_CATALOG } from '../editor/monaco/monacoCommandCatalog.js'
+import { getMonacoDefaultKeybinding } from '../editor/monaco/monacoActionsBridge.js'
 import styles from './KeybindingsEditor.module.css'
 
 function buildKeyString(e: KeyboardEvent): string {
@@ -288,7 +288,11 @@ function getEffectiveKey(command: string, svc: IUserKeybindingsService): string 
     if (kb.key !== undefined) return formatKey(kb.key)
   }
 
-  // Fall back to Monaco command catalog for built-in editor commands.
-  const monacoEntry = MONACO_COMMAND_CATALOG.find((c) => c.id === command)
-  return monacoEntry?.defaultKey ? formatKey(monacoEntry.defaultKey) : undefined
+  // Fall back to the default keybinding monaco itself ships for built-in
+  // editor commands (recorded by monacoActionsBridge at MonacoLoader boot).
+  const decoded = getMonacoDefaultKeybinding(command)
+  if (!decoded) return undefined
+  if (decoded.chords) return formatChord(decoded.chords)
+  if (decoded.key !== undefined) return formatKey(decoded.key)
+  return undefined
 }
