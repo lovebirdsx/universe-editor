@@ -131,6 +131,20 @@ describe('useGlobalKeybindingHandler', () => {
     expect(executeCommand).not.toHaveBeenCalled()
   })
 
+  it('does not swallow Delete in editable target even if a global Delete binding exists', () => {
+    const { executeCommand, instantiation } = createHarness()
+    bind('delete', 'workbench.files.action.delete')
+    mountHost(instantiation)
+
+    const textarea = document.createElement('textarea')
+    document.body.appendChild(textarea)
+    const { preventDefault, stopPropagation } = dispatch({ key: 'Delete', from: textarea })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
   it('still fires when ctrl is pressed inside editable target', () => {
     const { executeCommand, instantiation } = createHarness()
     bind('ctrl+b', 'test.toggle')

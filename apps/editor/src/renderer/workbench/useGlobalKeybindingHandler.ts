@@ -48,6 +48,12 @@ function hasFunctionalModifier(e: KeyboardEvent): boolean {
   return e.ctrlKey || e.altKey || e.metaKey
 }
 
+function isNativeEditableKey(e: KeyboardEvent): boolean {
+  if (!isEditableTarget(e.target)) return false
+  const key = e.key.toLowerCase()
+  return key === 'delete' || key === 'backspace'
+}
+
 interface PendingChord {
   key: string
   entry: IDisposable
@@ -116,7 +122,7 @@ export function useGlobalKeybindingHandler(): void {
       // are length > 1 and pass through.
       const isPrintableTyping =
         e.key.length === 1 && !hasFunctionalModifier(e) && isEditableTarget(e.target)
-      if (isPrintableTyping) return
+      if (isPrintableTyping || isNativeEditableKey(e)) return
 
       e.preventDefault()
       e.stopPropagation()
