@@ -17,6 +17,8 @@ const EXPLORER = 'workbench.view.explorer'
 test.describe('@p0 workspace', () => {
   test('openWorkspace sets current workspace path', async ({ workbench }) => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-'))
+    // URI.fsPath always returns forward slashes; normalize tmpDir to match
+    const expectedPath = tmpDir.replace(/\\/g, '/')
 
     await workbench.openWorkspace(tmpDir)
 
@@ -24,7 +26,7 @@ test.describe('@p0 workspace', () => {
     // so the path should already be set. Poll defensively for CI timing.
     await expect
       .poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5000 })
-      .toBe(tmpDir)
+      .toBe(expectedPath)
   })
 
   test('openFolder action reveals Explorer sidebar', async ({ workbench }) => {

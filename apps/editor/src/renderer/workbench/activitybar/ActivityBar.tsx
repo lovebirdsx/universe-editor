@@ -60,6 +60,7 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
     (id: string) => {
       const sidebarVisible = layoutService.getVisible(PartId.SideBar)
       if (activeId === id && sidebarVisible) {
+        viewsService.closeViewContainer(id)
         layoutService.setVisible(PartId.SideBar, false)
       } else {
         viewsService.openViewContainer(id)
