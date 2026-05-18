@@ -17,6 +17,7 @@ interface WorkbenchLayoutProps {
   sidebarVisible: boolean
   secondarySidebarVisible: boolean
   panelVisible: boolean
+  activitybarVisible: boolean
   sizes: Readonly<LayoutSizes>
   onSidebarResize: (px: number) => void
   onSecondarySidebarResize: (px: number) => void
@@ -39,6 +40,7 @@ export function WorkbenchLayout({
   sidebarVisible,
   secondarySidebarVisible,
   panelVisible,
+  activitybarVisible,
   sizes,
   onSidebarResize,
   onSecondarySidebarResize,
@@ -95,7 +97,12 @@ export function WorkbenchLayout({
     <div className={styles['workbench']}>
       <div className={styles['titlebar']}>{titlebar}</div>
       <div className={styles['top']}>
-        <div className={styles['activitybar']}>{activitybar}</div>
+        <div
+          className={styles['activitybar']}
+          style={activitybarVisible ? undefined : { display: 'none' }}
+        >
+          {activitybar}
+        </div>
         <div className={styles['main']}>
           <Allotment
             ref={allotmentRef}

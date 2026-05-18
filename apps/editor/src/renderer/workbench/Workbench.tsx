@@ -29,6 +29,7 @@ function WorkbenchShell() {
   const sidebarVisible = visible[PartId.SideBar]
   const secondarySidebarVisible = visible[PartId.SecondarySideBar]
   const panelVisible = visible[PartId.Panel]
+  const activityBarVisible = visible[PartId.ActivityBar]
 
   // Look up Parts registered by main.tsx's bootstrap. Parts are singletons —
   // they live for the lifetime of the workbench, so this lookup happens once.
@@ -58,6 +59,7 @@ function WorkbenchShell() {
         sidebarVisible={sidebarVisible}
         secondarySidebarVisible={secondarySidebarVisible}
         panelVisible={panelVisible}
+        activitybarVisible={activityBarVisible}
         sizes={sizes}
         onSidebarResize={onSidebarResize}
         onSecondarySidebarResize={onSecondarySidebarResize}

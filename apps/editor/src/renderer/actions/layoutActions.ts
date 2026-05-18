@@ -67,6 +67,22 @@ export class ShowExplorerAction extends Action2 {
   }
 }
 
+export class ToggleActivityBarVisibilityAction extends Action2 {
+  static readonly ID = 'workbench.action.toggleActivityBarVisibility'
+  constructor() {
+    super({
+      id: ToggleActivityBarVisibilityAction.ID,
+      title: 'Toggle Activity Bar',
+      category: 'View',
+      menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 0 },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(ILayoutService).toggleVisible(PartId.ActivityBar)
+  }
+}
+
 export class ToggleSidebarVisibilityAction extends Action2 {
   static readonly ID = 'workbench.action.toggleSidebarVisibility'
   constructor() {

@@ -7,6 +7,7 @@ import { registerAction2 } from '@universe-editor/platform'
 import {
   ShowCommandsAction,
   ShowExplorerAction,
+  ToggleActivityBarVisibilityAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
@@ -66,6 +67,7 @@ import {
 } from './searchActions.js'
 
 // Layout
+registerAction2(ToggleActivityBarVisibilityAction)
 registerAction2(ToggleSidebarVisibilityAction)
 registerAction2(ToggleSecondarySidebarVisibilityAction)
 registerAction2(TogglePanelAction)
