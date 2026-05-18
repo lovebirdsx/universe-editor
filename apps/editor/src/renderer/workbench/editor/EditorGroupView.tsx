@@ -53,7 +53,7 @@ function useGroupVersion(group: IEditorGroup): string {
         b.dispose()
       }
     },
-    () => `${group.editors.length}:${group.activeEditor?.id ?? ''}`,
+    () => `${group.editors.length}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}`,
   )
 }
 
