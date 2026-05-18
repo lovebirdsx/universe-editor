@@ -110,7 +110,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
               onClick={() => accept([item])}
               onMouseEnter={() => setFocusedIdx(idx)}
             >
-              {!query && mruIds.includes(item.id) && <span className={styles['mruIcon']}>⏱</span>}
+              {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
               <span className={styles['itemLabel']}>{item.label}</span>
               {item.description && <span className={styles['itemDesc']}>{item.description}</span>}
               {item.keybinding && (
