@@ -48,12 +48,15 @@ function useGroupVersion(group: IEditorGroup): string {
     (onChange) => {
       const a = group.onDidChangeModel(() => onChange())
       const b = group.onDidActiveEditorChange(() => onChange())
+      const dirtyUnsubs = group.editors.map((e) => e.onDidChangeDirty(() => onChange()))
       return () => {
         a.dispose()
         b.dispose()
+        dirtyUnsubs.forEach((d) => d.dispose())
       }
     },
-    () => `${group.editors.length}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}`,
+    () =>
+      `${group.editors.length}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}`,
   )
 }
 
