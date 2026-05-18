@@ -27,6 +27,13 @@ async function loadMonaco(): Promise<typeof monaco> {
           return new EditorWorker.default()
         },
       }
+      monacoMod.languages.json.jsonDefaults.setDiagnosticsOptions({
+        validate: true,
+        allowComments: true,
+        trailingCommas: 'warning',
+        schemaValidation: 'error',
+        schemaRequest: 'warning',
+      })
       _monaco = monacoMod
       return monacoMod
     })()

@@ -56,6 +56,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       tabSize: 2,
       insertSpaces: true,
       readOnly: false,
+      unicodeHighlight: {
+        allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
+      },
     })
     // Hijack Monaco's built-in F1 (StandaloneCommandsQuickAccess) so the
     // global, unified command palette wins regardless of focus.
