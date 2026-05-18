@@ -42,4 +42,12 @@ export const editor = {
   getModel: () => null,
 }
 
-export default { Uri, editor }
+export const languages = {
+  json: {
+    jsonDefaults: {
+      setDiagnosticsOptions: (_options: unknown) => {},
+    },
+  },
+}
+
+export default { Uri, editor, languages }
