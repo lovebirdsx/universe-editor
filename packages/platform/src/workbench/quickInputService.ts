@@ -61,6 +61,13 @@ export interface IQuickInputService {
 
   /** Convenience: show an input box and resolve with the entered text. */
   input(options?: IInputOptions): Promise<string | undefined>
+
+  /**
+   * Dismiss the currently visible panel (if any). Fires the panel's
+   * `onHide` callback and clears the `quickInputVisible` ContextKey.
+   * No-op when nothing is shown.
+   */
+  hide(): void
 }
 
 export const IQuickInputService = createDecorator<IQuickInputService>('quickInputService')

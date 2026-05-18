@@ -66,6 +66,7 @@ import {
   FindPreviousAction,
   FindReplaceInFileAction,
 } from './searchActions.js'
+import { CloseQuickInputAction } from './quickInputActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -141,3 +142,7 @@ registerAction2(FindInFileAction)
 registerAction2(FindReplaceInFileAction)
 registerAction2(FindNextAction)
 registerAction2(FindPreviousAction)
+
+// Quick Input (registered last so its `escape` binding wins over
+// FocusActiveEditorGroupAction whenever `quickInputVisible` is true).
+registerAction2(CloseQuickInputAction)

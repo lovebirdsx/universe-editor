@@ -3,7 +3,13 @@
  *  IQuickInputService implementation using React portals.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter, IStorageService } from '@universe-editor/platform'
+import {
+  Emitter,
+  IContextKeyService,
+  IStorageService,
+  type Event,
+  type IContextKey,
+} from '@universe-editor/platform'
 import type {
   IQuickInputService,
   IQuickPick,
@@ -11,8 +17,6 @@ import type {
   IPickOptions,
   IInputOptions,
 } from '@universe-editor/platform'
-
-type ShowQuickPickFn = (state: QuickPickState | null) => void
 
 export interface QuickPickState {
   type: 'pick' | 'input'
@@ -31,13 +35,36 @@ export interface QuickPickState {
 export class QuickInputService implements IQuickInputService {
   declare readonly _serviceBrand: undefined
 
-  private _showFn: ShowQuickPickFn | null = null
+  private readonly _onDidChangeState = new Emitter<QuickPickState | null>()
+  readonly onDidChangeState: Event<QuickPickState | null> = this._onDidChangeState.event
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {}
+  private _currentState: QuickPickState | null = null
+  private _currentOnHide: (() => void) | undefined
+  private readonly _visibleKey: IContextKey<boolean>
 
-  /** Called by <QuickInputPortal> to register the React state setter. */
-  registerShowFn(fn: ShowQuickPickFn): void {
-    this._showFn = fn
+  constructor(
+    @IStorageService private readonly _storage: IStorageService,
+    @IContextKeyService contextKeyService: IContextKeyService,
+  ) {
+    this._visibleKey = contextKeyService.createKey<boolean>('quickInputVisible', false)
+  }
+
+  get currentState(): QuickPickState | null {
+    return this._currentState
+  }
+
+  private _setState(state: QuickPickState | null): void {
+    this._currentState = state
+    this._visibleKey.set(state !== null)
+    this._onDidChangeState.fire(state)
+  }
+
+  hide(): void {
+    if (!this._currentState) return
+    const onHide = this._currentOnHide
+    this._currentOnHide = undefined
+    this._setState(null)
+    onHide?.()
   }
 
   createQuickPick<T extends IQuickPickItem>(): IQuickPick<T> {
@@ -62,7 +89,8 @@ export class QuickInputService implements IQuickInputService {
       onDidAccept: onDidAccept.event,
       onDidHide: onDidHide.event,
       show: () => {
-        this._showFn?.({
+        this._currentOnHide = () => onDidHide.fire()
+        this._setState({
           type: 'pick',
           items: _items,
           placeholder: _placeholder,
@@ -71,8 +99,7 @@ export class QuickInputService implements IQuickInputService {
         })
       },
       hide: () => {
-        this._showFn?.(null)
-        onDidHide.fire()
+        this.hide()
       },
       dispose: () => {
         onDidAccept.dispose()
@@ -93,14 +120,16 @@ export class QuickInputService implements IQuickInputService {
     }
 
     return new Promise((resolve) => {
-      this._showFn?.({
+      this._currentOnHide = () => resolve(undefined)
+      this._setState({
         type: 'pick',
         items,
         mruIds,
         placeholder: options?.placeholder,
         prefix: options?.prefix,
         onAccept: (selected) => {
-          this._showFn?.(null)
+          this._currentOnHide = undefined
+          this._setState(null)
           const item = selected[0] as T | undefined
           if (id && item?.id) {
             const newMru = [item.id, ...mruIds.filter((x) => x !== item.id)].slice(0, 20)
@@ -108,7 +137,6 @@ export class QuickInputService implements IQuickInputService {
           }
           resolve(item)
         },
-        onHide: () => resolve(undefined),
       })
     })
   }
@@ -121,18 +149,19 @@ export class QuickInputService implements IQuickInputService {
     }
 
     return new Promise((resolve) => {
-      this._showFn?.({
+      this._currentOnHide = () => resolve(undefined)
+      this._setState({
         type: 'input',
         placeholder: options?.placeholder,
         inputPrompt: options?.prompt,
         inputValue: options?.value ?? storedValue ?? '',
         validateInput: options?.validateInput,
         onInput: (value) => {
-          this._showFn?.(null)
+          this._currentOnHide = undefined
+          this._setState(null)
           if (id) void this._storage.set(`quickinput.lastValue.${id}`, value)
           resolve(value)
         },
-        onHide: () => resolve(undefined),
       })
     })
   }

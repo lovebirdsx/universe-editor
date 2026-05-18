@@ -69,10 +69,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   )
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Escape') {
-      state.onHide?.()
-      onClose()
-    } else if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown') {
       e.preventDefault()
       setFocusedIdx((i) => Math.min(i + 1, sortedFiltered.length - 1))
     } else if (e.key === 'ArrowUp') {
@@ -137,10 +134,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
   }, [])
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Escape') {
-      state.onHide?.()
-      onClose()
-    } else if (e.key === 'Enter') {
+    if (e.key === 'Enter') {
       const err = state.validateInput?.(value)
       if (err) {
         setError(err)
@@ -181,26 +175,26 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
 /** Portal that renders Quick Pick / Input Box over the entire workbench. */
 export function QuickInputPortal() {
   const quickInputService = useService(IQuickInputService)
-  const [panelState, setPanelState] = useState<QuickPickState | null>(null)
+  const svc = quickInputService as QuickInputService
+  const [panelState, setPanelState] = useState<QuickPickState | null>(svc.currentState)
 
   useEffect(() => {
-    const svc = quickInputService as QuickInputService
-    svc.registerShowFn(setPanelState)
-  }, [quickInputService])
+    const d = svc.onDidChangeState((s) => setPanelState(s))
+    setPanelState(svc.currentState)
+    return () => d.dispose()
+  }, [svc])
 
   if (!panelState) return null
 
+  const close = () => svc.hide()
+
   return createPortal(
-    <div
-      className={styles['overlay']}
-      onClick={() => setPanelState(null)}
-      data-testid="quick-input-overlay"
-    >
+    <div className={styles['overlay']} onClick={close} data-testid="quick-input-overlay">
       <div onClick={(e) => e.stopPropagation()}>
         {panelState.type === 'pick' ? (
-          <QuickPickPanel state={panelState} onClose={() => setPanelState(null)} />
+          <QuickPickPanel state={panelState} onClose={close} />
         ) : (
-          <InputPanel state={panelState} onClose={() => setPanelState(null)} />
+          <InputPanel state={panelState} onClose={close} />
         )}
       </div>
     </div>,

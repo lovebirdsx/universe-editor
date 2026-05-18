@@ -80,47 +80,56 @@ export function useGlobalKeybindingHandler(): void {
       pendingRef.current = { key, entry, timer }
     }
 
+    // Registered on document in capture phase so we intercept keydown events
+    // before any inner-element handler (including Monaco's chord dispatcher)
+    // can call stopPropagation() and hide the event from a window-level bubble
+    // listener. Capture phase fires outer→inner, so document fires before any
+    // Monaco container element.
     const handler = (e: KeyboardEvent) => {
       if (isModifierOnly(e.key)) return
-      // ESC is always processed globally even from editable targets (INPUT / SELECT /
-      // contentEditable). Without this exception, pressing ESC inside the Output panel's
-      // channel <select> would be silently swallowed and never reach the focus-editor action.
-      if (e.key !== 'Escape' && isEditableTarget(e.target) && !hasFunctionalModifier(e)) return
+
+      const pending = pendingRef.current
+      if (pending) {
+        // In chord mode — claim the second stroke unconditionally.
+        // Prevents Monaco from also acting on the keystroke that completes
+        // (or aborts) our chord.
+        const secondKey = buildKeyString(e)
+        const result = KeybindingsRegistry.resolveKeystroke(secondKey, contextKeyService, [
+          pending.key,
+        ])
+        e.preventDefault()
+        e.stopPropagation()
+        clearChord()
+        if (result.kind === 'execute') {
+          void commandService.executeCommand(result.command)
+        }
+        return
+      }
 
       const key = buildKeyString(e)
-      const pending = pendingRef.current
-      const result = KeybindingsRegistry.resolveKeystroke(
-        key,
-        contextKeyService,
-        pending ? [pending.key] : undefined,
-      )
+      const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
+      if (result.kind === 'no-match') return
 
+      // Reserve printable single-character keys (without ctrl/alt/meta) for
+      // text input when focus is in an editable target — even if someone
+      // bound such a key globally. Function keys, Escape, Arrows, Tab etc.
+      // are length > 1 and pass through.
+      const isPrintableTyping =
+        e.key.length === 1 && !hasFunctionalModifier(e) && isEditableTarget(e.target)
+      if (isPrintableTyping) return
+
+      e.preventDefault()
+      e.stopPropagation()
       if (result.kind === 'execute') {
-        e.preventDefault()
-        e.stopPropagation()
-        clearChord()
         void commandService.executeCommand(result.command)
-        return
-      }
-
-      if (result.kind === 'enter-chord') {
-        e.preventDefault()
-        e.stopPropagation()
+      } else {
         enterChord(result.pending[0]!)
-        return
-      }
-
-      // no-match: if we were mid-chord, the chord is aborted by the next key.
-      if (pending) {
-        e.preventDefault()
-        e.stopPropagation()
-        clearChord()
       }
     }
 
-    window.addEventListener('keydown', handler)
+    document.addEventListener('keydown', handler, true)
     return () => {
-      window.removeEventListener('keydown', handler)
+      document.removeEventListener('keydown', handler, true)
       clearChord()
     }
   }, [commandService, contextKeyService, statusBarService])
