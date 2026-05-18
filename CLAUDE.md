@@ -33,7 +33,8 @@ packages/
 
 ```bash
 pnpm dev          # 启动所有 dev（platform 先 watch 构建）
-pnpm check        # lint + typecheck + test + build（提交前跑这个）
+pnpm check        # 快速校验：lint + typecheck + test
+pnpm check:full   # 全量验收：lint + typecheck + test + build（提交前跑这个）
 pnpm lint:fix     # 自动修复格式 + lint
 
 pnpm --filter @universe-editor/editor dev   # 只启动桌面编辑器

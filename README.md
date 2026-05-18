@@ -33,7 +33,8 @@ packages/
 
 | 命令 | 作用 |
 | --- | --- |
-| `pnpm check` | lint + typecheck + test + build（提交前跑这个） |
+| `pnpm check` | 快速校验：lint + typecheck + test |
+| `pnpm check:full` | 全量验收：lint + typecheck + test + build（提交前跑这个） |
 | `pnpm build` | 全量构建 |
 | `pnpm test` | 全量测试 |
 | `pnpm typecheck` | 全量类型检查 |

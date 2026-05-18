@@ -13,7 +13,6 @@ import { BuiltInViewContainersContribution } from './BuiltInViewContainersContri
 import { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
 import { ContextKeyContribution } from './ContextKeyContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
-import { StatusBarDefaultsContribution } from './StatusBarDefaultsContribution.js'
 import { FileEditorStatusContribution } from '../workbench/statusbar/FileEditorStatusContribution.js'
 import { ExternalChangeWatcher } from '../workbench/editor/ExternalChangeWatcher.js'
 import { WorkspaceRecentMenuContribution } from '../services/workspace/workspaceRecentMenuContribution.js'
@@ -60,13 +59,6 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.settings',
   SettingsContribution,
   WorkbenchPhase.BlockStartup,
-)
-
-// Status bar defaults run after restore — the status bar is mounted by then.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.statusBarDefaults',
-  StatusBarDefaultsContribution,
-  WorkbenchPhase.AfterRestore,
 )
 
 // File editor cursor / language / encoding entries — only mount once both the
@@ -131,7 +123,6 @@ export {
   BuiltInViewsContribution,
   ContextKeyContribution,
   SettingsContribution,
-  StatusBarDefaultsContribution,
   FileEditorStatusContribution,
   ExternalChangeWatcher,
   WorkspaceRecentMenuContribution,
