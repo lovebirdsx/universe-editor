@@ -4,24 +4,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type ComponentType } from 'react'
-import {
-  EditorRegistry,
-  IEditorGroupsService,
-  IEditorInput,
-  localize,
-  type IPart,
-} from '@universe-editor/platform'
+import { IEditorGroupsService, IEditorInput, localize, type IPart } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { SettingsEditor } from '../preferences/SettingsEditor.js'
-import { SettingsEditorInput } from '../preferences/SettingsEditorInput.js'
 import { KeybindingsEditor } from '../keybindings/KeybindingsEditor.js'
-import { KeybindingsEditorInput } from '../keybindings/KeybindingsEditorInput.js'
-import { WelcomeEditorInput } from './WelcomeEditorInput.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
-import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditor } from './FileEditor.js'
-import { UntitledEditorInput } from './UntitledEditorInput.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from './EditorGroupsService.js'
@@ -30,41 +19,10 @@ import styles from './EditorArea.module.css'
 /** Registry of React components keyed by IEditorProvider.componentKey. */
 export const editorComponentMap = new Map<string, ComponentType<{ input: IEditorInput }>>()
 
-// Register built-in welcome editor
 editorComponentMap.set('welcome', WelcomeEditor)
 editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEditorInput }>)
 editorComponentMap.set('keybindings', KeybindingsEditor as ComponentType<{ input: IEditorInput }>)
 editorComponentMap.set('file', FileEditor)
-
-// Editor providers map typeId → componentKey so EditorGroupView can resolve the
-// React component for any IEditorInput. `deserialize` lets the restore pipeline
-// hydrate built-in inputs back from persisted state.
-EditorRegistry.registerEditorProvider({
-  typeId: WelcomeEditorInput.TYPE_ID,
-  componentKey: 'welcome',
-  deserialize: () => WelcomeEditorInput.deserialize(),
-})
-EditorRegistry.registerEditorProvider({
-  typeId: SettingsEditorInput.TYPE_ID,
-  componentKey: 'settings',
-  deserialize: () => SettingsEditorInput.deserialize(),
-})
-EditorRegistry.registerEditorProvider({
-  typeId: KeybindingsEditorInput.TYPE_ID,
-  componentKey: 'keybindings',
-  deserialize: () => KeybindingsEditorInput.deserialize(),
-})
-EditorRegistry.registerEditorProvider({
-  typeId: FileEditorInput.TYPE_ID,
-  componentKey: 'file',
-  deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
-})
-EditorRegistry.registerEditorProvider({
-  typeId: UntitledEditorInput.TYPE_ID,
-  componentKey: 'file',
-  // Untitled inputs are session-only — toJSON filters them out, so no
-  // deserialize is wired here.
-})
 
 export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
   const groupsService = useService(IEditorGroupsService) as EditorGroupsService

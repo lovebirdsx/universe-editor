@@ -9,6 +9,7 @@
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
 // Side-effect: registers all built-in Action2's with the global registries.
 import '../actions/index.js'
+import { BuiltInEditorProvidersContribution } from './BuiltInEditorProvidersContribution.js'
 import { BuiltInViewContainersContribution } from './BuiltInViewContainersContribution.js'
 import { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
 import { ContextKeyContribution } from './ContextKeyContribution.js'
@@ -27,6 +28,16 @@ import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 ContributionsRegistry.registerContribution(
   'workbench.contrib.contextKey',
   ContextKeyContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Built-in editor providers must be registered before WorkspaceRestoreContribution
+// (BlockRestore) calls _restore(). EditorArea.tsx lives in the Workbench dynamic
+// chunk which loads after setPhase(Ready), so we cannot rely on its module-level
+// side-effects being present when _restore() resolves its storage IPC call.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.builtInEditorProviders',
+  BuiltInEditorProvidersContribution,
   WorkbenchPhase.BlockStartup,
 )
 
@@ -130,6 +141,7 @@ ContributionsRegistry.registerContribution(
 )
 
 export {
+  BuiltInEditorProvidersContribution,
   BuiltInViewContainersContribution,
   BuiltInViewsContribution,
   ContextKeyContribution,
