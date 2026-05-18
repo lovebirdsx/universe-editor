@@ -23,6 +23,25 @@ test.describe('@p0 command palette', () => {
     await workbench.quickInput.waitForHidden()
   })
 
+  test('restores editor focus after closing with Escape', async ({ page, workbench }) => {
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+
+    await workbench.runCommand('workbench.action.focusActiveEditorGroup')
+    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.showCommands')
+    })
+    await workbench.quickInput.waitForVisible()
+    await expect(workbench.quickInput.input).toBeFocused()
+    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(false)
+
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
+    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+  })
+
   test('prefills the > prefix to indicate command mode', async ({ page, workbench }) => {
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.showCommands')
@@ -34,4 +53,3 @@ test.describe('@p0 command palette', () => {
     await workbench.quickInput.waitForHidden()
   })
 })
-

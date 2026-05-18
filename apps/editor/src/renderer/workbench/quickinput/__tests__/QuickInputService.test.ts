@@ -189,3 +189,49 @@ describe('QuickInputService — onDidChangeState', () => {
     qp.dispose()
   })
 })
+
+describe('QuickInputService — focus restoration', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+    document.body.innerHTML = ''
+  })
+
+  it('restores the previously focused element when hide() closes the panel', async () => {
+    const { svc } = createService()
+    const button = document.createElement('button')
+    const input = document.createElement('input')
+    document.body.append(button, input)
+
+    button.focus()
+    const promise = svc.pick([{ id: 'a', label: 'A' }])
+
+    input.focus()
+    svc.hide()
+    await promise
+    await vi.runAllTimersAsync()
+
+    expect(document.activeElement).toBe(button)
+  })
+
+  it('skips restoration when the previously focused element was removed', async () => {
+    const { svc } = createService()
+    const button = document.createElement('button')
+    const input = document.createElement('input')
+    document.body.append(button, input)
+
+    button.focus()
+    const promise = svc.pick([{ id: 'a', label: 'A' }])
+
+    input.focus()
+    button.remove()
+    svc.hide()
+    await promise
+
+    await vi.runAllTimersAsync()
+    expect(document.activeElement).not.toBe(button)
+  })
+})
