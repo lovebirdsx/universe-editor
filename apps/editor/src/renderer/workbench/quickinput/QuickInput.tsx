@@ -31,6 +31,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const [query, setQuery] = useState(prefix)
   const [focusedIdx, setFocusedIdx] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
   const mruIds = state.mruIds ?? []
 
   useLayoutEffect(() => {
@@ -59,6 +60,13 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   useEffect(() => {
     setFocusedIdx(0)
   }, [query])
+
+  useEffect(() => {
+    const list = listRef.current
+    if (!list) return
+    const focused = list.children[focusedIdx] as HTMLElement | undefined
+    focused?.scrollIntoView({ block: 'nearest' })
+  }, [focusedIdx])
 
   const accept = useCallback(
     (items: IQuickPickItem[]) => {
@@ -95,7 +103,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
           data-testid="quick-input-field"
         />
       </div>
-      <div className={styles['list']} role="listbox">
+      <div className={styles['list']} role="listbox" ref={listRef}>
         {prefixMissing ? (
           <p className={styles['empty']}>Type {`'${prefix}'`} followed by a command name</p>
         ) : sortedFiltered.length === 0 ? (
