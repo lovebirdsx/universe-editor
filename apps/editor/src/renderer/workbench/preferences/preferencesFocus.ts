@@ -1,6 +1,5 @@
 export const SETTINGS_EDITOR_FOCUS_SEARCH_EVENT = 'workbench.preferences.focusSettingsSearch'
-export const KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT =
-  'workbench.preferences.focusKeybindingsSearch'
+export const KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT = 'workbench.preferences.focusKeybindingsSearch'
 
 function dispatchPreferencesFocusEvent(eventName: string): void {
   queueMicrotask(() => {

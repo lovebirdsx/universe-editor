@@ -125,8 +125,7 @@ export function KeybindingsEditor(): JSX.Element {
 
     focusSearch()
     document.addEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
-    return () =>
-      document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
+    return () => document.removeEventListener(KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
   }, [])
 
   // Re-render on user keybinding changes.
