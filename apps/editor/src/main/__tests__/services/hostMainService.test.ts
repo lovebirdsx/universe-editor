@@ -2,7 +2,24 @@
  *  Tests for apps/editor/src/main/services/host/hostMainService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+const { relaunch, quit } = vi.hoisted(() => ({
+  relaunch: vi.fn(),
+  quit: vi.fn(),
+}))
+
+vi.mock('electron', async () => {
+  const actual = await vi.importActual<typeof import('electron')>('electron')
+  return {
+    ...actual,
+    app: {
+      relaunch,
+      quit,
+    },
+  }
+})
+
 import { MainHostService } from '../../services/host/hostMainService.js'
 
 interface FakeWin {
@@ -11,6 +28,7 @@ interface FakeWin {
   maximize(): void
   unmaximize(): void
   close(): void
+  reload(): void
   on(event: string, handler: () => void): void
   removeListener(event: string, handler: () => void): void
   isDestroyed(): boolean
@@ -43,6 +61,9 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     close() {
       calls.push('close')
     },
+    reload() {
+      calls.push('reload')
+    },
     webContents: {
       toggleDevTools() {
         calls.push('toggleDevTools')
@@ -69,6 +90,12 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
 }
 
 describe('MainHostService', () => {
+  beforeEach(() => {
+    relaunch.mockReset()
+    quit.mockReset()
+    vi.unstubAllEnvs()
+  })
+
   it('isMaximized reflects underlying window state', async () => {
     const win = makeFakeWin()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -109,6 +136,29 @@ describe('MainHostService', () => {
     const service = new MainHostService(win as any)
     await service.toggleDevTools()
     expect(win.calls).toEqual(['toggleDevTools'])
+    service.dispose()
+  })
+
+  it('restart relaunches the app and then quits', async () => {
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.restart()
+    expect(relaunch).toHaveBeenCalledTimes(1)
+    expect(quit).toHaveBeenCalledTimes(1)
+    expect(relaunch.mock.invocationCallOrder[0]).toBeLessThan(quit.mock.invocationCallOrder[0]!)
+    service.dispose()
+  })
+
+  it('restart reloads the current window in dev mode', async () => {
+    vi.stubEnv('ELECTRON_RENDERER_URL', 'http://127.0.0.1:5173')
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.restart()
+    expect(win.calls).toEqual(['reload'])
+    expect(relaunch).not.toHaveBeenCalled()
+    expect(quit).not.toHaveBeenCalled()
     service.dispose()
   })
 })

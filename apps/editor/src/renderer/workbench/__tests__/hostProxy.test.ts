@@ -30,6 +30,7 @@ class FakeHost implements IHostServiceWire {
   readonly minimize = vi.fn().mockResolvedValue(undefined)
   readonly toggleMaximize = vi.fn().mockResolvedValue(undefined)
   readonly close = vi.fn().mockResolvedValue(undefined)
+  readonly restartWindow = vi.fn().mockResolvedValue(undefined)
   readonly devTools = vi.fn().mockResolvedValue(undefined)
 
   isMaximized(): Promise<boolean> {
@@ -43,6 +44,9 @@ class FakeHost implements IHostServiceWire {
   }
   closeWindow(): Promise<void> {
     return this.close()
+  }
+  restart(): Promise<void> {
+    return this.restartWindow()
   }
   toggleDevTools(): Promise<void> {
     return this.devTools()
@@ -124,10 +128,12 @@ describe('IHostService proxy', () => {
     await h.proxy.minimizeWindow()
     await h.proxy.toggleMaximizeWindow()
     await h.proxy.closeWindow()
+    await h.proxy.restart()
     await h.proxy.toggleDevTools()
     expect(h.fake.minimize).toHaveBeenCalledTimes(1)
     expect(h.fake.toggleMaximize).toHaveBeenCalledTimes(1)
     expect(h.fake.close).toHaveBeenCalledTimes(1)
+    expect(h.fake.restartWindow).toHaveBeenCalledTimes(1)
     expect(h.fake.devTools).toHaveBeenCalledTimes(1)
     h.dispose()
   })

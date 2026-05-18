@@ -39,7 +39,12 @@ import {
   OpenKeybindingsJsonAction,
   OpenSettingsJsonAction,
 } from './preferencesActions.js'
-import { AboutAction, CloseWindowAction, ToggleDevToolsAction } from './windowActions.js'
+import {
+  AboutAction,
+  CloseWindowAction,
+  RestartEditorAction,
+  ToggleDevToolsAction,
+} from './windowActions.js'
 import {
   ClearRecentWorkspacesAction,
   CloseFolderAction,
@@ -134,6 +139,7 @@ registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
 
 // Window / Help
+registerAction2(RestartEditorAction)
 registerAction2(CloseWindowAction)
 registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)

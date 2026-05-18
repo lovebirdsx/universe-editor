@@ -38,6 +38,7 @@ export interface IHostService {
   minimizeWindow(): Promise<void>
   toggleMaximizeWindow(): Promise<void>
   closeWindow(): Promise<void>
+  restart(): Promise<void>
   toggleDevTools(): Promise<void>
 
   /**

@@ -12,10 +12,16 @@ import {
   type IDisposable,
   type IHostService as IHostServiceType,
 } from '@universe-editor/platform'
-import { AboutAction, CloseWindowAction, ToggleDevToolsAction } from '../windowActions.js'
+import {
+  AboutAction,
+  CloseWindowAction,
+  RestartEditorAction,
+  ToggleDevToolsAction,
+} from '../windowActions.js'
 
 function makeHostStub(): IHostServiceType & {
   closeCalls: number
+  restartCalls: number
   devToolsCalls: number
 } {
   const emitter = new Emitter<boolean>()
@@ -27,8 +33,10 @@ function makeHostStub(): IHostServiceType & {
     minimizeWindow: () => Promise.resolve(),
     toggleMaximizeWindow: () => Promise.resolve(),
     closeWindow: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
+    restart: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     toggleDevTools: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     closeCalls: 0,
+    restartCalls: 0,
     devToolsCalls: 0,
   } as never
 }
@@ -47,6 +55,29 @@ describe('windowActions', () => {
   const disposables: IDisposable[] = []
   afterEach(() => {
     while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('registers RestartEditor with keybinding + File menu wiring', () => {
+    disposables.push(registerAction2(RestartEditorAction))
+    expect(CommandsRegistry.getCommand(RestartEditorAction.ID)).toBeDefined()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+r')).toBe(RestartEditorAction.ID)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.MenubarFileMenu).some(
+        (i) => 'command' in i && i.command === RestartEditorAction.ID,
+      ),
+    ).toBe(true)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === RestartEditorAction.ID,
+      ),
+    ).toBe(true)
+  })
+
+  it('RestartEditor.run invokes IHostService.restart', () => {
+    disposables.push(registerAction2(RestartEditorAction))
+    const host = makeHostStub()
+    runCommand(RestartEditorAction.ID, host)
+    expect(host.restart).toHaveBeenCalledTimes(1)
   })
 
   it('registers CloseWindow with keybinding + Help menu wiring', () => {

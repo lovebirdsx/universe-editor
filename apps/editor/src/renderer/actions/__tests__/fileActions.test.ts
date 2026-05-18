@@ -165,6 +165,7 @@ class FakeHostService implements IHostServiceType {
   async minimizeWindow() {}
   async toggleMaximizeWindow() {}
   async closeWindow() {}
+  async restart() {}
   async toggleDevTools() {}
   async showOpenFileDialog(opts?: IShowOpenFileOptions) {
     this.openCalls.push(opts ?? {})

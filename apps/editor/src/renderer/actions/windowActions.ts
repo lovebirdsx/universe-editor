@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Window-level Action2 commands: close, devtools, about.
+ *  Window-level Action2 commands: restart, close, devtools, about.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -26,6 +26,24 @@ export class CloseWindowAction extends Action2 {
 
   override run(accessor: ServicesAccessor): void {
     void accessor.get(IHostService).closeWindow()
+  }
+}
+
+export class RestartEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.restartEditor'
+  constructor() {
+    super({
+      id: RestartEditorAction.ID,
+      title: localize('action.restartEditor.title', 'Restart Editor'),
+      category: localize('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+alt+r' },
+      menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 0 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void accessor.get(IHostService).restart()
   }
 }
 

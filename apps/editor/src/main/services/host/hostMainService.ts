@@ -3,7 +3,7 @@
  *  Host service implementation operating on a specific BrowserWindow.
  *--------------------------------------------------------------------------------------------*/
 
-import { dialog, shell, type BrowserWindow } from 'electron'
+import { app, dialog, shell, type BrowserWindow } from 'electron'
 import {
   Emitter,
   URI,
@@ -49,6 +49,20 @@ export class MainHostService implements IHostServiceWire, IDisposable {
 
   closeWindow(): Promise<void> {
     this._win.close()
+    return Promise.resolve()
+  }
+
+  restart(): Promise<void> {
+    // Under `electron-vite dev`, reloading the current window keeps the app
+    // attached to the live Vite dev server instead of relaunching a detached
+    // Electron process with no managed renderer.
+    if (process.env['ELECTRON_RENDERER_URL']) {
+      this._win.reload()
+      return Promise.resolve()
+    }
+
+    app.relaunch()
+    app.quit()
     return Promise.resolve()
   }
 

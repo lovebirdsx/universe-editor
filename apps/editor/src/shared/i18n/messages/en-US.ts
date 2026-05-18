@@ -106,6 +106,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.openWithDefaultApplication.title': 'Open with Default Application',
   'action.previousEditor.title': 'Open Previous Editor',
   'action.rename.title': 'Rename…',
+  'action.restartEditor.title': 'Restart Editor',
   'action.replace.title': 'Replace',
   'action.revealActiveFileInExplorer.title': 'Reveal Active File in Explorer',
   'action.save.title': 'Save',

@@ -106,6 +106,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.openWithDefaultApplication.title': '使用默认应用打开',
   'action.previousEditor.title': '打开上一个编辑器',
   'action.rename.title': '重命名…',
+  'action.restartEditor.title': '重启编辑器',
   'action.replace.title': '替换',
   'action.revealActiveFileInExplorer.title': '在资源管理器中定位当前文件',
   'action.save.title': '保存',
