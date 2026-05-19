@@ -1,7 +1,8 @@
-import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
+import { defineConfig } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
+import type { Plugin } from 'vite'
 import { monacoNlsPlugin } from './build/plugins/monacoNlsPlugin'
 import {
   NLS_FILE_SUFFIX,
@@ -11,10 +12,22 @@ import {
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
 
 // platform/src uses `.js` suffix on relative imports (TS NodeNext convention).
-// vite/esbuild need this map to resolve them to the real `.ts` files in dev.
-const jsToTsExtensionAlias = {
-  '.js': ['.ts', '.tsx', '.js', '.jsx'],
-} as const
+// Vite 7 removed extensionAlias; use a plugin instead to remap .js → .ts.
+function jsToTsResolvePlugin(): Plugin {
+  return {
+    name: 'universe-editor:js-to-ts-resolve',
+    enforce: 'pre',
+    async resolveId(id, importer, options) {
+      if (importer && id.endsWith('.js') && !importer.includes('node_modules')) {
+        const tsId = id.slice(0, -3) + '.ts'
+        const resolved = await this.resolve(tsId, importer, { skipSelf: true, ...options })
+        if (resolved) return resolved
+        const tsxId = id.slice(0, -3) + '.tsx'
+        return await this.resolve(tsxId, importer, { skipSelf: true, ...options })
+      }
+    },
+  }
+}
 
 const decoratorTsconfigRaw = {
   compilerOptions: {
@@ -25,24 +38,23 @@ const decoratorTsconfigRaw = {
 
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin({ exclude: ['@universe-editor/platform'] })],
+    plugins: [jsToTsResolvePlugin()],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,
       },
-      extensionAlias: jsToTsExtensionAlias,
     },
     esbuild: {
       tsconfigRaw: decoratorTsconfigRaw,
     },
     build: {
+      externalizeDeps: { exclude: ['@universe-editor/platform'] },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
       },
     },
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
     build: {
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/preload/index.ts') },
@@ -56,14 +68,14 @@ export default defineConfig({
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
     cacheDir: resolve(__dirname, 'node_modules/.vite-editor'),
-    plugins: [monacoNlsPlugin(), react()],
+    plugins: [monacoNlsPlugin(), react(), jsToTsResolvePlugin()],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,
       },
-      extensionAlias: jsToTsExtensionAlias,
     },
     optimizeDeps: {
+      exclude: ['@universe-editor/platform'],
       include: [
         'monaco-editor',
         'allotment',
