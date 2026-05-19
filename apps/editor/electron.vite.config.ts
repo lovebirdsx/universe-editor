@@ -1,7 +1,12 @@
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import { resolve } from 'node:path'
+import { readFileSync } from 'node:fs'
 import { monacoNlsPlugin } from './build/plugins/monacoNlsPlugin'
+import {
+  NLS_FILE_SUFFIX,
+  patchNlsSource,
+} from './src/renderer/workbench/editor/monaco/monacoNlsPatch'
 
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
 
@@ -69,6 +74,17 @@ export default defineConfig({
       ],
       esbuildOptions: {
         tsconfigRaw: decoratorTsconfigRaw,
+        plugins: [
+          {
+            name: 'universe-editor:monaco-nls',
+            setup(build) {
+              build.onLoad({ filter: /nls\.js$/ }, (args) => {
+                if (!args.path.replace(/\\/g, '/').endsWith(NLS_FILE_SUFFIX)) return undefined
+                return { contents: patchNlsSource(readFileSync(args.path, 'utf-8')), loader: 'js' }
+              })
+            },
+          },
+        ],
       },
     },
     esbuild: {
