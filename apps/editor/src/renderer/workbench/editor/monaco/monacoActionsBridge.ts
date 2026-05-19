@@ -50,22 +50,6 @@ export interface CoreCommand {
   primary: number
 }
 
-const CtrlCmd = 2048
-const KC_KeyA = 31
-const KC_KeyY = 55
-const KC_KeyZ = 56
-
-const DEFAULT_CORE_COMMANDS: readonly CoreCommand[] = [
-  { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: CtrlCmd | KC_KeyZ },
-  { id: 'redo', label: 'Redo', nlsKey: 'redo', primary: CtrlCmd | KC_KeyY },
-  {
-    id: 'editor.action.selectAll',
-    label: 'Select All',
-    nlsKey: 'selectAll.label',
-    primary: CtrlCmd | KC_KeyA,
-  },
-]
-
 /**
  * Side-table: commandId → its first decoded default keybinding. KeybindingsEditor
  * reads from this to show the default key; FileEditor reads from this to figure
@@ -92,7 +76,10 @@ function makeHandler(commandId: string) {
     const groups = accessor.get(IEditorGroupsService)
     const activeInput = groups.activeGroup.activeEditor
     if (!(activeInput instanceof FileEditorInput)) return
-    FileEditorRegistry.get(activeInput)?.trigger('', commandId, {})
+    const editor = FileEditorRegistry.get(activeInput)
+    if (!editor) return
+
+    editor.trigger('', commandId, {})
   }
 }
 
@@ -113,7 +100,7 @@ export async function bridgeAllMonacoActions(): Promise<IDisposable> {
   const mod = (await import('monaco-editor/esm/vs/editor/browser/editorExtensions.js')) as {
     EditorExtensionsRegistry: IMonacoEditorExtensionsRegistry
   }
-  return bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, DEFAULT_CORE_COMMANDS)
+  return bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, [])
 }
 
 /**
