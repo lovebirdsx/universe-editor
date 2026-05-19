@@ -32,6 +32,10 @@ test.describe('@p0 workspace', () => {
   test('openFolder action reveals Explorer sidebar', async ({ workbench }) => {
     const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-'))
 
+    // WorkspaceExplorerRevealContribution is instantiated at AfterRestore phase.
+    // Wait for Restored so the contribution is listening before we fire the event.
+    await workbench.waitForRestored()
+
     // Fire-and-forget: the real OpenFolderAction shows a native dialog in
     // production. In tests we bypass it by using the probe directly.
     await workbench.openWorkspace(tmpDir)
