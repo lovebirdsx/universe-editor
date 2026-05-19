@@ -19,6 +19,7 @@ import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 
 interface ISerializedFileEditor {
   readonly resource: UriComponents
+  readonly dirtyContent?: string
 }
 
 export class FileEditorInput extends EditorInput {
@@ -30,6 +31,8 @@ export class FileEditorInput extends EditorInput {
   /** Last-known on-disk mtime in epoch ms. Used to detect external changes. */
   private _lastKnownMtime = 0
   private _language: string
+  /** Dirty content pending application on next resolve() (hot exit restore). */
+  private _pendingDirtyContent: string | undefined
 
   constructor(
     private readonly _resource: URI,
@@ -69,6 +72,11 @@ export class FileEditorInput extends EditorInput {
     this._backupContent = text
     this._resolved = true
     await this._refreshMtime()
+    if (this._pendingDirtyContent !== undefined) {
+      const dirty = this._pendingDirtyContent
+      this._pendingDirtyContent = undefined
+      return dirty
+    }
     return text
   }
 
@@ -155,7 +163,17 @@ export class FileEditorInput extends EditorInput {
   }
 
   override serialize(): ISerializedFileEditor {
-    return { resource: this._resource.toJSON() }
+    let dirtyContent: string | undefined
+    if (this.isDirty) {
+      dirtyContent =
+        MonacoModelRegistry.peek(this._resource)?.getValue() ?? this._pendingDirtyContent
+    } else if (this._pendingDirtyContent !== undefined) {
+      dirtyContent = this._pendingDirtyContent
+    }
+    return {
+      resource: this._resource.toJSON(),
+      ...(dirtyContent !== undefined && { dirtyContent }),
+    }
   }
 
   static deserialize(data: unknown, accessor?: ServicesAccessor): FileEditorInput | null {
@@ -164,6 +182,10 @@ export class FileEditorInput extends EditorInput {
     if (!accessor) return null
     const resource = URI.revive(d.resource) as URI
     const inst = accessor.get(IInstantiationService)
-    return inst.createInstance(FileEditorInput, resource)
+    const input = inst.createInstance(FileEditorInput, resource)
+    if (d.dirtyContent !== undefined) {
+      input._pendingDirtyContent = d.dirtyContent
+    }
+    return input
   }
 }

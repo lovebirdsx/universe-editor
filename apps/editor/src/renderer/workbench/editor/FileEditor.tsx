@@ -182,6 +182,12 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       // than overwriting from disk. If we just created it, its buffer == text.
       editorRef.current?.setModel(model)
 
+      // Initialise dirty state: covers hot-exit restore (pending dirty content)
+      // and shared models that are already dirty in another split.
+      if (model.getValue() !== fileInput.backupContent) {
+        fileInput.setDirty(true)
+      }
+
       // Restore previously saved viewState (cursor, selection, scroll).
       if (groupId !== undefined && editorRef.current) {
         const saved = EditorViewStateCache.load(groupId, resourceUri)

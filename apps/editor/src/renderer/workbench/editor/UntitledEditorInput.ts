@@ -14,12 +14,18 @@ export class UntitledEditorInput extends EditorInput {
 
   private readonly _resource: URI
   private readonly _name: string
+  private _content: string
 
-  constructor() {
+  constructor(restoredName?: string, restoredContent?: string) {
     super()
-    const n = UntitledEditorInput._counter++
-    this._name = `Untitled-${n}`
+    if (restoredName) {
+      this._name = restoredName
+    } else {
+      const n = UntitledEditorInput._counter++
+      this._name = `Untitled-${n}`
+    }
     this._resource = URI.from({ scheme: 'untitled', path: '/' + this._name })
+    this._content = restoredContent ?? ''
   }
 
   override get typeId(): string {
@@ -35,7 +41,7 @@ export class UntitledEditorInput extends EditorInput {
   }
 
   async resolve(): Promise<string> {
-    return ''
+    return this._content
   }
 
   get backupContent(): string {
@@ -61,5 +67,21 @@ export class UntitledEditorInput extends EditorInput {
   override async revert(): Promise<void> {
     MonacoModelRegistry.peek(this._resource)?.setValue('')
     this.setDirty(false)
+  }
+
+  override serialize(): { name: string; content: string } {
+    const model = MonacoModelRegistry.peek(this._resource)
+    return { name: this._name, content: model?.getValue() ?? this._content }
+  }
+
+  static deserialize(data: unknown): UntitledEditorInput | null {
+    const d = data as { name?: string; content?: string } | null
+    if (!d?.name) return null
+    const match = /^Untitled-(\d+)$/.exec(d.name)
+    if (match) {
+      const n = parseInt(match[1]!, 10)
+      if (n >= UntitledEditorInput._counter) UntitledEditorInput._counter = n + 1
+    }
+    return new UntitledEditorInput(d.name, d.content ?? '')
   }
 }

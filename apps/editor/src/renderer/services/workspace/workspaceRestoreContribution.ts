@@ -30,6 +30,7 @@ interface PersistedWorkspaceState {
 export class WorkspaceRestoreContribution extends Disposable implements IWorkbenchContribution {
   private _persistTimer: ReturnType<typeof setTimeout> | null = null
   private readonly _groupListeners = new Map<number, IDisposable>()
+  private readonly _editorListeners = new Map<string, IDisposable>()
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
@@ -63,7 +64,10 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
 
   private _attachGroup(group: IEditorGroup): void {
     if (this._groupListeners.has(group.id)) return
-    const sub1 = group.onDidChangeModel(() => this._schedulePersist())
+    const sub1 = group.onDidChangeModel(() => {
+      this._syncEditorListeners()
+      this._schedulePersist()
+    })
     const sub2 = group.onDidActiveEditorChange(() => this._schedulePersist())
     this._groupListeners.set(group.id, {
       dispose: () => {
@@ -71,6 +75,28 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
         sub2.dispose()
       },
     })
+    this._syncEditorListeners()
+  }
+
+  private _syncEditorListeners(): void {
+    const current = new Set<string>()
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        current.add(editor.id)
+        if (!this._editorListeners.has(editor.id)) {
+          this._editorListeners.set(
+            editor.id,
+            editor.onDidChangeDirty(() => this._schedulePersist()),
+          )
+        }
+      }
+    }
+    for (const [id, sub] of this._editorListeners) {
+      if (!current.has(id)) {
+        sub.dispose()
+        this._editorListeners.delete(id)
+      }
+    }
   }
 
   private async _restore(): Promise<void> {
@@ -108,6 +134,8 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
     if (this._persistTimer !== null) clearTimeout(this._persistTimer)
     for (const sub of this._groupListeners.values()) sub.dispose()
     this._groupListeners.clear()
+    for (const sub of this._editorListeners.values()) sub.dispose()
+    this._editorListeners.clear()
     super.dispose()
   }
 }

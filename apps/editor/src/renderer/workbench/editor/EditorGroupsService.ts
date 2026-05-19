@@ -348,7 +348,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
 
   toJSON(): ISerializedEditorGroupsState {
     const grid = this._grid.serialize((group) => {
-      const persistable = group.editors.filter((e) => e.typeId !== 'untitled')
+      const persistable = group.editors
       const activeIdx = group.activeEditor ? persistable.indexOf(group.activeEditor) : -1
       const uris = persistable.map((e) => e.resource?.toString() ?? '').filter(Boolean)
       const viewStates = EditorViewStateCache.snapshotGroup(group.id, uris)

@@ -56,12 +56,11 @@ export class BuiltInEditorProvidersContribution
         deserialize: (data, accessor) => FileEditorInput.deserialize(data, accessor),
       }),
     )
-    // UntitledEditorInput is session-only — toJSON() filters them out, so no
-    // deserialize hook is needed.
     this._register(
       EditorRegistry.registerEditorProvider({
         typeId: UntitledEditorInput.TYPE_ID,
         componentKey: 'file',
+        deserialize: (data) => UntitledEditorInput.deserialize(data),
       }),
     )
   }

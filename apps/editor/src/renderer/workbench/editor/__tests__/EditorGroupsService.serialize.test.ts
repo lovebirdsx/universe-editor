@@ -177,7 +177,7 @@ describe('EditorGroupsService serialization', () => {
     dst.dispose()
   })
 
-  it('toJSON filters out untitled editors and recomputes activeIndex', () => {
+  it('toJSON includes untitled editors and serialises their content', () => {
     const svc = new EditorGroupsService()
     const a = new FakeEditorInput()
     const u = new UntitledEditorInput()
@@ -190,16 +190,18 @@ describe('EditorGroupsService serialization', () => {
     if (json.grid.root.type === 'branch') {
       const leaf = json.grid.root.children?.[0]
       if (leaf?.type === 'leaf' && leaf.data) {
-        expect(leaf.data.editors).toHaveLength(2)
-        expect(leaf.data.editors.every((e) => e.typeId !== 'untitled')).toBe(true)
-        // a is at 0, b is at 1 in the persisted list; active was b.
-        expect(leaf.data.activeIndex).toBe(1)
+        // All three editors should be serialised (UntitledEditorInput now has serialize())
+        expect(leaf.data.editors).toHaveLength(3)
+        const untitledEntry = leaf.data.editors.find((e) => e.typeId === 'untitled')
+        expect(untitledEntry).toBeDefined()
+        // b is active — it is at index 2 in the full list
+        expect(leaf.data.activeIndex).toBe(2)
       }
     }
     svc.dispose()
   })
 
-  it('toJSON falls back to activeIndex 0 when only untitled is active', () => {
+  it('toJSON includes untitled editor as active when it is the active editor', () => {
     const svc = new EditorGroupsService()
     const a = new FakeEditorInput()
     const u = new UntitledEditorInput()
@@ -210,9 +212,11 @@ describe('EditorGroupsService serialization', () => {
     if (json.grid.root.type === 'branch') {
       const leaf = json.grid.root.children?.[0]
       if (leaf?.type === 'leaf' && leaf.data) {
-        expect(leaf.data.editors).toHaveLength(1)
-        expect(leaf.data.editors[0]?.typeId).toBe(FakeEditorInput.TYPE_ID)
-        expect(leaf.data.activeIndex).toBe(0)
+        // Both editors are now persisted
+        expect(leaf.data.editors).toHaveLength(2)
+        // u is at index 1, and it is the active editor
+        expect(leaf.data.activeIndex).toBe(1)
+        expect(leaf.data.editors[1]?.typeId).toBe('untitled')
       }
     }
     svc.dispose()
