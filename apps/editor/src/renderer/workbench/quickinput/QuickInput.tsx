@@ -76,13 +76,22 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
     [state, onClose],
   )
 
+  const PAGE_SIZE = 8
+
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    const len = sortedFiltered.length
     if (e.key === 'ArrowDown') {
       e.preventDefault()
-      setFocusedIdx((i) => Math.min(i + 1, sortedFiltered.length - 1))
+      setFocusedIdx((i) => (len === 0 ? 0 : (i + 1) % len))
     } else if (e.key === 'ArrowUp') {
       e.preventDefault()
-      setFocusedIdx((i) => Math.max(i - 1, 0))
+      setFocusedIdx((i) => (len === 0 ? 0 : (i - 1 + len) % len))
+    } else if (e.key === 'PageDown') {
+      e.preventDefault()
+      setFocusedIdx((i) => (len === 0 ? 0 : Math.min(i + PAGE_SIZE, len - 1)))
+    } else if (e.key === 'PageUp') {
+      e.preventDefault()
+      setFocusedIdx((i) => (len === 0 ? 0 : Math.max(i - PAGE_SIZE, 0)))
     } else if (e.key === 'Enter') {
       const item = sortedFiltered[focusedIdx]
       if (item) accept([item])
@@ -116,7 +125,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
               role="option"
               aria-selected={idx === focusedIdx}
               onClick={() => accept([item])}
-              onMouseEnter={() => setFocusedIdx(idx)}
+              onMouseMove={() => setFocusedIdx(idx)}
             >
               {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
               <span className={styles['itemLabel']}>{item.label}</span>
