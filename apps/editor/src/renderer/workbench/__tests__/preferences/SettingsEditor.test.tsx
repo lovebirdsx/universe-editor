@@ -5,27 +5,84 @@ import {
   ConfigurationService,
   ConfigurationTarget,
   IConfigurationService,
+  INotificationService,
+  IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   type IDisposable,
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
 import { SettingsEditor } from '../../preferences/SettingsEditor.js'
+import { SettingsEditorInput } from '../../preferences/SettingsEditorInput.js'
 import { SETTINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../../preferences/preferencesFocus.js'
 
-function mount() {
+function makeWorkspaceStub(open = false) {
+  const listeners: Array<(w: null) => void> = []
+  return {
+    _serviceBrand: undefined as undefined,
+    current: open ? { folder: { fsPath: '/tmp' } as never, name: 'test' } : null,
+    onDidChangeWorkspace: (cb: (w: null) => void) => {
+      listeners.push(cb)
+      return { dispose: () => void 0 }
+    },
+    recent: [],
+    onDidChangeRecent: () => ({ dispose: () => void 0 }),
+    openFolder: async () => void 0,
+    closeFolder: async () => void 0,
+    clearRecent: async () => void 0,
+  }
+}
+
+function makeNotificationStub() {
+  const calls: Array<{ severity: number; message: string }> = []
+  return {
+    _serviceBrand: undefined as undefined,
+    notifications: { read: () => [], onChange: () => ({ dispose: () => void 0 }) } as never,
+    unreadCount: { read: () => 0, onChange: () => ({ dispose: () => void 0 }) } as never,
+    centerVisible: { read: () => false, onChange: () => ({ dispose: () => void 0 }) } as never,
+    notify: (opts: { severity: number; message: string }) => {
+      calls.push(opts)
+      return {
+        id: 'x',
+        progress: { report: () => void 0, done: () => void 0 },
+        dispose: () => void 0,
+        updateMessage: () => void 0,
+        updateSeverity: () => void 0,
+      }
+    },
+    prompt: async () => void 0,
+    status: () => ({
+      id: 'x',
+      progress: { report: () => void 0, done: () => void 0 },
+      dispose: () => void 0,
+      updateMessage: () => void 0,
+      updateSeverity: () => void 0,
+    }),
+    dismiss: () => void 0,
+    clearAll: () => void 0,
+    toggleCenter: () => void 0,
+    _calls: calls,
+  }
+}
+
+function mount(opts: { workspaceOpen?: boolean } = {}) {
   const config = new ConfigurationService()
+  const workspace = makeWorkspaceStub(opts.workspaceOpen ?? false)
+  const notif = makeNotificationStub()
   const services = new ServiceCollection()
   services.set(IConfigurationService, config)
+  services.set(IWorkspaceService, workspace as never)
+  services.set(INotificationService, notif as never)
   const instantiation = new InstantiationService(services)
+  const input = new SettingsEditorInput()
 
   const utils = render(
     <ServicesContext.Provider value={instantiation}>
-      <SettingsEditor />
+      <SettingsEditor input={input} />
     </ServicesContext.Provider>,
   )
 
-  return { ...utils, config }
+  return { ...utils, config, workspace, notif, input }
 }
 
 describe('SettingsEditor', () => {

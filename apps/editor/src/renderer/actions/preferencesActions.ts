@@ -30,6 +30,7 @@ import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
 import {
   dispatchKeybindingsEditorFocusSearch,
   dispatchSettingsEditorFocusSearch,
+  dispatchSettingsEditorSwitchTarget,
 } from '../workbench/preferences/preferencesFocus.js'
 
 const SETTINGS_JSON_TEMPLATE = `// User settings — edit and save to apply immediately.
@@ -250,5 +251,54 @@ export class ConfigureDisplayLanguageAction extends Action2 {
       primaryButton: localize('common.ok', 'OK'),
       cancelButton: localize('common.close', 'Close'),
     })
+  }
+}
+
+export class OpenWorkspaceSettingsAction extends Action2 {
+  static readonly ID = 'workbench.action.openWorkspaceSettings'
+  constructor() {
+    super({
+      id: OpenWorkspaceSettingsAction.ID,
+      title: localize('action.openWorkspaceSettings.title', 'Open Workspace Settings'),
+      category: localize('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const groups = accessor.get(IEditorGroupsService)
+
+    // If Settings editor already open, activate it and switch to Workspace tab.
+    for (const group of groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof SettingsEditorInput) {
+          groups.activateGroup(group)
+          group.setActive(editor)
+          dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
+          return
+        }
+      }
+    }
+
+    const input = new SettingsEditorInput()
+    input.switchTarget(ConfigurationTarget.Project)
+    groups.activeGroup.openEditor(input)
+    dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
+  }
+}
+
+export class OpenWorkspaceSettingsJsonAction extends Action2 {
+  static readonly ID = 'workbench.action.openWorkspaceSettingsJson'
+  constructor() {
+    super({
+      id: OpenWorkspaceSettingsJsonAction.ID,
+      title: localize('action.openWorkspaceSettingsJson.title', 'Open Workspace Settings (JSON)'),
+      category: localize('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void openUserDataFile(accessor, UserDataFile.ProjectSettings, SETTINGS_JSON_TEMPLATE)
   }
 }

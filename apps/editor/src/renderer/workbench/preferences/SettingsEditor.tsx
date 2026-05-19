@@ -9,22 +9,46 @@ import {
   ConfigurationRegistry,
   ConfigurationTarget,
   IConfigurationService,
+  INotificationService,
+  IWorkspaceService,
+  Severity,
   localize,
   type IConfigurationNode,
   type IConfigurationPropertySchema,
+  type IEditorInput,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import { SETTINGS_EDITOR_FOCUS_SEARCH_EVENT } from './preferencesFocus.js'
+import {
+  SETTINGS_EDITOR_FOCUS_SEARCH_EVENT,
+  SETTINGS_EDITOR_SWITCH_TARGET_EVENT,
+} from './preferencesFocus.js'
+import { SettingsEditorInput } from './SettingsEditorInput.js'
 import styles from './SettingsEditor.module.css'
+
+function originLabel(origin: ConfigurationTarget | undefined): string {
+  switch (origin) {
+    case ConfigurationTarget.Project:
+      return localize('settings.origin.workspace', 'Workspace')
+    case ConfigurationTarget.User:
+      return localize('settings.origin.user', 'User')
+    case ConfigurationTarget.Memory:
+      return localize('settings.origin.memory', 'Runtime')
+    case ConfigurationTarget.Default:
+      return localize('settings.origin.default', 'Default')
+    default:
+      return localize('settings.origin.default', 'Default')
+  }
+}
 
 interface RowProps {
   configKey: string
   schema: IConfigurationPropertySchema
   value: unknown
+  origin: ConfigurationTarget | undefined
   onChange: (value: unknown) => void
 }
 
-function PropertyRow({ configKey, schema, value, onChange }: RowProps) {
+function PropertyRow({ configKey, schema, value, origin, onChange }: RowProps) {
   let control: JSX.Element
 
   if (Array.isArray(schema.enum) && schema.enum.length > 0) {
@@ -84,7 +108,10 @@ function PropertyRow({ configKey, schema, value, onChange }: RowProps) {
   return (
     <div className={styles['row']} data-key={configKey}>
       <div className={styles['rowMeta']}>
-        <div className={styles['rowKey']}>{configKey}</div>
+        <div className={styles['rowKey']}>
+          {configKey}
+          <span className={styles['originBadge']}>{originLabel(origin)}</span>
+        </div>
         {schema.description ? <div className={styles['rowDesc']}>{schema.description}</div> : null}
       </div>
       <div className={styles['rowControl']}>{control}</div>
@@ -92,8 +119,15 @@ function PropertyRow({ configKey, schema, value, onChange }: RowProps) {
   )
 }
 
-export function SettingsEditor() {
+export function SettingsEditor({ input }: { input: IEditorInput }) {
   const config = useService(IConfigurationService)
+  const workspace = useService(IWorkspaceService)
+  const notifications = useService(INotificationService)
+
+  const [activeTarget, setActiveTarget] = useState<
+    ConfigurationTarget.User | ConfigurationTarget.Project
+  >(() => (input as SettingsEditorInput).target ?? ConfigurationTarget.User)
+  const [hasWorkspace, setHasWorkspace] = useState(() => workspace.current !== null)
   const [query, setQuery] = useState('')
   const [, bump] = useReducer((n: number) => n + 1, 0)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
@@ -109,6 +143,31 @@ export function SettingsEditor() {
     return () => document.removeEventListener(SETTINGS_EDITOR_FOCUS_SEARCH_EVENT, focusSearch)
   }, [])
 
+  // Track workspace open/close to enable/disable the Workspace tab.
+  useEffect(() => {
+    const d = workspace.onDidChangeWorkspace((w) => {
+      const open = w !== null
+      setHasWorkspace(open)
+      // If workspace closes while Workspace tab is active, fall back to User.
+      if (!open) setActiveTarget(ConfigurationTarget.User)
+    })
+    return () => d.dispose()
+  }, [workspace])
+
+  // Listen for external switch-target dispatches (e.g. from OpenWorkspaceSettingsAction).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const t = (e as CustomEvent<number>).detail as
+        | ConfigurationTarget.User
+        | ConfigurationTarget.Project
+      if (t === ConfigurationTarget.Project && !workspace.current) return
+      setActiveTarget(t)
+      ;(input as SettingsEditorInput).switchTarget(t)
+    }
+    document.addEventListener(SETTINGS_EDITOR_SWITCH_TARGET_EVENT, handler)
+    return () => document.removeEventListener(SETTINGS_EDITOR_SWITCH_TARGET_EVENT, handler)
+  }, [input, workspace])
+
   // Re-render whenever schema registry changes or any configuration value changes.
   useEffect(() => {
     const d1 = ConfigurationRegistry.onDidRegisterConfiguration(() => bump())
@@ -118,6 +177,18 @@ export function SettingsEditor() {
       d2.dispose()
     }
   }, [config])
+
+  function handleSwitchTarget(t: ConfigurationTarget.User | ConfigurationTarget.Project): void {
+    if (t === ConfigurationTarget.Project && !hasWorkspace) {
+      notifications.notify({
+        message: localize('settings.noWorkspace', 'Open a folder to edit workspace settings.'),
+        severity: Severity.Info,
+      })
+      return
+    }
+    setActiveTarget(t)
+    ;(input as SettingsEditorInput).switchTarget(t)
+  }
 
   const nodes = ConfigurationRegistry.getConfigurationNodes()
   const normalisedQuery = query.trim().toLowerCase()
@@ -143,6 +214,22 @@ export function SettingsEditor() {
   return (
     <div className={styles['root']}>
       <div className={styles['header']}>
+        <div className={styles['tabs']}>
+          <button
+            className={`${styles['tab']} ${activeTarget === ConfigurationTarget.User ? styles['tabActive'] : ''}`}
+            aria-selected={activeTarget === ConfigurationTarget.User}
+            onClick={() => handleSwitchTarget(ConfigurationTarget.User)}
+          >
+            {localize('settings.tab.user', 'User')}
+          </button>
+          <button
+            className={`${styles['tab']} ${!hasWorkspace ? styles['tabDisabled'] : ''} ${activeTarget === ConfigurationTarget.Project ? styles['tabActive'] : ''}`}
+            aria-selected={activeTarget === ConfigurationTarget.Project}
+            onClick={() => handleSwitchTarget(ConfigurationTarget.Project)}
+          >
+            {localize('settings.tab.workspace', 'Workspace')}
+          </button>
+        </div>
         <input
           ref={searchInputRef}
           className={styles['search']}
@@ -169,7 +256,8 @@ export function SettingsEditor() {
                   configKey={key}
                   schema={schema}
                   value={config.get(key)}
-                  onChange={(v) => config.update(key, v, ConfigurationTarget.User)}
+                  origin={config.getValueOrigin(key)}
+                  onChange={(v) => config.update(key, v, activeTarget)}
                 />
               ))}
             </section>

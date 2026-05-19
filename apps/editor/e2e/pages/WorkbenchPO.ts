@@ -66,4 +66,9 @@ export class WorkbenchPO {
   async getCurrentWorkspacePath(): Promise<string | undefined> {
     return this.page.evaluate(() => window.__E2E__!.getCurrentWorkspacePath())
   }
+
+  /** Return the active editor's resource URI string, or undefined if none. */
+  async getActiveEditorUri(): Promise<string | undefined> {
+    return this.page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+  }
 }

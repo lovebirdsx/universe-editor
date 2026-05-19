@@ -52,6 +52,12 @@ export interface IConfigurationService {
    */
   getLayerSnapshot(target: ConfigurationTarget): Readonly<Record<string, unknown>>
 
+  /**
+   * Return the highest-priority layer that owns the given key.
+   * Returns undefined if the key is not present in any layer.
+   */
+  getValueOrigin(key: string): ConfigurationTarget | undefined
+
   /** Fired whenever a configuration value changes. */
   readonly onDidChangeConfiguration: Event<IConfigurationChangeEvent>
 }
@@ -166,5 +172,15 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
       throw new Error(`Unknown configuration target: ${target}`)
     }
     return { ...layer }
+  }
+
+  getValueOrigin(key: string): ConfigurationTarget | undefined {
+    for (let i = this._layers.length - 1; i >= 0; i--) {
+      const layer = this._layers[i]
+      if (layer && Object.prototype.hasOwnProperty.call(layer, key)) {
+        return i as ConfigurationTarget
+      }
+    }
+    return undefined
   }
 }

@@ -37,6 +37,9 @@ export class UserSettingsSync extends Disposable {
   /** Last seen User layer snapshot. Used to detect what changed for setValue calls. */
   private _lastUserSnapshot: Record<string, unknown> = {}
 
+  /** Last seen Project layer snapshot. */
+  private _lastProjectSnapshot: Record<string, unknown> = {}
+
   constructor(
     @IConfigurationService private readonly _config: IConfigurationService,
     @IStorageService private readonly _storage: IStorageService,
@@ -60,13 +63,13 @@ export class UserSettingsSync extends Disposable {
       }),
     )
 
-    // Programmatic update() → propagate the changed keys to settings.json so
-    // user-visible JSON stays in sync. Only the User layer is mirrored; the
-    // Project layer is owned by the project file directly.
+    // Programmatic update() → propagate the changed keys to settings files so
+    // user-visible JSON stays in sync. Both User and Project layers are mirrored.
     this._register(
       this._config.onDidChangeConfiguration(() => {
         if (this._suspendWriteBack) return
-        void this._syncUserLayerToFile()
+        void this._syncLayerToFile(ConfigurationTarget.User, UserDataFile.Settings)
+        void this._syncLayerToFile(ConfigurationTarget.Project, UserDataFile.ProjectSettings)
       }),
     )
   }
@@ -92,11 +95,13 @@ export class UserSettingsSync extends Disposable {
     } finally {
       this._suspendWriteBack = false
     }
+    this._lastProjectSnapshot = { ...data }
   }
 
-  private async _syncUserLayerToFile(): Promise<void> {
-    const snapshot = this._config.getLayerSnapshot(ConfigurationTarget.User)
-    const prev = this._lastUserSnapshot
+  private async _syncLayerToFile(target: ConfigurationTarget, file: UserDataFile): Promise<void> {
+    const prev =
+      target === ConfigurationTarget.User ? this._lastUserSnapshot : this._lastProjectSnapshot
+    const snapshot = this._config.getLayerSnapshot(target)
 
     const allKeys = new Set([...Object.keys(prev), ...Object.keys(snapshot)])
     const changes: Array<{ key: string; value: unknown | undefined }> = []
@@ -108,11 +113,15 @@ export class UserSettingsSync extends Disposable {
     }
     if (changes.length === 0) return
 
-    // Apply changes through setValue so JSONC comments / formatting survive.
     for (const { key, value } of changes) {
-      await this._files.setValue(UserDataFile.Settings, [key], value)
+      await this._files.setValue(file, [key], value)
     }
-    this._lastUserSnapshot = { ...snapshot }
+
+    if (target === ConfigurationTarget.User) {
+      this._lastUserSnapshot = { ...snapshot }
+    } else {
+      this._lastProjectSnapshot = { ...snapshot }
+    }
   }
 
   private async _migrateLegacyUserSettings(): Promise<void> {

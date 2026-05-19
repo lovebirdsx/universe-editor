@@ -227,3 +227,37 @@ describe('ConfigurationService', () => {
     svc.dispose()
   })
 })
+
+describe('ConfigurationService.getValueOrigin', () => {
+  it('returns undefined when key is not in any layer', () => {
+    const svc = new ConfigurationService()
+    expect(svc.getValueOrigin('no.such.key')).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('returns Default when key only has a schema default', () => {
+    const d = ConfigurationRegistry.registerConfiguration({
+      id: 'origin-test',
+      properties: { 'origin-test.x': { type: 'number', default: 5 } },
+    })
+    const svc = new ConfigurationService()
+    expect(svc.getValueOrigin('origin-test.x')).toBe(ConfigurationTarget.Default)
+    d.dispose()
+    svc.dispose()
+  })
+
+  it('returns User when key is set in User layer', () => {
+    const svc = new ConfigurationService()
+    svc.update('my.key', 1, ConfigurationTarget.User)
+    expect(svc.getValueOrigin('my.key')).toBe(ConfigurationTarget.User)
+    svc.dispose()
+  })
+
+  it('returns Project when key is set in both User and Project layers (Project wins)', () => {
+    const svc = new ConfigurationService()
+    svc.update('my.key', 'user', ConfigurationTarget.User)
+    svc.update('my.key', 'project', ConfigurationTarget.Project)
+    expect(svc.getValueOrigin('my.key')).toBe(ConfigurationTarget.Project)
+    svc.dispose()
+  })
+})
