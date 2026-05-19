@@ -22,6 +22,7 @@ import { WorkspaceExplorerRevealContribution } from '../services/workspace/works
 import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
+import { ThemeContribution } from './ThemeContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -61,6 +62,12 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.settings',
   SettingsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.theme',
+  ThemeContribution,
   WorkbenchPhase.BlockStartup,
 )
 
@@ -145,4 +152,5 @@ export {
   ExplorerAutoRevealContribution,
   RecentFilesContribution,
   JsonSchemaBridgeContribution,
+  ThemeContribution,
 }

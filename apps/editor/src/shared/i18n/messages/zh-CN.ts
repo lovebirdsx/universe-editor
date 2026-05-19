@@ -38,12 +38,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.enum.auto': '跟随系统语言',
   'settings.enum.dark': '深色',
   'settings.enum.en-US': 'English',
-  'settings.enum.left': '左侧',
   'settings.enum.light': '浅色',
   'settings.enum.off': '关闭',
   'settings.enum.afterDelay': '延迟后',
   'settings.enum.onFocusChange': '失焦时',
-  'settings.enum.right': '右侧',
   'settings.enum.wordWrapOff': '关闭',
   'settings.enum.wordWrapOn': '开启',
   'settings.enum.zh-CN': '简体中文',
@@ -161,5 +159,4 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '延迟后自动保存的等待时长（毫秒），当 autoSave 设为 afterDelay 时生效。',
   'settings.readonly': '在表单视图中不可编辑',
   'settings.workbench.colorTheme.description': '工作台颜色主题。',
-  'settings.workbench.sideBarLocation.description': '侧边栏位置。',
 } as const

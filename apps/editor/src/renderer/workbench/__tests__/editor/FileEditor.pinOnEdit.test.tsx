@@ -8,23 +8,35 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+const monacoMockState = vi.hoisted(() => ({
+  createOptions: undefined as Record<string, unknown> | undefined,
+  updateOptionsCalls: [] as Record<string, unknown>[],
+}))
+
 vi.mock('../../editor/monaco/MonacoLoader.js', () => {
   const monacoStub = {
     editor: {
-      create: () => ({
-        setModel: () => {},
-        dispose: () => {},
-        getModel: () => null,
-        addCommand: () => null,
-        focus: () => {},
-        saveViewState: () => null,
-        restoreViewState: () => {},
-        onDidChangeCursorPosition: () => ({ dispose: () => {} }),
-        onDidScrollChange: () => ({ dispose: () => {} }),
-        onDidFocusEditorWidget: () => ({ dispose: () => {} }),
-        onDidBlurEditorWidget: () => ({ dispose: () => {} }),
-        getContainerDomNode: () => document.createElement('div'),
-      }),
+      create: (_container: unknown, options: Record<string, unknown>) => {
+        monacoMockState.createOptions = options
+        return {
+          setModel: () => {},
+          dispose: () => {},
+          getModel: () => null,
+          updateOptions: (options: Record<string, unknown>) => {
+            monacoMockState.updateOptionsCalls.push(options)
+          },
+          addCommand: () => null,
+          focus: () => {},
+          saveViewState: () => null,
+          restoreViewState: () => {},
+          onDidChangeCursorPosition: () => ({ dispose: () => {} }),
+          onDidScrollChange: () => ({ dispose: () => {} }),
+          onDidFocusEditorWidget: () => ({ dispose: () => {} }),
+          onDidBlurEditorWidget: () => ({ dispose: () => {} }),
+          getContainerDomNode: () => document.createElement('div'),
+        }
+      },
+      setTheme: () => {},
     },
     KeyCode: { F1: 0 },
   }
@@ -67,8 +79,10 @@ vi.mock('../../editor/FileEditorRegistry.js', () => {
 import { cleanup, render } from '@testing-library/react'
 import {
   ContextKeyService,
+  ConfigurationTarget,
   EditorInput,
   ICommandService,
+  type IConfigurationChangeEvent,
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
@@ -129,9 +143,52 @@ class FakeGroupsService {
   }
 }
 
+class FakeConfigurationService {
+  declare readonly _serviceBrand: undefined
+
+  private readonly _listeners = new Set<(e: IConfigurationChangeEvent) => void>()
+
+  constructor(private readonly _values: Record<string, unknown> = {}) {}
+
+  get<T>(key: string, defaultValue?: T): T | undefined {
+    return Object.prototype.hasOwnProperty.call(this._values, key)
+      ? (this._values[key] as T)
+      : defaultValue
+  }
+
+  update(key: string, value: unknown, _target?: ConfigurationTarget): void {
+    this._values[key] = value
+    this.fire(key)
+  }
+
+  loadLayer(_target: ConfigurationTarget, data: Record<string, unknown>): void {
+    Object.assign(this._values, data)
+    this.fire(...Object.keys(data))
+  }
+
+  getLayerSnapshot(): Readonly<Record<string, unknown>> {
+    return { ...this._values }
+  }
+
+  onDidChangeConfiguration = (listener: (e: IConfigurationChangeEvent) => void) => {
+    this._listeners.add(listener)
+    return { dispose: () => this._listeners.delete(listener) }
+  }
+
+  fire(...keys: string[]): void {
+    for (const listener of this._listeners) {
+      listener({
+        affectsConfiguration: (key) => keys.includes(key),
+      })
+    }
+  }
+}
+
 afterEach(() => {
   cleanup()
   onDidChangeContentCb = undefined
+  monacoMockState.createOptions = undefined
+  monacoMockState.updateOptionsCalls = []
 })
 
 describe('FileEditor — auto-pin on first edit', () => {
@@ -142,14 +199,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       _serviceBrand: undefined,
       executeCommand: async () => undefined,
     } as never)
-    services.set(IConfigurationService, {
-      _serviceBrand: undefined,
-      get: () => true,
-      update: () => {},
-      onDidChangeConfiguration: () => ({ dispose: () => {} }),
-      loadLayer: () => {},
-      getLayerSnapshot: () => ({}),
-    } as never)
+    services.set(IConfigurationService, new FakeConfigurationService() as never)
     services.set(IContextKeyService, new ContextKeyService())
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
@@ -170,5 +220,74 @@ describe('FileEditor — auto-pin on first edit', () => {
     onDidChangeContentCb!()
     expect(group.pinCalls).toContain(input)
     expect(group.previewEditor).toBeUndefined()
+  })
+
+  it('passes editor font size and word wrap settings to Monaco on create', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs())
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: async () => undefined,
+    } as never)
+    services.set(
+      IConfigurationService,
+      new FakeConfigurationService({
+        'editor.fontSize': 20,
+        'editor.wordWrap': true,
+        'workbench.colorTheme': 'light',
+      }) as never,
+    )
+    services.set(IContextKeyService, new ContextKeyService())
+    const inst = new InstantiationService(services)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
+    services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <FileEditor input={input} />
+      </ServicesContext.Provider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(monacoMockState.createOptions).toBeDefined()
+    })
+    expect(monacoMockState.createOptions).toMatchObject({
+      fontSize: 20,
+      wordWrap: 'on',
+      theme: 'vs',
+    })
+  })
+
+  it('updates live Monaco options when editor settings change', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs())
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: async () => undefined,
+    } as never)
+    const config = new FakeConfigurationService({
+      'editor.fontSize': 14,
+      'editor.wordWrap': false,
+    })
+    services.set(IConfigurationService, config as never)
+    services.set(IContextKeyService, new ContextKeyService())
+    const inst = new InstantiationService(services)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
+    services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <FileEditor input={input} />
+      </ServicesContext.Provider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(monacoMockState.createOptions).toBeDefined()
+    })
+    config.update('editor.fontSize', 18, ConfigurationTarget.User)
+    config.update('editor.wordWrap', true, ConfigurationTarget.User)
+
+    expect(monacoMockState.updateOptionsCalls).toContainEqual({ fontSize: 18 })
+    expect(monacoMockState.updateOptionsCalls).toContainEqual({ wordWrap: 'on' })
   })
 })

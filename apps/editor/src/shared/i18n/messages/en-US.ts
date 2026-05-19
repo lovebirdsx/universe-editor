@@ -38,12 +38,10 @@ export const EN_US_MESSAGES: MessageMap = {
   'settings.enum.auto': 'Use System Language',
   'settings.enum.dark': 'Dark',
   'settings.enum.en-US': 'English',
-  'settings.enum.left': 'Left',
   'settings.enum.light': 'Light',
   'settings.enum.off': 'Off',
   'settings.enum.afterDelay': 'After Delay',
   'settings.enum.onFocusChange': 'On Focus Change',
-  'settings.enum.right': 'Right',
   'settings.enum.wordWrapOff': 'Off',
   'settings.enum.wordWrapOn': 'On',
   'settings.enum.zh-CN': 'Simplified Chinese',
@@ -165,5 +163,4 @@ export const EN_US_MESSAGES: MessageMap = {
     'Auto save delay in milliseconds (when autoSave=afterDelay).',
   'settings.readonly': 'Not editable in form view',
   'settings.workbench.colorTheme.description': 'Workbench color theme.',
-  'settings.workbench.sideBarLocation.description': 'Side bar location.',
 } as const

@@ -50,19 +50,6 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Workbench color theme.',
             ),
           },
-          'workbench.sideBar.location': {
-            type: 'string',
-            default: 'left',
-            enum: ['left', 'right'],
-            enumItemLabels: {
-              left: localize('settings.enum.left', 'Left'),
-              right: localize('settings.enum.right', 'Right'),
-            },
-            description: localize(
-              'settings.workbench.sideBarLocation.description',
-              'Side bar location.',
-            ),
-          },
         },
       }),
     )

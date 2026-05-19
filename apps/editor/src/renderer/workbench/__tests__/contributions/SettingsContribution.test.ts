@@ -25,7 +25,6 @@ describe('SettingsContribution', () => {
     expect(ConfigurationRegistry.getDefaultValue('editor.wordWrap')).toBe(false)
     expect(ConfigurationRegistry.getDefaultValue('editor.minimap.enabled')).toBe(true)
     expect(ConfigurationRegistry.getDefaultValue('workbench.colorTheme')).toBe('dark')
-    expect(ConfigurationRegistry.getDefaultValue('workbench.sideBar.location')).toBe('left')
     expect(ConfigurationRegistry.getDefaultValue('files.autoSave')).toBe('off')
     expect(ConfigurationRegistry.getDefaultValue('files.autoSaveDelay')).toBe(1000)
   })

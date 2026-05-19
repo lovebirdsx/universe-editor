@@ -32,6 +32,19 @@ import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { IUserKeybindingsService } from '../keybindings/UserKeybindingsService.js'
 import styles from './FileEditor.module.css'
 
+function getEditorFontSize(configService: IConfigurationService): number {
+  const fontSize = configService.get<number>('editor.fontSize')
+  return typeof fontSize === 'number' ? fontSize : 14
+}
+
+function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
+  return configService.get<boolean>('editor.wordWrap') === true ? 'on' : 'off'
+}
+
+function getEditorTheme(configService: IConfigurationService): 'vs' | 'vs-dark' {
+  return configService.get<string>('workbench.colorTheme') === 'light' ? 'vs' : 'vs-dark'
+}
+
 // Canonical key-string normalization that matches KeybindingsRegistry's
 // internal form (lexicographic modifier order: alt → ctrl → meta → shift)
 // and the form `decodeMonacoKeybinding` emits.
@@ -83,9 +96,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     if (!monacoNs || !containerRef.current) return
     const minimapEnabled = configService.get<boolean>('editor.minimap.enabled') ?? true
     const ed = monacoNs.editor.create(containerRef.current, {
-      theme: 'vs-dark',
+      theme: getEditorTheme(configService),
       automaticLayout: true,
-      fontSize: 13,
+      fontSize: getEditorFontSize(configService),
+      wordWrap: getEditorWordWrap(configService),
       minimap: { enabled: minimapEnabled },
       scrollBeyondLastLine: false,
       tabSize: 2,
@@ -146,10 +160,18 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // Apply config changes to the live editor instance.
   useEffect(() => {
     const disposable = configService.onDidChangeConfiguration((e) => {
+      const options: monaco.editor.IEditorOptions = {}
+      if (e.affectsConfiguration('editor.fontSize')) {
+        options.fontSize = getEditorFontSize(configService)
+      }
+      if (e.affectsConfiguration('editor.wordWrap')) {
+        options.wordWrap = getEditorWordWrap(configService)
+      }
       if (e.affectsConfiguration('editor.minimap.enabled')) {
         const enabled = configService.get<boolean>('editor.minimap.enabled') ?? true
-        editorRef.current?.updateOptions({ minimap: { enabled } })
+        options.minimap = { enabled }
       }
+      if (Object.keys(options).length > 0) editorRef.current?.updateOptions(options)
     })
     return () => disposable.dispose()
   }, [configService])

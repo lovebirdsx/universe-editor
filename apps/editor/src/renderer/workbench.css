@@ -13,8 +13,8 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #1a1a1c;
-  color: #c8c8c8;
+  background: var(--color-background, #1a1a1c);
+  color: var(--color-foreground, #c8c8c8);
   font-family: var(--font-ui);
 }
 
@@ -106,6 +106,79 @@ html, body, #root {
 
   /* Toolbar */
   --color-toolbar-hover-bg: rgba(255, 255, 255, 0.06);
+}
+
+:root[data-theme='light'] {
+  --color-background: #f4f4f5;
+  --color-foreground: #24262b;
+  --color-foreground-muted: #666b76;
+  --color-border: #d6d8de;
+  --color-focus-border: #0067c0;
+  --color-accent: #0067c0;
+  --color-surface: #ffffff;
+
+  --color-titlebar: #eceef2;
+
+  --color-activitybar-bg: #e3e6eb;
+  --color-activitybar-fg: #5e6572;
+  --color-activitybar-fg-hover: #20242b;
+  --color-activitybar-fg-active: #111318;
+  --color-activitybar-item-hover: rgba(0, 0, 0, 0.06);
+  --color-activitybar-active-border: #0067c0;
+
+  --color-sidebar-bg: #ffffff;
+  --color-sidebar-fg: #24262b;
+  --color-sidebar-section-header-bg: #eef0f3;
+  --color-sidebar-section-header-fg: #424753;
+  --color-sidebar-section-header-hover: #e2e5ea;
+  --color-file-icon-default: #5e6572;
+  --color-file-icon-folder: #4a5568;
+  --color-file-icon-folder-special: #4876a8;
+  --color-file-icon-code: #2f78b7;
+  --color-file-icon-config: #8b6f1f;
+  --color-file-icon-markdown: #28724f;
+  --color-file-icon-special: #416f9f;
+
+  --color-editor-bg: #ffffff;
+  --color-editor-fg: #20242b;
+  --color-editor-fg-muted: #6a707b;
+  --color-editor-modified-border: #9a7200;
+
+  --color-tab-bar-bg: #eceef2;
+  --color-tab-active-bg: #ffffff;
+  --color-tab-active-fg: #111318;
+  --color-tab-active-border: #0067c0;
+  --color-tab-inactive-bg: #eceef2;
+  --color-tab-inactive-fg: #5e6572;
+  --color-tab-inactive-fg-hover: #20242b;
+  --color-tab-hover-bg: #e1e4ea;
+
+  --color-statusbar-bg: #0067c0;
+  --color-statusbar-fg: #ffffff;
+
+  --color-panel-bg: #ffffff;
+  --color-panel-tab-bar-bg: #eceef2;
+  --color-panel-toolbar-bg: #ffffff;
+
+  --color-quick-input-bg: #ffffff;
+  --color-quick-input-border: #c7cbd3;
+  --color-list-hover-bg: #e8f2ff;
+  --color-list-focus-outline: #0067c0;
+  --color-input-placeholder-fg: #7b818c;
+  --color-description-fg: #666b76;
+
+  --color-tooltip-bg: #ffffff;
+  --color-tooltip-fg: #24262b;
+
+  --color-sash-active: #0067c0;
+
+  --color-dropdown-bg: #ffffff;
+  --color-dropdown-border: #c7cbd3;
+
+  --color-badge-bg: #dceeff;
+  --color-badge-fg: #15395b;
+
+  --color-toolbar-hover-bg: rgba(0, 0, 0, 0.06);
 }
 
 /* Scrollbar */

@@ -555,7 +555,6 @@ main.tsx
 | 节点 | Key | 类型 | 默认 |
 |---|---|---|---|
 | workbench | `workbench.colorTheme` | enum: dark / light | `dark` |
-| workbench | `workbench.sideBar.location` | enum: left / right | `left` |
 | editor | `editor.fontSize` | number 8–32 | `14` |
 | editor | `editor.tabSize` | number 1–8 | `4` |
 | editor | `editor.wordWrap` | boolean | `false` |
@@ -808,4 +807,3 @@ editor 包新增 / 扩展：
 - **不**接 IntelliSense（仅 editor.worker + json.worker；TS/CSS/HTML 走 monarch 语法着色）
 - **不**实现 Outline / 搜索面板 / drag-drop / git decoration / diff editor / Reveal in Explorer
 - **不**实现 path-traversal 沙箱
-
