@@ -74,6 +74,11 @@ import {
   FindReplaceInFileAction,
 } from './searchActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
+import {
+  ClearAllNotificationsAction,
+  TestNotificationAction,
+  ToggleNotificationsCenterAction,
+} from './notificationActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -156,3 +161,8 @@ registerAction2(FindPreviousAction)
 // Quick Input (registered last so its `escape` binding wins over
 // FocusActiveEditorGroupAction whenever `quickInputVisible` is true).
 registerAction2(CloseQuickInputAction)
+
+// Notifications
+registerAction2(ToggleNotificationsCenterAction)
+registerAction2(ClearAllNotificationsAction)
+registerAction2(TestNotificationAction)

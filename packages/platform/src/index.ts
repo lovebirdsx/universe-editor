@@ -67,6 +67,9 @@ export * from './files/fileWatcher.js'
 // modal dialog abstraction
 export * from './dialog/dialogService.js'
 
+// notification service
+export * from './notification/notificationService.js'
+
 // workspace state
 export * from './workspace/workspaceService.js'
 

@@ -13,6 +13,8 @@ import { Panel } from './panel/Panel.js'
 import { StatusBar } from './statusbar/StatusBar.js'
 import { QuickInputPortal } from './quickinput/QuickInput.js'
 import { DialogHost, type RendererDialogService } from './dialog/RendererDialogService.js'
+import { NotificationsToast } from './notification/NotificationsToast.js'
+import { NotificationsCenter } from './notification/NotificationsCenter.js'
 
 interface WorkbenchProps {
   instantiation: InstantiationService
@@ -74,6 +76,8 @@ function WorkbenchShell() {
       />
       <QuickInputPortal />
       <DialogHost service={dialogService} />
+      <NotificationsToast />
+      <NotificationsCenter />
     </>
   )
 }

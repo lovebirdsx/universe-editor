@@ -24,6 +24,7 @@ import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
+import { NotificationStatusContribution } from '../workbench/notification/NotificationStatusContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -136,6 +137,13 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
+// Bell icon with unread badge. AfterRestore so the status bar is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.notificationStatus',
+  NotificationStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the
 // EditorArea, otherwise users see the default empty grid flash. BlockRestore
 // runs at LifecyclePhase.Ready which the bootstrap toggles before mount.
@@ -161,4 +169,5 @@ export {
   JsonSchemaBridgeContribution,
   ThemeContribution,
   WorkbenchFontContribution,
+  NotificationStatusContribution,
 }

@@ -64,6 +64,12 @@ export interface E2EProbe {
    * that WorkbenchErrorBoundary catches and shows the fallback UI.
    */
   triggerError(message?: string): Promise<void>
+  /**
+   * Calls onUnexpectedError() inside the renderer, which routes through the
+   * registered unexpected error handler (sticky Error toast). Unlike triggerError,
+   * this does not throw — the error is handled in-place.
+   */
+  triggerUnexpectedError(message?: string): void
 }
 
 declare global {

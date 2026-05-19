@@ -31,6 +31,8 @@ import {
   ContributionService,
   IContributionService,
   ILoggerService,
+  INotificationService,
+  Severity,
   ProxyChannel,
   DisposableTracker,
   localize,
@@ -53,6 +55,7 @@ import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
 import { OutputService } from './workbench/panel/output/OutputService.js'
 import { LayoutService } from './workbench/layout/LayoutService.js'
 import { RendererDialogService } from './workbench/dialog/RendererDialogService.js'
+import { NotificationService } from './workbench/notification/NotificationService.js'
 import { UserSettingsSync } from './workbench/configuration/UserSettingsSync.js'
 import {
   UserKeybindingsService,
@@ -195,6 +198,21 @@ async function bootstrapWorkbench(): Promise<void> {
   // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
   const dialogService = new RendererDialogService()
   services.set(IDialogService, dialogService)
+
+  // INotificationService — per-window, renderer-only. <NotificationsToast /> and
+  // <NotificationsCenter /> are mounted as portals by Workbench.
+  const notificationService = instantiation.createInstance(NotificationService)
+  services.set(INotificationService, notificationService)
+  // Route unhandled errors to the sticky Error toast so they're visible to users.
+  setUnexpectedErrorHandler((e) => {
+    const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
+    rootLogger.error(msg)
+    notificationService.notify({
+      severity: Severity.Error,
+      message: e instanceof Error ? e.message : String(e),
+      sticky: true,
+    })
+  })
 
   // Explorer tree state — single instance for the renderer; depends on
   // IWorkspaceService + IFileService so it must be created via DI.

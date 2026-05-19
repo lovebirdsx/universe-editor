@@ -11,6 +11,7 @@ import {
   LifecyclePhase,
   StatusBarAlignment,
   URI,
+  onUnexpectedError,
   type ICommandService,
   type IContextKeyService,
   type IEditorService,
@@ -75,6 +76,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     flushLayoutSave: () => services.layoutService.save(),
     triggerError: (message = 'E2E triggerError') => {
       throw new Error(message)
+    },
+    triggerUnexpectedError: (message = 'E2E triggerUnexpectedError') => {
+      onUnexpectedError(new Error(message))
     },
   }
 
