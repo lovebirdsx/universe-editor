@@ -14,6 +14,8 @@ import { FileWatcherMainService } from './services/fileWatcher/fileWatcherMainSe
 import { WorkspaceMainService } from './services/workspace/workspaceMainService.js'
 import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
 import { UserDataMainService } from './services/userData/userDataMainService.js'
+import { getDefaultStorage } from './storage.js'
+import { applyWindowState, loadWindowState, trackWindowState } from './windowState.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -60,12 +62,19 @@ function getSharedServices(): SharedMainServices {
 
 const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 
-function createWindow(): void {
+async function createWindow(): Promise<void> {
   const isMac = process.platform === 'darwin'
 
+  const storage = getDefaultStorage()
+  const windowState = await loadWindowState(storage)
+
   const win = new BrowserWindow({
-    width: 1280,
-    height: 800,
+    width: windowState?.width ?? 1280,
+    height: windowState?.height ?? 800,
+    // 有保存位置时恢复；否则让 Electron 自动居中（不传 x/y）
+    ...(windowState ? { x: windowState.x, y: windowState.y } : {}),
+    show: false,
+    backgroundColor: '#1e1e1e',
     title: localize('app.name', 'Universe Editor'),
     ...(isMac
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 8, y: 8 } }
@@ -78,6 +87,14 @@ function createWindow(): void {
       ...(e2eEnabled ? { additionalArguments: [E2E_PROBE_ARGV_FLAG] } : {}),
     },
   })
+
+  // 在渲染器准备好后才显示，避免白色闪烁；最大化/全屏在 show 前应用
+  win.once('ready-to-show', () => {
+    if (windowState) applyWindowState(win, windowState)
+    win.show()
+  })
+
+  trackWindowState(win, storage)
 
   const ipc = bootstrapWindowIpc(win, getSharedServices())
   win.on('closed', () => ipc.dispose())
@@ -103,10 +120,10 @@ async function loadMainSettingsText(): Promise<string> {
 
 void app.whenReady().then(async () => {
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
-  createWindow()
+  await createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
   })
 })
 
