@@ -1,0 +1,32 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "electron-vite: dev (inspect + renderer-debug)",
+      "type": "shell",
+      "command": "pnpm --filter @universe-editor/editor run dev -- --inspect=5858",
+      "group": "build",
+      "isBackground": true,
+      "options": {
+        "env": {
+          "VSCODE_RENDERER_DEBUG": "1"
+        }
+      },
+      "problemMatcher": {
+        "owner": "electron-vite",
+        "pattern": {
+          "regexp": "."
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": "\\[(main|preload|renderer)\\]",
+          "endsPattern": "Debugger listening on ws://|ready in \\d+"
+        }
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "dedicated",
+      }
+    }
+  ]
+}

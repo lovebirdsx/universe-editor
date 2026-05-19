@@ -1,0 +1,104 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug Main Process",
+      "type": "node",
+      "request": "attach",
+      "port": 5858,
+      "timeout": 30000,
+      "restart": true,
+      "sourceMaps": true,
+      "outFiles": ["${workspaceFolder}/apps/editor/out/main/**/*.js"],
+      "resolveSourceMapLocations": [
+        "${workspaceFolder}/apps/editor/out/main/**",
+        "${workspaceFolder}/packages/platform/src/**",
+        "!**/node_modules/**"
+      ],
+      "skipFiles": ["<node_internals>/**"],
+      "preLaunchTask": "electron-vite: dev (inspect + renderer-debug)"
+    },
+    {
+      "name": "Debug Renderer Process",
+      "type": "chrome",
+      "request": "attach",
+      "port": 9222,
+      "timeout": 30000,
+      "webRoot": "${workspaceFolder}/apps/editor/src/renderer",
+      "sourceMaps": true,
+      "urlFilter": "http://localhost:*/*"
+    },
+    {
+      "name": "Debug Vitest (main/node environment)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@universe-editor/editor",
+        "exec",
+        "vitest",
+        "--inspect-brk",
+        "--no-file-parallelism",
+        "--project=main",
+        "run"
+      ],
+      "attachSimplePort": 9229,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "cwd": "${workspaceFolder}/apps/editor"
+    },
+    {
+      "name": "Debug Vitest (renderer/happy-dom environment)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@universe-editor/editor",
+        "exec",
+        "vitest",
+        "--inspect-brk",
+        "--no-file-parallelism",
+        "--project=renderer",
+        "run"
+      ],
+      "attachSimplePort": 9229,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "cwd": "${workspaceFolder}/apps/editor"
+    },
+    {
+      "name": "Debug E2E Tests (Playwright)",
+      "type": "node",
+      "request": "launch",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": [
+        "--filter",
+        "@universe-editor/editor",
+        "exec",
+        "playwright",
+        "test",
+        "-c",
+        "e2e/playwright.config.ts"
+      ],
+      "attachSimplePort": 9229,
+      "skipFiles": ["<node_internals>/**", "**/node_modules/**"],
+      "console": "integratedTerminal",
+      "internalConsoleOptions": "neverOpen",
+      "cwd": "${workspaceFolder}/apps/editor",
+      "env": {
+        "UNIVERSE_E2E": "1"
+      }
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Debug Electron (Main Process + Renderer Process)",
+      "configurations": ["Debug Main Process", "Debug Renderer Process"],
+      "stopAll": true
+    }
+  ]
+}

@@ -29,6 +29,13 @@ if (import.meta.env.DEV) {
   })
 }
 
+// Dev-only: enable Chromium remote debugging port so VS Code's Chrome debugger
+// can attach to the renderer process. Activated via VSCODE_RENDERER_DEBUG=1
+// (set by the VS Code task in .vscode/tasks.json). Must be called before app.whenReady().
+if (import.meta.env.DEV && process.env['VSCODE_RENDERER_DEBUG'] === '1') {
+  app.commandLine.appendSwitch('remote-debugging-port', '9222')
+}
+
 // Shared singletons created lazily on first window.
 let sharedServices: SharedMainServices | null = null
 let sharedUserData: UserDataMainService | null = null
