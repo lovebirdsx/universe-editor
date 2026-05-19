@@ -42,6 +42,7 @@ import {
 import {
   AboutAction,
   CloseWindowAction,
+  NewWindowAction,
   RestartEditorAction,
   ToggleDevToolsAction,
 } from './windowActions.js'
@@ -139,6 +140,7 @@ registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
 
 // Window / Help
+registerAction2(NewWindowAction)
 registerAction2(RestartEditorAction)
 registerAction2(CloseWindowAction)
 registerAction2(ToggleDevToolsAction)

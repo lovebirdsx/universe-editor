@@ -73,6 +73,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     getLayoutSizes: () => ({ ...services.layoutService.sizes.get() }),
     setLayoutSize: (key, value) => services.layoutService.setSize(key, value),
     flushLayoutSave: () => services.layoutService.save(),
+    triggerError: (message = 'E2E triggerError') => {
+      throw new Error(message)
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

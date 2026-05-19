@@ -1,12 +1,10 @@
-import { app, BrowserWindow } from 'electron'
+import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { DisposableTracker, localize, setDisposableTracker } from '@universe-editor/platform'
+import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
-import { bootstrapWindowIpc, type SharedMainServices } from './ipc/registerMainServices.js'
-import { E2E_PROBE_ARGV_FLAG } from '../shared/e2e/contract.js'
 import { MainStorageService } from './services/storage/storageMainService.js'
 import { MainPingService } from './services/ping/pingMainService.js'
 import { FileSystemMainService } from './services/files/fileSystemMainService.js'
@@ -14,8 +12,10 @@ import { FileWatcherMainService } from './services/fileWatcher/fileWatcherMainSe
 import { WorkspaceMainService } from './services/workspace/workspaceMainService.js'
 import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
 import { UserDataMainService } from './services/userData/userDataMainService.js'
-import { getDefaultStorage } from './storage.js'
-import { applyWindowState, loadWindowState, trackWindowState } from './windowState.js'
+import { LogMainService } from './services/log/logMainService.js'
+import { WindowMainService } from './services/window/windowMainService.js'
+import { installMainErrorHandlers } from './errors.js'
+import type { ApplicationServices } from './window/scopedServicesFactory.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -38,17 +38,24 @@ if (import.meta.env.DEV && process.env['VSCODE_RENDERER_DEBUG'] === '1') {
   app.commandLine.appendSwitch('remote-debugging-port', '9222')
 }
 
-// Shared singletons created lazily on first window.
-let sharedServices: SharedMainServices | null = null
-let sharedUserData: UserDataMainService | null = null
+// Install global error handlers as early as possible (before any async work).
+const logMainService = new LogMainService()
+installMainErrorHandlers(logMainService.createLogger({ id: 'main', name: 'Main' }))
 
-function getSharedServices(): SharedMainServices {
-  if (!sharedServices) {
+const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
+
+// Application-singleton services — shared across all windows.
+let applicationServices: ApplicationServices | null = null
+let userDataService: UserDataMainService | null = null
+let windowMainService: WindowMainService | null = null
+
+function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
+  if (!applicationServices) {
     const storage = new MainStorageService()
     const workspace = new WorkspaceMainService(storage, new ElectronFolderDialog())
     const userData = new UserDataMainService(workspace)
-    sharedUserData = userData
-    sharedServices = {
+    userDataService = userData
+    applicationServices = {
       storage,
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(),
@@ -57,54 +64,17 @@ function getSharedServices(): SharedMainServices {
       userData,
     }
   }
-  return sharedServices
-}
-
-const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
-
-async function createWindow(): Promise<void> {
-  const isMac = process.platform === 'darwin'
-
-  const storage = getDefaultStorage()
-  const windowState = await loadWindowState(storage)
-
-  const win = new BrowserWindow({
-    width: windowState?.width ?? 1280,
-    height: windowState?.height ?? 800,
-    // 有保存位置时恢复；否则让 Electron 自动居中（不传 x/y）
-    ...(windowState ? { x: windowState.x, y: windowState.y } : {}),
-    show: false,
-    backgroundColor: '#1e1e1e',
-    title: localize('app.name', 'Universe Editor'),
-    ...(isMac
-      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 8, y: 8 } }
-      : { frame: false }),
-    webPreferences: {
-      preload: join(__dirname, '../preload/index.cjs'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-      ...(e2eEnabled ? { additionalArguments: [E2E_PROBE_ARGV_FLAG] } : {}),
-    },
-  })
-
-  // 在渲染器准备好后才显示，避免白色闪烁；最大化/全屏在 show 前应用
-  win.once('ready-to-show', () => {
-    if (windowState) applyWindowState(win, windowState)
-    win.show()
-  })
-
-  trackWindowState(win, storage)
-
-  const ipc = bootstrapWindowIpc(win, getSharedServices())
-  win.on('closed', () => ipc.dispose())
-
-  const rendererUrl = process.env['ELECTRON_RENDERER_URL']
-  if (rendererUrl) {
-    void win.loadURL(rendererUrl)
-  } else {
-    void win.loadFile(join(__dirname, '../renderer/index.html'))
+  if (!windowMainService) {
+    windowMainService = new WindowMainService({
+      appServices: applicationServices,
+      logService: logMainService,
+      e2eEnabled,
+      preloadPath: join(__dirname, '../preload/index.cjs'),
+      rendererUrl: process.env['ELECTRON_RENDERER_URL'],
+      rendererHtml: join(__dirname, '../renderer/index.html'),
+    })
   }
+  return { app: applicationServices, windows: windowMainService }
 }
 
 installMainProtocolDispatcher()
@@ -120,10 +90,13 @@ async function loadMainSettingsText(): Promise<string> {
 
 void app.whenReady().then(async () => {
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
-  await createWindow()
+  const { windows } = getOrCreateServices()
+  await windows.createWindow()
 
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) void createWindow()
+    if (getOrCreateServices().windows.getWindows().length === 0) {
+      void getOrCreateServices().windows.createWindow()
+    }
   })
 })
 
@@ -132,5 +105,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  sharedUserData?.dispose()
+  userDataService?.dispose()
+  windowMainService?.dispose()
+  logMainService.dispose()
 })

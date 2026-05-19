@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Window-level Action2 commands: restart, close, devtools, about.
+ *  Window-level Action2 commands: new window, restart, close, devtools, about.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -10,6 +10,24 @@ import {
   localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+
+export class NewWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.newWindow'
+  constructor() {
+    super({
+      id: NewWindowAction.ID,
+      title: localize('action.newWindow.title', 'New Window'),
+      category: localize('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+shift+n' },
+      menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 0 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void accessor.get(IHostService).openNewWindow()
+  }
+}
 
 export class CloseWindowAction extends Action2 {
   static readonly ID = 'workbench.action.closeWindow'

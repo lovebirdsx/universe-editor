@@ -179,6 +179,7 @@ class FakeHostService implements IHostServiceType {
   async openWithDefaultApp(_path: string) {
     return ''
   }
+  async openNewWindow() {}
 }
 
 interface FakeGroup extends IEditorGroup {

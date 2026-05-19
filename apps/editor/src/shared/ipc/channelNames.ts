@@ -15,6 +15,8 @@ export const ServiceChannels = {
   FileWatcher: 'fileWatcher',
   Workspace: 'workspace',
   UserData: 'userData',
+  Log: 'log',
+  Window: 'window',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

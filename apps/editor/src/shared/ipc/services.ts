@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
+import type { LogLevel } from '@universe-editor/platform'
 
 // -------- Ping (demo/smoke-test) --------
 
@@ -23,3 +24,16 @@ export interface IPingService {
 }
 
 export const IPingService = createDecorator<IPingService>('pingService')
+
+// -------- Log Channel (renderer → main aggregation) --------
+
+/**
+ * Wire-only IPC contract for renderer-side logging.
+ * Each renderer window sends structured log entries; the main process writes them to disk.
+ */
+export interface ILogChannelService {
+  readonly _serviceBrand: undefined
+  append(windowId: number, channel: string, level: LogLevel, message: string): Promise<void>
+}
+
+export const ILogChannelService = createDecorator<ILogChannelService>('logChannelService')

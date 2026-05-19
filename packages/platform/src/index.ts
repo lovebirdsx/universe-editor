@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // base utilities
+export * from './base/errors.js'
 export * from './base/event.js'
 export * from './base/lifecycle.js'
 export * from './base/linkedList.js'
@@ -22,6 +23,7 @@ export * from './di/instantiationService.js'
 
 // logging
 export * from './log/log.js'
+export * from './log/loggerService.js'
 
 // localization
 export * from './nls/nls.js'

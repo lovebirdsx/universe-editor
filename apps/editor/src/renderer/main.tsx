@@ -30,16 +30,20 @@ import {
   ConfigurationService,
   ContributionService,
   IContributionService,
+  ILoggerService,
   ProxyChannel,
   DisposableTracker,
   localize,
   setDisposableTracker,
+  setUnexpectedErrorHandler,
   normalizePlatform,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
-import { IPingService } from '../shared/ipc/services.js'
+import { IPingService, ILogChannelService } from '../shared/ipc/services.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
+import { installRendererErrorHandlers } from './errors.js'
+import { RendererLoggerService } from './services/log/rendererLoggerService.js'
 import { CommandService } from './workbench/CommandService.js'
 import { EditorService } from './workbench/editor/EditorService.js'
 import { EditorGroupsService } from './workbench/editor/EditorGroupsService.js'
@@ -67,6 +71,10 @@ import {
 } from './services/recentFiles/recentFilesService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
+
+// Install global error handlers before any async work.
+setUnexpectedErrorHandler((e) => console.error('[renderer] unexpected error:', e))
+installRendererErrorHandlers()
 
 async function bootstrapWorkbench(): Promise<void> {
   // Dev-only: track Disposable leaks. Report on beforeunload.
@@ -97,6 +105,21 @@ async function bootstrapWorkbench(): Promise<void> {
   // IPC must be available before any service that proxies main-side channels.
   const ipcService = createRendererIpcService()
   services.set(IIpcService, ipcService)
+
+  // Logger: route renderer logs to the main process for file-based aggregation.
+  // Use a stable per-session integer so renderer-<id>.log files are unique.
+  const windowId = Date.now()
+  const logChannelProxy = ProxyChannel.toService<ILogChannelService>(
+    ipcService.getChannel(ServiceChannels.Log),
+  )
+  const loggerService = new RendererLoggerService(logChannelProxy, windowId)
+  services.set(ILoggerService, loggerService)
+  // Update the global unexpected-error handler to also send to the file logger.
+  const rootLogger = loggerService.createLogger({ id: 'renderer', name: 'Renderer' })
+  setUnexpectedErrorHandler((e) => {
+    const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
+    rootLogger.error(msg)
+  })
 
   // Cross-process services: bind interface directly to a ProxyChannel-derived
   // proxy. No renderer wrapper class — adding a new service is one line.
@@ -235,10 +258,13 @@ async function bootstrapWorkbench(): Promise<void> {
   if (!rootEl) throw new Error('[bootstrap] #root element not found')
 
   const { Workbench } = await import('./workbench/Workbench.js')
+  const { WorkbenchErrorBoundary } = await import('./workbench/errors/WorkbenchErrorBoundary.js')
 
   createRoot(rootEl).render(
     <StrictMode>
-      <Workbench instantiation={instantiation} lifecycle={lifecycle} />
+      <WorkbenchErrorBoundary logger={rootLogger}>
+        <Workbench instantiation={instantiation} lifecycle={lifecycle} />
+      </WorkbenchErrorBoundary>
     </StrictMode>,
   )
 }

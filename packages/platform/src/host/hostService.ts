@@ -42,6 +42,12 @@ export interface IHostService {
   toggleDevTools(): Promise<void>
 
   /**
+   * Request the host to open a new application window. The new window
+   * inherits the current workspace context.
+   */
+  openNewWindow(): Promise<void>
+
+  /**
    * Show the given file path in the OS file manager (Explorer / Finder / Files)
    * with the item selected. The path must be an absolute fs path.
    */

@@ -9,49 +9,35 @@ import {
   ChannelServer,
   combinedDisposable,
   type IDisposable,
-  type IFileService,
-  type IFileWatcherService,
   type IHostServiceWire,
-  type IStorageService,
-  type IWorkspaceServiceWire,
-  type IUserDataFilesService,
   ProxyChannel,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
-import type { IPingService } from '../../shared/ipc/services.js'
 import { createMainProtocolForWindow } from './electronProtocol.js'
-import { MainHostService } from '../services/host/hostMainService.js'
-
-export interface SharedMainServices {
-  readonly storage: IStorageService
-  readonly ping: IPingService
-  readonly fileSystem: IFileService
-  readonly fileWatcher: IFileWatcherService
-  readonly workspace: IWorkspaceServiceWire
-  readonly userData: IUserDataFilesService
-}
+import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
 
 /**
- * Bind a ChannelServer to a window's protocol and register the window-scoped
- * `MainHostService` alongside the shared singletons. The returned disposable
- * tears down the server + protocol; call it on window close.
+ * Bind a ChannelServer to a window's protocol and register the application-singleton
+ * services alongside the per-window services. The returned disposable tears down
+ * the server + protocol; call it on window close.
  */
 export function bootstrapWindowIpc(
   win: BrowserWindow,
-  shared: SharedMainServices,
+  app: ApplicationServices,
+  window: WindowScopedServices,
 ): IDisposable & { host: IHostServiceWire } {
   const { protocol, disposable: protoDisposable } = createMainProtocolForWindow(win)
   const server = new ChannelServer(protocol)
-  const host = new MainHostService(win)
 
-  server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(host))
-  server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(shared.storage))
-  server.registerChannel(ServiceChannels.Ping, ProxyChannel.fromService(shared.ping))
-  server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(shared.fileSystem))
-  server.registerChannel(ServiceChannels.FileWatcher, ProxyChannel.fromService(shared.fileWatcher))
-  server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(shared.workspace))
-  server.registerChannel(ServiceChannels.UserData, ProxyChannel.fromService(shared.userData))
+  server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(window.host))
+  server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(app.storage))
+  server.registerChannel(ServiceChannels.Ping, ProxyChannel.fromService(app.ping))
+  server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(app.fileSystem))
+  server.registerChannel(ServiceChannels.FileWatcher, ProxyChannel.fromService(app.fileWatcher))
+  server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(app.workspace))
+  server.registerChannel(ServiceChannels.UserData, ProxyChannel.fromService(app.userData))
+  server.registerChannel(ServiceChannels.Log, ProxyChannel.fromService(window.logChannel))
 
-  const all = combinedDisposable(server, host, protoDisposable)
-  return Object.assign(all, { host })
+  const all = combinedDisposable(server, protoDisposable)
+  return Object.assign(all, { host: window.host })
 }

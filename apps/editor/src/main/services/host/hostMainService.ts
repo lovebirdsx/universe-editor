@@ -24,7 +24,10 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   private readonly _onMaximize = (): void => this._onDidChangeMaximized.fire(true)
   private readonly _onUnmaximize = (): void => this._onDidChangeMaximized.fire(false)
 
-  constructor(private readonly _win: BrowserWindow) {
+  constructor(
+    private readonly _win: BrowserWindow,
+    private readonly _createNewWindow: () => void = () => {},
+  ) {
     _win.on('maximize', this._onMaximize)
     _win.on('unmaximize', this._onUnmaximize)
   }
@@ -70,6 +73,11 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     if (!this._win.isDestroyed()) {
       this._win.webContents.toggleDevTools()
     }
+    return Promise.resolve()
+  }
+
+  openNewWindow(): Promise<void> {
+    this._createNewWindow()
     return Promise.resolve()
   }
 

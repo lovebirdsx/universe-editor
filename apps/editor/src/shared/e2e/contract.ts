@@ -59,6 +59,11 @@ export interface E2EProbe {
   setLayoutSize(key: 'sidebar' | 'secondarySidebar' | 'panel', value: number): void
   /** Force-flush any pending layout save. Resolves when data is on disk. */
   flushLayoutSave(): Promise<void>
+  /**
+   * Throws an error inside the renderer. Used by smoke.errorBoundary to test
+   * that WorkbenchErrorBoundary catches and shows the fallback UI.
+   */
+  triggerError(message?: string): Promise<void>
 }
 
 declare global {
