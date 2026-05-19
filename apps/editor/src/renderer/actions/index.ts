@@ -81,6 +81,7 @@ import {
   TestNotificationAction,
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
+import { ReopenWithAction } from './editorResolverActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -170,3 +171,6 @@ registerAction2(CloseQuickInputAction)
 registerAction2(ToggleNotificationsCenterAction)
 registerAction2(ClearAllNotificationsAction)
 registerAction2(TestNotificationAction)
+
+// Editor resolver
+registerAction2(ReopenWithAction)

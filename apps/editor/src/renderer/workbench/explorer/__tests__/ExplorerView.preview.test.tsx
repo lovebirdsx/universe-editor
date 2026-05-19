@@ -7,6 +7,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import {
   Emitter,
   IDialogService,
+  IEditorResolverService,
   IEditorService,
   IFileService,
   IFileWatcherService,
@@ -30,6 +31,7 @@ import {
 import { ExplorerView } from '../ExplorerView.js'
 import { ExplorerTreeService, IExplorerTreeService } from '../ExplorerTreeService.js'
 import { ServicesContext } from '../../useService.js'
+import { EditorResolverService } from '../../editor/EditorResolverService.js'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType {
   const dirs = new Map(Object.entries(initial))
@@ -121,6 +123,8 @@ function renderView(folder: URI, fs: IFileServiceType) {
   services.set(ICommandService, command as unknown as ICommandService)
   services.set(IDialogService, dialog)
   const inst = new InstantiationService(services)
+  const editorResolver = inst.createInstance(EditorResolverService)
+  services.set(IEditorResolverService, editorResolver)
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
   const result = render(

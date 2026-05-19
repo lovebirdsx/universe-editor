@@ -70,6 +70,24 @@ export interface E2EProbe {
    * this does not throw — the error is handled in-place.
    */
   triggerUnexpectedError(message?: string): void
+  /**
+   * Register a dummy EditorInput + resolver binding for E2E testing purposes.
+   * Opens files matching `glob` with a minimal no-op editor whose typeId is
+   * `typeId`. Allows E2E specs to verify resolver dispatch without shipping real
+   * editor implementations.
+   */
+  registerDummyEditor(glob: string, typeId: string): void
+  /**
+   * Returns the typeId of the currently active editor input, or undefined if
+   * no editor is active. Used by E2E specs to verify resolver dispatch results.
+   */
+  getActiveEditorTypeId(): string | undefined
+  /**
+   * Open a file by absolute file-system path via EditorResolverService, bypassing
+   * the native file picker dialog. Used by E2E specs that need to open a specific
+   * file for resolver testing.
+   */
+  openFileUri(fsPath: string): Promise<void>
 }
 
 declare global {

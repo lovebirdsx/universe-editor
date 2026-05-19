@@ -10,6 +10,7 @@ import {
   IContextKeyService,
   ContextKeyService,
   IDialogService,
+  IEditorResolverService,
   IEditorService,
   IEditorGroupsService,
   IFileService,
@@ -72,6 +73,7 @@ import {
   IRecentFilesService,
   RecentFilesService,
 } from './services/recentFiles/recentFilesService.js'
+import { EditorResolverService } from './workbench/editor/EditorResolverService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
@@ -184,6 +186,10 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IStatusBarService, statusBarService)
   services.set(IOutputService, outputService)
 
+  // EditorResolverService depends on IInstantiationService + IEditorService, both available now.
+  const editorResolverService = instantiation.createInstance(EditorResolverService)
+  services.set(IEditorResolverService, editorResolverService)
+
   // Services with @IStorageService dependencies go through DI.
   const viewsService = instantiation.createInstance(ViewsService)
   services.set(IViewsService, viewsService)
@@ -261,6 +267,8 @@ async function bootstrapWorkbench(): Promise<void> {
     contextKeyService,
     lifecycleService: lifecycle,
     editorService,
+    editorGroupsService,
+    editorResolverService,
     statusBarService,
     workspaceService,
     layoutService,

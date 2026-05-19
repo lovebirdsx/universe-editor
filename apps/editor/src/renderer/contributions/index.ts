@@ -25,6 +25,7 @@ import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 import { NotificationStatusContribution } from '../workbench/notification/NotificationStatusContribution.js'
+import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -144,6 +145,15 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
+// Default glob → EditorInput bindings + "Reopen With..." menu item.
+// BlockStartup so the catch-all '**/*' → FileEditorInput registration exists
+// before ExplorerView or any other caller opens a file.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.builtInEditorBindings',
+  BuiltInEditorBindingsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the
 // EditorArea, otherwise users see the default empty grid flash. BlockRestore
 // runs at LifecyclePhase.Ready which the bootstrap toggles before mount.
@@ -157,6 +167,7 @@ export {
   BuiltInEditorProvidersContribution,
   BuiltInViewContainersContribution,
   BuiltInViewsContribution,
+  BuiltInEditorBindingsContribution,
   ContextKeyContribution,
   SettingsContribution,
   FileEditorStatusContribution,

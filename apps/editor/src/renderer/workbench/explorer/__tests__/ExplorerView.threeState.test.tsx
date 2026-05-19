@@ -13,6 +13,7 @@ import {
   Emitter,
   IConfigurationService,
   IDialogService,
+  IEditorResolverService,
   IEditorService,
   IFileService,
   IFileWatcherService,
@@ -38,6 +39,7 @@ import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { ExplorerAutoRevealContribution } from '../../../contributions/ExplorerAutoRevealContribution.js'
 import { ServicesContext } from '../../useService.js'
 import styles from '../ExplorerView.module.css'
+import { EditorResolverService } from '../../editor/EditorResolverService.js'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType {
   const dirs = new Map(Object.entries(initial))
@@ -149,6 +151,8 @@ function setup(opts: { autoReveal?: boolean } = {}) {
   services.set(IDialogService, dialog)
   services.set(IConfigurationService, config)
   const inst = new InstantiationService(services)
+  const editorResolver = inst.createInstance(EditorResolverService)
+  services.set(IEditorResolverService, editorResolver)
   const tree = inst.createInstance(ExplorerTreeService)
   services.set(IExplorerTreeService, tree)
   const contrib = inst.createInstance(ExplorerAutoRevealContribution)

@@ -8,12 +8,16 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  EditorInput,
+  EditorRegistry,
   LifecyclePhase,
   StatusBarAlignment,
   URI,
   onUnexpectedError,
   type ICommandService,
   type IContextKeyService,
+  type IEditorGroupsService,
+  type IEditorResolverService,
   type IEditorService,
   type ILayoutService,
   type ILifecycleService,
@@ -33,9 +37,29 @@ export interface E2EProbeServices {
   readonly contextKeyService: IContextKeyService
   readonly lifecycleService: ILifecycleService
   readonly editorService: IEditorService
+  readonly editorGroupsService: IEditorGroupsService
+  readonly editorResolverService: IEditorResolverService
   readonly statusBarService: IStatusBarService
   readonly workspaceService: IWorkspaceService
   readonly layoutService: ILayoutService
+}
+
+class DummyEditorInput extends EditorInput {
+  constructor(
+    private readonly _uri: URI,
+    private readonly _typeId: string,
+  ) {
+    super()
+  }
+  override get typeId() {
+    return this._typeId
+  }
+  override get resource() {
+    return this._uri
+  }
+  override getName() {
+    return `Dummy: ${this._uri.path.split('/').pop() ?? ''}`
+  }
 }
 
 function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
@@ -79,6 +103,20 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     },
     triggerUnexpectedError: (message = 'E2E triggerUnexpectedError') => {
       onUnexpectedError(new Error(message))
+    },
+    registerDummyEditor: (glob: string, typeId: string) => {
+      EditorRegistry.registerEditorProvider({ typeId, componentKey: 'dummy' })
+      services.editorResolverService.registerEditor(
+        glob,
+        { typeId, displayName: `Dummy (${typeId})`, priority: 100 },
+        (uri) => new DummyEditorInput(uri, typeId),
+      )
+    },
+    getActiveEditorTypeId: () => {
+      return services.editorGroupsService.activeGroup?.activeEditor?.typeId
+    },
+    openFileUri: (fsPath: string) => {
+      return services.editorResolverService.openEditor(URI.file(fsPath))
     },
   }
 

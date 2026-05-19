@@ -16,16 +16,14 @@ import { useService } from '../useService.js'
 import {
   ICommandService,
   IDialogService,
-  IEditorService,
+  IEditorResolverService,
   IFileService,
-  IInstantiationService,
   IWorkspaceService,
   type URI,
 } from '@universe-editor/platform'
 import { IExplorerTreeService } from './ExplorerTreeService.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
-import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { confirmLargeFile } from '../editor/largeFileGuard.js'
 import { EXPLORER_FOCUS_VIEW_EVENT } from '../../actions/layoutActions.js'
 import styles from './ExplorerView.module.css'
@@ -33,9 +31,8 @@ import styles from './ExplorerView.module.css'
 const PAGE_STEP = 10
 
 export function ExplorerView() {
-  const instantiation = useService(IInstantiationService)
+  const editorResolverService = useService(IEditorResolverService)
   const workspaceService = useService(IWorkspaceService)
-  const editorService = useService(IEditorService)
   const commandService = useService(ICommandService)
   const fileService = useService(IFileService)
   const dialogService = useService(IDialogService)
@@ -80,8 +77,7 @@ export function ExplorerView() {
   const openFile = (resource: URI, options?: { preview?: boolean }) => {
     void (async () => {
       if (!(await confirmLargeFile(resource, fileService, dialogService))) return
-      const input = instantiation.createInstance(FileEditorInput, resource)
-      editorService.openEditor(input, { pinned: options?.preview !== true })
+      await editorResolverService.openEditor(resource, { pinned: options?.preview !== true })
     })()
   }
 
