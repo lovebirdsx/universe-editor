@@ -46,7 +46,9 @@ export const test = base.extend<E2EFixtures>({
     const page = await electronApp.firstWindow()
     await page.waitForLoadState('domcontentloaded')
     // 等待 renderer 装上探针(LifecyclePhase.Ready 之后).
-    await page.waitForFunction(() => Boolean((window as unknown as Record<string, unknown>)['__E2E__']))
+    await page.waitForFunction(() =>
+      Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+    )
     await use(page)
   },
   workbench: async ({ page }, use) => {

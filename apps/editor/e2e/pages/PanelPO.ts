@@ -1,9 +1,10 @@
 import { expect, type Page, type Locator } from '@playwright/test'
 
 export class PanelPO {
-  constructor(private readonly page: Page) {}
-
-  readonly root: Locator = this.page.getByTestId('part-panel')
+  readonly root: Locator
+  constructor(private readonly page: Page) {
+    this.root = page.getByTestId('part-panel')
+  }
 
   tab(id: string): Locator {
     return this.page.getByTestId(`panel-tab-${id}`)

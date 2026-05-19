@@ -1,9 +1,11 @@
 import type { Page, Locator } from '@playwright/test'
 
 export class ActivityBarPO {
-  constructor(private readonly page: Page) {}
+  readonly root: Locator
 
-  readonly root: Locator = this.page.getByTestId('part-activitybar')
+  constructor(private readonly page: Page) {
+    this.root = page.getByTestId('part-activitybar')
+  }
 
   item(containerId: string): Locator {
     return this.page.getByTestId(`activitybar-item-${containerId}`)
@@ -16,7 +18,9 @@ export class ActivityBarPO {
   async activeContainerId(): Promise<string | undefined> {
     const id = await this.page.evaluate(
       () =>
-        document.querySelector<HTMLElement>('[data-testid="part-sidebar"]')?.dataset['activeViewContainer'],
+        document.querySelector<HTMLElement>('[data-testid="part-sidebar"]')?.dataset[
+          'activeViewContainer'
+        ],
     )
     return id ?? undefined
   }
