@@ -23,6 +23,7 @@ import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
+import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -68,6 +69,12 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.theme',
   ThemeContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workbenchFont',
+  WorkbenchFontContribution,
   WorkbenchPhase.BlockStartup,
 )
 
@@ -153,4 +160,5 @@ export {
   RecentFilesContribution,
   JsonSchemaBridgeContribution,
   ThemeContribution,
+  WorkbenchFontContribution,
 }

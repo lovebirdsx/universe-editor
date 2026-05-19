@@ -13,6 +13,10 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales.js'
+import {
+  EDITOR_FONT_FAMILY_DEFAULT,
+  WORKBENCH_FONT_FAMILY_DEFAULT,
+} from '../workbench/configuration/fontDefaults.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -50,6 +54,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Workbench color theme.',
             ),
           },
+          'workbench.fontFamily': {
+            type: 'string',
+            default: WORKBENCH_FONT_FAMILY_DEFAULT,
+            description: localize(
+              'settings.workbench.fontFamily.description',
+              'Controls the font family of the workbench UI.',
+            ),
+          },
         },
       }),
     )
@@ -67,6 +79,14 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.editor.fontSize.description',
               'Controls the editor font size in pixels.',
+            ),
+          },
+          'editor.fontFamily': {
+            type: 'string',
+            default: EDITOR_FONT_FAMILY_DEFAULT,
+            description: localize(
+              'settings.editor.fontFamily.description',
+              'Controls the editor font family.',
             ),
           },
           'editor.tabSize': {

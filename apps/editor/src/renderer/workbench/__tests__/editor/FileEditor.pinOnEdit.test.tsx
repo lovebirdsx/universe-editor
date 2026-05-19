@@ -233,6 +233,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       IConfigurationService,
       new FakeConfigurationService({
         'editor.fontSize': 20,
+        'editor.fontFamily': "'Fira Code', monospace",
         'editor.wordWrap': true,
         'workbench.colorTheme': 'light',
       }) as never,
@@ -253,6 +254,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     })
     expect(monacoMockState.createOptions).toMatchObject({
       fontSize: 20,
+      fontFamily: "'Fira Code', monospace",
       wordWrap: 'on',
       theme: 'vs',
     })
@@ -267,6 +269,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     } as never)
     const config = new FakeConfigurationService({
       'editor.fontSize': 14,
+      'editor.fontFamily': "Consolas, 'Courier New', monospace",
       'editor.wordWrap': false,
     })
     services.set(IConfigurationService, config as never)
@@ -285,9 +288,13 @@ describe('FileEditor — auto-pin on first edit', () => {
       expect(monacoMockState.createOptions).toBeDefined()
     })
     config.update('editor.fontSize', 18, ConfigurationTarget.User)
+    config.update('editor.fontFamily', "'JetBrains Mono', monospace", ConfigurationTarget.User)
     config.update('editor.wordWrap', true, ConfigurationTarget.User)
 
     expect(monacoMockState.updateOptionsCalls).toContainEqual({ fontSize: 18 })
+    expect(monacoMockState.updateOptionsCalls).toContainEqual({
+      fontFamily: "'JetBrains Mono', monospace",
+    })
     expect(monacoMockState.updateOptionsCalls).toContainEqual({ wordWrap: 'on' })
   })
 })

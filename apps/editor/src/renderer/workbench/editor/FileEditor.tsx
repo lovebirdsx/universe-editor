@@ -30,11 +30,16 @@ import { EditorViewStateCache } from './EditorViewStateCache.js'
 import { FileEditorInput } from './FileEditorInput.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { IUserKeybindingsService } from '../keybindings/UserKeybindingsService.js'
+import { EDITOR_FONT_FAMILY_DEFAULT, normalizeFontFamily } from '../configuration/fontDefaults.js'
 import styles from './FileEditor.module.css'
 
 function getEditorFontSize(configService: IConfigurationService): number {
   const fontSize = configService.get<number>('editor.fontSize')
   return typeof fontSize === 'number' ? fontSize : 14
+}
+
+function getEditorFontFamily(configService: IConfigurationService): string {
+  return normalizeFontFamily(configService.get('editor.fontFamily'), EDITOR_FONT_FAMILY_DEFAULT)
 }
 
 function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
@@ -99,6 +104,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       theme: getEditorTheme(configService),
       automaticLayout: true,
       fontSize: getEditorFontSize(configService),
+      fontFamily: getEditorFontFamily(configService),
       wordWrap: getEditorWordWrap(configService),
       minimap: { enabled: minimapEnabled },
       scrollBeyondLastLine: false,
@@ -163,6 +169,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       const options: monaco.editor.IEditorOptions = {}
       if (e.affectsConfiguration('editor.fontSize')) {
         options.fontSize = getEditorFontSize(configService)
+      }
+      if (e.affectsConfiguration('editor.fontFamily')) {
+        options.fontFamily = getEditorFontFamily(configService)
       }
       if (e.affectsConfiguration('editor.wordWrap')) {
         options.wordWrap = getEditorWordWrap(configService)
