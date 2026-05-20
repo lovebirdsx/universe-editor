@@ -7,6 +7,13 @@
   flex-direction: column-reverse;
   gap: 6px;
   max-width: 380px;
+  /* Cap height so a tall stack scrolls inside the toast area instead of
+     pushing items off the top of the viewport. Leave room for the status bar
+     (28px) and a small top margin. */
+  max-height: calc(100vh - 56px);
+  overflow-y: auto;
+  /* Hide scrollbar gutter in chromium so it doesn't shift content. */
+  scrollbar-width: thin;
   pointer-events: none;
 }
 
@@ -25,6 +32,17 @@
   animation: slideIn 0.2s ease;
   max-width: 380px;
   word-break: break-word;
+  /* Prevent flex from collapsing items when the container hits max-height. */
+  flex: 0 0 auto;
+}
+
+.message {
+  margin: 0;
+  line-height: 1.4;
+  /* Long messages get a per-item cap so a single giant toast can't dominate
+     the stack; user can still click into the notification center for full text. */
+  max-height: 7.2em; /* ~5 lines */
+  overflow-y: auto;
 }
 
 .toast.severity-info {
@@ -57,11 +75,6 @@
 .body {
   flex: 1;
   min-width: 0;
-}
-
-.message {
-  margin: 0;
-  line-height: 1.4;
 }
 
 .progress {

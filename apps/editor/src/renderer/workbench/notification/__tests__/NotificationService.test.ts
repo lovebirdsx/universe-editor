@@ -182,6 +182,51 @@ describe('NotificationService', () => {
     expect(svc.unreadCount.get()).toBe(0)
     svc.dispose()
   })
+
+  it('markAllAsRead() clears unread count without opening the center', () => {
+    const svc = buildService()
+    svc.notify({ severity: Severity.Info, message: '1' })
+    svc.notify({ severity: Severity.Warning, message: '2' })
+    expect(svc.unreadCount.get()).toBe(2)
+
+    svc.markAllAsRead()
+    expect(svc.centerVisible.get()).toBe(false)
+    expect(svc.unreadCount.get()).toBe(0)
+    // Items remain in the list (center still shows them); they're just read.
+    expect(svc.notifications.get()).toHaveLength(2)
+    svc.dispose()
+  })
+
+  it('dismiss() targets the right item after restore (no id collision)', async () => {
+    // Seed storage with one item using id "notification-0" — the same id the
+    // counter would mint for a fresh notification if not advanced.
+    const storage = new FakeStorage()
+    await storage.set('workbench.notifications.list', [
+      {
+        id: 'notification-0',
+        severity: Severity.Info,
+        message: 'restored',
+        sticky: false,
+        timestamp: 1,
+        read: true,
+        dismissed: false,
+      },
+    ])
+    const svc = buildService(storage)
+    // Wait a microtask for _load() to flush.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const handle = svc.notify({ severity: Severity.Info, message: 'fresh' })
+    expect(handle.id).not.toBe('notification-0')
+
+    // Dismiss the fresh one — restored item must remain visible.
+    svc.dismiss(handle.id)
+    const remaining = svc.notifications.get()
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]?.message).toBe('restored')
+    svc.dispose()
+  })
 })
 
 // ---------------------------------------------------------------------------

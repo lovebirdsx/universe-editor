@@ -61,6 +61,7 @@ function makeNotificationStub() {
     dismiss: () => void 0,
     clearAll: () => void 0,
     toggleCenter: () => void 0,
+    markAllAsRead: () => void 0,
     _calls: calls,
   }
 }

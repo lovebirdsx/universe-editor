@@ -22,7 +22,20 @@ export class ToggleNotificationsCenterAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(INotificationService).toggleCenter()
+    const svc = accessor.get(INotificationService)
+    // Three-state bell:
+    //   1. center open  → close center
+    //   2. center closed & toast visible (unread > 0) → just hide the toast
+    //   3. center closed & no toast → open center
+    if (svc.centerVisible.get()) {
+      svc.toggleCenter()
+      return
+    }
+    if (svc.unreadCount.get() > 0) {
+      svc.markAllAsRead()
+      return
+    }
+    svc.toggleCenter()
   }
 }
 

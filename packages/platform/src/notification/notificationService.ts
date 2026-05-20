@@ -81,6 +81,8 @@ export interface INotificationService {
   dismiss(id: string): void
   clearAll(): void
   toggleCenter(): void
+  /** Mark all unread notifications as read (hides the toast without opening the center). */
+  markAllAsRead(): void
 }
 
 export const INotificationService = createDecorator<INotificationService>('notificationService')

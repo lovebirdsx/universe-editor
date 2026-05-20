@@ -58,6 +58,17 @@ export class NotificationService extends Disposable implements INotificationServ
     if (!Array.isArray(raw) || raw.length === 0) return
     // Restore as read — they appear in center but not as fresh toasts.
     this._items = (raw as INotification[]).map((n) => ({ ...n, read: true, dismissed: false }))
+    // Advance _nextId past any restored ids, otherwise new notifications would
+    // reuse ids and _findItem would resolve to the stale restored entry.
+    let maxId = -1
+    for (const item of this._items) {
+      const match = /^notification-(\d+)$/.exec(item.id)
+      if (match !== null) {
+        const n = Number(match[1])
+        if (Number.isFinite(n) && n > maxId) maxId = n
+      }
+    }
+    if (maxId >= this._nextId) this._nextId = maxId + 1
     this.notifications.set([...this._items], undefined)
   }
 
@@ -214,6 +225,20 @@ export class NotificationService extends Disposable implements INotificationServ
       }
       this._syncObservable()
     }
+  }
+
+  markAllAsRead(): void {
+    let changed = false
+    for (const item of this._items) {
+      if (!item.dismissed && !item.read) {
+        item.read = true
+        changed = true
+      }
+    }
+    // Cancel pending auto-read timers — they would no-op now anyway.
+    this._readTimers.forEach((t) => clearTimeout(t))
+    this._readTimers.clear()
+    if (changed) this._syncObservable()
   }
 
   private _markAsRead(id: string): void {
