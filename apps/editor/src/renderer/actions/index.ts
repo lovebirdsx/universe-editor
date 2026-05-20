@@ -59,6 +59,7 @@ import { NewFileAction, NewFolderAction, NewUntitledFileAction } from './fileCre
 import { DeleteFileAction, RenameFileAction } from './fileMutateActions.js'
 import {
   ClearRecentFilesAction,
+  GoToFileAction,
   OpenFileAction,
   OpenRecentFilesAction,
   OpenWithDefaultAppAction,
@@ -134,6 +135,7 @@ registerAction2(CloseFolderAction)
 // Files
 registerAction2(SaveFileAction)
 registerAction2(SaveFileAsAction)
+registerAction2(GoToFileAction)
 registerAction2(OpenFileAction)
 registerAction2(OpenRecentFilesAction)
 registerAction2(ClearRecentFilesAction)

@@ -63,8 +63,7 @@ export class OpenRecentFilesAction extends Action2 {
       id: OpenRecentFilesAction.ID,
       title: localize('action.openRecentFile.title', 'Open Recent File…'),
       category: localize('command.category.file', 'File'),
-      keybinding: { primary: 'ctrl+p' },
-      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 2 },
+      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 3 },
       f1: true,
     })
   }
@@ -145,6 +144,132 @@ export class OpenWithDefaultAppAction extends Action2 {
         type: 'error',
       })
     }
+  }
+}
+
+const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.turbo'])
+const MAX_FILES = 5000
+
+async function collectFiles(
+  dir: URI,
+  fileService: IFileService,
+  results: URI[] = [],
+  depth = 0,
+): Promise<URI[]> {
+  if (results.length >= MAX_FILES || depth > 30) return results
+  let entries
+  try {
+    entries = await fileService.list(dir)
+  } catch {
+    return results
+  }
+  for (const entry of entries) {
+    if (results.length >= MAX_FILES) break
+    const child = URI.joinPath(dir, entry.name)
+    if (entry.isDirectory) {
+      if (!IGNORE_DIRS.has(entry.name)) {
+        await collectFiles(child, fileService, results, depth + 1)
+      }
+    } else {
+      results.push(child)
+    }
+  }
+  return results
+}
+
+export class GoToFileAction extends Action2 {
+  static readonly ID = 'workbench.action.quickOpen'
+  constructor() {
+    super({
+      id: GoToFileAction.ID,
+      title: localize('action.goToFile.title', 'Go to File…'),
+      category: localize('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+p' },
+      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 1 },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const quickInput = accessor.get(IQuickInputService)
+    const workspace = accessor.get(IWorkspaceService)
+    const fileService = accessor.get(IFileService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+    const recentFiles = accessor.get(IRecentFilesService)
+
+    const root = workspace.current?.folder
+
+    // No workspace open — fall back to recent files.
+    if (!root) {
+      const all = await recentFiles.getAll()
+      if (all.length === 0) return
+      const items = all.map((f) => ({
+        id: f.uri.toString(),
+        label: f.name,
+        description: f.uri.fsPath,
+      }))
+      const pick = await quickInput.pick(items, {
+        id: 'workbench.recentFiles',
+        placeholder: localize('quickInput.openRecentFile.placeholder', 'Open Recent File…'),
+      })
+      if (!pick) return
+      const uri = URI.parse(pick.id)
+      for (const group of groups.groups) {
+        for (const editor of group.editors) {
+          if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+            groups.activateGroup(group)
+            group.setActive(editor)
+            return
+          }
+        }
+      }
+      const input = inst.createInstance(FileEditorInput, uri)
+      groups.activeGroup.openEditor(input, { activate: true })
+      return
+    }
+
+    // Workspace open — enumerate all files.
+    const uris = await collectFiles(root, fileService)
+    const rootPath = root.fsPath
+    const recent = await recentFiles.getAll()
+    const recentMap = new Map(recent.map((f) => [f.uri.toString(), f.lastOpened]))
+
+    const items = uris
+      .sort((a, b) => {
+        const aTime = recentMap.get(a.toString()) ?? 0
+        const bTime = recentMap.get(b.toString()) ?? 0
+        if (bTime !== aTime) return bTime - aTime
+        return a.fsPath.localeCompare(b.fsPath)
+      })
+      .map((uri) => {
+        const rel = uri.fsPath.startsWith(rootPath)
+          ? uri.fsPath.slice(rootPath.length).replace(/^[/\\]/, '')
+          : uri.fsPath
+        const name = rel.split(/[/\\]/).at(-1) ?? uri.fsPath
+        return { id: uri.toString(), label: name, description: rel }
+      })
+
+    const pick = await quickInput.pick(items, {
+      id: 'workbench.quickOpen.goToFile',
+      placeholder: localize('quickInput.goToFile.placeholder', 'Go to File…'),
+      matchOnDescription: true,
+    })
+    if (!pick) return
+
+    const uri = URI.parse(pick.id)
+    recentFiles.add(uri, pick.label)
+    for (const group of groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+          groups.activateGroup(group)
+          group.setActive(editor)
+          return
+        }
+      }
+    }
+    const input = inst.createInstance(FileEditorInput, uri)
+    groups.activeGroup.openEditor(input, { activate: true, pinned: true })
   }
 }
 
