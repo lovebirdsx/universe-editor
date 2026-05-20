@@ -40,14 +40,16 @@ async function loadMonaco(): Promise<typeof monaco> {
   if (!_monacoPromise) {
     _monacoPromise = (async () => {
       applyMonacoNls(getCurrentLocale())
-      const [monacoMod, EditorWorker, JsonWorker] = await Promise.all([
+      const [monacoMod, EditorWorker, JsonWorker, TsWorker] = await Promise.all([
         import('monaco-editor'),
         import('monaco-editor/esm/vs/editor/editor.worker?worker'),
         import('monaco-editor/esm/vs/language/json/json.worker?worker'),
+        import('monaco-editor/esm/vs/language/typescript/ts.worker?worker'),
       ])
       ;(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
         getWorker(_workerId, label) {
           if (label === 'json') return new JsonWorker.default()
+          if (label === 'typescript' || label === 'javascript') return new TsWorker.default()
           return new EditorWorker.default()
         },
       }
