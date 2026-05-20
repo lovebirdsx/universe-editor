@@ -16,6 +16,7 @@ export const enum MenuId {
   EditorTitle = 'editorTitle',
   EditorContext = 'editorContext',
   EditorTabContext = 'editorTabContext',
+  ExplorerContext = 'explorerContext',
   TitleBar = 'titleBar',
   StatusBar = 'statusBar',
   SideBarTitle = 'sideBarTitle',

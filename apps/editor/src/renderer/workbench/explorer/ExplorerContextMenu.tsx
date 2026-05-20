@@ -1,15 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ExplorerContextMenu — lightweight portal-rendered popup. Items dispatch
- *  through ICommandService so the file Actions registered in WP5 are the
- *  single source of truth; we only own positioning and keyboard dismissal.
+ *  ExplorerContextMenu — thin wrapper that delegates to the workbench-ui ContextMenu.
+ *  Items come from MenuRegistry (ExplorerMenuContribution registers them at BlockStartup).
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
-import { localize, type ICommandService, type URI } from '@universe-editor/platform'
-import type { ExplorerTreeService } from './ExplorerTreeService.js'
-import styles from './ExplorerView.module.css'
+import { type ICommandService, MenuId } from '@universe-editor/platform'
+import { ContextMenu } from '@universe-editor/workbench-ui'
+import type { URI } from '@universe-editor/platform'
 
 export interface ContextMenuState {
   readonly x: number
@@ -21,114 +18,22 @@ export interface ContextMenuState {
 interface Props {
   readonly state: ContextMenuState
   readonly rootResource: URI
-  readonly tree: ExplorerTreeService
   readonly commandService: ICommandService
   readonly onClose: () => void
 }
 
-interface MenuItem {
-  readonly id: string
-  readonly label: string
-  readonly run: () => void
-}
-
-type MenuEntry = MenuItem | { readonly id: string; readonly separator: true }
-
-export function ExplorerContextMenu({ state, rootResource, tree, commandService, onClose }: Props) {
-  const ref = useRef<HTMLUListElement>(null)
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose])
-
+export function ExplorerContextMenu({ state, rootResource, commandService, onClose }: Props) {
+  // Resolve the target for commands: clicked item, or its parent dir, or the root.
   const target = state.target
-  const isDir = target?.isDirectory ?? true
-  // For "New File / Folder", commands target the right-clicked directory, or the
-  // file's parent (let the action figure that out via the tree), or the root.
-  const newParent = target ? (target.isDirectory ? target.resource : rootResource) : rootResource
+  const effectiveTarget = target ?? { resource: rootResource, isDirectory: true }
 
-  const run = (commandId: string, args?: unknown) => {
-    onClose()
-    void commandService.executeCommand(commandId, args)
-  }
-
-  const items: MenuEntry[] = []
-  items.push({
-    id: 'newFile',
-    label: localize('explorer.context.newFile', 'New File'),
-    run: () => run('workbench.files.action.newFile', { parent: newParent }),
-  })
-  items.push({
-    id: 'newFolder',
-    label: localize('explorer.context.newFolder', 'New Folder'),
-    run: () => run('workbench.files.action.newFolder', { parent: newParent }),
-  })
-  if (target) {
-    items.push({ id: 'sep1', separator: true })
-    items.push({
-      id: 'rename',
-      label: localize('explorer.context.rename', 'Rename'),
-      run: () => run('workbench.files.action.rename', { target: target.resource }),
-    })
-    items.push({
-      id: 'delete',
-      label: localize('explorer.context.delete', 'Delete'),
-      run: () =>
-        run('workbench.files.action.delete', {
-          target: target.resource,
-          isDirectory: isDir,
-        }),
-    })
-    items.push({ id: 'sep2', separator: true })
-    if (!isDir) {
-      items.push({
-        id: 'openWithDefaultApp',
-        label: localize(
-          'explorer.context.openWithDefaultApplication',
-          'Open with Default Application',
-        ),
-        run: () => run('workbench.files.action.openWithDefaultApp', { target: target.resource }),
-      })
-    }
-    items.push({
-      id: 'revealInFolder',
-      label: localize('explorer.context.revealInFileExplorer', 'Reveal in File Explorer'),
-      run: () => run('workbench.files.action.revealInOsExplorer', { resource: target.resource }),
-    })
-    items.push({ id: 'sep3', separator: true })
-  }
-  items.push({
-    id: 'refresh',
-    label: localize('explorer.context.refresh', 'Refresh'),
-    run: () => {
-      onClose()
-      void tree.refresh(target?.isDirectory ? target.resource : rootResource)
-    },
-  })
-
-  return createPortal(
-    <ul ref={ref} role="menu" className={styles['menu']} style={{ top: state.y, left: state.x }}>
-      {items.map((it) =>
-        'separator' in it ? (
-          <li key={it.id} role="separator" className={styles['menuSeparator']} />
-        ) : (
-          <li key={it.id} role="menuitem" className={styles['menuItem']} onClick={it.run}>
-            {it.label}
-          </li>
-        ),
-      )}
-    </ul>,
-    document.body,
+  return (
+    <ContextMenu
+      menuId={MenuId.ExplorerContext}
+      anchor={{ x: state.x, y: state.y }}
+      args={[effectiveTarget]}
+      commandService={commandService}
+      onClose={onClose}
+    />
   )
 }

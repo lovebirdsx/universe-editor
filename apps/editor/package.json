@@ -27,6 +27,7 @@
   "dependencies": {
     "@fontsource/roboto": "catalog:",
     "@universe-editor/platform": "workspace:*",
+    "@universe-editor/workbench-ui": "workspace:*",
     "allotment": "catalog:",
     "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",

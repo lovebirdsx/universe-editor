@@ -14,6 +14,7 @@ import {
 } from 'react'
 import { useService } from '../useService.js'
 import {
+  IConfigurationService,
   ICommandService,
   IDialogService,
   IEditorResolverService,
@@ -21,6 +22,7 @@ import {
   IWorkspaceService,
   type URI,
 } from '@universe-editor/platform'
+import { DragSessionProvider, VirtualList } from '@universe-editor/workbench-ui'
 import { IExplorerTreeService } from './ExplorerTreeService.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
@@ -30,12 +32,18 @@ import styles from './ExplorerView.module.css'
 
 const PAGE_STEP = 10
 
+function computeDepth(resource: URI, root: URI): number {
+  const rootSegments = root.path.split('/').length
+  return resource.path.split('/').length - rootSegments
+}
+
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
   const workspaceService = useService(IWorkspaceService)
   const commandService = useService(ICommandService)
   const fileService = useService(IFileService)
   const dialogService = useService(IDialogService)
+  const configService = useService(IConfigurationService)
   const tree = useService(IExplorerTreeService)
 
   // Force a re-render whenever the tree fires onDidChange. A version counter is
@@ -203,34 +211,63 @@ export function ExplorerView() {
     }
   }
 
+  const threshold = configService.get<number>('workbench.tree.virtualizationThreshold') ?? 200
+  const visible = tree.getVisibleEntries()
+  const workspaceName = workspaceService.current?.name ?? ''
+
   return (
-    <div
-      ref={containerRef}
-      className={styles['view']}
-      role="tree"
-      tabIndex={0}
-      onKeyDown={onKeyDown}
-      onMouseDown={focusContainer}
-      onContextMenu={(e) => onRowContextMenu(e, null)}
-    >
-      <ExplorerTreeNode
-        resource={root}
-        name={workspaceService.current?.name ?? ''}
-        isDirectory
-        depth={0}
-        tree={tree}
-        onOpenFile={openFile}
-        onContextMenu={onRowContextMenu}
-      />
-      {menu && (
-        <ExplorerContextMenu
-          state={menu}
-          rootResource={root}
-          tree={tree}
-          commandService={commandService}
-          onClose={() => setMenu(null)}
-        />
-      )}
-    </div>
+    <DragSessionProvider>
+      <div
+        ref={containerRef}
+        className={styles['view']}
+        role="tree"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        onMouseDown={focusContainer}
+        onContextMenu={(e) => onRowContextMenu(e, null)}
+      >
+        {visible.length > threshold ? (
+          <VirtualList
+            items={visible}
+            estimateSize={() => 22}
+            className={styles['virtualList'] ?? ''}
+            renderItem={(entry, style) => (
+              <ExplorerTreeNode
+                key={entry.resource.toString()}
+                style={style}
+                resource={entry.resource}
+                name={entry.resource.toString() === root.toString() ? workspaceName : entry.name}
+                isDirectory={entry.isDirectory}
+                depth={computeDepth(entry.resource, root)}
+                omitChildren
+                tree={tree}
+                fileService={fileService}
+                onOpenFile={openFile}
+                onContextMenu={onRowContextMenu}
+              />
+            )}
+          />
+        ) : (
+          <ExplorerTreeNode
+            resource={root}
+            name={workspaceName}
+            isDirectory
+            depth={0}
+            tree={tree}
+            fileService={fileService}
+            onOpenFile={openFile}
+            onContextMenu={onRowContextMenu}
+          />
+        )}
+        {menu && (
+          <ExplorerContextMenu
+            state={menu}
+            rootResource={root}
+            commandService={commandService}
+            onClose={() => setMenu(null)}
+          />
+        )}
+      </div>
+    </DragSessionProvider>
   )
 }

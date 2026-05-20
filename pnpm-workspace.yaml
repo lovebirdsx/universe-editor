@@ -35,6 +35,8 @@ catalog:
   lucide-react: ^0.460.0
   '@fontsource/roboto': ^5.1.0
   monaco-editor: ^0.52.0
+  '@floating-ui/react': ^0.27.0
+  '@tanstack/react-virtual': ^3.13.0
 
   # JSON with comments (settings.json / keybindings.json)
   jsonc-parser: ^3.3.1

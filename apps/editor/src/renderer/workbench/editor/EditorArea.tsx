@@ -5,6 +5,7 @@
 
 import { type ComponentType } from 'react'
 import { IEditorGroupsService, IEditorInput, localize, type IPart } from '@universe-editor/platform'
+import { DragSessionProvider } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { SettingsEditor } from '../preferences/SettingsEditor.js'
@@ -41,18 +42,20 @@ export function EditorArea({ part }: { part?: IPart | undefined } = {}) {
 
   return (
     <div ref={containerRef} className={styles['editorAreaRoot']} data-testid="part-editorArea">
-      <GridLayout
-        grid={groupsService.grid}
-        viewFactory={(group) => (
-          <EditorGroupView
-            key={group.id}
-            group={group}
-            groupsService={groupsService}
-            componentMap={editorComponentMap}
-            fallback={welcomeFallback}
-          />
-        )}
-      />
+      <DragSessionProvider>
+        <GridLayout
+          grid={groupsService.grid}
+          viewFactory={(group) => (
+            <EditorGroupView
+              key={group.id}
+              group={group}
+              groupsService={groupsService}
+              componentMap={editorComponentMap}
+              fallback={welcomeFallback}
+            />
+          )}
+        />
+      </DragSessionProvider>
     </div>
   )
 }

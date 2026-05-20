@@ -62,6 +62,7 @@ import {
   OpenFileAction,
   OpenRecentFilesAction,
   OpenWithDefaultAppAction,
+  RefreshExplorerAction,
   RenameFileAction,
   SaveFileAction,
   SaveFileAsAction,
@@ -146,6 +147,7 @@ registerAction2(NewFolderAction)
 registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
 registerAction2(OpenWithDefaultAppAction)
+registerAction2(RefreshExplorerAction)
 registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
 

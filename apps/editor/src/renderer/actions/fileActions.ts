@@ -430,3 +430,30 @@ export class OpenWithDefaultAppAction extends Action2 {
     }
   }
 }
+
+// ---------------------------------------------------------------------------
+// Explorer refresh
+// ---------------------------------------------------------------------------
+
+export class RefreshExplorerAction extends Action2 {
+  static readonly ID = 'workbench.files.action.refresh'
+  constructor() {
+    super({
+      id: RefreshExplorerAction.ID,
+      title: localize('action.refresh.title', 'Refresh Explorer'),
+      category: localize('command.category.file', 'File'),
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const tree = accessor.get(IExplorerTreeService)
+    const arg = args[0] as { resource?: URI | UriComponents | null } | undefined
+    const resource = arg?.resource
+      ? arg.resource instanceof URI
+        ? arg.resource
+        : (URI.revive(arg.resource) as URI)
+      : tree.root
+    if (!resource) return
+    await tree.refresh(resource)
+  }
+}

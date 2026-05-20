@@ -164,6 +164,15 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Controls whether the Explorer should automatically reveal and select files when opening them.',
             ),
           },
+          'workbench.tree.virtualizationThreshold': {
+            type: 'number',
+            default: 200,
+            minimum: 10,
+            description: localize(
+              'settings.workbench.tree.virtualizationThreshold.description',
+              'Number of visible tree items above which virtual scrolling is enabled.',
+            ),
+          },
         },
       }),
     )

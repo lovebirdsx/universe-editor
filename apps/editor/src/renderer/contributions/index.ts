@@ -26,6 +26,7 @@ import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 import { NotificationStatusContribution } from '../workbench/notification/NotificationStatusContribution.js'
 import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
+import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -154,6 +155,14 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
+// Explorer right-click menu items registered through MenuRegistry.
+// BlockStartup so they are available before any ExplorerContextMenu renders.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.explorerMenu',
+  ExplorerMenuContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the
 // EditorArea, otherwise users see the default empty grid flash. BlockRestore
 // runs at LifecyclePhase.Ready which the bootstrap toggles before mount.
@@ -169,6 +178,7 @@ export {
   BuiltInViewsContribution,
   BuiltInEditorBindingsContribution,
   ContextKeyContribution,
+  ExplorerMenuContribution,
   SettingsContribution,
   FileEditorStatusContribution,
   ExternalChangeWatcher,

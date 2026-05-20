@@ -5,8 +5,9 @@
  *  the editor on click.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
-import type { URI } from '@universe-editor/platform'
+import { useEffect, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { type IFileService, type URI } from '@universe-editor/platform'
+import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import type { ExplorerTreeService } from './ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './ExplorerView.module.css'
@@ -22,6 +23,12 @@ interface Props {
     e: ReactMouseEvent,
     target: { resource: URI; isDirectory: boolean } | null,
   ) => void
+  /** When true, skip rendering children (used in virtual-scroll mode where VirtualList controls rows). */
+  readonly omitChildren?: boolean
+  /** Provided when DnD file-move is active. */
+  readonly fileService?: IFileService
+  /** Passed through from VirtualList's absolute-positioning style. */
+  readonly style?: CSSProperties
 }
 
 export function ExplorerTreeNode({
@@ -32,9 +39,12 @@ export function ExplorerTreeNode({
   tree,
   onOpenFile,
   onContextMenu,
+  omitChildren,
+  fileService,
+  style,
 }: Props) {
   const expanded = isDirectory ? tree.isExpanded(resource) : false
-  const children = isDirectory && expanded ? tree.getChildren(resource) : null
+  const children = isDirectory && expanded && !omitChildren ? tree.getChildren(resource) : null
   const indent = { paddingLeft: `${depth * 12 + 6}px` }
   const key = resource.toString()
   const isActiveEditor = tree.activeEditorResource?.toString() === key
@@ -85,6 +95,21 @@ export function ExplorerTreeNode({
     if (!isDirectory) onOpenFile(resource, { preview: false })
   }
 
+  const { dragHandleProps } = useDragHandle<{ resource: URI; isDirectory: boolean }>({
+    resource,
+    isDirectory,
+  })
+
+  const { dropTargetProps } = useDropTarget<{ resource: URI; isDirectory: boolean }>(
+    ({ resource: src }) => {
+      if (!fileService || !isDirectory) return
+      const srcName = src.path.split('/').pop()
+      if (!srcName) return
+      const dest = resource.with({ path: `${resource.path}/${srcName}` })
+      void fileService.rename(src, dest)
+    },
+  )
+
   return (
     <>
       <div
@@ -94,10 +119,12 @@ export function ExplorerTreeNode({
         aria-selected={isSelected}
         aria-current={isActiveEditor ? 'page' : undefined}
         className={className}
-        style={indent}
+        style={style ? { ...indent, ...style } : indent}
         onClick={onClick}
         onDoubleClick={onDoubleClick}
         onContextMenu={(e) => onContextMenu(e, { resource, isDirectory })}
+        {...dragHandleProps}
+        {...(isDirectory ? dropTargetProps : {})}
       >
         <span className={styles['twisty']} aria-hidden="true">
           {isDirectory ? (expanded ? '▾' : '▸') : ''}
@@ -115,6 +142,7 @@ export function ExplorerTreeNode({
           isDirectory={child.isDirectory}
           depth={depth + 1}
           tree={tree}
+          {...(fileService !== undefined ? { fileService } : {})}
           onOpenFile={onOpenFile}
           onContextMenu={onContextMenu}
         />

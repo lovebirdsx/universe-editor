@@ -3,8 +3,9 @@
  *  SearchResultsTree — file-grouped list of search matches.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState } from 'react'
+import { type CSSProperties, useState } from 'react'
 import { URI, type IFileMatch, type ITextSearchMatch } from '@universe-editor/platform'
+import { VirtualList } from '@universe-editor/workbench-ui'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { basenameOfResource, dirnameOfResource } from '../files/resourceInfo.js'
 import styles from './SearchView.module.css'
@@ -17,6 +18,7 @@ export interface SearchResultsTreeProps {
     | undefined
   onReplaceFile?: ((resource: URI) => void) | undefined
   replaceVisible?: boolean
+  virtualizationThreshold?: number
 }
 
 function highlight(preview: string, ranges: readonly { startColumn: number; endColumn: number }[]) {
@@ -45,6 +47,7 @@ function FileGroup({
   onReplaceFile,
   onReplaceMatch,
   replaceVisible,
+  style,
 }: {
   fileMatch: IFileMatch
   defaultExpanded: boolean
@@ -52,12 +55,13 @@ function FileGroup({
   onReplaceFile: SearchResultsTreeProps['onReplaceFile']
   onReplaceMatch: SearchResultsTreeProps['onReplaceMatch']
   replaceVisible: boolean | undefined
+  style?: CSSProperties
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded)
   const resource = URI.revive(fileMatch.resource) as URI
   const total = fileMatch.matches.reduce((n, m) => n + m.ranges.length, 0)
   return (
-    <div className={styles['fileGroup']}>
+    <div className={styles['fileGroup']} style={style}>
       <div className={styles['fileHeader']}>
         <button
           type="button"
@@ -133,7 +137,30 @@ export function SearchResultsTree({
   onReplaceFile,
   onReplaceMatch,
   replaceVisible,
+  virtualizationThreshold = 200,
 }: SearchResultsTreeProps) {
+  if (results.length > virtualizationThreshold) {
+    return (
+      <VirtualList
+        items={results}
+        estimateSize={() => 28}
+        className={styles['resultsTree'] ?? ''}
+        renderItem={(fm, style) => (
+          <FileGroup
+            key={(URI.revive(fm.resource) as URI).toString()}
+            fileMatch={fm}
+            defaultExpanded={false}
+            onActivateMatch={onActivateMatch}
+            onReplaceFile={onReplaceFile}
+            onReplaceMatch={onReplaceMatch}
+            replaceVisible={replaceVisible}
+            style={style}
+          />
+        )}
+      />
+    )
+  }
+
   return (
     <div className={styles['resultsTree']} role="tree">
       {results.map((fm, i) => (

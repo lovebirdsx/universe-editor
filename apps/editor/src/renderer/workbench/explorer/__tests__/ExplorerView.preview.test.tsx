@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   Emitter,
+  IConfigurationService,
   IDialogService,
   IEditorResolverService,
   IEditorService,
@@ -122,6 +123,15 @@ function renderView(folder: URI, fs: IFileServiceType) {
   services.set(IEditorService, editor as unknown as IEditorService)
   services.set(ICommandService, command as unknown as ICommandService)
   services.set(IDialogService, dialog)
+  services.set(IConfigurationService, {
+    _serviceBrand: undefined,
+    get<T>(_key: string, defaultValue?: T): T | undefined {
+      return defaultValue
+    },
+    update() {},
+    loadLayer() {},
+    onDidChangeConfiguration: new Emitter<never>().event,
+  } as unknown as IConfigurationService)
   const inst = new InstantiationService(services)
   const editorResolver = inst.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolver)

@@ -25,6 +25,7 @@ import {
   type IEditorInput,
   URI,
 } from '@universe-editor/platform'
+import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { closeEditorWithConfirm } from './closeEditorWithConfirm.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
@@ -80,6 +81,7 @@ function EditorTab({
   onPin,
   onClose,
   onContextMenu,
+  groupId,
 }: {
   input: EditorInput
   isActive: boolean
@@ -88,11 +90,17 @@ function EditorTab({
   onPin: () => void
   onClose: () => void
   onContextMenu: (e: ReactMouseEvent) => void
+  groupId: number
 }) {
   const resource = input.resource
   const showsFileIcon = resource && (resource.scheme === 'file' || resource.scheme === 'untitled')
   const languageId =
     'language' in input && typeof input.language === 'string' ? input.language : undefined
+
+  const { dragHandleProps } = useDragHandle<{ editor: EditorInput; sourceGroupId: number }>({
+    editor: input,
+    sourceGroupId: groupId,
+  })
 
   return (
     <div
@@ -104,6 +112,7 @@ function EditorTab({
       onContextMenu={onContextMenu}
       role="tab"
       aria-selected={isActive}
+      {...dragHandleProps}
     >
       {input.isDirty && <span className={styles['dirtyDot']} title="Unsaved changes" />}
       {showsFileIcon && resource && (
@@ -145,6 +154,30 @@ export function EditorGroupView({
   const tabBarRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
+
+  const { dropTargetProps } = useDropTarget<{ editor: EditorInput; sourceGroupId: number }>(
+    ({ editor, sourceGroupId }) => {
+      if (sourceGroupId === group.id) {
+        // Within same group: compute insertion index from the drop event's last known x.
+        const tabBar = tabBarRef.current
+        if (!tabBar) return
+        const tabs = Array.from(tabBar.querySelectorAll<HTMLElement>('[role="tab"]'))
+        const dropX = tabBar.dataset['lastDropX'] ? Number(tabBar.dataset['lastDropX']) : 0
+        let newIndex = tabs.length
+        for (let i = 0; i < tabs.length; i++) {
+          const rect = tabs[i]?.getBoundingClientRect()
+          if (rect && dropX < rect.left + rect.width / 2) {
+            newIndex = i
+            break
+          }
+        }
+        group.moveEditor(editor, newIndex)
+      } else {
+        const sourceGroup = groupsService.getGroup(sourceGroupId)
+        if (sourceGroup) groupsService.moveEditor(editor, group)
+      }
+    },
+  )
 
   const handleFocus = () => {
     if (!isActiveGroup) groupsService.activateGroup(group)
@@ -234,11 +267,24 @@ export function EditorGroupView({
               ‹
             </button>
           )}
-          <div ref={tabBarRef} className={styles['tabBar']} role="tablist">
+          <div
+            ref={tabBarRef}
+            className={styles['tabBar']}
+            role="tablist"
+            data-testid="editor-group-tabbar"
+            onDragOver={(e) => {
+              dropTargetProps.onDragOver(e)
+              if (tabBarRef.current) {
+                tabBarRef.current.dataset['lastDropX'] = String(e.clientX)
+              }
+            }}
+            onDrop={dropTargetProps.onDrop}
+          >
             {group.editors.map((e) => (
               <EditorTab
                 key={e.id}
                 input={e}
+                groupId={group.id}
                 isActive={group.activeEditor?.id === e.id}
                 isPreview={group.previewEditor === e}
                 onActivate={() => group.setActive(e)}

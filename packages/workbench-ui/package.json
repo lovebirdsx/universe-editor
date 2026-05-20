@@ -1,0 +1,46 @@
+{
+  "name": "@universe-editor/workbench-ui",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build && node scripts/copy-css.mjs",
+    "typecheck": "tsc --build",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "test": "vitest run",
+    "dev": "tsc --build --watch",
+    "clean": "tsc --build --clean"
+  },
+  "dependencies": {
+    "@floating-ui/react": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
+    "@universe-editor/platform": "workspace:*",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@testing-library/react": "catalog:",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@universe-editor/config-eslint": "workspace:*",
+    "@universe-editor/config-ts": "workspace:*",
+    "eslint": "catalog:",
+    "happy-dom": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  },
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  }
+}

@@ -128,3 +128,8 @@
   margin: 4px 0;
   background: var(--color-menu-border, #454545);
 }
+
+.virtualList {
+  flex: 1;
+  min-height: 0;
+}
