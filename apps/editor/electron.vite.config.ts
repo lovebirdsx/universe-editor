@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import type { Plugin } from 'vite'
 import { monacoNlsPlugin } from './build/plugins/monacoNlsPlugin'
+import { mainHmrPlugin } from './build/plugins/mainHmrPlugin'
 import {
   NLS_FILE_SUFFIX,
   patchNlsSource,
@@ -38,7 +39,7 @@ const decoratorTsconfigRaw = {
 
 export default defineConfig({
   main: {
-    plugins: [jsToTsResolvePlugin()],
+    plugins: [jsToTsResolvePlugin(), mainHmrPlugin()],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,

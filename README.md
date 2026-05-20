@@ -10,8 +10,6 @@ pnpm dev                  # 启动所有 dev（推荐）
 
 # 或单独启动
 pnpm --filter @universe-editor/editor dev     # 桌面编辑器（Electron）
-pnpm --filter @universe-editor/api dev        # http://localhost:3001
-pnpm --filter @universe-editor/web dev        # http://localhost:3000
 ```
 
 ## 仓库结构

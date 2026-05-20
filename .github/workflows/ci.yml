@@ -38,6 +38,32 @@ jobs:
       - name: Build
         run: pnpm build
 
+  integration:
+    name: Integration Tests
+    needs: ci
+    runs-on: ubuntu-latest
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (platform dist required for integration imports)
+        run: pnpm build
+
+      - name: Run integration tests
+        run: pnpm --filter @universe-editor/editor test:integration
+
   e2e:
     name: E2E Smoke (${{ matrix.os }})
     needs: ci
@@ -80,6 +106,19 @@ jobs:
         if: runner.os == 'Windows'
         run: pnpm --filter @universe-editor/editor e2e
 
+      - name: Run visual regression (Linux only)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor test:visual
+
+      - name: Upload visual diff artifacts
+        if: failure() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diff-${{ matrix.os }}
+          path: apps/editor/e2e/test-results
+          retention-days: 14
+          if-no-files-found: ignore
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v4
@@ -96,6 +135,42 @@ jobs:
           name: playwright-traces-${{ matrix.os }}
           path: apps/editor/e2e/test-results
           retention-days: 14
+          if-no-files-found: ignore
+
+  bench:
+    name: Benchmark
+    needs: ci
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    env:
+      ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (platform dist required by bench imports)
+        run: pnpm build
+
+      - name: Run benchmarks
+        run: pnpm --filter @universe-editor/editor bench
+
+      - name: Upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: apps/editor/bench/baselines/
+          retention-days: 30
           if-no-files-found: ignore
 
   package-windows:

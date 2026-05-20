@@ -39,6 +39,10 @@ pnpm lint:fix     # 自动修复格式 + lint
 
 pnpm --filter @universe-editor/editor dev   # 只启动桌面编辑器
 pnpm --filter @universe-editor/platform test
+pnpm --filter @universe-editor/editor test:integration   # 集成测试（真实 main services，无 Electron）
+pnpm --filter @universe-editor/editor bench              # 性能基准（4 个 bench 文件，结果存 bench/baselines/）
+pnpm --filter @universe-editor/editor test:visual        # Visual regression（需先在 Linux 生成基线）
+pnpm --filter @universe-editor/editor visual:update      # 更新 visual 基线截图（仅在 Linux 上跑）
 ```
 
 ## 跨包共同约定
