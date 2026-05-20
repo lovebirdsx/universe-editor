@@ -51,8 +51,15 @@ export class WindowMainService implements IWindowMainService {
   constructor(private readonly _opts: WindowMainServiceOptions) {}
 
   async createWindow(): Promise<number> {
-    const { e2eEnabled, appIconPath, preloadPath, rendererUrl, rendererHtml, appServices, logService } =
-      this._opts
+    const {
+      e2eEnabled,
+      appIconPath,
+      preloadPath,
+      rendererUrl,
+      rendererHtml,
+      appServices,
+      logService,
+    } = this._opts
 
     const isMac = process.platform === 'darwin'
     const storage = getDefaultStorage()
