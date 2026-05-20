@@ -23,9 +23,9 @@ import { RevealActiveFileInExplorerAction } from '../revealActions.js'
 import {
   IExplorerTreeService,
   type ExplorerTreeService,
-} from '../../workbench/explorer/ExplorerTreeService.js'
-import { FileEditorInput } from '../../workbench/editor/FileEditorInput.js'
-import { UntitledEditorInput } from '../../workbench/editor/UntitledEditorInput.js'
+} from '../../services/explorer/ExplorerTreeService.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 
 function makeFileInput(uri: URI): FileEditorInput {
   const input = Object.create(FileEditorInput.prototype) as FileEditorInput

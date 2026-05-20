@@ -1,5 +1,5 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for apps/editor/src/renderer/actions/fileActions.ts
+ *  Tests for the file* Action2 verb modules (Save / Create / Mutate / Open).
  *
  *  Drives the Action2 handlers directly via the CommandsRegistry, with fake
  *  implementations of IFileService / IDialogService / IHostService /
@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
+  ICommandService,
   IDialogService,
   IEditorGroupsService,
   IFileService,
@@ -22,6 +23,7 @@ import {
   URI,
   registerAction2,
   type EditorInput,
+  type ICommandService as ICommandServiceType,
   type IConfirmOptions,
   type IConfirmResult,
   type IDialogService as IDialogServiceType,
@@ -38,19 +40,15 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
   type UriComponents,
 } from '@universe-editor/platform'
-import {
-  DeleteFileAction,
-  NewFileAction,
-  NewFolderAction,
-  OpenFileAction,
-  RenameFileAction,
-  SaveFileAction,
-  SaveFileAsAction,
-} from '../fileActions.js'
+import { SaveFileAction, SaveFileAsAction } from '../fileSaveActions.js'
+import { NewFileAction, NewFolderAction, NewUntitledFileAction } from '../fileCreateActions.js'
+import { DeleteFileAction, RenameFileAction } from '../fileMutateActions.js'
+import { OpenFileAction } from '../fileOpenActions.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
-} from '../../workbench/explorer/ExplorerTreeService.js'
+} from '../../services/explorer/ExplorerTreeService.js'
+import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -182,6 +180,17 @@ class FakeHostService implements IHostServiceType {
   async openNewWindow() {}
 }
 
+class FakeCommandService implements ICommandServiceType {
+  declare readonly _serviceBrand: undefined
+  readonly calls: Array<{ id: string; args: unknown[] }> = []
+  results = new Map<string, unknown>()
+
+  async executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined> {
+    this.calls.push({ id, args })
+    return this.results.get(id) as T | undefined
+  }
+}
+
 interface FakeGroup extends IEditorGroup {
   readonly opened: EditorInput[]
   readonly closed: EditorInput[]
@@ -222,6 +231,7 @@ interface Harness {
   tree: ExplorerTreeService
   group: FakeGroup
   groupsService: IEditorGroupsServiceType
+  cmd: FakeCommandService
 }
 
 function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Harness {
@@ -230,6 +240,7 @@ function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Har
   const ws = new FakeWorkspaceService(root)
   const dialog = new FakeDialogService()
   const host = new FakeHostService()
+  const cmd = new FakeCommandService()
   const { group, service: groupsService } = makeGroup(opts.activeEditor)
 
   const services = new ServiceCollection()
@@ -239,6 +250,7 @@ function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Har
   services.set(IDialogService, dialog)
   services.set(IHostService, host)
   services.set(IEditorGroupsService, groupsService)
+  services.set(ICommandService, cmd)
   const inst = new InstantiationService(services)
   // ExplorerTreeService needs IWorkspaceService + IFileService.
   const tree = inst.createInstance(ExplorerTreeService)
@@ -246,7 +258,7 @@ function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Har
   // Re-set inst's snapshot in case the runner needs it
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
 
-  return { inst, fs, ws, dialog, host, tree, group, groupsService }
+  return { inst, fs, ws, dialog, host, tree, group, groupsService, cmd }
 }
 
 function run(h: Harness, id: string, args?: unknown): Promise<unknown> {
@@ -266,6 +278,7 @@ beforeEach(() => {
   disposables.push(registerAction2(OpenFileAction))
   disposables.push(registerAction2(NewFileAction))
   disposables.push(registerAction2(NewFolderAction))
+  disposables.push(registerAction2(NewUntitledFileAction))
   disposables.push(registerAction2(RenameFileAction))
   disposables.push(registerAction2(DeleteFileAction))
 })
@@ -290,6 +303,14 @@ describe('fileActions', () => {
     it('no-ops when there is no active editor', async () => {
       const h = makeHarness()
       await expect(run(h, SaveFileAction.ID)).resolves.toBeUndefined()
+    })
+
+    it('delegates to SaveFileAsAction when the active editor is untitled', async () => {
+      const h = makeHarness()
+      const untitled = h.inst.createInstance(UntitledEditorInput)
+      ;(h.group as unknown as { activeEditor: EditorInput }).activeEditor = untitled
+      await run(h, SaveFileAction.ID)
+      expect(h.cmd.calls.map((c) => c.id)).toContain(SaveFileAsAction.ID)
     })
   })
 
@@ -404,6 +425,17 @@ describe('fileActions', () => {
       const h = makeHarness({ activeEditor: active })
       await expect(run(h, SaveFileAsAction.ID)).resolves.toBeUndefined()
       expect(h.host.saveCalls).toHaveLength(0)
+    })
+  })
+
+  describe('NewUntitledFileAction', () => {
+    it('opens a fresh untitled input in the active group', async () => {
+      const h = makeHarness()
+      await run(h, NewUntitledFileAction.ID)
+      expect(h.group.opened).toHaveLength(1)
+      const opened = h.group.opened[0]
+      expect(opened).toBeInstanceOf(UntitledEditorInput)
+      expect(opened?.typeId).toBe('untitled')
     })
   })
 })

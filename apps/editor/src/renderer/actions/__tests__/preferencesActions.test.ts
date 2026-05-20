@@ -22,9 +22,9 @@ import {
   OpenKeybindingsEditorAction,
   OpenSettingsAction,
 } from '../preferencesActions.js'
-import { KeybindingsEditorInput } from '../../workbench/keybindings/KeybindingsEditorInput.js'
-import { SettingsEditorInput } from '../../workbench/preferences/SettingsEditorInput.js'
-import { EditorGroupsService } from '../../workbench/editor/EditorGroupsService.js'
+import { KeybindingsEditorInput } from '../../services/editor/KeybindingsEditorInput.js'
+import { SettingsEditorInput } from '../../services/editor/SettingsEditorInput.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../../shared/i18n/availableLocales.js'
 
 function runAction(groups: EditorGroupsService, id: string = OpenSettingsAction.ID): void {

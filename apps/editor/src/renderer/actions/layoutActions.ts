@@ -23,7 +23,7 @@ import {
   collectMonacoCommands,
   isMonacoCommandItem,
   type MonacoCommandItem,
-} from '../workbench/quickinput/monacoCommandSource.js'
+} from '../services/quickInput/monacoCommandSource.js'
 import { resolveShortcut } from '../workbench/titlebar/keybindingFormat.js'
 
 export const EXPLORER_FOCUS_VIEW_EVENT = 'explorer:focus-view'

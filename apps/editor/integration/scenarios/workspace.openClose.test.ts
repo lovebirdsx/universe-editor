@@ -38,8 +38,8 @@ describe('workspace.openClose (integration)', () => {
     await wb.workspace.openFolder(folder)
     await wb.workspace.closeFolder()
 
-    // Flush microtasks so the fire-and-forget _persistCurrent completes
-    await new Promise((r) => setImmediate(r))
+    // Drain all pending fire-and-forget writes so the file reflects the null current.
+    await wb.storage.flush()
 
     expect(await wb.workspace.getCurrent()).toBeNull()
     // The storage key should have been written as null (not absent)
@@ -62,8 +62,8 @@ describe('workspace.openClose (integration)', () => {
     await wb.workspace.openFolder(folderA)
     await wb.workspace.openFolder(folderB)
     await wb.workspace.openFolder(folderC)
-    // Flush pending async persist
-    await new Promise((r) => setTimeout(r, 20))
+    // Drain all pending fire-and-forget writes before the second session reads.
+    await wb.storage.flush()
 
     // Second "session": a fresh service reading the same storage file
     vi.mocked(app.getPath).mockReturnValue(wb.userDataDir)

@@ -24,9 +24,9 @@ import {
   type DisplayLanguageSetting,
   type ILocaleOption,
 } from '../../shared/i18n/availableLocales.js'
-import { SettingsEditorInput } from '../workbench/preferences/SettingsEditorInput.js'
-import { KeybindingsEditorInput } from '../workbench/keybindings/KeybindingsEditorInput.js'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
+import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import {
   dispatchKeybindingsEditorFocusSearch,
   dispatchSettingsEditorFocusSearch,

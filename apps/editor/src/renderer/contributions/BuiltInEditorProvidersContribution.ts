@@ -16,11 +16,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, EditorRegistry, type IWorkbenchContribution } from '@universe-editor/platform'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
-import { KeybindingsEditorInput } from '../workbench/keybindings/KeybindingsEditorInput.js'
-import { SettingsEditorInput } from '../workbench/preferences/SettingsEditorInput.js'
-import { UntitledEditorInput } from '../workbench/editor/UntitledEditorInput.js'
-import { WelcomeEditorInput } from '../workbench/editor/WelcomeEditorInput.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
+import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
+import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
+import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
 
 export class BuiltInEditorProvidersContribution
   extends Disposable

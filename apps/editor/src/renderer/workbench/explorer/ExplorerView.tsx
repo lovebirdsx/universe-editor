@@ -23,10 +23,10 @@ import {
   type URI,
 } from '@universe-editor/platform'
 import { DragSessionProvider, VirtualList } from '@universe-editor/workbench-ui'
-import { IExplorerTreeService } from './ExplorerTreeService.js'
+import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
-import { confirmLargeFile } from '../editor/largeFileGuard.js'
+import { confirmLargeFile } from '../../services/editor/largeFileGuard.js'
 import { EXPLORER_FOCUS_VIEW_EVENT } from '../../actions/layoutActions.js'
 import styles from './ExplorerView.module.css'
 

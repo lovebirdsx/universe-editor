@@ -13,8 +13,8 @@ import {
   localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../workbench/editor/FileEditorRegistry.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 
 export const SEARCH_FOCUS_INPUT_EVENT = 'search:focus-input'
 

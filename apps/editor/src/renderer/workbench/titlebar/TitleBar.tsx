@@ -6,7 +6,7 @@ import {
   type IEditorGroup,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import { FileEditorInput } from '../editor/FileEditorInput.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { MenuBar } from './MenuBar.js'
 import { WindowControls } from './WindowControls.js'
 import styles from './TitleBar.module.css'

@@ -10,7 +10,10 @@ import { createPortal } from 'react-dom'
 import { IQuickInputService } from '@universe-editor/platform'
 import type { IQuickPickItem } from '@universe-editor/platform'
 import { useService } from '../useService.js'
-import { QuickInputService, type QuickPickState } from './QuickInputService.js'
+import {
+  QuickInputService,
+  type QuickPickState,
+} from '../../services/quickInput/QuickInputService.js'
 import styles from './QuickInput.module.css'
 
 function fuzzyMatch(text: string, query: string): boolean {

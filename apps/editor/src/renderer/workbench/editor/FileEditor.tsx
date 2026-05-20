@@ -26,11 +26,14 @@ import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 import { getAllMonacoDefaultKeybindings } from './monaco/monacoActionsBridge.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
-import { EditorViewStateCache } from './EditorViewStateCache.js'
-import { FileEditorInput } from './FileEditorInput.js'
-import { FileEditorRegistry } from './FileEditorRegistry.js'
-import { IUserKeybindingsService } from '../keybindings/UserKeybindingsService.js'
-import { EDITOR_FONT_FAMILY_DEFAULT, normalizeFontFamily } from '../configuration/fontDefaults.js'
+import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
+import {
+  EDITOR_FONT_FAMILY_DEFAULT,
+  normalizeFontFamily,
+} from '../../services/configuration/fontDefaults.js'
 import styles from './FileEditor.module.css'
 
 function getEditorFontSize(configService: IConfigurationService): number {

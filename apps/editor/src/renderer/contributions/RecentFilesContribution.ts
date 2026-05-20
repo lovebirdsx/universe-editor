@@ -4,7 +4,7 @@ import {
   IWorkbenchContribution,
   type IEditorGroup,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 
 export class RecentFilesContribution extends Disposable implements IWorkbenchContribution {

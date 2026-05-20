@@ -4,7 +4,7 @@ import 'allotment/dist/style.css'
 import type { LayoutSizes } from '@universe-editor/platform'
 import styles from './WorkbenchLayout.module.css'
 import './allotment-theme.css'
-import { computeResizeAfterSecondaryToggle } from './resizeUtils.js'
+import { computeResizeAfterSecondaryToggle } from '../../services/layout/resizeUtils.js'
 
 interface WorkbenchLayoutProps {
   titlebar: ReactNode

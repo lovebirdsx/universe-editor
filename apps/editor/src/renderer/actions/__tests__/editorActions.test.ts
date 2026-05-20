@@ -31,9 +31,9 @@ import {
   SplitEditorRightAction,
   SplitEditorUpAction,
 } from '../editorActions.js'
-import { EditorGroupsService } from '../../workbench/editor/EditorGroupsService.js'
-import { FileEditorInput } from '../../workbench/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../workbench/editor/FileEditorRegistry.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 
 class TestEditor extends EditorInput {
   constructor(private readonly _name: string) {

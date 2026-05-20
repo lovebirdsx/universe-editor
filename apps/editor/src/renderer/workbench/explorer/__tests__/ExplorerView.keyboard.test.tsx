@@ -30,9 +30,12 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { ExplorerView } from '../ExplorerView.js'
-import { ExplorerTreeService, IExplorerTreeService } from '../ExplorerTreeService.js'
+import {
+  ExplorerTreeService,
+  IExplorerTreeService,
+} from '../../../services/explorer/ExplorerTreeService.js'
 import { ServicesContext } from '../../useService.js'
-import { EditorResolverService } from '../../editor/EditorResolverService.js'
+import { EditorResolverService } from '../../../services/editor/EditorResolverService.js'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType {
   const dirs = new Map(Object.entries(initial))

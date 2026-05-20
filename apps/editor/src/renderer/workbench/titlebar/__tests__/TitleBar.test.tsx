@@ -13,8 +13,8 @@ import {
   URI,
   type IWorkspace,
 } from '@universe-editor/platform'
-import { EditorGroupsService } from '../../editor/EditorGroupsService.js'
-import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
+import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { ServicesContext } from '../../useService.js'
 import { TitleBar } from '../TitleBar.js'
 

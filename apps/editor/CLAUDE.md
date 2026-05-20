@@ -13,6 +13,22 @@ Electron 33 桌面应用，VSCode 范式的 workbench。本目录是项目核心
 
 产物在 `out/{main,preload,renderer}`（electron-vite 约定，勿改）。
 
+## renderer 目录归类规则
+
+`src/renderer/` 下五个一级目录承载不同性质的代码，**新文件务必按下表归位**：
+
+| 目录 | 收什么 | 不收什么 |
+|---|---|---|
+| `services/<feature>/` | 所有 `*Service.ts` / `*Registry.ts` / `*Input.ts` / 业务 helper / 与平台无关的纯函数；同级 `__tests__/` 放测试 | React 组件、React Hook、`.module.css` |
+| `contributions/` | 所有 `implements IWorkbenchContribution` 的类（即便文件名不带 Contribution，例如 `ExternalChangeWatcher.ts`）；同级 `__tests__/` 放测试 | 服务、Action、视图 |
+| `actions/` | 所有 `Action2` 子类，**文件名必须复数** `*Actions.ts` 并按业务域聚合（`fileSaveActions.ts` / `fileOpenActions.ts` / `layoutActions.ts` …），不要为单个 Action 起独立文件；同级 `__tests__/` 放测试 | Action 之外的服务/视图 |
+| `workbench/<feature>/` | `.tsx` 视图组件、`.module.css` 样式、React Hook（`useXxx.ts(x)`）、React Context；同级 `__tests__/` 放测试 | `*Service.ts` / `*Input.ts` / Contribution |
+| `ipc/` | renderer 端 IPC bootstrap | — |
+
+应用入口位于 `main.tsx`，应用级 helper（`errors.ts` / `global.d.ts`）放在 `renderer/` 根。E2E 探针在 `renderer/e2e/`。
+
+新增模块时先问"它是不是 IWorkbenchContribution"，是 → `contributions/`；否则问"它是不是 Service/Registry/Input"，是 → `services/`；否则问"它是不是 Action2"，是 → `actions/`；都不是就是视图层 → `workbench/`。
+
 ## bootstrap 链路（renderer 端）
 
 `src/renderer/main.tsx` 顺序：
@@ -27,7 +43,8 @@ Electron 33 桌面应用，VSCode 范式的 workbench。本目录是项目核心
 
 ## 套路 A：加一个 Action2（命令 + 快捷键）
 
-**新建文件**：`src/renderer/actions/myAction.ts`
+**文件归位**：`src/renderer/actions/<domain>Actions.ts`（**复数**，按业务域归类，如 `fileSaveActions.ts` / `fileOpenActions.ts` / `layoutActions.ts` / `editorActions.ts`）。同一域内可放多个 Action 类；不要为单个 Action 新建独立文件。
+
 ```ts
 import { Action2, ILayoutService, PartId, type ServicesAccessor } from '@universe-editor/platform'
 
@@ -49,7 +66,7 @@ export class MyAction extends Action2 {
 }
 ```
 
-**注册**：在 `src/renderer/actions/index.ts` 末尾加 `registerAction2(MyAction)`。
+**注册**：在 `src/renderer/actions/index.ts` 对应分组里加 `registerAction2(MyAction)`。
 
 参考：`src/renderer/actions/layoutActions.ts`、`src/renderer/actions/searchActions.ts`
 
@@ -170,7 +187,7 @@ entry.dispose()
 
 要点：**生命周期由你管**。React 组件里放 `useRef` 持 accessor，`useEffect` cleanup 里 dispose；Contribution 里放成员字段，`_hide()` 时 dispose。
 
-参考：`src/renderer/workbench/statusbar/FileEditorStatusContribution.ts`、`src/renderer/workbench/search/SearchView.tsx`
+参考：`src/renderer/contributions/FileEditorStatusContribution.ts`、`src/renderer/workbench/search/useSearchEngine.ts`
 
 ## 套路 F：加一个 E2E 冒烟场景
 

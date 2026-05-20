@@ -27,8 +27,8 @@ import {
   FindReplaceInFileAction,
   SEARCH_FOCUS_INPUT_EVENT,
 } from '../searchActions.js'
-import { FileEditorInput } from '../../workbench/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../workbench/editor/FileEditorRegistry.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 
 describe('FindInFilesAction', () => {

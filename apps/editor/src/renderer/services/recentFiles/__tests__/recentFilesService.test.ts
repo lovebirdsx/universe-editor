@@ -19,8 +19,8 @@ import {
 } from '@universe-editor/platform'
 import { IRecentFilesService, RecentFilesService } from '../recentFilesService.js'
 import { RecentFilesContribution } from '../../../contributions/RecentFilesContribution.js'
-import { FileEditorInput } from '../../../workbench/editor/FileEditorInput.js'
-import { ClearRecentFilesAction, OpenRecentFilesAction } from '../../../actions/fileActions.js'
+import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { ClearRecentFilesAction, OpenRecentFilesAction } from '../../../actions/fileOpenActions.js'
 
 // ---------------------------------------------------------------------------
 // Fake IStorageService

@@ -5,10 +5,14 @@ import { join } from 'node:path'
 export interface Storage {
   get<T = unknown>(key: string): Promise<T | undefined>
   set(key: string, value: unknown): Promise<void>
+  /** Wait for all pending writes to complete. */
+  flush(): Promise<void>
 }
 
 export function createStorage(filePath: string): Storage {
   let cache: Record<string, unknown> | null = null
+  // Serialize all writes so concurrent set() calls never race on disk.
+  let writeChain: Promise<void> = Promise.resolve()
 
   const readAll = async (): Promise<Record<string, unknown>> => {
     if (cache) return cache
@@ -30,7 +34,15 @@ export function createStorage(filePath: string): Storage {
     async set(key: string, value: unknown): Promise<void> {
       const all = await readAll()
       all[key] = value
-      await fs.writeFile(filePath, JSON.stringify(all, null, 2), 'utf8')
+      // Snapshot content now so a later mutation doesn't affect this write.
+      const content = JSON.stringify(all, null, 2)
+      // Chain onto the previous write; swallow previous errors so the chain
+      // stays alive for future writes even if one write failed.
+      writeChain = writeChain.catch(() => {}).then(() => fs.writeFile(filePath, content, 'utf8'))
+      return writeChain
+    },
+    flush(): Promise<void> {
+      return writeChain
     },
   }
 }

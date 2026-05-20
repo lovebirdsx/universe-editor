@@ -21,7 +21,7 @@ import {
   type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
-import { EditorGroupsService } from '../EditorGroupsService.js'
+import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { EditorGroupView } from '../EditorGroupView.js'
 import { ServicesContext } from '../../useService.js'
 

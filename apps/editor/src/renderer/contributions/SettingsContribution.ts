@@ -16,7 +16,7 @@ import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
   WORKBENCH_FONT_FAMILY_DEFAULT,
-} from '../workbench/configuration/fontDefaults.js'
+} from '../services/configuration/fontDefaults.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {

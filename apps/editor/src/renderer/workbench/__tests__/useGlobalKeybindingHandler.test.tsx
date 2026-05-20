@@ -11,7 +11,7 @@ import {
   registerAction2,
   type IDisposable,
 } from '@universe-editor/platform'
-import { StatusBarService } from '../statusbar/StatusBarService.js'
+import { StatusBarService } from '../../services/statusbar/StatusBarService.js'
 import { ServicesContext } from '../useService.js'
 import { useGlobalKeybindingHandler } from '../useGlobalKeybindingHandler.js'
 import { SplitEditorDownAction } from '../../actions/editorActions.js'

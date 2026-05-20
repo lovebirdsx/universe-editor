@@ -54,20 +54,16 @@ import {
   OpenFolderAction,
   OpenRecentAction,
 } from './workspaceActions.js'
+import { SaveFileAction, SaveFileAsAction } from './fileSaveActions.js'
+import { NewFileAction, NewFolderAction, NewUntitledFileAction } from './fileCreateActions.js'
+import { DeleteFileAction, RenameFileAction } from './fileMutateActions.js'
 import {
   ClearRecentFilesAction,
-  DeleteFileAction,
-  NewFileAction,
-  NewFolderAction,
   OpenFileAction,
   OpenRecentFilesAction,
   OpenWithDefaultAppAction,
   RefreshExplorerAction,
-  RenameFileAction,
-  SaveFileAction,
-  SaveFileAsAction,
-} from './fileActions.js'
-import { NewUntitledFileAction } from './newUntitledFileAction.js'
+} from './fileOpenActions.js'
 import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from './revealActions.js'
 import {
   FindInFileAction,

@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../QuickInput.js'
-import type { QuickPickState } from '../QuickInputService.js'
+import type { QuickPickState } from '../../../services/quickInput/QuickInputService.js'
 
 afterEach(() => cleanup())
 

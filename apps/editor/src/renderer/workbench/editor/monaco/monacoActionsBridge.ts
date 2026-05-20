@@ -25,8 +25,8 @@ import {
   type IDisposable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../FileEditorInput.js'
-import { FileEditorRegistry } from '../FileEditorRegistry.js'
+import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import { decodeMonacoKeybinding, type DecodedKeybinding } from './monacoKeybindingDecoder.js'
 
 interface IMonacoEditorAction {

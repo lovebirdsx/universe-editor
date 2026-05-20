@@ -6,7 +6,7 @@ import {
 import {
   normalizeFontFamily,
   WORKBENCH_FONT_FAMILY_DEFAULT,
-} from '../workbench/configuration/fontDefaults.js'
+} from '../services/configuration/fontDefaults.js'
 
 function getWorkbenchFontFamily(config: IConfigurationService): string {
   return normalizeFontFamily(config.get('workbench.fontFamily'), WORKBENCH_FONT_FAMILY_DEFAULT)

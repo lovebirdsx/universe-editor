@@ -14,7 +14,7 @@ import { WelcomeEditor } from './WelcomeEditor.js'
 import { FileEditor } from './FileEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
-import { EditorGroupsService } from './EditorGroupsService.js'
+import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import styles from './EditorArea.module.css'
 
 /** Registry of React components keyed by IEditorProvider.componentKey. */

@@ -1,0 +1,122 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Create actions: new file (Explorer or untitled buffer) / new folder.
+ *--------------------------------------------------------------------------------------------*/
+
+import {
+  Action2,
+  IDialogService,
+  IEditorGroupsService,
+  IInstantiationService,
+  IWorkspaceService,
+  MenuId,
+  URI,
+  localize,
+  type ServicesAccessor,
+  type UriComponents,
+} from '@universe-editor/platform'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
+import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { reviveUri } from './fileActionsCommon.js'
+
+interface IParentArg {
+  readonly parent?: URI | UriComponents
+}
+
+function resolveParent(accessor: ServicesAccessor, args: IParentArg | undefined): URI | null {
+  const explicit = args?.parent ? reviveUri(args.parent) : null
+  if (explicit) return explicit
+  const workspace = accessor.get(IWorkspaceService)
+  return workspace.current?.folder ?? null
+}
+
+export class NewUntitledFileAction extends Action2 {
+  static readonly ID = 'workbench.action.files.newUntitledFile'
+  constructor() {
+    super({
+      id: NewUntitledFileAction.ID,
+      title: localize('action.newUntitledFile.title', 'New File'),
+      category: localize('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+n' },
+      menu: { id: MenuId.MenubarFileMenu, group: '1_new', order: 0 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const inst = accessor.get(IInstantiationService)
+    const groups = accessor.get(IEditorGroupsService)
+    const input = inst.createInstance(UntitledEditorInput)
+    groups.activeGroup.openEditor(input, { activate: true })
+  }
+}
+
+export class NewFileAction extends Action2 {
+  static readonly ID = 'workbench.files.action.newFile'
+  constructor() {
+    super({
+      id: NewFileAction.ID,
+      title: localize('action.newFile.title', 'New File…'),
+      category: localize('command.category.file', 'File'),
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const parent = resolveParent(accessor, args[0] as IParentArg)
+    if (!parent) return
+    const dialog = accessor.get(IDialogService)
+    const tree = accessor.get(IExplorerTreeService)
+    const groups = accessor.get(IEditorGroupsService)
+    const inst = accessor.get(IInstantiationService)
+
+    const name = await dialog.prompt({
+      title: localize('dialog.file.prompt.newFile', 'New File'),
+      placeholder: localize('common.name', 'Name'),
+    })
+    if (!name) return
+    try {
+      const created = await tree.createFile(parent, name)
+      const input = inst.createInstance(FileEditorInput, created)
+      groups.activeGroup.openEditor(input, { activate: true })
+    } catch (err) {
+      await dialog.confirm({
+        message: localize('dialog.file.create.error.file', 'Failed to create file'),
+        detail: err instanceof Error ? err.message : String(err),
+        type: 'error',
+      })
+    }
+  }
+}
+
+export class NewFolderAction extends Action2 {
+  static readonly ID = 'workbench.files.action.newFolder'
+  constructor() {
+    super({
+      id: NewFolderAction.ID,
+      title: localize('action.newFolder.title', 'New Folder…'),
+      category: localize('command.category.file', 'File'),
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const parent = resolveParent(accessor, args[0] as IParentArg)
+    if (!parent) return
+    const dialog = accessor.get(IDialogService)
+    const tree = accessor.get(IExplorerTreeService)
+
+    const name = await dialog.prompt({
+      title: localize('dialog.file.prompt.newFolder', 'New Folder'),
+      placeholder: localize('common.name', 'Name'),
+    })
+    if (!name) return
+    try {
+      await tree.createFolder(parent, name)
+    } catch (err) {
+      await dialog.confirm({
+        message: localize('dialog.file.create.error.folder', 'Failed to create folder'),
+        detail: err instanceof Error ? err.message : String(err),
+        type: 'error',
+      })
+    }
+  }
+}

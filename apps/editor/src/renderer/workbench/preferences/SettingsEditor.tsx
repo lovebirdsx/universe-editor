@@ -22,7 +22,7 @@ import {
   SETTINGS_EDITOR_FOCUS_SEARCH_EVENT,
   SETTINGS_EDITOR_SWITCH_TARGET_EVENT,
 } from './preferencesFocus.js'
-import { SettingsEditorInput } from './SettingsEditorInput.js'
+import { SettingsEditorInput } from '../../services/editor/SettingsEditorInput.js'
 import styles from './SettingsEditor.module.css'
 
 function originLabel(origin: ConfigurationTarget | undefined): string {

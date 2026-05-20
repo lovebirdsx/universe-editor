@@ -16,9 +16,9 @@ import {
   localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { closeEditorWithConfirm } from '../workbench/editor/closeEditorWithConfirm.js'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../workbench/editor/FileEditorRegistry.js'
+import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfirm.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 
 // ---------------------------------------------------------------------------
 // Close group

@@ -18,8 +18,8 @@ import {
   type ISchemaContribution,
 } from '@universe-editor/platform'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
-import { buildSettingsJsonSchema } from '../workbench/preferences/buildSettingsJsonSchema.js'
-import { buildKeybindingsJsonSchema } from '../workbench/keybindings/buildKeybindingsJsonSchema.js'
+import { buildSettingsJsonSchema } from '../services/preferences/buildSettingsJsonSchema.js'
+import { buildKeybindingsJsonSchema } from '../services/keybindings/buildKeybindingsJsonSchema.js'
 
 const SETTINGS_USER_URI = 'universe-editor://schemas/settings/user'
 const SETTINGS_PROJECT_URI = 'universe-editor://schemas/settings/project'

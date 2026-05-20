@@ -51,7 +51,7 @@ export class FooService implements IFooService {
 //    或：services.set(IFooService, new FooService(barInstance))
 ```
 
-参考：`src/di/instantiation.ts`、`apps/editor/src/renderer/workbench/explorer/ExplorerTreeService.ts`
+参考：`src/di/instantiation.ts`、`apps/editor/src/renderer/services/explorer/ExplorerTreeService.ts`
 
 ### Action2：命令 + 菜单 + 快捷键三合一
 

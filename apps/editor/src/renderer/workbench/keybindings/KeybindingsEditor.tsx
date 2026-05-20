@@ -9,7 +9,7 @@ import { CommandsRegistry, KeybindingsRegistry } from '@universe-editor/platform
 import { useService } from '../useService.js'
 import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
 import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferences/preferencesFocus.js'
-import { IUserKeybindingsService } from './UserKeybindingsService.js'
+import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
 import { getMonacoDefaultKeybinding } from '../editor/monaco/monacoActionsBridge.js'
 import styles from './KeybindingsEditor.module.css'
 

@@ -12,7 +12,7 @@ vi.mock('../../src/renderer/workbench/editor/monaco/MonacoModelRegistry.js', () 
   MonacoModelRegistry: { getOrCreate: vi.fn(), get: vi.fn(), _resetForTests: vi.fn() },
 }))
 
-import { EditorResolverService } from '../../src/renderer/workbench/editor/EditorResolverService.js'
+import { EditorResolverService } from '../../src/renderer/services/editor/EditorResolverService.js'
 
 // Minimal stubs for DI-injected constructor params — only openEditor() uses them
 const mockInst = { createInstance: vi.fn() } as unknown as IInstantiationService

@@ -59,6 +59,9 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
       userData.dispose()
       workspace.dispose()
       logService.dispose()
+      // Drain any pending fire-and-forget writes before removing the temp dir,
+      // otherwise serialized writes that haven't run yet will fail with ENOENT.
+      await storage.flush()
       await fs.rm(userDataDir, { recursive: true, force: true })
     },
   }

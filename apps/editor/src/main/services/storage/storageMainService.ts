@@ -19,4 +19,8 @@ export class MainStorageService implements IStorageService {
   set(key: string, value: unknown): Promise<void> {
     return this._storage.set(key, value)
   }
+
+  flush(): Promise<void> {
+    return this._storage.flush()
+  }
 }

@@ -27,8 +27,8 @@ import {
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
 } from '../../actions/layoutActions.js'
-import { FileEditorInput } from '../../workbench/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../workbench/editor/FileEditorRegistry.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 
 describe('Built-in layout Action2s', () => {
   const disposables: IDisposable[] = []

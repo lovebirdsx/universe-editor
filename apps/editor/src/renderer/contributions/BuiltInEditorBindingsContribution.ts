@@ -17,7 +17,7 @@ import {
   MenuRegistry,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 
 export class BuiltInEditorBindingsContribution
   extends Disposable

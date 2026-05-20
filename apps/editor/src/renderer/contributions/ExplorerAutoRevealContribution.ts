@@ -14,11 +14,11 @@ import {
   IWorkbenchContribution,
   URI,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
-} from '../workbench/explorer/ExplorerTreeService.js'
+} from '../services/explorer/ExplorerTreeService.js'
 
 export class ExplorerAutoRevealContribution extends Disposable implements IWorkbenchContribution {
   constructor(

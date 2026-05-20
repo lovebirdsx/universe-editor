@@ -17,8 +17,8 @@ import {
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../workbench/editor/FileEditorInput.js'
-import { IExplorerTreeService } from '../workbench/explorer/ExplorerTreeService.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 
 interface IRevealArgs {
   readonly resource?: URI | UriComponents

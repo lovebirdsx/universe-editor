@@ -50,33 +50,33 @@ import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { installRendererErrorHandlers } from './errors.js'
 import { RendererLoggerService } from './services/log/rendererLoggerService.js'
-import { CommandService } from './workbench/CommandService.js'
-import { EditorService } from './workbench/editor/EditorService.js'
-import { EditorGroupsService } from './workbench/editor/EditorGroupsService.js'
-import { StatusBarService } from './workbench/statusbar/StatusBarService.js'
-import { ViewsService } from './workbench/sidebar/ViewsService.js'
-import { QuickInputService } from './workbench/quickinput/QuickInputService.js'
-import { OutputService } from './workbench/panel/output/OutputService.js'
-import { LayoutService } from './workbench/layout/LayoutService.js'
-import { RendererDialogService } from './workbench/dialog/RendererDialogService.js'
-import { NotificationService } from './workbench/notification/NotificationService.js'
-import { UserSettingsSync } from './workbench/configuration/UserSettingsSync.js'
+import { CommandService } from './services/command/CommandService.js'
+import { EditorService } from './services/editor/EditorService.js'
+import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
+import { StatusBarService } from './services/statusbar/StatusBarService.js'
+import { ViewsService } from './services/views/ViewsService.js'
+import { QuickInputService } from './services/quickInput/QuickInputService.js'
+import { OutputService } from './services/output/OutputService.js'
+import { LayoutService } from './services/layout/LayoutService.js'
+import { RendererDialogService } from './services/dialog/RendererDialogService.js'
+import { NotificationService } from './services/notification/NotificationService.js'
+import { UserSettingsSync } from './services/configuration/UserSettingsSync.js'
 import {
   UserKeybindingsService,
   IUserKeybindingsService,
-} from './workbench/keybindings/UserKeybindingsService.js'
-import { RendererWorkspaceService } from './workbench/workspace/RendererWorkspaceService.js'
+} from './services/keybindings/UserKeybindingsService.js'
+import { RendererWorkspaceService } from './services/workspace/RendererWorkspaceService.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
-} from './workbench/explorer/ExplorerTreeService.js'
-import { TextSearchService } from './workbench/search/TextSearchService.js'
+} from './services/explorer/ExplorerTreeService.js'
+import { TextSearchService } from './services/search/TextSearchService.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
 import {
   IRecentFilesService,
   RecentFilesService,
 } from './services/recentFiles/recentFilesService.js'
-import { EditorResolverService } from './workbench/editor/EditorResolverService.js'
+import { EditorResolverService } from './services/editor/EditorResolverService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 

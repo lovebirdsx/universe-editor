@@ -8,7 +8,7 @@
 import { useEffect, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import { type IFileService, type URI } from '@universe-editor/platform'
 import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
-import type { ExplorerTreeService } from './ExplorerTreeService.js'
+import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './ExplorerView.module.css'
 

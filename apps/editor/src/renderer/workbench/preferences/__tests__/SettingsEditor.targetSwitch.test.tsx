@@ -13,7 +13,7 @@ import {
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
 import { SettingsEditor } from '../SettingsEditor.js'
-import { SettingsEditorInput } from '../SettingsEditorInput.js'
+import { SettingsEditorInput } from '../../../services/editor/SettingsEditorInput.js'
 import {
   SETTINGS_EDITOR_SWITCH_TARGET_EVENT,
   dispatchSettingsEditorSwitchTarget,
