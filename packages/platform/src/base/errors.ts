@@ -11,8 +11,18 @@ export function setUnexpectedErrorHandler(handler: (e: unknown) => void): void {
   unexpectedErrorHandler = handler
 }
 
+type ErrorTelemetryHook = (errorEventName: string, data: { stack?: string }) => void
+let _errorTelemetryHook: ErrorTelemetryHook | undefined
+
+export function setErrorTelemetryHook(hook: ErrorTelemetryHook): void {
+  _errorTelemetryHook = hook
+}
+
 export function onUnexpectedError(e: unknown): void {
   if (e instanceof ErrorNoTelemetry) return
+  _errorTelemetryHook?.('unhandledError', {
+    stack: e instanceof Error ? (e.stack ?? e.message) : String(e),
+  })
   unexpectedErrorHandler(e)
 }
 

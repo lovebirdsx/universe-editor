@@ -33,11 +33,14 @@ import {
   IContributionService,
   ILoggerService,
   INotificationService,
+  ITelemetryService,
+  NoopTelemetryService,
   Severity,
   ProxyChannel,
   DisposableTracker,
   localize,
   setDisposableTracker,
+  setErrorTelemetryHook,
   setUnexpectedErrorHandler,
   normalizePlatform,
 } from '@universe-editor/platform'
@@ -97,6 +100,11 @@ async function bootstrapWorkbench(): Promise<void> {
   }
 
   const services = new ServiceCollection()
+
+  // Telemetry: noop sink by default; wire real sinks via ITelemetrySinkRegistry later.
+  const telemetry = new NoopTelemetryService()
+  services.set(ITelemetryService, telemetry)
+  setErrorTelemetryHook((name, data) => telemetry.publicLogError(name, data))
 
   // Platform services
   const lifecycle = new LifecycleService()
@@ -162,7 +170,7 @@ async function bootstrapWorkbench(): Promise<void> {
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),
   )
-  const workspaceService = new RendererWorkspaceService(workspaceWire)
+  const workspaceService = new RendererWorkspaceService(workspaceWire, telemetry)
   services.set(IWorkspaceService, workspaceService)
 
   // Configuration core. UserSettingsSync (below) bridges the User layer to
@@ -175,10 +183,10 @@ async function bootstrapWorkbench(): Promise<void> {
 
   // Renderer-only service implementations (pure local state, no IPC).
   const editorGroupsService = new EditorGroupsService()
-  const editorService = new EditorService(editorGroupsService)
+  const editorService = new EditorService(editorGroupsService, telemetry)
   const statusBarService = new StatusBarService()
   const outputService = new OutputService()
-  const commandService = new CommandService(instantiation)
+  const commandService = new CommandService(instantiation, telemetry)
 
   services.set(ICommandService, commandService)
   services.set(IEditorGroupsService, editorGroupsService)

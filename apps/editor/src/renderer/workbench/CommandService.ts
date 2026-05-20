@@ -3,14 +3,17 @@
  *  ICommandService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ICommandService } from '@universe-editor/platform'
+import type { ICommandService, ITelemetryService } from '@universe-editor/platform'
 import { CommandsRegistry } from '@universe-editor/platform'
 import type { InstantiationService } from '@universe-editor/platform'
 
 export class CommandService implements ICommandService {
   declare readonly _serviceBrand: undefined
 
-  constructor(private readonly _instantiation: InstantiationService) {}
+  constructor(
+    private readonly _instantiation: InstantiationService,
+    private readonly _telemetry?: ITelemetryService,
+  ) {}
 
   executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined> {
     const command = CommandsRegistry.getCommand(id)
@@ -22,6 +25,7 @@ export class CommandService implements ICommandService {
       const result = this._instantiation.invokeFunction(
         (accessor) => command.handler(accessor, ...args) as T,
       )
+      this._telemetry?.publicLog('commandExecuted', { commandId: id })
       return Promise.resolve(result)
     } catch (err) {
       return Promise.reject(err)

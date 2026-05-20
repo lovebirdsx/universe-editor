@@ -9,6 +9,7 @@ import {
   Emitter,
   type Event,
   type IRecentWorkspace,
+  type ITelemetryService,
   type IWorkspace,
   type IWorkspaceService,
   type IWorkspaceServiceWire,
@@ -43,7 +44,10 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
   private readonly _onDidChangeRecent = this._register(new Emitter<readonly IRecentWorkspace[]>())
   readonly onDidChangeRecent: Event<readonly IRecentWorkspace[]> = this._onDidChangeRecent.event
 
-  constructor(private readonly _wire: IWorkspaceServiceWire) {
+  constructor(
+    private readonly _wire: IWorkspaceServiceWire,
+    private readonly _telemetry?: ITelemetryService,
+  ) {
     super()
     this._register(
       _wire.onDidChangeWorkspace((w) => {
@@ -84,6 +88,7 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
   }
 
   openFolder(folder?: URI): Promise<void> {
+    this._telemetry?.publicLog('workspaceOpened')
     return this._wire.openFolder(folder)
   }
 

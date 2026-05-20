@@ -12,6 +12,7 @@ import {
   IEditorGroupsService,
   IEditorInput,
   IEditorService,
+  ITelemetryService,
   IOpenEditorServiceOptions,
   URI,
   derived,
@@ -68,7 +69,10 @@ export class EditorService implements IEditorService {
 
   private _suppressGroupSync = 0
 
-  constructor(groupsService?: IEditorGroupsService) {
+  constructor(
+    groupsService?: IEditorGroupsService,
+    private readonly _telemetry?: ITelemetryService,
+  ) {
     this._groupsService = groupsService ?? new EditorGroupsService()
     this._sync()
     // Re-sync on every active-group transition AND on every editor change within
@@ -126,6 +130,7 @@ export class EditorService implements IEditorService {
       this._suppressGroupSync--
     }
     this._sync()
+    this._telemetry?.publicLog('editorOpened', { typeId: input.type })
   }
 
   closeEditor(id: string): void {

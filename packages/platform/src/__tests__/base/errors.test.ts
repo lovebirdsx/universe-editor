@@ -2,16 +2,19 @@
  *  Tests for packages/platform/src/base/errors.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   ErrorNoTelemetry,
   onUnexpectedError,
+  setErrorTelemetryHook,
   setUnexpectedErrorHandler,
 } from '../../base/errors.js'
 
 afterEach(() => {
   // Reset handler to default (console.error) after each test
   setUnexpectedErrorHandler((e) => console.error('[UnexpectedError]', e))
+  // Reset telemetry hook
+  setErrorTelemetryHook(() => {})
 })
 
 describe('setUnexpectedErrorHandler / onUnexpectedError', () => {
@@ -46,5 +49,28 @@ describe('ErrorNoTelemetry', () => {
     expect(wrapped.noTelemetry).toBe(true)
     expect(wrapped.message).toBe('original')
     expect(wrapped.stack).toBe(original.stack)
+  })
+})
+
+describe('setErrorTelemetryHook', () => {
+  it('calls hook with error stack on onUnexpectedError', () => {
+    const hook = vi.fn()
+    setErrorTelemetryHook(hook)
+    setUnexpectedErrorHandler(() => {})
+    const err = new Error('boom')
+    onUnexpectedError(err)
+    expect(hook).toHaveBeenCalledOnce()
+    expect(hook).toHaveBeenCalledWith(
+      'unhandledError',
+      expect.objectContaining({ stack: expect.stringContaining('boom') }),
+    )
+  })
+
+  it('does not call hook for ErrorNoTelemetry', () => {
+    const hook = vi.fn()
+    setErrorTelemetryHook(hook)
+    setUnexpectedErrorHandler(() => {})
+    onUnexpectedError(new ErrorNoTelemetry('silent'))
+    expect(hook).not.toHaveBeenCalled()
   })
 })

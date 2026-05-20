@@ -86,3 +86,7 @@ export * from './workbench/statusbarService.js'
 export * from './workbench/quickInputService.js'
 export * from './workbench/outputService.js'
 export * from './workbench/searchService.js'
+
+// telemetry
+export * from './telemetry/telemetryService.js'
+export * from './telemetry/noopTelemetryService.js'
