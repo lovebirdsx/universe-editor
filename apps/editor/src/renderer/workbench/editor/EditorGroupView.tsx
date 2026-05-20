@@ -58,7 +58,7 @@ function useGroupVersion(group: IEditorGroup): string {
       }
     },
     () =>
-      `${group.editors.length}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}`,
+      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}`,
   )
 }
 
@@ -82,6 +82,7 @@ function EditorTab({
   onClose,
   onContextMenu,
   groupId,
+  showDropIndicator,
 }: {
   input: EditorInput
   isActive: boolean
@@ -91,6 +92,7 @@ function EditorTab({
   onClose: () => void
   onContextMenu: (e: ReactMouseEvent) => void
   groupId: number
+  showDropIndicator: boolean
 }) {
   const resource = input.resource
   const showsFileIcon = resource && (resource.scheme === 'file' || resource.scheme === 'untitled')
@@ -112,6 +114,7 @@ function EditorTab({
       onContextMenu={onContextMenu}
       role="tab"
       aria-selected={isActive}
+      data-drop-before={showDropIndicator ? 'true' : undefined}
       {...dragHandleProps}
     >
       {input.isDirty && <span className={styles['dirtyDot']} title="Unsaved changes" />}
@@ -151,6 +154,7 @@ export function EditorGroupView({
   const dialogService = useService(IDialogService)
   const commandService = useService(ICommandService)
   const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null)
+  const [dropIndex, setDropIndex] = useState<number | null>(null)
   const tabBarRef = useRef<HTMLDivElement>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
@@ -161,16 +165,9 @@ export function EditorGroupView({
         // Within same group: compute insertion index from the drop event's last known x.
         const tabBar = tabBarRef.current
         if (!tabBar) return
-        const tabs = Array.from(tabBar.querySelectorAll<HTMLElement>('[role="tab"]'))
-        const dropX = tabBar.dataset['lastDropX'] ? Number(tabBar.dataset['lastDropX']) : 0
-        let newIndex = tabs.length
-        for (let i = 0; i < tabs.length; i++) {
-          const rect = tabs[i]?.getBoundingClientRect()
-          if (rect && dropX < rect.left + rect.width / 2) {
-            newIndex = i
-            break
-          }
-        }
+        const newIndex = calcInsertIndex(
+          tabBar.dataset['lastDropX'] ? Number(tabBar.dataset['lastDropX']) : 0,
+        )
         group.moveEditor(editor, newIndex)
       } else {
         const sourceGroup = groupsService.getGroup(sourceGroupId)
@@ -178,6 +175,17 @@ export function EditorGroupView({
       }
     },
   )
+
+  function calcInsertIndex(clientX: number): number {
+    const tabBar = tabBarRef.current
+    if (!tabBar) return group.editors.length
+    const tabs = Array.from(tabBar.querySelectorAll<HTMLElement>('[role="tab"]'))
+    for (let i = 0; i < tabs.length; i++) {
+      const rect = tabs[i]?.getBoundingClientRect()
+      if (rect && clientX < rect.left + rect.width / 2) return i
+    }
+    return tabs.length
+  }
 
   const handleFocus = () => {
     if (!isActiveGroup) groupsService.activateGroup(group)
@@ -277,16 +285,29 @@ export function EditorGroupView({
               if (tabBarRef.current) {
                 tabBarRef.current.dataset['lastDropX'] = String(e.clientX)
               }
+              setDropIndex(calcInsertIndex(e.clientX))
             }}
-            onDrop={dropTargetProps.onDrop}
+            onDragLeave={(e) => {
+              if (
+                tabBarRef.current &&
+                !tabBarRef.current.contains(e.relatedTarget as Node | null)
+              ) {
+                setDropIndex(null)
+              }
+            }}
+            onDrop={(e) => {
+              setDropIndex(null)
+              dropTargetProps.onDrop(e)
+            }}
           >
-            {group.editors.map((e) => (
+            {group.editors.map((e, idx) => (
               <EditorTab
                 key={e.id}
                 input={e}
                 groupId={group.id}
                 isActive={group.activeEditor?.id === e.id}
                 isPreview={group.previewEditor === e}
+                showDropIndicator={dropIndex === idx}
                 onActivate={() => group.setActive(e)}
                 onPin={() => group.pinEditor(e)}
                 onClose={() => void closeEditorWithConfirm(e, group, dialogService)}
@@ -301,6 +322,9 @@ export function EditorGroupView({
                 }}
               />
             ))}
+            {dropIndex === group.editors.length && (
+              <div className={styles['tabDropIndicatorTrail']} aria-hidden="true" />
+            )}
           </div>
           {canScrollRight && (
             <button

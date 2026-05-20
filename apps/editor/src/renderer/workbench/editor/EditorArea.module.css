@@ -283,3 +283,26 @@
   background: var(--color-menu-selection-bg, #094771);
   color: var(--color-menu-selection-fg, #ffffff);
 }
+
+.tab[data-drop-before='true']::before {
+  content: '';
+  position: absolute;
+  left: -1px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--color-tab-active-border, #0070e0);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+.tabDropIndicatorTrail {
+  flex-shrink: 0;
+  width: 2px;
+  height: calc(100% - 8px);
+  margin: 4px 0;
+  background: var(--color-tab-active-border, #0070e0);
+  border-radius: 1px;
+  pointer-events: none;
+}
