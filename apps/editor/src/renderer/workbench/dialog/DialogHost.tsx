@@ -56,6 +56,7 @@ function ConfirmDialog({
       className={styles['backdrop']}
       role="dialog"
       aria-modal="true"
+      data-renderer-dialog
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
@@ -113,6 +114,7 @@ function PromptDialog({
       className={styles['backdrop']}
       role="dialog"
       aria-modal="true"
+      data-renderer-dialog
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
@@ -137,6 +139,17 @@ function PromptDialog({
           className={styles['input']}
           placeholder={opts.placeholder}
           aria-label={opts.title}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') {
+              e.preventDefault()
+              e.stopPropagation()
+              onResolve(undefined)
+            } else if (e.key === 'Enter') {
+              e.preventDefault()
+              e.stopPropagation()
+              onResolve(inputEl?.value ?? '')
+            }
+          }}
         />
         <div className={styles['buttons']}>
           <button

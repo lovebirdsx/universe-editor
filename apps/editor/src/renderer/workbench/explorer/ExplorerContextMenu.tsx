@@ -25,6 +25,12 @@ interface Props {
 
 export function ExplorerContextMenu({ state, rootResource, commandService, onClose }: Props) {
   const target = state.target ?? { resource: rootResource, isDirectory: true }
+
+  // Expose both `resource` (RevealInOSExplorer, Refresh) and `target` (Rename,
+  // Delete, OpenWithDefaultApp), plus `parent` (NewFile, NewFolder): when the
+  // clicked node is a directory use it directly; otherwise strip the filename.
+  const resource = target.resource
+  const isDirectory = target.isDirectory
   const parent = target.isDirectory ? target.resource : (parentOf(target.resource) ?? rootResource)
 
   return (
@@ -33,10 +39,10 @@ export function ExplorerContextMenu({ state, rootResource, commandService, onClo
       anchor={{ x: state.x, y: state.y }}
       args={[
         {
-          target: target.resource,
-          resource: target.resource,
+          target: resource,
+          resource: resource,
           parent,
-          isDirectory: target.isDirectory,
+          isDirectory,
         },
       ]}
       commandService={commandService}

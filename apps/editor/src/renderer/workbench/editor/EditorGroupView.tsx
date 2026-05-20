@@ -218,7 +218,7 @@ export function EditorGroupView({
     }
     update()
     el.addEventListener('scroll', update, { passive: true })
-    const ro = new ResizeObserver(update)
+    const ro = new ResizeObserver(() => requestAnimationFrame(update))
     ro.observe(el)
     return () => {
       el.removeEventListener('scroll', update)

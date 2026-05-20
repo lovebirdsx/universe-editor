@@ -54,6 +54,17 @@ function isNativeEditableKey(e: KeyboardEvent): boolean {
   return key === 'delete' || key === 'backspace'
 }
 
+// Modal dialogs rendered by RendererDialogService own their keyboard events
+// entirely. Walk up from the event target to detect if we're inside one.
+function isInsideRendererDialog(target: EventTarget | null): boolean {
+  let el = target instanceof HTMLElement ? target : null
+  while (el) {
+    if (el.dataset['rendererDialog'] !== undefined) return true
+    el = el.parentElement
+  }
+  return false
+}
+
 interface PendingChord {
   key: string
   entry: IDisposable
@@ -93,6 +104,9 @@ export function useGlobalKeybindingHandler(): void {
     // Monaco container element.
     const handler = (e: KeyboardEvent) => {
       if (isModifierOnly(e.key)) return
+      // RendererDialogService dialogs handle their own keyboard events; never
+      // intercept from inside them (would prevent Escape from closing dialogs).
+      if (isInsideRendererDialog(e.target)) return
 
       const pending = pendingRef.current
       if (pending) {
