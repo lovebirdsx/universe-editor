@@ -70,6 +70,23 @@ export function WorkbenchLayout({
   // the pane is being hidden.
   const lastSecondarySizeRef = useRef(sizes.secondarySidebar)
 
+  // Panel show-transition guard: when panelVisible flips false→true, Allotment's
+  // internal ResizeObserver fires onChange synchronously, which would call
+  // onPanelResize → update sizes.panel → re-render → new preferredSize →
+  // another Allotment layout pass — triggering a "ResizeObserver loop" browser
+  // warning. We defer only the *first* onChange after the panel appears.
+  const prevPanelVisibleRef = useRef(panelVisible)
+  const panelJustShownRef = useRef(false)
+  const panelVisibleRef = useRef(panelVisible)
+  const onPanelResizeRef = useRef(onPanelResize)
+  panelVisibleRef.current = panelVisible
+  onPanelResizeRef.current = onPanelResize
+
+  if (prevPanelVisibleRef.current !== panelVisible) {
+    if (!prevPanelVisibleRef.current && panelVisible) panelJustShownRef.current = true
+    prevPanelVisibleRef.current = panelVisible
+  }
+
   if (prevSecVisibleRef.current !== secondarySidebarVisible) {
     // Transitioning visible → hidden: capture the live Allotment size before
     // any effect or onChange callback can overwrite it with 0.
@@ -145,7 +162,20 @@ export function WorkbenchLayout({
                 proportionalLayout={false}
                 onChange={(s) => {
                   const second = s[1]
-                  if (typeof second === 'number' && panelVisible) onPanelResize(second)
+                  if (typeof second !== 'number' || !panelVisibleRef.current) return
+                  if (panelJustShownRef.current) {
+                    // Defer to break the ResizeObserver loop: Allotment fires this
+                    // callback synchronously from its own ResizeObserver during the
+                    // panel show transition. Calling onPanelResize here would update
+                    // sizes.panel → re-render → new preferredSize → another Allotment
+                    // layout pass, triggering the browser's "loop" warning.
+                    panelJustShownRef.current = false
+                    requestAnimationFrame(() => {
+                      if (panelVisibleRef.current) onPanelResizeRef.current(second)
+                    })
+                    return
+                  }
+                  onPanelResizeRef.current(second)
                 }}
               >
                 <Allotment.Pane>
