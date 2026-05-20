@@ -23,6 +23,7 @@ export interface E2EStatusBarEntry {
   readonly id: string
   readonly text: string
   readonly alignment: 'left' | 'right'
+  readonly icon?: string
 }
 
 export interface E2ELayoutSizes {

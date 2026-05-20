@@ -1,8 +1,13 @@
 import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
+import { Bell, type LucideIcon } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import styles from './StatusBar.module.css'
+
+const ICON_MAP: Record<string, LucideIcon> = {
+  bell: Bell,
+}
 
 function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
   const commandService = useService(ICommandService)
@@ -13,14 +18,24 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
     }
   }
 
+  const Icon = entry.icon ? ICON_MAP[entry.icon] : undefined
+  const className = [
+    styles['item'],
+    entry.command ? styles['clickable'] : '',
+    entry.kind === 'prominent' ? styles['kind-prominent'] : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
     <button
-      className={`${styles['item']} ${entry.command ? styles['clickable'] : ''}`}
+      className={className}
       onClick={handleClick}
       title={entry.tooltip}
-      aria-label={entry.text}
+      aria-label={entry.text || entry.tooltip || ''}
     >
-      {entry.text}
+      {Icon && <Icon size={14} strokeWidth={1.75} aria-hidden="true" />}
+      {entry.text && <span>{entry.text}</span>}
     </button>
   )
 }

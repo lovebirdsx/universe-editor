@@ -92,6 +92,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         id: String(id),
         text: entry.text,
         alignment: entry.alignment === StatusBarAlignment.Right ? 'right' : 'left',
+        ...(entry.icon !== undefined && { icon: entry.icon }),
       })),
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,

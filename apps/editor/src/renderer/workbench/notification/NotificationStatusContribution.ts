@@ -11,6 +11,7 @@ import {
   StatusBarAlignment,
   autorun,
   localize,
+  type IStatusBarEntry,
   type IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
 
@@ -34,18 +35,28 @@ export class NotificationStatusContribution extends Disposable implements IWorkb
   }
 
   private _update(count: number): void {
-    const text = count > 0 ? `\u{1F514} ${count}` : '\u{1F514}'
-    const tooltip =
-      count > 0
-        ? `${count} unread notification(s)`
-        : localize('status.notifications', 'Notifications')
-    const entry = {
-      text,
-      tooltip,
-      command: 'workbench.action.notifications.toggleList',
-      alignment: StatusBarAlignment.Right,
-      priority: 10,
-    }
+    const hasUnread = count > 0
+    const tooltip = hasUnread
+      ? `${count} unread notification(s)`
+      : localize('status.notifications', 'Notifications')
+    const entry: IStatusBarEntry = hasUnread
+      ? {
+          text: String(count),
+          icon: 'bell',
+          kind: 'prominent',
+          tooltip,
+          command: 'workbench.action.notifications.toggleList',
+          alignment: StatusBarAlignment.Right,
+          priority: 10,
+        }
+      : {
+          text: '',
+          icon: 'bell',
+          tooltip,
+          command: 'workbench.action.notifications.toggleList',
+          alignment: StatusBarAlignment.Right,
+          priority: 10,
+        }
 
     if (this._accessor !== undefined) {
       this._accessor.update(entry)

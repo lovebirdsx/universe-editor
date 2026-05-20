@@ -75,6 +75,7 @@ html, body, #root {
   /* Status Bar */
   --color-statusbar-bg: #0f0f11;
   --color-statusbar-fg: #c8c8c8;
+  --color-statusbar-prominent-fg: #5fa8ff;
 
   /* Panel */
   --color-panel-bg: #1a1a1c;
@@ -155,6 +156,7 @@ html, body, #root {
 
   --color-statusbar-bg: #0067c0;
   --color-statusbar-fg: #ffffff;
+  --color-statusbar-prominent-fg: #ffe79a;
 
   --color-panel-bg: #ffffff;
   --color-panel-tab-bar-bg: #eceef2;

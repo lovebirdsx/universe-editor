@@ -43,3 +43,7 @@
 .item.clickable:hover {
   background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }
+
+.item.kind-prominent {
+  color: var(--color-statusbar-prominent-fg, #5fa8ff);
+}

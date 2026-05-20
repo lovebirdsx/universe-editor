@@ -26,7 +26,7 @@ test.describe('@p0 notification service', () => {
 
     // 5. Bell badge should not show a count (unreadCount = 0).
     const entriesBefore = await workbench.statusBar.entriesFromProbe()
-    const bellBefore = entriesBefore.find((e) => e.alignment === 'right' && /🔔/.test(e.text))
+    const bellBefore = entriesBefore.find((e) => e.alignment === 'right' && e.icon === 'bell')
     expect(bellBefore).toBeDefined()
     expect(bellBefore?.text).not.toMatch(/\d/)
 

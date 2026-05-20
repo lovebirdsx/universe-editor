@@ -12,6 +12,9 @@ export const enum StatusBarAlignment {
   Right = 1,
 }
 
+/** Visual emphasis for a status-bar entry. */
+export type StatusBarEntryKind = 'default' | 'prominent'
+
 export interface IStatusBarEntry {
   readonly text: string
   readonly tooltip?: string
@@ -20,6 +23,10 @@ export interface IStatusBarEntry {
   readonly alignment: StatusBarAlignment
   /** Higher = further from center. */
   readonly priority: number
+  /** Icon identifier (e.g. 'bell'). Renderer maps it to an SVG; platform stays icon-agnostic. */
+  readonly icon?: string
+  /** 'prominent' uses an attention foreground (e.g. unread counts). Defaults to inherited statusbar fg. */
+  readonly kind?: StatusBarEntryKind
 }
 
 /** Entry as kept by the service: stable id + the original entry. */
