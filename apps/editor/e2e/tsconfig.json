@@ -1,15 +1,11 @@
 {
   "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "@universe-editor/config-ts/base",
   "compilerOptions": {
-    "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "strict": true,
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
-    "skipLibCheck": true,
-    "isolatedModules": true,
     "noEmit": true,
+    "resolveJsonModule": true,
     "lib": ["ES2022", "DOM"],
     "types": ["node"]
   },

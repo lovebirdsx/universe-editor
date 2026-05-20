@@ -44,8 +44,8 @@ async function launchWithState(userDataDir: string) {
   const page = await app.firstWindow()
   // 等首次导航 commit，避免 evaluate 撞上 "Execution context was destroyed"。
   await page.waitForLoadState('domcontentloaded')
-  await page.waitForFunction(
-    () => Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+  await page.waitForFunction(() =>
+    Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
   )
   // whenReady() resolves as soon as LifecyclePhase.Ready is reached,
   // which happens BEFORE createRoot().render(). Any measurement taken

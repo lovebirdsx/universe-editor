@@ -5,7 +5,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { URI, type IEditorService, type IInstantiationService } from '@universe-editor/platform'
+import {
+  URI,
+  type EditorInput,
+  type IEditorService,
+  type IInstantiationService,
+} from '@universe-editor/platform'
 
 // Break the Monaco dep chain: FileEditorInput → MonacoModelRegistry → MonacoLoader → ?raw
 vi.mock('../../src/renderer/workbench/editor/monaco/MonacoModelRegistry.js', () => ({
@@ -31,7 +36,11 @@ describe('editorResolver.routing (integration)', () => {
 
   it('registerEditor + resolveEditors returns matching registration', () => {
     const factory = vi.fn((uri: URI) => ({ typeId: 'dummy', name: uri.fsPath }))
-    resolver.registerEditor('**/*.xyz', { typeId: 'dummy', displayName: 'Dummy Editor' }, factory)
+    resolver.registerEditor(
+      '**/*.xyz',
+      { typeId: 'dummy', displayName: 'Dummy Editor' },
+      factory as unknown as (uri: URI) => EditorInput,
+    )
 
     const uri = URI.file('/some/file.xyz')
     const results = resolver.resolveEditors(uri)

@@ -71,9 +71,7 @@ test.describe('@p1 workspace settings UX', () => {
     await workbench.waitForRestored()
     const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ws-settings-'))
     await workbench.openWorkspace(tmpDir)
-    await expect
-      .poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5000 })
-      .toBeTruthy()
+    await expect.poll(() => workbench.getCurrentWorkspacePath(), { timeout: 5000 }).toBeTruthy()
 
     await workbench.page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.openWorkspaceSettings')

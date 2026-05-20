@@ -17,7 +17,9 @@ test.describe('@p0 startup', () => {
 
     await page.evaluate(() => window.__E2E__!.whenReady())
 
-    const workbenchReady = await page.evaluate(() => window.__E2E__!.getContextKey('workbenchReady'))
+    const workbenchReady = await page.evaluate(() =>
+      window.__E2E__!.getContextKey('workbenchReady'),
+    )
     expect(workbenchReady).toBe(true)
   })
 

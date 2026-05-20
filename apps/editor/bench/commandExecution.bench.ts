@@ -7,7 +7,7 @@ import {
   IInstantiationService,
   ITelemetryService,
 } from '@universe-editor/platform'
-import { CommandService } from '../src/renderer/workbench/CommandService.js'
+import { CommandService } from '../src/renderer/services/command/CommandService.js'
 
 let commandService: CommandService
 

@@ -17,8 +17,6 @@ test.describe('@p1 output panel', () => {
 
     // Toggle off — verifies the command actually drives the layout observable.
     await workbench.runCommand('workbench.action.togglePanel')
-    await expect
-      .poll(() => workbench.getContextKey<boolean>('panelVisible'))
-      .toBe(false)
+    await expect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(false)
   })
 })

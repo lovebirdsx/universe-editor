@@ -33,10 +33,7 @@ test.describe('@p1 editorResolver', () => {
     })
 
     // Open the file through the EditorResolverService (bypasses native dialog).
-    await page.evaluate(
-      (fsPath) => window.__E2E__!.openFileUri(fsPath),
-      dummyFsPath,
-    )
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), dummyFsPath)
 
     // Resolver should have dispatched to dummyEditor.
     await expect
@@ -57,10 +54,7 @@ test.describe('@p1 editorResolver', () => {
     })
 
     // Open dummy file — resolver picks dummyEditor (priority 100 > builtin 1).
-    await page.evaluate(
-      (fsPath) => window.__E2E__!.openFileUri(fsPath),
-      dummyFsPath,
-    )
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), dummyFsPath)
 
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })

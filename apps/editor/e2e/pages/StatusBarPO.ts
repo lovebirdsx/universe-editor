@@ -7,7 +7,7 @@ export class StatusBarPO {
   }
 
   async entriesFromProbe(): Promise<
-    Array<{ id: string; text: string; alignment: 'left' | 'right' }>
+    Array<{ id: string; text: string; alignment: 'left' | 'right'; icon?: string }>
   > {
     return this.page.evaluate(() => window.__E2E__!.getStatusBarEntries())
   }

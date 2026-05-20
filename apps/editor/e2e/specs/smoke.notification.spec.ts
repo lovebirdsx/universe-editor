@@ -33,15 +33,11 @@ test.describe('@p0 notification service', () => {
     // 6. Open notification center → still holds the read (but not dismissed) notification.
     await workbench.runCommand('workbench.action.notifications.toggleList')
     await expect(workbench.page.locator('[data-testid="notifications-center"]')).toBeVisible()
-    await expect(
-      workbench.page.locator('[data-testid="notification-center-item"]'),
-    ).toHaveCount(1)
+    await expect(workbench.page.locator('[data-testid="notification-center-item"]')).toHaveCount(1)
 
     // 7. Clear all → center becomes empty.
     await workbench.runCommand('workbench.action.notifications.clearAll')
-    await expect(
-      workbench.page.locator('[data-testid="notification-center-item"]'),
-    ).toHaveCount(0)
+    await expect(workbench.page.locator('[data-testid="notification-center-item"]')).toHaveCount(0)
   })
 
   test('sticky notification stays in toast until dismissed', async ({ workbench }) => {
