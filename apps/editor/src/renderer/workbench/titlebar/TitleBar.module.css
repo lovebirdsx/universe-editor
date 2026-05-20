@@ -15,6 +15,15 @@
   flex-shrink: 0;
 }
 
+.app-icon {
+  width: 28px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
 .menubar {
   display: flex;
   align-items: stretch;

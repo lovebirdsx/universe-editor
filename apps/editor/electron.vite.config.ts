@@ -68,6 +68,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src/renderer'),
+    publicDir: resolve(__dirname, 'public'),
     cacheDir: resolve(__dirname, 'node_modules/.vite-editor'),
     plugins: [monacoNlsPlugin(), react(), jsToTsResolvePlugin()],
     resolve: {

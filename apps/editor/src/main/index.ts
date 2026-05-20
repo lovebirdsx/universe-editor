@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { existsSync } from 'node:fs'
 import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
@@ -48,6 +49,7 @@ const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 let applicationServices: ApplicationServices | null = null
 let userDataService: UserDataMainService | null = null
 let windowMainService: WindowMainService | null = null
+const appIconPath = join(__dirname, '../../build/icon.ico')
 
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
   if (!applicationServices) {
@@ -69,6 +71,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       appServices: applicationServices,
       logService: logMainService,
       e2eEnabled,
+      ...(existsSync(appIconPath) ? { appIconPath } : {}),
       preloadPath: join(__dirname, '../preload/index.cjs'),
       rendererUrl: process.env['ELECTRON_RENDERER_URL'],
       rendererHtml: join(__dirname, '../renderer/index.html'),

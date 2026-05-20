@@ -35,6 +35,8 @@ export interface WindowMainServiceOptions {
   readonly appServices: ApplicationServices
   readonly logService: LogMainService
   readonly e2eEnabled: boolean
+  /** Absolute path to app icon (.ico on Windows). */
+  readonly appIconPath?: string
   /** Absolute path to the preload script. */
   readonly preloadPath: string
   /** electron-vite dev server URL (undefined in production). */
@@ -49,7 +51,7 @@ export class WindowMainService implements IWindowMainService {
   constructor(private readonly _opts: WindowMainServiceOptions) {}
 
   async createWindow(): Promise<number> {
-    const { e2eEnabled, preloadPath, rendererUrl, rendererHtml, appServices, logService } =
+    const { e2eEnabled, appIconPath, preloadPath, rendererUrl, rendererHtml, appServices, logService } =
       this._opts
 
     const isMac = process.platform === 'darwin'
@@ -63,6 +65,7 @@ export class WindowMainService implements IWindowMainService {
       show: false,
       backgroundColor: '#1e1e1e',
       title: localize('app.name', 'Universe Editor'),
+      ...(appIconPath ? { icon: appIconPath } : {}),
       ...(isMac
         ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 8, y: 8 } }
         : { frame: false }),
