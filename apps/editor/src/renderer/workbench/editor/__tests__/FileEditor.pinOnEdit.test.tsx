@@ -118,6 +118,9 @@ function makeFs(): IFileServiceType {
     async createDirectory() {},
     async delete() {},
     async rename() {},
+    async listRecursive() {
+      return []
+    },
   }
 }
 

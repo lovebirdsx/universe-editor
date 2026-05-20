@@ -66,6 +66,9 @@ function makeFileService(): IFileServiceType {
     async createDirectory() {},
     async delete() {},
     async rename() {},
+    async listRecursive() {
+      return []
+    },
   }
 }
 

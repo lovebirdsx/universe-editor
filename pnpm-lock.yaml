@@ -137,6 +137,9 @@ importers:
       '@fontsource/roboto':
         specifier: 'catalog:'
         version: 5.2.10
+      '@tanstack/react-virtual':
+        specifier: 'catalog:'
+        version: 3.13.24(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
       '@universe-editor/platform':
         specifier: workspace:*
         version: link:../../packages/platform

@@ -7,6 +7,24 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../QuickInput.js'
 import type { QuickPickState } from '../../../services/quickInput/QuickInputService.js'
 
+// happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible items.
+// Mock it so all items are "visible" and existing text assertions continue to work.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: (opts: { count: number; estimateSize: () => number }) => ({
+    getVirtualItems: () =>
+      Array.from({ length: opts.count }, (_, i) => ({
+        index: i,
+        key: i,
+        start: i * opts.estimateSize(),
+        size: opts.estimateSize(),
+        lane: 0,
+        end: (i + 1) * opts.estimateSize(),
+      })),
+    getTotalSize: () => opts.count * opts.estimateSize(),
+    scrollToIndex: vi.fn(),
+  }),
+}))
+
 afterEach(() => cleanup())
 
 const items = [

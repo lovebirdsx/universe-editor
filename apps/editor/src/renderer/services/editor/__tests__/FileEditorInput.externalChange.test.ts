@@ -61,6 +61,9 @@ function makeFs(initial: Record<string, FsState>): IFileServiceType & {
     async createDirectory() {},
     async delete() {},
     async rename() {},
+    async listRecursive() {
+      return []
+    },
   } as IFileServiceType & { state: Record<string, FsState> }
 }
 

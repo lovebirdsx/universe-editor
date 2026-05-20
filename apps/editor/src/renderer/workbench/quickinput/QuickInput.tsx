@@ -4,9 +4,12 @@ import {
   useRef,
   useCallback,
   useLayoutEffect,
+  useMemo,
+  useDeferredValue,
   type KeyboardEvent,
 } from 'react'
 import { createPortal } from 'react-dom'
+import { useVirtualizer } from '@tanstack/react-virtual'
 import { IQuickInputService } from '@universe-editor/platform'
 import type { IQuickPickItem } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -45,19 +48,39 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const prefixMissing = prefix.length > 0 && !query.startsWith(prefix)
   const filterText = prefixActive ? query.slice(prefix.length) : prefix.length > 0 ? '' : query
 
-  const filtered = prefixMissing
-    ? []
-    : (state.items ?? []).filter((item) =>
-        fuzzyMatch(item.label + ' ' + (item.description ?? ''), filterText),
-      )
+  const deferredFilterText = useDeferredValue(filterText)
 
-  const sortedFiltered = [...filtered].sort((a, b) => {
-    const ai = mruIds.indexOf(a.id)
-    const bi = mruIds.indexOf(b.id)
-    if (ai === -1 && bi === -1) return 0
-    if (ai === -1) return 1
-    if (bi === -1) return -1
-    return ai - bi
+  const filtered = useMemo(
+    () =>
+      prefixMissing
+        ? []
+        : (state.items ?? []).filter((item) =>
+            fuzzyMatch(item.label + ' ' + (item.description ?? ''), deferredFilterText),
+          ),
+    [prefixMissing, state.items, deferredFilterText],
+  )
+
+  const sortedFiltered = useMemo(
+    () =>
+      [...filtered].sort((a, b) => {
+        const ai = mruIds.indexOf(a.id)
+        const bi = mruIds.indexOf(b.id)
+        if (ai === -1 && bi === -1) return 0
+        if (ai === -1) return 1
+        if (bi === -1) return -1
+        return ai - bi
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filtered, mruIds.join(',')],
+  )
+
+  const ITEM_HEIGHT = 32
+
+  const virtualizer = useVirtualizer({
+    count: sortedFiltered.length,
+    getScrollElement: () => listRef.current,
+    estimateSize: () => ITEM_HEIGHT,
+    overscan: 5,
   })
 
   useEffect(() => {
@@ -65,11 +88,10 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   }, [query])
 
   useEffect(() => {
-    const list = listRef.current
-    if (!list) return
-    const focused = list.children[focusedIdx] as HTMLElement | undefined
-    focused?.scrollIntoView({ block: 'nearest' })
-  }, [focusedIdx])
+    if (sortedFiltered.length > 0) {
+      virtualizer.scrollToIndex(focusedIdx, { align: 'auto' })
+    }
+  }, [focusedIdx, sortedFiltered.length, virtualizer])
 
   const accept = useCallback(
     (items: IQuickPickItem[]) => {
@@ -121,23 +143,41 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
         ) : sortedFiltered.length === 0 ? (
           <p className={styles['empty']}>No results</p>
         ) : (
-          sortedFiltered.map((item, idx) => (
-            <button
-              key={item.id}
-              className={`${styles['item']} ${idx === focusedIdx ? styles['focused'] : ''}`}
-              role="option"
-              aria-selected={idx === focusedIdx}
-              onClick={() => accept([item])}
-              onMouseMove={() => setFocusedIdx(idx)}
-            >
-              {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
-              <span className={styles['itemLabel']}>{item.label}</span>
-              {item.description && <span className={styles['itemDesc']}>{item.description}</span>}
-              {item.keybinding && (
-                <span className={styles['itemKeybinding']}>{item.keybinding}</span>
-              )}
-            </button>
-          ))
+          <div style={{ height: virtualizer.getTotalSize(), position: 'relative' }}>
+            {virtualizer.getVirtualItems().map((virtualRow) => {
+              const item = sortedFiltered[virtualRow.index]!
+              const idx = virtualRow.index
+              return (
+                <div
+                  key={item.id}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <button
+                    className={`${styles['item']} ${idx === focusedIdx ? styles['focused'] : ''}`}
+                    role="option"
+                    aria-selected={idx === focusedIdx}
+                    onClick={() => accept([item])}
+                    onMouseMove={() => setFocusedIdx(idx)}
+                  >
+                    {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
+                    <span className={styles['itemLabel']}>{item.label}</span>
+                    {item.description && (
+                      <span className={styles['itemDesc']}>{item.description}</span>
+                    )}
+                    {item.keybinding && (
+                      <span className={styles['itemKeybinding']}>{item.keybinding}</span>
+                    )}
+                  </button>
+                </div>
+              )
+            })}
+          </div>
         )}
       </div>
     </div>

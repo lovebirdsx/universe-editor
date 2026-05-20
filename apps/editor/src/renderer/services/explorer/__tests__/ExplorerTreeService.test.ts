@@ -87,6 +87,9 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFs {
         dirs.set(target.toString(), d)
       }
     },
+    async listRecursive() {
+      return []
+    },
   } as FakeFs
 }
 

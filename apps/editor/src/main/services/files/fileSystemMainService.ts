@@ -5,6 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { promises as fs } from 'node:fs'
+import path from 'node:path'
 import {
   FileSystemError,
   type IDirectoryEntry,
@@ -172,5 +173,37 @@ export class FileSystemMainService implements IFileService {
       if (err instanceof FileSystemError) throw err
       throw mapError(err, 'rename failed')
     }
+  }
+
+  async listRecursive(
+    resource: RawUri,
+    options?: { ignore?: readonly string[]; maxFiles?: number; maxDepth?: number },
+  ): Promise<string[]> {
+    const root = ensureFile(reviveUri(resource))
+    const ignore = new Set(options?.ignore ?? [])
+    const maxFiles = options?.maxFiles ?? 5000
+    const maxDepth = options?.maxDepth ?? 30
+    const results: string[] = []
+
+    const scan = async (dir: string, depth: number): Promise<void> => {
+      if (results.length >= maxFiles || depth > maxDepth) return
+      const dirents = await fs
+        .readdir(dir, { withFileTypes: true, encoding: 'utf8' })
+        .catch(() => null)
+      if (!dirents) return
+      const subdirs: string[] = []
+      for (const d of dirents) {
+        if (results.length >= maxFiles) return
+        if (d.isDirectory()) {
+          if (!ignore.has(d.name)) subdirs.push(path.join(dir, d.name))
+        } else if (d.isFile()) {
+          results.push(path.join(dir, d.name))
+        }
+      }
+      await Promise.all(subdirs.map((sub) => scan(sub, depth + 1)))
+    }
+
+    await scan(root.fsPath, 0)
+    return results
   }
 }

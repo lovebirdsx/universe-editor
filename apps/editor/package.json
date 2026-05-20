@@ -30,6 +30,7 @@
   },
   "dependencies": {
     "@fontsource/roboto": "catalog:",
+    "@tanstack/react-virtual": "catalog:",
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",
     "allotment": "catalog:",

@@ -68,6 +68,15 @@ export interface IFileService {
    * are not guaranteed and may throw `UNKNOWN`.
    */
   rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void>
+
+  /**
+   * Recursively lists all files under `root`, skipping directories named in
+   * `ignore`. Returns absolute fsPath strings to avoid URI serialization over IPC.
+   */
+  listRecursive(
+    root: URI,
+    options?: { ignore?: readonly string[]; maxFiles?: number; maxDepth?: number },
+  ): Promise<string[]>
 }
 
 export const IFileService = createDecorator<IFileService>('fileService')

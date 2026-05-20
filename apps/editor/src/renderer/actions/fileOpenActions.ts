@@ -150,31 +150,24 @@ export class OpenWithDefaultAppAction extends Action2 {
 const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.turbo'])
 const MAX_FILES = 5000
 
-async function collectFiles(
-  dir: URI,
-  fileService: IFileService,
-  results: URI[] = [],
-  depth = 0,
-): Promise<URI[]> {
-  if (results.length >= MAX_FILES || depth > 30) return results
-  let entries
-  try {
-    entries = await fileService.list(dir)
-  } catch {
-    return results
-  }
-  for (const entry of entries) {
-    if (results.length >= MAX_FILES) break
-    const child = URI.joinPath(dir, entry.name)
-    if (entry.isDirectory) {
-      if (!IGNORE_DIRS.has(entry.name)) {
-        await collectFiles(child, fileService, results, depth + 1)
-      }
-    } else {
-      results.push(child)
-    }
-  }
-  return results
+interface _FileCache {
+  uris: URI[]
+  timestamp: number
+}
+const _fileCache = new Map<string, _FileCache>()
+const _CACHE_TTL = 10_000
+
+async function getWorkspaceFiles(root: URI, fileService: IFileService): Promise<URI[]> {
+  const key = root.toString()
+  const cached = _fileCache.get(key)
+  if (cached && Date.now() - cached.timestamp < _CACHE_TTL) return cached.uris
+  const paths = await fileService.listRecursive(root, {
+    ignore: [...IGNORE_DIRS],
+    maxFiles: MAX_FILES,
+  })
+  const uris = paths.map((p) => URI.file(p))
+  _fileCache.set(key, { uris, timestamp: Date.now() })
+  return uris
 }
 
 export class GoToFileAction extends Action2 {
@@ -230,7 +223,7 @@ export class GoToFileAction extends Action2 {
     }
 
     // Workspace open — enumerate all files.
-    const uris = await collectFiles(root, fileService)
+    const uris = await getWorkspaceFiles(root, fileService)
     const rootPath = root.fsPath
     const recent = await recentFiles.getAll()
     const recentMap = new Map(recent.map((f) => [f.uri.toString(), f.lastOpened]))

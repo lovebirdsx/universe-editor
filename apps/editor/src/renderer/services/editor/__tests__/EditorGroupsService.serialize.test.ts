@@ -266,6 +266,9 @@ describe('EditorGroupsService serialization', () => {
         async createDirectory() {},
         async delete() {},
         async rename() {},
+        async listRecursive() {
+          return []
+        },
       } as IFileServiceType
     }
 

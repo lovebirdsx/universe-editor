@@ -68,6 +68,9 @@ function makeFs(): FakeFs {
     async createDirectory() {},
     async delete() {},
     async rename() {},
+    async listRecursive() {
+      return []
+    },
   } as FakeFs
   return fs
 }
