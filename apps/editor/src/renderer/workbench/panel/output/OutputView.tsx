@@ -1,5 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type ChangeEvent } from 'react'
 import { IOutputService } from '@universe-editor/platform'
+import { Trash2 } from 'lucide-react'
 import { useService, useObservable } from '../../useService.js'
 import styles from './OutputView.module.css'
 
@@ -18,7 +19,7 @@ export function OutputView() {
     }
   }, [content])
 
-  const handleChannelChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const handleChannelChange = (e: ChangeEvent<HTMLSelectElement>) => {
     outputService.setActiveChannel(e.target.value)
   }
 
@@ -43,8 +44,9 @@ export function OutputView() {
           onClick={() => activeChannel?.clear()}
           disabled={!activeChannel}
           title="Clear Output"
+          aria-label="Clear Output"
         >
-          ×
+          <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
       <pre ref={contentRef} className={styles['content']}>

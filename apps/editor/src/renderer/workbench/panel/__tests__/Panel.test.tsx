@@ -13,6 +13,13 @@ describe('Panel', () => {
     expect(tab.getAttribute('aria-selected')).toBe('true')
   })
 
+  it('renders the Output tab with a compact icon and label', () => {
+    render(<Panel />)
+    const tab = screen.getByTestId('panel-tab-output')
+    expect(tab.textContent).toContain('Output')
+    expect(tab.querySelector('svg')).toBeTruthy()
+  })
+
   it('renders the active tab content', () => {
     render(<Panel />)
     expect(screen.getByTestId('output-view')).toBeTruthy()
