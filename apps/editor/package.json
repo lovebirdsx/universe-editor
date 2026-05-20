@@ -20,9 +20,9 @@
     "lint:fix": "eslint --fix src",
     "clean": "tsc --build --clean",
     "package": "pnpm run package:win",
-    "package:win": "pnpm run build && electron-builder --win nsis dir",
-    "package:win:dir": "pnpm run build && electron-builder --win dir",
-    "package:win:installer": "pnpm run build && electron-builder --win nsis"
+    "package:win": "pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis dir",
+    "package:win:dir": "pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win dir",
+    "package:win:installer": "pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis"
   },
   "dependencies": {
     "@fontsource/roboto": "catalog:",
