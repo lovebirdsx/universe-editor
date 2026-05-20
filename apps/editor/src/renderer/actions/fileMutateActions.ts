@@ -4,12 +4,38 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Action2, IDialogService, localize, type ServicesAccessor } from '@universe-editor/platform'
-import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import {
+  IExplorerTreeService,
+  type ExplorerTreeService,
+} from '../services/explorer/ExplorerTreeService.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 function basename(path: string): string {
   const slash = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
   return slash === -1 ? path : path.slice(slash + 1)
+}
+
+function isDirectoryTarget(
+  tree: ExplorerTreeService,
+  target: ReturnType<typeof reviveUri>,
+): boolean {
+  if (!target) return false
+  if (tree.root?.toString() === target.toString()) return true
+  return tree
+    .getVisibleEntries()
+    .some((entry) => entry.isDirectory && entry.resource.toString() === target.toString())
+}
+
+function resolveTarget(
+  tree: ExplorerTreeService,
+  args: ITargetArg | undefined,
+): { target: ReturnType<typeof reviveUri>; isDirectory: boolean } {
+  const explicit = reviveUri(args?.target ?? args?.resource ?? null)
+  if (explicit) {
+    return { target: explicit, isDirectory: args?.isDirectory === true }
+  }
+  const selected = tree.selectedResource
+  return { target: selected, isDirectory: isDirectoryTarget(tree, selected) }
 }
 
 export class RenameFileAction extends Action2 {
@@ -24,10 +50,10 @@ export class RenameFileAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const target = reviveUri((args[0] as ITargetArg | undefined)?.target ?? null)
+    const tree = accessor.get(IExplorerTreeService)
+    const { target } = resolveTarget(tree, args[0] as ITargetArg | undefined)
     if (!target) return
     const dialog = accessor.get(IDialogService)
-    const tree = accessor.get(IExplorerTreeService)
 
     const current = basename(target.fsPath)
     const next = await dialog.prompt({
@@ -59,12 +85,10 @@ export class DeleteFileAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
-    const a = (args[0] as ITargetArg | undefined) ?? {}
-    const target = reviveUri(a.target ?? null)
-    if (!target) return
-    const isDirectory = !!a.isDirectory
-    const dialog = accessor.get(IDialogService)
     const tree = accessor.get(IExplorerTreeService)
+    const { target, isDirectory } = resolveTarget(tree, (args[0] as ITargetArg | undefined) ?? {})
+    if (!target) return
+    const dialog = accessor.get(IDialogService)
 
     const confirmed = await dialog.confirm({
       message: localize(

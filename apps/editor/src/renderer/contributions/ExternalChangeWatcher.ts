@@ -10,11 +10,13 @@ import {
   Disposable,
   IDialogService,
   IEditorGroupsService,
+  type IFileChangeEvent,
   IFileWatcherService,
   type IWorkbenchContribution,
   URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -31,19 +33,28 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     )
   }
 
-  private async _handle(events: readonly { resource: { path?: string } }[]): Promise<void> {
+  private async _handle(events: readonly IFileChangeEvent[]): Promise<void> {
     if (events.length === 0) return
-    const keys = new Set<string>()
+    const deletedResources: URI[] = []
+    const changedKeys = new Set<string>()
     for (const ev of events) {
       const u = URI.revive(ev.resource as Parameters<typeof URI.revive>[0])
-      if (u) keys.add(u.toString())
+      if (!u) continue
+      if (ev.type === 'deleted') {
+        deletedResources.push(u)
+      } else {
+        changedKeys.add(u.toString())
+      }
     }
-    if (keys.size === 0) return
+    if (deletedResources.length > 0) {
+      this._closeDeletedEditors(deletedResources)
+    }
+    if (changedKeys.size === 0) return
 
     const matches: FileEditorInput[] = []
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && keys.has(editor.resource.toString())) {
+        if (editor instanceof FileEditorInput && changedKeys.has(editor.resource.toString())) {
           matches.push(editor)
         }
       }
@@ -61,6 +72,22 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
         await input.checkExternalChange(this._dialog)
       } catch {
         // Best-effort: a failure on one input must not stall the others.
+      }
+    }
+  }
+
+  private _closeDeletedEditors(deletedResources: readonly URI[]): void {
+    for (const group of this._groups.groups) {
+      for (const editor of [...group.editors]) {
+        if (!(editor instanceof FileEditorInput)) continue
+        if (
+          deletedResources.some(
+            (deleted) =>
+              isDescendant(deleted, editor.resource) && deleted.scheme === editor.resource.scheme,
+          )
+        ) {
+          group.closeEditor(editor)
+        }
       }
     }
   }

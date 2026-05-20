@@ -18,15 +18,20 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri } from './fileActionsCommon.js'
 
 interface IParentArg {
   readonly parent?: URI | UriComponents
+  readonly resource?: URI | UriComponents
+  readonly isDirectory?: boolean
 }
 
 function resolveParent(accessor: ServicesAccessor, args: IParentArg | undefined): URI | null {
   const explicit = args?.parent ? reviveUri(args.parent) : null
   if (explicit) return explicit
+  const resource = args?.resource ? reviveUri(args.resource) : null
+  if (resource) return args?.isDirectory === true ? resource : parentOf(resource)
   const workspace = accessor.get(IWorkspaceService)
   return workspace.current?.folder ?? null
 }

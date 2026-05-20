@@ -31,9 +31,24 @@ class FakeWatcher implements IFileWatcherServiceType {
   }
 }
 
-function makeGroups(editors: EditorInput[]): IEditorGroupsServiceType {
-  const group = { editors } as unknown as IEditorGroup
-  return { groups: [group] } as unknown as IEditorGroupsServiceType
+function makeGroups(editors: EditorInput[]): IEditorGroupsServiceType & {
+  closed: EditorInput[]
+  group: IEditorGroup
+} {
+  const closed: EditorInput[] = []
+  const group = {
+    editors,
+    closeEditor(editor: EditorInput) {
+      closed.push(editor)
+      const index = editors.indexOf(editor)
+      if (index >= 0) editors.splice(index, 1)
+      return true
+    },
+  } as unknown as IEditorGroup
+  return { groups: [group], closed, group } as unknown as IEditorGroupsServiceType & {
+    closed: EditorInput[]
+    group: IEditorGroup
+  }
 }
 
 function makeDialog(): IDialogService {
@@ -98,5 +113,33 @@ describe('ExternalChangeWatcher', () => {
     watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt').toJSON() }])
     await flush()
     expect(fileInput.checks).toHaveLength(0)
+  })
+
+  it('closes matching FileEditorInputs when a file is deleted', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([fileInput])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(watcher, groups, makeDialog())
+
+    watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
+    await flush()
+    expect(groups.closed).toEqual([fileInput])
+    expect(fileInput.checks).toHaveLength(0)
+  })
+
+  it('closes descendant file tabs when a directory is deleted', async () => {
+    const inside = URI.file('/ws/folder/a.txt')
+    const outside = URI.file('/ws/other.txt')
+    const inputInside = makeFileInput(inside) as FileEditorInput & { checks: number[] }
+    const inputOutside = makeFileInput(outside) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([inputInside, inputOutside])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(watcher, groups, makeDialog())
+
+    watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder').toJSON() }])
+    await flush()
+    expect(groups.closed).toEqual([inputInside])
+    expect(groups.group.editors).toEqual([inputOutside])
   })
 })

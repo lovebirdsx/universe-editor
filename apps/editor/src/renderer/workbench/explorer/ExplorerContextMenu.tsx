@@ -7,6 +7,7 @@
 import { type ICommandService, MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { URI } from '@universe-editor/platform'
+import { parentOf } from '../../services/explorer/explorerTreeUtils.js'
 
 export interface ContextMenuState {
   readonly x: number
@@ -23,15 +24,21 @@ interface Props {
 }
 
 export function ExplorerContextMenu({ state, rootResource, commandService, onClose }: Props) {
-  // Resolve the target for commands: clicked item, or its parent dir, or the root.
-  const target = state.target
-  const effectiveTarget = target ?? { resource: rootResource, isDirectory: true }
+  const target = state.target ?? { resource: rootResource, isDirectory: true }
+  const parent = target.isDirectory ? target.resource : (parentOf(target.resource) ?? rootResource)
 
   return (
     <ContextMenu
       menuId={MenuId.ExplorerContext}
       anchor={{ x: state.x, y: state.y }}
-      args={[effectiveTarget]}
+      args={[
+        {
+          target: target.resource,
+          resource: target.resource,
+          parent,
+          isDirectory: target.isDirectory,
+        },
+      ]}
       commandService={commandService}
       onClose={onClose}
     />

@@ -12,5 +12,7 @@ export function reviveUri(value: URI | UriComponents | null): URI | null {
 
 export interface ITargetArg {
   readonly target?: URI | UriComponents
+  readonly resource?: URI | UriComponents
+  readonly parent?: URI | UriComponents
   readonly isDirectory?: boolean
 }

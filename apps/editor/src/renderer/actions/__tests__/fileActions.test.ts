@@ -343,6 +343,14 @@ describe('fileActions', () => {
       expect(h.group.opened).toHaveLength(1)
     })
 
+    it('uses the containing folder when invoked from a file context menu target', async () => {
+      const h = makeHarness()
+      h.dialog.promptResults.push('hello.txt')
+      const target = URI.file('/ws/src/main.ts')
+      await run(h, NewFileAction.ID, { resource: target, isDirectory: false })
+      expect(h.fs.writes.map((w) => w.path)).toContain(URI.file('/ws/src/hello.txt').toString())
+    })
+
     it('no-ops when the prompt is cancelled', async () => {
       const h = makeHarness()
       h.dialog.promptResults.push(undefined)
@@ -375,6 +383,16 @@ describe('fileActions', () => {
       expect(h.fs.files.has(source.toString())).toBe(false)
     })
 
+    it('accepts resource-style args from the Explorer context menu', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.dialog.promptResults.push('b.txt')
+      await run(h, RenameFileAction.ID, { resource: source, isDirectory: false })
+      expect(h.fs.files.has(URI.joinPath(root, 'b.txt').toString())).toBe(true)
+    })
+
     it('no-ops when prompt returns same name', async () => {
       const root = URI.file('/ws')
       const source = URI.joinPath(root, 'a.txt')
@@ -394,6 +412,27 @@ describe('fileActions', () => {
       h.fs.files.add(target.toString())
       h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
       await run(h, DeleteFileAction.ID, { target, isDirectory: false })
+      expect(h.fs.files.has(target.toString())).toBe(false)
+    })
+
+    it('accepts resource-style args from the Explorer context menu', async () => {
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      await run(h, DeleteFileAction.ID, { resource: target, isDirectory: false })
+      expect(h.fs.files.has(target.toString())).toBe(false)
+    })
+
+    it('falls back to the current Explorer selection when invoked without args', async () => {
+      const root = URI.file('/ws')
+      const target = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(target.toString())
+      h.tree.setSelection([target], target)
+      h.dialog.confirmResults.push({ confirmed: true, choice: 'primary' })
+      await run(h, DeleteFileAction.ID)
       expect(h.fs.files.has(target.toString())).toBe(false)
     })
 

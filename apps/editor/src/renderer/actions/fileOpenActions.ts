@@ -16,12 +16,12 @@ import {
   URI,
   localize,
   type ServicesAccessor,
-  type UriComponents,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
 export class OpenFileAction extends Action2 {
@@ -160,11 +160,13 @@ export class RefreshExplorerAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const tree = accessor.get(IExplorerTreeService)
-    const arg = args[0] as { resource?: URI | UriComponents | null } | undefined
-    const resource = arg?.resource
-      ? arg.resource instanceof URI
-        ? arg.resource
-        : (URI.revive(arg.resource) as URI)
+    const arg = args[0] as ITargetArg | undefined
+    const resourceArg = reviveUri(arg?.resource ?? null)
+    const parentArg = reviveUri(arg?.parent ?? null)
+    const resource = resourceArg
+      ? arg?.isDirectory === true
+        ? resourceArg
+        : (parentArg ?? parentOf(resourceArg) ?? resourceArg)
       : tree.root
     if (!resource) return
     await tree.refresh(resource)
