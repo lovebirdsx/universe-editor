@@ -20,10 +20,29 @@ export function setErrorTelemetryHook(hook: ErrorTelemetryHook): void {
 
 export function onUnexpectedError(e: unknown): void {
   if (e instanceof ErrorNoTelemetry) return
+  if (isCancellationError(e)) return
   _errorTelemetryHook?.('unhandledError', {
     stack: e instanceof Error ? (e.stack ?? e.message) : String(e),
   })
   unexpectedErrorHandler(e)
+}
+
+/**
+ * A cancellation error thrown when a pending async operation is cancelled
+ * during disposal (e.g. Monaco's Delayer.cancel()). This is expected behaviour
+ * and must not be treated as an unexpected error.
+ */
+export class CancellationError extends Error {
+  constructor() {
+    super('Canceled')
+    this.name = 'Canceled'
+  }
+}
+
+/** Returns true for any error that represents an intentional cancellation. */
+export function isCancellationError(error: unknown): boolean {
+  if (error instanceof CancellationError) return true
+  return error instanceof Error && error.name === 'Canceled' && error.message === 'Canceled'
 }
 
 /**
