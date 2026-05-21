@@ -13,7 +13,7 @@ import {
 } from '@playwright/test'
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO } from '../pages/WorkbenchPO.js'
 
@@ -30,6 +30,12 @@ export type E2EFixtures = {
 export const test = base.extend<E2EFixtures>({
   electronApp: async ({}, use) => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
+    // Pin UI language for deterministic assertions across CI/dev machines.
+    writeFileSync(
+      join(userDataDir, 'settings.json'),
+      JSON.stringify({ 'workbench.language': 'en-US' }, null, 2),
+      'utf8',
+    )
     const app = await electron.launch({
       args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
       cwd: APP_ROOT,

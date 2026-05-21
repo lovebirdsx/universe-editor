@@ -19,6 +19,7 @@ import {
   EditorInput,
   EditorRegistry,
   ICommandService,
+  IContextKeyService,
   IDialogService,
   type IEditorGroup,
   type IEditorGroupsService,
@@ -28,10 +29,9 @@ import {
 import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
+import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
-import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './EditorArea.module.css'
 
@@ -153,6 +153,7 @@ export function EditorGroupView({
   const isActiveGroup = activeGroup === group
   const dialogService = useService(IDialogService)
   const commandService = useService(ICommandService)
+  const contextKeyService = useService(IContextKeyService)
   const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const tabBarRef = useRef<HTMLDivElement>(null)
@@ -235,9 +236,9 @@ export function EditorGroupView({
   const activeEditor = group.activeEditor
   useEffect(() => {
     if (!isActiveGroup) return
-    if (!(activeEditor instanceof FileEditorInput)) return
-    FileEditorRegistry.get(activeEditor)?.focus()
-  }, [isActiveGroup, activeEditor])
+    if (!activeEditor) return
+    focusEditorInput(activeEditor, contextKeyService)
+  }, [contextKeyService, isActiveGroup, activeEditor])
 
   const renderContent = () => {
     const active = group.activeEditor

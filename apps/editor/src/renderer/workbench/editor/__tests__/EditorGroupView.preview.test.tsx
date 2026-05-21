@@ -5,8 +5,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
+  ContextKeyService,
   EditorInput,
   ICommandService,
+  IContextKeyService,
   IDialogService,
   InstantiationService,
   ServiceCollection,
@@ -36,6 +38,7 @@ function renderWithServices(node: React.ReactNode) {
   const services = new ServiceCollection()
   services.set(IDialogService, stubDialog)
   services.set(ICommandService, stubCommand)
+  services.set(IContextKeyService, new ContextKeyService())
   const inst = new InstantiationService(services)
   return render(<ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>)
 }

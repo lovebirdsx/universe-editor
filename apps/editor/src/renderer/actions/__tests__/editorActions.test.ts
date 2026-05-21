@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ContextKeyService,
   EditorInput,
+  IContextKeyService,
   IEditorGroupsService,
   InstantiationService,
   KeybindingsRegistry,
@@ -34,6 +36,7 @@ import {
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 
 class TestEditor extends EditorInput {
   constructor(private readonly _name: string) {
@@ -53,6 +56,7 @@ class TestEditor extends EditorInput {
 function makeAccessor(groups: EditorGroupsService) {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
+  services.set(IContextKeyService, new ContextKeyService())
   return new InstantiationService(services)
 }
 
@@ -293,6 +297,50 @@ describe('FocusActiveEditorGroupAction', () => {
 
     const focus = vi.fn()
     FileEditorRegistry.register(input, { focus } as never)
+
+    exec(FocusActiveEditorGroupAction, svc)
+
+    expect(focus).toHaveBeenCalledOnce()
+  })
+
+  it('run() focuses the surviving split editor after the other group closes', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, 3 /* Right */)
+    const input = Object.create(FileEditorInput.prototype) as FileEditorInput
+    first.openEditor(input)
+    second.openEditor(input)
+    svc.activateGroup(second)
+
+    const firstFocus = vi.fn()
+    const secondFocus = vi.fn()
+    const firstEditor = { focus: firstFocus } as never
+    const secondEditor = { focus: secondFocus } as never
+    FileEditorRegistry.register(input, firstEditor)
+    FileEditorRegistry.register(input, secondEditor)
+
+    svc.removeGroup(second)
+    FileEditorRegistry.unregister(input, secondEditor)
+    exec(FocusActiveEditorGroupAction, svc)
+
+    expect(svc.activeGroup).toBe(first)
+    expect(firstFocus).toHaveBeenCalledOnce()
+    expect(secondFocus).not.toHaveBeenCalled()
+  })
+
+  it('run() focuses an untitled editor after a newly split group is immediately closed', async () => {
+    const svc = new EditorGroupsService()
+    const input = new UntitledEditorInput()
+    svc.activeGroup.openEditor(input)
+
+    const focus = vi.fn()
+    FileEditorRegistry.register(input, { focus } as never)
+    exec(SplitEditorRightAction, svc)
+    exec(CloseActiveEditorAction, svc)
+    await Promise.resolve()
+
+    expect(svc.groups).toHaveLength(1)
+    expect(svc.activeGroup.activeEditor).toBe(input)
 
     exec(FocusActiveEditorGroupAction, svc)
 

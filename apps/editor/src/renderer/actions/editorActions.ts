@@ -10,6 +10,7 @@ import {
   GroupDirection,
   GroupLocation,
   IConfigurationService,
+  IContextKeyService,
   IDialogService,
   IEditorGroupsService,
   MenuId,
@@ -17,8 +18,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfirm.js'
-import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { focusEditorInput } from '../services/editor/editorFocus.js'
 
 // ---------------------------------------------------------------------------
 // Close group
@@ -359,9 +359,7 @@ export class FocusActiveEditorGroupAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     const activeEditor = accessor.get(IEditorGroupsService).activeGroup.activeEditor
-    if (activeEditor instanceof FileEditorInput) {
-      FileEditorRegistry.get(activeEditor)?.focus()
-    }
+    if (activeEditor) focusEditorInput(activeEditor, accessor.get(IContextKeyService))
   }
 }
 

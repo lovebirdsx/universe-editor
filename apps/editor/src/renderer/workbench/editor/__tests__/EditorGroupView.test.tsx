@@ -11,9 +11,11 @@ import { beforeEach, afterEach, describe, expect, it } from 'vitest'
 import { render, screen, fireEvent } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import {
+  ContextKeyService,
   EditorInput,
   EditorRegistry,
   ICommandService,
+  IContextKeyService,
   IDialogService,
   InstantiationService,
   ServiceCollection,
@@ -66,6 +68,7 @@ function makeFakeInstantiation(): InstantiationService {
     _serviceBrand: undefined,
     executeCommand: () => Promise.resolve(undefined),
   } as ICommandService)
+  sc.set(IContextKeyService, new ContextKeyService())
   return new InstantiationService(sc)
 }
 

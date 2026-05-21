@@ -29,6 +29,7 @@ import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { focusStandaloneEditor, syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
@@ -90,6 +91,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
+  const activeGroup = groupsService.activeGroup
+  const activeGroupActiveEditor = activeGroup.activeEditor
 
   useEffect(() => {
     let cancelled = false
@@ -133,7 +136,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       contextKeyService.set('editorFocus', true)
     })
     const blurSub = ed.onDidBlurEditorWidget(() => {
-      contextKeyService.set('editorFocus', false)
+      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     })
     // Bridge: when the user has rebound a Monaco built-in command to a new
     // key, swallow monaco's *original* default key in the capture phase so
@@ -159,11 +162,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     return () => {
       focusSub.dispose()
       blurSub.dispose()
-      // Monaco's dispose() does not guarantee a final blur event; reset
-      // explicitly so an unmount-while-focused doesn't leave a stale true.
-      contextKeyService.set('editorFocus', false)
       container.removeEventListener('keydown', bridgeHandler, true)
       ed.dispose()
+      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
     }
   }, [monacoNs, commandService, userKeybindingsSvc, configService, contextKeyService])
@@ -235,7 +236,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       if (editorRef.current) {
         FileEditorRegistry.register(fileInput, editorRef.current)
         if (groupsService.activeGroup.activeEditor === fileInput) {
-          editorRef.current.focus()
+          focusStandaloneEditor(editorRef.current, contextKeyService)
         }
         // Keep cache live so toJSON() always captures the latest position.
         cursorSub = editorRef.current.onDidChangeCursorPosition(flushViewState)
@@ -265,7 +266,13 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       if (editorRef.current) FileEditorRegistry.unregister(fileInput, editorRef.current)
       if (acquired) MonacoModelRegistry.release(fileInput.resource)
     }
-  }, [monacoNs, fileInput, groupsService.groups, group, groupsService.activeGroup.activeEditor])
+  }, [monacoNs, contextKeyService, fileInput, groupsService, group])
+
+  useEffect(() => {
+    if (activeGroup !== group) return
+    if (activeGroupActiveEditor !== fileInput) return
+    if (editorRef.current) focusStandaloneEditor(editorRef.current, contextKeyService)
+  }, [activeGroup, activeGroupActiveEditor, contextKeyService, fileInput, group])
 
   if (!monacoNs) {
     return (
