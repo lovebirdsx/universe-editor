@@ -108,9 +108,7 @@ describe('QuickPickPanel keyboard', () => {
   it('Enter with no matching items does nothing', () => {
     const onAccept = vi.fn()
     const onClose = vi.fn()
-    render(
-      <QuickPickPanel state={makeState({ onAccept, items: [] })} onClose={onClose} />,
-    )
+    render(<QuickPickPanel state={makeState({ onAccept, items: [] })} onClose={onClose} />)
     const input = screen.getByTestId('quick-input-field')
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onAccept).not.toHaveBeenCalled()

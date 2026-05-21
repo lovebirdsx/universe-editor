@@ -6,7 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { LogLevel } from '@universe-editor/platform'
+import {
+  LOG_TIMESTAMP_FORMAT_DEFAULT,
+  LogLevel,
+  formatLogTimestamp,
+} from '@universe-editor/platform'
 
 // Mock electron's app before importing logMainService
 const mockGetPath = vi.fn((_name: string): string => '')
@@ -195,7 +199,7 @@ describe('MainLogChannelService', () => {
     const content = await fs.readFile(logFile, 'utf8')
     expect(content).toContain('[renderer:42] renderer log entry')
     // Timestamp recorded in the file matches the caller-supplied fire time
-    expect(content).toContain(new Date(fireTime).toISOString())
+    expect(content).toContain(formatLogTimestamp(new Date(fireTime), LOG_TIMESTAMP_FORMAT_DEFAULT))
   })
 
   it('appendBatch routes each entry to its channel with provenance prefix', async () => {
