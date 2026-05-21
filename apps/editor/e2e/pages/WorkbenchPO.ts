@@ -71,4 +71,9 @@ export class WorkbenchPO {
   async getActiveEditorUri(): Promise<string | undefined> {
     return this.page.evaluate(() => window.__E2E__!.getActiveEditorUri())
   }
+
+  /** Return the number of editor groups currently open. */
+  async getEditorGroupCount(): Promise<number> {
+    return this.page.evaluate(() => window.__E2E__!.getEditorGroupCount())
+  }
 }

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
 import { QuickPickPanel } from '../QuickInput.js'
 import type { QuickPickState } from '../../../services/quickInput/QuickInputService.js'
 
@@ -83,5 +83,46 @@ describe('QuickPickPanel prefix mode', () => {
     render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
     // default items have no keybinding; no unexpected keybinding text should appear
     expect(screen.queryByText('Ctrl+')).toBeNull()
+  })
+})
+
+describe('QuickPickPanel keyboard', () => {
+  it('Enter selects the focused item and invokes onAccept + onClose', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={onClose} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([items[0]])
+    expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('Enter calls preventDefault to prevent the key event from leaking to the editor', () => {
+    render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    const event = createEvent.keyDown(input, { key: 'Enter' })
+    fireEvent(input, event)
+    expect(event.defaultPrevented).toBe(true)
+  })
+
+  it('Enter with no matching items does nothing', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(
+      <QuickPickPanel state={makeState({ onAccept, items: [] })} onClose={onClose} />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it('ArrowDown moves focus to next item and Enter accepts it', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'ArrowDown' })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([items[1]])
   })
 })

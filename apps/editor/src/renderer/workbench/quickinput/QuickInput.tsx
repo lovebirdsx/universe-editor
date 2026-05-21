@@ -118,6 +118,10 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
       e.preventDefault()
       setFocusedIdx((i) => (len === 0 ? 0 : Math.max(i - PAGE_SIZE, 0)))
     } else if (e.key === 'Enter') {
+      // preventDefault stops the native keydown from leaking to whichever element
+      // receives focus after the panel closes (typically the Monaco editor), which
+      // would otherwise cause an unwanted newline insertion.
+      e.preventDefault()
       const item = sortedFiltered[focusedIdx]
       if (item) accept([item])
     }
@@ -195,6 +199,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
+      e.preventDefault()
       const err = state.validateInput?.(value)
       if (err) {
         setError(err)

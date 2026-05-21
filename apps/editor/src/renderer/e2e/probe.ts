@@ -119,6 +119,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     openFileUri: (fsPath: string) => {
       return services.editorResolverService.openEditor(URI.file(fsPath))
     },
+    getEditorGroupCount: () => services.editorGroupsService.count,
   }
 
   window[E2E_PROBE_KEY] = probe

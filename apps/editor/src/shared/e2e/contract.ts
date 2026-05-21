@@ -89,6 +89,8 @@ export interface E2EProbe {
    * file for resolver testing.
    */
   openFileUri(fsPath: string): Promise<void>
+  /** Returns the number of editor groups currently open. */
+  getEditorGroupCount(): number
 }
 
 declare global {
