@@ -1,13 +1,29 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen } from '@testing-library/react'
-import { IOutputService, InstantiationService, ServiceCollection } from '@universe-editor/platform'
+import {
+  IConfigurationService,
+  IOutputService,
+  InstantiationService,
+  ServiceCollection,
+} from '@universe-editor/platform'
 import { OutputService } from '../../../../services/output/OutputService.js'
 import { ServicesContext } from '../../../useService.js'
 import { OutputView } from '../OutputView.js'
 
+const mockConfigService: IConfigurationService = {
+  _serviceBrand: undefined,
+  get: vi.fn().mockReturnValue(undefined),
+  update: vi.fn(),
+  loadLayer: vi.fn(),
+  getLayerSnapshot: vi.fn().mockReturnValue({}),
+  getValueOrigin: vi.fn().mockReturnValue(undefined),
+  onDidChangeConfiguration: { event: vi.fn(), dispose: vi.fn() } as never,
+}
+
 function renderOutputView(outputService = new OutputService()) {
   const services = new ServiceCollection()
   services.set(IOutputService, outputService)
+  services.set(IConfigurationService, mockConfigService)
   const instantiation = new InstantiationService(services)
 
   render(

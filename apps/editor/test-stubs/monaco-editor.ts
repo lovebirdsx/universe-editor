@@ -1,6 +1,6 @@
 /* Test stub for monaco-editor — happy-dom has no Monaco runtime, so we hand it
- * a tiny lookalike that satisfies the slice exercised by MonacoModelRegistry
- * and FileEditorInput tests.
+ * a tiny lookalike that satisfies the slice exercised by MonacoModelRegistry,
+ * FileEditorInput, and LogOutputView tests.
  */
 
 type Listener = () => void
@@ -8,6 +8,7 @@ type Listener = () => void
 function makeModel(initial: string, language: string, uri: unknown) {
   let value = initial
   const listeners = new Set<Listener>()
+  const lines = () => value.split('\n')
   return {
     uri,
     getValue: () => value,
@@ -17,6 +18,12 @@ function makeModel(initial: string, language: string, uri: unknown) {
       for (const l of listeners) l()
     },
     getLanguageId: () => language,
+    getLineCount: () => lines().length,
+    getLineContent: (n: number) => lines()[n - 1] ?? '',
+    applyEdits: (edits: Array<{ text: string }>) => {
+      for (const e of edits) value += e.text
+      for (const l of listeners) l()
+    },
     onDidChangeContent: (cb: Listener) => {
       listeners.add(cb)
       return { dispose: () => listeners.delete(cb) }
@@ -31,18 +38,39 @@ export const Uri = {
   parse: (s: string) => ({ toString: () => s }),
 }
 
+export class Range {
+  constructor(
+    public readonly startLineNumber: number,
+    public readonly startColumn: number,
+    public readonly endLineNumber: number,
+    public readonly endColumn: number,
+  ) {}
+}
+
 export const editor = {
   createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
   create: () => ({
     setModel: () => {},
     onDidChangeCursorPosition: () => ({ dispose: () => {} }),
+    onDidFocusEditorWidget: () => ({ dispose: () => {} }),
+    onDidBlurEditorWidget: () => ({ dispose: () => {} }),
     getModel: () => null,
+    getContainerDomNode: () => document.createElement('div'),
+    addCommand: () => {},
+    revealLine: () => {},
+    getScrollTop: () => 0,
+    getScrollHeight: () => 100,
+    getLayoutInfo: () => ({ height: 200 }),
+    updateOptions: () => {},
     dispose: () => {},
   }),
   getModel: () => null,
+  defineTheme: () => {},
 }
 
 export const languages = {
+  register: () => {},
+  setMonarchTokensProvider: () => ({ dispose: () => {} }),
   json: {
     jsonDefaults: {
       setDiagnosticsOptions: (_options: unknown) => {},
@@ -50,4 +78,4 @@ export const languages = {
   },
 }
 
-export default { Uri, editor, languages }
+export default { Uri, Range, editor, languages }

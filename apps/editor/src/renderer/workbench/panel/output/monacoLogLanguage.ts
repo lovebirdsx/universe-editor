@@ -1,0 +1,83 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Registers the 'log' language in Monaco with a Monarch tokenizer that mirrors
+ *  the token scopes from VSCode's extensions/log/syntaxes/log.tmLanguage.json,
+ *  and defines output-dark / output-light themes with matching log-level colors.
+ *--------------------------------------------------------------------------------------------*/
+
+import type * as monaco from 'monaco-editor'
+
+// Exported for unit tests (regex-only, no Monaco runtime required)
+export const LOG_LEVEL_RULES: Array<[RegExp, string]> = [
+  // error — highest priority
+  [/\[(error|err|critical|fatal|alert|failure)\]/i, 'log.error'],
+  // warning
+  [/\[(warn(?:ing)?|ww)\]/i, 'log.warning'],
+  // info
+  [/\[(info(?:rmation)?|notice|ii)\]/i, 'log.info'],
+  // debug
+  [/\[(debug|dbug|dbg|de|d)\]/i, 'log.debug'],
+  // trace / verbose
+  [/\[(trace|verbose|verb|vrb|vb|v)\]/i, 'log.trace'],
+  // ISO-8601 timestamp  (2024-05-21T10:30:00)
+  [/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/, 'log.date'],
+]
+
+const logMonarch: monaco.languages.IMonarchLanguage = {
+  tokenizer: {
+    root: [
+      ...LOG_LEVEL_RULES,
+      // anything else — advance by one character without a token so the
+      // tokenizer doesn't stall on unrecognised input
+      [/./, ''],
+    ],
+  },
+}
+
+const LOG_COLORS_DARK = {
+  trace: '6a9955',
+  debug: '9cdcfe',
+  info: '4ec994',
+  warning: 'd7a751',
+  error: 'f48771',
+  date: '8a8a92',
+}
+
+const LOG_COLORS_LIGHT = {
+  trace: '267f99',
+  debug: '0070c1',
+  info: '0b7a3e',
+  warning: 'b8860b',
+  error: 'a31515',
+  date: '6a6a7a',
+}
+
+function buildRules(colors: typeof LOG_COLORS_DARK): monaco.editor.ITokenThemeRule[] {
+  return [
+    { token: 'log.error', foreground: colors.error, fontStyle: 'bold' },
+    { token: 'log.warning', foreground: colors.warning },
+    { token: 'log.info', foreground: colors.info },
+    { token: 'log.debug', foreground: colors.debug },
+    { token: 'log.trace', foreground: colors.trace },
+    { token: 'log.date', foreground: colors.date },
+  ]
+}
+
+export function registerLogLanguage(m: typeof monaco): void {
+  m.languages.register({ id: 'log' })
+  m.languages.setMonarchTokensProvider('log', logMonarch)
+
+  m.editor.defineTheme('output-dark', {
+    base: 'vs-dark',
+    inherit: true,
+    rules: buildRules(LOG_COLORS_DARK),
+    colors: {},
+  })
+
+  m.editor.defineTheme('output-light', {
+    base: 'vs',
+    inherit: true,
+    rules: buildRules(LOG_COLORS_LIGHT),
+    colors: {},
+  })
+}

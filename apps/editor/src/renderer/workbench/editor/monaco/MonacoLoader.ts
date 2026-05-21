@@ -10,6 +10,7 @@ import { NullLogger, type ILogger } from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
+import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 
 export type { monaco }
 
@@ -56,6 +57,7 @@ async function loadMonaco(): Promise<typeof monaco> {
         },
       }
       _monaco = monacoMod
+      registerLogLanguage(_monaco)
       pushJsonDiagnostics()
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts

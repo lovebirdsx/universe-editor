@@ -72,19 +72,15 @@
 
 .content {
   flex: 1;
-  overflow-y: auto;
-  overflow-x: auto;
-  margin: 0;
-  padding: 6px 10px;
-  font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--color-foreground, #c8c8c8);
-  white-space: pre-wrap;
-  word-break: break-all;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
 }
 
 .empty {
+  padding: 6px 10px;
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
   color: var(--color-foreground-muted, #8a8a92);
   font-style: italic;
 }

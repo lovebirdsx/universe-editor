@@ -1,23 +1,18 @@
-import { useEffect, useRef, type ChangeEvent } from 'react'
-import { IOutputService } from '@universe-editor/platform'
+import { type ChangeEvent } from 'react'
+import { IConfigurationService, IOutputService } from '@universe-editor/platform'
 import { Trash2 } from 'lucide-react'
 import { useService, useObservable } from '../../useService.js'
+import { LogOutputView } from './LogOutputView.js'
 import styles from './OutputView.module.css'
 
 export function OutputView() {
   const outputService = useService(IOutputService)
+  const configService = useService(IConfigurationService)
   const channelNames = useObservable(outputService.channelNames)
   const activeChannelName = useObservable(outputService.activeChannelName)
   const content = useObservable(outputService.activeChannelContent)
   const activeChannel = activeChannelName ? outputService.getChannel(activeChannelName) : undefined
-  const contentRef = useRef<HTMLPreElement>(null)
-
-  // Auto-scroll to bottom when content changes
-  useEffect(() => {
-    if (contentRef.current) {
-      contentRef.current.scrollTop = contentRef.current.scrollHeight
-    }
-  }, [content])
+  const theme = configService.get<string>('workbench.colorTheme') === 'light' ? 'vs' : 'vs-dark'
 
   const handleChannelChange = (e: ChangeEvent<HTMLSelectElement>) => {
     outputService.setActiveChannel(e.target.value)
@@ -49,9 +44,13 @@ export function OutputView() {
           <Trash2 size={14} strokeWidth={1.75} aria-hidden="true" />
         </button>
       </div>
-      <pre ref={contentRef} className={styles['content']}>
-        {content || <span className={styles['empty']}>No output.</span>}
-      </pre>
+      <div className={styles['content']}>
+        {content ? (
+          <LogOutputView content={content} theme={theme} />
+        ) : (
+          <div className={styles['empty']}>No output.</div>
+        )}
+      </div>
     </div>
   )
 }

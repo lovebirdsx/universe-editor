@@ -49,8 +49,10 @@ function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
   return configService.get<boolean>('editor.wordWrap') === true ? 'on' : 'off'
 }
 
-function getEditorTheme(configService: IConfigurationService): 'vs' | 'vs-dark' {
-  return configService.get<string>('workbench.colorTheme') === 'light' ? 'vs' : 'vs-dark'
+function getEditorTheme(configService: IConfigurationService): 'output-light' | 'output-dark' {
+  return configService.get<string>('workbench.colorTheme') === 'light'
+    ? 'output-light'
+    : 'output-dark'
 }
 
 // Canonical key-string normalization that matches KeybindingsRegistry's
