@@ -58,12 +58,28 @@ export class ExplorerTreeService extends Disposable {
   private _root: URI | null = null
   private readonly _nodes = new Map<string, NodeState>()
   private _selection: URI[] = []
+  private _selectionKeys = new Set<string>()
   private _focused: URI | null = null
   private _activeEditorResource: URI | null = null
   private readonly _logger: ILogger
 
+  // Visible-rows cache: invalidated only when the tree structure changes
+  // (expand/collapse/refresh/root-swap). Selection mutations never touch it.
+  private _structureVersion = 0
+  private _visibleCache: readonly IExplorerEntry[] | null = null
+  private _visibleCacheVersion = -1
+
+  private readonly _onDidChangeStructure = this._register(new Emitter<void>())
+  readonly onDidChangeStructure: Event<void> = this._onDidChangeStructure.event
+
+  private readonly _onDidChangeSelection = this._register(new Emitter<void>())
+  readonly onDidChangeSelection: Event<void> = this._onDidChangeSelection.event
+
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange: Event<void> = this._onDidChange.event
+
+  private readonly _onReveal = this._register(new Emitter<URI>())
+  readonly onReveal: Event<URI> = this._onReveal.event
 
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
@@ -84,6 +100,10 @@ export class ExplorerTreeService extends Disposable {
 
   get selection(): readonly URI[] {
     return this._selection
+  }
+
+  isSelected(resource: URI): boolean {
+    return this._selectionKeys.has(resource.toString())
   }
 
   get focused(): URI | null {
@@ -120,14 +140,20 @@ export class ExplorerTreeService extends Disposable {
 
   /**
    * Flat, top-to-bottom list of every node currently rendered in the tree,
-   * including the workspace root. Used by keyboard navigation to compute
-   * up/down/home/end targets.
+   * including the workspace root. Cached across selection changes; only
+   * structure mutations invalidate the cache.
    */
-  getVisibleEntries(): IExplorerEntry[] {
-    if (!this._root) return []
+  getVisibleEntries(): readonly IExplorerEntry[] {
+    if (this._visibleCache && this._visibleCacheVersion === this._structureVersion) {
+      return this._visibleCache
+    }
     const out: IExplorerEntry[] = []
-    out.push({ resource: this._root, name: '', isDirectory: true })
-    this._collectVisible(this._root, out)
+    if (this._root) {
+      out.push({ resource: this._root, name: '', isDirectory: true })
+      this._collectVisible(this._root, out)
+    }
+    this._visibleCache = out
+    this._visibleCacheVersion = this._structureVersion
     return out
   }
 
@@ -140,22 +166,39 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
+  private _emitStructure(): void {
+    this._structureVersion++
+    this._visibleCache = null
+    this._onDidChangeStructure.fire()
+    this._onDidChange.fire()
+  }
+
+  private _emitSelection(): void {
+    this._onDidChangeSelection.fire()
+    this._onDidChange.fire()
+  }
+
+  private _replaceSelection(list: readonly URI[]): void {
+    this._selection = list as URI[]
+    this._selectionKeys = new Set(list.map((u) => u.toString()))
+  }
+
   setSelection(resources: readonly URI[] | URI | null, focus?: URI | null): void {
     const list =
       resources == null ? [] : Array.isArray(resources) ? dedupe(resources) : [resources as URI]
     const newFocus =
       focus === undefined ? (list.length > 0 ? (list[list.length - 1] ?? null) : null) : focus
     if (sameUriList(this._selection, list) && sameUri(this._focused, newFocus)) return
-    this._selection = list
+    this._replaceSelection(list)
     this._focused = newFocus
-    this._onDidChange.fire()
+    this._emitSelection()
     if (newFocus) this._fireReveal(newFocus)
   }
 
   setFocus(resource: URI | null): void {
     if (sameUri(this._focused, resource)) return
     this._focused = resource
-    this._onDidChange.fire()
+    this._emitSelection()
     if (resource) this._fireReveal(resource)
   }
 
@@ -163,10 +206,11 @@ export class ExplorerTreeService extends Disposable {
   toggleInSelection(resource: URI): void {
     const key = resource.toString()
     const idx = this._selection.findIndex((u) => u.toString() === key)
-    this._selection =
+    const next =
       idx >= 0 ? this._selection.filter((_, i) => i !== idx) : [...this._selection, resource]
+    this._replaceSelection(next)
     this._focused = resource
-    this._onDidChange.fire()
+    this._emitSelection()
     this._fireReveal(resource)
   }
 
@@ -180,22 +224,20 @@ export class ExplorerTreeService extends Disposable {
       return
     }
     const [lo, hi] = aIdx <= tIdx ? [aIdx, tIdx] : [tIdx, aIdx]
-    this._selection = visible.slice(lo, hi + 1).map((e) => e.resource)
+    this._replaceSelection(visible.slice(lo, hi + 1).map((e) => e.resource))
     this._focused = target
-    this._onDidChange.fire()
+    this._emitSelection()
     this._fireReveal(target)
   }
 
   setActiveEditorResource(resource: URI | null): void {
     if (sameUri(this._activeEditorResource, resource)) return
     this._activeEditorResource = resource
-    this._onDidChange.fire()
+    this._emitSelection()
   }
 
   private _fireReveal(target: URI): void {
-    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-      document.dispatchEvent(new CustomEvent('explorer:reveal', { detail: target.toString() }))
-    }
+    this._onReveal.fire(target)
   }
 
   /**
@@ -216,9 +258,9 @@ export class ExplorerTreeService extends Disposable {
     for (const dir of chain) {
       await this.expand(dir)
     }
-    this._selection = [target]
+    this._replaceSelection([target])
     this._focused = target
-    this._onDidChange.fire()
+    this._emitSelection()
     this._fireReveal(target)
     return true
   }
@@ -245,18 +287,21 @@ export class ExplorerTreeService extends Disposable {
 
   async expand(resource: URI): Promise<void> {
     const node = this._ensureNode(resource)
+    const wasExpanded = node.expanded
     node.expanded = true
     if (node.children === null && !node.loading) {
       await this._loadChildren(resource, node)
     }
-    this._onDidChange.fire()
+    if (!wasExpanded || node.children !== null) {
+      this._emitStructure()
+    }
   }
 
   collapse(resource: URI): void {
     const node = this._nodes.get(resource.toString())
-    if (!node) return
+    if (!node || !node.expanded) return
     node.expanded = false
-    this._onDidChange.fire()
+    this._emitStructure()
   }
 
   async toggle(resource: URI): Promise<void> {
@@ -271,7 +316,7 @@ export class ExplorerTreeService extends Disposable {
   async refresh(resource: URI): Promise<void> {
     const node = this._ensureNode(resource)
     await this._loadChildren(resource, node)
-    this._onDidChange.fire()
+    this._emitStructure()
   }
 
   async createFile(parent: URI, name: string): Promise<URI> {
@@ -332,7 +377,7 @@ export class ExplorerTreeService extends Disposable {
       if (parent) {
         await this.refresh(parent)
       } else {
-        this._onDidChange.fire()
+        this._emitStructure()
       }
       this._logger.info(`delete ${target.toString()} recursive=${opts?.recursive === true}`)
     } catch (err) {
@@ -345,13 +390,13 @@ export class ExplorerTreeService extends Disposable {
     this._logger.info(`setRoot ${root?.toString() ?? '<none>'}`)
     this._root = root
     this._nodes.clear()
-    this._selection = []
+    this._replaceSelection([])
     this._focused = null
     this._activeEditorResource = null
     if (root) {
       const node = this._ensureNode(root)
       node.expanded = true
-      void this._loadChildren(root, node).then(() => this._onDidChange.fire())
+      void this._loadChildren(root, node).then(() => this._emitStructure())
       void this._watcher.watch(root.toJSON()).catch(() => {
         // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
         this._logger.warn(`watch failed ${root.toString()}`)
@@ -359,7 +404,8 @@ export class ExplorerTreeService extends Disposable {
     } else {
       void this._watcher.unwatch().catch(() => {})
     }
-    this._onDidChange.fire()
+    this._emitStructure()
+    this._emitSelection()
   }
 
   private _onWatcherEvents(events: readonly IFileChangeEvent[]): void {

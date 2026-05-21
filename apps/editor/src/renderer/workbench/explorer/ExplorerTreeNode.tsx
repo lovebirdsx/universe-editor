@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  ExplorerTreeNode — recursive row renderer for one entry. Directories render
- *  a twisty and (when expanded) their children; files render a label that opens
- *  the editor on click.
+ *  ExplorerTreeNode — single flat row. Selection / focus / active-editor flags
+ *  arrive as props so React.memo can skip rows whose visible state didn't
+ *  actually change. The parent (ExplorerView) is responsible for the flat
+ *  visible-rows enumeration; this component never recurses into children.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import { memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
 import { type IFileService, type URI } from '@universe-editor/platform'
 import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
@@ -16,40 +17,38 @@ interface Props {
   readonly resource: URI
   readonly name: string
   readonly isDirectory: boolean
+  readonly expanded: boolean
   readonly depth: number
+  readonly isSelected: boolean
+  readonly isFocused: boolean
+  readonly isActiveEditor: boolean
   readonly tree: ExplorerTreeService
   readonly onOpenFile: (resource: URI, options?: { preview?: boolean }) => void
   readonly onContextMenu: (
     e: ReactMouseEvent,
     target: { resource: URI; isDirectory: boolean } | null,
   ) => void
-  /** When true, skip rendering children (used in virtual-scroll mode where VirtualList controls rows). */
-  readonly omitChildren?: boolean
-  /** Provided when DnD file-move is active. */
   readonly fileService?: IFileService
-  /** Passed through from VirtualList's absolute-positioning style. */
   readonly style?: CSSProperties
 }
 
-export function ExplorerTreeNode({
+function ExplorerTreeNodeImpl({
   resource,
   name,
   isDirectory,
+  expanded,
   depth,
+  isSelected,
+  isFocused,
+  isActiveEditor,
   tree,
   onOpenFile,
   onContextMenu,
-  omitChildren,
   fileService,
   style,
 }: Props) {
-  const expanded = isDirectory ? tree.isExpanded(resource) : false
-  const children = isDirectory && expanded && !omitChildren ? tree.getChildren(resource) : null
   const indent = { paddingLeft: `${depth * 12 + 6}px` }
   const key = resource.toString()
-  const isActiveEditor = tree.activeEditorResource?.toString() === key
-  const isSelected = tree.selection.some((u) => u.toString() === key)
-  const isFocused = tree.focused?.toString() === key
   const className = [
     styles['row'],
     isActiveEditor && styles['active'],
@@ -58,21 +57,8 @@ export function ExplorerTreeNode({
   ]
     .filter(Boolean)
     .join(' ')
-  const rowRef = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const handler = (e: Event) => {
-      const detail = (e as CustomEvent<string>).detail
-      if (detail === key) {
-        rowRef.current?.scrollIntoView({ block: 'nearest' })
-      }
-    }
-    document.addEventListener('explorer:reveal', handler)
-    return () => document.removeEventListener('explorer:reveal', handler)
-  }, [key])
 
   const onClick = (e: ReactMouseEvent) => {
-    // Modifier-keyed clicks toggle / extend the selection without opening files.
     if (e.shiftKey) {
       const anchor = tree.focused ?? resource
       tree.selectRange(anchor, resource)
@@ -111,42 +97,29 @@ export function ExplorerTreeNode({
   )
 
   return (
-    <>
-      <div
-        ref={rowRef}
-        role="treeitem"
-        aria-expanded={isDirectory ? expanded : undefined}
-        aria-selected={isSelected}
-        aria-current={isActiveEditor ? 'page' : undefined}
-        className={className}
-        style={style ? { ...indent, ...style } : indent}
-        onClick={onClick}
-        onDoubleClick={onDoubleClick}
-        onContextMenu={(e) => onContextMenu(e, { resource, isDirectory })}
-        {...dragHandleProps}
-        {...(isDirectory ? dropTargetProps : {})}
-      >
-        <span className={styles['twisty']} aria-hidden="true">
-          {isDirectory ? (expanded ? '▾' : '▸') : ''}
-        </span>
-        <span className={styles['icon']} aria-hidden="true">
-          <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />
-        </span>
-        <span className={styles['label']}>{name}</span>
-      </div>
-      {children?.map((child) => (
-        <ExplorerTreeNode
-          key={child.resource.toString()}
-          resource={child.resource}
-          name={child.name}
-          isDirectory={child.isDirectory}
-          depth={depth + 1}
-          tree={tree}
-          {...(fileService !== undefined ? { fileService } : {})}
-          onOpenFile={onOpenFile}
-          onContextMenu={onContextMenu}
-        />
-      ))}
-    </>
+    <div
+      data-row-key={key}
+      role="treeitem"
+      aria-expanded={isDirectory ? expanded : undefined}
+      aria-selected={isSelected}
+      aria-current={isActiveEditor ? 'page' : undefined}
+      className={className}
+      style={style ? { ...indent, ...style } : indent}
+      onClick={onClick}
+      onDoubleClick={onDoubleClick}
+      onContextMenu={(e) => onContextMenu(e, { resource, isDirectory })}
+      {...dragHandleProps}
+      {...(isDirectory ? dropTargetProps : {})}
+    >
+      <span className={styles['twisty']} aria-hidden="true">
+        {isDirectory ? (expanded ? '▾' : '▸') : ''}
+      </span>
+      <span className={styles['icon']} aria-hidden="true">
+        <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />
+      </span>
+      <span className={styles['label']}>{name}</span>
+    </div>
   )
 }
+
+export const ExplorerTreeNode = memo(ExplorerTreeNodeImpl)

@@ -1,5 +1,14 @@
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { useRef, type CSSProperties, type ReactNode } from 'react'
+import {
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+  type CSSProperties,
+  type ForwardedRef,
+  type ReactElement,
+  type ReactNode,
+  type Ref,
+} from 'react'
 
 export interface VirtualListProps<T> {
   items: readonly T[]
@@ -10,15 +19,22 @@ export interface VirtualListProps<T> {
   overscan?: number
 }
 
-export function VirtualList<T>({
-  items,
-  renderItem,
-  estimateSize,
-  className,
-  style,
-  overscan = 5,
-}: VirtualListProps<T>) {
+export interface VirtualListHandle {
+  scrollToIndex(index: number, opts?: { align?: 'auto' | 'start' | 'center' | 'end' }): void
+}
+
+interface CachedStyle {
+  start: number
+  size: number
+  style: CSSProperties
+}
+
+function VirtualListInner<T>(
+  { items, renderItem, estimateSize, className, style, overscan = 5 }: VirtualListProps<T>,
+  ref: ForwardedRef<VirtualListHandle>,
+) {
   const parentRef = useRef<HTMLDivElement>(null)
+  const styleCacheRef = useRef<Map<number, CachedStyle>>(new Map())
 
   const virtualizer = useVirtualizer({
     count: items.length,
@@ -27,22 +43,49 @@ export function VirtualList<T>({
     overscan,
   })
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      scrollToIndex(index, opts) {
+        virtualizer.scrollToIndex(index, opts)
+      },
+    }),
+    [virtualizer],
+  )
+
+  // Stable style refs per index — keeps renderItem children memoizable. A new
+  // object is only allocated when an item's start/size actually changes.
+  const getStableStyle = (index: number, start: number, size: number): CSSProperties => {
+    const cached = styleCacheRef.current.get(index)
+    if (cached && cached.start === start && cached.size === size) return cached.style
+    const next: CSSProperties = {
+      position: 'absolute',
+      top: 0,
+      left: 0,
+      width: '100%',
+      height: `${size}px`,
+      transform: `translateY(${start}px)`,
+    }
+    styleCacheRef.current.set(index, { start, size, style: next })
+    return next
+  }
+
   return (
     <div ref={parentRef} className={className} style={{ overflowY: 'auto', ...style }}>
       <div style={{ height: `${virtualizer.getTotalSize()}px`, position: 'relative' }}>
         {virtualizer.getVirtualItems().map((virtualItem) => {
           const item = items[virtualItem.index]
           if (item === undefined) return null
-          return renderItem(item, {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: `${virtualItem.size}px`,
-            transform: `translateY(${virtualItem.start}px)`,
-          })
+          return renderItem(
+            item,
+            getStableStyle(virtualItem.index, virtualItem.start, virtualItem.size),
+          )
         })}
       </div>
     </div>
   )
 }
+
+export const VirtualList = forwardRef(VirtualListInner) as <T>(
+  props: VirtualListProps<T> & { ref?: Ref<VirtualListHandle> },
+) => ReactElement | null
