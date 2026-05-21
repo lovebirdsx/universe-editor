@@ -77,6 +77,8 @@ export interface ILogFilesService {
   openLogsFolder(): Promise<void>
   setLogLevel(level: LogLevel): Promise<void>
   getLogLevel(): Promise<LogLevel>
+  setTimestampFormat(format: string): Promise<void>
+  getTimestampFormat(): Promise<string>
 }
 
 export const ILogFilesService = createDecorator<ILogFilesService>('logFilesService')

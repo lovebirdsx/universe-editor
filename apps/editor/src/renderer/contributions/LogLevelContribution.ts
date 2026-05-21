@@ -9,6 +9,7 @@ import {
   Disposable,
   IConfigurationService,
   ILoggerService,
+  LOG_TIMESTAMP_FORMAT_DEFAULT,
   LogLevel,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -30,6 +31,7 @@ export function parseLogLevel(value: unknown): LogLevel | undefined {
 
 export class LogLevelContribution extends Disposable implements IWorkbenchContribution {
   private _applied: LogLevel | undefined
+  private _appliedFormat: string | undefined
 
   constructor(
     @IConfigurationService private readonly _configuration: IConfigurationService,
@@ -40,20 +42,37 @@ export class LogLevelContribution extends Disposable implements IWorkbenchContri
     void this._apply()
     this._register(
       this._configuration.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('logging.level')) void this._apply()
+        if (
+          e.affectsConfiguration('logging.level') ||
+          e.affectsConfiguration('logging.timestampFormat')
+        ) {
+          void this._apply()
+        }
       }),
     )
   }
 
   private async _apply(): Promise<void> {
     const level = parseLogLevel(this._configuration.get('logging.level'))
-    if (level === undefined || level === this._applied) return
-    this._applied = level
-    this._loggerService.setLevel(level)
-    try {
-      await this._logFiles.setLogLevel(level)
-    } catch {
-      // Best-effort: main-side level sync is non-critical at startup.
+    if (level !== undefined && level !== this._applied) {
+      this._applied = level
+      this._loggerService.setLevel(level)
+      try {
+        await this._logFiles.setLogLevel(level)
+      } catch {
+        // Best-effort: main-side level sync is non-critical at startup.
+      }
+    }
+
+    const fmt =
+      this._configuration.get<string>('logging.timestampFormat') ?? LOG_TIMESTAMP_FORMAT_DEFAULT
+    if (fmt !== this._appliedFormat) {
+      this._appliedFormat = fmt
+      try {
+        await this._logFiles.setTimestampFormat(fmt)
+      } catch {
+        // Best-effort
+      }
     }
   }
 }

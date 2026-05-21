@@ -135,6 +135,14 @@ export class LogFilesMainService implements ILogFilesService {
     return this._logService.getLevel()
   }
 
+  async setTimestampFormat(format: string): Promise<void> {
+    this._logService.setTimestampFormat(format)
+  }
+
+  async getTimestampFormat(): Promise<string> {
+    return this._logService.getTimestampFormat()
+  }
+
   private _root(): string {
     return resolve(this._logService.getLogRoot())
   }

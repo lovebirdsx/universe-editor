@@ -13,6 +13,8 @@ import {
   Emitter,
   Event,
   LogLevel,
+  formatLogTimestamp,
+  LOG_TIMESTAMP_FORMAT_DEFAULT,
   type ILogger,
   type ILoggerService,
   type ILogChannel,
@@ -54,6 +56,7 @@ class FileLogger extends AbstractLogger {
   private _writeQueue: string[] = []
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
   private _estimatedSize = 0
+  private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
 
   constructor(
     logDir: string,
@@ -67,6 +70,10 @@ class FileLogger extends AbstractLogger {
     this._onChunk = onChunk
     this._currentDate = todayDateString()
     this._logPath = join(logDir, this._currentDate, `${channelId}.log`)
+  }
+
+  setTimestampFormat(format: string): void {
+    this._timestampFormat = format
   }
 
   protected _log(level: LogLevel, message: string): void {
@@ -87,7 +94,7 @@ class FileLogger extends AbstractLogger {
       this._estimatedSize = 0
     }
 
-    const ts = new Date(timestampMs).toISOString()
+    const ts = formatLogTimestamp(new Date(timestampMs), this._timestampFormat)
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
     const line = `[${ts}] [${label}] ${message}\n`
     this._writeQueue.push(line)
@@ -95,7 +102,7 @@ class FileLogger extends AbstractLogger {
     if (this._writeQueue.length > MAX_BUFFER_LINES) {
       const dropped = this._writeQueue.length - MAX_BUFFER_LINES + 1
       this._writeQueue.splice(0, dropped)
-      const warnTs = new Date().toISOString()
+      const warnTs = formatLogTimestamp(new Date(), this._timestampFormat)
       this._writeQueue.push(`[${warnTs}] [warn] dropped ${dropped} buffered log entries\n`)
     }
     this._scheduleFlush()
@@ -166,6 +173,7 @@ export class LogMainService implements ILoggerService {
 
   private readonly _logDir: string
   private _level: LogLevel = LogLevel.Info
+  private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
   private readonly _loggers = new Map<string, FileLogger>()
   private readonly _channels = new Map<string, ILogChannel>()
   private readonly _onDidAppendEntry = new Emitter<LogAppendEvent>()
@@ -192,6 +200,7 @@ export class LogMainService implements ILoggerService {
     let logger = this._loggers.get(channel.id)
     if (!logger) {
       logger = new FileLogger(this._logDir, channel.id, this._level, this._fireAppend)
+      logger.setTimestampFormat(this._timestampFormat)
       this._loggers.set(channel.id, logger)
     }
     return logger
@@ -213,6 +222,7 @@ export class LogMainService implements ILoggerService {
     let logger = this._loggers.get(channel.id)
     if (!logger) {
       logger = new FileLogger(this._logDir, channel.id, this._level, this._fireAppend)
+      logger.setTimestampFormat(this._timestampFormat)
       this._loggers.set(channel.id, logger)
     }
     logger.logWithTimestamp(level, message, timestampMs)
@@ -227,6 +237,17 @@ export class LogMainService implements ILoggerService {
 
   getLevel(): LogLevel {
     return this._level
+  }
+
+  setTimestampFormat(format: string): void {
+    this._timestampFormat = format
+    for (const logger of this._loggers.values()) {
+      logger.setTimestampFormat(format)
+    }
+  }
+
+  getTimestampFormat(): string {
+    return this._timestampFormat
   }
 
   async cleanupOldLogs(retainDays = 30): Promise<void> {

@@ -146,13 +146,30 @@ const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
   [LogLevel.Error]: 'error',
 }
 
+/** Supported timestamp format tokens for log output. */
+export type LogTimestampFormat = 'HH:mm:ss' | 'HH:mm:ss.SSS' | 'ISO'
+
+export const LOG_TIMESTAMP_FORMAT_DEFAULT: LogTimestampFormat = 'HH:mm:ss'
+
+/** Format a Date for log output according to the given format string. */
+export function formatLogTimestamp(date: Date, format: string): string {
+  if (format === 'ISO') return date.toISOString()
+  const h = String(date.getHours()).padStart(2, '0')
+  const m = String(date.getMinutes()).padStart(2, '0')
+  const s = String(date.getSeconds()).padStart(2, '0')
+  if (format === 'HH:mm:ss.SSS') {
+    return `${h}:${m}:${s}.${String(date.getMilliseconds()).padStart(3, '0')}`
+  }
+  return `${h}:${m}:${s}`
+}
+
 /**
  * Logs to `console`. Suitable for development environments.
  */
 export class ConsoleLogger extends AbstractLogger {
   protected _log(level: LogLevel, message: string): void {
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
-    const timestamp = new Date().toISOString()
+    const timestamp = formatLogTimestamp(new Date(), LOG_TIMESTAMP_FORMAT_DEFAULT)
     const line = `[${timestamp}] [${label}] ${message}`
 
     switch (level) {

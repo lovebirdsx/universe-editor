@@ -191,6 +191,23 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Default log level applied at startup.',
             ),
           },
+          'logging.timestampFormat': {
+            type: 'string',
+            default: 'HH:mm:ss',
+            enum: ['HH:mm:ss', 'HH:mm:ss.SSS', 'ISO'],
+            enumItemLabels: {
+              'HH:mm:ss': localize('settings.enum.timestampHHmmss', 'Time (09:11:25)'),
+              'HH:mm:ss.SSS': localize(
+                'settings.enum.timestampHHmmssSSS',
+                'Time with ms (09:11:25.123)',
+              ),
+              ISO: localize('settings.enum.timestampISO', 'ISO 8601 UTC'),
+            },
+            description: localize(
+              'settings.logging.timestampFormat.description',
+              'Timestamp format used in log output.',
+            ),
+          },
         },
       }),
     )
