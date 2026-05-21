@@ -8,16 +8,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  useContext,
   useEffect,
   useRef,
   useSyncExternalStore,
   useState,
   type ComponentType,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
   EditorInput,
   EditorRegistry,
+  GroupDirection,
   ICommandService,
   IContextKeyService,
   IDialogService,
@@ -26,7 +29,7 @@ import {
   type IEditorInput,
   URI,
 } from '@universe-editor/platform'
-import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
+import { DragSessionContext, useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
@@ -42,6 +45,49 @@ export interface EditorGroupViewProps {
   componentMap: Map<string, ComponentType<{ input: IEditorInput }>>
   /** Fallback shown when the group has no editors. */
   fallback?: React.ReactNode
+}
+
+/** Drop zones available when dragging a tab into a group's body (not the tab bar). */
+export type BodyDropZone = 'center' | 'top' | 'right' | 'bottom' | 'left'
+
+/** Width of each edge band as a fraction of the group's body dimensions. */
+const EDGE_RATIO = 0.2
+
+/**
+ * Pick the body drop zone for a pointer position relative to `rect`. Returns the
+ * edge whose perpendicular distance from the pointer is smallest, or `'center'`
+ * if the pointer is inside the central 60% × 60% region.
+ */
+export function detectBodyDropZone(
+  rect: { left: number; top: number; width: number; height: number },
+  clientX: number,
+  clientY: number,
+): BodyDropZone {
+  const dx = (clientX - rect.left) / rect.width
+  const dy = (clientY - rect.top) / rect.height
+  const distLeft = dx
+  const distRight = 1 - dx
+  const distTop = dy
+  const distBottom = 1 - dy
+  const min = Math.min(distLeft, distRight, distTop, distBottom)
+  if (min >= EDGE_RATIO) return 'center'
+  if (min === distLeft) return 'left'
+  if (min === distRight) return 'right'
+  if (min === distTop) return 'top'
+  return 'bottom'
+}
+
+function zoneToDirection(zone: Exclude<BodyDropZone, 'center'>): GroupDirection {
+  switch (zone) {
+    case 'top':
+      return GroupDirection.Up
+    case 'bottom':
+      return GroupDirection.Down
+    case 'left':
+      return GroupDirection.Left
+    case 'right':
+      return GroupDirection.Right
+  }
 }
 
 /** Subscribes to a group's model + active changes and returns a snapshot string. */
@@ -163,9 +209,14 @@ export function EditorGroupView({
   const dialogService = useService(IDialogService)
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
+  const dragSession = useContext(DragSessionContext)
   const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
+  const [bodyZone, setBodyZone] = useState<BodyDropZone | null>(null)
   const tabBarRef = useRef<HTMLDivElement>(null)
+  const bodyRef = useRef<HTMLDivElement>(null)
+  /** Last pointer position relative to the body — read on drop to recompute zone. */
+  const bodyDropPosRef = useRef<{ x: number; y: number } | null>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
 
@@ -185,6 +236,61 @@ export function EditorGroupView({
       }
     },
   )
+
+  const { dropTargetProps: bodyDropProps } = useDropTarget<{
+    editor: EditorInput
+    sourceGroupId: number
+  }>(({ editor, sourceGroupId }) => {
+    const rect = bodyRef.current?.getBoundingClientRect()
+    const pos = bodyDropPosRef.current
+    setBodyZone(null)
+    bodyDropPosRef.current = null
+    if (!rect || !pos) return
+    const sourceGroup = groupsService.getGroup(sourceGroupId)
+    if (!sourceGroup) return
+    // Dropping a group's only editor back onto itself would split into an empty
+    // source group (auto-removed) — guard against the useless churn.
+    if (sourceGroupId === group.id && sourceGroup.editors.length === 1) return
+    const zone = detectBodyDropZone(rect, pos.x, pos.y)
+    if (zone === 'center') {
+      // Same group + center = no-op (cross-group drops here behave like a tab-bar drop).
+      if (sourceGroupId === group.id) return
+      groupsService.moveEditor(editor, group)
+      return
+    }
+    const newGroup = groupsService.addGroup(group, zoneToDirection(zone))
+    groupsService.moveEditor(editor, newGroup)
+  })
+
+  const handleBodyDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
+    bodyDropProps.onDragOver(e)
+    const rect = bodyRef.current?.getBoundingClientRect()
+    if (!rect) return
+    bodyDropPosRef.current = { x: e.clientX, y: e.clientY }
+    // Suppress overlay when the source is *this* group and it owns only the
+    // dragged editor — dropping would be a no-op anywhere on the body.
+    const payload = dragSession?.payload as
+      | { editor: EditorInput; sourceGroupId: number }
+      | undefined
+    const onlyEditorSelfDrop = payload?.sourceGroupId === group.id && group.editors.length === 1
+    if (onlyEditorSelfDrop) {
+      if (bodyZone !== null) setBodyZone(null)
+      return
+    }
+    const zone = detectBodyDropZone(rect, e.clientX, e.clientY)
+    if (zone !== bodyZone) setBodyZone(zone)
+  }
+
+  const handleBodyDragLeave = (e: ReactDragEvent<HTMLDivElement>) => {
+    if (bodyRef.current && !bodyRef.current.contains(e.relatedTarget as Node | null)) {
+      setBodyZone(null)
+      bodyDropPosRef.current = null
+    }
+  }
+
+  const handleBodyDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    bodyDropProps.onDrop(e)
+  }
 
   function calcInsertIndex(clientX: number): number {
     const tabBar = tabBarRef.current
@@ -349,7 +455,24 @@ export function EditorGroupView({
           )}
         </div>
       )}
-      <div className={styles['editorContent']}>{renderContent()}</div>
+      <div
+        ref={bodyRef}
+        className={styles['editorContent']}
+        data-testid="editor-group-body"
+        onDragOver={handleBodyDragOver}
+        onDragLeave={handleBodyDragLeave}
+        onDrop={handleBodyDrop}
+      >
+        {renderContent()}
+        {bodyZone && (
+          <div
+            className={styles['dropZoneOverlay']}
+            data-zone={bodyZone}
+            data-testid="editor-group-drop-overlay"
+            aria-hidden="true"
+          />
+        )}
+      </div>
       {tabMenu && (
         <EditorTabContextMenu
           state={tabMenu}

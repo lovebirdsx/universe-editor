@@ -181,6 +181,37 @@
   position: relative;
 }
 
+.dropZoneOverlay {
+  position: absolute;
+  background: rgba(0, 112, 224, 0.18);
+  border: 1px solid rgba(0, 112, 224, 0.55);
+  pointer-events: none;
+  z-index: 5;
+  transition:
+    inset 80ms ease-out,
+    background-color 80ms ease-out;
+}
+
+.dropZoneOverlay[data-zone='center'] {
+  inset: 0;
+}
+
+.dropZoneOverlay[data-zone='top'] {
+  inset: 0 0 50% 0;
+}
+
+.dropZoneOverlay[data-zone='bottom'] {
+  inset: 50% 0 0 0;
+}
+
+.dropZoneOverlay[data-zone='left'] {
+  inset: 0 50% 0 0;
+}
+
+.dropZoneOverlay[data-zone='right'] {
+  inset: 0 0 0 50%;
+}
+
 .welcome {
   padding: 40px;
   color: var(--color-editor-fg, #cccccc);
