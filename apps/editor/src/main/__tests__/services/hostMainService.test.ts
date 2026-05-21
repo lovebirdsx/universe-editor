@@ -4,9 +4,11 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { relaunch, quit } = vi.hoisted(() => ({
+const { relaunch, quit, showSaveDialog, showOpenDialog } = vi.hoisted(() => ({
   relaunch: vi.fn(),
   quit: vi.fn(),
+  showSaveDialog: vi.fn(),
+  showOpenDialog: vi.fn(),
 }))
 
 vi.mock('electron', async () => {
@@ -16,6 +18,10 @@ vi.mock('electron', async () => {
     app: {
       relaunch,
       quit,
+    },
+    dialog: {
+      showSaveDialog,
+      showOpenDialog,
     },
   }
 })
@@ -93,6 +99,8 @@ describe('MainHostService', () => {
   beforeEach(() => {
     relaunch.mockReset()
     quit.mockReset()
+    showSaveDialog.mockReset()
+    showOpenDialog.mockReset()
     vi.unstubAllEnvs()
   })
 
@@ -159,6 +167,65 @@ describe('MainHostService', () => {
     expect(win.calls).toEqual(['reload'])
     expect(relaunch).not.toHaveBeenCalled()
     expect(quit).not.toHaveBeenCalled()
+    service.dispose()
+  })
+
+  it('showSaveFileDialog returns null when dialog is cancelled', async () => {
+    showSaveDialog.mockResolvedValue({ canceled: true, filePath: undefined })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    const result = await service.showSaveFileDialog({ defaultPath: 'F:/test/test/Untitled-1.txt' })
+    expect(result).toBeNull()
+    service.dispose()
+  })
+
+  it('showSaveFileDialog normalizes forward-slash defaultPath before passing to dialog', async () => {
+    showSaveDialog.mockResolvedValue({ canceled: true, filePath: undefined })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.showSaveFileDialog({ defaultPath: 'F:/test/test/Untitled-1.txt' })
+    const [, opts] = showSaveDialog.mock.calls[0] as [unknown, { defaultPath: string }]
+    // path.normalize converts forward slashes to the OS separator; on Windows
+    // this produces backslashes so the native shell dialog finds the directory.
+    // On POSIX the path is returned unchanged, so the assertion uses path.normalize.
+    const { normalize } = await import('node:path')
+    expect(opts.defaultPath).toBe(normalize('F:/test/test/Untitled-1.txt'))
+    service.dispose()
+  })
+
+  it('showSaveFileDialog returns URI for the picked file path', async () => {
+    showSaveDialog.mockResolvedValue({ canceled: false, filePath: 'F:\\test\\test\\output.txt' })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    const result = await service.showSaveFileDialog({})
+    expect(result).not.toBeNull()
+    expect(result?.scheme).toBe('file')
+    expect(result?.path).toBe('/F:/test/test/output.txt')
+    service.dispose()
+  })
+
+  it('showOpenFileDialog returns null when dialog is cancelled', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    const result = await service.showOpenFileDialog({ defaultPath: 'F:/test/test/' })
+    expect(result).toBeNull()
+    service.dispose()
+  })
+
+  it('showOpenFileDialog normalizes forward-slash defaultPath before passing to dialog', async () => {
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] })
+    const win = makeFakeWin()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const service = new MainHostService(win as any)
+    await service.showOpenFileDialog({ defaultPath: 'F:/test/test/' })
+    const [, opts] = showOpenDialog.mock.calls[0] as [unknown, { defaultPath: string }]
+    const { normalize } = await import('node:path')
+    expect(opts.defaultPath).toBe(normalize('F:/test/test/'))
     service.dispose()
   })
 })

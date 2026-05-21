@@ -5,17 +5,21 @@
 
 import {
   Action2,
+  GroupsOrder,
   ICommandService,
   IEditorGroupsService,
   IFileService,
   IHostService,
   IInstantiationService,
+  IWorkspaceService,
   MenuId,
+  URI,
   localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
+import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { reviveUri } from './fileActionsCommon.js'
 
@@ -63,8 +67,7 @@ export class SaveFileAsAction extends Action2 {
     const fileService = accessor.get(IFileService)
     const inst = accessor.get(IInstantiationService)
 
-    const defaultPath =
-      active instanceof FileEditorInput ? active.resource.fsPath : active.getName() + '.txt'
+    const defaultPath = resolveDefaultSavePath(active, groups, accessor)
     const picked = reviveUri(await host.showSaveFileDialog({ defaultPath }))
     if (!picked) return
 
@@ -84,6 +87,29 @@ export class SaveFileAsAction extends Action2 {
     groups.activeGroup.openEditor(newInput, { activate: true })
     groups.activeGroup.closeEditor(active)
   }
+}
+
+function resolveDefaultSavePath(
+  active: FileEditorInput | UntitledEditorInput,
+  groups: IEditorGroupsService,
+  accessor: ServicesAccessor,
+): string {
+  if (active instanceof FileEditorInput) return active.resource.fsPath
+  const filename = active.getName() + '.txt'
+  // 1. Last active file editor's directory
+  for (const group of groups.getGroups(GroupsOrder.MostRecentlyActive)) {
+    for (const editor of group.editors) {
+      if (editor instanceof FileEditorInput) {
+        const dir = parentOf(editor.resource)
+        if (dir) return URI.joinPath(dir, filename).fsPath
+      }
+    }
+  }
+  // 2. Workspace/project folder
+  const folder = accessor.get(IWorkspaceService).current?.folder
+  if (folder) return URI.joinPath(folder, filename).fsPath
+  // 3. System default
+  return filename
 }
 
 async function readUntitledText(input: UntitledEditorInput): Promise<string> {

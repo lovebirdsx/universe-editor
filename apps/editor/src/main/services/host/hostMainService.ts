@@ -3,6 +3,7 @@
  *  Host service implementation operating on a specific BrowserWindow.
  *--------------------------------------------------------------------------------------------*/
 
+import path from 'node:path'
 import { app, dialog, shell, type BrowserWindow } from 'electron'
 import {
   Emitter,
@@ -96,7 +97,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     const result = await dialog.showOpenDialog(this._win, {
       properties: ['openFile'],
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
-      ...(opts?.defaultPath !== undefined ? { defaultPath: opts.defaultPath } : {}),
+      ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
     })
     if (result.canceled || result.filePaths.length === 0) {
       this._logger.info(`showOpenFileDialog cancelled id=${this._win.id}`)
@@ -111,7 +112,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   async showSaveFileDialog(opts?: IShowSaveFileOptions): Promise<UriComponents | null> {
     const result = await dialog.showSaveDialog(this._win, {
       ...(opts?.title !== undefined ? { title: opts.title } : {}),
-      ...(opts?.defaultPath !== undefined ? { defaultPath: opts.defaultPath } : {}),
+      ...(opts?.defaultPath !== undefined ? { defaultPath: path.normalize(opts.defaultPath) } : {}),
     })
     if (result.canceled || !result.filePath) {
       this._logger.info(`showSaveFileDialog cancelled id=${this._win.id}`)
