@@ -12,6 +12,7 @@
       "outFiles": ["${workspaceFolder}/apps/editor/out/main/**/*.js"],
       "resolveSourceMapLocations": [
         "${workspaceFolder}/apps/editor/out/main/**",
+        "${workspaceFolder}/apps/editor/src/main/**",
         "${workspaceFolder}/packages/platform/src/**",
         "!**/node_modules/**"
       ],

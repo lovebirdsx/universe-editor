@@ -49,6 +49,7 @@ export default defineConfig({
       tsconfigRaw: decoratorTsconfigRaw,
     },
     build: {
+      sourcemap: true,
       externalizeDeps: { exclude: ['@universe-editor/platform'] },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },
