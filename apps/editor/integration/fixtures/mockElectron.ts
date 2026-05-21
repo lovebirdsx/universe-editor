@@ -37,4 +37,7 @@ vi.mock('electron', () => ({
     on: vi.fn(),
     removeHandler: vi.fn(),
   },
+  shell: {
+    openPath: vi.fn(async () => ''),
+  },
 }))

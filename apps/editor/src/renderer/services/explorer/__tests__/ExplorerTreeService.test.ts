@@ -2,19 +2,22 @@
  *  Tests for apps/editor/src/renderer/services/explorer/ExplorerTreeService.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   IFileService,
   IFileWatcherService,
+  ILoggerService,
   IWorkspaceService,
   InstantiationService,
+  LogLevel,
   ServiceCollection,
   URI,
   type IDirectoryEntry,
   type IFileChangeEvent,
   type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
+  type ILogger,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
   type UriComponents,
@@ -136,12 +139,35 @@ function makeInst(
   fs: IFileServiceType,
   ws: IWorkspaceServiceType,
   watcher: IFileWatcherServiceType,
+  logger?: ILogger,
 ): InstantiationService {
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
   services.set(IFileWatcherService, watcher)
+  if (logger) {
+    services.set(ILoggerService, {
+      _serviceBrand: undefined,
+      createLogger: () => logger,
+      setLevel: () => {},
+      getLevel: () => LogLevel.Info,
+    })
+  }
   return new InstantiationService(services)
+}
+
+function makeLogger(): ILogger {
+  return {
+    level: LogLevel.Info,
+    setLevel: vi.fn(),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    flush: vi.fn(),
+    dispose: vi.fn(),
+  }
 }
 
 const root = URI.file('/ws')
@@ -263,7 +289,8 @@ describe('ExplorerTreeService', () => {
   })
 
   it('fs.list errors surface on the node without crashing', async () => {
-    const tree = inst.createInstance(ExplorerTreeService)
+    const logger = makeLogger()
+    const tree = makeInst(fs, ws, watcher, logger).createInstance(ExplorerTreeService)
     await flush()
     const bad = URI.joinPath(root, 'missing')
     fs.dirs.delete(bad.toString())
@@ -275,6 +302,7 @@ describe('ExplorerTreeService', () => {
     }
     await tree.expand(bad)
     expect(tree.getChildren(bad)).toEqual([])
+    expect(logger.warn).toHaveBeenCalledWith(`loadChildren failed ${bad.toString()}`, 'boom')
   })
 
   it('fires onDidChange when state mutates', async () => {

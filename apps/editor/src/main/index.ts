@@ -14,6 +14,7 @@ import { WorkspaceMainService } from './services/workspace/workspaceMainService.
 import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
 import { UserDataMainService } from './services/userData/userDataMainService.js'
 import { LogMainService } from './services/log/logMainService.js'
+import { LogFilesMainService } from './services/log/logFilesMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { installMainErrorHandlers } from './errors.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
@@ -41,7 +42,8 @@ if (import.meta.env.DEV && process.env['VSCODE_RENDERER_DEBUG'] === '1') {
 
 // Install global error handlers as early as possible (before any async work).
 const logMainService = new LogMainService()
-installMainErrorHandlers(logMainService.createLogger({ id: 'main', name: 'Main' }))
+const mainLogger = logMainService.createLogger({ id: 'main', name: 'Main' })
+installMainErrorHandlers(mainLogger)
 
 const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 
@@ -53,17 +55,27 @@ const appIconPath = join(__dirname, '../../build/icon.ico')
 
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
   if (!applicationServices) {
+    mainLogger.info('create application services')
     const storage = new MainStorageService()
-    const workspace = new WorkspaceMainService(storage, new ElectronFolderDialog())
+    const workspace = new WorkspaceMainService(
+      storage,
+      new ElectronFolderDialog(),
+      logMainService.createLogger({ id: 'workspace', name: 'Workspace' }),
+    )
     const userData = new UserDataMainService(workspace)
     userDataService = userData
     applicationServices = {
       storage,
       ping: new MainPingService(),
-      fileSystem: new FileSystemMainService(),
-      fileWatcher: new FileWatcherMainService(),
+      fileSystem: new FileSystemMainService(
+        logMainService.createLogger({ id: 'fileSystem', name: 'File System' }),
+      ),
+      fileWatcher: new FileWatcherMainService(
+        logMainService.createLogger({ id: 'fileWatcher', name: 'File Watcher' }),
+      ),
       workspace,
       userData,
+      logFiles: new LogFilesMainService(logMainService),
     }
   }
   if (!windowMainService) {
@@ -92,11 +104,13 @@ async function loadMainSettingsText(): Promise<string> {
 }
 
 void app.whenReady().then(async () => {
+  mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
   await windows.createWindow()
 
   app.on('activate', () => {
+    mainLogger.info('app activate')
     if (getOrCreateServices().windows.getWindows().length === 0) {
       void getOrCreateServices().windows.createWindow()
     }
@@ -104,10 +118,12 @@ void app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
+  mainLogger.info(`window-all-closed platform=${process.platform}`)
   if (process.platform !== 'darwin') app.quit()
 })
 
 app.on('will-quit', () => {
+  mainLogger.info('will-quit')
   userDataService?.dispose()
   windowMainService?.dispose()
   logMainService.dispose()

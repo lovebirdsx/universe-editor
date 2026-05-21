@@ -12,12 +12,14 @@ import {
   IEditorGroupsService,
   IEditorInput,
   IEditorService,
+  NullLogger,
   ITelemetryService,
   IOpenEditorServiceOptions,
   URI,
   derived,
   observableValue,
   transaction,
+  type ILogger,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from './EditorGroupsService.js'
 
@@ -72,6 +74,7 @@ export class EditorService implements IEditorService {
   constructor(
     groupsService?: IEditorGroupsService,
     private readonly _telemetry?: ITelemetryService,
+    private readonly _logger: ILogger = new NullLogger(),
   ) {
     this._groupsService = groupsService ?? new EditorGroupsService()
     this._sync()
@@ -131,6 +134,9 @@ export class EditorService implements IEditorService {
     }
     this._sync()
     this._telemetry?.publicLog('editorOpened', { typeId: input.type })
+    this._logger.info(
+      `openEditor id=${input.id} type=${input.type} reused=${existing !== undefined} pinned=${options?.pinned ?? true} activate=${options?.activate !== false}`,
+    )
   }
 
   closeEditor(id: string): void {
@@ -144,12 +150,14 @@ export class EditorService implements IEditorService {
         this._suppressGroupSync--
       }
       this._sync()
+      this._logger.info(`closeEditor id=${id} type=${target.typeId}`)
     }
   }
 
   closeAllEditors(): void {
     const group = this._groupsService.activeGroup
     if (group.editors.length === 0) return
+    const count = group.editors.length
     this._suppressGroupSync++
     try {
       group.closeAllEditors()
@@ -157,5 +165,6 @@ export class EditorService implements IEditorService {
       this._suppressGroupSync--
     }
     this._sync()
+    this._logger.info(`closeAllEditors count=${count}`)
   }
 }

@@ -45,7 +45,7 @@ import {
   normalizePlatform,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
-import { IPingService, ILogChannelService } from '../shared/ipc/services.js'
+import { ILogChannelService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { installRendererErrorHandlers } from './errors.js'
@@ -72,6 +72,7 @@ import {
 } from './services/explorer/ExplorerTreeService.js'
 import { TextSearchService } from './services/search/TextSearchService.js'
 import { ALL_PART_CTORS } from './workbench/parts/index.js'
+import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import {
   IRecentFilesService,
   RecentFilesService,
@@ -129,6 +130,8 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(ILoggerService, loggerService)
   // Update the global unexpected-error handler to also send to the file logger.
   const rootLogger = loggerService.createLogger({ id: 'renderer', name: 'Renderer' })
+  rootLogger.info(`bootstrap start windowId=${windowId}`)
+  setMonacoLoaderLogger(loggerService.createLogger({ id: 'monaco', name: 'Monaco' }))
   setUnexpectedErrorHandler((e) => {
     const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
     rootLogger.error(msg)
@@ -163,6 +166,10 @@ async function bootstrapWorkbench(): Promise<void> {
     IUserDataFilesService,
     ProxyChannel.toService<IUserDataFilesService>(ipcService.getChannel(ServiceChannels.UserData)),
   )
+  services.set(
+    ILogFilesService,
+    ProxyChannel.toService<ILogFilesService>(ipcService.getChannel(ServiceChannels.LogFiles)),
+  )
   await initializeRendererNls(
     services.get(IUserDataFilesService) as IUserDataFilesService,
     window.navigator.language,
@@ -170,7 +177,11 @@ async function bootstrapWorkbench(): Promise<void> {
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),
   )
-  const workspaceService = new RendererWorkspaceService(workspaceWire, telemetry)
+  const workspaceService = new RendererWorkspaceService(
+    workspaceWire,
+    telemetry,
+    loggerService.createLogger({ id: 'workspace', name: 'Workspace' }),
+  )
   services.set(IWorkspaceService, workspaceService)
 
   // Configuration core. UserSettingsSync (below) bridges the User layer to
@@ -182,11 +193,21 @@ async function bootstrapWorkbench(): Promise<void> {
   const instantiation = new InstantiationService(services)
 
   // Renderer-only service implementations (pure local state, no IPC).
-  const editorGroupsService = new EditorGroupsService()
-  const editorService = new EditorService(editorGroupsService, telemetry)
+  const editorGroupsService = new EditorGroupsService(
+    loggerService.createLogger({ id: 'editorGroups', name: 'Editor Groups' }),
+  )
+  const editorService = new EditorService(
+    editorGroupsService,
+    telemetry,
+    loggerService.createLogger({ id: 'editor', name: 'Editor' }),
+  )
   const statusBarService = new StatusBarService()
   const outputService = new OutputService()
-  const commandService = new CommandService(instantiation, telemetry)
+  const commandService = new CommandService(
+    instantiation,
+    telemetry,
+    loggerService.createLogger({ id: 'command', name: 'Command' }),
+  )
 
   services.set(ICommandService, commandService)
   services.set(IEditorGroupsService, editorGroupsService)
@@ -286,6 +307,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // correct preferredSize. Allotment 1.20.5 only reads preferredSize on mount
   // (or pane-show); changing it after mount is silently ignored.
   await Promise.all([layoutService.load(), viewsService.load()])
+  rootLogger.info('bootstrap services restored')
 
   // Mount
   const rootEl = document.getElementById('root')
@@ -301,6 +323,7 @@ async function bootstrapWorkbench(): Promise<void> {
       </WorkbenchErrorBoundary>
     </StrictMode>,
   )
+  rootLogger.info('bootstrap mounted')
 }
 
 void bootstrapWorkbench()

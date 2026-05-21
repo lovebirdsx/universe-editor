@@ -3,10 +3,13 @@ import {
   CommandsRegistry,
   Emitter,
   IHostService,
+  ILoggerService,
   InstantiationService,
   KeybindingsRegistry,
+  LogLevel,
   MenuId,
   MenuRegistry,
+  NullLogger,
   ServiceCollection,
   registerAction2,
   type IDisposable,
@@ -44,6 +47,12 @@ function makeHostStub(): IHostServiceType & {
 function runCommand(commandId: string, host: IHostServiceType): void {
   const services = new ServiceCollection()
   services.set(IHostService, host)
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => new NullLogger(),
+    setLevel: () => {},
+    getLevel: () => LogLevel.Info,
+  })
   const inst = new InstantiationService(services)
   inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(commandId)!
@@ -130,9 +139,6 @@ describe('windowActions', () => {
   it('About.run is callable without throwing', () => {
     disposables.push(registerAction2(AboutAction))
     const host = makeHostStub()
-    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
-    runCommand(AboutAction.ID, host)
-    expect(infoSpy).toHaveBeenCalled()
-    infoSpy.mockRestore()
+    expect(() => runCommand(AboutAction.ID, host)).not.toThrow()
   })
 })

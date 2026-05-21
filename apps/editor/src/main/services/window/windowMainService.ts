@@ -60,10 +60,14 @@ export class WindowMainService implements IWindowMainService {
       appServices,
       logService,
     } = this._opts
+    const logger = logService.createLogger({ id: 'window', name: 'Window' })
 
     const isMac = process.platform === 'darwin'
     const storage = getDefaultStorage()
     const windowState = await loadWindowState(storage)
+    logger.info(
+      `createWindow start e2e=${e2eEnabled} dev=${rendererUrl !== undefined} restoredState=${windowState !== null}`,
+    )
 
     const win = new BrowserWindow({
       width: windowState?.width ?? 1280,
@@ -88,30 +92,43 @@ export class WindowMainService implements IWindowMainService {
     win.once('ready-to-show', () => {
       if (windowState) applyWindowState(win, windowState)
       win.show()
+      logger.info(`readyToShow id=${win.id}`)
     })
 
     trackWindowState(win, storage)
 
     // Per-window services
-    const host = new MainHostService(win, () => {
-      void this.createWindow()
-    })
+    const host = new MainHostService(
+      win,
+      () => {
+        void this.createWindow()
+      },
+      logService.createLogger({ id: 'host', name: 'Host' }),
+    )
     const logChannel = new MainLogChannelService(logService)
     const windowServices: WindowScopedServices = { host, logChannel }
 
     const ipc = bootstrapWindowIpc(win, appServices, windowServices)
     const entry: WindowEntry = { win, ipc }
     this._windows.set(win.id, entry)
+    logger.info(`createWindow created id=${win.id}`)
 
     win.on('closed', () => {
       ipc.dispose()
       this._windows.delete(win.id)
+      logger.info(`closed id=${win.id}`)
     })
 
     if (rendererUrl) {
-      void win.loadURL(rendererUrl)
+      logger.info(`loadURL id=${win.id} url=${rendererUrl}`)
+      void win.loadURL(rendererUrl).catch((err) => {
+        logger.error(`loadURL failed id=${win.id}`, err)
+      })
     } else {
-      void win.loadFile(rendererHtml)
+      logger.info(`loadFile id=${win.id} file=${rendererHtml}`)
+      void win.loadFile(rendererHtml).catch((err) => {
+        logger.error(`loadFile failed id=${win.id}`, err)
+      })
     }
 
     return win.id
@@ -121,6 +138,7 @@ export class WindowMainService implements IWindowMainService {
     const entry = this._windows.get(id)
     if (entry && !entry.win.isDestroyed()) {
       entry.win.focus()
+      this._opts.logService.createLogger({ id: 'window', name: 'Window' }).debug(`focus id=${id}`)
     }
   }
 
@@ -133,6 +151,8 @@ export class WindowMainService implements IWindowMainService {
   }
 
   dispose(): void {
+    const logger = this._opts.logService.createLogger({ id: 'window', name: 'Window' })
+    logger.info(`dispose windows=${this._windows.size}`)
     for (const { ipc } of this._windows.values()) {
       ipc.dispose()
     }

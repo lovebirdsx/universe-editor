@@ -10,10 +10,12 @@ import {
   Emitter,
   type Event,
   type IDisposable,
+  type ILogger,
   type IRecentWorkspace,
   type IStorageService,
   type IWorkspace,
   type IWorkspaceServiceWire,
+  NullLogger,
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -63,6 +65,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
   constructor(
     private readonly _storage: IStorageService,
     private readonly _folderDialog: IFolderDialog,
+    private readonly _logger: ILogger = new NullLogger(),
   ) {}
 
   private async _hydrate(): Promise<void> {
@@ -90,6 +93,9 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
           this._current = { folder, name: persistedCurrent.name }
         }
       }
+      this._logger.debug(
+        `hydrate workspace current=${this._current?.folder.toString() ?? '<none>'} recent=${this._recent.length}`,
+      )
       this._hydrated = true
     })()
     return this._hydratePromise
@@ -110,7 +116,10 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     // JSON.stringify([undefined]) → "[null]" over IPC, so treat null same as undefined.
     if (folder == null) {
       resolved = await this._folderDialog.showOpenFolderDialog()
-      if (!resolved) return
+      if (!resolved) {
+        this._logger.info('openFolder cancelled')
+        return
+      }
     } else {
       resolved = reviveUri(folder)
     }
@@ -120,13 +129,16 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     this._onDidChangeWorkspace.fire(workspace)
     this._addRecent(workspace)
     void this._persistCurrent()
+    this._logger.info(`openFolder ${workspace.folder.toString()}`)
   }
 
   async closeFolder(): Promise<void> {
     if (this._current === null) return
+    const previous = this._current.folder.toString()
     this._current = null
     this._onDidChangeWorkspace.fire(null)
     void this._persistCurrent()
+    this._logger.info(`closeFolder ${previous}`)
   }
 
   async clearRecent(): Promise<void> {
@@ -134,12 +146,14 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     this._recent = []
     this._onDidChangeRecent.fire(this._recent)
     await this._persist()
+    this._logger.info('clearRecent')
   }
 
   /** Internal restore path used when reviving from storage at startup. */
   async restoreCurrent(workspace: IWorkspace): Promise<void> {
     this._current = workspace
     this._onDidChangeWorkspace.fire(workspace)
+    this._logger.info(`restoreCurrent ${workspace.folder.toString()}`)
   }
 
   private _addRecent(workspace: IWorkspace): void {
@@ -153,6 +167,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     this._recent = [entry, ...filtered].slice(0, MAX_RECENT)
     this._onDidChangeRecent.fire(this._recent)
     void this._persist()
+    this._logger.debug(`recentWorkspaces count=${this._recent.length}`)
   }
 
   private async _persist(): Promise<void> {

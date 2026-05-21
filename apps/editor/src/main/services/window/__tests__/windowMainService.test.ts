@@ -54,6 +54,7 @@ function makeOpts() {
       fileWatcher: {} as never,
       workspace: {} as never,
       userData: {} as never,
+      logFiles: {} as never,
     },
     logService,
     e2eEnabled: false,

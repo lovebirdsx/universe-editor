@@ -23,11 +23,13 @@ import {
   IEditorGroup,
   IEditorGroupsService,
   IFindGroupScope,
+  NullLogger,
   type ISerializedGrid,
   Orientation,
   type ServicesAccessor,
   observableValue,
   transaction,
+  type ILogger,
   type IDisposable,
 } from '@universe-editor/platform'
 import { EditorGroup, directionToGridDirection } from './EditorGroup.js'
@@ -74,7 +76,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     return this._grid
   }
 
-  constructor() {
+  constructor(private readonly _logger: ILogger = new NullLogger()) {
     super()
     const initial = new EditorGroup(new EditorGroupModel(), this)
     this._groups.push(initial)
@@ -158,6 +160,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     if (idx !== -1) this._mru.splice(idx, 1)
     this._mru.unshift(target)
     this._onDidActiveGroupChange.fire(target)
+    this._logger.debug(`activateGroup id=${target.id}`)
     return target
   }
 
@@ -169,6 +172,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     this._mru.push(newGroup)
     this._onDidAddGroup.fire(newGroup)
     this._watchGroup(newGroup)
+    this._logger.info(`addGroup id=${newGroup.id} target=${target.id} direction=${direction}`)
     return newGroup
   }
 
@@ -190,6 +194,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     }
     target.model.dispose()
     this._onDidRemoveGroup.fire(target)
+    this._logger.info(`removeGroup id=${target.id}`)
   }
 
   moveGroup(group: IEditorGroup, location: IEditorGroup, direction: GroupDirection): IEditorGroup {
@@ -198,6 +203,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     if (src === dst) return src
     this._grid.moveView(src, dst, directionToGridDirection(direction))
     this._onDidMoveGroup.fire(src)
+    this._logger.info(`moveGroup id=${src.id} target=${dst.id} direction=${direction}`)
     return src
   }
 
@@ -207,14 +213,17 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     if (src === target) return
     src.closeEditor(editor)
     ;(target as EditorGroup).openEditor(editor)
+    this._logger.info(`moveEditor id=${editor.id} from=${src.id} to=${target.id}`)
   }
 
   copyEditor(editor: EditorInput, target: IEditorGroup): void {
     ;(target as EditorGroup).openEditor(editor)
+    this._logger.info(`copyEditor id=${editor.id} to=${target.id}`)
   }
 
   setGroupOrientation(orientation: GroupOrientation): void {
     this._orientation = orientation
+    this._logger.debug(`setGroupOrientation orientation=${orientation}`)
   }
 
   arrangeGroups(_arrangement: GroupsArrangement, _group?: IEditorGroup): void {
@@ -335,5 +344,6 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     const nextActive = restoredActive ?? this._groups[0]!
     this._activeGroup.set(nextActive, undefined)
     this._onDidActiveGroupChange.fire(nextActive)
+    this._logger.info(`restoreEditorGroups groups=${this._groups.length} active=${nextActive.id}`)
   }
 }

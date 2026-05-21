@@ -7,11 +7,14 @@ import {
   EditorInput,
   IEditorService,
   IFileService,
+  ILoggerService,
   InstantiationService,
+  LogLevel,
   ServiceCollection,
   URI,
   type IEditorService as IEditorServiceType,
   type IFileService as IFileServiceType,
+  type ILogger,
 } from '@universe-editor/platform'
 import { EditorResolverService } from '../EditorResolverService.js'
 import { FileEditorInput } from '../FileEditorInput.js'
@@ -53,14 +56,35 @@ function makeFs(): IFileServiceType {
   } as unknown as IFileServiceType
 }
 
+function makeLogger(): ILogger {
+  return {
+    level: LogLevel.Info,
+    setLevel: vi.fn(),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    flush: vi.fn(),
+    dispose: vi.fn(),
+  }
+}
+
 function makeEnv() {
   const editorService = makeEditorService()
+  const logger = makeLogger()
   const services = new ServiceCollection()
   services.set(IEditorService, editorService)
   services.set(IFileService, makeFs())
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => logger,
+    setLevel: () => {},
+    getLevel: () => LogLevel.Info,
+  })
   const inst = new InstantiationService(services)
   const resolver = inst.createInstance(EditorResolverService)
-  return { resolver, editorService, inst }
+  return { resolver, editorService, inst, logger }
 }
 
 afterEach(() => {
@@ -142,15 +166,16 @@ describe('EditorResolverService', () => {
   })
 
   it('duplicate registration: same (typeId, glob) is skipped with a warning', () => {
-    const { resolver } = makeEnv()
-    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { resolver, logger } = makeEnv()
     const factory = () => ({}) as unknown as EditorInput
 
     const d1 = resolver.registerEditor('**/*.ts', { typeId: 'dup', displayName: 'Dup' }, factory)
     const d2 = resolver.registerEditor('**/*.ts', { typeId: 'dup', displayName: 'Dup' }, factory)
 
-    expect(warnSpy).toHaveBeenCalledOnce()
-    expect(warnSpy.mock.calls[0]?.[0]).toContain('duplicate registration')
+    expect(logger.warn).toHaveBeenCalledOnce()
+    expect((logger.warn as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]).toContain(
+      'duplicate registration',
+    )
 
     // Only one registration actually exists
     const uri = URI.file('/a.ts')

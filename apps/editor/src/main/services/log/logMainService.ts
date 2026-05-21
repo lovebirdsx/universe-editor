@@ -139,6 +139,10 @@ export class LogMainService implements ILoggerService {
     this._logDir = join(app.getPath('userData'), 'logs')
   }
 
+  getLogRoot(): string {
+    return this._logDir
+  }
+
   createLogger(channel: ILogChannel): ILogger {
     let logger = this._loggers.get(channel.id)
     if (!logger) {

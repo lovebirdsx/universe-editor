@@ -16,6 +16,7 @@ export const ServiceChannels = {
   Workspace: 'workspace',
   UserData: 'userData',
   Log: 'log',
+  LogFiles: 'logFiles',
   Window: 'window',
 } as const
 

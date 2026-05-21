@@ -16,8 +16,12 @@ import {
   type IFileChangeEvent,
   IFileService,
   IFileWatcherService,
+  ILoggerService,
   IWorkspaceService,
+  NullLogger,
   URI,
+  type ILogger,
+  type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
 import { dedupe, isDescendant, parentOf, sameUri, sameUriList } from './explorerTreeUtils.js'
 
@@ -56,6 +60,7 @@ export class ExplorerTreeService extends Disposable {
   private _selection: URI[] = []
   private _focused: URI | null = null
   private _activeEditorResource: URI | null = null
+  private readonly _logger: ILogger
 
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange: Event<void> = this._onDidChange.event
@@ -64,8 +69,11 @@ export class ExplorerTreeService extends Disposable {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileService private readonly _fileService: IFileService,
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
+    @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
+    this._logger =
+      loggerService?.createLogger({ id: 'explorer', name: 'Explorer' }) ?? new NullLogger()
     this._setRoot(this._workspace.current?.folder ?? null)
     this._register(this._workspace.onDidChangeWorkspace((w) => this._setRoot(w?.folder ?? null)))
     this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))
@@ -270,45 +278,72 @@ export class ExplorerTreeService extends Disposable {
   async createFile(parent: URI, name: string): Promise<URI> {
     const target = URI.joinPath(parent, name)
     if (await this._fileService.exists(target)) {
+      this._logger.warn(`createFile exists ${target.toString()}`)
       throw new Error(`A file or folder named "${name}" already exists.`)
     }
-    await this._fileService.writeFile(target, '')
-    await this.refresh(parent)
-    return target
+    try {
+      await this._fileService.writeFile(target, '')
+      await this.refresh(parent)
+      this._logger.info(`createFile ${target.toString()}`)
+      return target
+    } catch (err) {
+      this._logger.error(`createFile failed ${target.toString()}`, err)
+      throw err
+    }
   }
 
   async createFolder(parent: URI, name: string): Promise<URI> {
     const target = URI.joinPath(parent, name)
     if (await this._fileService.exists(target)) {
+      this._logger.warn(`createFolder exists ${target.toString()}`)
       throw new Error(`A file or folder named "${name}" already exists.`)
     }
-    await this._fileService.createDirectory(target)
-    await this.refresh(parent)
-    return target
+    try {
+      await this._fileService.createDirectory(target)
+      await this.refresh(parent)
+      this._logger.info(`createFolder ${target.toString()}`)
+      return target
+    } catch (err) {
+      this._logger.error(`createFolder failed ${target.toString()}`, err)
+      throw err
+    }
   }
 
   async rename(source: URI, newName: string): Promise<URI> {
     const parent = parentOf(source)
     if (!parent) throw new Error('Cannot rename the workspace root.')
     const target = URI.joinPath(parent, newName)
-    await this._fileService.rename(source, target, { overwrite: false })
-    this._nodes.delete(source.toString())
-    await this.refresh(parent)
-    return target
+    try {
+      await this._fileService.rename(source, target, { overwrite: false })
+      this._nodes.delete(source.toString())
+      await this.refresh(parent)
+      this._logger.info(`rename ${source.toString()} -> ${target.toString()}`)
+      return target
+    } catch (err) {
+      this._logger.error(`rename failed ${source.toString()} -> ${target.toString()}`, err)
+      throw err
+    }
   }
 
   async delete(target: URI, opts?: { recursive?: boolean }): Promise<void> {
-    await this._fileService.delete(target, opts)
-    const parent = parentOf(target)
-    this._nodes.delete(target.toString())
-    if (parent) {
-      await this.refresh(parent)
-    } else {
-      this._onDidChange.fire()
+    try {
+      await this._fileService.delete(target, opts)
+      const parent = parentOf(target)
+      this._nodes.delete(target.toString())
+      if (parent) {
+        await this.refresh(parent)
+      } else {
+        this._onDidChange.fire()
+      }
+      this._logger.info(`delete ${target.toString()} recursive=${opts?.recursive === true}`)
+    } catch (err) {
+      this._logger.error(`delete failed ${target.toString()}`, err)
+      throw err
     }
   }
 
   private _setRoot(root: URI | null): void {
+    this._logger.info(`setRoot ${root?.toString() ?? '<none>'}`)
     this._root = root
     this._nodes.clear()
     this._selection = []
@@ -320,6 +355,7 @@ export class ExplorerTreeService extends Disposable {
       void this._loadChildren(root, node).then(() => this._onDidChange.fire())
       void this._watcher.watch(root.toJSON()).catch(() => {
         // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+        this._logger.warn(`watch failed ${root.toString()}`)
       })
     } else {
       void this._watcher.unwatch().catch(() => {})
@@ -341,6 +377,9 @@ export class ExplorerTreeService extends Disposable {
       seen.add(key)
       void this.refresh(parent)
     }
+    if (seen.size > 0) {
+      this._logger.debug(`watcher refresh parents=${seen.size} events=${events.length}`)
+    }
   }
 
   private _ensureNode(resource: URI): NodeState {
@@ -359,9 +398,11 @@ export class ExplorerTreeService extends Disposable {
     try {
       const entries = await this._fileService.list(resource)
       node.children = sortEntries(entries, resource)
+      this._logger.debug(`loadChildren ${resource.toString()} entries=${node.children.length}`)
     } catch (err) {
       node.children = []
       node.error = err instanceof Error ? err.message : String(err)
+      this._logger.warn(`loadChildren failed ${resource.toString()}`, node.error)
     } finally {
       node.loading = false
     }

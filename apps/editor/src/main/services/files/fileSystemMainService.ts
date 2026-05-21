@@ -8,9 +8,11 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
   FileSystemError,
+  NullLogger,
   type IDirectoryEntry,
   type IFileService,
   type IFileStat,
+  type ILogger,
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -48,22 +50,31 @@ function mapError(err: unknown, fallbackMessage: string): FileSystemError {
 export class FileSystemMainService implements IFileService {
   declare readonly _serviceBrand: undefined
 
+  constructor(private readonly _logger: ILogger = new NullLogger()) {}
+
   async readFile(resource: RawUri): Promise<Uint8Array> {
     const uri = ensureFile(reviveUri(resource))
     try {
       const buf = await fs.readFile(uri.fsPath)
+      this._logger.debug(`readFile ${uri.fsPath} bytes=${buf.byteLength}`)
       return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
     } catch (err) {
-      throw mapError(err, 'readFile failed')
+      const mapped = mapError(err, 'readFile failed')
+      this._logger.warn(`readFile failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
   async readFileText(resource: RawUri, encoding: 'utf8' = 'utf8'): Promise<string> {
     const uri = ensureFile(reviveUri(resource))
     try {
-      return await fs.readFile(uri.fsPath, encoding)
+      const text = await fs.readFile(uri.fsPath, encoding)
+      this._logger.debug(`readFileText ${uri.fsPath} chars=${text.length}`)
+      return text
     } catch (err) {
-      throw mapError(err, 'readFileText failed')
+      const mapped = mapError(err, 'readFileText failed')
+      this._logger.warn(`readFileText failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
@@ -78,8 +89,12 @@ export class FileSystemMainService implements IFileService {
           Buffer.from(content.buffer, content.byteOffset, content.byteLength),
         )
       }
+      const size = typeof content === 'string' ? content.length : content.byteLength
+      this._logger.info(`writeFile ${uri.fsPath} bytes=${size}`)
     } catch (err) {
-      throw mapError(err, 'writeFile failed')
+      const mapped = mapError(err, 'writeFile failed')
+      this._logger.warn(`writeFile failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
@@ -97,6 +112,7 @@ export class FileSystemMainService implements IFileService {
     const uri = ensureFile(reviveUri(resource))
     try {
       const s = await fs.stat(uri.fsPath)
+      this._logger.debug(`stat ${uri.fsPath} size=${s.size} directory=${s.isDirectory()}`)
       return {
         resource: uri,
         isFile: s.isFile(),
@@ -105,7 +121,9 @@ export class FileSystemMainService implements IFileService {
         mtime: s.mtimeMs,
       }
     } catch (err) {
-      throw mapError(err, 'stat failed')
+      const mapped = mapError(err, 'stat failed')
+      this._logger.warn(`stat failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
@@ -113,13 +131,17 @@ export class FileSystemMainService implements IFileService {
     const uri = ensureFile(reviveUri(resource))
     try {
       const dirents = await fs.readdir(uri.fsPath, { withFileTypes: true })
-      return dirents.map((d) => ({
+      const entries = dirents.map((d) => ({
         name: d.name,
         isFile: d.isFile(),
         isDirectory: d.isDirectory(),
       }))
+      this._logger.debug(`list ${uri.fsPath} entries=${entries.length}`)
+      return entries
     } catch (err) {
-      throw mapError(err, 'list failed')
+      const mapped = mapError(err, 'list failed')
+      this._logger.warn(`list failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
@@ -127,8 +149,11 @@ export class FileSystemMainService implements IFileService {
     const uri = ensureFile(reviveUri(resource))
     try {
       await fs.mkdir(uri.fsPath, { recursive: true })
+      this._logger.info(`createDirectory ${uri.fsPath}`)
     } catch (err) {
-      throw mapError(err, 'createDirectory failed')
+      const mapped = mapError(err, 'createDirectory failed')
+      this._logger.warn(`createDirectory failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
@@ -147,8 +172,11 @@ export class FileSystemMainService implements IFileService {
       } else {
         await fs.unlink(uri.fsPath)
       }
+      this._logger.info(`delete ${uri.fsPath} recursive=${recursive}`)
     } catch (err) {
-      throw mapError(err, 'delete failed')
+      const mapped = mapError(err, 'delete failed')
+      this._logger.warn(`delete failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
     }
   }
 
@@ -169,9 +197,14 @@ export class FileSystemMainService implements IFileService {
         }
       }
       await fs.rename(src.fsPath, dst.fsPath)
+      this._logger.info(`rename ${src.fsPath} -> ${dst.fsPath} overwrite=${overwrite}`)
     } catch (err) {
-      if (err instanceof FileSystemError) throw err
-      throw mapError(err, 'rename failed')
+      const mapped = err instanceof FileSystemError ? err : mapError(err, 'rename failed')
+      this._logger.warn(
+        `rename failed ${src.fsPath} -> ${dst.fsPath} code=${mapped.code}`,
+        mapped.message,
+      )
+      throw mapped
     }
   }
 
@@ -204,6 +237,9 @@ export class FileSystemMainService implements IFileService {
     }
 
     await scan(root.fsPath, 0)
+    this._logger.debug(
+      `listRecursive ${root.fsPath} files=${results.length} maxFiles=${maxFiles} maxDepth=${maxDepth}`,
+    )
     return results
   }
 }

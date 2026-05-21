@@ -14,7 +14,9 @@ import {
   type IDisposable,
   type IFileChangeEvent,
   type IFileWatcherService,
+  NullLogger,
   URI,
+  type ILogger,
   type UriComponents,
 } from '@universe-editor/platform'
 
@@ -46,6 +48,8 @@ function reviveUri(value: UriComponents): URI {
 export class FileWatcherMainService implements IFileWatcherService, IDisposable {
   declare readonly _serviceBrand: undefined
 
+  constructor(private readonly _logger: ILogger = new NullLogger()) {}
+
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]> = this._onDidChangeFiles.event
 
@@ -71,12 +75,18 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       })
       w.on('error', () => {
         // Surface as silent stop; renderer can re-arm by calling watch() again.
+        this._logger.warn(`watcher error ${target}`)
         this._teardownWatcher()
       })
       this._watcher = w
       this._rootFsPath = target
+      this._logger.info(`watch ${target}`)
     } catch (err) {
       this._rootFsPath = null
+      this._logger.warn(
+        `watch failed ${target}`,
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      )
       throw err
     }
   }
@@ -106,12 +116,14 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     }
     this._pending.clear()
     if (this._watcher) {
+      const root = this._rootFsPath
       try {
         this._watcher.close()
       } catch {
         // ignore
       }
       this._watcher = null
+      if (root) this._logger.info(`unwatch ${root}`)
     }
     this._rootFsPath = null
   }
@@ -149,6 +161,7 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       batch.push({ type, resource: URI.file(abs).toJSON() })
     }
     if (batch.length > 0) {
+      this._logger.debug(`file events root=${root} count=${batch.length}`)
       this._onDidChangeFiles.fire(batch)
     }
   }

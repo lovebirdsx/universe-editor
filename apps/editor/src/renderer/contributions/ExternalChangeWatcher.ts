@@ -10,21 +10,31 @@ import {
   Disposable,
   IDialogService,
   IEditorGroupsService,
-  type IFileChangeEvent,
   IFileWatcherService,
-  type IWorkbenchContribution,
+  ILoggerService,
+  NullLogger,
   URI,
+  type IFileChangeEvent,
+  type ILogger,
+  type ILoggerService as ILoggerServiceType,
+  type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
+  private readonly _logger: ILogger
+
   constructor(
     @IFileWatcherService watcher: IFileWatcherService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IDialogService private readonly _dialog: IDialogService,
+    @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
+    this._logger =
+      loggerService?.createLogger({ id: 'externalChange', name: 'External Change' }) ??
+      new NullLogger()
     this._register(
       watcher.onDidChangeFiles((events) => {
         // Don't await — events run concurrently per group.
@@ -35,6 +45,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
 
   private async _handle(events: readonly IFileChangeEvent[]): Promise<void> {
     if (events.length === 0) return
+    this._logger.debug(`handleExternalChanges events=${events.length}`)
     const deletedResources: URI[] = []
     const changedKeys = new Set<string>()
     for (const ev of events) {
@@ -60,6 +71,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       }
     }
     if (matches.length === 0) return
+    this._logger.info(`externalChanges matchedEditors=${matches.length}`)
 
     // De-dup by URI: a file can be open in multiple groups, but we only want
     // to prompt once per resource.
@@ -70,8 +82,9 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       seen.add(key)
       try {
         await input.checkExternalChange(this._dialog)
-      } catch {
+      } catch (err) {
         // Best-effort: a failure on one input must not stall the others.
+        this._logger.warn(`externalChange check failed ${key}`, err)
       }
     }
   }
@@ -87,6 +100,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
           )
         ) {
           group.closeEditor(editor)
+          this._logger.info(`closeDeletedEditor ${editor.resource.toString()} group=${group.id}`)
         }
       }
     }

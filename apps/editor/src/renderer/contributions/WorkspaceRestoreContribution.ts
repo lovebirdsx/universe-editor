@@ -8,10 +8,14 @@ import {
   Disposable,
   IEditorGroupsService,
   IInstantiationService,
+  ILoggerService,
   IStorageService,
   IWorkspaceService,
+  NullLogger,
   type IDisposable,
   type IEditorGroup,
+  type ILogger,
+  type ILoggerService as ILoggerServiceType,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
@@ -31,14 +35,19 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
   private _persistTimer: ReturnType<typeof setTimeout> | null = null
   private readonly _groupListeners = new Map<number, IDisposable>()
   private readonly _editorListeners = new Map<string, IDisposable>()
+  private readonly _logger: ILogger
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IWorkspaceService _workspace: IWorkspaceService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
+    @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
+    this._logger =
+      loggerService?.createLogger({ id: 'workspaceRestore', name: 'Workspace Restore' }) ??
+      new NullLogger()
 
     // Restore prior session synchronously enough that React mount sees the
     // rebuilt grid. We launch the read immediately; the lifecycle phase
@@ -106,8 +115,14 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
       this._instantiation.invokeFunction((accessor) => {
         ;(this._groups as EditorGroupsService).restore(raw.groups, accessor)
       })
+      this._logger.debug(
+        `restored workspace state groups=${(this._groups as EditorGroupsService).groups.length}`,
+      )
     } catch (err) {
-      console.warn('[WorkspaceRestoreContribution] failed to restore workspace state', err)
+      this._logger.warn(
+        'failed to restore workspace state',
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      )
     }
   }
 
@@ -125,8 +140,12 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
         groups: (this._groups as EditorGroupsService).toJSON(),
       }
       await this._storage.set(WORKSPACE_STATE_STORAGE_KEY, state)
+      this._logger.debug(`persisted workspace state groups=${this._groups.groups.length}`)
     } catch (err) {
-      console.warn('[WorkspaceRestoreContribution] failed to persist workspace state', err)
+      this._logger.warn(
+        'failed to persist workspace state',
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      )
     }
   }
 

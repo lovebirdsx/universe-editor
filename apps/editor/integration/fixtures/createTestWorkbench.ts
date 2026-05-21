@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createStorage } from '../../src/main/storage.js'
 import { LogMainService } from '../../src/main/services/log/logMainService.js'
+import { LogFilesMainService } from '../../src/main/services/log/logFilesMainService.js'
 import { MainStorageService } from '../../src/main/services/storage/storageMainService.js'
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
@@ -17,6 +18,7 @@ export interface TestWorkbench {
   readonly storage: MainStorageService
   readonly workspace: WorkspaceMainService
   readonly userData: UserDataMainService
+  readonly logFiles: LogFilesMainService
   readonly fileSystem: FileSystemMainService
   readonly fileWatcher: FileWatcherMainService
   dispose(): Promise<void>
@@ -40,6 +42,7 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
   vi.mocked(app.getPath).mockReturnValue(userDataDir)
 
   const logService = new LogMainService()
+  const logFiles = new LogFilesMainService(logService)
   // Pass an explicit Storage to avoid the module-level singleton in storage.ts
   const storage = new MainStorageService(createStorage(join(userDataDir, 'state.json')))
   const workspace = new WorkspaceMainService(storage, noopDialog)
@@ -53,6 +56,7 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
     storage,
     workspace,
     userData,
+    logFiles,
     fileSystem,
     fileWatcher,
     async dispose() {

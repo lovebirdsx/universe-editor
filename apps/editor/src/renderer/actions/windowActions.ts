@@ -6,6 +6,7 @@
 import {
   Action2,
   IHostService,
+  ILoggerService,
   MenuId,
   localize,
   type ServicesAccessor,
@@ -96,10 +97,9 @@ export class AboutAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    // Avoid touching the accessor — keep AboutAction reachable even before
-    // optional services are wired. A real dialog comes in a later milestone.
-    void accessor
-
-    console.info(localize('app.description', 'A VSCode-paradigm game content editor.'))
+    accessor
+      .get(ILoggerService)
+      .createLogger({ id: 'action', name: 'Action' })
+      .info(localize('app.description', 'A VSCode-paradigm game content editor.'))
   }
 }

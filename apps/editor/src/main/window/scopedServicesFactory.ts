@@ -13,7 +13,11 @@ import type {
   IUserDataFilesService,
   IWorkspaceServiceWire,
 } from '@universe-editor/platform'
-import type { IPingService, ILogChannelService } from '../../shared/ipc/services.js'
+import type {
+  ILogChannelService,
+  ILogFilesService,
+  IPingService,
+} from '../../shared/ipc/services.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 
 /** Services shared across all windows. Instantiated once at app startup. */
@@ -24,6 +28,7 @@ export interface ApplicationServices {
   readonly fileWatcher: IFileWatcherService
   readonly workspace: IWorkspaceServiceWire
   readonly userData: IUserDataFilesService
+  readonly logFiles: ILogFilesService
 }
 
 /** Services scoped to a single BrowserWindow. Created per-window by WindowMainService. */

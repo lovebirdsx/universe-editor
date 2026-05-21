@@ -8,13 +8,17 @@ import {
   EditorRegistry,
   IEditorGroupsService,
   IFileService,
+  ILoggerService,
   IStorageService,
   IWorkspaceService,
   InstantiationService,
+  LogLevel,
+  NullLogger,
   ServiceCollection,
   URI,
   type IDisposable,
   type IFileService as IFileServiceType,
+  type ILogger,
   type IRecentWorkspace,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
@@ -87,15 +91,36 @@ function makeWorkspaceStub(): IWorkspaceServiceType {
   } as IWorkspaceServiceType
 }
 
+function makeLogger(): ILogger {
+  return {
+    level: LogLevel.Info,
+    setLevel: vi.fn(),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    flush: vi.fn(),
+    dispose: vi.fn(),
+  }
+}
+
 function buildContribution(
   storage: IStorageService,
   groups: EditorGroupsService,
+  logger: ILogger = new NullLogger(),
 ): { contribution: WorkspaceRestoreContribution; inst: InstantiationService } {
   const services = new ServiceCollection()
   services.set(IStorageService, storage)
   services.set(IEditorGroupsService, groups)
   services.set(IWorkspaceService, makeWorkspaceStub())
   services.set(IFileService, makeFs())
+  services.set(ILoggerService, {
+    _serviceBrand: undefined,
+    createLogger: () => logger,
+    setLevel: () => {},
+    getLevel: () => LogLevel.Info,
+  })
   const inst = new InstantiationService(services)
   const contribution = inst.createInstance(WorkspaceRestoreContribution)
   return { contribution, inst }
@@ -155,13 +180,12 @@ describe('WorkspaceRestoreContribution', () => {
   it('warns and falls back to default when stored state is malformed', async () => {
     const groups = new EditorGroupsService()
     const storage = makeStorage({ [WORKSPACE_STATE_STORAGE_KEY]: { groups: 'garbage' } })
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    const { contribution } = buildContribution(storage, groups)
+    const logger = makeLogger()
+    const { contribution } = buildContribution(storage, groups, logger)
     await Promise.resolve()
     await Promise.resolve()
-    expect(warn).toHaveBeenCalled()
+    expect(logger.warn).toHaveBeenCalled()
     expect(groups.groups).toHaveLength(1)
-    warn.mockRestore()
     contribution.dispose()
     groups.dispose()
   })

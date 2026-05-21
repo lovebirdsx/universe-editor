@@ -6,13 +6,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   IFileService,
+  ILoggerService,
   IWorkspaceService,
   InstantiationService,
+  LogLevel,
   ServiceCollection,
   URI,
   type IDirectoryEntry,
   type IFileService as IFileServiceType,
   type IFileStat,
+  type ILogger,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -109,10 +112,36 @@ function addDir(fs: FakeFs, parent: URI, name: string): URI {
   return uri
 }
 
-function makeInst(fs: IFileServiceType, ws: IWorkspaceServiceType): InstantiationService {
+function makeLogger(): ILogger {
+  return {
+    level: LogLevel.Info,
+    setLevel: vi.fn(),
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    flush: vi.fn(),
+    dispose: vi.fn(),
+  }
+}
+
+function makeInst(
+  fs: IFileServiceType,
+  ws: IWorkspaceServiceType,
+  logger?: ILogger,
+): InstantiationService {
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
+  if (logger) {
+    services.set(ILoggerService, {
+      _serviceBrand: undefined,
+      createLogger: () => logger,
+      setLevel: () => {},
+      getLevel: () => LogLevel.Info,
+    })
+  }
   return new InstantiationService(services)
 }
 
@@ -142,6 +171,24 @@ describe('TextSearchService', () => {
     })
     expect(results).toHaveLength(1)
     expect(results[0]?.matches[0]?.ranges).toHaveLength(1)
+  })
+
+  it('logs search completion summaries without logging the query text', async () => {
+    const logger = makeLogger()
+    const loggedSvc = makeInst(fs, ws, logger).createInstance(TextSearchService)
+    addFile(fs, root, 'a.ts', 'const x = foo()\n')
+
+    await loggedSvc.search({
+      pattern: 'foo',
+      isRegex: false,
+      matchCase: false,
+      matchWholeWord: false,
+      includes: [],
+      excludes: [],
+    })
+
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('search finished files=1'))
+    expect(logger.info).not.toHaveBeenCalledWith(expect.stringContaining('pattern=foo'))
   })
 
   it('recurses into subdirectories', async () => {

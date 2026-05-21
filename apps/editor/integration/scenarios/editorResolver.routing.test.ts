@@ -6,10 +6,13 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  LogLevel,
+  NullLogger,
   URI,
   type EditorInput,
   type IEditorService,
   type IInstantiationService,
+  type ILoggerService,
 } from '@universe-editor/platform'
 
 // Break the Monaco dep chain: FileEditorInput → MonacoModelRegistry → MonacoLoader → ?raw
@@ -22,12 +25,18 @@ import { EditorResolverService } from '../../src/renderer/services/editor/Editor
 // Minimal stubs for DI-injected constructor params — only openEditor() uses them
 const mockInst = { createInstance: vi.fn() } as unknown as IInstantiationService
 const mockEditor = { openEditor: vi.fn() } as unknown as IEditorService
+const mockLoggerService: ILoggerService = {
+  _serviceBrand: undefined,
+  createLogger: () => new NullLogger(),
+  setLevel: () => {},
+  getLevel: () => LogLevel.Info,
+}
 
 describe('editorResolver.routing (integration)', () => {
   let resolver: EditorResolverService
 
   beforeEach(() => {
-    resolver = new EditorResolverService(mockInst, mockEditor)
+    resolver = new EditorResolverService(mockInst, mockEditor, mockLoggerService)
   })
 
   afterEach(() => {

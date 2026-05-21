@@ -13,6 +13,9 @@ import {
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileChangeEvent,
   type IFileWatcherService as IFileWatcherServiceType,
+  type ILoggerService as ILoggerServiceType,
+  LogLevel,
+  NullLogger,
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -66,6 +69,15 @@ function makeDialog(): IDialogService {
   } as unknown as IDialogService
 }
 
+function makeLoggerService(): ILoggerServiceType {
+  return {
+    _serviceBrand: undefined,
+    createLogger: () => new NullLogger(),
+    setLevel: () => {},
+    getLevel: () => LogLevel.Info,
+  }
+}
+
 function makeFileInput(uri: URI): FileEditorInput {
   const checks: number[] = []
   const fake = Object.create(FileEditorInput.prototype) as FileEditorInput & {
@@ -94,7 +106,7 @@ describe('ExternalChangeWatcher', () => {
     const inputB = makeFileInput(uriB) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([inputA, inputB])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
 
     watcher.fire([{ type: 'modified', resource: uriA.toJSON() }])
     await flush()
@@ -108,7 +120,7 @@ describe('ExternalChangeWatcher', () => {
     const untitled = new UntitledEditorInput()
     const groups = makeGroups([fileInput, untitled])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
 
     watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt').toJSON() }])
     await flush()
@@ -120,7 +132,7 @@ describe('ExternalChangeWatcher', () => {
     const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([fileInput])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
 
     watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
     await flush()
@@ -135,7 +147,7 @@ describe('ExternalChangeWatcher', () => {
     const inputOutside = makeFileInput(outside) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([inputInside, inputOutside])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
 
     watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder').toJSON() }])
     await flush()

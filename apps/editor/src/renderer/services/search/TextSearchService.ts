@@ -10,10 +10,14 @@
 
 import {
   IFileService,
+  ILoggerService,
   IWorkspaceService,
+  NullLogger,
   URI,
   type IFileMatch,
   type IFileService as IFileServiceType,
+  type ILogger,
+  type ILoggerService as ILoggerServiceType,
   type ITextSearchOptions,
   type ITextSearchProgress,
   type ITextSearchQuery,
@@ -51,25 +55,41 @@ function relPathOf(root: URI, child: URI): string {
 export class TextSearchService implements ITextSearchService {
   declare readonly _serviceBrand: undefined
 
+  private readonly _logger: ILogger
+
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceServiceType,
     @IFileService private readonly _fileService: IFileServiceType,
-  ) {}
+    @ILoggerService loggerService: ILoggerServiceType,
+  ) {
+    this._logger = loggerService?.createLogger({ id: 'search', name: 'Search' }) ?? new NullLogger()
+  }
 
   async search(
     query: ITextSearchQuery,
     opts: ITextSearchOptions = {},
   ): Promise<readonly IFileMatch[]> {
     const root = this._workspace.current?.folder ?? null
-    if (!root) return []
-    if (query.pattern.length === 0) return []
+    if (!root) {
+      this._logger.debug('search skipped noWorkspace')
+      return []
+    }
+    if (query.pattern.length === 0) {
+      this._logger.debug('search skipped emptyPattern')
+      return []
+    }
 
     let re: RegExp
     try {
       re = compileQuery(query)
     } catch {
+      this._logger.warn('search skipped invalidQuery')
       return []
     }
+    const startedAt = Date.now()
+    this._logger.info(
+      `search start root=${root.toString()} includes=${query.includes.length} excludes=${query.excludes.length}`,
+    )
 
     const maxFiles = query.maxFiles ?? DEFAULT_MAX_FILES
     const maxResults = query.maxResults ?? DEFAULT_MAX_RESULTS
@@ -84,19 +104,31 @@ export class TextSearchService implements ITextSearchService {
     let totalMatches = 0
     let limitHit: SearchLimitHit | undefined
     let yieldCounter = 0
+    let listFailures = 0
+    let statFailures = 0
+    let readFailures = 0
+    let skippedLarge = 0
+    let skippedBinary = 0
 
     const queue: URI[] = [root]
     while (queue.length > 0) {
-      if (signal?.aborted) return results
+      if (signal?.aborted) {
+        this._logger.info(`search aborted files=${filesScanned} matches=${totalMatches}`)
+        return results
+      }
       const dir = queue.shift()!
       let entries
       try {
         entries = await this._fileService.list(dir)
       } catch {
+        listFailures++
         continue
       }
       for (const entry of entries) {
-        if (signal?.aborted) return results
+        if (signal?.aborted) {
+          this._logger.info(`search aborted files=${filesScanned} matches=${totalMatches}`)
+          return results
+        }
         if (HARD_IGNORE_SEGMENTS.has(entry.name)) continue
 
         const child = URI.joinPath(dir, entry.name)
@@ -122,10 +154,12 @@ export class TextSearchService implements ITextSearchService {
           const stat = await this._fileService.stat(child)
           if (stat.size > MAX_FILE_SIZE_BYTES) {
             filesScanned++
+            skippedLarge++
             continue
           }
         } catch {
           // stat failure: try the read anyway; if it also fails we'll swallow.
+          statFailures++
         }
 
         let text: string
@@ -133,12 +167,14 @@ export class TextSearchService implements ITextSearchService {
           text = await this._fileService.readFileText(child)
         } catch {
           filesScanned++
+          readFailures++
           continue
         }
         filesScanned++
 
         if (isBinary(text)) {
           // count as scanned, no matches
+          skippedBinary++
         } else {
           const remaining = maxResults - totalMatches
           const cap = Math.min(maxMatchesPerFile, Math.max(0, remaining))
@@ -166,7 +202,10 @@ export class TextSearchService implements ITextSearchService {
         if (yieldCounter % YIELD_EVERY === 0) {
           opts.onProgress?.(progressOf(filesScanned, filesMatched, totalMatches, limitHit))
           await Promise.resolve()
-          if (signal?.aborted) return results
+          if (signal?.aborted) {
+            this._logger.info(`search aborted files=${filesScanned} matches=${totalMatches}`)
+            return results
+          }
         }
 
         if (limitHit === 'files' || limitHit === 'matches') break
@@ -175,6 +214,13 @@ export class TextSearchService implements ITextSearchService {
     }
 
     opts.onProgress?.(progressOf(filesScanned, filesMatched, totalMatches, limitHit))
+    const durationMs = Date.now() - startedAt
+    this._logger.info(
+      `search finished files=${filesScanned} matched=${filesMatched} matches=${totalMatches} ` +
+        `limit=${limitHit ?? 'none'} ms=${durationMs} listFailures=${listFailures} ` +
+        `statFailures=${statFailures} readFailures=${readFailures} ` +
+        `skippedLarge=${skippedLarge} skippedBinary=${skippedBinary}`,
+    )
     return results
   }
 }

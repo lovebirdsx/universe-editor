@@ -14,8 +14,9 @@ describe('ApplicationServices type', () => {
       fileWatcher: {} as ApplicationServices['fileWatcher'],
       workspace: {} as ApplicationServices['workspace'],
       userData: {} as ApplicationServices['userData'],
+      logFiles: {} as ApplicationServices['logFiles'],
     }
-    expect(Object.keys(svc)).toHaveLength(6)
+    expect(Object.keys(svc)).toHaveLength(7)
   })
 })
 
@@ -40,8 +41,9 @@ describe('service layer separation', () => {
       'fileWatcher',
       'workspace',
       'userData',
+      'logFiles',
     ]
-    expect(appKeys).toHaveLength(6)
+    expect(appKeys).toHaveLength(7)
   })
 
   it('WindowScopedServices does not include singleton fields', () => {

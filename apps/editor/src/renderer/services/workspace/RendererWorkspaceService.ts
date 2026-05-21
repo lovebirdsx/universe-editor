@@ -7,7 +7,9 @@
 import {
   Disposable,
   Emitter,
+  NullLogger,
   type Event,
+  type ILogger,
   type IRecentWorkspace,
   type ITelemetryService,
   type IWorkspace,
@@ -47,6 +49,7 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
   constructor(
     private readonly _wire: IWorkspaceServiceWire,
     private readonly _telemetry?: ITelemetryService,
+    private readonly _logger: ILogger = new NullLogger(),
   ) {
     super()
     this._register(
@@ -63,20 +66,28 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
     )
     // Pull initial state. Failures fall back to defaults; downstream listeners
     // simply see no initial event and stay with null / [].
-    void _wire.getCurrent().then((w) => {
-      const revived = reviveWorkspace(w)
-      if (revived !== this._current) {
-        this._current = revived
-        this._onDidChangeWorkspace.fire(revived)
-      }
-    })
-    void _wire.getRecent().then((r) => {
-      const revived = reviveRecent(r)
-      if (revived.length > 0 || this._recent.length > 0) {
-        this._recent = revived
-        this._onDidChangeRecent.fire(revived)
-      }
-    })
+    void _wire
+      .getCurrent()
+      .then((w) => {
+        const revived = reviveWorkspace(w)
+        if (revived !== this._current) {
+          this._current = revived
+          this._onDidChangeWorkspace.fire(revived)
+        }
+        this._logger.debug(`hydrate current=${revived?.folder.toString() ?? '<none>'}`)
+      })
+      .catch((err) => this._logger.warn('hydrate current failed', err))
+    void _wire
+      .getRecent()
+      .then((r) => {
+        const revived = reviveRecent(r)
+        if (revived.length > 0 || this._recent.length > 0) {
+          this._recent = revived
+          this._onDidChangeRecent.fire(revived)
+        }
+        this._logger.debug(`hydrate recent=${revived.length}`)
+      })
+      .catch((err) => this._logger.warn('hydrate recent failed', err))
   }
 
   get current(): IWorkspace | null {
@@ -89,14 +100,17 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
 
   openFolder(folder?: URI): Promise<void> {
     this._telemetry?.publicLog('workspaceOpened')
+    this._logger.info(`openFolder ${folder?.toString() ?? '<dialog>'}`)
     return this._wire.openFolder(folder)
   }
 
   closeFolder(): Promise<void> {
+    this._logger.info(`closeFolder current=${this._current?.folder.toString() ?? '<none>'}`)
     return this._wire.closeFolder()
   }
 
   clearRecent(): Promise<void> {
+    this._logger.info(`clearRecent count=${this._recent.length}`)
     return this._wire.clearRecent()
   }
 }

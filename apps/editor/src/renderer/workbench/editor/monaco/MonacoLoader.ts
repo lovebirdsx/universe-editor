@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as monaco from 'monaco-editor'
+import { NullLogger, type ILogger } from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
@@ -14,6 +15,7 @@ export type { monaco }
 
 let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
+let _logger: ILogger = new NullLogger()
 
 type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas']>
 
@@ -61,7 +63,7 @@ async function loadMonaco(): Promise<typeof monaco> {
       // would only mean the shortcuts editor shows fewer entries, the
       // editor itself still works.
       void bridgeAllMonacoActions().catch((err) => {
-        console.error('[MonacoLoader] bridgeAllMonacoActions failed', err)
+        _logger.error('bridgeAllMonacoActions failed', err)
       })
       return monacoMod
     })()
@@ -88,4 +90,8 @@ export const MonacoLoader = {
     _extraSchemas = schemas
     pushJsonDiagnostics()
   },
+}
+
+export function setMonacoLoaderLogger(logger: ILogger): void {
+  _logger = logger
 }

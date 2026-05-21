@@ -37,3 +37,25 @@ export interface ILogChannelService {
 }
 
 export const ILogChannelService = createDecorator<ILogChannelService>('logChannelService')
+
+// -------- Log Files (main -> renderer read-only log viewing) --------
+
+export interface LogFileDescriptor {
+  readonly id: string
+  readonly name: string
+  readonly channelId: string
+  readonly date: string
+  readonly size: number
+  readonly modifiedTime: number
+}
+
+export interface ILogFilesService {
+  readonly _serviceBrand: undefined
+  listLogFiles(): Promise<LogFileDescriptor[]>
+  readLogFile(id: string, maxBytes?: number): Promise<string>
+  openLogsFolder(): Promise<void>
+  setLogLevel(level: LogLevel): Promise<void>
+  getLogLevel(): Promise<LogLevel>
+}
+
+export const ILogFilesService = createDecorator<ILogFilesService>('logFilesService')
