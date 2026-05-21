@@ -12,6 +12,7 @@ import {
   IStorageService,
   IWorkspaceService,
   NullLogger,
+  StorageScope,
   type IDisposable,
   type IEditorGroup,
   type ILogger,
@@ -36,6 +37,11 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
   private readonly _groupListeners = new Map<number, IDisposable>()
   private readonly _editorListeners = new Map<string, IDisposable>()
   private readonly _logger: ILogger
+  // Suspend persistence while we're rebuilding the grid for a different
+  // workspace — otherwise the group change events fired during clearAll/
+  // restore would schedule a write back into the new workspace's storage,
+  // overwriting it with the prior workspace's state.
+  private _suspendPersist = false
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
@@ -53,6 +59,13 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
     // rebuilt grid. We launch the read immediately; the lifecycle phase
     // (BlockRestore) is awaited by ContributionService.
     void this._restore()
+
+    // Re-hydrate when the workspace storage scope swaps (folder open/close/change).
+    this._register(
+      this._storage.onDidChangeWorkspaceScope(() => {
+        void this._restore()
+      }),
+    )
 
     // Persistence wiring — listen to coarse and fine-grained group changes.
     this._register(this._groups.onDidAddGroup((g) => this._attachGroup(g)))
@@ -109,9 +122,23 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
   }
 
   private async _restore(): Promise<void> {
+    if (this._persistTimer !== null) {
+      clearTimeout(this._persistTimer)
+      this._persistTimer = null
+    }
+    this._suspendPersist = true
     try {
-      const raw = await this._storage.get<PersistedWorkspaceState>(WORKSPACE_STATE_STORAGE_KEY)
-      if (!raw || !raw.groups) return
+      const raw = await this._storage.get<PersistedWorkspaceState>(
+        WORKSPACE_STATE_STORAGE_KEY,
+        StorageScope.WORKSPACE,
+      )
+      if (!raw || !raw.groups) {
+        // No state for this workspace (or no workspace open) — tear down to a
+        // single empty group so the previous workspace's editors don't leak.
+        ;(this._groups as EditorGroupsService).clearAll()
+        this._logger.debug('cleared workspace state (no persisted data)')
+        return
+      }
       this._instantiation.invokeFunction((accessor) => {
         ;(this._groups as EditorGroupsService).restore(raw.groups, accessor)
       })
@@ -123,10 +150,13 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
         'failed to restore workspace state',
         err instanceof Error ? (err.stack ?? err.message) : String(err),
       )
+    } finally {
+      this._suspendPersist = false
     }
   }
 
   private _schedulePersist(): void {
+    if (this._suspendPersist) return
     if (this._persistTimer !== null) clearTimeout(this._persistTimer)
     this._persistTimer = setTimeout(() => {
       this._persistTimer = null
@@ -139,7 +169,7 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
       const state: PersistedWorkspaceState = {
         groups: (this._groups as EditorGroupsService).toJSON(),
       }
-      await this._storage.set(WORKSPACE_STATE_STORAGE_KEY, state)
+      await this._storage.set(WORKSPACE_STATE_STORAGE_KEY, state, StorageScope.WORKSPACE)
       this._logger.debug(`persisted workspace state groups=${this._groups.groups.length}`)
     } catch (err) {
       this._logger.warn(

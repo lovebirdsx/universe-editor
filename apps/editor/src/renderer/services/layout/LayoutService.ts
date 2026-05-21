@@ -3,7 +3,13 @@
  *  ILayoutService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter, IStorageService, observableValue, toDisposable } from '@universe-editor/platform'
+import {
+  Emitter,
+  IStorageService,
+  StorageScope,
+  observableValue,
+  toDisposable,
+} from '@universe-editor/platform'
 import type { IDisposable, ILayoutService, IPart, LayoutSizes } from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
 
@@ -46,7 +52,13 @@ export class LayoutService implements ILayoutService {
   private readonly _onDidRegisterPart = new Emitter<IPart>()
   readonly onDidRegisterPart = this._onDidRegisterPart.event
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {}
+  constructor(@IStorageService private readonly _storage: IStorageService) {
+    // Reload from the new workspace's storage whenever the WORKSPACE scope
+    // swaps. Application-singleton — no disposal needed.
+    this._storage.onDidChangeWorkspaceScope(() => {
+      void this._reload()
+    })
+  }
 
   getVisible(part: PartId): boolean {
     return this.visible.get()[part]
@@ -72,7 +84,7 @@ export class LayoutService implements ILayoutService {
   async load(): Promise<void> {
     let data: PersistedLayout | undefined
     try {
-      data = await this._storage.get<PersistedLayout>(STORAGE_KEY)
+      data = await this._storage.get<PersistedLayout>(STORAGE_KEY, StorageScope.WORKSPACE)
     } catch {
       return
     }
@@ -111,10 +123,30 @@ export class LayoutService implements ILayoutService {
       sizes: this.sizes.get(),
     }
     try {
-      await this._storage.set(STORAGE_KEY, payload)
+      await this._storage.set(STORAGE_KEY, payload, StorageScope.WORKSPACE)
     } catch {
       // swallow: persistence is best-effort
     }
+  }
+
+  /**
+   * Reset to defaults, then re-load from the (now switched) WORKSPACE scope.
+   * Suspends persistence across the reset so we don't write defaults back to
+   * the new workspace before its own data is read.
+   */
+  private async _reload(): Promise<void> {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer)
+      this._saveTimer = undefined
+    }
+    this._suspendPersist = true
+    try {
+      this.visible.set(INITIAL_VISIBLE, undefined)
+      this.sizes.set(INITIAL_SIZES, undefined)
+    } finally {
+      this._suspendPersist = false
+    }
+    await this.load()
   }
 
   private _schedulePersist(): void {

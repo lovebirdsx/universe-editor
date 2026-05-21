@@ -3,6 +3,7 @@ import {
   ConfigurationService,
   ConfigurationTarget,
   Emitter,
+  Event,
   IConfigurationService,
   IStorageService,
   IUserDataFilesService,
@@ -18,6 +19,7 @@ class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
   store = new Map<string, unknown>()
   setCalls: Array<{ key: string; value: unknown }> = []
+  readonly onDidChangeWorkspaceScope = Event.None
   preset(key: string, value: unknown) {
     this.store.set(key, value)
   }
@@ -27,6 +29,9 @@ class FakeStorage implements IStorageService {
   async set(key: string, value: unknown): Promise<void> {
     this.store.set(key, value)
     this.setCalls.push({ key, value })
+  }
+  async remove(key: string): Promise<void> {
+    this.store.delete(key)
   }
 }
 

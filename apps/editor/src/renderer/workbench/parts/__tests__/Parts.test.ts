@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  Event,
   ILayoutService,
   InstantiationService,
   IStorageService,
@@ -22,6 +23,8 @@ function makeStorage(): IStorageService {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(undefined),
     set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: Event.None,
   } as unknown as IStorageService
 }
 

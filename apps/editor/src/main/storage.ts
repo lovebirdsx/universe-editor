@@ -1,10 +1,12 @@
 import { app } from 'electron'
+import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 export interface Storage {
   get<T = unknown>(key: string): Promise<T | undefined>
   set(key: string, value: unknown): Promise<void>
+  remove(key: string): Promise<void>
   /** Wait for all pending writes to complete. */
   flush(): Promise<void>
 }
@@ -26,6 +28,11 @@ export function createStorage(filePath: string): Storage {
     return cache
   }
 
+  const writeAll = async (content: string): Promise<void> => {
+    await fs.mkdir(dirname(filePath), { recursive: true })
+    await fs.writeFile(filePath, content, 'utf8')
+  }
+
   return {
     async get<T>(key: string): Promise<T | undefined> {
       const all = await readAll()
@@ -34,11 +41,16 @@ export function createStorage(filePath: string): Storage {
     async set(key: string, value: unknown): Promise<void> {
       const all = await readAll()
       all[key] = value
-      // Snapshot content now so a later mutation doesn't affect this write.
       const content = JSON.stringify(all, null, 2)
-      // Chain onto the previous write; swallow previous errors so the chain
-      // stays alive for future writes even if one write failed.
-      writeChain = writeChain.catch(() => {}).then(() => fs.writeFile(filePath, content, 'utf8'))
+      writeChain = writeChain.catch(() => {}).then(() => writeAll(content))
+      return writeChain
+    },
+    async remove(key: string): Promise<void> {
+      const all = await readAll()
+      if (!(key in all)) return
+      delete all[key]
+      const content = JSON.stringify(all, null, 2)
+      writeChain = writeChain.catch(() => {}).then(() => writeAll(content))
       return writeChain
     },
     flush(): Promise<void> {
@@ -54,4 +66,14 @@ export function getDefaultStorage(): Storage {
     _defaultStorage = createStorage(join(app.getPath('userData'), 'state.json'))
   }
   return _defaultStorage
+}
+
+/** Stable filesystem-safe id for a workspace, derived from its URI string. */
+export function workspaceIdFromUri(uriString: string): string {
+  return createHash('sha1').update(uriString).digest('hex').slice(0, 16)
+}
+
+/** Backend file path for a given workspace id, under `<userData>/workspaces/`. */
+export function workspaceStoragePath(workspaceId: string): string {
+  return join(app.getPath('userData'), 'workspaces', `${workspaceId}.json`)
 }

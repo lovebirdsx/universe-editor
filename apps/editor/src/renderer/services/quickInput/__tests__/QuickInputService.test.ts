@@ -8,6 +8,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ContextKeyService,
+  Event,
   IContextKeyService,
   IStorageService,
   InstantiationService,
@@ -18,11 +19,15 @@ import { QuickInputService, type QuickPickState } from '../QuickInputService.js'
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
   private readonly _map = new Map<string, unknown>()
+  readonly onDidChangeWorkspaceScope = Event.None
   async get<T = unknown>(key: string): Promise<T | undefined> {
     return this._map.get(key) as T | undefined
   }
   async set(key: string, value: unknown): Promise<void> {
     this._map.set(key, value)
+  }
+  async remove(key: string): Promise<void> {
+    this._map.delete(key)
   }
 }
 

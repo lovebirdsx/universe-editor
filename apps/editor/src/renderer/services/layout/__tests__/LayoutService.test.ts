@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { autorun, PartId, type IStorageService } from '@universe-editor/platform'
+import { autorun, Event, PartId, type IStorageService } from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
 
 interface FakeStorage extends IStorageService {
@@ -12,6 +12,8 @@ function makeStorage(initial: unknown = undefined): FakeStorage {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(initial),
     set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: Event.None,
   } as unknown as FakeStorage
   return fake
 }
@@ -124,6 +126,7 @@ describe('LayoutService', () => {
       expect.objectContaining({
         sizes: expect.objectContaining({ sidebar: 270, panel: 200 }),
       }),
+      expect.any(Number),
     )
   })
 

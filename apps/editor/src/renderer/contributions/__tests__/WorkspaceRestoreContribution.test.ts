@@ -65,18 +65,25 @@ function makeFs(): IFileServiceType {
 
 function makeStorage(initial: Record<string, unknown> = {}): IStorageService & {
   store: Record<string, unknown>
+  fireScopeChange: () => void
 } {
   const store = { ...initial }
+  const emitter = new Emitter<void>()
   return {
     _serviceBrand: undefined,
     store,
+    onDidChangeWorkspaceScope: emitter.event,
+    fireScopeChange: () => emitter.fire(),
     async get<T = unknown>(key: string): Promise<T | undefined> {
       return store[key] as T | undefined
     },
     async set(key: string, value: unknown): Promise<void> {
       store[key] = value
     },
-  } as IStorageService & { store: Record<string, unknown> }
+    async remove(key: string): Promise<void> {
+      delete store[key]
+    },
+  } as IStorageService & { store: Record<string, unknown>; fireScopeChange: () => void }
 }
 
 function makeWorkspaceStub(): IWorkspaceServiceType {
@@ -209,6 +216,33 @@ describe('WorkspaceRestoreContribution', () => {
     await Promise.resolve()
     expect(setSpy).toHaveBeenCalled()
     expect(setSpy.mock.calls[0]?.[0]).toBe(WORKSPACE_STATE_STORAGE_KEY)
+    contribution.dispose()
+    groups.dispose()
+  })
+
+  it('reloads when the workspace scope changes', async () => {
+    const groups = new EditorGroupsService()
+    // Start with one editor open via seeded state.
+    const seed = new EditorGroupsService()
+    seed.activeGroup.openEditor(new WelcomeEditorInput())
+    const initial: ISerializedEditorGroupsState = seed.toJSON()
+    seed.dispose()
+    const storage = makeStorage({ [WORKSPACE_STATE_STORAGE_KEY]: { groups: initial } })
+    const { contribution } = buildContribution(storage, groups)
+    // Flush initial restore.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(groups.groups[0]?.count).toBe(1)
+
+    // Simulate workspace switch to an unseeded scope — storage backend now
+    // returns undefined; the contribution should clear the editors.
+    delete storage.store[WORKSPACE_STATE_STORAGE_KEY]
+    storage.fireScopeChange()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(groups.groups).toHaveLength(1)
+    expect(groups.groups[0]?.count).toBe(0)
+
     contribution.dispose()
     groups.dispose()
   })

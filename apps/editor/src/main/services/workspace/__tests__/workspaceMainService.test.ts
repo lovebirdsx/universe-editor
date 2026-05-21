@@ -3,28 +3,50 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { URI, type IStorageService, type IRecentWorkspace } from '@universe-editor/platform'
+import { Emitter, URI, type IRecentWorkspace } from '@universe-editor/platform'
 import {
   CURRENT_WORKSPACE_STORAGE_KEY,
   RECENT_WORKSPACES_STORAGE_KEY,
   WorkspaceMainService,
   type IFolderDialog,
+  type IWorkspaceScopedStorage,
 } from '../workspaceMainService.js'
 
-function makeStorage(
-  initial: Record<string, unknown> = {},
-): IStorageService & { store: Record<string, unknown> } {
+type FakeStorage = IWorkspaceScopedStorage & {
+  store: Record<string, unknown>
+  switchCalls: (string | null)[]
+  flushCalls: number
+}
+
+function makeStorage(initial: Record<string, unknown> = {}): FakeStorage {
   const store = { ...initial }
+  const scopeEmitter = new Emitter<void>()
+  const switchCalls: (string | null)[] = []
+  let flushCalls = 0
   return {
     _serviceBrand: undefined,
     store,
+    switchCalls,
+    get flushCalls() {
+      return flushCalls
+    },
+    onDidChangeWorkspaceScope: scopeEmitter.event,
     async get<T = unknown>(key: string): Promise<T | undefined> {
       return store[key] as T | undefined
     },
     async set(key: string, value: unknown): Promise<void> {
       store[key] = value
     },
-  } as IStorageService & { store: Record<string, unknown> }
+    async remove(key: string): Promise<void> {
+      delete store[key]
+    },
+    async switchWorkspace(id: string | null): Promise<void> {
+      switchCalls.push(id)
+    },
+    async flush(): Promise<void> {
+      flushCalls++
+    },
+  } as FakeStorage
 }
 
 function makeDialog(result: URI | null = null): IFolderDialog & { calls: number } {
@@ -185,6 +207,35 @@ describe('WorkspaceMainService', () => {
     expect(current?.folder.toString()).toBe(folder.toString())
     expect(current?.name).toBe('persisted')
     svc2.dispose()
+  })
+
+  it('openFolder flushes storage and switches scope before firing onDidChangeWorkspace', async () => {
+    const storage = makeStorage()
+    const svc = new WorkspaceMainService(storage, makeDialog())
+    let scopeAtFire: (string | null)[] = []
+    svc.onDidChangeWorkspace(() => {
+      scopeAtFire = [...storage.switchCalls]
+    })
+    await svc.openFolder(URI.file('/tmp/foo'))
+    expect(storage.flushCalls).toBeGreaterThan(0)
+    // switchWorkspace must have been called with a non-null id BEFORE the event fired
+    expect(scopeAtFire.at(-1)).toBeTypeOf('string')
+    expect(scopeAtFire.at(-1)).not.toBeNull()
+    svc.dispose()
+  })
+
+  it('closeFolder switches storage scope to null before firing event', async () => {
+    const storage = makeStorage()
+    const svc = new WorkspaceMainService(storage, makeDialog())
+    await svc.openFolder(URI.file('/tmp/foo'))
+    storage.switchCalls.length = 0
+    let scopeAtFire: (string | null)[] = []
+    svc.onDidChangeWorkspace(() => {
+      scopeAtFire = [...storage.switchCalls]
+    })
+    await svc.closeFolder()
+    expect(scopeAtFire.at(-1)).toBeNull()
+    svc.dispose()
   })
 
   it('closeFolder clears the persisted current entry', async () => {

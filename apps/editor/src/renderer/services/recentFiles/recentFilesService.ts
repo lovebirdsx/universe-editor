@@ -1,5 +1,6 @@
 import {
   IStorageService,
+  StorageScope,
   URI,
   createDecorator,
   type UriComponents,
@@ -35,7 +36,9 @@ export class RecentFilesService implements IRecentFilesService {
   private _items: IRecentFile[] = []
   private _loadPromise: Promise<void> | null = null
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {}
+  constructor(@IStorageService private readonly _storage: IStorageService) {
+    this._storage.onDidChangeWorkspaceScope(() => this._reset())
+  }
 
   private _ensureLoaded(): Promise<void> {
     this._loadPromise ??= this._load()
@@ -43,7 +46,7 @@ export class RecentFilesService implements IRecentFilesService {
   }
 
   private async _load(): Promise<void> {
-    const raw = await this._storage.get<PersistedRecentFile[]>(STORAGE_KEY)
+    const raw = await this._storage.get<PersistedRecentFile[]>(STORAGE_KEY, StorageScope.WORKSPACE)
     if (!raw) return
     const loaded = raw.map((r) => ({
       uri: URI.revive(r.uri) as URI,
@@ -79,6 +82,12 @@ export class RecentFilesService implements IRecentFilesService {
     void this._persist()
   }
 
+  /** Clear in-memory state on workspace swap so the next getAll() re-reads. */
+  private _reset(): void {
+    this._items = []
+    this._loadPromise = null
+  }
+
   private async _persist(): Promise<void> {
     // Ensure storage has been loaded before writing back, so we never
     // overwrite persisted items that haven't been merged into _items yet.
@@ -88,6 +97,6 @@ export class RecentFilesService implements IRecentFilesService {
       name: i.name,
       lastOpened: i.lastOpened,
     }))
-    await this._storage.set(STORAGE_KEY, data)
+    await this._storage.set(STORAGE_KEY, data, StorageScope.WORKSPACE)
   }
 }

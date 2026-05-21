@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createStorage } from '../storage.js'
+import { createStorage, workspaceIdFromUri, workspaceStoragePath } from '../storage.js'
+
+// Stub electron app.getPath() — workspaceStoragePath uses it. We don't import
+// the real module in the test; cheap stub so the function is callable in node.
+vi.mock('electron', () => ({
+  app: { getPath: () => tmpdir() },
+}))
 
 describe('createStorage', () => {
   let file: string
@@ -45,11 +51,52 @@ describe('createStorage', () => {
     expect(await s.get('x')).toBe(42)
   })
 
-  it('preserves keys across multiple sets', async () => {
+  it('removes a key and persists', async () => {
+    const s = createStorage(file)
+    await s.set('keep', 1)
+    await s.set('drop', 2)
+    await s.remove('drop')
+    expect(await s.get('drop')).toBeUndefined()
+    expect(await s.get('keep')).toBe(1)
+    const reader = createStorage(file)
+    expect(await reader.get('drop')).toBeUndefined()
+    expect(await reader.get('keep')).toBe(1)
+  })
+
+  it('remove() on a missing key is a no-op', async () => {
+    const s = createStorage(file)
+    await expect(s.remove('never-set')).resolves.toBeUndefined()
+  })
+
+  it('flush() resolves after pending writes complete', async () => {
     const s = createStorage(file)
     await s.set('a', 1)
     await s.set('b', 2)
-    expect(await s.get('a')).toBe(1)
-    expect(await s.get('b')).toBe(2)
+    await s.flush()
+    const reader = createStorage(file)
+    expect(await reader.get('a')).toBe(1)
+    expect(await reader.get('b')).toBe(2)
+  })
+})
+
+describe('workspaceIdFromUri', () => {
+  it('is stable across calls with the same input', () => {
+    expect(workspaceIdFromUri('file:///tmp/a')).toBe(workspaceIdFromUri('file:///tmp/a'))
+  })
+
+  it('produces 16 hex chars', () => {
+    expect(workspaceIdFromUri('file:///tmp/foo')).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('differs for distinct inputs', () => {
+    expect(workspaceIdFromUri('file:///tmp/a')).not.toBe(workspaceIdFromUri('file:///tmp/b'))
+  })
+})
+
+describe('workspaceStoragePath', () => {
+  it('places the file under <userData>/workspaces/<id>.json', () => {
+    const p = workspaceStoragePath('abcdef0123456789')
+    expect(p).toContain('workspaces')
+    expect(p.endsWith('abcdef0123456789.json')).toBe(true)
   })
 })

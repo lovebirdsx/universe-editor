@@ -346,4 +346,24 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     this._onDidActiveGroupChange.fire(nextActive)
     this._logger.info(`restoreEditorGroups groups=${this._groups.length} active=${nextActive.id}`)
   }
+
+  /**
+   * Tear down all groups to a single empty seed group. Used when the active
+   * workspace changes and there's no persisted state for the new workspace.
+   */
+  clearAll(): void {
+    for (let i = this._groups.length - 1; i >= 1; i--) {
+      const g = this._groups[i]!
+      this._grid.removeView(g)
+      this._groups.splice(i, 1)
+      const mruIdx = this._mru.indexOf(g)
+      if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
+      g.model.dispose()
+      this._onDidRemoveGroup.fire(g)
+    }
+    const seed = this._groups[0]!
+    seed.closeAllEditors()
+    this._activeGroup.set(seed, undefined)
+    this._onDidActiveGroupChange.fire(seed)
+  }
 }

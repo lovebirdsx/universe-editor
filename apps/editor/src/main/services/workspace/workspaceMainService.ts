@@ -19,9 +19,20 @@ import {
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
+import { workspaceIdFromUri } from '../../storage.js'
 
 export interface IFolderDialog {
   showOpenFolderDialog(): Promise<URI | null>
+}
+
+/**
+ * Storage capability needed by WorkspaceMainService — extends IStorageService
+ * with the main-only `switchWorkspace` / `flush` hooks so the service can
+ * coordinate scope swaps when the active folder changes.
+ */
+export interface IWorkspaceScopedStorage extends IStorageService {
+  switchWorkspace(workspaceId: string | null): Promise<void>
+  flush(): Promise<void>
 }
 
 export const RECENT_WORKSPACES_STORAGE_KEY = 'workbench.recentWorkspaces'
@@ -63,7 +74,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
   private _hydratePromise: Promise<void> | null = null
 
   constructor(
-    private readonly _storage: IStorageService,
+    private readonly _storage: IWorkspaceScopedStorage,
     private readonly _folderDialog: IFolderDialog,
     private readonly _logger: ILogger = new NullLogger(),
   ) {}
@@ -92,6 +103,16 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
         if (folder) {
           this._current = { folder, name: persistedCurrent.name }
         }
+      }
+      // Bind the WORKSPACE-scope backend to the hydrated current workspace
+      // (or detach if none), so the first WORKSPACE reads after startup hit
+      // the right file.
+      try {
+        await this._storage.switchWorkspace(
+          this._current ? workspaceIdFromUri(this._current.folder.toString()) : null,
+        )
+      } catch {
+        // best-effort; storage layer logs its own errors
       }
       this._logger.debug(
         `hydrate workspace current=${this._current?.folder.toString() ?? '<none>'} recent=${this._recent.length}`,
@@ -125,6 +146,11 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     }
     await this._hydrate()
     const workspace = makeWorkspace(resolved)
+    // Flush + swap storage scope BEFORE firing onDidChangeWorkspace so
+    // subscribers (renderer-side restore contributions) read the new
+    // workspace's data, not the previous one's.
+    await this._storage.flush()
+    await this._storage.switchWorkspace(workspaceIdFromUri(workspace.folder.toString()))
     this._current = workspace
     this._onDidChangeWorkspace.fire(workspace)
     this._addRecent(workspace)
@@ -135,6 +161,8 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
   async closeFolder(): Promise<void> {
     if (this._current === null) return
     const previous = this._current.folder.toString()
+    await this._storage.flush()
+    await this._storage.switchWorkspace(null)
     this._current = null
     this._onDidChangeWorkspace.fire(null)
     void this._persistCurrent()
@@ -151,6 +179,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
 
   /** Internal restore path used when reviving from storage at startup. */
   async restoreCurrent(workspace: IWorkspace): Promise<void> {
+    await this._storage.switchWorkspace(workspaceIdFromUri(workspace.folder.toString()))
     this._current = workspace
     this._onDidChangeWorkspace.fire(workspace)
     this._logger.info(`restoreCurrent ${workspace.folder.toString()}`)

@@ -3,6 +3,7 @@ import {
   ConfigurationService,
   ConfigurationTarget,
   Emitter,
+  Event,
   IConfigurationService,
   IStorageService,
   IUserDataFilesService,
@@ -17,11 +18,15 @@ import { UserSettingsSync } from '../UserSettingsSync.js'
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
   store = new Map<string, unknown>()
+  readonly onDidChangeWorkspaceScope = Event.None
   async get<T = unknown>(key: string): Promise<T | undefined> {
     return this.store.get(key) as T | undefined
   }
   async set(key: string, value: unknown): Promise<void> {
     this.store.set(key, value)
+  }
+  async remove(key: string): Promise<void> {
+    this.store.delete(key)
   }
 }
 

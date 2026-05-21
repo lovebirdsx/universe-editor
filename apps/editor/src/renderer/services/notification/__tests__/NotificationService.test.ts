@@ -4,6 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  Event,
   INotificationService,
   IStatusBarService,
   IStorageService,
@@ -26,6 +27,7 @@ import { StatusBarService } from '../../statusbar/StatusBarService.js'
 class FakeStorage implements IStorageServiceType {
   declare readonly _serviceBrand: undefined
   private readonly _data = new Map<string, unknown>()
+  readonly onDidChangeWorkspaceScope = Event.None
 
   async get<T>(key: string): Promise<T | undefined> {
     return this._data.get(key) as T | undefined
@@ -33,6 +35,10 @@ class FakeStorage implements IStorageServiceType {
 
   async set(key: string, value: unknown): Promise<void> {
     this._data.set(key, value)
+  }
+
+  async remove(key: string): Promise<void> {
+    this._data.delete(key)
   }
 }
 

@@ -3,7 +3,7 @@
  *  IViewsService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { IStorageService, observableValue } from '@universe-editor/platform'
+import { IStorageService, StorageScope, observableValue } from '@universe-editor/platform'
 import type { IViewsService } from '@universe-editor/platform'
 import { ViewContainerLocation, ViewContainerRegistry } from '@universe-editor/platform'
 
@@ -24,7 +24,11 @@ export class ViewsService implements IViewsService {
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {}
+  constructor(@IStorageService private readonly _storage: IStorageService) {
+    this._storage.onDidChangeWorkspaceScope(() => {
+      void this._reload()
+    })
+  }
 
   openViewContainer(containerId: string): void {
     const location = this._getLocation(containerId)
@@ -51,7 +55,7 @@ export class ViewsService implements IViewsService {
   async load(): Promise<void> {
     let data: PersistedViews | undefined
     try {
-      data = await this._storage.get<PersistedViews>(STORAGE_KEY)
+      data = await this._storage.get<PersistedViews>(STORAGE_KEY, StorageScope.WORKSPACE)
     } catch {
       return
     }
@@ -78,10 +82,25 @@ export class ViewsService implements IViewsService {
       activeContainerByLocation: this.activeContainerByLocation.get() as Record<number, string>,
     }
     try {
-      await this._storage.set(STORAGE_KEY, payload)
+      await this._storage.set(STORAGE_KEY, payload, StorageScope.WORKSPACE)
     } catch {
       // swallow: persistence is best-effort
     }
+  }
+
+  /** Reset to empty then re-load from the new WORKSPACE scope. */
+  private async _reload(): Promise<void> {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer)
+      this._saveTimer = undefined
+    }
+    this._suspendPersist = true
+    try {
+      this.activeContainerByLocation.set({}, undefined)
+    } finally {
+      this._suspendPersist = false
+    }
+    await this.load()
   }
 
   private _schedulePersist(): void {

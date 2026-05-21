@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { type IPart, type IStorageService, PartId } from '@universe-editor/platform'
+import { Event, type IPart, type IStorageService, PartId } from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
 
 function makeStorage(initial: unknown = undefined): IStorageService {
@@ -7,6 +7,8 @@ function makeStorage(initial: unknown = undefined): IStorageService {
     _serviceBrand: undefined,
     get: vi.fn().mockResolvedValue(initial),
     set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: Event.None,
   } as unknown as IStorageService
 }
 

@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  Event,
   IEditorGroupsService,
   IFileService,
   IStorageService,
@@ -29,6 +30,7 @@ import { ClearRecentFilesAction, OpenRecentFilesAction } from '../../../actions/
 class FakeStorage implements IStorageServiceType {
   declare readonly _serviceBrand: undefined
   private readonly _data = new Map<string, unknown>()
+  readonly onDidChangeWorkspaceScope = Event.None
 
   async get<T>(key: string): Promise<T | undefined> {
     return this._data.get(key) as T | undefined
@@ -36,6 +38,10 @@ class FakeStorage implements IStorageServiceType {
 
   async set(key: string, value: unknown): Promise<void> {
     this._data.set(key, value)
+  }
+
+  async remove(key: string): Promise<void> {
+    this._data.delete(key)
   }
 
   seed(key: string, value: unknown): void {
@@ -237,7 +243,7 @@ describe('RecentFilesService', () => {
     await svc.getAll() // prime cache so _ensureLoaded() is instant in _persist()
     svc.add(URI.file('/x.txt'), 'x.txt')
     await Promise.resolve()
-    expect(spy).toHaveBeenCalledWith('workbench.recentFiles', expect.any(Array))
+    expect(spy).toHaveBeenCalledWith('workbench.recentFiles', expect.any(Array), expect.any(Number))
   })
 
   it('clear() empties the list and persists', async () => {

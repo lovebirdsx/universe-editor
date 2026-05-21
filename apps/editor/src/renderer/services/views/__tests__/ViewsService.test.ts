@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import {
+  Event,
   ViewContainerLocation,
   ViewContainerRegistry,
   type IStorageService,
@@ -10,6 +11,8 @@ const stubStorage: IStorageService = {
   _serviceBrand: undefined,
   get: async () => undefined,
   set: async () => {},
+  remove: async () => {},
+  onDidChangeWorkspaceScope: Event.None,
 }
 
 function makeService(): ViewsService {
