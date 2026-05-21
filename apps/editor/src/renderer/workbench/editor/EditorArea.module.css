@@ -109,6 +109,22 @@
   background: var(--color-tab-active-border, #0070e0);
 }
 
+/* Active tab in a non-focused group — muted appearance */
+.tab.activeUnfocused {
+  background: var(--color-tab-active-bg, #1a1a1c);
+  color: var(--color-tab-unfocused-active-fg, #999999);
+}
+
+.tab.activeUnfocused::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-tab-unfocused-active-border, #555555);
+}
+
 .tab:hover {
   color: var(--color-tab-inactive-fg-hover, #aaaaaa);
   background: var(--color-tab-hover-bg, #353535);

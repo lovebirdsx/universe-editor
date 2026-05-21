@@ -76,6 +76,7 @@ function useActiveGroup(groupsService: IEditorGroupsService): IEditorGroup {
 function EditorTab({
   input,
   isActive,
+  isGroupActive,
   isPreview,
   onActivate,
   onPin,
@@ -86,6 +87,7 @@ function EditorTab({
 }: {
   input: EditorInput
   isActive: boolean
+  isGroupActive: boolean
   isPreview: boolean
   onActivate: () => void
   onPin: () => void
@@ -104,11 +106,18 @@ function EditorTab({
     sourceGroupId: groupId,
   })
 
+  const tabClass = [
+    styles['tab'],
+    isActive && isGroupActive ? styles['active'] : '',
+    isActive && !isGroupActive ? styles['activeUnfocused'] : '',
+    isPreview ? (styles['preview'] ?? '') : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+
   return (
     <div
-      className={`${styles['tab']} ${isActive ? styles['active'] : ''} ${
-        isPreview ? (styles['preview'] ?? '') : ''
-      }`}
+      className={tabClass}
       onClick={onActivate}
       onDoubleClick={onPin}
       onContextMenu={onContextMenu}
@@ -307,6 +316,7 @@ export function EditorGroupView({
                 input={e}
                 groupId={group.id}
                 isActive={group.activeEditor?.id === e.id}
+                isGroupActive={isActiveGroup}
                 isPreview={group.previewEditor === e}
                 showDropIndicator={dropIndex === idx}
                 onActivate={() => group.setActive(e)}
