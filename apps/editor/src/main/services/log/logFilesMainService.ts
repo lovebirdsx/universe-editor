@@ -6,8 +6,12 @@
 import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
 import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
-import { LogLevel } from '@universe-editor/platform'
-import type { ILogFilesService, LogFileDescriptor } from '../../../shared/ipc/services.js'
+import { LogLevel, type Event } from '@universe-editor/platform'
+import type {
+  ILogFilesService,
+  LogAppendEvent,
+  LogFileDescriptor,
+} from '../../../shared/ipc/services.js'
 import type { LogMainService } from './logMainService.js'
 import { humanizeChannelId } from './logLabels.js'
 
@@ -37,7 +41,11 @@ function isInside(root: string, target: string): boolean {
 export class LogFilesMainService implements ILogFilesService {
   declare readonly _serviceBrand: undefined
 
-  constructor(private readonly _logService: LogMainService) {}
+  readonly onDidAppendEntry: Event<LogAppendEvent>
+
+  constructor(private readonly _logService: LogMainService) {
+    this.onDidAppendEntry = _logService.onDidAppendEntry
+  }
 
   async listLogFiles(): Promise<LogFileDescriptor[]> {
     const root = this._root()

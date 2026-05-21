@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
-import type { LogLevel } from '@universe-editor/platform'
+import type { Event, LogLevel } from '@universe-editor/platform'
 
 // -------- Ping (demo/smoke-test) --------
 
@@ -63,8 +63,14 @@ export interface LogFileDescriptor {
   readonly modifiedTime: number
 }
 
+export interface LogAppendEvent {
+  readonly channelId: string
+  readonly chunk: string
+}
+
 export interface ILogFilesService {
   readonly _serviceBrand: undefined
+  readonly onDidAppendEntry: Event<LogAppendEvent>
   listLogFiles(): Promise<LogFileDescriptor[]>
   readLogFile(id: string, maxBytes?: number): Promise<string>
   resolveLogPath(id: string): Promise<string>

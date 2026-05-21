@@ -134,6 +134,34 @@ describe('LogMainService', () => {
     const current = await fs.readFile(logPath, 'utf8')
     expect(current).toContain('after-rotate line')
   })
+
+  it('fires onDidAppendEntry after a successful flush with the written chunk', async () => {
+    const svc = new LogMainService()
+    const events: Array<{ channelId: string; chunk: string }> = []
+    svc.onDidAppendEntry((e) => events.push(e))
+
+    const logger = svc.createLogger({ id: 'tail', name: 'Tail' })
+    logger.info('first entry')
+    logger.flush()
+    await new Promise((r) => setTimeout(r, 200))
+
+    expect(events).toHaveLength(1)
+    expect(events[0]?.channelId).toBe('tail')
+    expect(events[0]?.chunk).toContain('first entry')
+    expect(events[0]?.chunk).toContain('[info]')
+    // Chunk should end with a newline (line-terminated log entry)
+    expect(events[0]?.chunk.endsWith('\n')).toBe(true)
+  })
+
+  it('does not fire onDidAppendEntry when no entries are queued', async () => {
+    const svc = new LogMainService()
+    const events: Array<{ channelId: string; chunk: string }> = []
+    svc.onDidAppendEntry((e) => events.push(e))
+    const logger = svc.createLogger({ id: 'idle', name: 'Idle' })
+    logger.flush()
+    await new Promise((r) => setTimeout(r, 200))
+    expect(events).toHaveLength(0)
+  })
 })
 
 describe('MainLogChannelService', () => {

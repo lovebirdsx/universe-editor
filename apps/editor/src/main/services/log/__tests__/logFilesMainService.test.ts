@@ -169,4 +169,8 @@ describe('LogFilesMainService', () => {
   it('resolveLogPath rejects path traversal attempts', async () => {
     await expect(service.resolveLogPath('../etc/passwd')).rejects.toThrow(/Invalid log file id/)
   })
+
+  it('forwards LogMainService.onDidAppendEntry as its own onDidAppendEntry', () => {
+    expect(service.onDidAppendEntry).toBe(logService.onDidAppendEntry)
+  })
 })

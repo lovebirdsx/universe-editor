@@ -10,11 +10,18 @@ import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import {
   AbstractLogger,
+  Emitter,
+  Event,
   LogLevel,
   type ILogger,
   type ILoggerService,
   type ILogChannel,
 } from '@universe-editor/platform'
+
+export interface LogAppendEvent {
+  readonly channelId: string
+  readonly chunk: string
+}
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const FLUSH_DEBOUNCE_MS = 150
@@ -43,14 +50,21 @@ class FileLogger extends AbstractLogger {
   private _currentDate: string
   private readonly _logDir: string
   private readonly _channelId: string
+  private readonly _onChunk: (channelId: string, chunk: string) => void
   private _writeQueue: string[] = []
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
   private _estimatedSize = 0
 
-  constructor(logDir: string, channelId: string, level: LogLevel) {
+  constructor(
+    logDir: string,
+    channelId: string,
+    level: LogLevel,
+    onChunk: (channelId: string, chunk: string) => void,
+  ) {
     super(level)
     this._logDir = logDir
     this._channelId = channelId
+    this._onChunk = onChunk
     this._currentDate = todayDateString()
     this._logPath = join(logDir, this._currentDate, `${channelId}.log`)
   }
@@ -109,11 +123,11 @@ class FileLogger extends AbstractLogger {
     const content = lines.join('')
     try {
       await this._ensureLogDir()
-      // Rotate if the file is too large
       if (this._estimatedSize > MAX_FILE_SIZE) {
         await this._rotate()
       }
       await fs.appendFile(this._logPath, content, 'utf8')
+      this._onChunk(this._channelId, content)
     } catch (err) {
       console.error('[LogMainService] Failed to write log:', err)
     }
@@ -154,6 +168,8 @@ export class LogMainService implements ILoggerService {
   private _level: LogLevel = LogLevel.Info
   private readonly _loggers = new Map<string, FileLogger>()
   private readonly _channels = new Map<string, ILogChannel>()
+  private readonly _onDidAppendEntry = new Emitter<LogAppendEvent>()
+  readonly onDidAppendEntry: Event<LogAppendEvent> = this._onDidAppendEntry.event
 
   constructor() {
     this._logDir = join(app.getPath('userData'), 'logs')
@@ -175,7 +191,7 @@ export class LogMainService implements ILoggerService {
     this._channels.set(channel.id, channel)
     let logger = this._loggers.get(channel.id)
     if (!logger) {
-      logger = new FileLogger(this._logDir, channel.id, this._level)
+      logger = new FileLogger(this._logDir, channel.id, this._level, this._fireAppend)
       this._loggers.set(channel.id, logger)
     }
     return logger
@@ -196,7 +212,7 @@ export class LogMainService implements ILoggerService {
     this._channels.set(channel.id, channel)
     let logger = this._loggers.get(channel.id)
     if (!logger) {
-      logger = new FileLogger(this._logDir, channel.id, this._level)
+      logger = new FileLogger(this._logDir, channel.id, this._level, this._fireAppend)
       this._loggers.set(channel.id, logger)
     }
     logger.logWithTimestamp(level, message, timestampMs)
@@ -240,5 +256,10 @@ export class LogMainService implements ILoggerService {
       logger.dispose()
     }
     this._loggers.clear()
+    this._onDidAppendEntry.dispose()
+  }
+
+  private readonly _fireAppend = (channelId: string, chunk: string): void => {
+    this._onDidAppendEntry.fire({ channelId, chunk })
   }
 }

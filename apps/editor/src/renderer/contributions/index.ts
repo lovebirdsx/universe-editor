@@ -28,6 +28,7 @@ import { NotificationStatusContribution } from './NotificationStatusContribution
 import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 import { LogLevelContribution } from './LogLevelContribution.js'
+import { LogTailContribution } from './LogTailContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -170,6 +171,14 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.logLevel',
   LogLevelContribution,
   WorkbenchPhase.BlockStartup,
+)
+
+// Live tail of main-side log writes into the active `Log (X)` Output channel.
+// AfterRestore so the Output service and panel UI are already wired up.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.logTail',
+  LogTailContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the
