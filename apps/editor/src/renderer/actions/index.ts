@@ -81,6 +81,7 @@ import {
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
 import {
+  OpenActiveLogFileAction,
   OpenLogsFolderAction,
   RefreshLogOutputAction,
   SetLogLevelAction,
@@ -163,6 +164,7 @@ registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)
 registerAction2(ShowLogsAction)
 registerAction2(RefreshLogOutputAction)
+registerAction2(OpenActiveLogFileAction)
 registerAction2(OpenLogsFolderAction)
 registerAction2(SetLogLevelAction)
 

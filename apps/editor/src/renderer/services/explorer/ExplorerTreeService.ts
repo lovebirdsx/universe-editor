@@ -18,8 +18,8 @@ import {
   IFileWatcherService,
   ILoggerService,
   IWorkspaceService,
-  NullLogger,
   URI,
+  createNamedLogger,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
@@ -72,8 +72,7 @@ export class ExplorerTreeService extends Disposable {
     @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
-    this._logger =
-      loggerService?.createLogger({ id: 'explorer', name: 'Explorer' }) ?? new NullLogger()
+    this._logger = createNamedLogger(loggerService, { id: 'explorer', name: 'Explorer' })
     this._setRoot(this._workspace.current?.folder ?? null)
     this._register(this._workspace.onDidChangeWorkspace((w) => this._setRoot(w?.folder ?? null)))
     this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))

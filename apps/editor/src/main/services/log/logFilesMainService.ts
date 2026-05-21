@@ -9,26 +9,12 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'node:pat
 import { LogLevel } from '@universe-editor/platform'
 import type { ILogFilesService, LogFileDescriptor } from '../../../shared/ipc/services.js'
 import type { LogMainService } from './logMainService.js'
+import { humanizeChannelId } from './logLabels.js'
 
 const DEFAULT_MAX_BYTES = 1024 * 1024
 const MAX_READ_BYTES = 10 * 1024 * 1024
 const DATE_DIR_RE = /^\d{4}-\d{2}-\d{2}$/
 const LOG_FILE_RE = /^[A-Za-z0-9._-]+\.log$/
-
-const LOG_LABELS: Record<string, string> = {
-  main: 'Main',
-  renderer: 'Renderer',
-  window: 'Window',
-  workspace: 'Workspace',
-  fileSystem: 'File System',
-  fileWatcher: 'File Watcher',
-  host: 'Host',
-  command: 'Command',
-  editor: 'Editor',
-  editorGroups: 'Editor Groups',
-  monaco: 'Monaco',
-  action: 'Action',
-}
 
 function normalizeMaxBytes(maxBytes: number | undefined): number {
   if (maxBytes === undefined) return DEFAULT_MAX_BYTES
@@ -41,19 +27,6 @@ function formatLimit(limit: number): string {
   if (limit % (1024 * 1024) === 0) return `${limit / (1024 * 1024)} MB`
   if (limit % 1024 === 0) return `${limit / 1024} KB`
   return `${limit} bytes`
-}
-
-function labelFromChannelId(channelId: string): string {
-  const rendererMatch = /^renderer-(.+)$/.exec(channelId)
-  if (rendererMatch?.[1]) return `Renderer ${rendererMatch[1]}`
-
-  const direct = LOG_LABELS[channelId]
-  if (direct) return direct
-
-  return channelId
-    .replace(/[-_.]+/g, ' ')
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/\b\w/g, (ch) => ch.toUpperCase())
 }
 
 function isInside(root: string, target: string): boolean {
@@ -87,9 +60,10 @@ export class LogFilesMainService implements ILogFilesService {
         const fullPath = this._resolve(date, file.name)
         const stat = await fs.stat(fullPath)
         const channelId = basename(file.name, '.log')
+        const registered = this._logService.getChannel(channelId)
         result.push({
           id: `${date}/${file.name}`,
-          name: labelFromChannelId(channelId),
+          name: registered?.name ?? humanizeChannelId(channelId),
           channelId,
           date,
           size: stat.size,
@@ -122,7 +96,12 @@ export class LogFilesMainService implements ILogFilesService {
     try {
       const buffer = Buffer.alloc(limit)
       await handle.read(buffer, 0, limit, stat.size - limit)
-      return `[Log truncated to last ${formatLimit(limit)}]\n${buffer.toString('utf8')}`
+      const text = buffer.toString('utf8')
+      // The tail offset may land mid-character or mid-line; drop the first
+      // partial line so the output never starts with a broken code point.
+      const firstNewline = text.indexOf('\n')
+      const safe = firstNewline === -1 ? text : text.slice(firstNewline + 1)
+      return `[Log truncated to last ${formatLimit(limit)}]\n${safe}`
     } finally {
       await handle.close()
     }
@@ -133,6 +112,11 @@ export class LogFilesMainService implements ILogFilesService {
     await fs.mkdir(root, { recursive: true })
     const error = await shell.openPath(root)
     if (error) throw new Error(error)
+  }
+
+  async resolveLogPath(id: string): Promise<string> {
+    const { date, fileName } = this._parseId(id)
+    return this._resolve(date, fileName)
   }
 
   async setLogLevel(level: LogLevel): Promise<void> {

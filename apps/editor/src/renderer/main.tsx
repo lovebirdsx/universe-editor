@@ -128,6 +128,9 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   const loggerService = new RendererLoggerService(logChannelProxy, windowId)
   services.set(ILoggerService, loggerService)
+  window.addEventListener('beforeunload', () => {
+    void loggerService.flush()
+  })
   // Update the global unexpected-error handler to also send to the file logger.
   const rootLogger = loggerService.createLogger({ id: 'renderer', name: 'Renderer' })
   rootLogger.info(`bootstrap start windowId=${windowId}`)

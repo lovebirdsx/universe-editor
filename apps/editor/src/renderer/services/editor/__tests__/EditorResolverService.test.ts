@@ -5,6 +5,7 @@
 import { describe, expect, it, vi, afterEach } from 'vitest'
 import {
   EditorInput,
+  Event,
   IEditorService,
   IFileService,
   ILoggerService,
@@ -59,6 +60,7 @@ function makeFs(): IFileServiceType {
 function makeLogger(): ILogger {
   return {
     level: LogLevel.Info,
+    onDidChangeLogLevel: Event.None,
     setLevel: vi.fn(),
     trace: vi.fn(),
     debug: vi.fn(),

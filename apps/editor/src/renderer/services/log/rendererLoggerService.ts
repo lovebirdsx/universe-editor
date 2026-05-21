@@ -14,12 +14,62 @@ import {
   type ILogChannel,
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
-import type { ILogChannelService } from '../../../shared/ipc/services.js'
+import type { ILogChannelService, LogEntry } from '../../../shared/ipc/services.js'
 
-class IpcLogger extends AbstractLogger {
+interface IpcBatcher {
+  enqueue(entry: LogEntry): void
+  flush(): Promise<void>
+}
+
+class WindowLogBatcher implements IpcBatcher {
+  private _pending: LogEntry[] = []
+  private _flushScheduled = false
+  private _inFlight: Promise<void> | null = null
+
   constructor(
     private readonly _proxy: ILogChannelService,
     private readonly _windowId: number,
+  ) {}
+
+  enqueue(entry: LogEntry): void {
+    this._pending.push(entry)
+    if (!this._flushScheduled) {
+      this._flushScheduled = true
+      queueMicrotask(() => {
+        this._flushScheduled = false
+        void this._send()
+      })
+    }
+  }
+
+  async flush(): Promise<void> {
+    // Drain any pending entries (synchronous send) then await in-flight work.
+    if (this._pending.length > 0) {
+      await this._send()
+    } else if (this._inFlight) {
+      await this._inFlight
+    }
+  }
+
+  private async _send(): Promise<void> {
+    if (this._pending.length === 0) return
+    const batch = this._pending
+    this._pending = []
+    const work = this._proxy.appendBatch(this._windowId, batch).catch((err) => {
+      console.error('[RendererLogger] failed to forward log batch:', err)
+    })
+    this._inFlight = work
+    try {
+      await work
+    } finally {
+      if (this._inFlight === work) this._inFlight = null
+    }
+  }
+}
+
+class IpcLogger extends AbstractLogger {
+  constructor(
+    private readonly _batcher: IpcBatcher,
     private readonly _channel: string,
     level: LogLevel,
   ) {
@@ -27,7 +77,16 @@ class IpcLogger extends AbstractLogger {
   }
 
   protected _log(level: LogLevel, message: string): void {
-    void this._proxy.append(this._windowId, this._channel, level, message)
+    this._batcher.enqueue({
+      channel: this._channel,
+      level,
+      message,
+      timestamp: Date.now(),
+    })
+  }
+
+  override flush(): void {
+    void this._batcher.flush()
   }
 }
 
@@ -41,21 +100,16 @@ export class RendererLoggerService implements ILoggerServiceType {
 
   private _level: LogLevel = LogLevel.Info
   private readonly _loggers = new Map<string, ILogger>()
+  private readonly _batcher: WindowLogBatcher
 
-  constructor(
-    private readonly _logChannelProxy: ILogChannelService,
-    private readonly _windowId: number,
-  ) {}
+  constructor(logChannelProxy: ILogChannelService, windowId: number) {
+    this._batcher = new WindowLogBatcher(logChannelProxy, windowId)
+  }
 
   createLogger(channel: ILogChannel): ILogger {
     let logger = this._loggers.get(channel.id)
     if (!logger) {
-      const ipcLogger = new IpcLogger(
-        this._logChannelProxy,
-        this._windowId,
-        channel.id,
-        this._level,
-      )
+      const ipcLogger = new IpcLogger(this._batcher, channel.id, this._level)
       // In dev, also echo to console for quick iteration
       if (import.meta.env.DEV) {
         logger = new MultiplexLogger([ipcLogger, new ConsoleLogger(this._level)], this._level)
@@ -76,6 +130,17 @@ export class RendererLoggerService implements ILoggerServiceType {
 
   getLevel(): LogLevel {
     return this._level
+  }
+
+  /**
+   * Flush every buffered log entry across all loggers managed by this service.
+   * Called from a `beforeunload` hook so renderer exits don't drop log lines.
+   */
+  async flush(): Promise<void> {
+    for (const logger of this._loggers.values()) {
+      logger.flush()
+    }
+    await this._batcher.flush()
   }
 }
 

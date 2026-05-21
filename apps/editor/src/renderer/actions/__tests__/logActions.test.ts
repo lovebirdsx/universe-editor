@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ConfigurationTarget,
+  IConfigurationService,
   ILoggerService,
   ILayoutService,
   IOutputService,
@@ -18,7 +20,12 @@ import {
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../../shared/ipc/services.js'
 import { OutputService } from '../../services/output/OutputService.js'
-import { OpenLogsFolderAction, SetLogLevelAction, ShowLogsAction } from '../logActions.js'
+import {
+  OpenLogsFolderAction,
+  RefreshLogOutputAction,
+  SetLogLevelAction,
+  ShowLogsAction,
+} from '../logActions.js'
 
 const descriptor: LogFileDescriptor = {
   id: '2026-05-21/main.log',
@@ -46,6 +53,7 @@ function baseLogFilesService() {
     _serviceBrand: undefined,
     listLogFiles: vi.fn().mockResolvedValue([descriptor]),
     readLogFile: vi.fn().mockResolvedValue('hello log'),
+    resolveLogPath: vi.fn().mockResolvedValue('/userData/logs/2026-05-21/main.log'),
     openLogsFolder: vi.fn().mockResolvedValue(undefined),
     setLogLevel: vi.fn().mockResolvedValue(undefined),
     getLogLevel: vi.fn().mockResolvedValue(LogLevel.Info),
@@ -144,6 +152,41 @@ describe('logActions', () => {
     expect(entry).toMatchObject({ group: '5_tools' })
   })
 
+  it('RefreshLogOutputAction re-reads the log file matching the active Log (X) channel', async () => {
+    disposables.push(registerAction2(RefreshLogOutputAction))
+    const output = new OutputService()
+    const layout = makeLayoutService()
+    const logFiles = makeLogFilesService()
+    output.createChannel(`Log (${descriptor.name})`)
+    output.setActiveChannel(`Log (${descriptor.name})`)
+    const services = new ServiceCollection()
+    services.set(ILogFilesService, logFiles as never)
+    services.set(IOutputService, output)
+    services.set(ILayoutService, layout as never)
+
+    await runCommand(RefreshLogOutputAction.ID, services)
+
+    expect(logFiles.listLogFiles).toHaveBeenCalledTimes(1)
+    expect(logFiles.readLogFile).toHaveBeenCalledWith(descriptor.id, 1024 * 1024)
+    expect(output.activeChannelContent.get()).toBe('hello log')
+  })
+
+  it('RefreshLogOutputAction is a no-op when no Log channel is active', async () => {
+    disposables.push(registerAction2(RefreshLogOutputAction))
+    const output = new OutputService()
+    const layout = makeLayoutService()
+    const logFiles = makeLogFilesService()
+    const services = new ServiceCollection()
+    services.set(ILogFilesService, logFiles as never)
+    services.set(IOutputService, output)
+    services.set(ILayoutService, layout as never)
+
+    await runCommand(RefreshLogOutputAction.ID, services)
+
+    expect(logFiles.listLogFiles).not.toHaveBeenCalled()
+    expect(logFiles.readLogFile).not.toHaveBeenCalled()
+  })
+
   it('SetLogLevelAction updates renderer and main logger levels', async () => {
     disposables.push(registerAction2(SetLogLevelAction))
     const info = vi.fn()
@@ -157,16 +200,31 @@ describe('logActions', () => {
       items.find((item) => item.level === LogLevel.Debug),
     )
     const logFiles = makeLogFilesService()
+    const configurationService = {
+      _serviceBrand: undefined,
+      get: vi.fn(),
+      update: vi.fn(),
+      loadLayer: vi.fn(),
+      getLayerSnapshot: vi.fn(() => ({})),
+      getValueOrigin: vi.fn(),
+      onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
+    }
     const services = new ServiceCollection()
     services.set(ILogFilesService, logFiles as never)
     services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
     services.set(ILoggerService, loggerService as never)
+    services.set(IConfigurationService, configurationService as never)
 
     await runCommand(SetLogLevelAction.ID, services)
 
     expect(logFiles.getLogLevel).toHaveBeenCalledTimes(1)
     expect(logFiles.setLogLevel).toHaveBeenCalledWith(LogLevel.Debug)
     expect(loggerService.setLevel).toHaveBeenCalledWith(LogLevel.Debug)
+    expect(configurationService.update).toHaveBeenCalledWith(
+      'logging.level',
+      'debug',
+      ConfigurationTarget.User,
+    )
     expect(info).toHaveBeenCalledWith('Log level set to Debug')
   })
 })

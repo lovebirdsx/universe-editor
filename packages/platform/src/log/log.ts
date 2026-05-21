@@ -6,7 +6,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, IDisposable } from '../base/lifecycle.js'
+import { Emitter, Event } from '../base/event.js'
 import { createDecorator } from '../di/instantiation.js'
+import type { ILogChannel } from './loggerService.js'
 
 export const enum LogLevel {
   Off = 0,
@@ -23,6 +25,7 @@ export function canLog(logger: ILogger, level: LogLevel): boolean {
 
 export interface ILogger extends IDisposable {
   readonly level: LogLevel
+  readonly onDidChangeLogLevel: Event<LogLevel>
   setLevel(level: LogLevel): void
 
   trace(message: string, ...args: unknown[]): void
@@ -38,8 +41,20 @@ export interface ILogService extends ILogger {}
 
 export const ILogService = createDecorator<ILogService>('logService')
 
+function formatArg(arg: unknown): string {
+  if (arg instanceof Error) return arg.stack ?? arg.message
+  if (typeof arg === 'object' && arg !== null) {
+    try {
+      return JSON.stringify(arg)
+    } catch {
+      return String(arg)
+    }
+  }
+  return String(arg)
+}
+
 function formatArgs(args: unknown[]): string {
-  return args.length > 0 ? ` ${args.map((a) => String(a)).join(' ')}` : ''
+  return args.length > 0 ? ` ${args.map(formatArg).join(' ')}` : ''
 }
 
 /**
@@ -48,6 +63,8 @@ function formatArgs(args: unknown[]): string {
  */
 export abstract class AbstractLogger extends Disposable implements ILogger {
   private _level: LogLevel
+  private readonly _onDidChangeLogLevel = this._register(new Emitter<LogLevel>())
+  readonly onDidChangeLogLevel: Event<LogLevel> = this._onDidChangeLogLevel.event
 
   constructor(level: LogLevel = LogLevel.Info) {
     super()
@@ -59,7 +76,9 @@ export abstract class AbstractLogger extends Disposable implements ILogger {
   }
 
   setLevel(level: LogLevel): void {
+    if (this._level === level) return
     this._level = level
+    this._onDidChangeLogLevel.fire(level)
   }
 
   trace(message: string, ...args: unknown[]): void {
@@ -105,6 +124,17 @@ export abstract class AbstractLogger extends Disposable implements ILogger {
  */
 export class NullLogger extends AbstractLogger {
   protected _log(_level: LogLevel, _message: string): void {}
+}
+
+/**
+ * Helper for the common pattern: optional `ILoggerService` injection plus a
+ * fallback to NullLogger when no service is wired (e.g. in tests).
+ */
+export function createNamedLogger(
+  service: { createLogger(channel: ILogChannel): ILogger } | undefined,
+  channel: ILogChannel,
+): ILogger {
+  return service?.createLogger(channel) ?? new NullLogger()
 }
 
 const LOG_LEVEL_LABELS: Record<LogLevel, string> = {

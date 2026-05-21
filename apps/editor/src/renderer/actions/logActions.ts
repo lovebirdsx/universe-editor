@@ -5,6 +5,10 @@
 
 import {
   Action2,
+  IConfigurationService,
+  ConfigurationTarget,
+  IEditorGroupsService,
+  IInstantiationService,
   ILoggerService,
   ILayoutService,
   IOutputService,
@@ -12,14 +16,17 @@ import {
   LogLevel,
   MenuId,
   PartId,
+  URI,
   localize,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/services.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 
 const LOG_READ_MAX_BYTES = 1024 * 1024
 const EMPTY_LOG_CHANNEL = 'Log'
+const LOG_CHANNEL_PREFIX = 'Log ('
 
 interface LogFileQuickPickItem extends IQuickPickItem {
   readonly descriptor: LogFileDescriptor
@@ -29,8 +36,6 @@ interface LogLevelQuickPickItem extends IQuickPickItem {
   readonly level: LogLevel
 }
 
-let lastLogFileId: string | undefined
-
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KB`
@@ -38,7 +43,13 @@ function formatBytes(bytes: number): string {
 }
 
 function channelNameForLog(descriptor: LogFileDescriptor): string {
-  return `Log (${descriptor.name})`
+  return `${LOG_CHANNEL_PREFIX}${descriptor.name})`
+}
+
+function activeLogChannelName(outputService: IOutputService): string | undefined {
+  const active = outputService.activeChannel?.name
+  if (!active || !active.startsWith(LOG_CHANNEL_PREFIX) || !active.endsWith(')')) return undefined
+  return active.slice(LOG_CHANNEL_PREFIX.length, -1)
 }
 
 function revealOutputPanel(layoutService: ILayoutService): void {
@@ -58,7 +69,6 @@ async function writeLogToOutput(
   channel.clear()
   channel.append(content)
   outputService.setActiveChannel(channelName)
-  lastLogFileId = descriptor.id
   revealOutputPanel(layoutService)
 }
 
@@ -78,6 +88,15 @@ const LOG_LEVEL_ITEMS: readonly LogLevelQuickPickItem[] = [
   { id: 'error', label: 'Error', level: LogLevel.Error },
   { id: 'off', label: 'Off', level: LogLevel.Off },
 ]
+
+const LEVEL_TO_SETTING_VALUE: Record<LogLevel, string> = {
+  [LogLevel.Off]: 'off',
+  [LogLevel.Trace]: 'trace',
+  [LogLevel.Debug]: 'debug',
+  [LogLevel.Info]: 'info',
+  [LogLevel.Warning]: 'warning',
+  [LogLevel.Error]: 'error',
+}
 
 export class ShowLogsAction extends Action2 {
   static readonly ID = 'workbench.action.showLogs'
@@ -133,14 +152,54 @@ export class RefreshLogOutputAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    if (!lastLogFileId) return
     const logFilesService = accessor.get(ILogFilesService)
     const outputService = accessor.get(IOutputService)
     const layoutService = accessor.get(ILayoutService)
+    const currentName = activeLogChannelName(outputService)
+    if (!currentName) return
     const descriptors = await logFilesService.listLogFiles()
-    const descriptor = descriptors.find((candidate) => candidate.id === lastLogFileId)
+    const descriptor = descriptors.find((candidate) => candidate.name === currentName)
     if (!descriptor) return
     await writeLogToOutput(logFilesService, outputService, layoutService, descriptor)
+  }
+}
+
+export class OpenActiveLogFileAction extends Action2 {
+  static readonly ID = 'workbench.action.openActiveLogFile'
+
+  constructor() {
+    super({
+      id: OpenActiveLogFileAction.ID,
+      title: localize('action.openActiveLogFile.title', 'Developer: Open Active Log File'),
+      category: localize('command.category.help', 'Help'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const logFilesService = accessor.get(ILogFilesService)
+    const outputService = accessor.get(IOutputService)
+    const groups = accessor.get(IEditorGroupsService)
+    const instantiation = accessor.get(IInstantiationService)
+    const currentName = activeLogChannelName(outputService)
+    if (!currentName) return
+    const descriptors = await logFilesService.listLogFiles()
+    const descriptor = descriptors.find((candidate) => candidate.name === currentName)
+    if (!descriptor) return
+    const fsPath = await logFilesService.resolveLogPath(descriptor.id)
+    const uri = URI.file(fsPath)
+
+    for (const group of groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+          groups.activateGroup(group)
+          group.setActive(editor)
+          return
+        }
+      }
+    }
+    const input = instantiation.createInstance(FileEditorInput, uri)
+    groups.activeGroup.openEditor(input, { activate: true, pinned: true })
   }
 }
 
@@ -179,6 +238,7 @@ export class SetLogLevelAction extends Action2 {
     const logFilesService = accessor.get(ILogFilesService)
     const quickInputService = accessor.get(IQuickInputService)
     const loggerService = accessor.get(ILoggerService)
+    const configurationService = accessor.get(IConfigurationService)
     const current = await logFilesService.getLogLevel()
     const items = LOG_LEVEL_ITEMS.map((item): LogLevelQuickPickItem => {
       if (item.level !== current) return item
@@ -192,6 +252,11 @@ export class SetLogLevelAction extends Action2 {
 
     await logFilesService.setLogLevel(selected.level)
     loggerService.setLevel(selected.level)
+    configurationService.update(
+      'logging.level',
+      LEVEL_TO_SETTING_VALUE[selected.level],
+      ConfigurationTarget.User,
+    )
     loggerService
       .createLogger({ id: 'logActions', name: 'Log Actions' })
       .info(`Log level set to ${selected.label}`)

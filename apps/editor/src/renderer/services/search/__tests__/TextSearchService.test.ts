@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  Event,
   IFileService,
   ILoggerService,
   IWorkspaceService,
@@ -115,6 +116,7 @@ function addDir(fs: FakeFs, parent: URI, name: string): URI {
 function makeLogger(): ILogger {
   return {
     level: LogLevel.Info,
+    onDidChangeLogLevel: Event.None,
     setLevel: vi.fn(),
     trace: vi.fn(),
     debug: vi.fn(),

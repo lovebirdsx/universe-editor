@@ -109,6 +109,12 @@ void app.whenReady().then(async () => {
   const { windows } = getOrCreateServices()
   await windows.createWindow()
 
+  setTimeout(() => {
+    void logMainService.cleanupOldLogs().catch((err) => {
+      mainLogger.warn(`cleanupOldLogs failed: ${(err as Error).message}`)
+    })
+  }, 5000)
+
   app.on('activate', () => {
     mainLogger.info('app activate')
     if (getOrCreateServices().windows.getWindows().length === 0) {

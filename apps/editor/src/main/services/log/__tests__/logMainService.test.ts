@@ -16,7 +16,8 @@ vi.mock('electron', () => ({
 }))
 
 // Import after mock is set up
-const { LogMainService, MainLogChannelService } = await import('../logMainService.js')
+const { LogMainService } = await import('../logMainService.js')
+const { MainLogChannelService } = await import('../mainLogChannelService.js')
 
 describe('LogMainService', () => {
   let tmpDir: string
@@ -86,6 +87,53 @@ describe('LogMainService', () => {
     // File should not exist (nothing written)
     await expect(fs.access(logFile)).rejects.toThrow()
   })
+
+  it('cleanupOldLogs removes date directories older than the retention window', async () => {
+    const svc = new LogMainService()
+    const today = new Date()
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const recentDir = join(tmpDir, 'logs', dateStr)
+    const oldDir = join(tmpDir, 'logs', '2000-01-01')
+    await fs.mkdir(recentDir, { recursive: true })
+    await fs.mkdir(oldDir, { recursive: true })
+    await fs.writeFile(join(recentDir, 'main.log'), 'fresh', 'utf8')
+    await fs.writeFile(join(oldDir, 'main.log'), 'stale', 'utf8')
+
+    await svc.cleanupOldLogs(30)
+
+    await expect(fs.access(recentDir)).resolves.toBeUndefined()
+    await expect(fs.access(oldDir)).rejects.toThrow()
+  })
+
+  it('cleanupOldLogs is a no-op when the logs directory is missing', async () => {
+    const svc = new LogMainService()
+    await expect(svc.cleanupOldLogs(30)).resolves.toBeUndefined()
+  })
+
+  it('rotates oversized log files into a rotated/ subdirectory', async () => {
+    const svc = new LogMainService()
+    const today = new Date()
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const dayDir = join(tmpDir, 'logs', dateStr)
+    await fs.mkdir(dayDir, { recursive: true })
+    const logPath = join(dayDir, 'rotate-target.log')
+    // Pre-populate the log file so rename has something to move
+    await fs.writeFile(logPath, 'previous content', 'utf8')
+
+    const logger = svc.createLogger({ id: 'rotate-target', name: 'Rotate Target' })
+    // Force the FileLogger to think the file is oversized
+    ;(logger as unknown as { _estimatedSize: number })._estimatedSize = 11 * 1024 * 1024
+    logger.info('after-rotate line')
+    logger.flush()
+    await new Promise((r) => setTimeout(r, 200))
+
+    const rotatedDir = join(dayDir, 'rotated')
+    const rotatedEntries = await fs.readdir(rotatedDir)
+    expect(rotatedEntries.some((name) => name.startsWith('rotate-target.'))).toBe(true)
+    // New current log should still be at the un-rotated path
+    const current = await fs.readFile(logPath, 'utf8')
+    expect(current).toContain('after-rotate line')
+  })
 })
 
 describe('MainLogChannelService', () => {
@@ -101,21 +149,50 @@ describe('MainLogChannelService', () => {
     vi.clearAllMocks()
   })
 
-  it('routes append calls to the correct renderer log file', async () => {
+  it('routes append calls to the channel-named log file with renderer provenance prefix', async () => {
     const logSvc = new LogMainService()
     const channelSvc = new MainLogChannelService(logSvc)
 
-    await channelSvc.append(42, 'editor', LogLevel.Info, 'renderer log entry')
+    const fireTime = Date.now()
+    await channelSvc.append(42, 'editor', LogLevel.Info, 'renderer log entry', fireTime)
 
     // Wait for the async write
     await new Promise((r) => setTimeout(r, 200))
-    logSvc.createLogger({ id: 'renderer-42', name: 'Renderer 42' }).flush()
+    logSvc.createLogger({ id: 'editor', name: 'Editor' }).flush()
     await new Promise((r) => setTimeout(r, 200))
 
     const today = new Date()
     const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
-    const logFile = join(tmpDir, 'logs', dateStr, 'renderer-42.log')
+    const logFile = join(tmpDir, 'logs', dateStr, 'editor.log')
     const content = await fs.readFile(logFile, 'utf8')
-    expect(content).toContain('[editor] renderer log entry')
+    expect(content).toContain('[renderer:42] renderer log entry')
+    // Timestamp recorded in the file matches the caller-supplied fire time
+    expect(content).toContain(new Date(fireTime).toISOString())
+  })
+
+  it('appendBatch routes each entry to its channel with provenance prefix', async () => {
+    const logSvc = new LogMainService()
+    const channelSvc = new MainLogChannelService(logSvc)
+
+    const ts = Date.now()
+    await channelSvc.appendBatch(7, [
+      { channel: 'editor', level: LogLevel.Info, message: 'one', timestamp: ts },
+      { channel: 'workspace', level: LogLevel.Warning, message: 'two', timestamp: ts },
+    ])
+
+    await new Promise((r) => setTimeout(r, 200))
+    logSvc.createLogger({ id: 'editor', name: 'Editor' }).flush()
+    logSvc.createLogger({ id: 'workspace', name: 'Workspace' }).flush()
+    await new Promise((r) => setTimeout(r, 200))
+
+    const today = new Date()
+    const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+    const editorContent = await fs.readFile(join(tmpDir, 'logs', dateStr, 'editor.log'), 'utf8')
+    const workspaceContent = await fs.readFile(
+      join(tmpDir, 'logs', dateStr, 'workspace.log'),
+      'utf8',
+    )
+    expect(editorContent).toContain('[renderer:7] one')
+    expect(workspaceContent).toContain('[renderer:7] two')
   })
 })

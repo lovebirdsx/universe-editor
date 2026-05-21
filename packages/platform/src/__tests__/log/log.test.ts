@@ -163,3 +163,56 @@ describe('MultiplexLogger', () => {
     expect(log.level).toBe(LogLevel.Debug)
   })
 })
+
+describe('AbstractLogger.onDidChangeLogLevel', () => {
+  it('fires when setLevel changes the level', () => {
+    const log = new NullLogger(LogLevel.Info)
+    const seen: LogLevel[] = []
+    log.onDidChangeLogLevel((level) => seen.push(level))
+    log.setLevel(LogLevel.Debug)
+    expect(seen).toEqual([LogLevel.Debug])
+  })
+
+  it('does not fire when setLevel is called with the same level', () => {
+    const log = new NullLogger(LogLevel.Info)
+    const seen: LogLevel[] = []
+    log.onDidChangeLogLevel((level) => seen.push(level))
+    log.setLevel(LogLevel.Info)
+    expect(seen).toEqual([])
+  })
+
+  it('MultiplexLogger.setLevel triggers events on every delegate', () => {
+    const a = new NullLogger(LogLevel.Info)
+    const b = new NullLogger(LogLevel.Info)
+    const mux = new MultiplexLogger([a, b], LogLevel.Info)
+    const seenA: LogLevel[] = []
+    const seenB: LogLevel[] = []
+    a.onDidChangeLogLevel((level) => seenA.push(level))
+    b.onDidChangeLogLevel((level) => seenB.push(level))
+    mux.setLevel(LogLevel.Error)
+    expect(seenA).toEqual([LogLevel.Error])
+    expect(seenB).toEqual([LogLevel.Error])
+  })
+})
+
+describe('AbstractLogger formatArgs', () => {
+  class CapturingLogger extends AbstractLogger {
+    readonly entries: string[] = []
+    protected _log(_level: LogLevel, message: string): void {
+      this.entries.push(message)
+    }
+  }
+
+  it('stringifies plain objects as JSON', () => {
+    const log = new CapturingLogger(LogLevel.Info)
+    log.info('payload', { a: 1, b: 'two' })
+    expect(log.entries[0]).toBe('payload {"a":1,"b":"two"}')
+  })
+
+  it('emits Error stack/message instead of "[object Object]"', () => {
+    const log = new CapturingLogger(LogLevel.Info)
+    const err = new Error('boom')
+    log.error('failed', err)
+    expect(log.entries[0]).toContain(err.stack ?? err.message)
+  })
+})

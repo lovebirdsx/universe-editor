@@ -12,8 +12,8 @@ import {
   IFileService,
   ILoggerService,
   IWorkspaceService,
-  NullLogger,
   URI,
+  createNamedLogger,
   type IFileMatch,
   type IFileService as IFileServiceType,
   type ILogger,
@@ -62,7 +62,7 @@ export class TextSearchService implements ITextSearchService {
     @IFileService private readonly _fileService: IFileServiceType,
     @ILoggerService loggerService: ILoggerServiceType,
   ) {
-    this._logger = loggerService?.createLogger({ id: 'search', name: 'Search' }) ?? new NullLogger()
+    this._logger = createNamedLogger(loggerService, { id: 'search', name: 'Search' })
   }
 
   async search(

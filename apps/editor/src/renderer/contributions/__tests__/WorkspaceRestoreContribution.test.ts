@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  Event,
   EditorRegistry,
   IEditorGroupsService,
   IFileService,
@@ -94,6 +95,7 @@ function makeWorkspaceStub(): IWorkspaceServiceType {
 function makeLogger(): ILogger {
   return {
     level: LogLevel.Info,
+    onDidChangeLogLevel: Event.None,
     setLevel: vi.fn(),
     trace: vi.fn(),
     debug: vi.fn(),

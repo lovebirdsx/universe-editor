@@ -5,6 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
+  Event,
   IFileService,
   IFileWatcherService,
   ILoggerService,
@@ -159,6 +160,7 @@ function makeInst(
 function makeLogger(): ILogger {
   return {
     level: LogLevel.Info,
+    onDidChangeLogLevel: Event.None,
     setLevel: vi.fn(),
     trace: vi.fn(),
     debug: vi.fn(),

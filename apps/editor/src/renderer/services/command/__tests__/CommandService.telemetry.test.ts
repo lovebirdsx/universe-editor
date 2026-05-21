@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  Event,
   InstantiationService,
   LogLevel,
   ServiceCollection,
@@ -26,6 +27,7 @@ function makeTelemetry(): ITelemetryService {
 function makeLogger(): ILogger {
   return {
     level: LogLevel.Info,
+    onDidChangeLogLevel: Event.None,
     setLevel: vi.fn(),
     trace: vi.fn(),
     debug: vi.fn(),

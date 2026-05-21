@@ -15,10 +15,11 @@ import {
   type ILoggerService,
   type ILogChannel,
 } from '@universe-editor/platform'
-import type { ILogChannelService } from '../../../shared/ipc/services.js'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const FLUSH_DEBOUNCE_MS = 150
+const MAX_BUFFER_LINES = 10000
+const DATE_DIR_RE = /^\d{4}-\d{2}-\d{2}$/
 
 const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
   [LogLevel.Off]: 'off',
@@ -55,6 +56,16 @@ class FileLogger extends AbstractLogger {
   }
 
   protected _log(level: LogLevel, message: string): void {
+    this._enqueue(level, message, Date.now())
+  }
+
+  /** Variant used by IPC arrivals: log with the timestamp recorded by the caller. */
+  logWithTimestamp(level: LogLevel, message: string, timestampMs: number): void {
+    if (level === LogLevel.Off || level < this.level) return
+    this._enqueue(level, message, timestampMs)
+  }
+
+  private _enqueue(level: LogLevel, message: string, timestampMs: number): void {
     const now = todayDateString()
     if (now !== this._currentDate) {
       this._currentDate = now
@@ -62,11 +73,17 @@ class FileLogger extends AbstractLogger {
       this._estimatedSize = 0
     }
 
-    const ts = new Date().toISOString()
+    const ts = new Date(timestampMs).toISOString()
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
     const line = `[${ts}] [${label}] ${message}\n`
     this._writeQueue.push(line)
     this._estimatedSize += line.length
+    if (this._writeQueue.length > MAX_BUFFER_LINES) {
+      const dropped = this._writeQueue.length - MAX_BUFFER_LINES + 1
+      this._writeQueue.splice(0, dropped)
+      const warnTs = new Date().toISOString()
+      this._writeQueue.push(`[${warnTs}] [warn] dropped ${dropped} buffered log entries\n`)
+    }
     this._scheduleFlush()
   }
 
@@ -108,8 +125,10 @@ class FileLogger extends AbstractLogger {
   }
 
   private async _rotate(): Promise<void> {
+    const rotatedDir = join(this._logDir, this._currentDate, 'rotated')
+    await fs.mkdir(rotatedDir, { recursive: true })
     const ts = new Date().toISOString().replace(/[:.]/g, '-')
-    const rotated = this._logPath.replace('.log', `.${ts}.log`)
+    const rotated = join(rotatedDir, `${this._channelId}.${ts}.log`)
     try {
       await fs.rename(this._logPath, rotated)
     } catch {
@@ -134,6 +153,7 @@ export class LogMainService implements ILoggerService {
   private readonly _logDir: string
   private _level: LogLevel = LogLevel.Info
   private readonly _loggers = new Map<string, FileLogger>()
+  private readonly _channels = new Map<string, ILogChannel>()
 
   constructor() {
     this._logDir = join(app.getPath('userData'), 'logs')
@@ -143,13 +163,43 @@ export class LogMainService implements ILoggerService {
     return this._logDir
   }
 
+  getChannel(id: string): ILogChannel | undefined {
+    return this._channels.get(id)
+  }
+
+  getChannels(): readonly ILogChannel[] {
+    return Array.from(this._channels.values())
+  }
+
   createLogger(channel: ILogChannel): ILogger {
+    this._channels.set(channel.id, channel)
     let logger = this._loggers.get(channel.id)
     if (!logger) {
       logger = new FileLogger(this._logDir, channel.id, this._level)
       this._loggers.set(channel.id, logger)
     }
     return logger
+  }
+
+  /**
+   * Append a pre-formatted message to a channel using a caller-supplied
+   * timestamp. Used by MainLogChannelService when forwarding renderer entries
+   * so the recorded time reflects when the renderer fired, not when main
+   * received the IPC.
+   */
+  appendToChannel(
+    channel: ILogChannel,
+    level: LogLevel,
+    message: string,
+    timestampMs: number,
+  ): void {
+    this._channels.set(channel.id, channel)
+    let logger = this._loggers.get(channel.id)
+    if (!logger) {
+      logger = new FileLogger(this._logDir, channel.id, this._level)
+      this._loggers.set(channel.id, logger)
+    }
+    logger.logWithTimestamp(level, message, timestampMs)
   }
 
   setLevel(level: LogLevel): void {
@@ -163,44 +213,32 @@ export class LogMainService implements ILoggerService {
     return this._level
   }
 
+  async cleanupOldLogs(retainDays = 30): Promise<void> {
+    let dirs
+    try {
+      dirs = await fs.readdir(this._logDir, { withFileTypes: true })
+    } catch {
+      return
+    }
+    const cutoff = Date.now() - retainDays * 24 * 60 * 60 * 1000
+    await Promise.all(
+      dirs.map(async (entry) => {
+        if (!entry.isDirectory() || !DATE_DIR_RE.test(entry.name)) return
+        const t = Date.parse(`${entry.name}T00:00:00Z`)
+        if (!Number.isFinite(t) || t >= cutoff) return
+        try {
+          await fs.rm(join(this._logDir, entry.name), { recursive: true, force: true })
+        } catch {
+          // best-effort cleanup; do not fail startup
+        }
+      }),
+    )
+  }
+
   dispose(): void {
     for (const logger of this._loggers.values()) {
       logger.dispose()
     }
     this._loggers.clear()
-  }
-}
-
-/**
- * IPC receiver: renderer windows send log entries here via ProxyChannel.
- * Routes each entry to the appropriate FileLogger in LogMainService.
- */
-export class MainLogChannelService implements ILogChannelService {
-  declare readonly _serviceBrand: undefined
-
-  constructor(private readonly _logService: LogMainService) {}
-
-  async append(windowId: number, channel: string, level: LogLevel, message: string): Promise<void> {
-    const logger = this._logService.createLogger({
-      id: `renderer-${windowId}`,
-      name: `Renderer ${windowId}`,
-    })
-    switch (level) {
-      case LogLevel.Trace:
-        logger.trace(`[${channel}] ${message}`)
-        break
-      case LogLevel.Debug:
-        logger.debug(`[${channel}] ${message}`)
-        break
-      case LogLevel.Info:
-        logger.info(`[${channel}] ${message}`)
-        break
-      case LogLevel.Warning:
-        logger.warn(`[${channel}] ${message}`)
-        break
-      case LogLevel.Error:
-        logger.error(`[${channel}] ${message}`)
-        break
-    }
   }
 }

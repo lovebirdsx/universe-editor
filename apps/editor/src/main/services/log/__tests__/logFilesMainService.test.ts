@@ -110,10 +110,63 @@ describe('LogFilesMainService', () => {
     expect(shell.openPath).toHaveBeenCalledWith(root)
   })
 
+  it('drops the first partial line when tailing a large file to avoid mojibake', async () => {
+    const date = todayStr()
+    // Build a payload where the byte at offset (size - limit) lands in the middle
+    // of a line and inside a multi-byte UTF-8 sequence.
+    const head = '中文头部不应出现\n'.repeat(40) // ~ > 1KB of Chinese
+    const tail = 'line A\nline B\n'
+    await writeLog(tmpDir, date, 'main.log', head + tail)
+
+    const result = await service.readLogFile(`${date}/main.log`, tail.length + 5)
+    expect(result.startsWith('[Log truncated to last ')).toBe(true)
+    // After truncation prefix, content should start at a line boundary
+    const body = result.slice(result.indexOf('\n') + 1)
+    expect(body).not.toContain('�')
+    expect(body).toContain('line B')
+  })
+
+  it('uses the registered channel descriptor name when listing log files', async () => {
+    const date = todayStr()
+    // Register a channel with an explicit human-readable name
+    logService.createLogger({ id: 'externalChange', name: 'External Change' })
+    await writeLog(tmpDir, date, 'externalChange.log', 'x')
+
+    const files = await service.listLogFiles()
+    const match = files.find((f) => f.channelId === 'externalChange')
+    expect(match?.name).toBe('External Change')
+  })
+
   it('setLogLevel updates the backing LogMainService level', async () => {
     await service.setLogLevel(LogLevel.Debug)
 
     expect(await service.getLogLevel()).toBe(LogLevel.Debug)
     expect(logService.getLevel()).toBe(LogLevel.Debug)
+  })
+
+  it('does not surface entries inside a rotated/ subdirectory as channels', async () => {
+    const date = todayStr()
+    await writeLog(tmpDir, date, 'main.log', 'current')
+    const rotatedDir = join(tmpDir, 'logs', date, 'rotated')
+    await fs.mkdir(rotatedDir, { recursive: true })
+    await fs.writeFile(join(rotatedDir, 'main.2025-01-01T00-00-00-000Z.log'), 'old', 'utf8')
+
+    const files = await service.listLogFiles()
+
+    expect(files).toHaveLength(1)
+    expect(files[0]?.channelId).toBe('main')
+  })
+
+  it('resolveLogPath returns the absolute fs path inside the logs root', async () => {
+    const date = todayStr()
+    await writeLog(tmpDir, date, 'main.log', 'content')
+
+    const path = await service.resolveLogPath(`${date}/main.log`)
+
+    expect(path).toBe(join(tmpDir, 'logs', date, 'main.log'))
+  })
+
+  it('resolveLogPath rejects path traversal attempts', async () => {
+    await expect(service.resolveLogPath('../etc/passwd')).rejects.toThrow(/Invalid log file id/)
   })
 })

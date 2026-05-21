@@ -176,5 +176,23 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
         },
       }),
     )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'logging',
+        title: localize('settings.logging', 'Logging'),
+        properties: {
+          'logging.level': {
+            type: 'string',
+            default: 'info',
+            enum: ['off', 'trace', 'debug', 'info', 'warning', 'error'],
+            description: localize(
+              'settings.logging.level.description',
+              'Default log level applied at startup.',
+            ),
+          },
+        },
+      }),
+    )
   }
 }

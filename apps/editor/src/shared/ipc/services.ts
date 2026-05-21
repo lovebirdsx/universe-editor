@@ -27,13 +27,27 @@ export const IPingService = createDecorator<IPingService>('pingService')
 
 // -------- Log Channel (renderer → main aggregation) --------
 
+export interface LogEntry {
+  readonly channel: string
+  readonly level: LogLevel
+  readonly message: string
+  readonly timestamp: number
+}
+
 /**
  * Wire-only IPC contract for renderer-side logging.
  * Each renderer window sends structured log entries; the main process writes them to disk.
  */
 export interface ILogChannelService {
   readonly _serviceBrand: undefined
-  append(windowId: number, channel: string, level: LogLevel, message: string): Promise<void>
+  append(
+    windowId: number,
+    channel: string,
+    level: LogLevel,
+    message: string,
+    timestamp: number,
+  ): Promise<void>
+  appendBatch(windowId: number, entries: readonly LogEntry[]): Promise<void>
 }
 
 export const ILogChannelService = createDecorator<ILogChannelService>('logChannelService')
@@ -53,6 +67,7 @@ export interface ILogFilesService {
   readonly _serviceBrand: undefined
   listLogFiles(): Promise<LogFileDescriptor[]>
   readLogFile(id: string, maxBytes?: number): Promise<string>
+  resolveLogPath(id: string): Promise<string>
   openLogsFolder(): Promise<void>
   setLogLevel(level: LogLevel): Promise<void>
   getLogLevel(): Promise<LogLevel>

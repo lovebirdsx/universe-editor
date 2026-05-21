@@ -27,6 +27,7 @@ import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 import { NotificationStatusContribution } from './NotificationStatusContribution.js'
 import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
+import { LogLevelContribution } from './LogLevelContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -160,6 +161,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerMenu',
   ExplorerMenuContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Apply persisted `logging.level` to the renderer + main loggers as early as
+// possible so the configured level is in effect before bulk restore traffic.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.logLevel',
+  LogLevelContribution,
   WorkbenchPhase.BlockStartup,
 )
 
