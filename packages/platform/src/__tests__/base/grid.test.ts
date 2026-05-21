@@ -297,3 +297,123 @@ describe('Grid — serialize / deserialize', () => {
     expect(leafA?.size).toBe(250)
   })
 })
+
+describe('Grid — resizeView on nested branches', () => {
+  // Regression: for the layout Vertical(Horizontal(A, B), C) the sash between
+  // the top row and the bottom row calls resizeView(A, { height: ... }).  The
+  // old implementation looked only at A's immediate parent (Horizontal) and
+  // returned early because Horizontal ≠ Vertical, making the sash immovable.
+  // The fix walks up to the first ancestor whose parent has the matching
+  // orientation and resizes at that level.
+
+  it('resizes the horizontal sub-branch when height is requested via its leftmost leaf', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const c = new V('c')
+    const grid = new Grid(a)
+    // Build Vertical( Horizontal(A,B), C )
+    grid.addView(b, 200, a, Direction.Down) // Vertical(A, B) inside root
+    grid.addView(c, 200, a, Direction.Right) // split A right: Horizontal(A,C) replaces A
+    // Now tree is Root(Horizontal)[Vertical(Horizontal(A,C), B)]
+    // Sash between Horizontal(A,C) and B calls resizeView(A, { height: ... })
+    const spy = vi.fn()
+    grid.onDidChange(spy)
+    const prevSizeB = grid.getLeafSize(b)
+    grid.resizeView(a, { height: 300 })
+    // The resize must have fired and changed B's size (the sibling branch).
+    expect(spy).toHaveBeenCalledOnce()
+    expect(grid.getLeafSize(b)).not.toBe(prevSizeB)
+  })
+
+  it('resizeView with no relevant axis remains a no-op on a simple horizontal grid', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Right)
+    const spy = vi.fn()
+    grid.onDidChange(spy)
+    grid.resizeView(a, { height: 500 })
+    expect(spy).not.toHaveBeenCalled()
+  })
+})
+
+describe('Grid — rebuildFrom', () => {
+  it('replaces the tree with the serialized structure', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const c = new V('c')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Down)
+    grid.addView(c, 200, a, Direction.Right)
+    // Serialize, then wipe by rebuilding with new view instances.
+    const json = grid.serialize((v) => v.viewId)
+    const d = new V('d')
+    const e = new V('e')
+    const f = new V('f')
+    const views = [d, e, f]
+    let idx = 0
+    grid.rebuildFrom(json.root, () => views[idx++]!)
+    expect(grid.getViews()).toEqual([d, e, f])
+  })
+
+  it('fires onDidChange exactly once', () => {
+    const a = new V('a')
+    const b = new V('b')
+    const grid = new Grid(a)
+    grid.addView(b, 200, a, Direction.Right)
+    const json = grid.serialize((v) => v.viewId)
+    const spy = vi.fn()
+    grid.onDidChange(spy)
+    let idx = 0
+    const fresh = [new V('x'), new V('y')]
+    grid.rebuildFrom(json.root, () => fresh[idx++]!)
+    expect(spy).toHaveBeenCalledOnce()
+  })
+
+  it('correctly restores a 3-leaf nested layout — the editor-group drag regression', () => {
+    // Reproduces: after dragging an editor to the top row the layout becomes
+    // Root(Horizontal)[Vertical(Horizontal(G1,G3), G2)].  A previous restore
+    // approach using sequential addView calls reconstructed it incorrectly as
+    // Root(Horizontal)[G1, Vertical(G3,G2)] — two columns, right has two rows.
+    const g1 = new V('g1')
+    const g2 = new V('g2')
+    const g3 = new V('g3')
+    const grid = new Grid(g1)
+    // Add g2 below g1 → Root(Horizontal)[Vertical(G1,G2)]
+    grid.addView(g2, 200, g1, Direction.Down)
+    // Add g3 to the right of g1 → Root(Horizontal)[Vertical(Horizontal(G1,G3),G2)]
+    grid.addView(g3, 200, g1, Direction.Right)
+
+    const json = grid.serialize((v) => v.viewId)
+
+    // Rebuild from the serialized data with fresh view instances.
+    const r1 = new V('r1')
+    const r2 = new V('r2')
+    const r3 = new V('r3')
+    const replacements = [r1, r2, r3]
+    let ri = 0
+    grid.rebuildFrom(json.root, () => replacements[ri++]!)
+
+    // The vertical branch (outer) should have two children:
+    //   child[0] — horizontal branch with r1 and r2 (the top row)
+    //   child[1] — leaf r3 (the bottom row)
+    // NOT: horizontal root with r1 and vertical(r2,r3).
+    expect(grid.getViews()).toEqual([r1, r2, r3])
+    const root = grid.root
+    // Root has one child which is the outer Vertical branch.
+    expect(root.children).toHaveLength(1)
+    const outer = root.children[0]!
+    expect(outer.kind).toBe('branch')
+    if (outer.kind === 'branch') {
+      expect(outer.orientation).toBe(Orientation.Vertical)
+      expect(outer.children).toHaveLength(2)
+      const topRow = outer.children[0]!
+      expect(topRow.kind).toBe('branch')
+      if (topRow.kind === 'branch') {
+        expect(topRow.orientation).toBe(Orientation.Horizontal)
+        expect(topRow.children).toHaveLength(2)
+      }
+      expect(outer.children[1]!.kind).toBe('leaf')
+    }
+  })
+})

@@ -338,10 +338,12 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
    */
   restore(state: ISerializedEditorGroupsState, accessor?: ServicesAccessor): void {
     // 1. Tear down existing groups beyond the first; close all editors in the
-    //    first group so it can be reused as the seed leaf.
+    //    first group so it can be reused as the seed leaf.  We do NOT call
+    //    grid.removeView here because the grid will be fully rebuilt in step 4.
     for (let i = this._groups.length - 1; i >= 1; i--) {
       const g = this._groups[i]!
-      this._grid.removeView(g)
+      this._groupWatchers.get(g.id)?.dispose()
+      this._groupWatchers.delete(g.id)
       this._groups.splice(i, 1)
       const mruIdx = this._mru.indexOf(g)
       if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
@@ -351,28 +353,37 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     const seed = this._groups[0]!
     seed.closeAllEditors()
 
-    // 2. Walk the serialized tree in depth-first order; the first leaf
-    //    populates the seed group, subsequent leaves call addGroup() against
-    //    the previous leaf's group with a direction derived from the parent
-    //    branch's orientation.
+    // 2. Walk the serialized tree to collect all leaves in pre-order.
     const visitOrder: ICollectedLeaf[] = []
     collectLeavesInOrder(state.grid.root, undefined, visitOrder)
 
-    let restoredActive: EditorGroup | undefined
-    visitOrder.forEach((leaf, index) => {
-      let target: EditorGroup
-      if (index === 0) {
-        target = seed
+    // 3. Create EditorGroup instances for each leaf (reuse the seed for the first).
+    const leafGroups: EditorGroup[] = []
+    for (let i = 0; i < visitOrder.length; i++) {
+      if (i === 0) {
+        leafGroups.push(seed)
       } else {
-        const dir = leaf.direction ?? Direction.Right
         const newGroup = new EditorGroup(new EditorGroupModel(), this)
-        this._grid.addView(newGroup, 200, this._groups[index - 1]!, dir)
+        leafGroups.push(newGroup)
         this._groups.push(newGroup)
         this._mru.push(newGroup)
-        this._onDidAddGroup.fire(newGroup)
         this._watchGroup(newGroup)
-        target = newGroup
       }
+    }
+
+    // 4. Rebuild the grid tree from the serialized structure in one shot.
+    //    This correctly restores every level of nesting (branch orientations,
+    //    depths) unlike the previous sequential addView approach which could
+    //    not express trees where a branch node is the sibling of a leaf at
+    //    any nesting depth greater than one.
+    let leafIndex = 0
+    this._grid.rebuildFrom(state.grid.root, (_data: unknown) => leafGroups[leafIndex++]!)
+
+    // 5. Fire add events for new groups, then hydrate editors.
+    let restoredActive: EditorGroup | undefined
+    visitOrder.forEach((leaf, index) => {
+      const target = leafGroups[index]!
+      if (index > 0) this._onDidAddGroup.fire(target)
       const hydrated: EditorInput[] = []
       for (const e of leaf.data.editors) {
         const input = EditorRegistry.deserialize(e.typeId, e.data, accessor)
@@ -385,7 +396,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       if (target.id === state.activeGroupId) restoredActive = target
     })
 
-    // 3. Restore the active group (fall back to the first).
+    // 6. Restore the active group (fall back to the first).
     const nextActive = restoredActive ?? this._groups[0]!
     this._activeGroup.set(nextActive, undefined)
     this._onDidActiveGroupChange.fire(nextActive)

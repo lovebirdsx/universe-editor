@@ -259,27 +259,41 @@ export class Grid<T extends IGridView> {
   }
 
   resizeView(view: T, size: { width?: number; height?: number }): void {
-    const leaf = this._leaves.get(view.viewId)
-    if (!leaf) return
-    const parent = leaf.parent!
-    const desired = parent.orientation === Orientation.Horizontal ? size.width : size.height
-    if (desired === undefined) return
+    const leafNode = this._leaves.get(view.viewId)
+    if (!leafNode) return
+    if (size.width === undefined && size.height === undefined) return
+
+    // Determine which orientation the caller wants to resize along.
+    const desiredOrientation =
+      size.width !== undefined ? Orientation.Horizontal : Orientation.Vertical
+
+    // Walk up from the leaf until we reach a node whose parent has the matching
+    // orientation.  This is required for nested branches: e.g. a leaf inside a
+    // horizontal sub-branch when the outer (sash-owning) branch is vertical.
+    // Without the walk the resize silently no-ops because the leaf's immediate
+    // parent has the wrong orientation.
+    let node: GridNode<T> = leafNode
+    while (node.parent && node.parent !== this._root) {
+      if (node.parent.orientation === desiredOrientation) break
+      node = node.parent
+    }
+
+    const parent = node.parent
+    if (!parent || parent.orientation !== desiredOrientation) return
+
+    const desired = desiredOrientation === Orientation.Horizontal ? size.width! : size.height!
     const min =
-      parent.orientation === Orientation.Horizontal
-        ? leaf.view.minimumWidth
-        : leaf.view.minimumHeight
+      desiredOrientation === Orientation.Horizontal ? view.minimumWidth : view.minimumHeight
     const max =
-      parent.orientation === Orientation.Horizontal
-        ? leaf.view.maximumWidth
-        : leaf.view.maximumHeight
+      desiredOrientation === Orientation.Horizontal ? view.maximumWidth : view.maximumHeight
     const clamped = Math.max(min, Math.min(max, desired))
-    const delta = clamped - leaf.size
+    const delta = clamped - node.size
     if (delta === 0) return
     // Distribute the inverse delta to the next sibling (the simplest model).
-    const idx = parent.children.indexOf(leaf)
+    const idx = parent.children.indexOf(node)
     const sibling = parent.children[idx + 1] ?? parent.children[idx - 1]
     if (!sibling) return
-    leaf.size = clamped
+    node.size = clamped
     sibling.size = Math.max(1, sibling.size - delta)
     this._notifyChange()
   }
@@ -291,6 +305,30 @@ export class Grid<T extends IGridView> {
       width: 0,
       height: 0,
     }
+  }
+
+  /**
+   * Replace the current grid tree in-place with the structure described by
+   * `serializedRoot`.  `viewFactory` is called once per leaf in pre-order
+   * (left-to-right depth-first) traversal — the same order that
+   * `collectLeavesInOrder` in `editorGroupsPersistence` produces.
+   *
+   * This is the correct way to restore a persisted layout: the full tree
+   * topology is reconstructed at once, so branch orientations and nesting
+   * depths are preserved exactly.  Sequential `addView` calls cannot express
+   * every possible tree (e.g. a branch node that is a sibling of a leaf) and
+   * therefore produce incorrect layouts for arrangements with depth > 1.
+   *
+   * Fires `onDidChange` once after the tree has been replaced.
+   */
+  rebuildFrom(
+    serializedRoot: ISerializedGridNode<unknown>,
+    viewFactory: (data: unknown) => T,
+  ): void {
+    this._leaves.clear()
+    this._root = this._buildBranch(serializedRoot, viewFactory as (data: unknown) => IGridView)
+    this._registerLeaves(this._root)
+    this._notifyChange()
   }
 
   private _serializeNode(

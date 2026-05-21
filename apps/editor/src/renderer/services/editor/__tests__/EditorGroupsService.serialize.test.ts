@@ -328,4 +328,49 @@ describe('EditorGroupsService serialization', () => {
       dst.dispose()
     })
   })
+
+  it('restore preserves layout topology for a 3-group nested arrangement', () => {
+    // Regression for the editor-group drag bug:
+    // After dragging an editor to a new split in the top row the internal grid
+    // becomes Root(Horizontal)[Vertical(Horizontal(G1,G3), G2)].
+    // The previous sequential-addView restore reconstructed this incorrectly as
+    // Root(Horizontal)[G1, Vertical(G3,G2)] — two columns, right has two rows —
+    // which also broke the row sash (resizeView silent no-op on nested branch).
+    const src = new EditorGroupsService()
+    // G1 in top row
+    src.activeGroup.openEditor(new FakeEditorInput())
+    // G2 below G1
+    const g2 = src.addGroup(src.activeGroup, GroupDirection.Down)
+    g2.openEditor(new OtherEditorInput())
+    // G3 to the right of G1 (creating a horizontal pair in the top row)
+    const g3 = src.addGroup(src.activeGroup, GroupDirection.Right)
+    g3.openEditor(new FakeEditorInput())
+    expect(src.groups).toHaveLength(3)
+    const json = src.toJSON()
+    src.dispose()
+
+    const dst = new EditorGroupsService()
+    dst.restore(json)
+    expect(dst.groups).toHaveLength(3)
+
+    // Verify layout: the root should contain a single vertical branch whose
+    // first child is a horizontal branch (top row with 2 groups) and whose
+    // second child is a leaf (bottom row with 1 group).
+    const root = dst.grid.root
+    expect(root.children).toHaveLength(1)
+    const outer = root.children[0]!
+    expect(outer.kind).toBe('branch')
+    if (outer.kind === 'branch') {
+      expect(outer.orientation).toBe(1 /* Vertical */)
+      expect(outer.children).toHaveLength(2)
+      const topRow = outer.children[0]!
+      expect(topRow.kind).toBe('branch')
+      if (topRow.kind === 'branch') {
+        expect(topRow.orientation).toBe(0 /* Horizontal */)
+        expect(topRow.children).toHaveLength(2)
+      }
+      expect(outer.children[1]!.kind).toBe('leaf')
+    }
+    dst.dispose()
+  })
 })
