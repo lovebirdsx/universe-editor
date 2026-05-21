@@ -13,15 +13,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect, _electron as electron } from '@playwright/test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
+import { URI } from '@universe-editor/platform'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
 
 const SAVED_SIDEBAR_PX = 400
 
-/** Pre-seeded layout state matching LayoutService's STORAGE_KEY / PersistedLayout shape. */
-const SEEDED_STATE = {
+/** Pre-seeded workspace-scoped layout state (`workspaces/<id>.json`). */
+const SEEDED_WORKSPACE_STATE = {
   'workbench.layout': {
     visible: {
       activityBar: true,
@@ -33,6 +35,10 @@ const SEEDED_STATE = {
     },
     sizes: { sidebar: SAVED_SIDEBAR_PX, secondarySidebar: 300, panel: 200 },
   },
+}
+
+function workspaceIdFromUri(uriString: string): string {
+  return createHash('sha1').update(uriString).digest('hex').slice(0, 16)
 }
 
 async function launchWithState(userDataDir: string) {
@@ -59,9 +65,26 @@ test.describe('@p1 layout persistence', () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-persist-'))
 
     try {
-      // Pre-seed state.json — simulates a previous session where the user
-      // had dragged the sidebar to SAVED_SIDEBAR_PX and the save completed.
-      writeFileSync(join(userDataDir, 'state.json'), JSON.stringify(SEEDED_STATE, null, 2))
+      // Storage is workspace-scoped: seed current workspace in state.json,
+      // then seed workbench.layout in workspaces/<id>.json.
+      const workspaceDir = join(userDataDir, 'fixture-workspace')
+      mkdirSync(workspaceDir, { recursive: true })
+
+      const workspaceUri = URI.file(workspaceDir)
+      const workspaceId = workspaceIdFromUri(workspaceUri.toString())
+      const currentWorkspaceState = {
+        'workbench.currentWorkspace': {
+          folder: workspaceUri.toJSON(),
+          name: basename(workspaceDir),
+        },
+      }
+
+      writeFileSync(join(userDataDir, 'state.json'), JSON.stringify(currentWorkspaceState, null, 2))
+      mkdirSync(join(userDataDir, 'workspaces'), { recursive: true })
+      writeFileSync(
+        join(userDataDir, 'workspaces', `${workspaceId}.json`),
+        JSON.stringify(SEEDED_WORKSPACE_STATE, null, 2),
+      )
 
       const { app, page } = await launchWithState(userDataDir)
       try {
