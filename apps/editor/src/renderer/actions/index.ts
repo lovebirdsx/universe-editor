@@ -18,12 +18,22 @@ import {
   CloseEditorsToTheRightAction,
   CloseOtherEditorsAction,
   FirstEditorInGroupAction,
+  FocusAboveGroupAction,
   FocusActiveEditorGroupAction,
+  FocusBelowGroupAction,
   FocusFirstGroupAction,
   FocusLastGroupAction,
+  FocusLeftGroupAction,
   FocusNextGroupAction,
   FocusPreviousGroupAction,
+  FocusRightGroupAction,
   LastEditorInGroupAction,
+  MoveEditorToAboveGroupAction,
+  MoveEditorToBelowGroupAction,
+  MoveEditorToLeftGroupAction,
+  MoveEditorToNextGroupAction,
+  MoveEditorToPreviousGroupAction,
+  MoveEditorToRightGroupAction,
   NextEditorAction,
   PreviousEditorAction,
   SplitEditorDownAction,
@@ -123,6 +133,18 @@ registerAction2(FocusPreviousGroupAction)
 registerAction2(FocusFirstGroupAction)
 registerAction2(FocusLastGroupAction)
 registerAction2(FocusActiveEditorGroupAction)
+registerAction2(FocusLeftGroupAction)
+registerAction2(FocusRightGroupAction)
+registerAction2(FocusAboveGroupAction)
+registerAction2(FocusBelowGroupAction)
+
+// Editor — move editor to group
+registerAction2(MoveEditorToLeftGroupAction)
+registerAction2(MoveEditorToRightGroupAction)
+registerAction2(MoveEditorToAboveGroupAction)
+registerAction2(MoveEditorToBelowGroupAction)
+registerAction2(MoveEditorToNextGroupAction)
+registerAction2(MoveEditorToPreviousGroupAction)
 
 // Preferences
 registerAction2(OpenSettingsAction)

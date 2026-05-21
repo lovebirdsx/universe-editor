@@ -20,6 +20,9 @@ import {
   GroupsArrangement,
   GroupsOrder,
   Grid,
+  type GridBranchNode,
+  type GridNode,
+  type GridLeafNode,
   IEditorGroup,
   IEditorGroupsService,
   IFindGroupScope,
@@ -137,13 +140,55 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       }
     }
     if (scope.direction !== undefined) {
-      // Simplified: treat direction as next/prev along the creation order.
-      // (A richer implementation walks the grid tree spatially.)
-      const delta =
-        scope.direction === GroupDirection.Right || scope.direction === GroupDirection.Down ? 1 : -1
-      const target = idx + delta
-      if (target >= 0 && target < this._groups.length) return this._groups[target]
-      return wrap ? this._groups[(target + this._groups.length) % this._groups.length] : undefined
+      return this._findSpatialNeighbor(source as EditorGroup, scope.direction)
+    }
+    return undefined
+  }
+
+  private _findSpatialNeighbor(
+    source: EditorGroup,
+    direction: GroupDirection,
+  ): EditorGroup | undefined {
+    const gridDir = directionToGridDirection(direction)
+    const wantedOrientation =
+      gridDir === Direction.Left || gridDir === Direction.Right
+        ? Orientation.Horizontal
+        : Orientation.Vertical
+    const goForward = gridDir === Direction.Right || gridDir === Direction.Down
+
+    function findLeaf(node: GridNode<EditorGroup>): GridLeafNode<EditorGroup> | undefined {
+      if (node.kind === 'leaf') return node.view === source ? node : undefined
+      for (const c of node.children) {
+        const f = findLeaf(c)
+        if (f) return f
+      }
+      return undefined
+    }
+
+    function nearestLeaf(
+      node: GridNode<EditorGroup>,
+      last: boolean,
+    ): GridLeafNode<EditorGroup> | undefined {
+      if (node.kind === 'leaf') return node
+      const children = node.children
+      if (children.length === 0) return undefined
+      return nearestLeaf(last ? children[children.length - 1]! : children[0]!, last)
+    }
+
+    const leaf = findLeaf(this._grid.root)
+    if (!leaf) return undefined
+
+    let cur: GridNode<EditorGroup> = leaf
+    while (cur.parent) {
+      const parent: GridBranchNode<EditorGroup> = cur.parent
+      if (parent.orientation === wantedOrientation) {
+        const idx = parent.children.indexOf(cur)
+        const sibIdx = goForward ? idx + 1 : idx - 1
+        if (sibIdx >= 0 && sibIdx < parent.children.length) {
+          return nearestLeaf(parent.children[sibIdx]!, goForward)?.view
+        }
+      }
+      cur = parent
     }
     return undefined
   }

@@ -19,13 +19,22 @@ import { formatChord } from './titlebar/keybindingFormat.js'
 
 const CHORD_TIMEOUT_MS = 1500
 
+// Map browser KeyboardEvent.key values to our canonical key names where they differ.
+const DOM_KEY_MAP: Record<string, string> = {
+  arrowleft: 'left',
+  arrowright: 'right',
+  arrowup: 'up',
+  arrowdown: 'down',
+}
+
 function buildKeyString(e: KeyboardEvent): string {
   const parts: string[] = []
   if (e.ctrlKey) parts.push('ctrl')
   if (e.altKey) parts.push('alt')
   if (e.shiftKey) parts.push('shift')
   if (e.metaKey) parts.push('meta')
-  parts.push(e.key.toLowerCase())
+  const raw = e.key.toLowerCase()
+  parts.push(DOM_KEY_MAP[raw] ?? raw)
   return parts.join('+')
 }
 

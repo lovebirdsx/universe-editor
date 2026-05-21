@@ -81,6 +81,20 @@ describe('useGlobalKeybindingHandler', () => {
     expect(stopPropagation).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['ArrowLeft', 'ctrl+left'],
+    ['ArrowRight', 'ctrl+right'],
+    ['ArrowUp', 'ctrl+up'],
+    ['ArrowDown', 'ctrl+down'],
+  ])('maps browser key %s to canonical %s for keybinding lookup', (domKey, binding) => {
+    const { executeCommand, instantiation } = createHarness()
+    bind(binding, 'test.arrowCmd')
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: domKey })
+    expect(executeCommand).toHaveBeenCalledWith('test.arrowCmd')
+  })
+
   it('does nothing when no keybinding matches', () => {
     const { executeCommand, instantiation } = createHarness()
     mountHost(instantiation)
@@ -273,6 +287,21 @@ describe('useGlobalKeybindingHandler — chord support', () => {
     dispatch({ ctrlKey: true, key: 'Control' })
     expect(executeCommand).not.toHaveBeenCalled()
     expect(statusBar.entries.get()).toHaveLength(0)
+  })
+
+  it.each([
+    ['ArrowLeft', 'ctrl+left', 'chord.focusLeft'],
+    ['ArrowRight', 'ctrl+right', 'chord.focusRight'],
+    ['ArrowUp', 'ctrl+up', 'chord.focusUp'],
+    ['ArrowDown', 'ctrl+down', 'chord.focusDown'],
+  ])('maps browser key %s in second chord stroke to canonical %s', (domKey, _binding, command) => {
+    const { executeCommand, instantiation } = createHarness()
+    bindChord(['ctrl+k', _binding], command)
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, key: 'k' })
+    dispatch({ ctrlKey: true, key: domKey })
+    expect(executeCommand).toHaveBeenCalledWith(command)
   })
 })
 

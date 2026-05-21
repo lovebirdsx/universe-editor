@@ -10,6 +10,7 @@
 import {
   useContext,
   useEffect,
+  useLayoutEffect,
   useRef,
   useSyncExternalStore,
   useState,
@@ -349,7 +350,7 @@ export function EditorGroupView({
   // When this group becomes active (e.g. user returns from sidebar without changing file),
   // focus the Monaco editor so keyboard input goes to the editor immediately.
   const activeEditor = group.activeEditor
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!isActiveGroup) return
     if (!activeEditor) return
     focusEditorInput(activeEditor, contextKeyService)

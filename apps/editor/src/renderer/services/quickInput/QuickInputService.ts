@@ -83,6 +83,9 @@ export class QuickInputService implements IQuickInputService {
 
     const focus = () => {
       if (!target.isConnected) return
+      // A command executed from the palette may have already moved DOM focus to a
+      // Monaco editor. Don't steal it back — that would undo the command's intent.
+      if (document.activeElement?.closest('.monaco-editor') !== null) return
       target.focus()
     }
 
