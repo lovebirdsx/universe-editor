@@ -6,9 +6,11 @@
 
 import {
   Action2,
+  IProgressService,
   IQuickInputService,
   IWorkspaceService,
   MenuId,
+  ProgressLocation,
   localize,
   type IQuickPickItem,
   type ServicesAccessor,
@@ -28,7 +30,16 @@ export class OpenFolderAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    void accessor.get(IWorkspaceService).openFolder()
+    const workspace = accessor.get(IWorkspaceService)
+    const progress = accessor.get(IProgressService)
+    void progress.withProgress(
+      {
+        location: ProgressLocation.Window,
+        title: localize('progress.openFolder', 'Opening folder…'),
+        source: 'workspace',
+      },
+      () => workspace.openFolder(),
+    )
   }
 }
 
@@ -67,6 +78,7 @@ export class OpenRecentAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const workspace = accessor.get(IWorkspaceService)
     const quickInput = accessor.get(IQuickInputService)
+    const progress = accessor.get(IProgressService)
     const recent = workspace.recent
     if (recent.length === 0) return
     const items: RecentPickItem[] = recent.map((r, index) => ({
@@ -81,7 +93,15 @@ export class OpenRecentAction extends Action2 {
     })
     if (!pick) return
     const target = recent[pick.index]
-    if (target) await workspace.openFolder(target.folder)
+    if (!target) return
+    await progress.withProgress(
+      {
+        location: ProgressLocation.Window,
+        title: localize('progress.openRecent', 'Opening {name}…', { name: target.name }),
+        source: 'workspace',
+      },
+      () => workspace.openFolder(target.folder),
+    )
   }
 }
 

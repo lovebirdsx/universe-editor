@@ -24,10 +24,14 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
+  IProgressOptions,
+  IProgressService,
+  IProgressStep,
   ITelemetryService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
+import { CancellationToken } from '@universe-editor/platform'
 import { AcpSessionService } from '../acpSessionService.js'
 import { IAcpClientService, type IAcpClientNotificationSink } from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
@@ -102,6 +106,20 @@ class StubNotificationService implements INotificationService {
   clearAll(): void {}
   toggleCenter(): void {}
   markAllAsRead(): void {}
+  cancelProgress(): void {}
+}
+
+class StubProgressService implements IProgressService {
+  declare readonly _serviceBrand: undefined
+  async withProgress<R>(
+    _options: IProgressOptions,
+    task: (
+      progress: { report(value: IProgressStep): void },
+      token: CancellationToken,
+    ) => Promise<R>,
+  ): Promise<R> {
+    return task({ report() {} }, CancellationToken.None)
+  }
 }
 
 class StubLoggerService implements ILoggerService {
@@ -229,6 +247,7 @@ describe('AcpSessionService', () => {
       notifications,
       telemetry,
       permission,
+      new StubProgressService(),
       new StubLoggerService(),
     )
   })
@@ -535,6 +554,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubNotificationService(),
       new NoopTelemetryService(),
       new StubPermissionHandler(),
+      new StubProgressService(),
       new StubLoggerService(),
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)

@@ -21,9 +21,17 @@ export interface IPromptChoice {
 
 export interface INotificationProgress {
   /** Report current progress. Calling this implicitly starts the spinner. */
-  report(state: { message?: string; increment?: number }): void
+  report(state: { message?: string; increment?: number; total?: number }): void
   /** Mark progress as complete — hides the spinner. */
   done(): void
+}
+
+/** Side-channel for cancellable progress notifications. */
+export interface INotificationProgressOptions {
+  /** Render a cancel button on the toast / center entry. */
+  cancellable?: boolean
+  /** Invoked when the user clicks cancel. Owner should flip its CancellationTokenSource. */
+  onCancel?: () => void
 }
 
 export interface INotificationHandle extends IDisposable {
@@ -44,7 +52,9 @@ export interface INotification {
   read: boolean
   /** True once the user has explicitly dismissed this notification. */
   dismissed: boolean
-  progress?: { message?: string; increment?: number; done: boolean }
+  progress?: { message?: string; increment?: number; total?: number; done: boolean }
+  /** Whether a cancel control should be rendered next to the progress bar. */
+  cancellable?: boolean
 }
 
 export interface INotificationService {
@@ -67,6 +77,7 @@ export interface INotificationService {
     message: string
     actions?: IPromptChoice[]
     sticky?: boolean
+    progress?: INotificationProgressOptions
   }): INotificationHandle
 
   /**
@@ -79,6 +90,8 @@ export interface INotificationService {
   status(message: string, opts?: { sticky?: boolean }): INotificationHandle
 
   dismiss(id: string): void
+  /** Trigger the cancel handler registered for a progress notification, if any. */
+  cancelProgress(id: string): void
   clearAll(): void
   toggleCenter(): void
   /** Mark all unread notifications as read (hides the toast without opening the center). */

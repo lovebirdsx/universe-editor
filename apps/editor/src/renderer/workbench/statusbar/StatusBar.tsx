@@ -1,6 +1,6 @@
 import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
-import { Bell, type LucideIcon } from 'lucide-react'
+import { Bell, Loader2, RefreshCw, type LucideIcon } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import styles from './StatusBar.module.css'
@@ -19,6 +19,8 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
   }
 
   const Icon = entry.icon ? ICON_MAP[entry.icon] : undefined
+  const showSpinner = entry.showProgress === true || entry.showProgress === 'spinning'
+  const showSyncing = entry.showProgress === 'syncing'
   const className = [
     styles['item'],
     entry.command ? styles['clickable'] : '',
@@ -34,7 +36,27 @@ function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
       title={entry.tooltip}
       aria-label={entry.text || entry.tooltip || ''}
     >
-      {Icon && <Icon size={14} strokeWidth={1.75} aria-hidden="true" />}
+      {showSpinner && (
+        <Loader2
+          size={14}
+          strokeWidth={1.75}
+          className={styles['spin']}
+          aria-hidden="true"
+          data-testid="statusbar-spinner"
+        />
+      )}
+      {showSyncing && (
+        <RefreshCw
+          size={14}
+          strokeWidth={1.75}
+          className={styles['spin']}
+          aria-hidden="true"
+          data-testid="statusbar-spinner"
+        />
+      )}
+      {Icon && !showSpinner && !showSyncing && (
+        <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+      )}
       {entry.text && <span>{entry.text}</span>}
     </button>
   )

@@ -254,6 +254,11 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
           data-testid="quick-input-field"
         />
       </div>
+      {state.busy === true && (
+        <div className={styles['progress']} data-testid="quick-input-busy">
+          <div className={styles['progressBar']} />
+        </div>
+      )}
       <div className={styles['list']} role="listbox" ref={listRef}>
         {prefixMissing ? (
           <p className={styles['empty']}>Type {`'${prefix}'`} followed by a command name</p>
@@ -343,6 +348,11 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
           aria-invalid={!!error}
         />
       </div>
+      {state.busy === true && (
+        <div className={styles['progress']} data-testid="quick-input-busy">
+          <div className={styles['progressBar']} />
+        </div>
+      )}
       {error && (
         <p className={styles['empty']} style={{ color: '#f14c4c' }}>
           {error}

@@ -16,6 +16,7 @@ import { DialogHost } from './dialog/DialogHost.js'
 import type { RendererDialogService } from '../services/dialog/RendererDialogService.js'
 import { NotificationsToast } from './notification/NotificationsToast.js'
 import { NotificationsCenter } from './notification/NotificationsCenter.js'
+import { ProgressDialogHost } from './progress/ProgressDialogHost.js'
 
 interface WorkbenchProps {
   instantiation: InstantiationService
@@ -79,6 +80,7 @@ function WorkbenchShell() {
       <DialogHost service={dialogService} />
       <NotificationsToast />
       <NotificationsCenter />
+      <ProgressDialogHost />
     </>
   )
 }

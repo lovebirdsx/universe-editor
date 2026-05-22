@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
+  IProgressService,
   IQuickInputService,
   IWorkspaceService,
   InstantiationService,
@@ -16,6 +17,9 @@ import {
   URI,
   registerAction2,
   type IDisposable,
+  type IProgressOptions,
+  type IProgressService as IProgressServiceType,
+  type IProgressStep,
   type IQuickInputService as IQuickInputServiceType,
   type IQuickPick,
   type IQuickPickItem,
@@ -23,6 +27,7 @@ import {
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
+import { CancellationToken } from '@universe-editor/platform'
 import {
   ClearRecentWorkspacesAction,
   CloseFolderAction,
@@ -100,6 +105,21 @@ function makeQuickInputStub(pickResult: IQuickPickItem | undefined): IQuickInput
   } as IQuickInputServiceType & { pickCalls: IQuickPickItem[][] }
 }
 
+function makeProgressStub(): IProgressServiceType {
+  return {
+    _serviceBrand: undefined,
+    async withProgress<R>(
+      _options: IProgressOptions,
+      task: (
+        progress: { report(value: IProgressStep): void },
+        token: CancellationToken,
+      ) => Promise<R>,
+    ): Promise<R> {
+      return task({ report() {} }, CancellationToken.None)
+    },
+  }
+}
+
 function runCommand(
   id: string,
   workspace: IWorkspaceServiceType,
@@ -107,6 +127,7 @@ function runCommand(
 ): Promise<unknown> {
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
+  services.set(IProgressService, makeProgressStub())
   if (quickInput) services.set(IQuickInputService, quickInput)
   const inst = new InstantiationService(services)
   return new Promise((resolve) => {

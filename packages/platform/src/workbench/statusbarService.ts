@@ -27,6 +27,12 @@ export interface IStatusBarEntry {
   readonly icon?: string
   /** 'prominent' uses an attention foreground (e.g. unread counts). Defaults to inherited statusbar fg. */
   readonly kind?: StatusBarEntryKind
+  /**
+   * When set, the entry renders a spinning icon before its text. `true` and
+   * `'spinning'` are aliases. `'syncing'` uses a sync-style icon (semantically
+   * "two-way sync" vs. plain "loading"). Renderer maps to a codicon + CSS animation.
+   */
+  readonly showProgress?: boolean | 'spinning' | 'syncing'
 }
 
 /** Entry as kept by the service: stable id + the original entry. */

@@ -132,6 +132,62 @@
   flex-wrap: wrap;
 }
 
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.progress {
+  flex: 1;
+  height: 2px;
+  background: var(--color-border, #454545);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progressBar {
+  height: 100%;
+  background: #007acc;
+  animation: indeterminate 1.4s ease infinite;
+  transform-origin: left;
+}
+
+.progressBarDeterminate {
+  height: 100%;
+  background: #007acc;
+  width: 0;
+  transition: width 120ms ease-out;
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: scaleX(0) translateX(0%);
+  }
+  50% {
+    transform: scaleX(0.5) translateX(100%);
+  }
+  100% {
+    transform: scaleX(0) translateX(300%);
+  }
+}
+
+.cancelBtn {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--color-border, #454545);
+  border-radius: 3px;
+  color: var(--color-dialog-fg, #ccc);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+
+.cancelBtn:hover {
+  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+}
+
 .actionBtn {
   background: none;
   border: 1px solid var(--color-border, #454545);

@@ -10,6 +10,7 @@ export * from './base/lifecycle.js'
 export * from './base/linkedList.js'
 export * from './base/functional.js'
 export * from './base/async.js'
+export * from './base/cancellation.js'
 export * from './base/uri.js'
 export * from './base/grid.js'
 export * from './base/observable/index.js'
@@ -69,6 +70,9 @@ export * from './dialog/dialogService.js'
 
 // notification service
 export * from './notification/notificationService.js'
+
+// progress service (long-running async UI surface)
+export * from './progress/progressService.js'
 
 // workspace state
 export * from './workspace/workspaceService.js'

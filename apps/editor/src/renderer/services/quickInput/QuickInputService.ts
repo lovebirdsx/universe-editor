@@ -28,6 +28,8 @@ export interface QuickPickState {
   matchOnDescription?: boolean | undefined
   matchOnDetail?: boolean | undefined
   filterMode?: QuickPickFilterMode | undefined
+  /** Show an indeterminate progress bar at the top of the panel. */
+  busy?: boolean | undefined
   onAccept?: (items: IQuickPickItem[]) => void
   onInput?: (value: string) => void
   onHide?: () => void
@@ -113,6 +115,20 @@ export class QuickInputService implements IQuickInputService {
     const onDidHide = new Emitter<void>()
     let _items: readonly T[] = []
     let _placeholder: string | undefined
+    let _busy = false
+    let _visible = false
+
+    const pushState = (): void => {
+      if (!_visible) return
+      this._setState({
+        type: 'pick',
+        items: _items,
+        placeholder: _placeholder,
+        busy: _busy,
+        onAccept: (selected) => onDidAccept.fire(selected as T[]),
+        onHide: () => onDidHide.fire(),
+      })
+    }
 
     const qp: IQuickPick<T> = {
       get placeholder() {
@@ -120,26 +136,31 @@ export class QuickInputService implements IQuickInputService {
       },
       set placeholder(v) {
         _placeholder = v
+        pushState()
       },
       get items() {
         return _items
       },
       set items(v) {
         _items = v
+        pushState()
+      },
+      get busy() {
+        return _busy
+      },
+      set busy(v) {
+        _busy = v
+        pushState()
       },
       onDidAccept: onDidAccept.event,
       onDidHide: onDidHide.event,
       show: () => {
+        _visible = true
         this._currentOnHide = () => onDidHide.fire()
-        this._setState({
-          type: 'pick',
-          items: _items,
-          placeholder: _placeholder,
-          onAccept: (selected) => onDidAccept.fire(selected as T[]),
-          onHide: () => onDidHide.fire(),
-        })
+        pushState()
       },
       hide: () => {
+        _visible = false
         this.hide()
       },
       dispose: () => {
@@ -171,6 +192,7 @@ export class QuickInputService implements IQuickInputService {
         matchOnDescription: options?.matchOnDescription,
         matchOnDetail: options?.matchOnDetail,
         filterMode: options?.filterMode,
+        busy: options?.busy,
         onAccept: (selected) => {
           this._currentOnHide = undefined
           this._setState(null)

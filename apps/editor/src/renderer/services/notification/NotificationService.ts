@@ -15,6 +15,7 @@ import type {
   INotification,
   INotificationHandle,
   INotificationProgress,
+  INotificationProgressOptions,
   INotificationService,
   IPromptChoice,
 } from '@universe-editor/platform'
@@ -34,6 +35,8 @@ export class NotificationService extends Disposable implements INotificationServ
   private readonly _readTimers = new Map<string, ReturnType<typeof setTimeout>>()
   /** Settle functions for pending prompt() calls, keyed by notification id. */
   private readonly _promptSettlers = new Map<string, () => void>()
+  /** Cancel callbacks for cancellable progress notifications. */
+  private readonly _cancelHandlers = new Map<string, () => void>()
   private _persistTimer: ReturnType<typeof setTimeout> | undefined
 
   readonly notifications = observableValue<readonly INotification[]>(
@@ -77,8 +80,10 @@ export class NotificationService extends Disposable implements INotificationServ
     message: string
     actions?: IPromptChoice[]
     sticky?: boolean
+    progress?: INotificationProgressOptions
   }): INotificationHandle {
     const id = `notification-${this._nextId++}`
+    const cancellable = opts.progress?.cancellable === true
     const notification: INotification = {
       id,
       severity: opts.severity,
@@ -88,6 +93,10 @@ export class NotificationService extends Disposable implements INotificationServ
       read: false,
       dismissed: false,
       ...(opts.actions !== undefined ? { actions: opts.actions } : {}),
+      ...(cancellable ? { cancellable: true } : {}),
+    }
+    if (cancellable && opts.progress?.onCancel) {
+      this._cancelHandlers.set(id, opts.progress.onCancel)
     }
 
     this._items = [...this._items, notification]
@@ -111,8 +120,10 @@ export class NotificationService extends Disposable implements INotificationServ
           done: false,
           ...(prev?.message !== undefined ? { message: prev.message } : {}),
           ...(prev?.increment !== undefined ? { increment: prev.increment } : {}),
+          ...(prev?.total !== undefined ? { total: prev.total } : {}),
           ...(state.message !== undefined ? { message: state.message } : {}),
           ...(state.increment !== undefined ? { increment: state.increment } : {}),
+          ...(state.total !== undefined ? { total: state.total } : {}),
         }
         this._syncObservable()
       },
@@ -124,6 +135,7 @@ export class NotificationService extends Disposable implements INotificationServ
           done: true,
           ...(prev?.message !== undefined ? { message: prev.message } : {}),
           ...(prev?.increment !== undefined ? { increment: prev.increment } : {}),
+          ...(prev?.total !== undefined ? { total: prev.total } : {}),
         }
         this._syncObservable()
       },
@@ -146,6 +158,7 @@ export class NotificationService extends Disposable implements INotificationServ
       },
       dispose: () => {
         this._clearReadTimer(id)
+        this._cancelHandlers.delete(id)
       },
     }
   }
@@ -183,6 +196,7 @@ export class NotificationService extends Disposable implements INotificationServ
 
   dismiss(id: string): void {
     this._clearReadTimer(id)
+    this._cancelHandlers.delete(id)
 
     const settler = this._promptSettlers.get(id)
     if (settler !== undefined) {
@@ -197,12 +211,23 @@ export class NotificationService extends Disposable implements INotificationServ
     this._schedulePersist()
   }
 
+  cancelProgress(id: string): void {
+    const handler = this._cancelHandlers.get(id)
+    if (handler === undefined) return
+    // Drop the handler before invoking — owners typically dismiss the
+    // notification from inside the callback, and we don't want re-entry.
+    this._cancelHandlers.delete(id)
+    handler()
+  }
+
   clearAll(): void {
     this._readTimers.forEach((t) => clearTimeout(t))
     this._readTimers.clear()
 
     this._promptSettlers.forEach((s) => s())
     this._promptSettlers.clear()
+
+    this._cancelHandlers.clear()
 
     for (const item of this._items) {
       item.dismissed = true

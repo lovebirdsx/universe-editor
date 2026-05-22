@@ -33,6 +33,7 @@ import {
   IContributionService,
   ILoggerService,
   INotificationService,
+  IProgressService,
   ITelemetryService,
   NoopTelemetryService,
   Severity,
@@ -61,6 +62,7 @@ import { OutputService } from './services/output/OutputService.js'
 import { LayoutService } from './services/layout/LayoutService.js'
 import { RendererDialogService } from './services/dialog/RendererDialogService.js'
 import { NotificationService } from './services/notification/NotificationService.js'
+import { ProgressService } from './services/progress/ProgressService.js'
 import { UserSettingsSync } from './services/configuration/UserSettingsSync.js'
 import {
   UserKeybindingsService,
@@ -251,6 +253,9 @@ async function bootstrapWorkbench(): Promise<void> {
   // <NotificationsCenter /> are mounted as portals by Workbench.
   const notificationService = instantiation.createInstance(NotificationService)
   services.set(INotificationService, notificationService)
+  // IProgressService — depends on StatusBar + Notification (both already set).
+  const progressService = instantiation.createInstance(ProgressService)
+  services.set(IProgressService, progressService)
   // Route unhandled errors to the sticky Error toast so they're visible to users.
   setUnexpectedErrorHandler((e) => {
     const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)

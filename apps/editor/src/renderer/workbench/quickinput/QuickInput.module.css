@@ -121,3 +121,31 @@
   border-bottom: 1px solid var(--color-border, #0f0f11);
   flex-shrink: 0;
 }
+
+.progress {
+  height: 2px;
+  background: var(--color-border, #2f2f35);
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
+.progressBar {
+  position: absolute;
+  inset: 0;
+  background: var(--color-accent, #0070e0);
+  animation: quick-input-indeterminate 1.4s ease infinite;
+  transform-origin: left;
+}
+
+@keyframes quick-input-indeterminate {
+  0% {
+    transform: scaleX(0) translateX(0%);
+  }
+  50% {
+    transform: scaleX(0.5) translateX(100%);
+  }
+  100% {
+    transform: scaleX(0) translateX(300%);
+  }
+}

@@ -72,6 +72,31 @@ export function NotificationsCenter() {
               <div className={styles.body}>
                 <p className={styles.message}>{n.message}</p>
                 <span className={styles.time}>{relativeTime(n.timestamp)}</span>
+                {n.progress !== undefined && !n.progress.done && (
+                  <div className={styles.progressRow}>
+                    <div className={styles.progress}>
+                      {n.progress.increment !== undefined ? (
+                        <div
+                          className={styles.progressBarDeterminate}
+                          style={{ width: `${Math.min(100, Math.max(0, n.progress.increment))}%` }}
+                        />
+                      ) : (
+                        <div className={styles.progressBar} />
+                      )}
+                    </div>
+                    {n.cancellable === true && (
+                      <button
+                        className={styles.cancelBtn}
+                        onClick={() => {
+                          service.cancelProgress(n.id)
+                        }}
+                        type="button"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
+                )}
                 {n.actions !== undefined && n.actions.length > 0 && (
                   <div className={styles.actions}>
                     {n.actions.map((action) => (

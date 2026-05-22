@@ -35,8 +35,30 @@ export function NotificationsToast() {
           <div className={styles.body}>
             <p className={styles.message}>{n.message}</p>
             {n.progress !== undefined && !n.progress.done && (
-              <div className={styles.progress}>
-                <div className={styles.progressBar} />
+              <div className={styles.progressRow}>
+                <div className={styles.progress}>
+                  {n.progress.increment !== undefined ? (
+                    <div
+                      className={styles.progressBarDeterminate}
+                      style={{ width: `${Math.min(100, Math.max(0, n.progress.increment))}%` }}
+                      data-testid="notification-progress-determinate"
+                    />
+                  ) : (
+                    <div className={styles.progressBar} />
+                  )}
+                </div>
+                {n.cancellable === true && (
+                  <button
+                    className={styles.cancelBtn}
+                    onClick={() => {
+                      service.cancelProgress(n.id)
+                    }}
+                    type="button"
+                    data-testid="notification-cancel-btn"
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             )}
             {n.actions !== undefined && n.actions.length > 0 && (

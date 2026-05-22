@@ -1,0 +1,87 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  width: 380px;
+  max-width: 90vw;
+  background: var(--color-dialog-bg, #252526);
+  border: 1px solid var(--color-border, #454545);
+  border-radius: 4px;
+  padding: 16px 18px;
+  color: var(--color-dialog-fg, #ccc);
+  font-size: 13px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.6);
+}
+
+.title {
+  margin: 0 0 6px;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.message {
+  margin: 0 0 10px;
+  opacity: 0.8;
+  line-height: 1.4;
+}
+
+.progress {
+  height: 4px;
+  background: var(--color-border, #454545);
+  border-radius: 2px;
+  overflow: hidden;
+  margin: 10px 0 12px;
+}
+
+.barDeterminate {
+  height: 100%;
+  background: var(--color-accent, #0070e0);
+  width: 0;
+  transition: width 120ms ease-out;
+}
+
+.barIndeterminate {
+  height: 100%;
+  background: var(--color-accent, #0070e0);
+  animation: progress-dialog-indeterminate 1.4s ease infinite;
+  transform-origin: left;
+}
+
+@keyframes progress-dialog-indeterminate {
+  0% {
+    transform: scaleX(0) translateX(0%);
+  }
+  50% {
+    transform: scaleX(0.5) translateX(100%);
+  }
+  100% {
+    transform: scaleX(0) translateX(300%);
+  }
+}
+
+.buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cancelBtn {
+  background: none;
+  border: 1px solid var(--color-border, #454545);
+  border-radius: 3px;
+  color: var(--color-dialog-fg, #ccc);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 4px 12px;
+}
+
+.cancelBtn:hover {
+  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+}

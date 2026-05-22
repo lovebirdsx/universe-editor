@@ -30,6 +30,8 @@ export interface IPickOptions {
    * the prefix away, the list is suppressed and a hint is shown instead.
    */
   readonly prefix?: string
+  /** Initial busy state — useful when items are still being computed when `pick` is called. */
+  readonly busy?: boolean
 }
 
 export interface IInputOptions {
@@ -43,6 +45,11 @@ export interface IInputOptions {
 export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   placeholder: string | undefined
   items: readonly T[]
+  /**
+   * When true, the picker UI shows an indeterminate progress bar at the top.
+   * Used while resolving items asynchronously (search results, dynamic completion, ...).
+   */
+  busy: boolean
 
   readonly onDidAccept: Event<T[]>
   readonly onDidHide: Event<void>

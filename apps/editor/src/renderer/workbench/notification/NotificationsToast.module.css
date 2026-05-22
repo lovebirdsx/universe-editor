@@ -92,6 +92,41 @@
   transform-origin: left;
 }
 
+.progressBarDeterminate {
+  height: 100%;
+  background: var(--toast-accent, #007acc);
+  width: 0;
+  transition: width 120ms ease-out;
+}
+
+.progressRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.progressRow .progress {
+  flex: 1;
+  margin-top: 0;
+}
+
+.cancelBtn {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--color-border, #454545);
+  border-radius: 3px;
+  color: var(--color-dialog-fg, #ccc);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 6px;
+  line-height: 1.4;
+}
+
+.cancelBtn:hover {
+  background: var(--color-hover, rgba(255, 255, 255, 0.08));
+}
+
 @keyframes indeterminate {
   0% {
     transform: scaleX(0) translateX(0%);

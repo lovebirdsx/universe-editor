@@ -22,8 +22,10 @@ import {
   IConfigurationService,
   ILoggerService,
   INotificationService,
+  IProgressService,
   ITelemetryService,
   IWorkspaceService,
+  ProgressLocation,
   Severity,
   observableValue,
   transaction,
@@ -433,6 +435,7 @@ export class AcpSessionService
     @INotificationService private readonly _notification: INotificationService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpPermissionHandler private readonly _permission: IAcpPermissionHandler,
+    @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
@@ -444,60 +447,82 @@ export class AcpSessionService
 
   async createSession(agentId?: string): Promise<IAcpSession> {
     const resolvedAgentId = agentId ?? this._registry.defaultAgentId()
-    const cwd = this._workspace.current?.folder.fsPath
-    const conn = await this._client.connect(resolvedAgentId, this, cwd !== undefined ? { cwd } : {})
-    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-    const mcpServers = this._readMcpServers()
-    const initParams: AcpInitializeParams = {
-      protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
-    }
-    try {
-      await withTimeout(
-        conn.request<AcpInitializeResult>(AcpMethods.Initialize, initParams),
-        timeoutMs,
-        'ACP initialize',
-      )
-      const newParams: AcpNewSessionParams = { cwd: cwd ?? '', mcpServers }
-      const { sessionId: agentSessionId } = await withTimeout(
-        conn.request<AcpNewSessionResult>(AcpMethods.NewSession, newParams),
-        timeoutMs,
-        'ACP session/new',
-      )
-      const localId = `s${++this._seq}`
-      const title = `${this._registry.get(resolvedAgentId).name} · ${localId}`
-      const session = new AcpSession(
-        localId,
-        resolvedAgentId,
-        title,
-        conn,
-        agentSessionId,
-        this._telemetry,
-      )
-      this._byAgentSessionId.set(agentSessionId, session)
-      transaction((tx) => {
-        this._sessions = [...this._sessions, session]
-        this.sessions.set(this._sessions, tx)
-        this.activeSessionId.set(localId, tx)
-        this.activeSession.set(session, tx)
-      })
-      this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
-      this._onDidCreate.fire(session)
-      return session
-    } catch (err) {
-      conn.dispose()
-      const msg = (err as Error).message
-      this._logger.warn(`[acp] createSession failed: ${msg}`)
-      this._notification.notify({
-        severity: Severity.Error,
-        message: `Failed to start agent session: ${msg}`,
-      })
-      this._telemetry.publicLogError('acp.session_create_failed', {
-        agentId: resolvedAgentId,
-        error: msg,
-      })
-      throw err
-    }
+    const agentName = this._registry.get(resolvedAgentId).name
+    return this._progress.withProgress(
+      {
+        location: ProgressLocation.Notification,
+        title: `Starting ${agentName}…`,
+        cancellable: true,
+        source: 'acp',
+      },
+      async (progress, token) => {
+        const cwd = this._workspace.current?.folder.fsPath
+        progress.report({ message: 'Spawning agent process…' })
+        const conn = await this._client.connect(
+          resolvedAgentId,
+          this,
+          cwd !== undefined ? { cwd } : {},
+        )
+        const cancelSub = token.onCancellationRequested(() => conn.dispose())
+        const timeoutMs =
+          this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+        const mcpServers = this._readMcpServers()
+        const initParams: AcpInitializeParams = {
+          protocolVersion: ACP_PROTOCOL_VERSION,
+          clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+        }
+        try {
+          progress.report({ message: 'Negotiating ACP protocol…' })
+          await withTimeout(
+            conn.request<AcpInitializeResult>(AcpMethods.Initialize, initParams),
+            timeoutMs,
+            'ACP initialize',
+          )
+          progress.report({ message: 'Creating session…' })
+          const newParams: AcpNewSessionParams = { cwd: cwd ?? '', mcpServers }
+          const { sessionId: agentSessionId } = await withTimeout(
+            conn.request<AcpNewSessionResult>(AcpMethods.NewSession, newParams),
+            timeoutMs,
+            'ACP session/new',
+          )
+          const localId = `s${++this._seq}`
+          const title = `${agentName} · ${localId}`
+          const session = new AcpSession(
+            localId,
+            resolvedAgentId,
+            title,
+            conn,
+            agentSessionId,
+            this._telemetry,
+          )
+          this._byAgentSessionId.set(agentSessionId, session)
+          transaction((tx) => {
+            this._sessions = [...this._sessions, session]
+            this.sessions.set(this._sessions, tx)
+            this.activeSessionId.set(localId, tx)
+            this.activeSession.set(session, tx)
+          })
+          this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
+          this._onDidCreate.fire(session)
+          return session
+        } catch (err) {
+          conn.dispose()
+          const msg = (err as Error).message
+          this._logger.warn(`[acp] createSession failed: ${msg}`)
+          this._notification.notify({
+            severity: Severity.Error,
+            message: `Failed to start agent session: ${msg}`,
+          })
+          this._telemetry.publicLogError('acp.session_create_failed', {
+            agentId: resolvedAgentId,
+            error: msg,
+          })
+          throw err
+        } finally {
+          cancelSub.dispose()
+        }
+      },
+    )
   }
 
   setActive(sessionId: string): void {
