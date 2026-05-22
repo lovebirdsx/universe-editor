@@ -26,6 +26,9 @@ const DOM_KEY_MAP: Record<string, string> = {
   arrowup: 'up',
   arrowdown: 'down',
 }
+const QUICK_INPUT_NATIVE_NAVIGATION_KEYS = new Set(['arrowleft', 'arrowright', 'home', 'end'])
+const QUICK_INPUT_NATIVE_PRIMARY_SHORTCUTS = new Set(['a', 'c', 'v', 'x', 'z', 'y'])
+const QUICK_INPUT_OWNED_KEYS = new Set(['enter', 'arrowup', 'arrowdown', 'pageup', 'pagedown'])
 
 function buildKeyString(e: KeyboardEvent): string {
   const parts: string[] = []
@@ -61,6 +64,34 @@ function isNativeEditableKey(e: KeyboardEvent): boolean {
   if (!isEditableTarget(e.target)) return false
   const key = e.key.toLowerCase()
   return key === 'delete' || key === 'backspace'
+}
+
+function isQuickInputNativeEditingKey(e: KeyboardEvent): boolean {
+  if (!isEditableTarget(e.target)) return false
+
+  const key = e.key.toLowerCase()
+  if (e.key.length === 1 && !hasFunctionalModifier(e)) return true
+  if (isNativeEditableKey(e)) return true
+
+  if (QUICK_INPUT_NATIVE_NAVIGATION_KEYS.has(key)) return true
+
+  const primaryModifier = e.ctrlKey || e.metaKey
+  if (!primaryModifier) return false
+
+  return QUICK_INPUT_NATIVE_PRIMARY_SHORTCUTS.has(key)
+}
+
+function isQuickInputOwnedKey(e: KeyboardEvent): boolean {
+  const key = e.key.toLowerCase()
+  if (QUICK_INPUT_OWNED_KEYS.has(key)) return true
+  return (
+    e.ctrlKey &&
+    !e.altKey &&
+    !e.metaKey &&
+    !e.shiftKey &&
+    (key === 'n' || key === 'p') &&
+    isEditableTarget(e.target)
+  )
 }
 
 // Modal dialogs rendered by RendererDialogService own their keyboard events
@@ -116,6 +147,22 @@ export function useGlobalKeybindingHandler(): void {
       // RendererDialogService dialogs handle their own keyboard events; never
       // intercept from inside them (would prevent Escape from closing dialogs).
       if (isInsideRendererDialog(e.target)) return
+
+      if (contextKeyService.get('quickInputVisible') === true) {
+        clearChord()
+        if (isQuickInputNativeEditingKey(e) || isQuickInputOwnedKey(e)) return
+
+        const key = buildKeyString(e)
+        const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
+        if (result.kind === 'no-match') return
+
+        e.preventDefault()
+        e.stopPropagation()
+        if (result.kind === 'execute' && e.key.toLowerCase() === 'escape') {
+          void commandService.executeCommand(result.command)
+        }
+        return
+      }
 
       const pending = pendingRef.current
       if (pending) {

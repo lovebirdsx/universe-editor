@@ -294,6 +294,7 @@ export class FocusNextGroupAction extends Action2 {
       title: localize('action.focusNextGroup.title', 'Focus Next Group'),
       category: localize('command.category.view', 'View'),
       precondition: 'editorPartMultipleEditorGroups',
+      keybinding: { primary: 'alt+0' },
       f1: true,
     })
   }
@@ -312,6 +313,7 @@ export class FocusPreviousGroupAction extends Action2 {
       title: localize('action.focusPreviousGroup.title', 'Focus Previous Group'),
       category: localize('command.category.view', 'View'),
       precondition: 'editorPartMultipleEditorGroups',
+      keybinding: { primary: 'alt+9' },
       f1: true,
     })
   }

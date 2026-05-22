@@ -30,6 +30,10 @@ function fuzzyMatch(text: string, query: string): boolean {
   return qi === q.length
 }
 
+function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p'): boolean {
+  return e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === key
+}
+
 // Exported for unit tests so prefix / filtering behavior can be exercised
 // without booting the full portal + service plumbing.
 export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: () => void }) {
@@ -105,10 +109,10 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
     const len = sortedFiltered.length
-    if (e.key === 'ArrowDown') {
+    if (e.key === 'ArrowDown' || isCtrlNavigationKey(e, 'n')) {
       e.preventDefault()
       setFocusedIdx((i) => (len === 0 ? 0 : (i + 1) % len))
-    } else if (e.key === 'ArrowUp') {
+    } else if (e.key === 'ArrowUp' || isCtrlNavigationKey(e, 'p')) {
       e.preventDefault()
       setFocusedIdx((i) => (len === 0 ? 0 : (i - 1 + len) % len))
     } else if (e.key === 'PageDown') {
@@ -207,6 +211,8 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
       }
       state.onInput?.(value)
       onClose()
+    } else if (isCtrlNavigationKey(e, 'n') || isCtrlNavigationKey(e, 'p')) {
+      e.preventDefault()
     }
   }
 

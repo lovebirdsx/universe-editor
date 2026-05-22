@@ -123,4 +123,30 @@ describe('QuickPickPanel keyboard', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(onAccept).toHaveBeenCalledWith([items[1]])
   })
+
+  it('Ctrl+N moves focus to next item and Enter accepts it', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    const event = createEvent.keyDown(input, { key: 'n', ctrlKey: true })
+
+    fireEvent(input, event)
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onAccept).toHaveBeenCalledWith([items[1]])
+  })
+
+  it('Ctrl+P moves focus to previous item and wraps', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    const event = createEvent.keyDown(input, { key: 'p', ctrlKey: true })
+
+    fireEvent(input, event)
+    fireEvent.keyDown(input, { key: 'Enter' })
+
+    expect(event.defaultPrevented).toBe(true)
+    expect(onAccept).toHaveBeenCalledWith([items[1]])
+  })
 })

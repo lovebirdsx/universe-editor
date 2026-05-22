@@ -53,6 +53,30 @@ test.describe('@p0 command palette', () => {
     await workbench.quickInput.waitForHidden()
   })
 
+  test('keeps workbench shortcuts from firing while the palette owns focus', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    const activeUri = await workbench.getActiveEditorUri()
+    expect(activeUri).toBeDefined()
+
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.showCommands')
+    })
+    await workbench.quickInput.waitForVisible()
+    await expect(workbench.quickInput.input).toBeFocused()
+
+    await page.keyboard.press('Control+N')
+
+    await expect(workbench.quickInput.input).toBeFocused()
+    await expect.poll(() => workbench.getActiveEditorUri()).toBe(activeUri)
+
+    await page.keyboard.press('Escape')
+    await workbench.quickInput.waitForHidden()
+  })
+
   test('Enter key does not leak to the editor when confirming a command', async ({
     page,
     workbench,

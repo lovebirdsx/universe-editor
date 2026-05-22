@@ -438,6 +438,107 @@ describe('useGlobalKeybindingHandler — ESC routing by contextKey', () => {
   })
 })
 
+describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
+  let disposables: IDisposable[] = []
+
+  afterEach(() => {
+    disposables.forEach((d) => d.dispose())
+    disposables = []
+    document.body.innerHTML = ''
+  })
+
+  function mountHost(instantiation: InstantiationService) {
+    return render(
+      <ServicesContext.Provider value={instantiation}>
+        <TestHost />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  function showQuickInput(instantiation: InstantiationService): HTMLInputElement {
+    const contextKeyService = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    contextKeyService.createKey<boolean>('quickInputVisible', true)
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    return input
+  }
+
+  it('leaves Ctrl+N for QuickInput navigation without executing the workbench command', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+n',
+        command: 'workbench.action.files.newUntitledFile',
+      }),
+    )
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key: 'n', from: input })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
+  it('still routes Escape to the QuickInput close command', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'escape',
+        command: 'workbench.action.closeQuickInput',
+        when: 'quickInputVisible',
+      }),
+    )
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({ key: 'Escape', from: input })
+
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.closeQuickInput')
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(stopPropagation).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not enter chord mode while QuickInput is visible', () => {
+    const { executeCommand, instantiation, statusBar } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        chords: ['ctrl+k', 'ctrl+s'],
+        command: 'workbench.action.openGlobalKeybindings',
+      }),
+    )
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key: 'k', from: input })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(statusBar.entries.get()).toHaveLength(0)
+    expect(preventDefault).toHaveBeenCalledTimes(1)
+    expect(stopPropagation).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves native input editing shortcuts such as Ctrl+A alone', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+a',
+        command: 'test.globalSelectAll',
+      }),
+    )
+    const input = showQuickInput(instantiation)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key: 'a', from: input })
+
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+})
+
 describe('useGlobalKeybindingHandler — ctrl+k ctrl+s end-to-end', () => {
   const disposables: IDisposable[] = []
 
