@@ -33,6 +33,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
           onDidScrollChange: () => ({ dispose: () => {} }),
           onDidFocusEditorWidget: () => ({ dispose: () => {} }),
           onDidBlurEditorWidget: () => ({ dispose: () => {} }),
+          onDidChangeModel: () => ({ dispose: () => {} }),
           getContainerDomNode: () => document.createElement('div'),
         }
       },
