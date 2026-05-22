@@ -28,6 +28,7 @@ export interface QuickPickState {
   matchOnDescription?: boolean | undefined
   matchOnDetail?: boolean | undefined
   filterMode?: QuickPickFilterMode | undefined
+  quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
   /** Show an indeterminate progress bar at the top of the panel. */
   busy?: boolean | undefined
   onAccept?: (items: IQuickPickItem[]) => void
@@ -192,6 +193,7 @@ export class QuickInputService implements IQuickInputService {
         matchOnDescription: options?.matchOnDescription,
         matchOnDetail: options?.matchOnDetail,
         filterMode: options?.filterMode,
+        quickNavigate: options?.quickNavigate,
         busy: options?.busy,
         onAccept: (selected) => {
           this._currentOnHide = undefined

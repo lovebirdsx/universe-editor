@@ -147,7 +147,8 @@ function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p')
 export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: () => void }) {
   const prefix = state.prefix ?? ''
   const [query, setQuery] = useState(prefix)
-  const [focusedIdx, setFocusedIdx] = useState(0)
+  const quickNavigate = state.quickNavigate
+  const [focusedIdx, setFocusedIdx] = useState(quickNavigate?.initialSelectionIndex ?? 0)
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const mruIds = state.mruIds ?? []
@@ -197,8 +198,9 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   })
 
   useEffect(() => {
+    if (quickNavigate) return
     setFocusedIdx(0)
-  }, [query])
+  }, [query, quickNavigate])
 
   useEffect(() => {
     if (sortedFiltered.length > 0) {
@@ -214,10 +216,41 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
     [state, onClose],
   )
 
+  // Quick navigate mode: release of the modifier accepts the focused item.
+  // Refs let the document keyup listener read the latest state without
+  // re-binding on every focusedIdx change.
+  const sortedFilteredRef = useRef(sortedFiltered)
+  sortedFilteredRef.current = sortedFiltered
+  const focusedIdxRef = useRef(focusedIdx)
+  focusedIdxRef.current = focusedIdx
+  const acceptRef = useRef(accept)
+  acceptRef.current = accept
+
+  useEffect(() => {
+    if (!quickNavigate) return
+    const modifierKey = quickNavigate.modifier === 'ctrl' ? 'Control' : ''
+    if (!modifierKey) return
+    const onKeyUp = (e: globalThis.KeyboardEvent) => {
+      if (e.key !== modifierKey) return
+      const list = sortedFilteredRef.current
+      const item = list[focusedIdxRef.current]
+      if (item) acceptRef.current([item])
+    }
+    document.addEventListener('keyup', onKeyUp, true)
+    return () => document.removeEventListener('keyup', onKeyUp, true)
+  }, [quickNavigate])
+
   const PAGE_SIZE = 8
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
     const len = sortedFiltered.length
+    if (quickNavigate && e.key === 'Tab') {
+      e.preventDefault()
+      if (len === 0) return
+      if (e.shiftKey) setFocusedIdx((i) => (i - 1 + len) % len)
+      else setFocusedIdx((i) => (i + 1) % len)
+      return
+    }
     if (e.key === 'ArrowDown' || isCtrlNavigationKey(e, 'n')) {
       e.preventDefault()
       setFocusedIdx((i) => (len === 0 ? 0 : (i + 1) % len))

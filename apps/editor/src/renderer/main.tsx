@@ -80,6 +80,10 @@ import {
   IRecentFilesService,
   RecentFilesService,
 } from './services/recentFiles/recentFilesService.js'
+import {
+  IRecentEditorsService,
+  RecentEditorsService,
+} from './services/editor/RecentEditorsService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
 import { AcpAgentRegistry, IAcpAgentRegistry } from './services/acp/acpAgentRegistry.js'
 import { AcpPermissionHandler, IAcpPermissionHandler } from './services/acp/acpPermissionHandler.js'
@@ -244,6 +248,9 @@ async function bootstrapWorkbench(): Promise<void> {
 
   const recentFilesService = instantiation.createInstance(RecentFilesService)
   services.set(IRecentFilesService, recentFilesService)
+
+  const recentEditorsService = instantiation.createInstance(RecentEditorsService)
+  services.set(IRecentEditorsService, recentEditorsService)
 
   // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
   const dialogService = new RendererDialogService()

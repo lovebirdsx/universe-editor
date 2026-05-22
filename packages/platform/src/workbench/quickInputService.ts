@@ -32,6 +32,15 @@ export interface IPickOptions {
   readonly prefix?: string
   /** Initial busy state — useful when items are still being computed when `pick` is called. */
   readonly busy?: boolean
+  /**
+   * Enables VSCode-style "quick navigate" mode: while the configured modifier
+   * key remains held, Tab / Shift+Tab cycles focus; releasing the modifier
+   * accepts the focused item. Used by Ctrl+Tab editor switching.
+   */
+  readonly quickNavigate?: {
+    readonly modifier: 'ctrl'
+    readonly initialSelectionIndex?: number
+  }
 }
 
 export interface IInputOptions {

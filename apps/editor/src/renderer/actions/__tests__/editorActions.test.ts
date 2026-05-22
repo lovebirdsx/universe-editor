@@ -257,8 +257,8 @@ describe('Built-in editor Action2s', () => {
   it('NextEditor + PreviousEditor are registered with the expected keybindings', () => {
     disposables.push(registerAction2(NextEditorAction))
     disposables.push(registerAction2(PreviousEditorAction))
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+tab')).toBe(NextEditorAction.ID)
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+tab')).toBe(PreviousEditorAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+pagedown')).toBe(NextEditorAction.ID)
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+pageup')).toBe(PreviousEditorAction.ID)
   })
 
   it('SplitEditorRight is bound to Ctrl+\\ and is f1', () => {

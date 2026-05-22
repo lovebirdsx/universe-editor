@@ -14,6 +14,8 @@ import {
   IDialogService,
   IEditorGroupsService,
   type IEditorGroup,
+  IQuickInputService,
+  type IQuickPickItem,
   MenuId,
   localize,
   type ServicesAccessor,
@@ -22,6 +24,7 @@ import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfir
 import { focusEditorInput } from '../services/editor/editorFocus.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { IRecentEditorsService } from '../services/editor/RecentEditorsService.js'
 
 // ---------------------------------------------------------------------------
 // Shared helper: activate a group and transfer DOM focus to Monaco
@@ -134,7 +137,7 @@ export class NextEditorAction extends Action2 {
       id: NextEditorAction.ID,
       title: localize('action.nextEditor.title', 'Open Next Editor'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+tab' },
+      keybinding: { primary: 'ctrl+pagedown' },
       precondition: 'hasActiveEditor',
       f1: true,
     })
@@ -156,7 +159,7 @@ export class PreviousEditorAction extends Action2 {
       id: PreviousEditorAction.ID,
       title: localize('action.previousEditor.title', 'Open Previous Editor'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+shift+tab' },
+      keybinding: { primary: 'ctrl+pageup' },
       precondition: 'hasActiveEditor',
       f1: true,
     })
@@ -168,6 +171,96 @@ export class PreviousEditorAction extends Action2 {
     const idx = group.indexOf(active)
     const prev = group.getEditorByIndex(idx - 1) ?? group.getEditorByIndex(group.count - 1)
     if (prev) group.setActive(prev)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Quick-pick MRU editor switching (Ctrl+Tab / Ctrl+Shift+Tab)
+// ---------------------------------------------------------------------------
+
+// Encodes (groupId, editorId) into a single quick-pick id so we can decode it
+// back without an out-of-band map. Editor ids are opaque strings and never
+// contain `::` in practice; we still join with a delimiter unlikely to appear.
+const PICK_ID_DELIMITER = '::'
+
+function buildRecentEditorPickItems(recentService: IRecentEditorsService): IQuickPickItem[] {
+  const items: IQuickPickItem[] = []
+  for (const { editor, group } of recentService.getRecentEditors()) {
+    items.push({
+      id: `${group.id}${PICK_ID_DELIMITER}${editor.id}`,
+      label: editor.label,
+      description: localize('quickOpenRecentEditor.group', 'Group {id}', { id: group.id }),
+    })
+  }
+  return items
+}
+
+async function runQuickOpenRecentEditor(
+  accessor: ServicesAccessor,
+  reverse: boolean,
+): Promise<void> {
+  const groups = accessor.get(IEditorGroupsService)
+  const recentService = accessor.get(IRecentEditorsService)
+  const quickInput = accessor.get(IQuickInputService)
+
+  const items = buildRecentEditorPickItems(recentService)
+  if (items.length <= 1) return
+
+  const initialSelectionIndex = reverse ? items.length - 1 : 1
+  const picked = await quickInput.pick(items, {
+    placeholder: localize('quickOpenRecentEditor.placeholder', 'Recently Used Editors'),
+    quickNavigate: { modifier: 'ctrl', initialSelectionIndex },
+  })
+  if (!picked) return
+
+  const sepIdx = picked.id.indexOf(PICK_ID_DELIMITER)
+  if (sepIdx === -1) return
+  const groupId = Number(picked.id.slice(0, sepIdx))
+  const editorId = picked.id.slice(sepIdx + PICK_ID_DELIMITER.length)
+  const group = groups.getGroup(groupId)
+  if (!group) return
+  const editor = group.editors.find((e) => e.id === editorId)
+  if (!editor) return
+
+  groups.activateGroup(group)
+  group.setActive(editor)
+  activateGroupAndFocus(groups, group)
+}
+
+export class QuickOpenRecentEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.quickOpenRecentEditor'
+  constructor() {
+    super({
+      id: QuickOpenRecentEditorAction.ID,
+      title: localize('action.quickOpenRecentEditor.title', 'Open Recently Used Editor'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+tab', when: '!quickInputVisible' },
+      precondition: 'editorIsOpen',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): Promise<void> {
+    return runQuickOpenRecentEditor(accessor, false)
+  }
+}
+
+export class QuickOpenRecentEditorReverseAction extends Action2 {
+  static readonly ID = 'workbench.action.quickOpenRecentEditorReverse'
+  constructor() {
+    super({
+      id: QuickOpenRecentEditorReverseAction.ID,
+      title: localize(
+        'action.quickOpenRecentEditorReverse.title',
+        'Open Least Recently Used Editor',
+      ),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+tab', when: '!quickInputVisible' },
+      precondition: 'editorIsOpen',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): Promise<void> {
+    return runQuickOpenRecentEditor(accessor, true)
   }
 }
 
