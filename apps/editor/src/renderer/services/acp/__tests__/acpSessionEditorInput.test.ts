@@ -37,4 +37,34 @@ describe('AcpSessionEditorInput', () => {
     expect(restored?.sessionId).toBe('sess-4')
     expect(restored?.agentId).toBeUndefined()
   })
+
+  it('serialize/deserialize round-trips historyId so editor restart can auto-resume', () => {
+    const input = new AcpSessionEditorInput('sess-5', 'claude-code', 'h7-xyz')
+    const restored = AcpSessionEditorInput.deserialize(input.serialize())
+    expect(restored?.sessionId).toBe('sess-5')
+    expect(restored?.agentId).toBe('claude-code')
+    expect(restored?.historyId).toBe('h7-xyz')
+  })
+
+  it('serialize omits historyId when not provided', () => {
+    const input = new AcpSessionEditorInput('sess-6', 'claude-code')
+    const parsed = JSON.parse(input.serialize()) as Record<string, unknown>
+    expect(parsed['historyId']).toBeUndefined()
+  })
+
+  it('deserialize accepts legacy payloads without historyId', () => {
+    const restored = AcpSessionEditorInput.deserialize(
+      JSON.stringify({ sessionId: 'sess-7', agentId: 'fake' }),
+    )
+    expect(restored?.sessionId).toBe('sess-7')
+    expect(restored?.historyId).toBeUndefined()
+  })
+
+  it('deserialize discards historyId of wrong type while keeping sessionId', () => {
+    const restored = AcpSessionEditorInput.deserialize(
+      JSON.stringify({ sessionId: 'sess-8', historyId: 9 }),
+    )
+    expect(restored?.sessionId).toBe('sess-8')
+    expect(restored?.historyId).toBeUndefined()
+  })
 })

@@ -80,7 +80,9 @@ export class OpenAgentInEditorAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const session = accessor.get(IAcpSessionService).activeSession.get()
     if (!session) return
-    accessor.get(IEditorService).openEditor(new AcpSessionEditorInput(session.id, session.agentId))
+    accessor
+      .get(IEditorService)
+      .openEditor(new AcpSessionEditorInput(session.id, session.agentId, session.historyId))
   }
 }
 

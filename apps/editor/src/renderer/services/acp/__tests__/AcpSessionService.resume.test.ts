@@ -320,6 +320,54 @@ function buildService(opts: FakeAcpClientOptions = {}): {
 // Tests
 // ---------------------------------------------------------------------------
 
+describe('AcpSessionService — historyId routing (editor restart)', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('exposes historyId on the IAcpSession returned by createSession', async () => {
+    const built = buildService()
+    svc = built.svc
+    await built.history.initialize()
+    const session = await svc.createSession()
+    const historyId = built.history.list()[0]?.id
+    expect(historyId).toBeDefined()
+    expect(session.historyId).toBe(historyId)
+  })
+
+  it('getByHistoryId returns the live session with that history id', async () => {
+    const built = buildService()
+    svc = built.svc
+    await built.history.initialize()
+    const a = await svc.createSession()
+    await new Promise((r) => setTimeout(r, 5))
+    const b = await svc.createSession()
+    expect(svc.getByHistoryId(a.historyId!)?.id).toBe(a.id)
+    expect(svc.getByHistoryId(b.historyId!)?.id).toBe(b.id)
+  })
+
+  it('getByHistoryId returns undefined when no live session matches', async () => {
+    const built = buildService()
+    svc = built.svc
+    await built.history.initialize()
+    expect(svc.getByHistoryId('nope')).toBeUndefined()
+  })
+
+  it('resumeSession yields a session whose historyId matches the resumed entry', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    const historyId = original.historyId!
+    await svc.closeSession(original.id)
+    const resumed = await svc.resumeSession(historyId)
+    expect(resumed.historyId).toBe(historyId)
+    expect(svc.getByHistoryId(historyId)?.id).toBe(resumed.id)
+  })
+})
+
 describe('AcpSessionService — history wiring', () => {
   let svc: AcpSessionService
 

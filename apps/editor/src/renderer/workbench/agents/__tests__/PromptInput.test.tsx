@@ -139,6 +139,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     id: 's1',
     agentId: 'fake',
     title: 'Fake',
+    historyId: undefined,
     messages,
     toolCalls,
     plan,

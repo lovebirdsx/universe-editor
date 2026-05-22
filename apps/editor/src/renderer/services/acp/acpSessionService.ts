@@ -126,6 +126,11 @@ export interface IAcpSession {
   readonly id: string
   readonly agentId: string
   readonly title: string
+  /**
+   * Stable identifier from AcpSessionHistoryService — survives editor restarts.
+   * Sessions created or resumed through AcpSessionService always carry one.
+   */
+  readonly historyId: string | undefined
   readonly messages: IObservable<readonly AcpMessage[]>
   readonly toolCalls: IObservable<readonly AcpToolCall[]>
   readonly plan: IObservable<readonly AcpPlanEntry[]>
@@ -173,6 +178,12 @@ export interface IAcpSessionService {
   setActive(sessionId: string): void
   closeSession(sessionId: string): Promise<void>
   getById(sessionId: string): IAcpSession | undefined
+  /**
+   * Look up a live session by its history id (the durable id from
+   * AcpSessionHistoryService). Returns undefined if no live session matches —
+   * the caller (e.g. AcpSessionEditor) can then issue `resumeSession(historyId)`.
+   */
+  getByHistoryId(historyId: string): IAcpSession | undefined
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -924,6 +935,10 @@ export class AcpSessionService
 
   getById(sessionId: string): IAcpSession | undefined {
     return this._sessions.find((x) => x.id === sessionId)
+  }
+
+  getByHistoryId(historyId: string): IAcpSession | undefined {
+    return this._sessions.find((x) => x.historyId === historyId)
   }
 
   // -- IAcpClientNotificationSink ---------------------------------------
