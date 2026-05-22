@@ -56,7 +56,6 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
           },
           'acp.startupTimeoutMs': {
             type: 'number',
-            default: 20000,
             description: localize(
               'settings.acp.startupTimeoutMs',
               'How long to wait (milliseconds) for an agent to answer `initialize` + `session/new` before giving up. Lower this only if you trust your agent to start quickly.',

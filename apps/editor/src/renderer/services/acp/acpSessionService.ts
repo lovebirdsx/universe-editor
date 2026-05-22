@@ -181,7 +181,7 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 // Implementation
 // ---------------------------------------------------------------------------
 
-const DEFAULT_STARTUP_TIMEOUT_MS = 20_000
+const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
 class AcpSession extends Disposable implements IAcpSession {
   readonly messages: ISettableObservable<readonly AcpMessage[]>

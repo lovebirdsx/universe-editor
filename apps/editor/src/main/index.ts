@@ -52,6 +52,8 @@ const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 // Application-singleton services — shared across all windows.
 let applicationServices: ApplicationServices | null = null
 let userDataService: UserDataMainService | null = null
+let acpHostService: AcpHostMainService | null = null
+let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
 const appIconPath = join(__dirname, '../../build/icon.ico')
 
@@ -66,6 +68,14 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     )
     const userData = new UserDataMainService(workspace)
     userDataService = userData
+    const acpHost = new AcpHostMainService(
+      logMainService.createLogger({ id: 'acpHost', name: 'ACP Host' }),
+    )
+    acpHostService = acpHost
+    const acpTerminal = new AcpTerminalMainService(
+      logMainService.createLogger({ id: 'acpTerminal', name: 'ACP Terminal' }),
+    )
+    acpTerminalService = acpTerminal
     applicationServices = {
       storage,
       ping: new MainPingService(),
@@ -78,12 +88,8 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       workspace,
       userData,
       logFiles: new LogFilesMainService(logMainService),
-      acpHost: new AcpHostMainService(
-        logMainService.createLogger({ id: 'acpHost', name: 'ACP Host' }),
-      ),
-      acpTerminal: new AcpTerminalMainService(
-        logMainService.createLogger({ id: 'acpTerminal', name: 'ACP Terminal' }),
-      ),
+      acpHost,
+      acpTerminal,
     }
   }
   if (!windowMainService) {
@@ -139,6 +145,8 @@ app.on('window-all-closed', () => {
 app.on('will-quit', () => {
   mainLogger.info('will-quit')
   userDataService?.dispose()
+  acpHostService?.dispose()
+  acpTerminalService?.dispose()
   windowMainService?.dispose()
   logMainService.dispose()
 })
