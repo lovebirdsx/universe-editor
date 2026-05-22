@@ -1,6 +1,8 @@
 import { useState, type ComponentType } from 'react'
-import { localize } from '@universe-editor/platform'
+import { localize, ILayoutService, PartId } from '@universe-editor/platform'
 import type { IPart } from '@universe-editor/platform'
+import { X } from 'lucide-react'
+import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { OutputView } from './output/OutputView.js'
 import { resolvePanelIcon } from './icon-map.js'
@@ -24,6 +26,7 @@ export function Panel({ part }: { part?: IPart | undefined } = {}) {
   ]
   const [activeTabId, setActiveTabId] = useState(builtInTabs[0]?.id ?? '')
   const containerRef = usePartContainer(part)
+  const layoutService = useService(ILayoutService)
 
   const activeTab = builtInTabs.find((t) => t.id === activeTabId)
   const ActiveComponent = activeTab?.component ?? null
@@ -31,14 +34,24 @@ export function Panel({ part }: { part?: IPart | undefined } = {}) {
   return (
     <div ref={containerRef} className={styles['panel']} data-testid="part-panel">
       <div className={styles['tabBar']} role="tablist">
-        {builtInTabs.map((tab) => (
-          <PanelTabButton
-            key={tab.id}
-            tab={tab}
-            active={activeTabId === tab.id}
-            onClick={() => setActiveTabId(tab.id)}
-          />
-        ))}
+        <div className={styles['tabs']}>
+          {builtInTabs.map((tab) => (
+            <PanelTabButton
+              key={tab.id}
+              tab={tab}
+              active={activeTabId === tab.id}
+              onClick={() => setActiveTabId(tab.id)}
+            />
+          ))}
+        </div>
+        <button
+          className={styles['closeButton']}
+          onClick={() => layoutService.setVisible(PartId.Panel, false)}
+          title={localize('panel.close', 'Close Panel')}
+          aria-label={localize('panel.close', 'Close Panel')}
+        >
+          <X size={14} strokeWidth={1.75} aria-hidden="true" />
+        </button>
       </div>
       <div className={styles['content']}>{ActiveComponent && <ActiveComponent />}</div>
     </div>
