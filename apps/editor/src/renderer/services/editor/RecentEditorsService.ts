@@ -90,13 +90,27 @@ export class RecentEditorsService extends Disposable implements IRecentEditorsSe
 
   getRecentEditors(): readonly IRecentEditor[] {
     const out: IRecentEditor[] = []
+    const seen = new Set<string>()
+
     for (const entry of this._mru) {
       const group = this._groups.getGroup(entry.groupId)
       if (!group) continue
       const editor = group.editors.find((e) => e.id === entry.editorId)
       if (!editor) continue
+      seen.add(`${entry.groupId}:${entry.editorId}`)
       out.push({ editor, group })
     }
+
+    // Append editors that are open in groups but have never been activated in
+    // this session (e.g. background tabs restored from a previous session).
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (!seen.has(`${group.id}:${editor.id}`)) {
+          out.push({ editor, group })
+        }
+      }
+    }
+
     return out
   }
 
