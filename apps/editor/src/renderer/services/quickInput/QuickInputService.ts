@@ -16,6 +16,7 @@ import type {
   IQuickPickItem,
   IPickOptions,
   IInputOptions,
+  QuickPickFilterMode,
 } from '@universe-editor/platform'
 
 export interface QuickPickState {
@@ -24,6 +25,9 @@ export interface QuickPickState {
   mruIds?: readonly string[]
   placeholder?: string | undefined
   prefix?: string | undefined
+  matchOnDescription?: boolean | undefined
+  matchOnDetail?: boolean | undefined
+  filterMode?: QuickPickFilterMode | undefined
   onAccept?: (items: IQuickPickItem[]) => void
   onInput?: (value: string) => void
   onHide?: () => void
@@ -164,6 +168,9 @@ export class QuickInputService implements IQuickInputService {
         mruIds,
         placeholder: options?.placeholder,
         prefix: options?.prefix,
+        matchOnDescription: options?.matchOnDescription,
+        matchOnDetail: options?.matchOnDetail,
+        filterMode: options?.filterMode,
         onAccept: (selected) => {
           this._currentOnHide = undefined
           this._setState(null)

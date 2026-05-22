@@ -77,6 +77,7 @@ export class OpenRecentAction extends Action2 {
     }))
     const pick = await quickInput.pick<RecentPickItem>(items, {
       placeholder: localize('quickInput.openRecent.placeholder', 'Open Recent'),
+      matchOnDescription: true,
     })
     if (!pick) return
     const target = recent[pick.index]

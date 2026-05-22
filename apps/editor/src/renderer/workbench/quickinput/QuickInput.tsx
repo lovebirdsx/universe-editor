@@ -11,7 +11,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { IQuickInputService } from '@universe-editor/platform'
-import type { IQuickPickItem } from '@universe-editor/platform'
+import type { IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import {
   QuickInputService,
@@ -19,7 +19,7 @@ import {
 } from '../../services/quickInput/QuickInputService.js'
 import styles from './QuickInput.module.css'
 
-function fuzzyMatch(text: string, query: string): boolean {
+function fuzzyMatchField(text: string, query: string): boolean {
   if (!query) return true
   const t = text.toLowerCase()
   const q = query.toLowerCase()
@@ -28,6 +28,114 @@ function fuzzyMatch(text: string, query: string): boolean {
     if (t[i] === q[qi]) qi++
   }
   return qi === q.length
+}
+
+function normalizeWordQuery(query: string): string {
+  return query.trim().replace(/\s+/g, ' ').toLowerCase()
+}
+
+function isAsciiLetterOrDigit(ch: string): boolean {
+  const code = ch.charCodeAt(0)
+  return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122)
+}
+
+function isWordSeparator(ch: string): boolean {
+  return !isAsciiLetterOrDigit(ch)
+}
+
+function getWordStarts(text: string): number[] {
+  const starts: number[] = []
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (ch === undefined || isWordSeparator(ch)) continue
+    const prev = i > 0 ? text[i - 1] : undefined
+    if (prev === undefined || isWordSeparator(prev)) starts.push(i)
+  }
+  return starts
+}
+
+function findWordPrefix(text: string, piece: string, from: number): number {
+  for (const start of getWordStarts(text)) {
+    if (start < from) continue
+    if (text.startsWith(piece, start)) return start
+  }
+  return -1
+}
+
+function wordPiecesMatch(text: string, pieces: readonly string[]): boolean {
+  let from = 0
+  for (const piece of pieces) {
+    const start = findWordPrefix(text, piece, from)
+    if (start === -1) return false
+    from = start + piece.length
+  }
+  return true
+}
+
+function compactWordStartsMatch(text: string, query: string): boolean {
+  const starts = getWordStarts(text)
+
+  const visit = (startIndex: number, queryIndex: number): boolean => {
+    if (queryIndex >= query.length) return true
+
+    for (let i = startIndex; i < starts.length; i++) {
+      const start = starts[i]!
+      let consumed = 0
+      while (queryIndex + consumed < query.length && start + consumed < text.length) {
+        const queryChar = query[queryIndex + consumed]
+        const textChar = text[start + consumed]
+        if (queryChar === undefined || textChar === undefined || queryChar !== textChar) break
+        consumed++
+      }
+
+      for (let count = consumed; count > 0; count--) {
+        if (visit(i + 1, queryIndex + count)) return true
+      }
+    }
+
+    return false
+  }
+
+  return visit(0, 0)
+}
+
+function wordMatchField(text: string, query: string): boolean {
+  const normalizedQuery = normalizeWordQuery(query)
+  if (!normalizedQuery) return true
+
+  const normalizedText = text.toLowerCase()
+  if (normalizedText.includes(normalizedQuery)) return true
+
+  const pieces = normalizedQuery.split(' ').filter((piece) => piece.length > 0)
+  if (pieces.length > 1) return wordPiecesMatch(normalizedText, pieces)
+
+  const firstPiece = pieces[0]
+  return firstPiece !== undefined && compactWordStartsMatch(normalizedText, firstPiece)
+}
+
+function itemMatches(
+  item: IQuickPickItem,
+  query: string,
+  mode: QuickPickFilterMode,
+  matchOnDescription: boolean,
+  matchOnDetail: boolean,
+): boolean {
+  const matcher = mode === 'word' ? wordMatchField : fuzzyMatchField
+  if (matcher(item.label, query)) return true
+  if (matchOnDescription && item.description && matcher(item.description, query)) {
+    return true
+  }
+  if (matchOnDetail && item.detail && matcher(item.detail, query)) return true
+  return false
+}
+
+function compareMru(a: IQuickPickItem, b: IQuickPickItem, mruIds: readonly string[]): number {
+  const ai = mruIds.indexOf(a.id)
+  const bi = mruIds.indexOf(b.id)
+  if (ai === -1 && bi === -1) return 0
+  if (ai === -1) return 1
+  if (bi === -1) return -1
+  return ai - bi
 }
 
 function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p'): boolean {
@@ -43,6 +151,9 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const mruIds = state.mruIds ?? []
+  const filterMode = state.filterMode ?? 'fuzzy'
+  const matchOnDescription = state.matchOnDescription === true
+  const matchOnDetail = state.matchOnDetail === true
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -59,23 +170,21 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
       prefixMissing
         ? []
         : (state.items ?? []).filter((item) =>
-            fuzzyMatch(item.label + ' ' + (item.description ?? ''), deferredFilterText),
+            itemMatches(item, deferredFilterText, filterMode, matchOnDescription, matchOnDetail),
           ),
-    [prefixMissing, state.items, deferredFilterText],
+    [prefixMissing, state.items, deferredFilterText, filterMode, matchOnDescription, matchOnDetail],
   )
 
   const sortedFiltered = useMemo(
     () =>
       [...filtered].sort((a, b) => {
-        const ai = mruIds.indexOf(a.id)
-        const bi = mruIds.indexOf(b.id)
-        if (ai === -1 && bi === -1) return 0
-        if (ai === -1) return 1
-        if (bi === -1) return -1
-        return ai - bi
+        const mruCompare = compareMru(a, b, mruIds)
+        if (mruCompare !== 0) return mruCompare
+        if (filterMode === 'word') return a.label.localeCompare(b.label)
+        return 0
       }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filtered, mruIds.join(',')],
+    [filtered, filterMode, mruIds.join(',')],
   )
 
   const ITEM_HEIGHT = 32

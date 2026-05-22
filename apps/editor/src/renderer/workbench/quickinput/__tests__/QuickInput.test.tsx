@@ -32,6 +32,19 @@ const items = [
   { id: 'cmd.line', label: 'Go to Line' },
 ]
 
+const focusGroupCommands = [
+  { id: 'workbench.action.focusNextGroup', label: 'Focus Next Group', description: 'View' },
+  { id: 'workbench.action.focusFirstGroup', label: 'Focus First Group', description: 'View' },
+  { id: 'workbench.action.focusLastGroup', label: 'Focus Last Group', description: 'View' },
+  { id: 'workbench.action.focusPreviousGroup', label: 'Focus Previous Group', description: 'View' },
+  {
+    id: 'workbench.action.focusRightGroup',
+    label: 'Focus Right Editor Group',
+    description: 'View',
+  },
+  { id: 'workbench.action.focusLeftGroup', label: 'Focus Left Editor Group', description: 'View' },
+]
+
 function makeState(extra: Partial<QuickPickState> = {}): QuickPickState {
   return { type: 'pick', items, prefix: '>', onAccept: vi.fn(), onHide: vi.fn(), ...extra }
 }
@@ -83,6 +96,89 @@ describe('QuickPickPanel prefix mode', () => {
     render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
     // default items have no keybinding; no unexpected keybinding text should appear
     expect(screen.queryByText('Ctrl+')).toBeNull()
+  })
+
+  it('uses word filtering for command labels so focus ri selects Focus Right first', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({ items: focusGroupCommands, filterMode: 'word' })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '>focus ri' } })
+
+    const options = screen.getAllByRole('option').map((option) => option.textContent)
+    expect(options).toHaveLength(1)
+    expect(options[0]).toContain('Focus Right Editor Group')
+  })
+
+  it('does not match description or detail unless enabled', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            {
+              id: 'alpha',
+              label: 'Alpha',
+              description: 'description-hit',
+              detail: 'detail-hit',
+            },
+          ],
+          prefix: undefined,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'description-hit' } })
+    expect(screen.queryByText('Alpha')).toBeNull()
+
+    cleanup()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            {
+              id: 'alpha',
+              label: 'Alpha',
+              description: 'description-hit',
+              detail: 'detail-hit',
+            },
+          ],
+          prefix: undefined,
+          matchOnDescription: true,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('quick-input-field'), {
+      target: { value: 'description-hit' },
+    })
+    expect(screen.getByText('Alpha')).toBeTruthy()
+
+    cleanup()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            {
+              id: 'alpha',
+              label: 'Alpha',
+              description: 'description-hit',
+              detail: 'detail-hit',
+            },
+          ],
+          prefix: undefined,
+          matchOnDetail: true,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('quick-input-field'), {
+      target: { value: 'detail-hit' },
+    })
+    expect(screen.getByText('Alpha')).toBeTruthy()
   })
 })
 

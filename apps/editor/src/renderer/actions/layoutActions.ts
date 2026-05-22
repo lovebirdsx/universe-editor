@@ -182,6 +182,7 @@ export class ShowCommandsAction extends Action2 {
       id: 'workbench.commandPalette',
       placeholder: localize('quickInput.commandPalette.placeholder', 'Type a command name…'),
       prefix: '>',
+      filterMode: 'word',
     })
     if (!selected) return
     if (isMonacoCommandItem(selected)) {

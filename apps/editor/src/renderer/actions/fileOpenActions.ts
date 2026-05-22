@@ -85,6 +85,7 @@ export class OpenRecentFilesAction extends Action2 {
     const pick = await quickInput.pick(pickItems, {
       id: 'workbench.recentFiles',
       placeholder: localize('quickInput.openRecentFile.placeholder', 'Open Recent File…'),
+      matchOnDescription: true,
     })
     if (!pick) return
 
@@ -205,6 +206,7 @@ export class GoToFileAction extends Action2 {
       const pick = await quickInput.pick(items, {
         id: 'workbench.recentFiles',
         placeholder: localize('quickInput.openRecentFile.placeholder', 'Open Recent File…'),
+        matchOnDescription: true,
       })
       if (!pick) return
       const uri = URI.parse(pick.id)

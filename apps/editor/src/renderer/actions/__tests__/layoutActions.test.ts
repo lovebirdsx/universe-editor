@@ -124,8 +124,11 @@ describe('Built-in layout Action2s', () => {
       await cmd.handler(accessor)
     })
     expect(pick).toHaveBeenCalled()
-    const pickedOptions = pick.mock.calls[0]?.[1] as { prefix?: string } | undefined
+    const pickedOptions = pick.mock.calls[0]?.[1] as
+      | { prefix?: string; filterMode?: string }
+      | undefined
     expect(pickedOptions?.prefix).toBe('>')
+    expect(pickedOptions?.filterMode).toBe('word')
     expect(executeCommand).toHaveBeenCalledWith('demo.cmd')
   })
 

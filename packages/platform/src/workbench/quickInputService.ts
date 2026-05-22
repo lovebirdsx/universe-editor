@@ -15,11 +15,14 @@ export interface IQuickPickItem {
   readonly keybinding?: string
 }
 
+export type QuickPickFilterMode = 'fuzzy' | 'word'
+
 export interface IPickOptions {
   readonly id?: string
   readonly placeholder?: string
   readonly matchOnDescription?: boolean
   readonly matchOnDetail?: boolean
+  readonly filterMode?: QuickPickFilterMode
   /**
    * Optional prefix string identifying the picker's mode (VSCode-style quick
    * access, e.g. ">" for commands). When set, the input is prefilled with this
