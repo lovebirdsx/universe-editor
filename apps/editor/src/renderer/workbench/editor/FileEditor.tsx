@@ -138,6 +138,16 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     const blurSub = ed.onDidBlurEditorWidget(() => {
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     })
+    const modelChangeSub = ed.onDidChangeModel(() => {
+      const lang = ed.getModel()?.getLanguageId()
+      ed.updateOptions({
+        quickSuggestions: {
+          other: true,
+          comments: false,
+          strings: lang === 'json' || lang === 'jsonc',
+        },
+      })
+    })
     // Bridge: when the user has rebound a Monaco built-in command to a new
     // key, swallow monaco's *original* default key in the capture phase so
     // monaco's internal dispatch doesn't also fire the action. The default
@@ -162,6 +172,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     return () => {
       focusSub.dispose()
       blurSub.dispose()
+      modelChangeSub.dispose()
       container.removeEventListener('keydown', bridgeHandler, true)
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
