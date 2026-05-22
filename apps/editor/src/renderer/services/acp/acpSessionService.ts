@@ -37,24 +37,37 @@ import {
 import { IAcpClientService, type IAcpClientNotificationSink } from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
+import { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import { AcpAbortError, type AcpConnection } from './acpConnection.js'
 import {
   ACP_PROTOCOL_VERSION,
   AcpMethods,
+  parseInitializeResult,
+  parseLoadSessionResult,
+  parseNewSessionResult,
   parseSessionUpdateParams,
+  parseSetConfigOptionResult,
+  type AcpAvailableCommand,
   type AcpContentBlock,
   type AcpInitializeParams,
   type AcpInitializeResult,
+  type AcpLoadSessionParams,
   type AcpNewSessionParams,
-  type AcpNewSessionResult,
   type AcpRequestPermissionParams,
   type AcpRequestPermissionResult,
   type AcpSessionCancelParams,
+  type AcpSessionConfigOption,
+  type AcpSessionModeState,
   type AcpSessionPromptParams,
   type AcpSessionPromptResult,
   type AcpSessionUpdate,
   type AcpSessionUpdateParams,
+  type AcpSetConfigOptionParams,
+  type AcpSetSessionModeParams,
 } from './acpProtocol.js'
+import { composePromptBlocks, type PromptMention } from './promptMentions.js'
+
+export type { PromptMention }
 
 // ---------------------------------------------------------------------------
 // Public view model
@@ -65,7 +78,10 @@ export type AcpMessageRole = 'user' | 'agent' | 'thought'
 export interface AcpMessage {
   readonly id: string
   readonly role: AcpMessageRole
+  /** Plain-text view of `blocks`, computed via {@link blocksToText}. */
   readonly text: string
+  /** Structured content blocks — used by the renderer for markdown / images / resource links. */
+  readonly blocks: readonly AcpContentBlock[]
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -75,7 +91,9 @@ export interface AcpToolCall {
   readonly title: string
   readonly kind: string
   readonly status: AcpToolCallStatus
+  /** Plain-text view of `blocks`. */
   readonly text: string
+  readonly blocks: readonly AcpContentBlock[]
 }
 
 export interface AcpPlanEntry {
@@ -98,6 +116,12 @@ export interface AcpPendingPermission {
 
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
+/** Bag of normalized initial session state captured from `session/new`. */
+export interface IAcpSessionInitState {
+  readonly configOptions?: readonly AcpSessionConfigOption[]
+  readonly modes?: AcpSessionModeState
+}
+
 export interface IAcpSession {
   readonly id: string
   readonly agentId: string
@@ -107,11 +131,29 @@ export interface IAcpSession {
   readonly plan: IObservable<readonly AcpPlanEntry[]>
   readonly status: IObservable<AcpSessionStatus>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
+  /**
+   * Unified configuration view. Legacy `modes` are normalized into a single
+   * `category: 'mode'` ConfigOption so the UI can treat both protocol shapes
+   * uniformly; see {@link AcpSessionService} for the conversion details.
+   */
+  readonly configOptions: IObservable<readonly AcpSessionConfigOption[]>
+  /** Latest agent-advertised slash commands (may be empty). */
+  readonly availableCommands: IObservable<readonly AcpAvailableCommand[]>
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void
-  sendPrompt(text: string): Promise<void>
+  /**
+   * Send a prompt. If `mentions` are provided, any `@<name>` in the text
+   * whose `<name>` matches a recorded mention is rewritten into a
+   * `resource_link` AcpContentBlock. Unmatched `@`-tokens stay as text.
+   */
+  sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void>
   cancelTurn(): Promise<void>
   close(): Promise<void>
+  /**
+   * Change one configuration option. Falls back to `session/set_mode` for
+   * legacy-only agents that didn't expose configOptions.
+   */
+  setConfigOption(configId: string, value: string): Promise<void>
 }
 
 export interface IAcpSessionService {
@@ -120,6 +162,14 @@ export interface IAcpSessionService {
   readonly activeSessionId: IObservable<string | undefined>
   readonly activeSession: IObservable<IAcpSession | undefined>
   createSession(agentId?: string): Promise<IAcpSession>
+  /**
+   * Resume a previously-persisted session by its local history id.
+   * Spawns a fresh agent process, validates `agentCapabilities.loadSession`,
+   * replays the conversation via `session/load`, and registers the session
+   * before issuing the load so streaming `session/update` notifications during
+   * replay are routed correctly.
+   */
+  resumeSession(historyId: string): Promise<IAcpSession>
   setActive(sessionId: string): void
   closeSession(sessionId: string): Promise<void>
   getById(sessionId: string): IAcpSession | undefined
@@ -139,12 +189,13 @@ class AcpSession extends Disposable implements IAcpSession {
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
   readonly status: ISettableObservable<AcpSessionStatus>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
+  readonly configOptions: ISettableObservable<readonly AcpSessionConfigOption[]>
+  readonly availableCommands: ISettableObservable<readonly AcpAvailableCommand[]>
 
   private _messages: AcpMessage[] = []
   private _toolCalls: AcpToolCall[] = []
   private _msgCounter = 0
 
-  private _streamBuffer = new Map<AcpMessageRole, string>()
   /** Abort controller for the in-flight `session/prompt`. */
   private _activeAbort: AbortController | undefined
 
@@ -154,6 +205,13 @@ class AcpSession extends Disposable implements IAcpSession {
   private _pendingTx: TransactionImpl | undefined
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
 
+  /**
+   * Legacy modes state — kept around so we can keep emitting `session/set_mode`
+   * for agents that haven't migrated. Also drives the synthetic mode
+   * ConfigOption so the UI can use a single rendering path.
+   */
+  private _legacyModes: AcpSessionModeState | undefined
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -161,6 +219,9 @@ class AcpSession extends Disposable implements IAcpSession {
     private readonly _conn: AcpConnection,
     private readonly _sessionIdOnAgent: string,
     private readonly _telemetry: ITelemetryService,
+    initState?: IAcpSessionInitState,
+    private readonly _historyId?: string,
+    private readonly _history?: IAcpSessionHistoryService,
   ) {
     super()
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
@@ -171,6 +232,17 @@ class AcpSession extends Disposable implements IAcpSession {
       `acp.session.pendingPermission.${id}`,
       undefined,
     )
+    this.configOptions = observableValue<readonly AcpSessionConfigOption[]>(
+      `acp.session.configOptions.${id}`,
+      [],
+    )
+    this.availableCommands = observableValue<readonly AcpAvailableCommand[]>(
+      `acp.session.availableCommands.${id}`,
+      [],
+    )
+    if (initState) {
+      this.applyInitState(initState)
+    }
     this._register(this._conn)
     this._register(
       this._conn.onExit(() => {
@@ -179,6 +251,25 @@ class AcpSession extends Disposable implements IAcpSession {
         this._cancelPending()
       }),
     )
+  }
+
+  /**
+   * Apply a bag of init state (modes / configOptions). Idempotent and safe to
+   * call multiple times — used by both the constructor and by `resumeSession`
+   * after `session/load` returns. Empty bags are a no-op.
+   */
+  applyInitState(state: IAcpSessionInitState): void {
+    if (state.modes) {
+      this._legacyModes = state.modes
+    }
+    if (state.configOptions || state.modes) {
+      this.configOptions.set(this._materializeConfigOptions(state.configOptions), undefined)
+    }
+  }
+
+  /** History id this session was minted with — undefined for sessions created without persistence. */
+  get historyId(): string | undefined {
+    return this._historyId
   }
 
   presentPermission(p: AcpPendingPermission): void {
@@ -195,12 +286,20 @@ class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  async sendPrompt(text: string): Promise<void> {
+  async sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void> {
+    // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
+    // Safe no-op when this session wasn't created with a history id.
+    if (this._history && this._historyId) {
+      this._history.touch(this._historyId)
+    }
     this._appendMessage('user', text)
     this.status.set('running', undefined)
+    const prompt = composePromptBlocks(text, mentions ?? [])
     const params: AcpSessionPromptParams = {
       sessionId: this._sessionIdOnAgent,
-      prompt: [{ type: 'text', text }],
+      // Fall back to a single text block for empty/no-mention prompts so we
+      // keep the wire shape stable even for trivial cases.
+      prompt: prompt.length > 0 ? prompt : [{ type: 'text', text }],
     }
     const abort = new AbortController()
     this._activeAbort = abort
@@ -263,27 +362,32 @@ class AcpSession extends Disposable implements IAcpSession {
       case 'agent_thought_chunk':
         this._appendChunk('thought', update.content)
         break
-      case 'tool_call':
+      case 'tool_call': {
+        const blocks = update.content ?? []
         this._upsertToolCall({
           id: update.toolCallId,
           title: update.title ?? update.toolCallId,
           kind: update.kind ?? 'unknown',
           status: update.status ?? 'pending',
-          text: blocksToText(update.content),
+          blocks,
+          text: blocksToText(blocks),
         })
         this._telemetry.publicLog('acp.tool_call_started', {
           sessionId: this.id,
           kind: update.kind ?? 'unknown',
         })
         break
+      }
       case 'tool_call_update': {
         const existing = this._toolCalls.find((t) => t.id === update.toolCallId)
+        const blocks = update.content ?? existing?.blocks ?? []
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: existing?.title ?? update.toolCallId,
           kind: existing?.kind ?? 'unknown',
           status: update.status ?? existing?.status ?? 'pending',
-          text: update.content ? blocksToText(update.content) : (existing?.text ?? ''),
+          blocks,
+          text: blocksToText(blocks),
         }
         this._upsertToolCall(next)
         if (update.status === 'failed') {
@@ -303,34 +407,115 @@ class AcpSession extends Disposable implements IAcpSession {
           undefined,
         )
         break
+      case 'available_commands_update':
+        this.availableCommands.set(update.availableCommands, undefined)
+        this._telemetry.publicLog('acp.commands_advertised', {
+          sessionId: this.id,
+          count: update.availableCommands.length,
+        })
+        break
+      case 'current_mode_update':
+        if (this._legacyModes) {
+          this._legacyModes = {
+            ...this._legacyModes,
+            currentModeId: update.currentModeId,
+          }
+        }
+        this._reconcileLegacyModeOption(update.currentModeId)
+        break
+      case 'config_option_update':
+        this.configOptions.set(this._materializeConfigOptions(update.configOptions), undefined)
+        break
     }
+  }
+
+  async setConfigOption(configId: string, value: string): Promise<void> {
+    const cur = this.configOptions.get()
+    const target = cur.find((o) => o.id === configId)
+    const isLegacyMode =
+      target?.category === 'mode' &&
+      this._legacyModes !== undefined &&
+      !cur.some((o) => o.category === 'mode' && this._lastSeenFromConfigOptionsServer.has(o.id))
+    // Legacy path: only modes were advertised → use session/set_mode.
+    if (isLegacyMode) {
+      const params: AcpSetSessionModeParams = { sessionId: this._sessionIdOnAgent, modeId: value }
+      await this._conn.request(AcpMethods.SetSessionMode, params)
+      this._legacyModes = { ...this._legacyModes!, currentModeId: value }
+      this._reconcileLegacyModeOption(value)
+      this._telemetry.publicLog('acp.config_option_set', {
+        sessionId: this.id,
+        configId,
+        legacy: true,
+      })
+      return
+    }
+    const params: AcpSetConfigOptionParams = {
+      sessionId: this._sessionIdOnAgent,
+      configId,
+      value,
+    }
+    const raw = await this._conn.request<unknown>(AcpMethods.SetConfigOption, params)
+    const parsed = parseSetConfigOptionResult(raw)
+    if (parsed) {
+      this._markServerConfigIds(parsed.configOptions)
+      this.configOptions.set(this._materializeConfigOptions(parsed.configOptions), undefined)
+    }
+    this._telemetry.publicLog('acp.config_option_set', { sessionId: this.id, configId })
+  }
+
+  /** Synthesize / refresh the mode ConfigOption from `_legacyModes`. */
+  private _reconcileLegacyModeOption(currentModeId: string): void {
+    if (!this._legacyModes) return
+    const cur = this.configOptions.get()
+    const next = cur.map((o) =>
+      o.category === 'mode' && !this._lastSeenFromConfigOptionsServer.has(o.id)
+        ? { ...o, currentValue: currentModeId }
+        : o,
+    )
+    this.configOptions.set(next, undefined)
+  }
+
+  /**
+   * Build the final ConfigOption[] for the UI: agent-supplied options first
+   * (preserving their priority order), then a synthetic `mode` option derived
+   * from legacy `modes` if the agent didn't already publish one in that
+   * category. Per spec, when both are present the client uses configOptions
+   * exclusively and ignores modes — we keep `_legacyModes` only to fall back
+   * to `session/set_mode` when writing.
+   */
+  private _materializeConfigOptions(
+    serverOpts: readonly AcpSessionConfigOption[] | undefined,
+  ): readonly AcpSessionConfigOption[] {
+    const out: AcpSessionConfigOption[] = serverOpts ? [...serverOpts] : []
+    if (this._legacyModes) {
+      const hasServerMode = out.some((o) => o.category === 'mode')
+      if (!hasServerMode) {
+        out.push(legacyModesToConfigOption(this._legacyModes))
+      }
+    }
+    if (serverOpts) this._markServerConfigIds(serverOpts)
+    return out
+  }
+
+  private readonly _lastSeenFromConfigOptionsServer = new Set<string>()
+  private _markServerConfigIds(opts: readonly AcpSessionConfigOption[]): void {
+    this._lastSeenFromConfigOptionsServer.clear()
+    for (const o of opts) this._lastSeenFromConfigOptionsServer.add(o.id)
   }
 
   private _appendChunk(role: AcpMessageRole, block: AcpContentBlock): void {
-    if (block.type !== 'text') {
-      // image / resource blocks: surface a minimal placeholder rather than
-      // silently dropping content the user could otherwise inspect.
-      const placeholder = block.type === 'resource' ? `[resource: ${block.uri}]` : `[image]`
-      this._appendBufferedChunk(role, placeholder)
-      this.messages.set(this._messages, this._batchedTx())
-      return
-    }
-    this._appendBufferedChunk(role, block.text)
-    this.messages.set(this._messages, this._batchedTx())
-  }
-
-  private _appendBufferedChunk(role: AcpMessageRole, text: string): void {
-    const buf = (this._streamBuffer.get(role) ?? '') + text
-    this._streamBuffer.set(role, buf)
     const last = this._messages[this._messages.length - 1]
     if (last && last.role === role && this._isStreaming(last.id)) {
-      const next: AcpMessage = { id: last.id, role, text: buf }
+      const blocks = mergeStreamingBlock(last.blocks, block)
+      const next: AcpMessage = { id: last.id, role, blocks, text: blocksToText(blocks) }
       this._messages = [...this._messages.slice(0, -1), next]
     } else {
       const id = `m${++this._msgCounter}`
       this._streamingIds.add(id)
-      this._messages = [...this._messages, { id, role, text: buf }]
+      const blocks: readonly AcpContentBlock[] = [block]
+      this._messages = [...this._messages, { id, role, blocks, text: blocksToText(blocks) }]
     }
+    this.messages.set(this._messages, this._batchedTx())
   }
 
   private readonly _streamingIds = new Set<string>()
@@ -339,7 +524,6 @@ class AcpSession extends Disposable implements IAcpSession {
   }
 
   private _flushStream(): void {
-    this._streamBuffer.clear()
     this._streamingIds.clear()
     this.messages.set(this._messages, undefined)
     this._commitBatchedTx()
@@ -347,7 +531,8 @@ class AcpSession extends Disposable implements IAcpSession {
 
   private _appendMessage(role: AcpMessageRole, text: string): void {
     const id = `m${++this._msgCounter}`
-    this._messages = [...this._messages, { id, role, text }]
+    const blocks: readonly AcpContentBlock[] = [{ type: 'text', text }]
+    this._messages = [...this._messages, { id, role, blocks, text }]
     this.messages.set(this._messages, undefined)
   }
 
@@ -394,9 +579,56 @@ function blocksToText(blocks: readonly AcpContentBlock[] | undefined): string {
         ? b.text
         : b.type === 'resource'
           ? `[resource: ${b.uri}]`
-          : `[image: ${b.mimeType}]`,
+          : b.type === 'resource_link'
+            ? `[resource: ${b.name ?? b.uri}]`
+            : b.type === 'audio'
+              ? `[audio: ${b.mimeType}]`
+              : `[image: ${b.mimeType}]`,
     )
     .join('')
+}
+
+/**
+ * Merge an incoming streaming chunk into the existing blocks list. Consecutive
+ * `text` blocks collapse into a single block so the markdown parser can see a
+ * coherent document; non-text blocks (image / resource / resource_link / audio)
+ * are appended as-is.
+ */
+function mergeStreamingBlock(
+  blocks: readonly AcpContentBlock[],
+  chunk: AcpContentBlock,
+): readonly AcpContentBlock[] {
+  if (chunk.type === 'text') {
+    const last = blocks[blocks.length - 1]
+    if (last && last.type === 'text') {
+      return [...blocks.slice(0, -1), { type: 'text', text: last.text + chunk.text }]
+    }
+  }
+  return [...blocks, chunk]
+}
+
+/**
+ * Convert the legacy `SessionModeState` into a synthetic ConfigOption (category
+ * `mode`) so the UI can render legacy and new agents identically. The id is
+ * stable — the upper layer detects "legacy mode" by checking whether the agent
+ * ever published a real ConfigOption with the same id (it didn't if this
+ * synthetic id is in use).
+ */
+const LEGACY_MODE_OPTION_ID = '__legacy_mode__'
+
+function legacyModesToConfigOption(state: AcpSessionModeState): AcpSessionConfigOption {
+  return {
+    id: LEGACY_MODE_OPTION_ID,
+    name: 'Mode',
+    category: 'mode',
+    type: 'select',
+    currentValue: state.currentModeId,
+    options: state.availableModes.map((m) => ({
+      value: m.id,
+      name: m.name,
+      ...(m.description !== undefined ? { description: m.description } : {}),
+    })),
+  }
 }
 
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
@@ -437,6 +669,7 @@ export class AcpSessionService
     @IAcpPermissionHandler private readonly _permission: IAcpPermissionHandler,
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
+    @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -469,7 +702,7 @@ export class AcpSessionService
         const mcpServers = this._readMcpServers()
         const initParams: AcpInitializeParams = {
           protocolVersion: ACP_PROTOCOL_VERSION,
-          clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
+          clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
         }
         try {
           progress.report({ message: 'Negotiating ACP protocol…' })
@@ -480,22 +713,42 @@ export class AcpSessionService
           )
           progress.report({ message: 'Creating session…' })
           const newParams: AcpNewSessionParams = { cwd: cwd ?? '', mcpServers }
-          const { sessionId: agentSessionId } = await withTimeout(
-            conn.request<AcpNewSessionResult>(AcpMethods.NewSession, newParams),
+          const rawResult = await withTimeout(
+            conn.request<unknown>(AcpMethods.NewSession, newParams),
             timeoutMs,
             'ACP session/new',
           )
+          const result = parseNewSessionResult(rawResult)
+          if (!result) {
+            throw new Error('ACP session/new returned malformed result')
+          }
           const localId = `s${++this._seq}`
           const title = `${agentName} · ${localId}`
+          const initState: IAcpSessionInitState = {
+            ...(result.configOptions ? { configOptions: result.configOptions } : {}),
+            ...(result.modes ? { modes: result.modes } : {}),
+          }
+          // Record the session in persistent history BEFORE constructing AcpSession
+          // so the session has its historyId from the first sendPrompt onwards. The
+          // history.add call returns synchronously; the storage write is debounced.
+          const histEntry = this._history.add({
+            agentId: resolvedAgentId,
+            sessionIdOnAgent: result.sessionId,
+            title,
+            ...(cwd !== undefined ? { cwd } : {}),
+          })
           const session = new AcpSession(
             localId,
             resolvedAgentId,
             title,
             conn,
-            agentSessionId,
+            result.sessionId,
             this._telemetry,
+            initState,
+            histEntry.id,
+            this._history,
           )
-          this._byAgentSessionId.set(agentSessionId, session)
+          this._byAgentSessionId.set(result.sessionId, session)
           transaction((tx) => {
             this._sessions = [...this._sessions, session]
             this.sessions.set(this._sessions, tx)
@@ -530,6 +783,122 @@ export class AcpSessionService
     if (!s) return
     this.activeSessionId.set(sessionId, undefined)
     this.activeSession.set(s, undefined)
+  }
+
+  async resumeSession(historyId: string): Promise<IAcpSession> {
+    const entry = this._history.get(historyId)
+    if (!entry) {
+      throw new Error(`Unknown agent session history id: ${historyId}`)
+    }
+    // If a live session backed by the same sessionIdOnAgent is already open,
+    // surface it instead of spawning a duplicate agent process.
+    const existing = this._byAgentSessionId.get(entry.sessionIdOnAgent)
+    if (existing && existing.status.get() !== 'closed') {
+      this.setActive(existing.id)
+      return existing
+    }
+    const cwd = entry.cwd
+    const conn = await this._client.connect(entry.agentId, this, cwd !== undefined ? { cwd } : {})
+    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+    const mcpServers = this._readMcpServers()
+    const initParams: AcpInitializeParams = {
+      protocolVersion: ACP_PROTOCOL_VERSION,
+      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    }
+    let session: AcpSession | undefined
+    let registered = false
+    try {
+      const rawInit = await withTimeout(
+        conn.request<unknown>(AcpMethods.Initialize, initParams),
+        timeoutMs,
+        'ACP initialize',
+      )
+      const initResult = parseInitializeResult(rawInit)
+      if (!initResult) {
+        throw new Error('ACP initialize returned malformed result')
+      }
+      if (initResult.agentCapabilities?.loadSession !== true) {
+        throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
+      }
+      const localId = `s${++this._seq}`
+      const title = `${this._registry.get(entry.agentId).name} · ${localId}`
+      // Construct the AcpSession BEFORE session/load so any session/update
+      // notifications the agent emits during replay route through this._byAgentSessionId.
+      session = new AcpSession(
+        localId,
+        entry.agentId,
+        title,
+        conn,
+        entry.sessionIdOnAgent,
+        this._telemetry,
+        undefined,
+        historyId,
+        this._history,
+      )
+      this._byAgentSessionId.set(entry.sessionIdOnAgent, session)
+      const captured = session
+      transaction((tx) => {
+        this._sessions = [...this._sessions, captured]
+        this.sessions.set(this._sessions, tx)
+        this.activeSessionId.set(localId, tx)
+        this.activeSession.set(captured, tx)
+      })
+      registered = true
+
+      const loadParams: AcpLoadSessionParams = {
+        sessionId: entry.sessionIdOnAgent,
+        cwd: cwd ?? '',
+        mcpServers,
+      }
+      const rawLoad = await withTimeout(
+        conn.request<unknown>(AcpMethods.LoadSession, loadParams),
+        timeoutMs,
+        'ACP session/load',
+      )
+      const loadResult = parseLoadSessionResult(rawLoad)
+      if (loadResult === null) {
+        throw new Error('ACP session/load returned malformed result')
+      }
+      if (loadResult.modes || loadResult.configOptions) {
+        session.applyInitState({
+          ...(loadResult.modes ? { modes: loadResult.modes } : {}),
+          ...(loadResult.configOptions ? { configOptions: loadResult.configOptions } : {}),
+        })
+      }
+      this._history.touch(historyId)
+      this._telemetry.publicLog('acp.session_resumed', {
+        agentId: entry.agentId,
+      })
+      this._onDidCreate.fire(session)
+      return session
+    } catch (err) {
+      if (registered && session) {
+        const captured = session
+        // Rollback: drop the partial session before bubbling the error.
+        this._sessions = this._sessions.filter((x) => x !== captured)
+        this.sessions.set(this._sessions, undefined)
+        this._byAgentSessionId.delete(entry.sessionIdOnAgent)
+        if (this.activeSession.get() === captured) {
+          const next = this._sessions[0]
+          this.activeSessionId.set(next?.id, undefined)
+          this.activeSession.set(next, undefined)
+        }
+        captured.dispose()
+      } else {
+        conn.dispose()
+      }
+      const msg = (err as Error).message
+      this._logger.warn(`[acp] resumeSession failed: ${msg}`)
+      this._notification.notify({
+        severity: Severity.Error,
+        message: `Failed to resume agent session: ${msg}`,
+      })
+      this._telemetry.publicLogError('acp.session_resume_failed', {
+        agentId: entry.agentId,
+        error: msg,
+      })
+      throw err
+    }
   }
 
   async closeSession(sessionId: string): Promise<void> {

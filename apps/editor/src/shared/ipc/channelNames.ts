@@ -19,6 +19,7 @@ export const ServiceChannels = {
   LogFiles: 'logFiles',
   Window: 'window',
   AcpHost: 'acpHost',
+  AcpTerminal: 'acpTerminal',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

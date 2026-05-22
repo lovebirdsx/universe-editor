@@ -19,6 +19,7 @@ import type {
   IPingService,
 } from '../../shared/ipc/services.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
+import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 
 /** Services shared across all windows. Instantiated once at app startup. */
@@ -31,6 +32,7 @@ export interface ApplicationServices {
   readonly userData: IUserDataFilesService
   readonly logFiles: ILogFilesService
   readonly acpHost: IAcpHostService
+  readonly acpTerminal: IAcpTerminalService
 }
 
 /** Services scoped to a single BrowserWindow. Created per-window by WindowMainService. */

@@ -56,6 +56,7 @@ function makeOpts() {
       userData: {} as never,
       logFiles: {} as never,
       acpHost: {} as never,
+      acpTerminal: {} as never,
     },
     logService,
     e2eEnabled: false,

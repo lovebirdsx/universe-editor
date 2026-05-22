@@ -48,6 +48,7 @@ import {
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { ILogChannelService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
+import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { installRendererErrorHandlers } from './errors.js'
@@ -89,6 +90,10 @@ import { AcpAgentRegistry, IAcpAgentRegistry } from './services/acp/acpAgentRegi
 import { AcpPermissionHandler, IAcpPermissionHandler } from './services/acp/acpPermissionHandler.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
+import {
+  AcpSessionHistoryService,
+  IAcpSessionHistoryService,
+} from './services/acp/acpSessionHistory.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
@@ -188,6 +193,10 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(
     IAcpHostService,
     ProxyChannel.toService<IAcpHostService>(ipcService.getChannel(ServiceChannels.AcpHost)),
+  )
+  services.set(
+    IAcpTerminalService,
+    ProxyChannel.toService<IAcpTerminalService>(ipcService.getChannel(ServiceChannels.AcpTerminal)),
   )
   await initializeRendererNls(
     services.get(IUserDataFilesService) as IUserDataFilesService,
@@ -298,6 +307,12 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IAcpPermissionHandler, acpPermissionHandler)
   const acpClientService = instantiation.createInstance(AcpClientService)
   services.set(IAcpClientService, acpClientService)
+  // History must be available before SessionService so createSession can record
+  // to it from the very first call. initialize() is fire-and-forget — early
+  // adds are merged in once hydration completes.
+  const acpSessionHistoryService = instantiation.createInstance(AcpSessionHistoryService)
+  services.set(IAcpSessionHistoryService, acpSessionHistoryService)
+  void acpSessionHistoryService.initialize()
   const acpSessionService = instantiation.createInstance(AcpSessionService)
   services.set(IAcpSessionService, acpSessionService)
 

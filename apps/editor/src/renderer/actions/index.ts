@@ -101,9 +101,14 @@ import {
 } from './logActions.js'
 import {
   CancelAgentTurnAction,
+  ClearAgentSessionHistoryAction,
   NewAgentSessionAction,
   OpenAgentInEditorAction,
+  ResumeAgentSessionAction,
   SelectAgentAction,
+  SelectAgentModeAction,
+  SelectAgentModelAction,
+  SelectAgentThoughtLevelAction,
 } from './agentActions.js'
 
 // Layout
@@ -224,3 +229,8 @@ registerAction2(NewAgentSessionAction)
 registerAction2(CancelAgentTurnAction)
 registerAction2(OpenAgentInEditorAction)
 registerAction2(SelectAgentAction)
+registerAction2(SelectAgentModelAction)
+registerAction2(SelectAgentModeAction)
+registerAction2(SelectAgentThoughtLevelAction)
+registerAction2(ResumeAgentSessionAction)
+registerAction2(ClearAgentSessionHistoryAction)

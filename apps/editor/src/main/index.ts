@@ -17,6 +17,7 @@ import { LogMainService } from './services/log/logMainService.js'
 import { LogFilesMainService } from './services/log/logFilesMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
+import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
 import { installMainErrorHandlers } from './errors.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 
@@ -79,6 +80,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       logFiles: new LogFilesMainService(logMainService),
       acpHost: new AcpHostMainService(
         logMainService.createLogger({ id: 'acpHost', name: 'ACP Host' }),
+      ),
+      acpTerminal: new AcpTerminalMainService(
+        logMainService.createLogger({ id: 'acpTerminal', name: 'ACP Terminal' }),
       ),
     }
   }

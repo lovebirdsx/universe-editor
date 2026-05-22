@@ -11,10 +11,12 @@ import {
   autorun,
   ConfigurationService,
   Emitter,
+  Event,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
   observableValue,
+  StorageScope,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
@@ -27,12 +29,14 @@ import type {
   IProgressOptions,
   IProgressService,
   IProgressStep,
+  IStorageService,
   ITelemetryService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
 import { AcpSessionService } from '../acpSessionService.js'
+import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { IAcpClientService, type IAcpClientNotificationSink } from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
@@ -145,6 +149,29 @@ class StubPermissionHandler implements IAcpPermissionHandler {
   }
 }
 
+class FakeStorage implements IStorageService {
+  declare readonly _serviceBrand: undefined
+  readonly store = new Map<string, unknown>()
+  readonly onDidChangeWorkspaceScope = Event.None
+  async get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
+    return this.store.get(key) as T | undefined
+  }
+  async set(key: string, value: unknown): Promise<void> {
+    this.store.set(key, value)
+  }
+  async remove(key: string): Promise<void> {
+    this.store.delete(key)
+  }
+}
+
+function makeHistory(): AcpSessionHistoryService {
+  return new AcpSessionHistoryService(
+    new FakeStorage(),
+    new NoopTelemetryService(),
+    new StubLoggerService(),
+  )
+}
+
 /**
  * Captures the sink + connection so tests can inject inbound traffic.
  */
@@ -249,6 +276,7 @@ describe('AcpSessionService', () => {
       permission,
       new StubProgressService(),
       new StubLoggerService(),
+      makeHistory(),
     )
   })
 
@@ -556,6 +584,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubPermissionHandler(),
       new StubProgressService(),
       new StubLoggerService(),
+      makeHistory(),
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)
     svc.dispose()

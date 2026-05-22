@@ -40,7 +40,7 @@ export interface JsonRpcResponse {
 export type JsonRpcMessage = JsonRpcRequest | JsonRpcNotification | JsonRpcResponse
 
 // ---------------------------------------------------------------------------
-// ACP method names (subset)
+// ACP method names
 // ---------------------------------------------------------------------------
 
 export const AcpMethods = {
@@ -48,10 +48,16 @@ export const AcpMethods = {
   Initialize: 'initialize',
   /** Client → Agent: create a new session. */
   NewSession: 'session/new',
+  /** Client → Agent: load an existing session by id (replays history). */
+  LoadSession: 'session/load',
   /** Client → Agent: send a user prompt for the active session. */
   SessionPrompt: 'session/prompt',
   /** Client → Agent: cancel the current turn. */
   SessionCancel: 'session/cancel',
+  /** Client → Agent: switch session mode (legacy; prefer SetConfigOption). */
+  SetSessionMode: 'session/set_mode',
+  /** Client → Agent: set a session-level config option (model/mode/thought_level). */
+  SetConfigOption: 'session/set_config_option',
   /** Agent → Client (notification): streaming update for the active turn. */
   SessionUpdate: 'session/update',
   /** Agent → Client: request the user's permission for a tool call. */
@@ -60,14 +66,32 @@ export const AcpMethods = {
   ReadTextFile: 'fs/read_text_file',
   /** Agent → Client: write a UTF-8 text file. */
   WriteTextFile: 'fs/write_text_file',
+  /** Agent → Client: create a managed terminal process. */
+  TerminalCreate: 'terminal/create',
+  /** Agent → Client: pull buffered output (and optional exit status). */
+  TerminalOutput: 'terminal/output',
+  /** Agent → Client: block until the terminal process exits. */
+  TerminalWaitForExit: 'terminal/wait_for_exit',
+  /** Agent → Client: kill the terminal process. */
+  TerminalKill: 'terminal/kill',
+  /** Agent → Client: release the terminal (drop its buffer / state). */
+  TerminalRelease: 'terminal/release',
 } as const
 
 // ---------------------------------------------------------------------------
-// Domain payloads
+// Capabilities
 // ---------------------------------------------------------------------------
 
 export interface AcpClientCapabilities {
   readonly fs?: { readonly readTextFile?: boolean; readonly writeTextFile?: boolean }
+  /** Terminal/* peer methods are answered. */
+  readonly terminal?: boolean
+}
+
+export interface AcpAgentCapabilities {
+  readonly promptCapabilities?: Readonly<Record<string, unknown>>
+  /** Agent honours `session/load` for replay. */
+  readonly loadSession?: boolean
 }
 
 export interface AcpInitializeParams {
@@ -77,10 +101,12 @@ export interface AcpInitializeParams {
 
 export interface AcpInitializeResult {
   readonly protocolVersion: number
-  readonly agentCapabilities?: {
-    readonly promptCapabilities?: Readonly<Record<string, unknown>>
-  }
+  readonly agentCapabilities?: AcpAgentCapabilities
 }
+
+// ---------------------------------------------------------------------------
+// Session setup
+// ---------------------------------------------------------------------------
 
 export interface AcpNewSessionParams {
   /** Workspace cwd communicated to the agent. */
@@ -88,14 +114,50 @@ export interface AcpNewSessionParams {
   readonly mcpServers?: readonly unknown[]
 }
 
+export interface AcpLoadSessionParams {
+  readonly sessionId: string
+  readonly cwd: string
+  readonly mcpServers?: readonly unknown[]
+}
+
 export interface AcpNewSessionResult {
   readonly sessionId: string
+  /** Legacy modes mechanism — present until the agent migrates to configOptions. */
+  readonly modes?: AcpSessionModeState
+  /** Preferred mechanism for exposing session-level switches. */
+  readonly configOptions?: readonly AcpSessionConfigOption[]
 }
+
+/**
+ * `session/load` returns the same shape as `session/new` minus the sessionId
+ * (the caller already knows it). Agents may also return `null` — in that case
+ * the client keeps whatever modes/configOptions it had cached locally.
+ */
+export interface AcpLoadSessionResult {
+  readonly modes?: AcpSessionModeState
+  readonly configOptions?: readonly AcpSessionConfigOption[]
+}
+
+// ---------------------------------------------------------------------------
+// Content blocks (multimodal payloads)
+// ---------------------------------------------------------------------------
 
 export type AcpContentBlock =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'image'; readonly mimeType: string; readonly data: string }
+  | { readonly type: 'audio'; readonly mimeType: string; readonly data: string }
   | { readonly type: 'resource'; readonly uri: string }
+  | {
+      readonly type: 'resource_link'
+      readonly uri: string
+      readonly name?: string
+      readonly mimeType?: string
+      readonly description?: string
+    }
+
+// ---------------------------------------------------------------------------
+// Prompt / cancel
+// ---------------------------------------------------------------------------
 
 export interface AcpSessionPromptParams {
   readonly sessionId: string
@@ -111,20 +173,84 @@ export interface AcpSessionCancelParams {
   readonly sessionId: string
 }
 
-/** Variants for `session/update` notifications. We model the ones we render. */
+// ---------------------------------------------------------------------------
+// Modes (legacy)
+// ---------------------------------------------------------------------------
+
+export interface AcpSessionMode {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+}
+
+export interface AcpSessionModeState {
+  readonly currentModeId: string
+  readonly availableModes: readonly AcpSessionMode[]
+}
+
+export interface AcpSetSessionModeParams {
+  readonly sessionId: string
+  readonly modeId: string
+}
+
+// ---------------------------------------------------------------------------
+// Session config options (preferred; replaces modes)
+// ---------------------------------------------------------------------------
+
+export type AcpConfigOptionType = 'select'
+
+/** Reserved categories per spec; custom categories must use `_`-prefix. */
+export type AcpConfigOptionCategory = 'mode' | 'model' | 'thought_level' | (string & {})
+
+export interface AcpConfigOptionValue {
+  readonly value: string
+  readonly name: string
+  readonly description?: string
+}
+
+export interface AcpSessionConfigOption {
+  readonly id: string
+  readonly name: string
+  readonly description?: string
+  readonly category?: AcpConfigOptionCategory
+  readonly type: AcpConfigOptionType
+  readonly currentValue: string
+  readonly options: readonly AcpConfigOptionValue[]
+}
+
+export interface AcpSetConfigOptionParams {
+  readonly sessionId: string
+  readonly configId: string
+  readonly value: string
+}
+
+export interface AcpSetConfigOptionResult {
+  /** Agent MUST return the full option set so the client can reflect cross-option deps. */
+  readonly configOptions: readonly AcpSessionConfigOption[]
+}
+
+// ---------------------------------------------------------------------------
+// Available (slash) commands
+// ---------------------------------------------------------------------------
+
+export interface AcpAvailableCommandInput {
+  readonly hint: string
+}
+
+export interface AcpAvailableCommand {
+  readonly name: string
+  readonly description: string
+  readonly input?: AcpAvailableCommandInput
+}
+
+// ---------------------------------------------------------------------------
+// session/update notification variants
+// ---------------------------------------------------------------------------
+
 export type AcpSessionUpdate =
-  | {
-      readonly sessionUpdate: 'agent_message_chunk'
-      readonly content: AcpContentBlock
-    }
-  | {
-      readonly sessionUpdate: 'user_message_chunk'
-      readonly content: AcpContentBlock
-    }
-  | {
-      readonly sessionUpdate: 'agent_thought_chunk'
-      readonly content: AcpContentBlock
-    }
+  | { readonly sessionUpdate: 'agent_message_chunk'; readonly content: AcpContentBlock }
+  | { readonly sessionUpdate: 'user_message_chunk'; readonly content: AcpContentBlock }
+  | { readonly sessionUpdate: 'agent_thought_chunk'; readonly content: AcpContentBlock }
   | {
       readonly sessionUpdate: 'tool_call'
       readonly toolCallId: string
@@ -143,11 +269,27 @@ export type AcpSessionUpdate =
       readonly sessionUpdate: 'plan'
       readonly entries: readonly { readonly content: string; readonly priority?: string }[]
     }
+  | {
+      readonly sessionUpdate: 'available_commands_update'
+      readonly availableCommands: readonly AcpAvailableCommand[]
+    }
+  | {
+      readonly sessionUpdate: 'current_mode_update'
+      readonly currentModeId: string
+    }
+  | {
+      readonly sessionUpdate: 'config_option_update'
+      readonly configOptions: readonly AcpSessionConfigOption[]
+    }
 
 export interface AcpSessionUpdateParams {
   readonly sessionId: string
   readonly update: AcpSessionUpdate
 }
+
+// ---------------------------------------------------------------------------
+// Permission request
+// ---------------------------------------------------------------------------
 
 export interface AcpRequestPermissionParams {
   readonly sessionId: string
@@ -169,6 +311,10 @@ export interface AcpRequestPermissionResult {
     | { readonly outcome: 'cancelled' }
 }
 
+// ---------------------------------------------------------------------------
+// File system
+// ---------------------------------------------------------------------------
+
 export interface AcpReadTextFileParams {
   readonly sessionId: string
   readonly path: string
@@ -184,6 +330,61 @@ export interface AcpWriteTextFileParams {
   readonly sessionId: string
   readonly path: string
   readonly content: string
+}
+
+// ---------------------------------------------------------------------------
+// Terminal
+// ---------------------------------------------------------------------------
+
+export interface AcpTerminalEnvVar {
+  readonly name: string
+  readonly value: string
+}
+
+export interface AcpTerminalCreateParams {
+  readonly sessionId: string
+  readonly command: string
+  readonly args?: readonly string[]
+  readonly env?: readonly AcpTerminalEnvVar[]
+  readonly cwd?: string
+  readonly outputByteLimit?: number
+}
+
+export interface AcpTerminalCreateResult {
+  readonly terminalId: string
+}
+
+export interface AcpTerminalOutputParams {
+  readonly sessionId: string
+  readonly terminalId: string
+}
+
+export interface AcpTerminalExitStatus {
+  readonly exitCode?: number
+  readonly signal?: string
+}
+
+export interface AcpTerminalOutputResult {
+  readonly output: string
+  readonly truncated: boolean
+  readonly exitStatus?: AcpTerminalExitStatus
+}
+
+export interface AcpTerminalWaitForExitParams {
+  readonly sessionId: string
+  readonly terminalId: string
+}
+
+export type AcpTerminalWaitForExitResult = AcpTerminalExitStatus
+
+export interface AcpTerminalKillParams {
+  readonly sessionId: string
+  readonly terminalId: string
+}
+
+export interface AcpTerminalReleaseParams {
+  readonly sessionId: string
+  readonly terminalId: string
 }
 
 /** Current ACP protocol version that we advertise. */
@@ -208,9 +409,17 @@ function isContentBlock(v: unknown): v is AcpContentBlock {
     case 'text':
       return typeof v['text'] === 'string'
     case 'image':
+    case 'audio':
       return typeof v['mimeType'] === 'string' && typeof v['data'] === 'string'
     case 'resource':
       return typeof v['uri'] === 'string'
+    case 'resource_link':
+      return (
+        typeof v['uri'] === 'string' &&
+        (v['name'] === undefined || typeof v['name'] === 'string') &&
+        (v['mimeType'] === undefined || typeof v['mimeType'] === 'string') &&
+        (v['description'] === undefined || typeof v['description'] === 'string')
+      )
     default:
       return false
   }
@@ -292,6 +501,188 @@ export function parseRequestPermissionParams(v: unknown): AcpRequestPermissionPa
 
 const TOOL_CALL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed'])
 
+function parseConfigOptionValue(v: unknown): AcpConfigOptionValue | null {
+  if (!isObject(v)) return null
+  if (typeof v['value'] !== 'string') return null
+  if (typeof v['name'] !== 'string') return null
+  if (v['description'] !== undefined && typeof v['description'] !== 'string') return null
+  return {
+    value: v['value'],
+    name: v['name'],
+    ...(typeof v['description'] === 'string' ? { description: v['description'] } : {}),
+  }
+}
+
+function parseSessionConfigOption(v: unknown): AcpSessionConfigOption | null {
+  if (!isObject(v)) return null
+  if (typeof v['id'] !== 'string') return null
+  if (typeof v['name'] !== 'string') return null
+  if (v['description'] !== undefined && typeof v['description'] !== 'string') return null
+  if (v['category'] !== undefined && typeof v['category'] !== 'string') return null
+  if (v['type'] !== 'select') return null
+  if (typeof v['currentValue'] !== 'string') return null
+  const optsRaw = v['options']
+  if (!Array.isArray(optsRaw)) return null
+  const options: AcpConfigOptionValue[] = []
+  for (const o of optsRaw) {
+    const parsed = parseConfigOptionValue(o)
+    if (!parsed) return null
+    options.push(parsed)
+  }
+  return {
+    id: v['id'],
+    name: v['name'],
+    ...(typeof v['description'] === 'string' ? { description: v['description'] } : {}),
+    ...(typeof v['category'] === 'string'
+      ? { category: v['category'] as AcpConfigOptionCategory }
+      : {}),
+    type: 'select',
+    currentValue: v['currentValue'],
+    options,
+  }
+}
+
+function parseConfigOptionsArray(v: unknown): readonly AcpSessionConfigOption[] | null {
+  if (!Array.isArray(v)) return null
+  const out: AcpSessionConfigOption[] = []
+  for (const item of v) {
+    const parsed = parseSessionConfigOption(item)
+    if (!parsed) return null
+    out.push(parsed)
+  }
+  return out
+}
+
+function parseSessionMode(v: unknown): AcpSessionMode | null {
+  if (!isObject(v)) return null
+  if (typeof v['id'] !== 'string') return null
+  if (typeof v['name'] !== 'string') return null
+  if (v['description'] !== undefined && typeof v['description'] !== 'string') return null
+  return {
+    id: v['id'],
+    name: v['name'],
+    ...(typeof v['description'] === 'string' ? { description: v['description'] } : {}),
+  }
+}
+
+export function parseSessionModeState(v: unknown): AcpSessionModeState | null {
+  if (!isObject(v)) return null
+  if (typeof v['currentModeId'] !== 'string') return null
+  const arr = v['availableModes']
+  if (!Array.isArray(arr)) return null
+  const modes: AcpSessionMode[] = []
+  for (const m of arr) {
+    const parsed = parseSessionMode(m)
+    if (!parsed) return null
+    modes.push(parsed)
+  }
+  return { currentModeId: v['currentModeId'], availableModes: modes }
+}
+
+export function parseNewSessionResult(v: unknown): AcpNewSessionResult | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  const out: {
+    sessionId: string
+    modes?: AcpSessionModeState
+    configOptions?: readonly AcpSessionConfigOption[]
+  } = { sessionId: v['sessionId'] }
+  if (v['modes'] !== undefined) {
+    const modes = parseSessionModeState(v['modes'])
+    if (modes) out.modes = modes
+  }
+  if (v['configOptions'] !== undefined) {
+    const cfg = parseConfigOptionsArray(v['configOptions'])
+    if (cfg) out.configOptions = cfg
+  }
+  return out
+}
+
+/**
+ * Parse `session/load` result. Agents may legitimately return `null` / `{}` —
+ * in that case we still succeed with an empty bag so the caller can keep using
+ * whatever modes/configOptions it had. Returning `null` means the WIRE shape
+ * was invalid (e.g. a string), which the caller should treat as a protocol
+ * error.
+ */
+export function parseLoadSessionResult(v: unknown): AcpLoadSessionResult | null {
+  if (v === null || v === undefined) return {}
+  if (!isObject(v)) return null
+  const out: {
+    modes?: AcpSessionModeState
+    configOptions?: readonly AcpSessionConfigOption[]
+  } = {}
+  if (v['modes'] !== undefined) {
+    const modes = parseSessionModeState(v['modes'])
+    if (modes) out.modes = modes
+  }
+  if (v['configOptions'] !== undefined) {
+    const cfg = parseConfigOptionsArray(v['configOptions'])
+    if (cfg) out.configOptions = cfg
+  }
+  return out
+}
+
+function parseAgentCapabilities(v: unknown): AcpAgentCapabilities | null {
+  if (!isObject(v)) return null
+  const out: {
+    promptCapabilities?: Readonly<Record<string, unknown>>
+    loadSession?: boolean
+  } = {}
+  if (v['promptCapabilities'] !== undefined) {
+    if (!isObject(v['promptCapabilities'])) return null
+    out.promptCapabilities = v['promptCapabilities'] as Readonly<Record<string, unknown>>
+  }
+  if (v['loadSession'] !== undefined) {
+    if (typeof v['loadSession'] !== 'boolean') return null
+    out.loadSession = v['loadSession']
+  }
+  return out
+}
+
+export function parseInitializeResult(v: unknown): AcpInitializeResult | null {
+  if (!isObject(v)) return null
+  if (typeof v['protocolVersion'] !== 'number') return null
+  const out: {
+    protocolVersion: number
+    agentCapabilities?: AcpAgentCapabilities
+  } = { protocolVersion: v['protocolVersion'] }
+  if (v['agentCapabilities'] !== undefined) {
+    const caps = parseAgentCapabilities(v['agentCapabilities'])
+    if (!caps) return null
+    out.agentCapabilities = caps
+  }
+  return out
+}
+
+export function parseAvailableCommand(v: unknown): AcpAvailableCommand | null {
+  if (!isObject(v)) return null
+  if (typeof v['name'] !== 'string') return null
+  if (typeof v['description'] !== 'string') return null
+  let input: AcpAvailableCommandInput | undefined
+  if (v['input'] !== undefined) {
+    if (!isObject(v['input'])) return null
+    if (typeof v['input']['hint'] !== 'string') return null
+    input = { hint: v['input']['hint'] }
+  }
+  return {
+    name: v['name'],
+    description: v['description'],
+    ...(input ? { input } : {}),
+  }
+}
+
+function parseAvailableCommandsArray(v: unknown): readonly AcpAvailableCommand[] | null {
+  if (!Array.isArray(v)) return null
+  const out: AcpAvailableCommand[] = []
+  for (const c of v) {
+    const parsed = parseAvailableCommand(c)
+    if (!parsed) return null
+    out.push(parsed)
+  }
+  return out
+}
+
 function parseSessionUpdate(v: unknown): AcpSessionUpdate | null {
   if (!isObject(v)) return null
   const kind = v['sessionUpdate']
@@ -350,6 +741,20 @@ function parseSessionUpdate(v: unknown): AcpSessionUpdate | null {
       }
       return { sessionUpdate: 'plan', entries: parsed }
     }
+    case 'available_commands_update': {
+      const cmds = parseAvailableCommandsArray(v['availableCommands'])
+      if (!cmds) return null
+      return { sessionUpdate: 'available_commands_update', availableCommands: cmds }
+    }
+    case 'current_mode_update': {
+      if (typeof v['currentModeId'] !== 'string') return null
+      return { sessionUpdate: 'current_mode_update', currentModeId: v['currentModeId'] }
+    }
+    case 'config_option_update': {
+      const cfg = parseConfigOptionsArray(v['configOptions'])
+      if (!cfg) return null
+      return { sessionUpdate: 'config_option_update', configOptions: cfg }
+    }
     default:
       return null
   }
@@ -361,4 +766,64 @@ export function parseSessionUpdateParams(v: unknown): AcpSessionUpdateParams | n
   const update = parseSessionUpdate(v['update'])
   if (!update) return null
   return { sessionId: v['sessionId'], update }
+}
+
+export function parseSetConfigOptionResult(v: unknown): AcpSetConfigOptionResult | null {
+  if (!isObject(v)) return null
+  const cfg = parseConfigOptionsArray(v['configOptions'])
+  if (!cfg) return null
+  return { configOptions: cfg }
+}
+
+// ---------------------------------------------------------------------------
+// Terminal parsing
+// ---------------------------------------------------------------------------
+
+function parseTerminalEnv(v: unknown): readonly AcpTerminalEnvVar[] | null {
+  if (!Array.isArray(v)) return null
+  const out: AcpTerminalEnvVar[] = []
+  for (const e of v) {
+    if (!isObject(e)) return null
+    if (typeof e['name'] !== 'string') return null
+    if (typeof e['value'] !== 'string') return null
+    out.push({ name: e['name'], value: e['value'] })
+  }
+  return out
+}
+
+export function parseTerminalCreateParams(v: unknown): AcpTerminalCreateParams | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  if (typeof v['command'] !== 'string') return null
+  let args: readonly string[] | undefined
+  if (v['args'] !== undefined) {
+    if (!Array.isArray(v['args'])) return null
+    if (!v['args'].every((a) => typeof a === 'string')) return null
+    args = v['args'] as readonly string[]
+  }
+  let env: readonly AcpTerminalEnvVar[] | undefined
+  if (v['env'] !== undefined) {
+    const parsed = parseTerminalEnv(v['env'])
+    if (!parsed) return null
+    env = parsed
+  }
+  if (v['cwd'] !== undefined && typeof v['cwd'] !== 'string') return null
+  if (v['outputByteLimit'] !== undefined && typeof v['outputByteLimit'] !== 'number') return null
+  return {
+    sessionId: v['sessionId'],
+    command: v['command'],
+    ...(args ? { args } : {}),
+    ...(env ? { env } : {}),
+    ...(typeof v['cwd'] === 'string' ? { cwd: v['cwd'] } : {}),
+    ...(typeof v['outputByteLimit'] === 'number' ? { outputByteLimit: v['outputByteLimit'] } : {}),
+  }
+}
+
+export function parseTerminalIdRequest(
+  v: unknown,
+): { sessionId: string; terminalId: string } | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  if (typeof v['terminalId'] !== 'string') return null
+  return { sessionId: v['sessionId'], terminalId: v['terminalId'] }
 }

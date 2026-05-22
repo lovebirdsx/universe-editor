@@ -1,12 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  MessageList — renders the streaming message log for one session. Plain text
- *  rendering for v1; markdown rendering can be layered in later via a dedicated
- *  helper without changing the data flow.
+ *  MessageList — renders the streaming message log for one session. Each
+ *  message's structured `blocks` go through MessageContent for markdown,
+ *  image, and resource-link rendering.
  *--------------------------------------------------------------------------------------------*/
 
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import { MessageContent } from './MessageContent.js'
 import styles from './agents.module.css'
 
 export function MessageList({ session }: { session: IAcpSession }) {
@@ -22,7 +23,7 @@ export function MessageList({ session }: { session: IAcpSession }) {
           data-testid={`acp-message-${m.role}`}
         >
           <span className={styles['messageRole']}>{m.role}</span>
-          <pre className={styles['messageText']}>{m.text}</pre>
+          <MessageContent blocks={m.blocks} />
         </li>
       ))}
     </ol>

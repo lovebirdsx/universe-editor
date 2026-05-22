@@ -4,14 +4,15 @@
  *  prompt input. Also shown by AcpSessionEditor (full-screen editor variant).
  *--------------------------------------------------------------------------------------------*/
 
-import { useState, type FormEvent } from 'react'
 import { localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
+import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { MessageList } from './MessageList.js'
 import { PermissionCard } from './PermissionCard.js'
 import { PlanView } from './PlanView.js'
+import { PromptInput } from './PromptInput.js'
 import { ToolCallList } from './ToolCallCard.js'
 import styles from './agents.module.css'
 
@@ -28,6 +29,7 @@ export function ChatView({ session }: { session?: IAcpSession }) {
   return (
     <div className={styles['chat']} data-testid="acp-chat">
       <Header session={target} />
+      <ConfigOptionsBar session={target} />
       <div className={styles['chatBody']}>
         <PlanView session={target} />
         <MessageList session={target} />
@@ -48,60 +50,6 @@ function Header({ session }: { session: IAcpSession }) {
         {status}
       </span>
     </div>
-  )
-}
-
-function PromptInput({ session }: { session: IAcpSession }) {
-  const [text, setText] = useState('')
-  const status = useObservable(session.status)
-  const running = status === 'running'
-
-  const submit = (e: FormEvent): void => {
-    e.preventDefault()
-    if (!text.trim() || running) return
-    const value = text
-    setText('')
-    void session.sendPrompt(value)
-  }
-
-  return (
-    <form className={styles['promptForm']} onSubmit={submit}>
-      <textarea
-        className={styles['promptTextarea']}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
-        rows={3}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault()
-            submit(e)
-          }
-        }}
-        data-testid="acp-prompt-input"
-      />
-      <div className={styles['promptActions']}>
-        {running ? (
-          <button
-            type="button"
-            className={styles['cancelButton']}
-            onClick={() => void session.cancelTurn()}
-            data-testid="acp-prompt-cancel"
-          >
-            {localize('acp.prompt.cancel', 'Cancel')}
-          </button>
-        ) : (
-          <button
-            type="submit"
-            className={styles['sendButton']}
-            disabled={!text.trim()}
-            data-testid="acp-prompt-send"
-          >
-            {localize('acp.prompt.send', 'Send')}
-          </button>
-        )}
-      </div>
-    </form>
   )
 }
 

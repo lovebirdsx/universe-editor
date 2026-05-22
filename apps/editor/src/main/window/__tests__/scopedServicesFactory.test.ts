@@ -16,8 +16,9 @@ describe('ApplicationServices type', () => {
       userData: {} as ApplicationServices['userData'],
       logFiles: {} as ApplicationServices['logFiles'],
       acpHost: {} as ApplicationServices['acpHost'],
+      acpTerminal: {} as ApplicationServices['acpTerminal'],
     }
-    expect(Object.keys(svc)).toHaveLength(8)
+    expect(Object.keys(svc)).toHaveLength(9)
   })
 })
 
