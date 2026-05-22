@@ -91,6 +91,28 @@ export interface E2EProbe {
   openFileUri(fsPath: string): Promise<void>
   /** Returns the number of editor groups currently open. */
   getEditorGroupCount(): number
+  // -- ACP probe -----------------------------------------------------------
+  /**
+   * Inject a test ACP agent that runs `node <jsPath>`. Writes into the Memory
+   * layer of `acp.agents` so AcpAgentRegistry picks it up, and sets
+   * `acp.defaultAgentId` to the same id. Returns once both configuration
+   * updates are visible.
+   */
+  installAcpEchoAgent(agentId: string, jsPath: string): void
+  /** Number of open ACP sessions. */
+  getAcpSessionCount(): number
+  /** Active ACP session id (the local one assigned by AcpSessionService), if any. */
+  getActiveAcpSessionId(): string | undefined
+  /**
+   * Send a prompt on the active ACP session. Fire-and-forget — the promise
+   * resolves once the prompt request resolves on the agent side (one full
+   * turn). Specs that don't want to wait should not await this call.
+   */
+  sendAcpPrompt(text: string): Promise<void>
+  /** Snapshot of the active session's messages (role + text). */
+  getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
+  /** Snapshot of the active session's tool calls (id, title, status, text). */
+  getAcpToolCalls(): ReadonlyArray<{ id: string; title: string; status: string; text: string }>
 }
 
 declare global {

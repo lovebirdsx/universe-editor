@@ -55,6 +55,7 @@ function makeOpts() {
       workspace: {} as never,
       userData: {} as never,
       logFiles: {} as never,
+      acpHost: {} as never,
     },
     logService,
     e2eEnabled: false,

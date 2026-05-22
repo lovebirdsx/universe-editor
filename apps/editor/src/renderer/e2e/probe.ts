@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  ConfigurationTarget,
   EditorInput,
   EditorRegistry,
   LifecyclePhase,
@@ -15,6 +16,7 @@ import {
   URI,
   onUnexpectedError,
   type ICommandService,
+  type IConfigurationService,
   type IContextKeyService,
   type IEditorGroupsService,
   type IEditorResolverService,
@@ -24,6 +26,7 @@ import {
   type IStatusBarService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
+import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import {
   E2E_PROBE_ENABLED_KEY,
   E2E_PROBE_KEY,
@@ -42,6 +45,8 @@ export interface E2EProbeServices {
   readonly statusBarService: IStatusBarService
   readonly workspaceService: IWorkspaceService
   readonly layoutService: ILayoutService
+  readonly configurationService: IConfigurationService
+  readonly acpSessionService: IAcpSessionService
 }
 
 class DummyEditorInput extends EditorInput {
@@ -120,6 +125,40 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
       return services.editorResolverService.openEditor(URI.file(fsPath))
     },
     getEditorGroupCount: () => services.editorGroupsService.count,
+    installAcpEchoAgent: (agentId, jsPath) => {
+      services.configurationService.update(
+        'acp.agents',
+        [{ id: agentId, name: 'Echo Agent', command: 'node', args: [jsPath] }],
+        ConfigurationTarget.Memory,
+      )
+      services.configurationService.update(
+        'acp.defaultAgentId',
+        agentId,
+        ConfigurationTarget.Memory,
+      )
+    },
+    getAcpSessionCount: () => services.acpSessionService.sessions.get().length,
+    getActiveAcpSessionId: () => services.acpSessionService.activeSessionId.get(),
+    sendAcpPrompt: async (text) => {
+      const s = services.acpSessionService.activeSession.get()
+      if (!s) throw new Error('[E2E] no active ACP session')
+      await s.sendPrompt(text)
+    },
+    getAcpMessages: () => {
+      const s = services.acpSessionService.activeSession.get()
+      if (!s) return []
+      return s.messages.get().map((m) => ({ role: m.role, text: m.text }))
+    },
+    getAcpToolCalls: () => {
+      const s = services.acpSessionService.activeSession.get()
+      if (!s) return []
+      return s.toolCalls.get().map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        text: t.text,
+      }))
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

@@ -97,6 +97,12 @@ import {
   SetLogLevelAction,
   ShowLogsAction,
 } from './logActions.js'
+import {
+  CancelAgentTurnAction,
+  NewAgentSessionAction,
+  OpenAgentInEditorAction,
+  SelectAgentAction,
+} from './agentActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -208,3 +214,9 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// Agents
+registerAction2(NewAgentSessionAction)
+registerAction2(CancelAgentTurnAction)
+registerAction2(OpenAgentInEditorAction)
+registerAction2(SelectAgentAction)

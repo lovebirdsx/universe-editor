@@ -1,0 +1,276 @@
+.chat {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-editor-bg, #1e1e1e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.chatHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--color-border, #333);
+  font-size: 12px;
+}
+
+.chatTitle {
+  font-weight: 600;
+  flex: 1;
+}
+
+.chatStatus {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 2px 6px;
+  border-radius: 3px;
+  background: var(--color-badge-bg, #333);
+}
+
+.chatStatus[data-status='running'] {
+  background: var(--color-badge-progress, #0e639c);
+}
+.chatStatus[data-status='errored'] {
+  background: var(--color-badge-error, #a1260d);
+}
+.chatStatus[data-status='closed'] {
+  background: var(--color-badge-muted, #555);
+}
+
+.chatBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messageList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.messageItem {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--color-message-bg, #2a2a2a);
+}
+
+.messageItem[data-role='user'] {
+  background: var(--color-message-user-bg, #2a3550);
+}
+
+.messageItem[data-role='thought'] {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.messageRole {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-message-role-fg, #888);
+}
+
+.messageText {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-family-mono, monospace);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.toolCallList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.toolCallCard {
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.toolCallCard[data-status='in_progress'] {
+  border-color: var(--color-badge-progress, #0e639c);
+}
+.toolCallCard[data-status='completed'] {
+  border-color: var(--color-badge-success, #2c7d32);
+}
+.toolCallCard[data-status='failed'] {
+  border-color: var(--color-badge-error, #a1260d);
+}
+
+.toolCallHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolCallKind {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 4px;
+  border-radius: 2px;
+  background: var(--color-badge-bg, #333);
+}
+
+.toolCallTitle {
+  flex: 1;
+  font-weight: 600;
+}
+
+.toolCallStatus {
+  font-size: 10px;
+  color: var(--color-message-role-fg, #888);
+}
+
+.toolCallBody {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-family-mono, monospace);
+  font-size: 11px;
+}
+
+.promptForm {
+  border-top: 1px solid var(--color-border, #333);
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.promptTextarea {
+  width: 100%;
+  resize: vertical;
+  font-family: var(--font-family-mono, monospace);
+  font-size: 12px;
+  padding: 4px 6px;
+  background: var(--color-input-bg, #3c3c3c);
+  color: var(--color-input-fg, #d4d4d4);
+  border: 1px solid var(--color-input-border, #555);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.promptActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.sendButton,
+.cancelButton {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--color-button-bg, #0e639c);
+  color: #fff;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.sendButton:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.cancelButton {
+  background: var(--color-badge-error, #a1260d);
+}
+
+.sessionList {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+}
+
+.sessionListToolbar {
+  display: flex;
+  gap: 4px;
+  padding: 2px 0 6px;
+}
+
+.sessionListToolbar button {
+  flex: 1;
+  font-size: 11px;
+  padding: 4px;
+  background: var(--color-button-secondary-bg, #3c3c3c);
+  color: var(--color-button-secondary-fg, #d4d4d4);
+  border: 1px solid var(--color-border, #555);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.sessionList ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.sessionRow {
+  display: flex;
+  align-items: center;
+  padding: 4px 6px;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.sessionRow[data-active='true'] {
+  background: var(--color-list-active-bg, #094771);
+}
+
+.sessionRow:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.sessionRowTitle {
+  flex: 1;
+}
+
+.sessionClose {
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 0 4px;
+}
+
+.empty,
+.emptyChat {
+  padding: 16px 12px;
+  color: var(--color-sidebar-fg, #888);
+  font-size: 12px;
+}
+
+.emptyChat {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.sessionMissing {
+  padding: 16px;
+  color: var(--color-sidebar-fg, #888);
+}

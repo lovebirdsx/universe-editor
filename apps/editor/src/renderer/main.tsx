@@ -46,6 +46,7 @@ import {
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { ILogChannelService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
+import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { installRendererErrorHandlers } from './errors.js'
@@ -78,6 +79,10 @@ import {
   RecentFilesService,
 } from './services/recentFiles/recentFilesService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
+import { AcpAgentRegistry, IAcpAgentRegistry } from './services/acp/acpAgentRegistry.js'
+import { AcpPermissionHandler, IAcpPermissionHandler } from './services/acp/acpPermissionHandler.js'
+import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
+import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
@@ -173,6 +178,10 @@ async function bootstrapWorkbench(): Promise<void> {
     ILogFilesService,
     ProxyChannel.toService<ILogFilesService>(ipcService.getChannel(ServiceChannels.LogFiles)),
   )
+  services.set(
+    IAcpHostService,
+    ProxyChannel.toService<IAcpHostService>(ipcService.getChannel(ServiceChannels.AcpHost)),
+  )
   await initializeRendererNls(
     services.get(IUserDataFilesService) as IUserDataFilesService,
     window.navigator.language,
@@ -261,6 +270,19 @@ async function bootstrapWorkbench(): Promise<void> {
   const textSearchService = instantiation.createInstance(TextSearchService)
   services.set(ITextSearchService, textSearchService)
 
+  // ACP (Agent Client Protocol) services. AgentRegistry depends only on
+  // IConfigurationService; ClientService brings together host + permission
+  // + IFileService + IOutputService; SessionService owns Session state and
+  // drives the connection.
+  const acpAgentRegistry = instantiation.createInstance(AcpAgentRegistry)
+  services.set(IAcpAgentRegistry, acpAgentRegistry)
+  const acpPermissionHandler = instantiation.createInstance(AcpPermissionHandler)
+  services.set(IAcpPermissionHandler, acpPermissionHandler)
+  const acpClientService = instantiation.createInstance(AcpClientService)
+  services.set(IAcpClientService, acpClientService)
+  const acpSessionService = instantiation.createInstance(AcpSessionService)
+  services.set(IAcpSessionService, acpSessionService)
+
   // Kick off async load of user settings from storage. Once it resolves,
   // ConfigurationService fires onDidChangeConfiguration so any subscribers
   // (Settings editor, theme contributions) refresh — no need to await here.
@@ -304,6 +326,8 @@ async function bootstrapWorkbench(): Promise<void> {
     statusBarService,
     workspaceService,
     layoutService,
+    configurationService,
+    acpSessionService,
   })
 
   // Load persisted layout and view state before mounting React so Allotment starts with the

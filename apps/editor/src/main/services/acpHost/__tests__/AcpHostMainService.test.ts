@@ -1,0 +1,240 @@
+/*---------------------------------------------------------------------------------------------
+ *  Tests for apps/editor/src/main/services/acpHost/acpHostMainService.ts
+ *--------------------------------------------------------------------------------------------*/
+
+import { EventEmitter } from 'node:events'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { NullLogger } from '@universe-editor/platform'
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { AcpHostMainService, type AcpSpawner } from '../acpHostMainService.js'
+import type { AcpExitEvent, AcpStdioChunk } from '../../../../shared/ipc/acpHostService.js'
+
+class FakeStdStream extends EventEmitter {
+  setEncoding = vi.fn()
+}
+
+class FakeStdinStream extends EventEmitter {
+  readonly writes: string[] = []
+  destroyed = false
+  writable = true
+  write(data: string, _enc: string, cb: (err?: Error | null) => void): boolean {
+    this.writes.push(data)
+    cb(null)
+    return true
+  }
+}
+
+class FakeProc extends EventEmitter {
+  readonly stdout = new FakeStdStream()
+  readonly stderr = new FakeStdStream()
+  readonly stdin = new FakeStdinStream()
+  killCalls = 0
+  kill(): boolean {
+    this.killCalls++
+    return true
+  }
+  emitData(stream: 'stdout' | 'stderr', data: string): void {
+    this[stream].emit('data', data)
+  }
+  emitExit(code: number | null, signal: NodeJS.Signals | null): void {
+    this.emit('exit', code, signal)
+  }
+  emitError(err: Error): void {
+    this.emit('error', err)
+  }
+}
+
+function fakeSpawnerWith(procs: FakeProc[]): AcpSpawner {
+  let i = 0
+  return () => {
+    const next = procs[i++]
+    if (!next) throw new Error('FakeSpawner: no more procs queued')
+    return next as unknown as ChildProcessWithoutNullStreams
+  }
+}
+
+function makeService(spawner: AcpSpawner): AcpHostMainService {
+  return new AcpHostMainService(new NullLogger(), spawner)
+}
+
+describe('AcpHostMainService', () => {
+  let svc: AcpHostMainService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('start returns a handle and fires onStdout chunks for that handle', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+
+    const stdoutChunks: AcpStdioChunk[] = []
+    svc.onStdout((c) => stdoutChunks.push(c))
+
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+    expect(handle).toBeTruthy()
+
+    proc.emitData('stdout', 'line-1\n')
+    proc.emitData('stdout', 'line-2\n')
+
+    expect(stdoutChunks).toEqual([
+      { handle, data: 'line-1\n' },
+      { handle, data: 'line-2\n' },
+    ])
+  })
+
+  it('routes stderr to onStderr keyed by handle', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+
+    const stderrChunks: AcpStdioChunk[] = []
+    svc.onStderr((c) => stderrChunks.push(c))
+
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+    proc.emitData('stderr', 'oops')
+
+    expect(stderrChunks).toEqual([{ handle, data: 'oops' }])
+  })
+
+  it('events from one handle do not leak to listeners filtering on another', async () => {
+    const procA = new FakeProc()
+    const procB = new FakeProc()
+    svc = makeService(fakeSpawnerWith([procA, procB]))
+
+    const allChunks: AcpStdioChunk[] = []
+    svc.onStdout((c) => allChunks.push(c))
+
+    const { handle: ha } = await svc.start({ command: 'a', args: [] })
+    const { handle: hb } = await svc.start({ command: 'b', args: [] })
+    expect(ha).not.toBe(hb)
+
+    procA.emitData('stdout', 'from-a')
+    procB.emitData('stdout', 'from-b')
+
+    const fromA = allChunks.filter((c) => c.handle === ha)
+    const fromB = allChunks.filter((c) => c.handle === hb)
+    expect(fromA).toEqual([{ handle: ha, data: 'from-a' }])
+    expect(fromB).toEqual([{ handle: hb, data: 'from-b' }])
+  })
+
+  it('writeStdin writes utf-8 to the matching proc and rejects for unknown/exited handles', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+
+    await svc.writeStdin(handle, 'hello\n')
+    expect(proc.stdin.writes).toEqual(['hello\n'])
+
+    await expect(svc.writeStdin('does-not-exist', 'x')).rejects.toThrow(/unknown or exited/)
+  })
+
+  it('onExit fires exactly once with the handle, code, and signal', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+
+    const events: AcpExitEvent[] = []
+    svc.onExit((e) => events.push(e))
+
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+    proc.emitExit(0, null)
+    // Spurious second exit must be ignored.
+    proc.emitExit(1, 'SIGTERM')
+
+    expect(events).toEqual([{ handle, code: 0, signal: null }])
+    // After exit, writes reject.
+    await expect(svc.writeStdin(handle, 'x')).rejects.toThrow(/unknown or exited/)
+  })
+
+  it('stop is a no-op for unknown handles and kills live procs once', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+    await svc.stop('never-started')
+
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+    await svc.stop(handle)
+    expect(proc.killCalls).toBe(1)
+
+    // Calling stop a second time after the proc has exited should be a no-op.
+    proc.emitExit(null, 'SIGTERM')
+    await svc.stop(handle)
+    expect(proc.killCalls).toBe(1)
+  })
+
+  it('dispose kills all live procs and clears its book-keeping', async () => {
+    const procA = new FakeProc()
+    const procB = new FakeProc()
+    svc = makeService(fakeSpawnerWith([procA, procB]))
+
+    await svc.start({ command: 'a', args: [] })
+    await svc.start({ command: 'b', args: [] })
+
+    svc.dispose()
+    expect(procA.killCalls).toBe(1)
+    expect(procB.killCalls).toBe(1)
+  })
+
+  it('rejects the start promise if spawn throws synchronously', async () => {
+    const throwingSpawner: AcpSpawner = () => {
+      throw new Error('ENOENT')
+    }
+    svc = makeService(throwingSpawner)
+    await expect(svc.start({ command: 'missing', args: [] })).rejects.toThrow('ENOENT')
+  })
+
+  it('translates an async spawn error into a synthetic exit event', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+    const exits: AcpExitEvent[] = []
+    svc.onExit((e) => exits.push(e))
+
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+    proc.emitError(new Error('spawn npx ENOENT'))
+
+    expect(exits).toEqual([{ handle, code: null, signal: null, error: 'spawn npx ENOENT' }])
+    // After the synthetic exit, writeStdin must reject — without this, the
+    // renderer would land in "Cannot call write after a stream was destroyed".
+    await expect(svc.writeStdin(handle, 'x')).rejects.toThrow(/unknown or exited/)
+    // A subsequent real exit must not double-fire.
+    proc.emitExit(null, null)
+    expect(exits).toHaveLength(1)
+  })
+
+  it('rejects writeStdin when stdin has been destroyed mid-flight', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+    const { handle } = await svc.start({ command: 'agent', args: [] })
+    // Simulate the narrow race: stdin already destroyed but the exit event
+    // has not yet propagated through the event loop.
+    proc.stdin.destroyed = true
+    await expect(svc.writeStdin(handle, 'x')).rejects.toThrow(/stdin is not writable/)
+  })
+})
+
+describe('AcpHostMainService — env / cwd plumbing', () => {
+  let svc: AcpHostMainService
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('passes cwd and merged env to the spawner', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    svc = new AcpHostMainService(new NullLogger(), spawner)
+    await svc.start({
+      command: 'agent',
+      args: ['--flag'],
+      cwd: '/some/path',
+      env: { FOO: 'bar' },
+    })
+    expect(spawner).toHaveBeenCalledTimes(1)
+    const call = spawner.mock.calls[0]!
+    expect(call[0]).toBe('agent')
+    expect(call[1]).toEqual(['--flag'])
+    expect(call[2].cwd).toBe('/some/path')
+    expect(call[2].env?.FOO).toBe('bar')
+    // Inherited env should still be present.
+    expect(call[2].env?.PATH ?? call[2].env?.Path).toBeDefined()
+  })
+})

@@ -16,6 +16,7 @@ import { UserDataMainService } from './services/userData/userDataMainService.js'
 import { LogMainService } from './services/log/logMainService.js'
 import { LogFilesMainService } from './services/log/logFilesMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
+import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
 import { installMainErrorHandlers } from './errors.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 
@@ -76,6 +77,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       workspace,
       userData,
       logFiles: new LogFilesMainService(logMainService),
+      acpHost: new AcpHostMainService(
+        logMainService.createLogger({ id: 'acpHost', name: 'ACP Host' }),
+      ),
     }
   }
   if (!windowMainService) {

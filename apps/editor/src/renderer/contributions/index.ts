@@ -29,6 +29,12 @@ import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContri
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 import { LogLevelContribution } from './LogLevelContribution.js'
 import { LogTailContribution } from './LogTailContribution.js'
+import {
+  AgentsConfigurationContribution,
+  AgentsEditorProviderContribution,
+  AgentsStatusBarContribution,
+  AgentsViewContainerContribution,
+} from './AgentsContributions.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -178,6 +184,29 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.logTail',
   LogTailContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// ACP integration: configuration schema, view container/views, editor provider
+// (BlockStartup); status-bar entry runs after the workbench mounts.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsConfiguration',
+  AgentsConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsViewContainer',
+  AgentsViewContainerContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsEditorProvider',
+  AgentsEditorProviderContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsStatusBar',
+  AgentsStatusBarContribution,
   WorkbenchPhase.AfterRestore,
 )
 
