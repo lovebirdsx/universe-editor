@@ -188,3 +188,177 @@ export interface AcpWriteTextFileParams {
 
 /** Current ACP protocol version that we advertise. */
 export const ACP_PROTOCOL_VERSION = 1
+
+// ---------------------------------------------------------------------------
+// Runtime guards
+//
+// Peer-initiated traffic comes from a third-party agent process, so we never
+// trust the wire payload to match our TypeScript types. These narrow guards
+// fail closed and let the caller emit `-32602 Invalid params` instead of
+// letting a missing field crash a deeper layer with `-32603 Internal error`.
+// ---------------------------------------------------------------------------
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null
+}
+
+function isContentBlock(v: unknown): v is AcpContentBlock {
+  if (!isObject(v)) return false
+  switch (v['type']) {
+    case 'text':
+      return typeof v['text'] === 'string'
+    case 'image':
+      return typeof v['mimeType'] === 'string' && typeof v['data'] === 'string'
+    case 'resource':
+      return typeof v['uri'] === 'string'
+    default:
+      return false
+  }
+}
+
+function isContentBlockArray(v: unknown): v is readonly AcpContentBlock[] {
+  return Array.isArray(v) && v.every(isContentBlock)
+}
+
+export function parseReadTextFileParams(v: unknown): AcpReadTextFileParams | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  if (typeof v['path'] !== 'string') return null
+  if (v['line'] !== undefined && typeof v['line'] !== 'number') return null
+  if (v['limit'] !== undefined && typeof v['limit'] !== 'number') return null
+  const out: AcpReadTextFileParams = {
+    sessionId: v['sessionId'],
+    path: v['path'],
+    ...(typeof v['line'] === 'number' ? { line: v['line'] } : {}),
+    ...(typeof v['limit'] === 'number' ? { limit: v['limit'] } : {}),
+  }
+  return out
+}
+
+export function parseWriteTextFileParams(v: unknown): AcpWriteTextFileParams | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  if (typeof v['path'] !== 'string') return null
+  if (typeof v['content'] !== 'string') return null
+  return {
+    sessionId: v['sessionId'],
+    path: v['path'],
+    content: v['content'],
+  }
+}
+
+export function parseRequestPermissionParams(v: unknown): AcpRequestPermissionParams | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  const tc = v['toolCall']
+  if (!isObject(tc) || typeof tc['toolCallId'] !== 'string') return null
+  if (tc['title'] !== undefined && typeof tc['title'] !== 'string') return null
+  if (tc['kind'] !== undefined && typeof tc['kind'] !== 'string') return null
+  const optsRaw = v['options']
+  if (!Array.isArray(optsRaw)) return null
+  const options: AcpRequestPermissionParams['options'][number][] = []
+  for (const opt of optsRaw) {
+    if (!isObject(opt)) return null
+    if (typeof opt['optionId'] !== 'string') return null
+    if (typeof opt['name'] !== 'string') return null
+    const kind = opt['kind']
+    if (
+      kind !== undefined &&
+      kind !== 'allow_once' &&
+      kind !== 'allow_always' &&
+      kind !== 'reject_once' &&
+      kind !== 'reject_always'
+    ) {
+      return null
+    }
+    options.push({
+      optionId: opt['optionId'],
+      name: opt['name'],
+      ...(kind
+        ? { kind: kind as 'allow_once' | 'allow_always' | 'reject_once' | 'reject_always' }
+        : {}),
+    })
+  }
+  return {
+    sessionId: v['sessionId'],
+    toolCall: {
+      toolCallId: tc['toolCallId'],
+      ...(typeof tc['title'] === 'string' ? { title: tc['title'] } : {}),
+      ...(typeof tc['kind'] === 'string' ? { kind: tc['kind'] } : {}),
+    },
+    options,
+  }
+}
+
+const TOOL_CALL_STATUSES = new Set(['pending', 'in_progress', 'completed', 'failed'])
+
+function parseSessionUpdate(v: unknown): AcpSessionUpdate | null {
+  if (!isObject(v)) return null
+  const kind = v['sessionUpdate']
+  switch (kind) {
+    case 'agent_message_chunk':
+    case 'user_message_chunk':
+    case 'agent_thought_chunk': {
+      if (!isContentBlock(v['content'])) return null
+      return { sessionUpdate: kind, content: v['content'] } as AcpSessionUpdate
+    }
+    case 'tool_call': {
+      if (typeof v['toolCallId'] !== 'string') return null
+      if (v['title'] !== undefined && typeof v['title'] !== 'string') return null
+      if (v['kind'] !== undefined && typeof v['kind'] !== 'string') return null
+      if (v['status'] !== undefined && !TOOL_CALL_STATUSES.has(v['status'] as string)) return null
+      if (v['content'] !== undefined && !isContentBlockArray(v['content'])) return null
+      return {
+        sessionUpdate: 'tool_call',
+        toolCallId: v['toolCallId'],
+        ...(typeof v['title'] === 'string' ? { title: v['title'] } : {}),
+        ...(typeof v['kind'] === 'string' ? { kind: v['kind'] } : {}),
+        ...(typeof v['status'] === 'string'
+          ? { status: v['status'] as 'pending' | 'in_progress' | 'completed' | 'failed' }
+          : {}),
+        ...(v['content'] !== undefined
+          ? { content: v['content'] as readonly AcpContentBlock[] }
+          : {}),
+      }
+    }
+    case 'tool_call_update': {
+      if (typeof v['toolCallId'] !== 'string') return null
+      if (v['status'] !== undefined && !TOOL_CALL_STATUSES.has(v['status'] as string)) return null
+      if (v['content'] !== undefined && !isContentBlockArray(v['content'])) return null
+      return {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: v['toolCallId'],
+        ...(typeof v['status'] === 'string'
+          ? { status: v['status'] as 'pending' | 'in_progress' | 'completed' | 'failed' }
+          : {}),
+        ...(v['content'] !== undefined
+          ? { content: v['content'] as readonly AcpContentBlock[] }
+          : {}),
+      }
+    }
+    case 'plan': {
+      const entries = v['entries']
+      if (!Array.isArray(entries)) return null
+      const parsed: { content: string; priority?: string }[] = []
+      for (const e of entries) {
+        if (!isObject(e) || typeof e['content'] !== 'string') return null
+        if (e['priority'] !== undefined && typeof e['priority'] !== 'string') return null
+        parsed.push({
+          content: e['content'],
+          ...(typeof e['priority'] === 'string' ? { priority: e['priority'] } : {}),
+        })
+      }
+      return { sessionUpdate: 'plan', entries: parsed }
+    }
+    default:
+      return null
+  }
+}
+
+export function parseSessionUpdateParams(v: unknown): AcpSessionUpdateParams | null {
+  if (!isObject(v)) return null
+  if (typeof v['sessionId'] !== 'string') return null
+  const update = parseSessionUpdate(v['update'])
+  if (!update) return null
+  return { sessionId: v['sessionId'], update }
+}

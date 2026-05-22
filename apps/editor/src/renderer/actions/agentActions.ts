@@ -75,7 +75,7 @@ export class OpenAgentInEditorAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const session = accessor.get(IAcpSessionService).activeSession.get()
     if (!session) return
-    accessor.get(IEditorService).openEditor(new AcpSessionEditorInput(session.id))
+    accessor.get(IEditorService).openEditor(new AcpSessionEditorInput(session.id, session.agentId))
   }
 }
 
@@ -92,11 +92,24 @@ export class SelectAgentAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const registry = accessor.get(IAcpAgentRegistry)
     const quickInput = accessor.get(IQuickInputService)
-    const items: IQuickPickItem[] = registry.list().map((d) => ({
-      id: d.id,
-      label: d.name,
-      description: d.command,
-    }))
+    const agents = registry.list()
+    const healths = await Promise.all(agents.map((a) => registry.health(a.id)))
+    const items: IQuickPickItem[] = agents.map((d, i) => {
+      const available = healths[i]?.available ?? false
+      return {
+        id: d.id,
+        label: d.name,
+        description: d.command,
+        ...(available
+          ? {}
+          : {
+              detail: localize(
+                'agent.selectAgent.unavailable',
+                'Not installed (command not found in PATH)',
+              ),
+            }),
+      }
+    })
     const picked = await quickInput.pick(items, {
       placeholder: localize('agent.selectAgent.placeholder', 'Select default ACP agent'),
     })

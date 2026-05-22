@@ -63,6 +63,12 @@ export interface IAcpHostService {
   start(spec: AcpLaunchSpec): Promise<AcpStartResult>
   writeStdin(handle: string, data: string): Promise<void>
   stop(handle: string): Promise<void>
+  /**
+   * Resolve `command` against PATH without launching the agent. Returns true if
+   * the binary is found by the platform's `where`/`which` lookup. Used to
+   * surface "agent not installed" in the picker before the user hits a wall.
+   */
+  probe(command: string): Promise<boolean>
 }
 
 export const IAcpHostService = createDecorator<IAcpHostService>('acpHostService')

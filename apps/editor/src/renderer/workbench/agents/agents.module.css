@@ -71,8 +71,11 @@
 }
 
 .messageItem[data-role='thought'] {
-  opacity: 0.6;
+  opacity: 0.7;
   font-style: italic;
+  background: var(--color-message-thought-bg, #2a2a35);
+  border-left: 2px solid var(--color-message-thought-accent, #7a7aa3);
+  padding-left: 10px;
 }
 
 .messageRole {
@@ -273,4 +276,122 @@
 .sessionMissing {
   padding: 16px;
   color: var(--color-sidebar-fg, #888);
+}
+
+.planCard {
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  background: var(--color-message-bg, #2a2a2a);
+}
+
+.planHeader {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.planTitle {
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 11px;
+}
+
+.planCount {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--color-badge-bg, #333);
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.planChevron {
+  margin-left: auto;
+  font-size: 10px;
+  color: var(--color-message-role-fg, #888);
+}
+
+.planList {
+  list-style: decimal inside;
+  margin: 0;
+  padding: 0 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.planEntry {
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.planEntry[data-priority='high'] {
+  color: var(--color-warning-fg, #d7ba7d);
+  font-weight: 500;
+}
+
+.planEntry[data-priority='critical'] {
+  color: var(--color-error-fg, #f48771);
+  font-weight: 600;
+}
+
+.permissionCard {
+  border-top: 1px solid var(--color-border, #333);
+  background: var(--color-message-bg, #2a2a2a);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.permissionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.permissionTitle {
+  font-weight: 600;
+  flex: 1;
+}
+
+.permissionKind {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--color-badge-bg, #333);
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.permissionActions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.permissionAllow,
+.permissionDeny {
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 0;
+  border-radius: 3px;
+  cursor: pointer;
+  color: #fff;
+}
+
+.permissionAllow {
+  background: var(--color-button-bg, #0e639c);
+}
+
+.permissionDeny {
+  background: var(--color-badge-error, #a1260d);
 }

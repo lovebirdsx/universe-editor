@@ -47,7 +47,7 @@ export function SessionListView() {
               className={styles['sessionRow']}
               data-active={s.id === activeId}
               onClick={() => service.setActive(s.id)}
-              onDoubleClick={() => editor.openEditor(new AcpSessionEditorInput(s.id))}
+              onDoubleClick={() => editor.openEditor(new AcpSessionEditorInput(s.id, s.agentId))}
             >
               <span className={styles['sessionRowTitle']}>{s.title}</span>
               <button

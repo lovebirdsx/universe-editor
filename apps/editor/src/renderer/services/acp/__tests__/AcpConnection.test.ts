@@ -213,6 +213,27 @@ describe('AcpConnection — exit handling', () => {
     harness.dispose()
   })
 
+  it('rejects the request locally when its AbortSignal fires', async () => {
+    const harness = createInMemoryAcpHost()
+    const conn = new AcpConnection(harness.host, harness.handle, noopHandler, new NullLogger())
+    const controller = new AbortController()
+    const p = conn.request('slow/op', undefined, controller.signal)
+    controller.abort()
+    await expect(p).rejects.toThrow(/Aborted/)
+    conn.dispose()
+    harness.dispose()
+  })
+
+  it('rejects immediately when the signal is already aborted', async () => {
+    const harness = createInMemoryAcpHost()
+    const conn = new AcpConnection(harness.host, harness.handle, noopHandler, new NullLogger())
+    const controller = new AbortController()
+    controller.abort()
+    await expect(conn.request('x', undefined, controller.signal)).rejects.toThrow(/Aborted/)
+    conn.dispose()
+    harness.dispose()
+  })
+
   it('ignores stdout/exit events targeting a different handle', () => {
     const harness = createInMemoryAcpHost()
     const handler: IAcpConnectionHandler = {

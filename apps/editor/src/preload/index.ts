@@ -3,6 +3,10 @@ import type { IpcRendererEvent } from 'electron'
 import { IPC_PROTOCOL_CHANNEL } from '../shared/ipc/channelNames.js'
 import { E2E_PROBE_ARGV_FLAG, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 
+const HOME_DIR_FLAG = '--ue-home-dir='
+const homeArg = process.argv.find((a) => a.startsWith(HOME_DIR_FLAG))
+const home = homeArg ? homeArg.slice(HOME_DIR_FLAG.length) : ''
+
 const bridge = {
   send(data: Uint8Array): void {
     ipcRenderer.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
@@ -20,6 +24,7 @@ const bridge = {
     return () => ipcRenderer.removeListener(IPC_PROTOCOL_CHANNEL, listener)
   },
   platform: process.platform as NodeJS.Platform,
+  home,
 }
 
 contextBridge.exposeInMainWorld('ipc', bridge)

@@ -81,6 +81,7 @@ import {
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
 import { AcpAgentRegistry, IAcpAgentRegistry } from './services/acp/acpAgentRegistry.js'
 import { AcpPermissionHandler, IAcpPermissionHandler } from './services/acp/acpPermissionHandler.js'
+import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
 import './workbench.css'
@@ -276,6 +277,11 @@ async function bootstrapWorkbench(): Promise<void> {
   // drives the connection.
   const acpAgentRegistry = instantiation.createInstance(AcpAgentRegistry)
   services.set(IAcpAgentRegistry, acpAgentRegistry)
+  const acpPathPolicy = new AcpPathPolicy({
+    platform,
+    home: typeof window.ipc?.home === 'string' ? window.ipc.home : '',
+  })
+  services.set(IAcpPathPolicy, acpPathPolicy)
   const acpPermissionHandler = instantiation.createInstance(AcpPermissionHandler)
   services.set(IAcpPermissionHandler, acpPermissionHandler)
   const acpClientService = instantiation.createInstance(AcpClientService)

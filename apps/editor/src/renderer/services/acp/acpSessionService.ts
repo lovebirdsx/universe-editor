@@ -8,32 +8,45 @@
  *    - activeSession: the one currently visible in the chat view
  *
  *  Session lifecycle: `createSession(agentId)` spawns the agent, performs
- *  ACP `initialize` + `session/new`, then stays idle until `sendPrompt(text)`
- *  is called. `cancelTurn()` issues `session/cancel`. `close()` disposes the
- *  connection (which kills the process via the host) and removes the session
- *  from the observable list.
+ *  ACP `initialize` + `session/new` under a timeout, then stays idle until
+ *  `sendPrompt(text)` is called. `cancelTurn()` issues `session/cancel` AND
+ *  locally aborts the in-flight prompt request so the local promise unblocks
+ *  even if the agent never responds. `close()` disposes the connection (which
+ *  kills the process via the host) and removes the session from the list.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
   Disposable,
   Emitter,
+  IConfigurationService,
+  ILoggerService,
+  INotificationService,
+  ITelemetryService,
   IWorkspaceService,
+  Severity,
   observableValue,
+  transaction,
+  TransactionImpl,
+  type ILogger,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { IAcpClientService, type IAcpClientNotificationSink } from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
-import type { AcpConnection } from './acpConnection.js'
+import { IAcpPermissionHandler } from './acpPermissionHandler.js'
+import { AcpAbortError, type AcpConnection } from './acpConnection.js'
 import {
   ACP_PROTOCOL_VERSION,
   AcpMethods,
+  parseSessionUpdateParams,
   type AcpContentBlock,
   type AcpInitializeParams,
   type AcpInitializeResult,
   type AcpNewSessionParams,
   type AcpNewSessionResult,
+  type AcpRequestPermissionParams,
+  type AcpRequestPermissionResult,
   type AcpSessionCancelParams,
   type AcpSessionPromptParams,
   type AcpSessionPromptResult,
@@ -68,6 +81,19 @@ export interface AcpPlanEntry {
   readonly priority?: string
 }
 
+export interface AcpPendingPermission {
+  readonly toolCallId: string
+  readonly title: string
+  readonly kind?: string
+  readonly options: readonly {
+    readonly optionId: string
+    readonly name: string
+    readonly kind?: string
+  }[]
+  resolve(optionId: string): void
+  cancel(): void
+}
+
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
 export interface IAcpSession {
@@ -78,6 +104,9 @@ export interface IAcpSession {
   readonly toolCalls: IObservable<readonly AcpToolCall[]>
   readonly plan: IObservable<readonly AcpPlanEntry[]>
   readonly status: IObservable<AcpSessionStatus>
+  readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
+  /** Internal — call site is the permission handler. */
+  presentPermission(p: AcpPendingPermission): void
   sendPrompt(text: string): Promise<void>
   cancelTurn(): Promise<void>
   close(): Promise<void>
@@ -100,19 +129,28 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 // Implementation
 // ---------------------------------------------------------------------------
 
+const DEFAULT_STARTUP_TIMEOUT_MS = 20_000
+
 class AcpSession extends Disposable implements IAcpSession {
   readonly messages: ISettableObservable<readonly AcpMessage[]>
   readonly toolCalls: ISettableObservable<readonly AcpToolCall[]>
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
   readonly status: ISettableObservable<AcpSessionStatus>
+  readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
 
-  /** Internal: backing arrays for cheap mutations before publishing snapshots. */
   private _messages: AcpMessage[] = []
   private _toolCalls: AcpToolCall[] = []
   private _msgCounter = 0
 
-  /** Active streaming buffer per role for chunked updates. */
   private _streamBuffer = new Map<AcpMessageRole, string>()
+  /** Abort controller for the in-flight `session/prompt`. */
+  private _activeAbort: AbortController | undefined
+
+  // 16ms batching: collapse bursts of session/update chunks into one
+  // observer notification per frame. Underlying values still update
+  // synchronously (set(v, tx) writes _value before tx.finish()).
+  private _pendingTx: TransactionImpl | undefined
+  private _flushTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(
     readonly id: string,
@@ -120,18 +158,39 @@ class AcpSession extends Disposable implements IAcpSession {
     readonly title: string,
     private readonly _conn: AcpConnection,
     private readonly _sessionIdOnAgent: string,
+    private readonly _telemetry: ITelemetryService,
   ) {
     super()
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
     this.toolCalls = observableValue<readonly AcpToolCall[]>(`acp.session.toolCalls.${id}`, [])
     this.plan = observableValue<readonly AcpPlanEntry[]>(`acp.session.plan.${id}`, [])
     this.status = observableValue<AcpSessionStatus>(`acp.session.status.${id}`, 'idle')
+    this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
+      `acp.session.pendingPermission.${id}`,
+      undefined,
+    )
     this._register(this._conn)
     this._register(
       this._conn.onExit(() => {
+        this._commitBatchedTx()
         this.status.set('closed', undefined)
+        this._cancelPending()
       }),
     )
+  }
+
+  presentPermission(p: AcpPendingPermission): void {
+    // Replace any prior pending request — only one card at a time per session.
+    this._cancelPending()
+    this.pendingPermission.set(p, undefined)
+  }
+
+  private _cancelPending(): void {
+    const cur = this.pendingPermission.get()
+    if (cur) {
+      this.pendingPermission.set(undefined, undefined)
+      cur.cancel()
+    }
   }
 
   async sendPrompt(text: string): Promise<void> {
@@ -141,14 +200,33 @@ class AcpSession extends Disposable implements IAcpSession {
       sessionId: this._sessionIdOnAgent,
       prompt: [{ type: 'text', text }],
     }
+    const abort = new AbortController()
+    this._activeAbort = abort
+    this._telemetry.publicLog('acp.prompt_sent', { sessionId: this.id })
     try {
-      await this._conn.request<AcpSessionPromptResult>(AcpMethods.SessionPrompt, params)
+      await this._conn.request<AcpSessionPromptResult>(
+        AcpMethods.SessionPrompt,
+        params,
+        abort.signal,
+      )
       this._flushStream()
       this.status.set('idle', undefined)
     } catch (err) {
       this._flushStream()
-      this.status.set('errored', undefined)
-      this._appendMessage('agent', `[error] ${(err as Error).message}`)
+      if (err instanceof AcpAbortError) {
+        this.status.set('idle', undefined)
+        this._appendMessage('agent', '[cancelled]')
+        this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: this.id })
+      } else {
+        this.status.set('errored', undefined)
+        this._appendMessage('agent', `[error] ${(err as Error).message}`)
+        this._telemetry.publicLogError('acp.prompt_failed', {
+          sessionId: this.id,
+          error: (err as Error).message,
+        })
+      }
+    } finally {
+      if (this._activeAbort === abort) this._activeAbort = undefined
     }
   }
 
@@ -159,10 +237,14 @@ class AcpSession extends Disposable implements IAcpSession {
     } catch {
       // swallow — cancel is best-effort
     }
+    this._activeAbort?.abort()
   }
 
   async close(): Promise<void> {
+    this._commitBatchedTx()
     this.status.set('closed', undefined)
+    this._activeAbort?.abort()
+    this._cancelPending()
     this.dispose()
   }
 
@@ -187,6 +269,10 @@ class AcpSession extends Disposable implements IAcpSession {
           status: update.status ?? 'pending',
           text: blocksToText(update.content),
         })
+        this._telemetry.publicLog('acp.tool_call_started', {
+          sessionId: this.id,
+          kind: update.kind ?? 'unknown',
+        })
         break
       case 'tool_call_update': {
         const existing = this._toolCalls.find((t) => t.id === update.toolCallId)
@@ -198,6 +284,12 @@ class AcpSession extends Disposable implements IAcpSession {
           text: update.content ? blocksToText(update.content) : (existing?.text ?? ''),
         }
         this._upsertToolCall(next)
+        if (update.status === 'failed') {
+          this._telemetry.publicLogError('acp.tool_call_failed', {
+            sessionId: this.id,
+            kind: next.kind,
+          })
+        }
         break
       }
       case 'plan':
@@ -213,10 +305,21 @@ class AcpSession extends Disposable implements IAcpSession {
   }
 
   private _appendChunk(role: AcpMessageRole, block: AcpContentBlock): void {
-    if (block.type !== 'text') return
-    const buf = (this._streamBuffer.get(role) ?? '') + block.text
+    if (block.type !== 'text') {
+      // image / resource blocks: surface a minimal placeholder rather than
+      // silently dropping content the user could otherwise inspect.
+      const placeholder = block.type === 'resource' ? `[resource: ${block.uri}]` : `[image]`
+      this._appendBufferedChunk(role, placeholder)
+      this.messages.set(this._messages, this._batchedTx())
+      return
+    }
+    this._appendBufferedChunk(role, block.text)
+    this.messages.set(this._messages, this._batchedTx())
+  }
+
+  private _appendBufferedChunk(role: AcpMessageRole, text: string): void {
+    const buf = (this._streamBuffer.get(role) ?? '') + text
     this._streamBuffer.set(role, buf)
-    // Update or create the last message of this role.
     const last = this._messages[this._messages.length - 1]
     if (last && last.role === role && this._isStreaming(last.id)) {
       const next: AcpMessage = { id: last.id, role, text: buf }
@@ -226,7 +329,6 @@ class AcpSession extends Disposable implements IAcpSession {
       this._streamingIds.add(id)
       this._messages = [...this._messages, { id, role, text: buf }]
     }
-    this.messages.set(this._messages, undefined)
   }
 
   private readonly _streamingIds = new Set<string>()
@@ -237,6 +339,8 @@ class AcpSession extends Disposable implements IAcpSession {
   private _flushStream(): void {
     this._streamBuffer.clear()
     this._streamingIds.clear()
+    this.messages.set(this._messages, undefined)
+    this._commitBatchedTx()
   }
 
   private _appendMessage(role: AcpMessageRole, text: string): void {
@@ -252,15 +356,55 @@ class AcpSession extends Disposable implements IAcpSession {
     } else {
       this._toolCalls = [...this._toolCalls.slice(0, idx), call, ...this._toolCalls.slice(idx + 1)]
     }
-    this.toolCalls.set(this._toolCalls, undefined)
+    this.toolCalls.set(this._toolCalls, this._batchedTx())
+  }
+
+  /** Lazily open a 16ms-deadlined transaction for streaming bursts. */
+  private _batchedTx(): TransactionImpl {
+    if (!this._pendingTx) {
+      this._pendingTx = new TransactionImpl(
+        () => {},
+        () => `acp.session.batch.${this.id}`,
+      )
+      this._flushTimer = setTimeout(() => this._commitBatchedTx(), 16)
+    }
+    return this._pendingTx
+  }
+
+  private _commitBatchedTx(): void {
+    if (this._flushTimer) {
+      clearTimeout(this._flushTimer)
+      this._flushTimer = undefined
+    }
+    if (this._pendingTx) {
+      const tx = this._pendingTx
+      this._pendingTx = undefined
+      tx.finish()
+    }
   }
 }
 
 function blocksToText(blocks: readonly AcpContentBlock[] | undefined): string {
   if (!blocks) return ''
   return blocks
-    .map((b) => (b.type === 'text' ? b.text : b.type === 'resource' ? b.uri : ''))
+    .map((b) =>
+      b.type === 'text'
+        ? b.text
+        : b.type === 'resource'
+          ? `[resource: ${b.uri}]`
+          : `[image: ${b.mimeType}]`,
+    )
     .join('')
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
 
 export class AcpSessionService
@@ -279,13 +423,20 @@ export class AcpSessionService
   private readonly _byAgentSessionId = new Map<string, AcpSession>()
   private _sessions: AcpSession[] = []
   private _seq = 0
+  private readonly _logger: ILogger
 
   constructor(
     @IAcpClientService private readonly _client: IAcpClientService,
     @IAcpAgentRegistry private readonly _registry: IAcpAgentRegistry,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IConfigurationService private readonly _config: IConfigurationService,
+    @INotificationService private readonly _notification: INotificationService,
+    @ITelemetryService private readonly _telemetry: ITelemetryService,
+    @IAcpPermissionHandler private readonly _permission: IAcpPermissionHandler,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+    this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
     this.sessions = observableValue<readonly IAcpSession[]>('acp.sessions', [])
     this.activeSessionId = observableValue<string | undefined>('acp.activeSessionId', undefined)
     this.activeSession = observableValue<IAcpSession | undefined>('acp.activeSession', undefined)
@@ -295,25 +446,58 @@ export class AcpSessionService
     const resolvedAgentId = agentId ?? this._registry.defaultAgentId()
     const cwd = this._workspace.current?.folder.fsPath
     const conn = await this._client.connect(resolvedAgentId, this, cwd !== undefined ? { cwd } : {})
+    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+    const mcpServers = this._readMcpServers()
     const initParams: AcpInitializeParams = {
       protocolVersion: ACP_PROTOCOL_VERSION,
       clientCapabilities: { fs: { readTextFile: true, writeTextFile: true } },
     }
-    await conn.request<AcpInitializeResult>(AcpMethods.Initialize, initParams)
-    const newParams: AcpNewSessionParams = { cwd: cwd ?? '', mcpServers: [] }
-    const { sessionId: agentSessionId } = await conn.request<AcpNewSessionResult>(
-      AcpMethods.NewSession,
-      newParams,
-    )
-    const localId = `s${++this._seq}`
-    const title = `${this._registry.get(resolvedAgentId).name} · ${localId}`
-    const session = new AcpSession(localId, resolvedAgentId, title, conn, agentSessionId)
-    this._byAgentSessionId.set(agentSessionId, session)
-    this._sessions = [...this._sessions, session]
-    this.sessions.set(this._sessions, undefined)
-    this.setActive(localId)
-    this._onDidCreate.fire(session)
-    return session
+    try {
+      await withTimeout(
+        conn.request<AcpInitializeResult>(AcpMethods.Initialize, initParams),
+        timeoutMs,
+        'ACP initialize',
+      )
+      const newParams: AcpNewSessionParams = { cwd: cwd ?? '', mcpServers }
+      const { sessionId: agentSessionId } = await withTimeout(
+        conn.request<AcpNewSessionResult>(AcpMethods.NewSession, newParams),
+        timeoutMs,
+        'ACP session/new',
+      )
+      const localId = `s${++this._seq}`
+      const title = `${this._registry.get(resolvedAgentId).name} · ${localId}`
+      const session = new AcpSession(
+        localId,
+        resolvedAgentId,
+        title,
+        conn,
+        agentSessionId,
+        this._telemetry,
+      )
+      this._byAgentSessionId.set(agentSessionId, session)
+      transaction((tx) => {
+        this._sessions = [...this._sessions, session]
+        this.sessions.set(this._sessions, tx)
+        this.activeSessionId.set(localId, tx)
+        this.activeSession.set(session, tx)
+      })
+      this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
+      this._onDidCreate.fire(session)
+      return session
+    } catch (err) {
+      conn.dispose()
+      const msg = (err as Error).message
+      this._logger.warn(`[acp] createSession failed: ${msg}`)
+      this._notification.notify({
+        severity: Severity.Error,
+        message: `Failed to start agent session: ${msg}`,
+      })
+      this._telemetry.publicLogError('acp.session_create_failed', {
+        agentId: resolvedAgentId,
+        error: msg,
+      })
+      throw err
+    }
   }
 
   setActive(sessionId: string): void {
@@ -341,6 +525,7 @@ export class AcpSessionService
       this.activeSessionId.set(next?.id, undefined)
       this.activeSession.set(next, undefined)
     }
+    this._telemetry.publicLog('acp.session_closed', { sessionId })
   }
 
   getById(sessionId: string): IAcpSession | undefined {
@@ -350,8 +535,62 @@ export class AcpSessionService
   // -- IAcpClientNotificationSink ---------------------------------------
 
   onSessionUpdate(params: AcpSessionUpdateParams): void {
-    const session = this._byAgentSessionId.get(params.sessionId)
+    const parsed = parseSessionUpdateParams(params)
+    if (!parsed) {
+      this._logger.warn('[acp] dropping malformed session/update')
+      return
+    }
+    const session = this._byAgentSessionId.get(parsed.sessionId)
     if (!session) return
-    session.applyUpdate(params.update)
+    session.applyUpdate(parsed.update)
+  }
+
+  async onRequestPermission(
+    params: AcpRequestPermissionParams,
+  ): Promise<AcpRequestPermissionResult> {
+    const auto = this._permission.tryAutoApprove(params)
+    if (auto) {
+      this._telemetry.publicLog('acp.permission_auto_approved', {
+        kind: params.toolCall.kind ?? 'unknown',
+      })
+      return auto
+    }
+    const session = this._byAgentSessionId.get(params.sessionId)
+    if (!session) {
+      this._logger.warn(`[acp] request_permission for unknown session ${params.sessionId}`)
+      return { outcome: { outcome: 'cancelled' } }
+    }
+    const allowAlways = params.options.find((o) => o.kind === 'allow_always')
+    return await new Promise<AcpRequestPermissionResult>((resolve) => {
+      const settle = (result: AcpRequestPermissionResult): void => {
+        if (session.pendingPermission.get() === pending) {
+          session.pendingPermission.set(undefined, undefined)
+        }
+        resolve(result)
+      }
+      const pending: AcpPendingPermission = {
+        toolCallId: params.toolCall.toolCallId,
+        title: params.toolCall.title ?? params.toolCall.toolCallId,
+        ...(params.toolCall.kind !== undefined ? { kind: params.toolCall.kind } : {}),
+        options: params.options,
+        resolve: (optionId) => {
+          if (allowAlways && optionId === allowAlways.optionId && params.toolCall.kind) {
+            this._permission.persistAllow(params.toolCall.kind)
+          }
+          this._telemetry.publicLog('acp.permission_resolved', { optionId })
+          settle({ outcome: { outcome: 'selected', optionId } })
+        },
+        cancel: () => {
+          this._telemetry.publicLog('acp.permission_cancelled', {})
+          settle({ outcome: { outcome: 'cancelled' } })
+        },
+      }
+      session.presentPermission(pending)
+    })
+  }
+
+  private _readMcpServers(): readonly unknown[] {
+    const raw = this._config.get<unknown>('acp.mcpServers')
+    return Array.isArray(raw) ? raw : []
   }
 }

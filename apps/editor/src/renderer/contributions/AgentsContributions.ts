@@ -54,6 +54,22 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Tool-call kinds that are auto-approved without prompting (e.g. "fs.read").',
             ),
           },
+          'acp.startupTimeoutMs': {
+            type: 'number',
+            default: 20000,
+            description: localize(
+              'settings.acp.startupTimeoutMs',
+              'How long to wait (milliseconds) for an agent to answer `initialize` + `session/new` before giving up. Lower this only if you trust your agent to start quickly.',
+            ),
+          },
+          'acp.mcpServers': {
+            type: 'array',
+            default: [],
+            description: localize(
+              'settings.acp.mcpServers',
+              "MCP servers forwarded to the agent on session/new. Each entry must follow the agent's expected shape.",
+            ),
+          },
         },
       }),
     )

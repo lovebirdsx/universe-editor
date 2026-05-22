@@ -6,7 +6,11 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NullLogger } from '@universe-editor/platform'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
-import { AcpHostMainService, type AcpSpawner } from '../acpHostMainService.js'
+import {
+  AcpHostMainService,
+  type AcpCommandLookup,
+  type AcpSpawner,
+} from '../acpHostMainService.js'
 import type { AcpExitEvent, AcpStdioChunk } from '../../../../shared/ipc/acpHostService.js'
 
 class FakeStdStream extends EventEmitter {
@@ -236,5 +240,91 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     expect(call[2].env?.FOO).toBe('bar')
     // Inherited env should still be present.
     expect(call[2].env?.PATH ?? call[2].env?.Path).toBeDefined()
+  })
+
+  it('rejects non-absolute cwd to prevent unintended working-directory inheritance', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    svc = new AcpHostMainService(new NullLogger(), spawner)
+    await expect(svc.start({ command: 'agent', args: [], cwd: 'relative/path' })).rejects.toThrow(
+      /absolute path/,
+    )
+    expect(spawner).not.toHaveBeenCalled()
+  })
+
+  it('strips ELECTRON_RUN_AS_NODE / NODE_OPTIONS from inherited env before spawning', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    const originalRunAsNode = process.env.ELECTRON_RUN_AS_NODE
+    const originalNodeOptions = process.env.NODE_OPTIONS
+    process.env.ELECTRON_RUN_AS_NODE = '1'
+    process.env.NODE_OPTIONS = '--inspect=9229'
+    try {
+      svc = new AcpHostMainService(new NullLogger(), spawner)
+      await svc.start({ command: 'agent', args: [] })
+      const call = spawner.mock.calls[0]!
+      expect(call[2].env?.ELECTRON_RUN_AS_NODE).toBeUndefined()
+      expect(call[2].env?.NODE_OPTIONS).toBeUndefined()
+    } finally {
+      if (originalRunAsNode === undefined) delete process.env.ELECTRON_RUN_AS_NODE
+      else process.env.ELECTRON_RUN_AS_NODE = originalRunAsNode
+      if (originalNodeOptions === undefined) delete process.env.NODE_OPTIONS
+      else process.env.NODE_OPTIONS = originalNodeOptions
+    }
+  })
+
+  it('refuses to honor denylisted env overrides supplied via spec.env', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    svc = new AcpHostMainService(new NullLogger(), spawner)
+    await svc.start({
+      command: 'agent',
+      args: [],
+      env: { NODE_OPTIONS: '--require ./evil.js', ELECTRON_RUN_AS_NODE: '1', SAFE: 'ok' },
+    })
+    const call = spawner.mock.calls[0]!
+    expect(call[2].env?.NODE_OPTIONS).toBeUndefined()
+    expect(call[2].env?.ELECTRON_RUN_AS_NODE).toBeUndefined()
+    expect(call[2].env?.SAFE).toBe('ok')
+  })
+})
+
+describe('AcpHostMainService — probe', () => {
+  let svc: AcpHostMainService
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('returns true when the lookup hook reports the command is on PATH', async () => {
+    const lookup = vi.fn(async () => true) as AcpCommandLookup
+    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    await expect(svc.probe('agent')).resolves.toBe(true)
+  })
+
+  it('returns false when the lookup hook reports the command is missing', async () => {
+    const lookup = vi.fn(async () => false) as AcpCommandLookup
+    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    await expect(svc.probe('missing')).resolves.toBe(false)
+  })
+
+  it('returns false for empty command without invoking the lookup', async () => {
+    const lookup = vi.fn(async () => true) as AcpCommandLookup
+    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    await expect(svc.probe('')).resolves.toBe(false)
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('swallows lookup errors and returns false', async () => {
+    const lookup = vi.fn(async () => {
+      throw new Error('boom')
+    }) as AcpCommandLookup
+    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    await expect(svc.probe('weird')).resolves.toBe(false)
   })
 })

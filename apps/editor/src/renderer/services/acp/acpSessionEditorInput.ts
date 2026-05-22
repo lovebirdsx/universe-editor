@@ -9,7 +9,15 @@ import { EditorInput, URI } from '@universe-editor/platform'
 export class AcpSessionEditorInput extends EditorInput {
   static readonly TYPE_ID = 'acp.session'
 
-  constructor(readonly sessionId: string) {
+  /**
+   * `agentId` is captured at construction so a stale serialized input — left
+   * over from a previous run after the agent subprocess has died — can offer
+   * a reconnect button against the right agent without us guessing.
+   */
+  constructor(
+    readonly sessionId: string,
+    readonly agentId?: string,
+  ) {
     super()
   }
 
@@ -26,15 +34,19 @@ export class AcpSessionEditorInput extends EditorInput {
   }
 
   override serialize(): string {
-    return JSON.stringify({ sessionId: this.sessionId })
+    return JSON.stringify({
+      sessionId: this.sessionId,
+      ...(this.agentId !== undefined ? { agentId: this.agentId } : {}),
+    })
   }
 
   static deserialize(data: unknown): AcpSessionEditorInput | null {
     if (typeof data !== 'string') return null
     try {
-      const parsed = JSON.parse(data) as { sessionId?: unknown }
+      const parsed = JSON.parse(data) as { sessionId?: unknown; agentId?: unknown }
       if (typeof parsed.sessionId !== 'string') return null
-      return new AcpSessionEditorInput(parsed.sessionId)
+      const agentId = typeof parsed.agentId === 'string' ? parsed.agentId : undefined
+      return new AcpSessionEditorInput(parsed.sessionId, agentId)
     } catch {
       return null
     }

@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { BrowserWindow } from 'electron'
+import { homedir } from 'node:os'
 import { localize, type IDisposable } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
 import { bootstrapWindowIpc } from '../../ipc/registerMainServices.js'
@@ -86,7 +87,10 @@ export class WindowMainService implements IWindowMainService {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        ...(e2eEnabled ? { additionalArguments: [E2E_PROBE_ARGV_FLAG] } : {}),
+        additionalArguments: [
+          `--ue-home-dir=${homedir()}`,
+          ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
+        ],
       },
     })
 

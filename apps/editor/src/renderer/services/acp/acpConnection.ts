@@ -100,10 +100,15 @@ export class AcpConnection extends Disposable {
 
   /**
    * Issue a JSON-RPC request and resolve with the result (or reject on error).
+   * Pass an AbortSignal to settle the promise locally — note that the peer is
+   * NOT notified; cancel semantics on the wire are protocol-specific.
    */
-  request<T = unknown>(method: string, params?: unknown): Promise<T> {
+  request<T = unknown>(method: string, params?: unknown, signal?: AbortSignal): Promise<T> {
     if (this._disposed) {
       return Promise.reject(new Error('AcpConnection: disposed'))
+    }
+    if (signal?.aborted) {
+      return Promise.reject(new AcpAbortError(method))
     }
     const id = this._nextId++
     const msg: JsonRpcRequest = {
@@ -113,12 +118,25 @@ export class AcpConnection extends Disposable {
       ...(params !== undefined ? { params } : {}),
     }
     return new Promise<T>((resolve, reject) => {
+      const onAbort = (): void => {
+        if (!this._pending.has(id)) return
+        this._pending.delete(id)
+        reject(new AcpAbortError(method))
+      }
       this._pending.set(id, {
-        resolve: (v) => resolve(v as T),
-        reject,
+        resolve: (v) => {
+          signal?.removeEventListener('abort', onAbort)
+          resolve(v as T)
+        },
+        reject: (e) => {
+          signal?.removeEventListener('abort', onAbort)
+          reject(e)
+        },
       })
+      signal?.addEventListener('abort', onAbort, { once: true })
       this._send(msg).catch((err: Error) => {
         this._pending.delete(id)
+        signal?.removeEventListener('abort', onAbort)
         reject(err)
       })
     })
@@ -248,6 +266,13 @@ export class AcpRpcError extends Error {
   }
 }
 
+export class AcpAbortError extends Error {
+  constructor(method: string) {
+    super(`Aborted: ${method}`)
+    this.name = 'AcpAbortError'
+  }
+}
+
 /**
  * Test/utility transport: pure in-memory pipe that lets you drive an
  * AcpConnection without spawning a real process. Returns the connection + a
@@ -285,6 +310,7 @@ export function createInMemoryAcpHost(): IAcpTransportTestHarness {
       return Promise.resolve()
     },
     stop: () => Promise.resolve(),
+    probe: () => Promise.resolve(true),
   }
   return {
     host,

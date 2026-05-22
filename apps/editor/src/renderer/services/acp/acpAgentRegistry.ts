@@ -7,6 +7,7 @@
 
 import { createDecorator, IConfigurationService } from '@universe-editor/platform'
 import type { AcpLaunchSpec } from '../../../shared/ipc/acpHostService.js'
+import { IAcpHostService } from '../../../shared/ipc/acpHostService.js'
 
 export interface IAcpAgentDescriptor {
   readonly id: string
@@ -15,6 +16,10 @@ export interface IAcpAgentDescriptor {
   readonly args: readonly string[]
   readonly env?: Readonly<Record<string, string>>
   readonly cwd?: string
+}
+
+export interface IAcpAgentHealth {
+  readonly available: boolean
 }
 
 export interface IAcpAgentRegistry {
@@ -27,6 +32,12 @@ export interface IAcpAgentRegistry {
   resolve(agentId: string, cwdOverride?: string): AcpLaunchSpec
   /** Default agent id (`acp.defaultAgentId`, falls back to `claude-code`). */
   defaultAgentId(): string
+  /**
+   * Probe whether the agent's command resolves in PATH. Memoized per command —
+   * call sites can hit this repeatedly without paying the `where`/`which` cost
+   * every time. Returns `{ available: false }` for unknown agents.
+   */
+  health(agentId: string): Promise<IAcpAgentHealth>
 }
 
 export const IAcpAgentRegistry = createDecorator<IAcpAgentRegistry>('acpAgentRegistry')
@@ -46,7 +57,12 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
 export class AcpAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
 
-  constructor(@IConfigurationService private readonly _config: IConfigurationService) {}
+  private readonly _probeCache = new Map<string, Promise<boolean>>()
+
+  constructor(
+    @IConfigurationService private readonly _config: IConfigurationService,
+    @IAcpHostService private readonly _host: IAcpHostService,
+  ) {}
 
   list(): readonly IAcpAgentDescriptor[] {
     const userAgents = this._readUserAgents()
@@ -79,6 +95,21 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
 
   defaultAgentId(): string {
     return this._config.get<string>('acp.defaultAgentId') ?? 'claude-code'
+  }
+
+  async health(agentId: string): Promise<IAcpAgentHealth> {
+    let descriptor: IAcpAgentDescriptor
+    try {
+      descriptor = this.get(agentId)
+    } catch {
+      return { available: false }
+    }
+    let probe = this._probeCache.get(descriptor.command)
+    if (!probe) {
+      probe = this._host.probe(descriptor.command)
+      this._probeCache.set(descriptor.command, probe)
+    }
+    return { available: await probe }
   }
 
   private _readUserAgents(): readonly IAcpAgentDescriptor[] {

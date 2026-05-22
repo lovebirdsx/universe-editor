@@ -10,6 +10,8 @@ import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { MessageList } from './MessageList.js'
+import { PermissionCard } from './PermissionCard.js'
+import { PlanView } from './PlanView.js'
 import { ToolCallList } from './ToolCallCard.js'
 import styles from './agents.module.css'
 
@@ -27,9 +29,11 @@ export function ChatView({ session }: { session?: IAcpSession }) {
     <div className={styles['chat']} data-testid="acp-chat">
       <Header session={target} />
       <div className={styles['chatBody']}>
+        <PlanView session={target} />
         <MessageList session={target} />
         <ToolCallList session={target} />
       </div>
+      <PermissionCard session={target} />
       <PromptInput session={target} />
     </div>
   )

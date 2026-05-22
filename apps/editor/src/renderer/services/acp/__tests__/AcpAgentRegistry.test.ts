@@ -2,13 +2,34 @@
  *  Tests for apps/editor/src/renderer/services/acp/acpAgentRegistry.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
-import { ConfigurationService, ConfigurationTarget } from '@universe-editor/platform'
+import { describe, expect, it, vi } from 'vitest'
+import { ConfigurationService, ConfigurationTarget, Emitter } from '@universe-editor/platform'
 import { AcpAgentRegistry } from '../acpAgentRegistry.js'
+import type { IAcpHostService } from '../../../../shared/ipc/acpHostService.js'
 
-function makeRegistry(): { registry: AcpAgentRegistry; config: ConfigurationService } {
+function makeHost(
+  probeImpl: (cmd: string) => Promise<boolean> = async () => true,
+): IAcpHostService {
+  return {
+    _serviceBrand: undefined,
+    onStdout: new Emitter().event,
+    onStderr: new Emitter().event,
+    onExit: new Emitter().event,
+    start: vi.fn(),
+    writeStdin: vi.fn(),
+    stop: vi.fn(),
+    probe: vi.fn(probeImpl),
+  } as unknown as IAcpHostService
+}
+
+function makeRegistry(probeImpl?: (cmd: string) => Promise<boolean>): {
+  registry: AcpAgentRegistry
+  config: ConfigurationService
+  host: IAcpHostService
+} {
   const config = new ConfigurationService()
-  return { registry: new AcpAgentRegistry(config), config }
+  const host = makeHost(probeImpl)
+  return { registry: new AcpAgentRegistry(config, host), config, host }
 }
 
 describe('AcpAgentRegistry', () => {
@@ -127,5 +148,45 @@ describe('AcpAgentRegistry', () => {
     const { registry } = makeRegistry()
     const spec = registry.resolve('claude-code')
     expect(spec.cwd).toBeUndefined()
+  })
+
+  it('health returns { available: true } when the host probe finds the command', async () => {
+    const { registry } = makeRegistry(async () => true)
+    await expect(registry.health('claude-code')).resolves.toEqual({ available: true })
+  })
+
+  it('health returns { available: false } when the command is not in PATH', async () => {
+    const { registry } = makeRegistry(async () => false)
+    await expect(registry.health('claude-code')).resolves.toEqual({ available: false })
+  })
+
+  it('health returns { available: false } for an unknown agent id without probing', async () => {
+    const probe = vi.fn(async () => true)
+    const { registry } = makeRegistry(probe)
+    await expect(registry.health('nope')).resolves.toEqual({ available: false })
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it('health memoizes probes per command across calls', async () => {
+    const probe = vi.fn(async () => true)
+    const { registry, config } = makeRegistry(probe)
+    config.update(
+      'acp.agents',
+      [
+        { id: 'a', name: 'A', command: '/shared', args: [] },
+        { id: 'b', name: 'B', command: '/shared', args: [] },
+        { id: 'c', name: 'C', command: '/other', args: [] },
+      ],
+      ConfigurationTarget.Memory,
+    )
+    await registry.health('a')
+    await registry.health('a')
+    await registry.health('b')
+    await registry.health('c')
+    expect(probe).toHaveBeenCalledTimes(2)
+    const commands = (probe.mock.calls as readonly (readonly unknown[])[])
+      .map((c) => c[0] as string)
+      .sort()
+    expect(commands).toEqual(['/other', '/shared'])
   })
 })
