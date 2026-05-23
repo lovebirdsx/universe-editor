@@ -76,6 +76,12 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
   list() {
     return [{ id: 'fake', name: 'Fake Agent', command: '/x', args: [] }]
   }
+  allAgentIds(): readonly string[] {
+    // Empty on purpose — these tests exercise createSession/resumeSession in
+    // isolation; the protocol-hydrate sweep that consumes allAgentIds() runs
+    // through its own dedicated tests with a real ACP pair.
+    return []
+  }
   get(agentId: string) {
     if (agentId === 'fake') return this.list()[0]!
     throw new Error(`unknown agent ${agentId}`)

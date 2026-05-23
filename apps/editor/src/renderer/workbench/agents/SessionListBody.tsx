@@ -108,6 +108,7 @@ export function SessionListBody({
                 e.stopPropagation()
                 void (async () => {
                   if (running) await service.closeSession(running.id)
+                  await service.deleteOnAgent(entry.id)
                   history.remove(entry.id)
                 })()
               }}

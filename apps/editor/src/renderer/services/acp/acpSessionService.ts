@@ -39,15 +39,20 @@ import {
 } from '@universe-editor/platform'
 import {
   PROTOCOL_VERSION,
+  type AgentCapabilities,
   type AvailableCommand,
   type ContentBlock,
+  type DeleteSessionRequest,
   type InitializeRequest,
+  type ListSessionsRequest,
+  type ListSessionsResponse,
   type LoadSessionRequest,
   type NewSessionRequest,
   type PromptRequest,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
+  type SessionInfo,
   type SessionModeState,
   type SessionNotification,
   type SessionUpdate,
@@ -195,6 +200,14 @@ export interface IAcpSessionService {
    * id is claimed on first call so concurrent invocations resume at most once.
    */
   tryRestoreActiveSession(): Promise<void>
+  /**
+   * Best-effort: ask the owning agent to delete a session via `session/delete`.
+   * Returns `'unsupported'` if the agent did not advertise
+   * `sessionCapabilities.delete` at last hydrate, `'unknown'` if we have no
+   * history entry for the id, `'ok'` if the call succeeded, `'error'` for any
+   * RPC / spawn failure (caller is expected to still remove the local row).
+   */
+  deleteOnAgent(historyId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'>
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -206,6 +219,23 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
 const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionHistoryId'
+
+/** Page cap for the hydrate sweep — 5 pages × default page size keeps cold-start latency bounded even on big histories. */
+const HYDRATE_MAX_PAGES = 5
+/** Per-agent timeout for the initialize+listSessions roundtrip. */
+const HYDRATE_TIMEOUT_MS = 10_000
+
+/**
+ * Notification sink for listing-only connections. These connections live just
+ * long enough to call `initialize` + `listSessions` and then dispose, so they
+ * should never receive `session/update` or `session/request_permission`. We
+ * still need a real implementation because `IAcpClientService.connect` requires
+ * one — refuse permissions and drop updates on the floor.
+ */
+const NULL_SINK: IAcpClientNotificationSink = {
+  onSessionUpdate: () => {},
+  onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }),
+}
 
 /**
  * Local error type signalling "the in-flight prompt was cancelled locally
@@ -499,8 +529,26 @@ class AcpSession extends Disposable implements IAcpSession {
         }
         break
       }
+      case 'session_info_update': {
+        // Push title / updatedAt into the durable history entry so the sidebar
+        // reflects renames and activity without waiting for the next hydrate.
+        if (this._history && this._historyId) {
+          const patch: { title?: string; updatedAt?: number } = {}
+          if (typeof update.title === 'string' && update.title.length > 0) {
+            patch.title = update.title
+          }
+          if (typeof update.updatedAt === 'string') {
+            const ts = Date.parse(update.updatedAt)
+            if (Number.isFinite(ts)) patch.updatedAt = ts
+          }
+          if (Object.keys(patch).length > 0) {
+            this._history.updateInfo(this._historyId, patch)
+          }
+        }
+        break
+      }
       default:
-        // session_info_update / usage_update etc. — ignored for now.
+        // usage_update etc. — ignored for now.
         break
     }
   }
@@ -780,6 +828,20 @@ export class AcpSessionService
   private readonly _logger: ILogger
 
   /**
+   * Generation token for `_hydrateHistoryFromAgents`. Workspace swaps and
+   * back-to-back hydrate triggers increment this; in-flight calls capture
+   * `myGen` at entry and drop their results when it no longer matches —
+   * race-safe against user A→B→A flips where cwd strings would alias.
+   */
+  private _hydrateGen = 0
+  /**
+   * Capability snapshot per agentId, refreshed every time the hydrate sweep
+   * finishes a connection's `initialize`. Read by `deleteOnAgent` to decide
+   * whether to attempt `unstable_deleteSession` or fall back to local-only.
+   */
+  private readonly _agentCaps = new Map<string, AgentCapabilities>()
+
+  /**
    * Workspace-persisted historyId of the previously-active session, captured on
    * startup and consumed by `tryRestoreActiveSession()` once. Cleared after the
    * first successful (or attempted) restore so the autorun-driven persistence
@@ -816,6 +878,10 @@ export class AcpSessionService
     this.activeSession = observableValue<IAcpSession | undefined>('acp.activeSession', undefined)
 
     this._loadPendingRestorePromise = this._loadPendingRestore()
+    // Hydrate the session history from each known agent's `session/list` so
+    // sessions created in the CLI / other clients show up in the sidebar. Done
+    // fire-and-forget — listing failures must never block startup.
+    void this._hydrateHistoryFromAgents(this._workspace.current?.folder.fsPath)
     // Persist the active session's historyId so we can restore it on the next
     // editor launch. Mirrors OutputService's "restore last active" pattern.
     this._register(
@@ -888,6 +954,7 @@ export class AcpSessionService
     } finally {
       this._suspendActivePersist = false
     }
+    void this._hydrateHistoryFromAgents(this._workspace.current?.folder.fsPath)
     void this.tryRestoreActiveSession()
   }
 
@@ -1215,6 +1282,135 @@ export class AcpSessionService
         }
       }
     })
+  }
+
+  // -- hydrate sweep (protocol-level session/list) -----------------------
+
+  /**
+   * Per-agent: spawn a short-lived ACP connection, call `initialize` to learn
+   * capabilities, and — if the agent advertises `sessionCapabilities.list` —
+   * walk `session/list` to discover sessions we don't have local rows for.
+   *
+   * All errors are swallowed: listing failures must never break the editor's
+   * createSession / resumeSession / closeSession paths. The local
+   * IStorageService-backed history remains the fallback source of truth.
+   *
+   * Generation-token pattern (`_hydrateGen`): each call increments the
+   * counter, captures `myGen`, and aborts if the counter has moved on by the
+   * time the async result lands. This is race-safe against workspace
+   * A→B→A flips where a naive cwd-string comparison would alias.
+   */
+  private async _hydrateHistoryFromAgents(cwd: string | undefined): Promise<void> {
+    const myGen = ++this._hydrateGen
+    try {
+      await this._history.initialize()
+    } catch {
+      // best-effort — proceed even if local hydrate is empty
+    }
+    if (myGen !== this._hydrateGen) return
+    const agentIds = this._registry.allAgentIds()
+    await Promise.all(agentIds.map((agentId) => this._hydrateOneAgent(agentId, cwd, myGen)))
+  }
+
+  private async _hydrateOneAgent(
+    agentId: string,
+    cwd: string | undefined,
+    myGen: number,
+  ): Promise<void> {
+    let conn: IAcpClientConnection | undefined
+    try {
+      conn = await this._client.connect(agentId, NULL_SINK, cwd !== undefined ? { cwd } : {})
+      if (myGen !== this._hydrateGen) return
+      const initParams: InitializeRequest = {
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+          terminal: true,
+        },
+      }
+      const init = await withTimeout(
+        conn.conn.initialize(initParams),
+        HYDRATE_TIMEOUT_MS,
+        'ACP hydrate initialize',
+      )
+      if (myGen !== this._hydrateGen) return
+      this._agentCaps.set(agentId, init.agentCapabilities ?? {})
+      const listCap = init.agentCapabilities?.sessionCapabilities?.list
+      if (listCap == null) return
+      const collected: SessionInfo[] = []
+      let cursor: string | null | undefined
+      for (let page = 0; page < HYDRATE_MAX_PAGES; page++) {
+        const params: ListSessionsRequest = {
+          cwd: cwd ?? null,
+          ...(cursor !== undefined ? { cursor } : {}),
+        }
+        const resp: ListSessionsResponse = await withTimeout(
+          conn.conn.listSessions(params),
+          HYDRATE_TIMEOUT_MS,
+          'ACP session/list',
+        )
+        if (myGen !== this._hydrateGen) return
+        collected.push(...resp.sessions)
+        cursor = resp.nextCursor ?? undefined
+        if (!cursor) break
+      }
+      if (myGen !== this._hydrateGen) return
+      if (collected.length === 0) return
+      this._history.bulkMergeFromAgent(agentId, collected)
+      this._telemetry.publicLog('acp.session_hydrate_ok', {
+        agentId,
+        count: collected.length,
+      })
+    } catch (err) {
+      this._logger.warn(`[acp] hydrate failed for ${agentId}: ${(err as Error).message}`)
+      this._telemetry.publicLogError('acp.session_hydrate_failed', {
+        agentId,
+        error: (err as Error).message,
+      })
+    } finally {
+      if (conn) conn.dispose()
+    }
+  }
+
+  async deleteOnAgent(historyId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
+    const entry = this._history.get(historyId)
+    if (!entry) return 'unknown'
+    const caps = this._agentCaps.get(entry.agentId)
+    if (caps?.sessionCapabilities?.delete == null) return 'unsupported'
+    const cwd = entry.cwd
+    let conn: IAcpClientConnection | undefined
+    try {
+      conn = await this._client.connect(entry.agentId, NULL_SINK, cwd !== undefined ? { cwd } : {})
+      const initParams: InitializeRequest = {
+        protocolVersion: PROTOCOL_VERSION,
+        clientCapabilities: {
+          fs: { readTextFile: true, writeTextFile: true },
+          terminal: true,
+        },
+      }
+      await withTimeout(
+        conn.conn.initialize(initParams),
+        HYDRATE_TIMEOUT_MS,
+        'ACP delete initialize',
+      )
+      const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
+      await withTimeout(
+        conn.conn.unstable_deleteSession(params),
+        HYDRATE_TIMEOUT_MS,
+        'ACP session/delete',
+      )
+      this._telemetry.publicLog('acp.session_delete_ok', { agentId: entry.agentId })
+      return 'ok'
+    } catch (err) {
+      this._logger.warn(`[acp] deleteOnAgent failed: ${(err as Error).message}`)
+      this._telemetry.publicLogError('acp.session_delete_failed', {
+        agentId: entry.agentId,
+        error: (err as Error).message,
+      })
+      return 'error'
+    } finally {
+      if (conn) conn.dispose()
+    }
   }
 
   // -- IAcpClientNotificationSink ---------------------------------------

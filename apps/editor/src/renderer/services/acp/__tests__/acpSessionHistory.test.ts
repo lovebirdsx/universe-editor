@@ -501,6 +501,201 @@ describe('AcpSessionHistoryService — setHistoryConfigOption', () => {
   })
 })
 
+describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('creates fresh rows for protocol sessions that have no local match', async () => {
+    await svc.initialize()
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's-1', cwd: '/work', title: 'one', updatedAt: '2024-01-01T00:00:00Z' },
+      { sessionId: 's-2', cwd: '/work', title: 'two', updatedAt: '2024-02-01T00:00:00Z' },
+    ])
+    const list = svc.list()
+    expect(list.map((e) => e.sessionIdOnAgent)).toEqual(['s-2', 's-1'])
+    expect(list[0]?.title).toBe('two')
+    expect(list[0]?.lastUsedAt).toBe(Date.parse('2024-02-01T00:00:00Z'))
+    expect(list[0]?.cwd).toBe('/work')
+  })
+
+  it('upserts existing rows by (agentId, sessionIdOnAgent) and keeps the local id/createdAt', async () => {
+    await svc.initialize()
+    const existing = svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-keep',
+      title: 'local-title',
+      cwd: '/work',
+    })
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's-keep', cwd: '/work', title: 'protocol-title', updatedAt: null },
+    ])
+    const got = svc.get(existing.id)
+    expect(got?.id).toBe(existing.id)
+    expect(got?.createdAt).toBe(existing.createdAt)
+    expect(got?.title).toBe('protocol-title')
+  })
+
+  it('preserves configOptions when upserting from protocol', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 't' })
+    svc.setHistoryConfigOption(e.id, 'model', 'claude-sonnet-4-6')
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's-1', cwd: '/work', title: 'renamed', updatedAt: null },
+    ])
+    expect(svc.get(e.id)?.configOptions).toEqual({ model: 'claude-sonnet-4-6' })
+  })
+
+  it('lastUsedAt = max(protocol updatedAt, local lastUsedAt)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 't' })
+    const localTs = e.lastUsedAt
+    // Protocol reports an older timestamp — local wins.
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's-1', cwd: '/work', title: 't', updatedAt: '2000-01-01T00:00:00Z' },
+    ])
+    expect(svc.get(e.id)?.lastUsedAt).toBe(localTs)
+    // Protocol reports a newer timestamp — protocol wins.
+    const future = new Date(Date.now() + 86_400_000).toISOString()
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's-1', cwd: '/work', title: 't', updatedAt: future },
+    ])
+    expect(svc.get(e.id)?.lastUsedAt).toBe(Date.parse(future))
+  })
+
+  it('falls back to sessionId as the title when protocol returns no title', async () => {
+    await svc.initialize()
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's-blank', cwd: '/work', title: null, updatedAt: null },
+    ])
+    expect(svc.list()[0]?.title).toBe('s-blank')
+  })
+
+  it('does not partition by agentId — different agents own different rows for the same sessionId', async () => {
+    await svc.initialize()
+    svc.bulkMergeFromAgent('alpha', [
+      { sessionId: 's-shared', cwd: '/w', title: 'A', updatedAt: null },
+    ])
+    svc.bulkMergeFromAgent('beta', [
+      { sessionId: 's-shared', cwd: '/w', title: 'B', updatedAt: null },
+    ])
+    expect(svc.list()).toHaveLength(2)
+    expect(
+      svc
+        .list()
+        .map((e) => e.agentId)
+        .sort(),
+    ).toEqual(['alpha', 'beta'])
+  })
+
+  it('sorts the resulting list by lastUsedAt desc and truncates to MAX_ENTRIES', async () => {
+    await svc.initialize()
+    const big: { sessionId: string; cwd: string; title: string; updatedAt: string }[] = []
+    for (let i = 0; i < 110; i++) {
+      big.push({
+        sessionId: `s-${i}`,
+        cwd: '/w',
+        title: `t-${i}`,
+        updatedAt: new Date(2000_000 + i * 1000).toISOString(),
+      })
+    }
+    svc.bulkMergeFromAgent('fake', big)
+    expect(svc.list()).toHaveLength(100)
+    // s-109 has the largest updatedAt — must be first.
+    expect(svc.list()[0]?.sessionIdOnAgent).toBe('s-109')
+    expect(svc.list().some((e) => e.sessionIdOnAgent === 's-0')).toBe(false)
+  })
+
+  it('is a no-op when the protocol list is empty', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-untouched', title: 't' })
+    await flushWrite()
+    const writesBefore = storage.setCalls.length
+    svc.bulkMergeFromAgent('fake', [])
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(writesBefore)
+    expect(svc.list()).toHaveLength(1)
+  })
+
+  it('skips the write when nothing changed', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's', title: 'same', cwd: '/w' })
+    await flushWrite()
+    const writesBefore = storage.setCalls.length
+    // Protocol re-reports identical title/cwd and an OLDER updatedAt → no change.
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: 's', cwd: e.cwd ?? '/w', title: 'same', updatedAt: '1970-01-01T00:00:00Z' },
+    ])
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(writesBefore)
+  })
+
+  it('drops malformed protocol entries (empty sessionId)', async () => {
+    await svc.initialize()
+    svc.bulkMergeFromAgent('fake', [
+      { sessionId: '', cwd: '/w', title: 't', updatedAt: null },
+      { sessionId: 'good', cwd: '/w', title: 'ok', updatedAt: null },
+    ])
+    expect(svc.list().map((e) => e.sessionIdOnAgent)).toEqual(['good'])
+  })
+})
+
+describe('AcpSessionHistoryService — updateInfo', () => {
+  let svc: AcpSessionHistoryService
+  beforeEach(() => {
+    svc = makeService().svc
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('patches title and bumps lastUsedAt when updatedAt is newer', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'old' })
+    const future = e.lastUsedAt + 100_000
+    svc.updateInfo(e.id, { title: 'new', updatedAt: future })
+    const got = svc.get(e.id)
+    expect(got?.title).toBe('new')
+    expect(got?.lastUsedAt).toBe(future)
+  })
+
+  it('keeps lastUsedAt when patch.updatedAt is older', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'old' })
+    svc.updateInfo(e.id, { updatedAt: e.lastUsedAt - 100_000 })
+    expect(svc.get(e.id)?.lastUsedAt).toBe(e.lastUsedAt)
+  })
+
+  it('is a no-op for unknown ids', async () => {
+    await svc.initialize()
+    svc.updateInfo('nope', { title: 'x' })
+    expect(svc.list()).toEqual([])
+  })
+
+  it('ignores blank-string titles', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'keep' })
+    svc.updateInfo(e.id, { title: '' })
+    expect(svc.get(e.id)?.title).toBe('keep')
+  })
+
+  it('resorts entries when a non-head row receives a fresher updatedAt', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 'first' })
+    svc.add({ agentId: 'a', sessionIdOnAgent: '2', title: 'second' })
+    expect(svc.list()[0]?.id).not.toBe(first.id)
+    svc.updateInfo(first.id, { updatedAt: Date.now() + 1_000_000 })
+    expect(svc.list()[0]?.id).toBe(first.id)
+  })
+})
+
 describe('AcpSessionHistoryService — workspace scope', () => {
   it('with a workspace open: writes go to WORKSPACE bucket', async () => {
     const storage = new FakeStorage()

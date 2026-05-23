@@ -74,6 +74,27 @@ export interface IAcpSessionHistoryService {
    * selections so they survive editor restart.
    */
   setHistoryConfigOption(historyId: string, configId: string, value: string): void
+  /**
+   * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
+   * sweep that polls each agent's `session/list`. Rows are upserted by
+   * (agentId, sessionIdOnAgent); existing configOptions are preserved;
+   * lastUsedAt = max(protocol updatedAt, local lastUsedAt). Sorts the final
+   * snapshot by lastUsedAt desc and truncates to MAX_ENTRIES.
+   */
+  bulkMergeFromAgent(agentId: string, sessions: readonly BulkMergeSessionInfo[]): void
+  /**
+   * Patch metadata for one entry from a `session_info_update` notification.
+   * No-op if id is unknown.
+   */
+  updateInfo(historyId: string, patch: { title?: string; updatedAt?: number }): void
+}
+
+/** Shape we accept from the protocol's `SessionInfo` — kept structural to avoid leaking SDK types into the history interface. */
+export interface BulkMergeSessionInfo {
+  readonly sessionId: string
+  readonly cwd: string
+  readonly title?: string | null
+  readonly updatedAt?: string | null
 }
 
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
@@ -206,6 +227,81 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
     const nextOpts: Readonly<Record<string, string>> = { ...prevOpts, [configId]: value }
     const next: AcpSessionHistoryEntry = { ...cur, configOptions: nextOpts }
     this._entries = this._entries.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  bulkMergeFromAgent(agentId: string, sessions: readonly BulkMergeSessionInfo[]): void {
+    if (sessions.length === 0) return
+    const now = Date.now()
+    const byKey = new Map<string, AcpSessionHistoryEntry>()
+    for (const e of this._entries) {
+      byKey.set(`${e.agentId} ${e.sessionIdOnAgent}`, e)
+    }
+    let changed = false
+    for (const info of sessions) {
+      if (typeof info.sessionId !== 'string' || info.sessionId.length === 0) continue
+      const key = `${agentId} ${info.sessionId}`
+      const existing = byKey.get(key)
+      const protocolTs = parseIsoTimestamp(info.updatedAt)
+      const title =
+        typeof info.title === 'string' && info.title.length > 0
+          ? info.title
+          : (existing?.title ?? info.sessionId)
+      const cwd = typeof info.cwd === 'string' && info.cwd.length > 0 ? info.cwd : existing?.cwd
+      if (existing) {
+        const lastUsedAt = Math.max(existing.lastUsedAt, protocolTs ?? 0)
+        const sameTitle = existing.title === title
+        const sameCwd = existing.cwd === cwd
+        const sameLastUsed = existing.lastUsedAt === lastUsedAt
+        if (sameTitle && sameCwd && sameLastUsed) continue
+        const next: AcpSessionHistoryEntry = {
+          ...existing,
+          title,
+          ...(cwd !== undefined ? { cwd } : {}),
+          lastUsedAt,
+        }
+        byKey.set(key, next)
+        changed = true
+      } else {
+        const created = protocolTs ?? now
+        const next: AcpSessionHistoryEntry = {
+          id: this._mintId(),
+          agentId,
+          sessionIdOnAgent: info.sessionId,
+          title,
+          ...(cwd !== undefined ? { cwd } : {}),
+          createdAt: created,
+          lastUsedAt: created,
+        }
+        byKey.set(key, next)
+        changed = true
+      }
+    }
+    if (!changed) return
+    this._entries = Array.from(byKey.values()).sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    this._truncate()
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  updateInfo(historyId: string, patch: { title?: string; updatedAt?: number }): void {
+    const idx = this._entries.findIndex((e) => e.id === historyId)
+    if (idx === -1) return
+    const cur = this._entries[idx]!
+    const nextTitle = patch.title !== undefined && patch.title.length > 0 ? patch.title : cur.title
+    const nextLastUsedAt =
+      patch.updatedAt !== undefined && Number.isFinite(patch.updatedAt)
+        ? Math.max(cur.lastUsedAt, patch.updatedAt)
+        : cur.lastUsedAt
+    if (nextTitle === cur.title && nextLastUsedAt === cur.lastUsedAt) return
+    const next: AcpSessionHistoryEntry = {
+      ...cur,
+      title: nextTitle,
+      lastUsedAt: nextLastUsedAt,
+    }
+    this._entries = this._entries.map((e, i) => (i === idx ? next : e))
+    this._entries.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     this._publish()
     this._scheduleWrite()
   }
@@ -387,4 +483,10 @@ function parseLocalSeq(id: string): number | undefined {
   if (!m) return undefined
   const n = Number(m[1])
   return Number.isFinite(n) ? n : undefined
+}
+
+function parseIsoTimestamp(value: string | null | undefined): number | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined
+  const ts = Date.parse(value)
+  return Number.isFinite(ts) ? ts : undefined
 }

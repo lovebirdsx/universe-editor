@@ -98,6 +98,9 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
   list() {
     return [{ id: 'fake', name: 'Fake', command: '/x', args: [] }]
   }
+  allAgentIds(): readonly string[] {
+    return ['fake']
+  }
   get(_agentId: string) {
     return this.list()[0]!
   }

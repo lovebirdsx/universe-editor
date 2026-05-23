@@ -26,6 +26,8 @@ export interface IAcpAgentRegistry {
   readonly _serviceBrand: undefined
   /** Snapshot of all known agents (built-in merged with user). */
   list(): readonly IAcpAgentDescriptor[]
+  /** Convenience: ids only. Used by the hydrate sweep that polls every known agent. */
+  allAgentIds(): readonly string[]
   /** Resolve an agentId to its descriptor; throws if unknown. */
   get(agentId: string): IAcpAgentDescriptor
   /** Resolve an agentId to a LaunchSpec ready to feed to IAcpHostService.start. */
@@ -70,6 +72,10 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
     for (const a of BUILTIN_AGENTS) byId.set(a.id, a)
     for (const a of userAgents) byId.set(a.id, a)
     return [...byId.values()]
+  }
+
+  allAgentIds(): readonly string[] {
+    return this.list().map((a) => a.id)
   }
 
   get(agentId: string): IAcpAgentDescriptor {

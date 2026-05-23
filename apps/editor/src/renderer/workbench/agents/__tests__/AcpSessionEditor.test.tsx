@@ -64,6 +64,9 @@ function makeService(
       return byHistoryId.get(id)
     },
     async tryRestoreActiveSession(): Promise<void> {},
+    async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
+      return 'unsupported'
+    },
   } satisfies FakeAcpSessionService
 }
 
