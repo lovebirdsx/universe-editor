@@ -31,14 +31,16 @@ test.describe('@p1 editor tab drag-and-drop', () => {
       void window.__E2E__!.runCommand('workbench.action.splitEditorRight')
     })
 
+    // Wait for the second group to appear in the DOM before opening beta.txt.
+    // The split command is fire-and-forget; React renders the new group asynchronously,
+    // so dblclick must not fire until group 2 is active.
+    const tabBars = workbench.page.locator('[data-testid="editor-group-tabbar"]')
+    await expect(tabBars).toHaveCount(2, { timeout: 5000 })
+
     // Open beta.txt in the second group.
     const betaRow = workbench.page.locator('[role="treeitem"]', { hasText: 'beta.txt' })
     await expect(betaRow).toBeVisible({ timeout: 5000 })
     await betaRow.dblclick()
-
-    // Get tab bars from both groups.
-    const tabBars = workbench.page.locator('[data-testid="editor-group-tabbar"]')
-    await expect(tabBars).toHaveCount(2, { timeout: 5000 })
 
     const firstTabBar = tabBars.nth(0)
     const secondTabBar = tabBars.nth(1)
@@ -48,9 +50,8 @@ test.describe('@p1 editor tab drag-and-drop', () => {
     await expect(betaTab).toBeVisible({ timeout: 3000 })
 
     // Drag beta.txt tab to the first group's tab bar.
-    await betaTab.dragTo(firstTabBar)
-
-    await workbench.page.waitForTimeout(500)
+    // force:true bypasses actionability checks for narrow tab elements in CI viewports.
+    await betaTab.dragTo(firstTabBar, { force: true })
 
     // Now both files should be in the first group.
     const betaTabInSecond = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
