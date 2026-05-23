@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { IFileService, IWorkspaceService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
-import type { AcpAvailableCommand } from '../../services/acp/acpProtocol.js'
+import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
   applyMentionPick,
   extractMentionQuery,
@@ -57,7 +57,7 @@ export function PromptInput({ session }: { session: IAcpSession }) {
   const running = status === 'running'
 
   const slashQuery = useMemo(() => extractSlashQuery(text), [text])
-  const slashMatches = useMemo<readonly AcpAvailableCommand[]>(
+  const slashMatches = useMemo<readonly AvailableCommand[]>(
     () => (slashQuery === null ? [] : filterCommands(commands, slashQuery)),
     [commands, slashQuery],
   )
@@ -91,7 +91,7 @@ export function PromptInput({ session }: { session: IAcpSession }) {
   // and "No matching files" states) would be pure noise.
   const mentionOpen = mentionQuery !== null && !mentionDismissed && workspaceRoot !== undefined
 
-  const acceptSlash = (cmd: AcpAvailableCommand): void => {
+  const acceptSlash = (cmd: AvailableCommand): void => {
     setText(`${cmd.name} `)
     setSlashDismissed(true)
     setSlashIndex(0)

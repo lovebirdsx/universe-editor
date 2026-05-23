@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Stage 7 tests for AcpSessionService — covers ConfigOption ingestion, legacy
  *  `modes` synthesis, and the setConfigOption write path (modern + legacy
- *  fallback). The fake AcpClient here is a slimmed-down version of the one in
- *  AcpSessionService.test.ts, parameterized so each test can supply a custom
- *  `session/new` result and seed `setConfigOption` / `set_mode` acks.
+ *  fallback). The fake ACP client wires an in-memory ACP stream pair to a stub
+ *  Agent so each test can parameterize `session/new` response shape and the
+ *  setConfigOption / setSessionMode behaviour.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -34,26 +34,42 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
+import {
+  AgentSideConnection,
+  ClientSideConnection,
+  RequestError,
+  type Agent,
+  type AuthenticateRequest,
+  type AuthenticateResponse,
+  type CancelNotification,
+  type Client,
+  type InitializeRequest,
+  type InitializeResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
+  type NewSessionRequest,
+  type NewSessionResponse,
+  type PromptRequest,
+  type PromptResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SessionConfigOption,
+  type SessionModeState,
+  type SetSessionConfigOptionRequest,
+  type SetSessionConfigOptionResponse,
+  type SetSessionModeRequest,
+  type SetSessionModeResponse,
+} from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
-import { IAcpClientService, type IAcpClientNotificationSink } from '../acpClientService.js'
+import {
+  IAcpClientService,
+  type IAcpClientConnection,
+  type IAcpClientNotificationSink,
+} from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
-import {
-  AcpConnection,
-  AcpRpcError,
-  createInMemoryAcpHost,
-  type IAcpConnectionHandler,
-  type IAcpTransportTestHarness,
-} from '../acpConnection.js'
-import {
-  AcpMethods,
-  type AcpRequestPermissionParams,
-  type AcpRequestPermissionResult,
-  type AcpSessionConfigOption,
-  type AcpSessionModeState,
-  type AcpSessionUpdateParams,
-} from '../acpProtocol.js'
+import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -137,7 +153,7 @@ class StubProgressService implements IProgressService {
 
 class StubPermissionHandler implements IAcpPermissionHandler {
   declare readonly _serviceBrand: undefined
-  tryAutoApprove(_params: AcpRequestPermissionParams): AcpRequestPermissionResult | undefined {
+  tryAutoApprove(_params: RequestPermissionRequest): RequestPermissionResponse | undefined {
     return undefined
   }
   persistAllow(): void {}
@@ -158,104 +174,129 @@ class FakeStorage implements IStorageService {
   }
 }
 
-interface ConnectedSession {
-  readonly sink: IAcpClientNotificationSink
-  readonly harness: IAcpTransportTestHarness
-}
+// ---------------------------------------------------------------------------
+// Parameterized stub agent + fake AcpClient
+// ---------------------------------------------------------------------------
 
 interface FakeAcpClientOptions {
   /** Extra fields to merge into the `session/new` result. */
   newSessionResult?: {
-    modes?: AcpSessionModeState
-    configOptions?: readonly AcpSessionConfigOption[]
+    modes?: SessionModeState
+    configOptions?: readonly SessionConfigOption[]
   }
-  /** Result handed back for `session/set_config_option`. */
-  setConfigOptionResult?: { configOptions: readonly AcpSessionConfigOption[] }
-  /** Error code/message to return for `session/set_config_option`. */
+  /** Result handed back for `session/set_config_option`. Defaults to `{ configOptions: [] }`. */
+  setConfigOptionResult?: { configOptions: readonly SessionConfigOption[] }
+  /** Error code/message to throw from `session/set_config_option`. */
   setConfigOptionError?: { code: number; message: string }
-  /** Result for `session/set_mode`. Defaults to empty object. */
+  /** Result for `session/set_mode`. Defaults to an empty object. */
   setSessionModeResult?: Record<string, unknown>
+}
+
+class StubAgent implements Agent {
+  readonly initializeCalls: InitializeRequest[] = []
+  readonly newSessionCalls: NewSessionRequest[] = []
+  readonly loadSessionCalls: LoadSessionRequest[] = []
+  readonly promptCalls: PromptRequest[] = []
+  readonly cancelCalls: CancelNotification[] = []
+  readonly setSessionModeCalls: SetSessionModeRequest[] = []
+  readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
+
+  constructor(
+    private readonly _agentSessionId: string,
+    private readonly _opts: FakeAcpClientOptions,
+  ) {}
+
+  initialize(params: InitializeRequest): Promise<InitializeResponse> {
+    this.initializeCalls.push(params)
+    return Promise.resolve({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: false, promptCapabilities: {} },
+      authMethods: [],
+    } as unknown as InitializeResponse)
+  }
+
+  newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
+    this.newSessionCalls.push(params)
+    return Promise.resolve({
+      sessionId: this._agentSessionId,
+      ...(this._opts.newSessionResult ?? {}),
+    } as unknown as NewSessionResponse)
+  }
+
+  loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    this.loadSessionCalls.push(params)
+    return Promise.resolve({} as unknown as LoadSessionResponse)
+  }
+
+  prompt(params: PromptRequest): Promise<PromptResponse> {
+    this.promptCalls.push(params)
+    return new Promise<never>(() => {})
+  }
+
+  cancel(params: CancelNotification): Promise<void> {
+    this.cancelCalls.push(params)
+    return Promise.resolve()
+  }
+
+  setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse | void> {
+    this.setSessionModeCalls.push(params)
+    return Promise.resolve((this._opts.setSessionModeResult ?? {}) as SetSessionModeResponse)
+  }
+
+  setSessionConfigOption(
+    params: SetSessionConfigOptionRequest,
+  ): Promise<SetSessionConfigOptionResponse> {
+    this.setConfigOptionCalls.push(params)
+    if (this._opts.setConfigOptionError) {
+      throw new RequestError(
+        this._opts.setConfigOptionError.code,
+        this._opts.setConfigOptionError.message,
+      )
+    }
+    return Promise.resolve(
+      (this._opts.setConfigOptionResult ?? { configOptions: [] }) as SetSessionConfigOptionResponse,
+    )
+  }
+
+  authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
+    return Promise.resolve()
+  }
+}
+
+interface ConnectedSession {
+  readonly sink: IAcpClientNotificationSink
+  readonly agent: StubAgent
+  readonly agentConn: AgentSideConnection
+  readonly clientConn: ClientSideConnection
 }
 
 class FakeAcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
   readonly connected: ConnectedSession[] = []
-  /** Per-method counts of outbound requests across all sessions. */
-  readonly callCounts: Record<string, number> = {}
-  /** Capture every outbound JSON-RPC request body for assertions. */
-  readonly outbound: { method: string; params: unknown }[] = []
   private _agentSeq = 0
 
   constructor(private readonly _opts: FakeAcpClientOptions = {}) {}
 
-  async connect(_agentId: string, sink: IAcpClientNotificationSink): Promise<AcpConnection> {
+  async connect(_agentId: string, sink: IAcpClientNotificationSink): Promise<IAcpClientConnection> {
     const agentSessionId = `agent-${++this._agentSeq}`
-    const harness = createInMemoryAcpHost()
-    const handler: IAcpConnectionHandler = {
-      onRequest: () => Promise.reject(new AcpRpcError('not implemented', -32601)),
-      onNotification: (_m, p) => sink.onSessionUpdate(p as AcpSessionUpdateParams),
+    const pair = createInMemoryAcpPair()
+    const agent = new StubAgent(agentSessionId, this._opts)
+    const agentConn = new AgentSideConnection(() => agent, pair.agentStream)
+    const clientImpl: Client = {
+      requestPermission: (params) => sink.onRequestPermission(params),
+      sessionUpdate: async (params) => {
+        sink.onSessionUpdate(params)
+      },
     }
-    const conn = new AcpConnection(harness.host, harness.handle, handler, new NullLogger())
-
-    const ack = (rawLines: readonly string[]): void => {
-      for (const line of rawLines) {
-        if (!line.trim()) continue
-        const msg = JSON.parse(line) as {
-          id?: unknown
-          method?: string
-          params?: unknown
-        }
-        if (typeof msg.method === 'string') {
-          this.callCounts[msg.method] = (this.callCounts[msg.method] ?? 0) + 1
-          if (msg.id !== undefined) {
-            this.outbound.push({ method: msg.method, params: msg.params })
-          }
-        }
-        if (typeof msg.id !== 'number' && typeof msg.id !== 'string') continue
-        if (msg.method === AcpMethods.Initialize) {
-          this._respond(harness, msg.id, { protocolVersion: 1 })
-        } else if (msg.method === AcpMethods.NewSession) {
-          this._respond(harness, msg.id, {
-            sessionId: agentSessionId,
-            ...(this._opts.newSessionResult ?? {}),
-          })
-        } else if (msg.method === AcpMethods.SetConfigOption) {
-          if (this._opts.setConfigOptionError) {
-            this._respondError(harness, msg.id, this._opts.setConfigOptionError)
-          } else {
-            this._respond(harness, msg.id, this._opts.setConfigOptionResult ?? {})
-          }
-        } else if (msg.method === AcpMethods.SetSessionMode) {
-          this._respond(harness, msg.id, this._opts.setSessionModeResult ?? {})
-        }
-      }
+    const clientConn = new ClientSideConnection(() => clientImpl, pair.clientStream)
+    this.connected.push({ sink, agent, agentConn, clientConn })
+    return {
+      conn: clientConn,
+      dispose: (): void => {
+        void pair.clientStream.writable.close().catch(() => {})
+        void pair.agentStream.writable.close().catch(() => {})
+      },
     }
-
-    let lastSeen = 0
-    const interval: NodeJS.Timeout = setInterval(() => {
-      const writes = harness.written()
-      if (writes.length > lastSeen) {
-        const newLines = writes.slice(lastSeen)
-        lastSeen = writes.length
-        for (const w of newLines) ack(w.split('\n'))
-      }
-    }, 1)
-
-    this.connected.push({ sink, harness })
-    conn.onExit(() => clearInterval(interval))
-    return conn
-  }
-
-  private _respond(harness: IAcpTransportTestHarness, id: number | string, result: unknown): void {
-    harness.inject(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n')
-  }
-
-  private _respondError(
-    harness: IAcpTransportTestHarness,
-    id: number | string,
-    err: { code: number; message: string },
-  ): void {
-    harness.inject(JSON.stringify({ jsonrpc: '2.0', id, error: err }) + '\n')
   }
 }
 
@@ -289,7 +330,7 @@ describe('AcpSessionService — Stage 7 init', () => {
   })
 
   it('seeds configOptions from session/new', async () => {
-    const fixture: AcpSessionConfigOption = {
+    const fixture: SessionConfigOption = {
       id: 'model',
       name: 'Model',
       category: 'model',
@@ -309,7 +350,7 @@ describe('AcpSessionService — Stage 7 init', () => {
   })
 
   it('synthesizes a mode ConfigOption from legacy modes', async () => {
-    const modes: AcpSessionModeState = {
+    const modes: SessionModeState = {
       currentModeId: 'plan',
       availableModes: [
         { id: 'plan', name: 'Plan' },
@@ -323,7 +364,12 @@ describe('AcpSessionService — Stage 7 init', () => {
     expect(opts).toHaveLength(1)
     expect(opts[0]?.category).toBe('mode')
     expect(opts[0]?.currentValue).toBe('plan')
-    expect(opts[0]?.options.map((o) => o.value)).toEqual(['plan', 'act'])
+    expect(opts[0]?.type).toBe('select')
+    const first = opts[0]
+    if (first && first.type === 'select') {
+      const values = (first.options as readonly { value: string }[]).map((o) => o.value)
+      expect(values).toEqual(['plan', 'act'])
+    }
     // The synthetic id is stable so the upstream code can detect "legacy mode".
     expect(opts[0]?.id).toBe('__legacy_mode__')
   })
@@ -443,7 +489,7 @@ describe('AcpSessionService — Stage 7 session/update fan-out', () => {
   })
 
   it('applies current_mode_update to the synthetic mode option', async () => {
-    const modes: AcpSessionModeState = {
+    const modes: SessionModeState = {
       currentModeId: 'plan',
       availableModes: [
         { id: 'plan', name: 'Plan' },
@@ -473,7 +519,7 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
   })
 
   it('sends session/set_config_option and applies the returned configOptions', async () => {
-    const initial: AcpSessionConfigOption = {
+    const initial: SessionConfigOption = {
       id: 'model',
       name: 'Model',
       category: 'model',
@@ -484,7 +530,7 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
         { value: 'opus', name: 'Opus' },
       ],
     }
-    const updated: AcpSessionConfigOption = { ...initial, currentValue: 'opus' }
+    const updated: SessionConfigOption = { ...initial, currentValue: 'opus' }
     const built = buildService({
       newSessionResult: { configOptions: [initial] },
       setConfigOptionResult: { configOptions: [updated] },
@@ -493,11 +539,11 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
     client = built.client
     const s = await svc.createSession()
     await s.setConfigOption('model', 'opus')
-    expect(client.callCounts[AcpMethods.SetConfigOption]).toBe(1)
-    expect(client.callCounts[AcpMethods.SetSessionMode] ?? 0).toBe(0)
+    const agent = client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toHaveLength(1)
+    expect(agent.setSessionModeCalls).toHaveLength(0)
     expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
-    const sent = client.outbound.find((m) => m.method === AcpMethods.SetConfigOption)
-    expect(sent?.params).toMatchObject({
+    expect(agent.setConfigOptionCalls[0]).toMatchObject({
       sessionId: 'agent-1',
       configId: 'model',
       value: 'opus',
@@ -505,7 +551,7 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
   })
 
   it('falls back to session/set_mode for legacy-mode-only agents', async () => {
-    const modes: AcpSessionModeState = {
+    const modes: SessionModeState = {
       currentModeId: 'plan',
       availableModes: [
         { id: 'plan', name: 'Plan' },
@@ -520,11 +566,14 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
     // that and route through session/set_mode, not session/set_config_option.
     const opt = s.configOptions.get()[0]!
     await s.setConfigOption(opt.id, 'act')
-    expect(client.callCounts[AcpMethods.SetSessionMode]).toBe(1)
-    expect(client.callCounts[AcpMethods.SetConfigOption] ?? 0).toBe(0)
+    const agent = client.connected[0]!.agent
+    expect(agent.setSessionModeCalls).toHaveLength(1)
+    expect(agent.setConfigOptionCalls).toHaveLength(0)
     expect(s.configOptions.get()[0]?.currentValue).toBe('act')
-    const sent = client.outbound.find((m) => m.method === AcpMethods.SetSessionMode)
-    expect(sent?.params).toMatchObject({ sessionId: 'agent-1', modeId: 'act' })
+    expect(agent.setSessionModeCalls[0]).toMatchObject({
+      sessionId: 'agent-1',
+      modeId: 'act',
+    })
   })
 
   it('uses session/set_config_option when both legacy modes and a server mode option exist', async () => {
@@ -556,12 +605,13 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
     client = built.client
     const s = await svc.createSession()
     await s.setConfigOption('mode', 'chat')
-    expect(client.callCounts[AcpMethods.SetConfigOption]).toBe(1)
-    expect(client.callCounts[AcpMethods.SetSessionMode] ?? 0).toBe(0)
+    const agent = client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toHaveLength(1)
+    expect(agent.setSessionModeCalls).toHaveLength(0)
   })
 
   it('propagates errors from session/set_config_option', async () => {
-    const initial: AcpSessionConfigOption = {
+    const initial: SessionConfigOption = {
       id: 'model',
       name: 'Model',
       category: 'model',

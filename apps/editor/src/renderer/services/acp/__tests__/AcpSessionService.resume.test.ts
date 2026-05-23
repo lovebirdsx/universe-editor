@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Stage 10 tests for AcpSessionService — resumeSession path. The fake ACP
- *  client lets each test seed the agent's `initialize` and `session/load`
- *  responses so we can exercise:
+ *  client wires an in-memory ACP stream pair to a stub Agent so each test can
+ *  seed `initialize` and `session/load` behaviour and verify:
  *    - happy path (initialize advertises loadSession=true → session/load applies state)
  *    - capability gate (initialize does not advertise loadSession → reject)
  *    - unknown history id (no agent spawned)
@@ -38,26 +38,39 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
+import {
+  AgentSideConnection,
+  ClientSideConnection,
+  RequestError,
+  type Agent,
+  type AuthenticateRequest,
+  type AuthenticateResponse,
+  type CancelNotification,
+  type Client,
+  type InitializeRequest,
+  type InitializeResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
+  type NewSessionRequest,
+  type NewSessionResponse,
+  type PromptRequest,
+  type PromptResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SessionConfigOption,
+  type SessionModeState,
+  type SessionNotification,
+} from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
-import { IAcpClientService, type IAcpClientNotificationSink } from '../acpClientService.js'
+import {
+  IAcpClientService,
+  type IAcpClientConnection,
+  type IAcpClientNotificationSink,
+} from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
-import {
-  AcpConnection,
-  AcpRpcError,
-  createInMemoryAcpHost,
-  type IAcpConnectionHandler,
-  type IAcpTransportTestHarness,
-} from '../acpConnection.js'
-import {
-  AcpMethods,
-  type AcpRequestPermissionParams,
-  type AcpRequestPermissionResult,
-  type AcpSessionConfigOption,
-  type AcpSessionModeState,
-  type AcpSessionUpdateParams,
-} from '../acpProtocol.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
 // ---------------------------------------------------------------------------
 // Stubs
@@ -147,7 +160,7 @@ class StubProgressService implements IProgressService {
 
 class StubPermissionHandler implements IAcpPermissionHandler {
   declare readonly _serviceBrand: undefined
-  tryAutoApprove(_params: AcpRequestPermissionParams): AcpRequestPermissionResult | undefined {
+  tryAutoApprove(_params: RequestPermissionRequest): RequestPermissionResponse | undefined {
     return undefined
   }
   persistAllow(): void {}
@@ -169,31 +182,88 @@ class FakeStorage implements IStorageService {
 }
 
 // ---------------------------------------------------------------------------
-// Parameterized fake AcpClient
+// Parameterized stub agent + fake AcpClient
 // ---------------------------------------------------------------------------
 
 interface FakeAcpClientOptions {
-  /** Replace the default initialize result (default: { protocolVersion: 1, agentCapabilities: { loadSession: true } }). */
-  initializeResult?: unknown
+  /** Replace the default initialize result. Default advertises loadSession=true. */
+  initializeResult?: Partial<InitializeResponse>
   /** Per-call override for session/load result (default: empty object). */
-  loadSessionResult?: unknown
+  loadSessionResult?: Partial<LoadSessionResponse>
   /** Throw an RPC error from session/load instead of returning a result. */
   loadSessionError?: { code: number; message: string }
-  /** Inject notifications onto the wire BEFORE acknowledging session/load. */
-  loadSessionUpdates?: readonly AcpSessionUpdateParams[]
+  /** Trigger session/update notifications BEFORE session/load resolves. */
+  loadSessionUpdates?: readonly SessionNotification[]
+}
+
+class StubAgent implements Agent {
+  readonly initializeCalls: InitializeRequest[] = []
+  readonly newSessionCalls: NewSessionRequest[] = []
+  readonly loadSessionCalls: LoadSessionRequest[] = []
+  readonly promptCalls: PromptRequest[] = []
+  readonly cancelCalls: CancelNotification[] = []
+  /** Set by the fake client right after construction so the agent can stream updates. */
+  connection?: AgentSideConnection
+
+  constructor(
+    private readonly _agentSessionId: string,
+    private readonly _opts: FakeAcpClientOptions,
+  ) {}
+
+  initialize(params: InitializeRequest): Promise<InitializeResponse> {
+    this.initializeCalls.push(params)
+    return Promise.resolve({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: true, promptCapabilities: {} },
+      authMethods: [],
+      ...(this._opts.initializeResult ?? {}),
+    } as unknown as InitializeResponse)
+  }
+
+  newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
+    this.newSessionCalls.push(params)
+    return Promise.resolve({ sessionId: this._agentSessionId } as unknown as NewSessionResponse)
+  }
+
+  async loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    this.loadSessionCalls.push(params)
+    // Stream any pre-load notifications first to verify the routing path.
+    if (this.connection) {
+      for (const upd of this._opts.loadSessionUpdates ?? []) {
+        await this.connection.sessionUpdate(upd)
+      }
+    }
+    if (this._opts.loadSessionError) {
+      throw new RequestError(this._opts.loadSessionError.code, this._opts.loadSessionError.message)
+    }
+    return (this._opts.loadSessionResult ?? {}) as unknown as LoadSessionResponse
+  }
+
+  prompt(params: PromptRequest): Promise<PromptResponse> {
+    this.promptCalls.push(params)
+    // Never resolves — exercises sendPrompt without us having to manage it.
+    return new Promise<never>(() => {})
+  }
+
+  cancel(params: CancelNotification): Promise<void> {
+    this.cancelCalls.push(params)
+    return Promise.resolve()
+  }
+
+  authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
+    return Promise.resolve()
+  }
 }
 
 interface ConnectedSession {
   readonly sink: IAcpClientNotificationSink
-  readonly harness: IAcpTransportTestHarness
-  readonly connection: AcpConnection
-  cleanup(): void
+  readonly agent: StubAgent
+  readonly clientConn: ClientSideConnection
 }
 
 class FakeAcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
   readonly connected: ConnectedSession[] = []
-  readonly callCounts: Record<string, number> = {}
   readonly connectArgs: { agentId: string; cwd: string | undefined }[] = []
   private _agentSeq = 0
 
@@ -203,89 +273,33 @@ class FakeAcpClientService implements IAcpClientService {
     agentId: string,
     sink: IAcpClientNotificationSink,
     options?: { cwd?: string },
-  ): Promise<AcpConnection> {
+  ): Promise<IAcpClientConnection> {
     this.connectArgs.push({ agentId, cwd: options?.cwd })
     const agentSessionId = `agent-${++this._agentSeq}`
-    const harness = createInMemoryAcpHost()
-    const handler: IAcpConnectionHandler = {
-      onRequest: () => Promise.reject(new AcpRpcError('not implemented', -32601)),
-      onNotification: (_m, p) => sink.onSessionUpdate(p as AcpSessionUpdateParams),
+    const pair = createInMemoryAcpPair()
+    const agent = new StubAgent(agentSessionId, this._opts)
+    const agentConn = new AgentSideConnection(() => agent, pair.agentStream)
+    agent.connection = agentConn
+    const clientImpl: Client = {
+      requestPermission: (params) => sink.onRequestPermission(params),
+      sessionUpdate: async (params) => {
+        sink.onSessionUpdate(params)
+      },
     }
-    const conn = new AcpConnection(harness.host, harness.handle, handler, new NullLogger())
-
-    const ack = (rawLines: readonly string[]): void => {
-      for (const line of rawLines) {
-        if (!line.trim()) continue
-        const msg = JSON.parse(line) as {
-          id?: unknown
-          method?: string
-          params?: unknown
-        }
-        if (typeof msg.method === 'string') {
-          this.callCounts[msg.method] = (this.callCounts[msg.method] ?? 0) + 1
-        }
-        if (typeof msg.id !== 'number' && typeof msg.id !== 'string') continue
-        if (msg.method === AcpMethods.Initialize) {
-          this._respond(
-            harness,
-            msg.id,
-            this._opts.initializeResult ?? {
-              protocolVersion: 1,
-              agentCapabilities: { loadSession: true },
-            },
-          )
-        } else if (msg.method === AcpMethods.NewSession) {
-          this._respond(harness, msg.id, { sessionId: agentSessionId })
-        } else if (msg.method === AcpMethods.LoadSession) {
-          // Use the params' sessionId since session/load passes back what we sent.
-          // Stream any pre-load notifications first to verify the routing path.
-          for (const upd of this._opts.loadSessionUpdates ?? []) {
-            harness.inject(
-              JSON.stringify({ jsonrpc: '2.0', method: AcpMethods.SessionUpdate, params: upd }) +
-                '\n',
-            )
-          }
-          if (this._opts.loadSessionError) {
-            this._respondError(harness, msg.id, this._opts.loadSessionError)
-          } else {
-            this._respond(harness, msg.id, this._opts.loadSessionResult ?? {})
-          }
-        }
-      }
+    const clientConn = new ClientSideConnection(() => clientImpl, pair.clientStream)
+    this.connected.push({ sink, agent, clientConn })
+    return {
+      conn: clientConn,
+      dispose: (): void => {
+        void pair.clientStream.writable.close().catch(() => {})
+        void pair.agentStream.writable.close().catch(() => {})
+      },
     }
-
-    let lastSeen = 0
-    const interval: NodeJS.Timeout = setInterval(() => {
-      const writes = harness.written()
-      if (writes.length > lastSeen) {
-        const newLines = writes.slice(lastSeen)
-        lastSeen = writes.length
-        for (const w of newLines) ack(w.split('\n'))
-      }
-    }, 1)
-
-    const cleanup = (): void => clearInterval(interval)
-    conn.onExit(cleanup)
-    this.connected.push({ sink, harness, connection: conn, cleanup })
-    return conn
-  }
-
-  private _respond(harness: IAcpTransportTestHarness, id: number | string, result: unknown): void {
-    harness.inject(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n')
-  }
-  private _respondError(
-    harness: IAcpTransportTestHarness,
-    id: number | string,
-    err: { code: number; message: string },
-  ): void {
-    harness.inject(JSON.stringify({ jsonrpc: '2.0', id, error: err }) + '\n')
   }
 }
 
 // ---------------------------------------------------------------------------
 // Helper: build a service with a freshly-instantiated history service.
-// We reuse the real AcpSessionHistoryService against a FakeStorage so tests
-// exercise the same code paths as production (LRU truncation, debounce, etc.).
 // ---------------------------------------------------------------------------
 
 function buildService(opts: FakeAcpClientOptions = {}): {
@@ -394,15 +408,12 @@ describe('AcpSessionService — history wiring', () => {
     svc = built.svc
     await built.history.initialize()
     const a = await svc.createSession()
-    // Force timestamp drift so the assertion is meaningful.
     await new Promise((r) => setTimeout(r, 5))
     const b = await svc.createSession()
     expect(built.history.list().map((e) => e.title)).toEqual([b.title, a.title])
     await new Promise((r) => setTimeout(r, 5))
-    // Bumping `a` via sendPrompt should reorder it to the head. The fake
-    // never acks session/prompt, but `history.touch()` runs synchronously at
-    // the start of sendPrompt so we don't await the prompt promise — we
-    // cancel it after the synchronous touch lands.
+    // Bumping `a` via sendPrompt: history.touch() runs synchronously at the
+    // start of sendPrompt. We cancel the never-resolving prompt afterwards.
     void a.sendPrompt('hi')
     expect(built.history.list().map((e) => e.title)).toEqual([a.title, b.title])
     await a.cancelTurn()
@@ -431,8 +442,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     const original = await svc.createSession()
     const historyId = built.history.list()[0]!.id
     expect(built.client.connected).toHaveLength(1)
-    // resumeSession should NOT spawn a second agent — it should setActive(original).
-    svc.setActive(original.id) // no-op but keeps the focus explicit
+    svc.setActive(original.id)
     const resumed = await svc.resumeSession(historyId)
     expect(resumed.id).toBe(original.id)
     expect(built.client.connected).toHaveLength(1)
@@ -440,7 +450,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
   })
 
   it('spawns a fresh agent and applies session/load state when capability=true', async () => {
-    const configFixture: AcpSessionConfigOption = {
+    const configFixture: SessionConfigOption = {
       id: 'model',
       name: 'Model',
       category: 'model',
@@ -451,12 +461,10 @@ describe('AcpSessionService.resumeSession — happy path', () => {
         { value: 'opus', name: 'Opus' },
       ],
     }
-    const modesFixture: AcpSessionModeState = {
+    const modesFixture: SessionModeState = {
       currentModeId: 'plan',
       availableModes: [{ id: 'plan', name: 'Plan' }],
     }
-    // Bootstrap step: createSession to populate history, then dispose the live
-    // session so resumeSession spawns a fresh agent for it.
     const built = buildService({
       loadSessionResult: { configOptions: [configFixture], modes: modesFixture },
     })
@@ -471,11 +479,11 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(resumed.agentId).toBe('fake')
     expect(svc.sessions.get()).toHaveLength(1)
     expect(svc.activeSession.get()?.id).toBe(resumed.id)
-    // session/load state has been applied through applyInitState.
     const opts = resumed.configOptions.get()
     expect(opts.find((o) => o.id === 'model')?.currentValue).toBe('opus')
     expect(opts.some((o) => o.category === 'mode')).toBe(true)
-    expect(built.client.callCounts[AcpMethods.LoadSession]).toBe(1)
+    // The resumed agent is the SECOND connection created by the fake client.
+    expect(built.client.connected[1]?.agent.loadSessionCalls).toHaveLength(1)
   })
 
   it('tolerates an empty session/load result (no state to apply)', async () => {
@@ -511,7 +519,6 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     const historyId = built.history.list()[0]!.id
     await svc.closeSession(original.id)
     const resumed = await svc.resumeSession(historyId)
-    // The streamed chunk should have landed on the resumed session.
     const msgs = resumed.messages.get()
     expect(msgs.length).toBe(1)
     expect(msgs[0]?.text).toBe('replayed history')
@@ -527,7 +534,10 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
 
   it('rejects when the agent does not advertise loadSession capability', async () => {
     const built = buildService({
-      initializeResult: { protocolVersion: 1, agentCapabilities: { loadSession: false } },
+      initializeResult: {
+        protocolVersion: 1,
+        agentCapabilities: { loadSession: false, promptCapabilities: {} },
+      } as Partial<InitializeResponse>,
     })
     svc = built.svc
     await built.history.initialize()
@@ -536,34 +546,8 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     await svc.closeSession(original.id)
 
     await expect(svc.resumeSession(historyId)).rejects.toThrow(/does not advertise.*loadSession/)
-    // No partial state left around.
     expect(svc.sessions.get()).toHaveLength(0)
     expect(built.notifications.captured.length).toBe(1)
-  })
-
-  it('rejects when initialize returns malformed payload', async () => {
-    const built = buildService({ initializeResult: { protocolVersion: 'oops' } })
-    svc = built.svc
-    await built.history.initialize()
-    // Bootstrap history with one entry using a fresh service that returns valid initialize.
-    const bootstrap = buildService()
-    await bootstrap.history.initialize()
-    await bootstrap.svc.createSession()
-    const historyId = bootstrap.history.list()[0]!.id
-    bootstrap.svc.dispose()
-
-    // Hand the entry to `svc`'s history via direct add (storage is a separate FakeStorage).
-    built.history.add({
-      agentId: 'fake',
-      sessionIdOnAgent: 'agent-bootstrap',
-      title: 'Fake Agent · s1',
-    })
-    const ids = built.history.list().map((e) => e.id)
-    expect(ids.length).toBeGreaterThan(0)
-    void historyId
-
-    await expect(svc.resumeSession(ids[0]!)).rejects.toThrow(/initialize returned malformed/)
-    expect(svc.sessions.get()).toHaveLength(0)
   })
 
   it('rolls back to no session when session/load fails (and the partial entry is disposed)', async () => {

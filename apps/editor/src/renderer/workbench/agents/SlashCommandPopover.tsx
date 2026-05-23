@@ -8,13 +8,13 @@
 
 import { useEffect, useRef } from 'react'
 import { localize } from '@universe-editor/platform'
-import type { AcpAvailableCommand } from '../../services/acp/acpProtocol.js'
+import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import styles from './agents.module.css'
 
 export interface SlashCommandPopoverProps {
-  readonly commands: readonly AcpAvailableCommand[]
+  readonly commands: readonly AvailableCommand[]
   readonly activeIndex: number
-  readonly onSelect: (cmd: AcpAvailableCommand) => void
+  readonly onSelect: (cmd: AvailableCommand) => void
   readonly onHover: (index: number) => void
 }
 
@@ -25,9 +25,9 @@ export interface SlashCommandPopoverProps {
  * (mature agents tend to put the common commands first).
  */
 export function filterCommands(
-  commands: readonly AcpAvailableCommand[],
+  commands: readonly AvailableCommand[],
   query: string,
-): readonly AcpAvailableCommand[] {
+): readonly AvailableCommand[] {
   if (!query) return commands
   const q = query.toLowerCase()
   return commands.filter((c) => {

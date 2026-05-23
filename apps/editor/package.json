@@ -30,6 +30,7 @@
     "package:win:installer": "pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis"
   },
   "dependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
     "@fontsource/roboto": "catalog:",
     "@tanstack/react-virtual": "catalog:",
     "@universe-editor/platform": "workspace:*",
@@ -37,7 +38,8 @@
     "allotment": "catalog:",
     "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",
-    "monaco-editor": "catalog:"
+    "monaco-editor": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@playwright/test": "catalog:",

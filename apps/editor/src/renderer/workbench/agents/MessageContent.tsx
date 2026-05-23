@@ -9,14 +9,14 @@
 
 import { Fragment, useMemo, type ReactNode } from 'react'
 import { IEditorResolverService, URI } from '@universe-editor/platform'
-import type { AcpContentBlock } from '../../services/acp/acpProtocol.js'
+import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseMarkdown, type MdInline, type MdNode } from '../../services/acp/markdownRenderer.js'
 import { useService } from '../useService.js'
 import { CodeBlock } from './CodeBlock.js'
 import styles from './agents.module.css'
 
 interface MessageContentProps {
-  readonly blocks: readonly AcpContentBlock[]
+  readonly blocks: readonly ContentBlock[]
 }
 
 export function MessageContent({ blocks }: MessageContentProps) {
@@ -29,7 +29,7 @@ export function MessageContent({ blocks }: MessageContentProps) {
   )
 }
 
-function BlockNode({ block }: { block: AcpContentBlock }) {
+function BlockNode({ block }: { block: ContentBlock }) {
   switch (block.type) {
     case 'text':
       return <MarkdownBlock text={block.text} />
@@ -42,14 +42,14 @@ function BlockNode({ block }: { block: AcpContentBlock }) {
         </div>
       )
     case 'resource':
-      return <ResourceLink uri={block.uri} />
+      return <ResourceLink uri={block.resource.uri} />
     case 'resource_link':
       return (
         <ResourceLink
           uri={block.uri}
-          {...(block.name !== undefined ? { name: block.name } : {})}
-          {...(block.description !== undefined ? { description: block.description } : {})}
-          {...(block.mimeType !== undefined ? { mimeType: block.mimeType } : {})}
+          {...(block.name != null ? { name: block.name } : {})}
+          {...(block.description != null ? { description: block.description } : {})}
+          {...(block.mimeType != null ? { mimeType: block.mimeType } : {})}
         />
       )
   }

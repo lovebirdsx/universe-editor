@@ -2,8 +2,8 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AcpSessionService — high-level multi-session state on top of AcpClientService.
  *
- *  Each Session owns one agent process (one AcpConnection). The service exposes
- *  observable arrays for the React layer to render:
+ *  Each Session owns one agent process (one ClientSideConnection). The service
+ *  exposes observable arrays for the React layer to render:
  *    - sessions:      every open Session
  *    - activeSession: the one currently visible in the chat view
  *
@@ -34,37 +34,32 @@ import {
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
-import { IAcpClientService, type IAcpClientNotificationSink } from './acpClientService.js'
+import {
+  PROTOCOL_VERSION,
+  type AvailableCommand,
+  type ContentBlock,
+  type InitializeRequest,
+  type LoadSessionRequest,
+  type NewSessionRequest,
+  type PromptRequest,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SessionConfigOption,
+  type SessionModeState,
+  type SessionNotification,
+  type SessionUpdate,
+  type SetSessionConfigOptionRequest,
+  type SetSessionModeRequest,
+  type ToolCallContent,
+} from '@agentclientprotocol/sdk'
+import {
+  IAcpClientService,
+  type IAcpClientConnection,
+  type IAcpClientNotificationSink,
+} from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
-import { AcpAbortError, type AcpConnection } from './acpConnection.js'
-import {
-  ACP_PROTOCOL_VERSION,
-  AcpMethods,
-  parseInitializeResult,
-  parseLoadSessionResult,
-  parseNewSessionResult,
-  parseSessionUpdateParams,
-  parseSetConfigOptionResult,
-  type AcpAvailableCommand,
-  type AcpContentBlock,
-  type AcpInitializeParams,
-  type AcpInitializeResult,
-  type AcpLoadSessionParams,
-  type AcpNewSessionParams,
-  type AcpRequestPermissionParams,
-  type AcpRequestPermissionResult,
-  type AcpSessionCancelParams,
-  type AcpSessionConfigOption,
-  type AcpSessionModeState,
-  type AcpSessionPromptParams,
-  type AcpSessionPromptResult,
-  type AcpSessionUpdate,
-  type AcpSessionUpdateParams,
-  type AcpSetConfigOptionParams,
-  type AcpSetSessionModeParams,
-} from './acpProtocol.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 
 export type { PromptMention }
@@ -81,7 +76,7 @@ export interface AcpMessage {
   /** Plain-text view of `blocks`, computed via {@link blocksToText}. */
   readonly text: string
   /** Structured content blocks — used by the renderer for markdown / images / resource links. */
-  readonly blocks: readonly AcpContentBlock[]
+  readonly blocks: readonly ContentBlock[]
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -93,7 +88,12 @@ export interface AcpToolCall {
   readonly status: AcpToolCallStatus
   /** Plain-text view of `blocks`. */
   readonly text: string
-  readonly blocks: readonly AcpContentBlock[]
+  /**
+   * Tool call output normalized into ContentBlock[]. ToolCallContent variants
+   * `content` are unwrapped; `diff` and `terminal` are converted to a placeholder
+   * text block so the existing MessageContent renderer keeps working unchanged.
+   */
+  readonly blocks: readonly ContentBlock[]
 }
 
 export interface AcpPlanEntry {
@@ -118,8 +118,8 @@ export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | '
 
 /** Bag of normalized initial session state captured from `session/new`. */
 export interface IAcpSessionInitState {
-  readonly configOptions?: readonly AcpSessionConfigOption[]
-  readonly modes?: AcpSessionModeState
+  readonly configOptions?: readonly SessionConfigOption[]
+  readonly modes?: SessionModeState
 }
 
 export interface IAcpSession {
@@ -141,15 +141,15 @@ export interface IAcpSession {
    * `category: 'mode'` ConfigOption so the UI can treat both protocol shapes
    * uniformly; see {@link AcpSessionService} for the conversion details.
    */
-  readonly configOptions: IObservable<readonly AcpSessionConfigOption[]>
+  readonly configOptions: IObservable<readonly SessionConfigOption[]>
   /** Latest agent-advertised slash commands (may be empty). */
-  readonly availableCommands: IObservable<readonly AcpAvailableCommand[]>
+  readonly availableCommands: IObservable<readonly AvailableCommand[]>
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void
   /**
    * Send a prompt. If `mentions` are provided, any `@<name>` in the text
    * whose `<name>` matches a recorded mention is rewritten into a
-   * `resource_link` AcpContentBlock. Unmatched `@`-tokens stay as text.
+   * `resource_link` ContentBlock. Unmatched `@`-tokens stay as text.
    */
   sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void>
   cancelTurn(): Promise<void>
@@ -194,14 +194,26 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
+/**
+ * Local error type signalling "the in-flight prompt was cancelled locally
+ * (via cancelTurn)". Distinct from RequestError so callers can map it to a
+ * neutral status instead of an error UI.
+ */
+export class AcpAbortError extends Error {
+  constructor(message = 'Aborted') {
+    super(message)
+    this.name = 'AcpAbortError'
+  }
+}
+
 class AcpSession extends Disposable implements IAcpSession {
   readonly messages: ISettableObservable<readonly AcpMessage[]>
   readonly toolCalls: ISettableObservable<readonly AcpToolCall[]>
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
   readonly status: ISettableObservable<AcpSessionStatus>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
-  readonly configOptions: ISettableObservable<readonly AcpSessionConfigOption[]>
-  readonly availableCommands: ISettableObservable<readonly AcpAvailableCommand[]>
+  readonly configOptions: ISettableObservable<readonly SessionConfigOption[]>
+  readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
 
   private _messages: AcpMessage[] = []
   private _toolCalls: AcpToolCall[] = []
@@ -221,13 +233,13 @@ class AcpSession extends Disposable implements IAcpSession {
    * for agents that haven't migrated. Also drives the synthetic mode
    * ConfigOption so the UI can use a single rendering path.
    */
-  private _legacyModes: AcpSessionModeState | undefined
+  private _legacyModes: SessionModeState | undefined
 
   constructor(
     readonly id: string,
     readonly agentId: string,
     readonly title: string,
-    private readonly _conn: AcpConnection,
+    private readonly _conn: IAcpClientConnection,
     private readonly _sessionIdOnAgent: string,
     private readonly _telemetry: ITelemetryService,
     initState?: IAcpSessionInitState,
@@ -243,25 +255,30 @@ class AcpSession extends Disposable implements IAcpSession {
       `acp.session.pendingPermission.${id}`,
       undefined,
     )
-    this.configOptions = observableValue<readonly AcpSessionConfigOption[]>(
+    this.configOptions = observableValue<readonly SessionConfigOption[]>(
       `acp.session.configOptions.${id}`,
       [],
     )
-    this.availableCommands = observableValue<readonly AcpAvailableCommand[]>(
+    this.availableCommands = observableValue<readonly AvailableCommand[]>(
       `acp.session.availableCommands.${id}`,
       [],
     )
     if (initState) {
       this.applyInitState(initState)
     }
-    this._register(this._conn)
-    this._register(
-      this._conn.onExit(() => {
-        this._commitBatchedTx()
-        this.status.set('closed', undefined)
-        this._cancelPending()
-      }),
-    )
+    this._register({ dispose: () => this._conn.dispose() })
+    // Connection close → seal the session.
+    const onClose = (): void => {
+      this._commitBatchedTx()
+      this.status.set('closed', undefined)
+      this._cancelPending()
+      this._activeAbort?.abort()
+    }
+    if (this._conn.conn.signal.aborted) {
+      onClose()
+    } else {
+      this._conn.conn.signal.addEventListener('abort', onClose, { once: true })
+    }
   }
 
   /**
@@ -306,21 +323,22 @@ class AcpSession extends Disposable implements IAcpSession {
     this._appendMessage('user', text)
     this.status.set('running', undefined)
     const prompt = composePromptBlocks(text, mentions ?? [])
-    const params: AcpSessionPromptParams = {
+    const params: PromptRequest = {
       sessionId: this._sessionIdOnAgent,
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
-      prompt: prompt.length > 0 ? prompt : [{ type: 'text', text }],
+      prompt: prompt.length > 0 ? [...prompt] : [{ type: 'text', text }],
     }
     const abort = new AbortController()
     this._activeAbort = abort
     this._telemetry.publicLog('acp.prompt_sent', { sessionId: this.id })
+    const abortPromise = new Promise<never>((_, reject) => {
+      const onAbort = (): void => reject(new AcpAbortError())
+      if (abort.signal.aborted) onAbort()
+      else abort.signal.addEventListener('abort', onAbort, { once: true })
+    })
     try {
-      await this._conn.request<AcpSessionPromptResult>(
-        AcpMethods.SessionPrompt,
-        params,
-        abort.signal,
-      )
+      await Promise.race([this._conn.conn.prompt(params), abortPromise])
       this._flushStream()
       this.status.set('idle', undefined)
     } catch (err) {
@@ -343,9 +361,8 @@ class AcpSession extends Disposable implements IAcpSession {
   }
 
   async cancelTurn(): Promise<void> {
-    const params: AcpSessionCancelParams = { sessionId: this._sessionIdOnAgent }
     try {
-      await this._conn.notify(AcpMethods.SessionCancel, params)
+      await this._conn.conn.cancel({ sessionId: this._sessionIdOnAgent })
     } catch {
       // swallow — cancel is best-effort
     }
@@ -362,7 +379,7 @@ class AcpSession extends Disposable implements IAcpSession {
 
   // -- ingestion ----------------------------------------------------------
 
-  applyUpdate(update: AcpSessionUpdate): void {
+  applyUpdate(update: SessionUpdate): void {
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
         this._appendChunk('user', update.content)
@@ -374,12 +391,12 @@ class AcpSession extends Disposable implements IAcpSession {
         this._appendChunk('thought', update.content)
         break
       case 'tool_call': {
-        const blocks = update.content ?? []
+        const blocks = toolCallContentToBlocks(update.content ?? [])
         this._upsertToolCall({
           id: update.toolCallId,
-          title: update.title ?? update.toolCallId,
+          title: update.title,
           kind: update.kind ?? 'unknown',
-          status: update.status ?? 'pending',
+          status: (update.status as AcpToolCallStatus | undefined) ?? 'pending',
           blocks,
           text: blocksToText(blocks),
         })
@@ -391,12 +408,15 @@ class AcpSession extends Disposable implements IAcpSession {
       }
       case 'tool_call_update': {
         const existing = this._toolCalls.find((t) => t.id === update.toolCallId)
-        const blocks = update.content ?? existing?.blocks ?? []
+        const blocks =
+          update.content != null
+            ? toolCallContentToBlocks(update.content)
+            : (existing?.blocks ?? [])
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: existing?.title ?? update.toolCallId,
           kind: existing?.kind ?? 'unknown',
-          status: update.status ?? existing?.status ?? 'pending',
+          status: (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending',
           blocks,
           text: blocksToText(blocks),
         }
@@ -437,6 +457,9 @@ class AcpSession extends Disposable implements IAcpSession {
       case 'config_option_update':
         this.configOptions.set(this._materializeConfigOptions(update.configOptions), undefined)
         break
+      default:
+        // session_info_update / usage_update etc. — ignored for now.
+        break
     }
   }
 
@@ -449,8 +472,11 @@ class AcpSession extends Disposable implements IAcpSession {
       !cur.some((o) => o.category === 'mode' && this._lastSeenFromConfigOptionsServer.has(o.id))
     // Legacy path: only modes were advertised → use session/set_mode.
     if (isLegacyMode) {
-      const params: AcpSetSessionModeParams = { sessionId: this._sessionIdOnAgent, modeId: value }
-      await this._conn.request(AcpMethods.SetSessionMode, params)
+      const params: SetSessionModeRequest = {
+        sessionId: this._sessionIdOnAgent,
+        modeId: value,
+      }
+      await this._conn.conn.setSessionMode(params)
       this._legacyModes = { ...this._legacyModes!, currentModeId: value }
       this._reconcileLegacyModeOption(value)
       this._telemetry.publicLog('acp.config_option_set', {
@@ -460,16 +486,15 @@ class AcpSession extends Disposable implements IAcpSession {
       })
       return
     }
-    const params: AcpSetConfigOptionParams = {
+    const params: SetSessionConfigOptionRequest = {
       sessionId: this._sessionIdOnAgent,
       configId,
       value,
     }
-    const raw = await this._conn.request<unknown>(AcpMethods.SetConfigOption, params)
-    const parsed = parseSetConfigOptionResult(raw)
-    if (parsed) {
-      this._markServerConfigIds(parsed.configOptions)
-      this.configOptions.set(this._materializeConfigOptions(parsed.configOptions), undefined)
+    const resp = await this._conn.conn.setSessionConfigOption(params)
+    if (resp.configOptions) {
+      this._markServerConfigIds(resp.configOptions)
+      this.configOptions.set(this._materializeConfigOptions(resp.configOptions), undefined)
     }
     this._telemetry.publicLog('acp.config_option_set', { sessionId: this.id, configId })
   }
@@ -480,7 +505,7 @@ class AcpSession extends Disposable implements IAcpSession {
     const cur = this.configOptions.get()
     const next = cur.map((o) =>
       o.category === 'mode' && !this._lastSeenFromConfigOptionsServer.has(o.id)
-        ? { ...o, currentValue: currentModeId }
+        ? ({ ...o, currentValue: currentModeId } as SessionConfigOption)
         : o,
     )
     this.configOptions.set(next, undefined)
@@ -495,9 +520,9 @@ class AcpSession extends Disposable implements IAcpSession {
    * to `session/set_mode` when writing.
    */
   private _materializeConfigOptions(
-    serverOpts: readonly AcpSessionConfigOption[] | undefined,
-  ): readonly AcpSessionConfigOption[] {
-    const out: AcpSessionConfigOption[] = serverOpts ? [...serverOpts] : []
+    serverOpts: readonly SessionConfigOption[] | undefined,
+  ): readonly SessionConfigOption[] {
+    const out: SessionConfigOption[] = serverOpts ? [...serverOpts] : []
     if (this._legacyModes) {
       const hasServerMode = out.some((o) => o.category === 'mode')
       if (!hasServerMode) {
@@ -509,12 +534,12 @@ class AcpSession extends Disposable implements IAcpSession {
   }
 
   private readonly _lastSeenFromConfigOptionsServer = new Set<string>()
-  private _markServerConfigIds(opts: readonly AcpSessionConfigOption[]): void {
+  private _markServerConfigIds(opts: readonly SessionConfigOption[]): void {
     this._lastSeenFromConfigOptionsServer.clear()
     for (const o of opts) this._lastSeenFromConfigOptionsServer.add(o.id)
   }
 
-  private _appendChunk(role: AcpMessageRole, block: AcpContentBlock): void {
+  private _appendChunk(role: AcpMessageRole, block: ContentBlock): void {
     const last = this._messages[this._messages.length - 1]
     if (last && last.role === role && this._isStreaming(last.id)) {
       const blocks = mergeStreamingBlock(last.blocks, block)
@@ -523,7 +548,7 @@ class AcpSession extends Disposable implements IAcpSession {
     } else {
       const id = `m${++this._msgCounter}`
       this._streamingIds.add(id)
-      const blocks: readonly AcpContentBlock[] = [block]
+      const blocks: readonly ContentBlock[] = [block]
       this._messages = [...this._messages, { id, role, blocks, text: blocksToText(blocks) }]
     }
     this.messages.set(this._messages, this._batchedTx())
@@ -542,7 +567,7 @@ class AcpSession extends Disposable implements IAcpSession {
 
   private _appendMessage(role: AcpMessageRole, text: string): void {
     const id = `m${++this._msgCounter}`
-    const blocks: readonly AcpContentBlock[] = [{ type: 'text', text }]
+    const blocks: readonly ContentBlock[] = [{ type: 'text', text }]
     this._messages = [...this._messages, { id, role, blocks, text }]
     this.messages.set(this._messages, undefined)
   }
@@ -582,14 +607,14 @@ class AcpSession extends Disposable implements IAcpSession {
   }
 }
 
-function blocksToText(blocks: readonly AcpContentBlock[] | undefined): string {
+function blocksToText(blocks: readonly ContentBlock[] | undefined): string {
   if (!blocks) return ''
   return blocks
     .map((b) =>
       b.type === 'text'
         ? b.text
         : b.type === 'resource'
-          ? `[resource: ${b.uri}]`
+          ? `[resource: ${b.resource.uri}]`
           : b.type === 'resource_link'
             ? `[resource: ${b.name ?? b.uri}]`
             : b.type === 'audio'
@@ -600,15 +625,40 @@ function blocksToText(blocks: readonly AcpContentBlock[] | undefined): string {
 }
 
 /**
+ * Flatten the SDK's ToolCallContent[] (a discriminated union of content / diff /
+ * terminal wrappers) into a flat ContentBlock[] so the existing MessageContent
+ * renderer can display tool call output uniformly. Non-text variants (diff,
+ * terminal) become a labelled text placeholder — full rendering can land in a
+ * follow-up.
+ */
+function toolCallContentToBlocks(content: readonly ToolCallContent[]): readonly ContentBlock[] {
+  const out: ContentBlock[] = []
+  for (const item of content) {
+    switch (item.type) {
+      case 'content':
+        out.push(item.content)
+        break
+      case 'diff':
+        out.push({ type: 'text', text: `[diff: ${item.path}]` })
+        break
+      case 'terminal':
+        out.push({ type: 'text', text: `[terminal: ${item.terminalId}]` })
+        break
+    }
+  }
+  return out
+}
+
+/**
  * Merge an incoming streaming chunk into the existing blocks list. Consecutive
  * `text` blocks collapse into a single block so the markdown parser can see a
  * coherent document; non-text blocks (image / resource / resource_link / audio)
  * are appended as-is.
  */
 function mergeStreamingBlock(
-  blocks: readonly AcpContentBlock[],
-  chunk: AcpContentBlock,
-): readonly AcpContentBlock[] {
+  blocks: readonly ContentBlock[],
+  chunk: ContentBlock,
+): readonly ContentBlock[] {
   if (chunk.type === 'text') {
     const last = blocks[blocks.length - 1]
     if (last && last.type === 'text') {
@@ -627,17 +677,19 @@ function mergeStreamingBlock(
  */
 const LEGACY_MODE_OPTION_ID = '__legacy_mode__'
 
-function legacyModesToConfigOption(state: AcpSessionModeState): AcpSessionConfigOption {
+function legacyModesToConfigOption(state: SessionModeState): SessionConfigOption {
   return {
+    type: 'select',
     id: LEGACY_MODE_OPTION_ID,
     name: 'Mode',
     category: 'mode',
-    type: 'select',
     currentValue: state.currentModeId,
     options: state.availableModes.map((m) => ({
       value: m.id,
       name: m.name,
-      ...(m.description !== undefined ? { description: m.description } : {}),
+      ...(m.description !== undefined && m.description !== null
+        ? { description: m.description }
+        : {}),
     })),
   }
 }
@@ -711,28 +763,26 @@ export class AcpSessionService
         const timeoutMs =
           this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
         const mcpServers = this._readMcpServers()
-        const initParams: AcpInitializeParams = {
-          protocolVersion: ACP_PROTOCOL_VERSION,
-          clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+        const initParams: InitializeRequest = {
+          protocolVersion: PROTOCOL_VERSION,
+          clientCapabilities: {
+            fs: { readTextFile: true, writeTextFile: true },
+            terminal: true,
+          },
         }
         try {
           progress.report({ message: 'Negotiating ACP protocol…' })
-          await withTimeout(
-            conn.request<AcpInitializeResult>(AcpMethods.Initialize, initParams),
-            timeoutMs,
-            'ACP initialize',
-          )
+          await withTimeout(conn.conn.initialize(initParams), timeoutMs, 'ACP initialize')
           progress.report({ message: 'Creating session…' })
-          const newParams: AcpNewSessionParams = { cwd: cwd ?? '', mcpServers }
-          const rawResult = await withTimeout(
-            conn.request<unknown>(AcpMethods.NewSession, newParams),
+          const newParams: NewSessionRequest = {
+            cwd: cwd ?? '',
+            mcpServers: mcpServers as NewSessionRequest['mcpServers'],
+          }
+          const result = await withTimeout(
+            conn.conn.newSession(newParams),
             timeoutMs,
             'ACP session/new',
           )
-          const result = parseNewSessionResult(rawResult)
-          if (!result) {
-            throw new Error('ACP session/new returned malformed result')
-          }
           const localId = `s${++this._seq}`
           const title = `${agentName} · ${localId}`
           const initState: IAcpSessionInitState = {
@@ -812,22 +862,21 @@ export class AcpSessionService
     const conn = await this._client.connect(entry.agentId, this, cwd !== undefined ? { cwd } : {})
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const mcpServers = this._readMcpServers()
-    const initParams: AcpInitializeParams = {
-      protocolVersion: ACP_PROTOCOL_VERSION,
-      clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: true },
+    const initParams: InitializeRequest = {
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
     }
     let session: AcpSession | undefined
     let registered = false
     try {
-      const rawInit = await withTimeout(
-        conn.request<unknown>(AcpMethods.Initialize, initParams),
+      const initResult = await withTimeout(
+        conn.conn.initialize(initParams),
         timeoutMs,
         'ACP initialize',
       )
-      const initResult = parseInitializeResult(rawInit)
-      if (!initResult) {
-        throw new Error('ACP initialize returned malformed result')
-      }
       if (initResult.agentCapabilities?.loadSession !== true) {
         throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
       }
@@ -856,21 +905,17 @@ export class AcpSessionService
       })
       registered = true
 
-      const loadParams: AcpLoadSessionParams = {
+      const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
-        mcpServers,
+        mcpServers: mcpServers as LoadSessionRequest['mcpServers'],
       }
-      const rawLoad = await withTimeout(
-        conn.request<unknown>(AcpMethods.LoadSession, loadParams),
+      const loadResult = await withTimeout(
+        conn.conn.loadSession(loadParams),
         timeoutMs,
         'ACP session/load',
       )
-      const loadResult = parseLoadSessionResult(rawLoad)
-      if (loadResult === null) {
-        throw new Error('ACP session/load returned malformed result')
-      }
-      if (loadResult.modes || loadResult.configOptions) {
+      if (loadResult && (loadResult.modes || loadResult.configOptions)) {
         session.applyInitState({
           ...(loadResult.modes ? { modes: loadResult.modes } : {}),
           ...(loadResult.configOptions ? { configOptions: loadResult.configOptions } : {}),
@@ -943,20 +988,13 @@ export class AcpSessionService
 
   // -- IAcpClientNotificationSink ---------------------------------------
 
-  onSessionUpdate(params: AcpSessionUpdateParams): void {
-    const parsed = parseSessionUpdateParams(params)
-    if (!parsed) {
-      this._logger.warn('[acp] dropping malformed session/update')
-      return
-    }
-    const session = this._byAgentSessionId.get(parsed.sessionId)
+  onSessionUpdate(params: SessionNotification): void {
+    const session = this._byAgentSessionId.get(params.sessionId)
     if (!session) return
-    session.applyUpdate(parsed.update)
+    session.applyUpdate(params.update)
   }
 
-  async onRequestPermission(
-    params: AcpRequestPermissionParams,
-  ): Promise<AcpRequestPermissionResult> {
+  async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {
     const auto = this._permission.tryAutoApprove(params)
     if (auto) {
       this._telemetry.publicLog('acp.permission_auto_approved', {
@@ -970,8 +1008,8 @@ export class AcpSessionService
       return { outcome: { outcome: 'cancelled' } }
     }
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')
-    return await new Promise<AcpRequestPermissionResult>((resolve) => {
-      const settle = (result: AcpRequestPermissionResult): void => {
+    return await new Promise<RequestPermissionResponse>((resolve) => {
+      const settle = (result: RequestPermissionResponse): void => {
         if (session.pendingPermission.get() === pending) {
           session.pendingPermission.set(undefined, undefined)
         }
@@ -980,8 +1018,12 @@ export class AcpSessionService
       const pending: AcpPendingPermission = {
         toolCallId: params.toolCall.toolCallId,
         title: params.toolCall.title ?? params.toolCall.toolCallId,
-        ...(params.toolCall.kind !== undefined ? { kind: params.toolCall.kind } : {}),
-        options: params.options,
+        ...(params.toolCall.kind != null ? { kind: params.toolCall.kind } : {}),
+        options: params.options.map((o) => ({
+          optionId: o.optionId,
+          name: o.name,
+          ...(o.kind !== undefined ? { kind: o.kind } : {}),
+        })),
         resolve: (optionId) => {
           if (allowAlways && optionId === allowAlways.optionId && params.toolCall.kind) {
             this._permission.persistAllow(params.toolCall.kind)

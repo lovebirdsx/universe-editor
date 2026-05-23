@@ -106,6 +106,7 @@ export class ShowLogsAction extends Action2 {
       id: ShowLogsAction.ID,
       title: localize('action.showLogs.title', 'Developer: Show Logs...'),
       category: localize('command.category.help', 'Help'),
+      keybinding: { primary: 'ctrl+shift+u' },
       f1: true,
     })
   }

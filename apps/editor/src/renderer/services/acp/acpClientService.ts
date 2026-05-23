@@ -1,16 +1,17 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpClientService — boots an ACP agent and returns a wired AcpConnection.
+ *  AcpClientService — boots an ACP agent and returns a wired ClientSideConnection
+ *  from `@agentclientprotocol/sdk`.
  *
- *  The Client side of ACP must answer three peer-initiated request methods:
- *    - fs/read_text_file  → IFileService.readFileText
- *    - fs/write_text_file → IFileService.writeFile
- *    - session/request_permission → IAcpPermissionHandler.request
- *  All other peer methods return JSON-RPC error -32601 (Method not found).
+ *  The Client side of ACP answers peer-initiated requests by implementing the
+ *  SDK's `Client` interface (readTextFile / writeTextFile / requestPermission /
+ *  the five terminal methods) plus the `sessionUpdate` notification handler.
+ *  Everything else (unstable_*, extMethod, extNotification) is left undefined so
+ *  the SDK returns `Method not found` automatically.
  *
  *  All fs/* requests are gated through IAcpPathPolicy against the session cwd
  *  the caller supplied. Anything outside the cwd or under a sensitive prefix
- *  fails closed with -32602 Invalid params and surfaces a user-visible
+ *  fails closed with `RequestError.invalidParams` and surfaces a user-visible
  *  notification — the agent process is untrusted code.
  *--------------------------------------------------------------------------------------------*/
 
@@ -24,55 +25,64 @@ import {
   URI,
 } from '@universe-editor/platform'
 import type { ILogger } from '@universe-editor/platform'
+import {
+  ClientSideConnection,
+  RequestError,
+  type Client,
+  type CreateTerminalRequest,
+  type CreateTerminalResponse,
+  type KillTerminalRequest,
+  type ReadTextFileRequest,
+  type ReadTextFileResponse,
+  type ReleaseTerminalRequest,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SessionNotification,
+  type TerminalOutputRequest,
+  type TerminalOutputResponse,
+  type WaitForTerminalExitRequest,
+  type WaitForTerminalExitResponse,
+  type WriteTextFileRequest,
+  type WriteTextFileResponse,
+} from '@agentclientprotocol/sdk'
 import { IAcpHostService } from '../../../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../../../shared/ipc/acpTerminalService.js'
-import { AcpConnection, AcpRpcError, type IAcpConnectionHandler } from './acpConnection.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
-import {
-  AcpMethods,
-  parseReadTextFileParams,
-  parseRequestPermissionParams,
-  parseTerminalCreateParams,
-  parseTerminalIdRequest,
-  parseWriteTextFileParams,
-  type AcpReadTextFileResult,
-  type AcpRequestPermissionResult,
-  type AcpSessionUpdateParams,
-  type AcpTerminalCreateResult,
-  type AcpTerminalOutputResult,
-  type AcpTerminalWaitForExitResult,
-} from './acpProtocol.js'
+import { createSdkHostStream } from './sdkHostStream.js'
 import { IOutputService } from '@universe-editor/platform'
 
 export interface IAcpClientNotificationSink {
-  onSessionUpdate(params: AcpSessionUpdateParams): void
+  onSessionUpdate(params: SessionNotification): void
   /**
    * Peer-initiated `session/request_permission`. The sink owns the UX
    * (inline-in-chat card today) and the autoApprove short-circuit.
    */
-  onRequestPermission(
-    params: import('./acpProtocol.js').AcpRequestPermissionParams,
-  ): Promise<AcpRequestPermissionResult>
+  onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>
+}
+
+export interface IAcpClientConnection {
+  readonly conn: ClientSideConnection
+  /** Stop the agent process and detach all listeners. Idempotent. */
+  dispose(): void
 }
 
 export interface IAcpClientService {
   readonly _serviceBrand: undefined
   /**
-   * Spawn the agent for `agentId` and return a wired AcpConnection. The
-   * supplied sink receives forwarded `session/update` notifications. The
-   * `cwd` option doubles as the path-sandbox root for fs/* peer requests.
+   * Spawn the agent for `agentId` and return a wired ClientSideConnection.
+   * The supplied sink receives forwarded `session/update` notifications and
+   * `session/request_permission` requests. The `cwd` option doubles as the
+   * path-sandbox root for fs/* peer requests.
    */
   connect(
     agentId: string,
     sink: IAcpClientNotificationSink,
     options?: { cwd?: string },
-  ): Promise<AcpConnection>
+  ): Promise<IAcpClientConnection>
 }
 
 export const IAcpClientService = createDecorator<IAcpClientService>('acpClientService')
-
-const JSONRPC_INVALID_PARAMS = -32602
 
 export class AcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
@@ -97,7 +107,7 @@ export class AcpClientService implements IAcpClientService {
     agentId: string,
     sink: IAcpClientNotificationSink,
     options?: { cwd?: string },
-  ): Promise<AcpConnection> {
+  ): Promise<IAcpClientConnection> {
     const spec = this._registry.resolve(agentId, options?.cwd)
     let handle: string
     try {
@@ -118,23 +128,126 @@ export class AcpClientService implements IAcpClientService {
 
     const cwd = options?.cwd ?? ''
     const stderr = this._output.createChannel(`acp/${agentId}/${handle}`)
+    const stderrSub = this._host.onStderr((chunk) => {
+      if (chunk.handle === handle) stderr.append(chunk.data)
+    })
     // Per-connection registry of terminals the agent has opened. Tracked
     // here so we can both (a) reject cross-connection terminalId references
     // and (b) reap leftover terminals if the agent crashes without releasing.
     const ownedTerminals = new Set<string>()
-    const handler: IAcpConnectionHandler = {
-      onRequest: (method, params) => this._handleRequest(method, params, cwd, sink, ownedTerminals),
-      onNotification: (method, params) => this._handleNotification(method, params, sink),
+
+    const clientImpl: Client = {
+      requestPermission: (params) => sink.onRequestPermission(params),
+      sessionUpdate: async (params) => {
+        sink.onSessionUpdate(params)
+      },
+      readTextFile: async (params: ReadTextFileRequest): Promise<ReadTextFileResponse> => {
+        const decision = this._pathPolicy.check(cwd, params.path)
+        if (!decision.ok) {
+          this._reportBlockedPath('read', params.path, decision.reason)
+          throw RequestError.invalidParams(
+            undefined,
+            `fs/read_text_file rejected: ${decision.reason}`,
+          )
+        }
+        const uri = URI.file(decision.normalized)
+        const content = await this._files.readFileText(uri)
+        const sliced = sliceLines(content, params.line ?? undefined, params.limit ?? undefined)
+        return { content: sliced }
+      },
+      writeTextFile: async (params: WriteTextFileRequest): Promise<WriteTextFileResponse> => {
+        const decision = this._pathPolicy.check(cwd, params.path)
+        if (!decision.ok) {
+          this._reportBlockedPath('write', params.path, decision.reason)
+          throw RequestError.invalidParams(
+            undefined,
+            `fs/write_text_file rejected: ${decision.reason}`,
+          )
+        }
+        await this._files.writeFile(URI.file(decision.normalized), params.content)
+        return {}
+      },
+      createTerminal: async (params: CreateTerminalRequest): Promise<CreateTerminalResponse> => {
+        let effectiveCwd: string | undefined
+        if (params.cwd != null) {
+          const decision = this._pathPolicy.check(cwd, params.cwd)
+          if (!decision.ok) {
+            this._reportBlockedPath('terminal-cwd', params.cwd, decision.reason)
+            throw RequestError.invalidParams(
+              undefined,
+              `terminal/create rejected: ${decision.reason}`,
+            )
+          }
+          effectiveCwd = decision.normalized
+        }
+        const envRecord: Record<string, string> = {}
+        for (const v of params.env ?? []) envRecord[v.name] = v.value
+        const created = await this._terminals.create({
+          command: params.command,
+          args: params.args ?? [],
+          ...(Object.keys(envRecord).length > 0 ? { env: envRecord } : {}),
+          ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
+          ...(params.outputByteLimit != null ? { outputByteLimit: params.outputByteLimit } : {}),
+        })
+        ownedTerminals.add(created.terminalId)
+        this._telemetry.publicLog('acp.terminal_created', { command: params.command })
+        return { terminalId: created.terminalId }
+      },
+      terminalOutput: async (params: TerminalOutputRequest): Promise<TerminalOutputResponse> => {
+        assertTerminalOwned(ownedTerminals, params.terminalId)
+        const snap = await this._terminals.output(params.terminalId)
+        return {
+          output: snap.output,
+          truncated: snap.truncated,
+          ...(snap.exitStatus !== undefined
+            ? {
+                exitStatus: {
+                  ...(snap.exitStatus.exitCode !== undefined
+                    ? { exitCode: snap.exitStatus.exitCode }
+                    : {}),
+                  ...(snap.exitStatus.signal !== undefined
+                    ? { signal: snap.exitStatus.signal }
+                    : {}),
+                },
+              }
+            : {}),
+        }
+      },
+      waitForTerminalExit: async (
+        params: WaitForTerminalExitRequest,
+      ): Promise<WaitForTerminalExitResponse> => {
+        assertTerminalOwned(ownedTerminals, params.terminalId)
+        const exit = await this._terminals.waitForExit(params.terminalId)
+        return {
+          ...(exit.exitCode !== undefined ? { exitCode: exit.exitCode } : {}),
+          ...(exit.signal !== undefined ? { signal: exit.signal } : {}),
+        }
+      },
+      killTerminal: async (params: KillTerminalRequest) => {
+        assertTerminalOwned(ownedTerminals, params.terminalId)
+        await this._terminals.kill(params.terminalId)
+      },
+      releaseTerminal: async (params: ReleaseTerminalRequest) => {
+        assertTerminalOwned(ownedTerminals, params.terminalId)
+        ownedTerminals.delete(params.terminalId)
+        await this._terminals.release(params.terminalId)
+      },
     }
-    const conn = new AcpConnection(this._host, handle, handler, this._logger, (data) =>
-      stderr.append(data),
-    )
-    conn.onExit(() => {
+
+    const hostStream = createSdkHostStream(this._host, handle)
+    const conn = new ClientSideConnection(() => clientImpl, hostStream.stream)
+
+    let disposed = false
+    const cleanup = (): void => {
+      if (disposed) return
+      disposed = true
+      stderrSub.dispose()
       try {
         stderr.dispose()
       } catch {
         // OutputChannel.dispose is idempotent; swallow if already gone.
       }
+      hostStream.dispose()
       // Reap terminals the agent left dangling. `release` kills the proc if
       // still alive; we swallow errors because the process may be racing exit.
       if (ownedTerminals.size > 0) {
@@ -146,161 +259,26 @@ export class AcpClientService implements IAcpClientService {
           })
         }
       }
-    })
-    return conn
-  }
+    }
 
-  private async _handleRequest(
-    method: string,
-    params: unknown,
-    cwd: string,
-    sink: IAcpClientNotificationSink,
-    ownedTerminals: Set<string>,
-  ): Promise<unknown> {
-    switch (method) {
-      case AcpMethods.ReadTextFile: {
-        const p = parseReadTextFileParams(params)
-        if (!p)
-          throw new AcpRpcError('Invalid params for fs/read_text_file', JSONRPC_INVALID_PARAMS)
-        const decision = this._pathPolicy.check(cwd, p.path)
-        if (!decision.ok) {
-          this._reportBlockedPath('read', p.path, decision.reason)
-          throw new AcpRpcError(
-            `fs/read_text_file rejected: ${decision.reason}`,
-            JSONRPC_INVALID_PARAMS,
-          )
-        }
-        const uri = URI.file(decision.normalized)
-        const content = await this._files.readFileText(uri)
-        const sliced = sliceLines(content, p.line, p.limit)
-        const result: AcpReadTextFileResult = { content: sliced }
-        return result
-      }
-      case AcpMethods.WriteTextFile: {
-        const p = parseWriteTextFileParams(params)
-        if (!p)
-          throw new AcpRpcError('Invalid params for fs/write_text_file', JSONRPC_INVALID_PARAMS)
-        const decision = this._pathPolicy.check(cwd, p.path)
-        if (!decision.ok) {
-          this._reportBlockedPath('write', p.path, decision.reason)
-          throw new AcpRpcError(
-            `fs/write_text_file rejected: ${decision.reason}`,
-            JSONRPC_INVALID_PARAMS,
-          )
-        }
-        await this._files.writeFile(URI.file(decision.normalized), p.content)
-        return null
-      }
-      case AcpMethods.RequestPermission: {
-        const p = parseRequestPermissionParams(params)
-        if (!p) {
-          throw new AcpRpcError(
-            'Invalid params for session/request_permission',
-            JSONRPC_INVALID_PARAMS,
-          )
-        }
-        return await sink.onRequestPermission(p)
-      }
-      case AcpMethods.TerminalCreate: {
-        const p = parseTerminalCreateParams(params)
-        if (!p) {
-          throw new AcpRpcError('Invalid params for terminal/create', JSONRPC_INVALID_PARAMS)
-        }
-        // Optional cwd is validated against the session sandbox. If the agent
-        // omits it the main service falls back to the spawn default (the editor
-        // process cwd), which is fine — we still strip dangerous env vars.
-        let effectiveCwd: string | undefined
-        if (p.cwd !== undefined) {
-          const decision = this._pathPolicy.check(cwd, p.cwd)
-          if (!decision.ok) {
-            this._reportBlockedPath('terminal-cwd', p.cwd, decision.reason)
-            throw new AcpRpcError(
-              `terminal/create rejected: ${decision.reason}`,
-              JSONRPC_INVALID_PARAMS,
-            )
-          }
-          effectiveCwd = decision.normalized
-        }
-        const envRecord: Record<string, string> = {}
-        for (const v of p.env ?? []) envRecord[v.name] = v.value
-        const created = await this._terminals.create({
-          command: p.command,
-          args: p.args ?? [],
-          ...(Object.keys(envRecord).length > 0 ? { env: envRecord } : {}),
-          ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-          ...(p.outputByteLimit !== undefined ? { outputByteLimit: p.outputByteLimit } : {}),
+    // Connection closes when the underlying stream ends (host exits or stop is
+    // called). Use the SDK's abort signal as the canonical "connection done"
+    // hook — it fires before `closed` resolves.
+    conn.signal.addEventListener('abort', cleanup, { once: true })
+
+    return {
+      conn,
+      dispose: (): void => {
+        // Manual dispose: kill the agent process if alive. The host's onExit
+        // will propagate into the SDK stream and fire `signal.abort`, which
+        // triggers `cleanup` above. Calling `cleanup` here too keeps things
+        // idempotent if `stop` rejects or races.
+        void this._host.stop(handle).catch(() => {
+          // best-effort
         })
-        ownedTerminals.add(created.terminalId)
-        this._telemetry.publicLog('acp.terminal_created', { command: p.command })
-        const result: AcpTerminalCreateResult = { terminalId: created.terminalId }
-        return result
-      }
-      case AcpMethods.TerminalOutput: {
-        const p = parseTerminalIdRequest(params)
-        if (!p) {
-          throw new AcpRpcError('Invalid params for terminal/output', JSONRPC_INVALID_PARAMS)
-        }
-        this._assertTerminalOwned(ownedTerminals, p.terminalId)
-        const snap = await this._terminals.output(p.terminalId)
-        const result: AcpTerminalOutputResult = {
-          output: snap.output,
-          truncated: snap.truncated,
-          ...(snap.exitStatus !== undefined ? { exitStatus: snap.exitStatus } : {}),
-        }
-        return result
-      }
-      case AcpMethods.TerminalWaitForExit: {
-        const p = parseTerminalIdRequest(params)
-        if (!p) {
-          throw new AcpRpcError('Invalid params for terminal/wait_for_exit', JSONRPC_INVALID_PARAMS)
-        }
-        this._assertTerminalOwned(ownedTerminals, p.terminalId)
-        const exit = await this._terminals.waitForExit(p.terminalId)
-        const result: AcpTerminalWaitForExitResult = exit
-        return result
-      }
-      case AcpMethods.TerminalKill: {
-        const p = parseTerminalIdRequest(params)
-        if (!p) {
-          throw new AcpRpcError('Invalid params for terminal/kill', JSONRPC_INVALID_PARAMS)
-        }
-        this._assertTerminalOwned(ownedTerminals, p.terminalId)
-        await this._terminals.kill(p.terminalId)
-        return null
-      }
-      case AcpMethods.TerminalRelease: {
-        const p = parseTerminalIdRequest(params)
-        if (!p) {
-          throw new AcpRpcError('Invalid params for terminal/release', JSONRPC_INVALID_PARAMS)
-        }
-        this._assertTerminalOwned(ownedTerminals, p.terminalId)
-        ownedTerminals.delete(p.terminalId)
-        await this._terminals.release(p.terminalId)
-        return null
-      }
-      default:
-        throw new AcpRpcError(`Method not found: ${method}`, AcpRpcError.METHOD_NOT_FOUND)
+        cleanup()
+      },
     }
-  }
-
-  private _assertTerminalOwned(owned: Set<string>, terminalId: string): void {
-    if (!owned.has(terminalId)) {
-      throw new AcpRpcError(`Unknown terminal: ${terminalId}`, JSONRPC_INVALID_PARAMS)
-    }
-  }
-
-  private _handleNotification(
-    method: string,
-    params: unknown,
-    sink: IAcpClientNotificationSink,
-  ): void {
-    if (method === AcpMethods.SessionUpdate) {
-      // Validation lives in AcpSessionService where the per-session router
-      // already knows how to gracefully ignore unknown update kinds.
-      sink.onSessionUpdate(params as AcpSessionUpdateParams)
-      return
-    }
-    this._logger.warn(`[acp] ignoring unknown notification: ${method}`)
   }
 
   private _reportBlockedPath(
@@ -314,6 +292,12 @@ export class AcpClientService implements IAcpClientService {
       severity: Severity.Warning,
       message: `Agent's request to ${op} "${path}" was blocked: ${reason}`,
     })
+  }
+}
+
+function assertTerminalOwned(owned: Set<string>, terminalId: string): void {
+  if (!owned.has(terminalId)) {
+    throw RequestError.invalidParams(undefined, `Unknown terminal: ${terminalId}`)
   }
 }
 

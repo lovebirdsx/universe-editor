@@ -22,7 +22,11 @@ import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSession
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
-import type { AcpConfigOptionCategory } from '../services/acp/acpProtocol.js'
+import type {
+  SessionConfigOptionCategory,
+  SessionConfigSelectGroup,
+  SessionConfigSelectOption,
+} from '@agentclientprotocol/sdk'
 
 const CATEGORY = localize('command.category.agents', 'Agents')
 
@@ -139,7 +143,7 @@ export class SelectAgentAction extends Action2 {
 
 async function pickConfigOption(
   accessor: ServicesAccessor,
-  category: AcpConfigOptionCategory,
+  category: SessionConfigOptionCategory,
   placeholder: string,
   notFound: string,
 ): Promise<void> {
@@ -152,19 +156,38 @@ async function pickConfigOption(
     return
   }
   const option = session.configOptions.get().find((o) => o.category === category)
-  if (!option) {
+  if (!option || option.type !== 'select') {
     accessor.get(INotificationService).notify({ severity: Severity.Info, message: notFound })
     return
   }
   const currentLabel = localize('agent.configOption.current', 'current')
-  const items: IQuickPickItem[] = option.options.map((v) => ({
+  const flatValues = flattenSelectOptions(option.options)
+  const items: IQuickPickItem[] = flatValues.map((v) => ({
     id: v.value,
     label: v.value === option.currentValue ? `${v.name} · ${currentLabel}` : v.name,
-    ...(v.description !== undefined ? { description: v.description } : {}),
+    ...(v.description != null ? { description: v.description } : {}),
   }))
   const picked = await accessor.get(IQuickInputService).pick(items, { placeholder })
   if (!picked || picked.id === option.currentValue) return
   await applyConfigOption(session, option.id, picked.id, accessor)
+}
+
+/**
+ * SDK's `SessionConfigSelectOptions` is a union: either a flat array of
+ * `SessionConfigSelectOption` or an array of `SessionConfigSelectGroup`. The
+ * QuickPick UI doesn't support grouping today, so we flatten — group labels
+ * are dropped, leaving just the leaf values.
+ */
+function flattenSelectOptions(
+  options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
+): readonly SessionConfigSelectOption[] {
+  if (options.length === 0) return []
+  const first = options[0]!
+  if ('group' in first) {
+    const groups = options as readonly SessionConfigSelectGroup[]
+    return groups.flatMap((g) => g.options)
+  }
+  return options as readonly SessionConfigSelectOption[]
 }
 
 async function applyConfigOption(

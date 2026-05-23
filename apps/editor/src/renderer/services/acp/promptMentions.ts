@@ -8,7 +8,7 @@
  *       Caret-aware: only fires when the cursor is inside the token.
  *    2) On submit, `composePromptBlocks(text, mentions)` walks the final text
  *       and turns any `@<name>` whose `<name>` matches a recorded mention into
- *       a `resource_link` AcpContentBlock. Unrecorded names stay as text — so
+ *       a `resource_link` ContentBlock. Unrecorded names stay as text — so
  *       the user can still type literal `@username` without it being treated
  *       as a file reference.
  *
@@ -18,7 +18,7 @@
  *  intuition — and avoids the diff-bookkeeping rabbit hole.
  *--------------------------------------------------------------------------------------------*/
 
-import type { AcpContentBlock } from './acpProtocol.js'
+import type { ContentBlock } from '@agentclientprotocol/sdk'
 
 export interface PromptMention {
   /** Absolute URI of the resource (typically `file:///...`). */
@@ -85,7 +85,7 @@ export function applyMentionPick(
 }
 
 /**
- * Tokenize `text` into AcpContentBlocks, expanding every `@<name>` whose
+ * Tokenize `text` into ContentBlocks, expanding every `@<name>` whose
  * `<name>` matches a recorded mention into a `resource_link` block. Adjacent
  * text is merged. Pure / synchronous; does NOT contact the network.
  *
@@ -96,13 +96,13 @@ export function applyMentionPick(
 export function composePromptBlocks(
   text: string,
   mentions: readonly PromptMention[],
-): readonly AcpContentBlock[] {
+): readonly ContentBlock[] {
   if (text.length === 0) return []
   if (mentions.length === 0) return [{ type: 'text', text }]
   const byName = new Map<string, PromptMention>()
   for (const m of mentions) byName.set(m.name, m)
 
-  const blocks: AcpContentBlock[] = []
+  const blocks: ContentBlock[] = []
   let bufStart = 0
   let i = 0
   while (i < text.length) {

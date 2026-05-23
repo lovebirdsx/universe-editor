@@ -1,0 +1,99 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Adapter that bridges `IAcpHostService` (string-based stdio bytestream over
+ *  IPC) into the SDK's `Stream<AnyMessage>` expected by `ClientSideConnection`.
+ *
+ *  The SDK is byte-oriented: `ndJsonStream` takes a `WritableStream<Uint8Array>`
+ *  and a `ReadableStream<Uint8Array>` and gives back a message-typed stream.
+ *  Our host emits decoded text chunks, so we re-encode on the read side and
+ *  re-decode on the write side. stderr is *not* wired into the SDK stream — it
+ *  stays a host-level event so callers can route it into an OutputChannel.
+ *--------------------------------------------------------------------------------------------*/
+
+import { ndJsonStream, type Stream } from '@agentclientprotocol/sdk'
+import type { IDisposable } from '@universe-editor/platform'
+import type {
+  AcpExitEvent,
+  AcpStdioChunk,
+  IAcpHostService,
+} from '../../../shared/ipc/acpHostService.js'
+
+export interface SdkHostStream {
+  readonly stream: Stream
+  /** Detach event listeners. Does NOT stop the underlying agent process. */
+  dispose(): void
+}
+
+/**
+ * Wrap a running agent (identified by `handle`) into an ACP SDK `Stream`.
+ *
+ * Lifecycle:
+ * - `onStdout` chunks for `handle` are encoded to UTF-8 and pushed into the
+ *   readable side.
+ * - `onExit` for `handle` closes the readable side, which causes the SDK
+ *   connection to settle its `closed` promise.
+ * - Writing to the writable side decodes UTF-8 back to text and forwards via
+ *   `writeStdin(handle, ...)`.
+ * - The adapter does **not** call `host.stop` on its own — `ndJsonStream`
+ *   never propagates close to its underlying byte writable. Callers are
+ *   responsible for invoking `host.stop(handle)` when they're done.
+ */
+export function createSdkHostStream(host: IAcpHostService, handle: string): SdkHostStream {
+  const encoder = new TextEncoder()
+  const decoder = new TextDecoder()
+  let stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined
+  let readableClosed = false
+
+  const disposables: IDisposable[] = []
+
+  const closeReadable = (): void => {
+    if (readableClosed) return
+    readableClosed = true
+    try {
+      stdoutController?.close()
+    } catch {
+      // already closed by cancel/error
+    }
+  }
+
+  disposables.push(
+    host.onStdout((chunk: AcpStdioChunk) => {
+      if (chunk.handle !== handle || readableClosed) return
+      stdoutController?.enqueue(encoder.encode(chunk.data))
+    }),
+  )
+
+  disposables.push(
+    host.onExit((evt: AcpExitEvent) => {
+      if (evt.handle !== handle) return
+      closeReadable()
+    }),
+  )
+
+  const readable = new ReadableStream<Uint8Array>({
+    start(controller) {
+      stdoutController = controller
+    },
+    cancel() {
+      readableClosed = true
+    },
+  })
+
+  const writable = new WritableStream<Uint8Array>({
+    async write(chunk) {
+      await host.writeStdin(handle, decoder.decode(chunk))
+    },
+  })
+
+  const stream = ndJsonStream(writable, readable)
+
+  return {
+    stream,
+    dispose(): void {
+      for (const d of disposables) {
+        d.dispose()
+      }
+      closeReadable()
+    },
+  }
+}

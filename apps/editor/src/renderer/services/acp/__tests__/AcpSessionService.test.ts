@@ -1,9 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for apps/editor/src/renderer/services/acp/acpSessionService.ts
- *  Drives AcpSessionService with a fake AcpClientService that returns an
- *  in-memory AcpConnection. We dispatch session/update notifications via the
- *  sink the service registers on connect() to exercise the streaming /
- *  tool-call / plan code paths.
+ *  Drives AcpSessionService with a fake AcpClientService backed by an
+ *  in-memory ACP stream pair + a stub Agent implementation. We dispatch
+ *  session/update notifications via the sink the service registers on
+ *  connect() to exercise the streaming / tool-call / plan code paths
+ *  without going through the SDK wire.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -35,25 +36,39 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
+import {
+  AgentSideConnection,
+  ClientSideConnection,
+  type Agent,
+  type AuthenticateRequest,
+  type AuthenticateResponse,
+  type CancelNotification,
+  type Client,
+  type InitializeRequest,
+  type InitializeResponse,
+  type LoadSessionRequest,
+  type LoadSessionResponse,
+  type NewSessionRequest,
+  type NewSessionResponse,
+  type PromptRequest,
+  type PromptResponse,
+  type RequestPermissionRequest,
+  type RequestPermissionResponse,
+  type SetSessionConfigOptionRequest,
+  type SetSessionConfigOptionResponse,
+  type SetSessionModeRequest,
+  type SetSessionModeResponse,
+} from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
-import { IAcpClientService, type IAcpClientNotificationSink } from '../acpClientService.js'
+import {
+  IAcpClientService,
+  type IAcpClientConnection,
+  type IAcpClientNotificationSink,
+} from '../acpClientService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
-import {
-  AcpConnection,
-  AcpRpcError,
-  createInMemoryAcpHost,
-  type IAcpConnectionHandler,
-  type IAcpTransportTestHarness,
-} from '../acpConnection.js'
-import {
-  AcpMethods,
-  type AcpRequestPermissionParams,
-  type AcpRequestPermissionResult,
-  type AcpSessionUpdate,
-  type AcpSessionUpdateParams,
-} from '../acpProtocol.js'
+import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -139,9 +154,9 @@ class StubLoggerService implements ILoggerService {
 
 class StubPermissionHandler implements IAcpPermissionHandler {
   declare readonly _serviceBrand: undefined
-  autoApproveResult: AcpRequestPermissionResult | undefined = undefined
+  autoApproveResult: RequestPermissionResponse | undefined = undefined
   readonly persisted: string[] = []
-  tryAutoApprove(_params: AcpRequestPermissionParams): AcpRequestPermissionResult | undefined {
+  tryAutoApprove(_params: RequestPermissionRequest): RequestPermissionResponse | undefined {
     return this.autoApproveResult
   }
   persistAllow(kind: string): void {
@@ -172,14 +187,93 @@ function makeHistory(): AcpSessionHistoryService {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Stub Agent — replays a configurable script of responses to the four
+// AcpSessionService outbound methods (initialize, newSession, prompt, cancel).
+// Tests can also override individual handlers per-instance.
+// ---------------------------------------------------------------------------
+
+interface StubAgentOptions {
+  /** When true, prompt() never resolves — used to exercise cancelTurn. */
+  promptHangs?: boolean
+  /** When true, initialize() never resolves — used to exercise startup timeout. */
+  initializeHangs?: boolean
+}
+
+class StubAgent implements Agent {
+  readonly initializeCalls: InitializeRequest[] = []
+  readonly newSessionCalls: NewSessionRequest[] = []
+  readonly loadSessionCalls: LoadSessionRequest[] = []
+  readonly promptCalls: PromptRequest[] = []
+  readonly cancelCalls: CancelNotification[] = []
+  readonly setSessionModeCalls: SetSessionModeRequest[] = []
+  readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
+
+  constructor(
+    private readonly _agentSessionId: string,
+    private readonly _opts: StubAgentOptions = {},
+  ) {}
+
+  initialize(params: InitializeRequest): Promise<InitializeResponse> {
+    this.initializeCalls.push(params)
+    if (this._opts.initializeHangs) return new Promise<never>(() => {})
+    return Promise.resolve({
+      protocolVersion: 1,
+      agentCapabilities: { loadSession: false, promptCapabilities: {} },
+      authMethods: [],
+    } as unknown as InitializeResponse)
+  }
+
+  newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
+    this.newSessionCalls.push(params)
+    return Promise.resolve({ sessionId: this._agentSessionId } as unknown as NewSessionResponse)
+  }
+
+  prompt(params: PromptRequest): Promise<PromptResponse> {
+    this.promptCalls.push(params)
+    if (this._opts.promptHangs) return new Promise<never>(() => {})
+    return Promise.resolve({ stopReason: 'end_turn' } as unknown as PromptResponse)
+  }
+
+  cancel(params: CancelNotification): Promise<void> {
+    this.cancelCalls.push(params)
+    return Promise.resolve()
+  }
+
+  setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse | void> {
+    this.setSessionModeCalls.push(params)
+    return Promise.resolve()
+  }
+
+  setSessionConfigOption(
+    params: SetSessionConfigOptionRequest,
+  ): Promise<SetSessionConfigOptionResponse> {
+    this.setConfigOptionCalls.push(params)
+    return Promise.resolve({} as unknown as SetSessionConfigOptionResponse)
+  }
+
+  loadSession(params: LoadSessionRequest): Promise<LoadSessionResponse> {
+    this.loadSessionCalls.push(params)
+    return Promise.resolve({} as unknown as LoadSessionResponse)
+  }
+
+  authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
+    return Promise.resolve()
+  }
+}
+
 /**
  * Captures the sink + connection so tests can inject inbound traffic.
  */
 interface ConnectedSession {
   readonly sink: IAcpClientNotificationSink
-  readonly harness: IAcpTransportTestHarness
-  readonly handler: IAcpConnectionHandler
-  readonly connection: AcpConnection
+  readonly agent: StubAgent
+  readonly agentConn: AgentSideConnection
+  readonly clientConn: ClientSideConnection
+}
+
+interface FakeAcpClientOptions {
+  readonly stubOptions?: StubAgentOptions
 }
 
 class FakeAcpClientService implements IAcpClientService {
@@ -187,71 +281,35 @@ class FakeAcpClientService implements IAcpClientService {
   /** One ConnectedSession per connect() call, in order. */
   readonly connected: ConnectedSession[] = []
   private _agentSeq = 0
-  /** Optional override: peer requests to perform after `initialize` + `new` succeed. */
-  postNewSessionHook: ((conn: ConnectedSession) => void) | undefined
 
-  async connect(_agentId: string, sink: IAcpClientNotificationSink): Promise<AcpConnection> {
+  constructor(private readonly _opts: FakeAcpClientOptions = {}) {}
+
+  async connect(_agentId: string, sink: IAcpClientNotificationSink): Promise<IAcpClientConnection> {
     const agentSessionId = `agent-${++this._agentSeq}`
-    const harness = createInMemoryAcpHost()
-    const handler: IAcpConnectionHandler = {
-      onRequest: () => Promise.reject(new AcpRpcError('not implemented', -32601)),
-      onNotification: (_m, p) => sink.onSessionUpdate(p as AcpSessionUpdateParams),
+    const pair = createInMemoryAcpPair()
+    const agent = new StubAgent(agentSessionId, this._opts.stubOptions ?? {})
+    const agentConn = new AgentSideConnection(() => agent, pair.agentStream)
+    const clientImpl: Client = {
+      requestPermission: (params) => sink.onRequestPermission(params),
+      sessionUpdate: async (params) => {
+        sink.onSessionUpdate(params)
+      },
     }
-    const conn = new AcpConnection(harness.host, harness.handle, handler, new NullLogger())
+    const clientConn = new ClientSideConnection(() => clientImpl, pair.clientStream)
 
-    // Auto-respond to the two outbound requests AcpSessionService issues
-    // during createSession: `initialize` and `session/new`.
-    const ackInitial = (rawLines: readonly string[]): void => {
-      for (const line of rawLines) {
-        if (!line.trim()) continue
-        const msg = JSON.parse(line) as { id?: unknown; method?: string }
-        if (typeof msg.id !== 'number' && typeof msg.id !== 'string') continue
-        if (msg.method === AcpMethods.Initialize) {
-          harness.inject(
-            JSON.stringify({
-              jsonrpc: '2.0',
-              id: msg.id,
-              result: { protocolVersion: 1 },
-            }) + '\n',
-          )
-        } else if (msg.method === AcpMethods.NewSession) {
-          harness.inject(
-            JSON.stringify({
-              jsonrpc: '2.0',
-              id: msg.id,
-              result: { sessionId: agentSessionId },
-            }) + '\n',
-          )
-        }
-      }
-    }
-
-    // Poll synchronously after a microtask flush: the test calls
-    // createSession() which awaits two requests; each write goes into
-    // harness.written(). We watch the array and feed responses back.
-    let lastSeen = 0
-    const interval: NodeJS.Timeout = setInterval(() => {
-      const writes = harness.written()
-      if (writes.length > lastSeen) {
-        const newLines = writes.slice(lastSeen)
-        lastSeen = writes.length
-        for (const w of newLines) ackInitial(w.split('\n'))
-      }
-    }, 1)
-
-    const session: ConnectedSession = { sink, harness, handler, connection: conn }
+    const session: ConnectedSession = { sink, agent, agentConn, clientConn }
     this.connected.push(session)
-
-    // Auto-stop the response pump once the test disposes the connection.
-    const cleanup = (): void => clearInterval(interval)
-    conn.onExit(cleanup)
-    return conn
+    return {
+      conn: clientConn,
+      dispose: (): void => {
+        // Close both writers to signal end-of-stream — SDK then aborts the
+        // ClientSideConnection's signal and resolves `closed`. We swallow
+        // double-close errors so dispose() stays idempotent.
+        void pair.clientStream.writable.close().catch(() => {})
+        void pair.agentStream.writable.close().catch(() => {})
+      },
+    }
   }
-}
-
-async function flush(): Promise<void> {
-  // Allow microtasks + the 1ms ack interval to run.
-  await new Promise((r) => setTimeout(r, 10))
 }
 
 describe('AcpSessionService', () => {
@@ -307,16 +365,20 @@ describe('AcpSessionService', () => {
     const connA = client.connected[0]!
     const connB = client.connected[1]!
 
-    const chunkA: AcpSessionUpdate = {
-      sessionUpdate: 'agent_message_chunk',
-      content: { type: 'text', text: 'hello A' },
-    }
-    const chunkB: AcpSessionUpdate = {
-      sessionUpdate: 'agent_message_chunk',
-      content: { type: 'text', text: 'hello B' },
-    }
-    connA.sink.onSessionUpdate({ sessionId: 'agent-1', update: chunkA })
-    connB.sink.onSessionUpdate({ sessionId: 'agent-2', update: chunkB })
+    connA.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'hello A' },
+      },
+    })
+    connB.sink.onSessionUpdate({
+      sessionId: 'agent-2',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'hello B' },
+      },
+    })
 
     const aMsgs = a.messages.get()
     const bMsgs = b.messages.get()
@@ -358,7 +420,6 @@ describe('AcpSessionService', () => {
       observerFires++
     })
     try {
-      // initial run counts as 1
       expect(observerFires).toBe(1)
       for (let i = 0; i < 10; i++) {
         conn.sink.onSessionUpdate({
@@ -369,14 +430,12 @@ describe('AcpSessionService', () => {
           },
         })
       }
-      // Value is updated synchronously — readers see the latest array...
       expect(
         s.messages
           .get()
           .map((m) => m.text)
           .join(''),
       ).toBe('c0c1c2c3c4c5c6c7c8c9')
-      // ...but observers have NOT fired yet (still within the open batch).
       expect(observerFires).toBe(1)
 
       await new Promise((r) => setTimeout(r, 24))
@@ -396,7 +455,7 @@ describe('AcpSessionService', () => {
         sessionUpdate: 'tool_call',
         toolCallId: 'tc1',
         title: 'Read file',
-        kind: 'fs',
+        kind: 'read',
         status: 'in_progress',
       },
     })
@@ -410,7 +469,7 @@ describe('AcpSessionService', () => {
         sessionUpdate: 'tool_call_update',
         toolCallId: 'tc1',
         status: 'completed',
-        content: [{ type: 'text', text: 'output' }],
+        content: [{ type: 'content', content: { type: 'text', text: 'output' } }],
       },
     })
     calls = s.toolCalls.get()
@@ -427,11 +486,17 @@ describe('AcpSessionService', () => {
       sessionId: 'agent-1',
       update: {
         sessionUpdate: 'plan',
-        entries: [{ content: 'step one', priority: 'high' }, { content: 'step two' }],
+        entries: [
+          { content: 'step one', priority: 'high', status: 'pending' },
+          { content: 'step two', priority: 'medium', status: 'pending' },
+        ],
       },
     })
     const plan = s.plan.get()
-    expect(plan).toEqual([{ content: 'step one', priority: 'high' }, { content: 'step two' }])
+    expect(plan).toEqual([
+      { content: 'step one', priority: 'high' },
+      { content: 'step two', priority: 'medium' },
+    ])
   })
 
   it('closeSession removes the session and falls back to the next active one', async () => {
@@ -444,15 +509,14 @@ describe('AcpSessionService', () => {
     expect(svc.activeSessionId.get()).toBeUndefined()
   })
 
-  it('cancelTurn writes a session/cancel notification to stdin', async () => {
+  it('cancelTurn sends a session/cancel notification to the agent', async () => {
     const s = await svc.createSession()
     const conn = client.connected[0]!
-    const before = conn.harness.written().length
     await s.cancelTurn()
-    const writes = conn.harness.written()
-    const lastFrames = writes.slice(before).join('')
-    expect(lastFrames).toContain('"method":"session/cancel"')
-    expect(lastFrames).toContain('"sessionId":"agent-1"')
+    // Cancel arrives async over the SDK stream; flush microtasks.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(conn.agent.cancelCalls).toHaveLength(1)
+    expect(conn.agent.cancelCalls[0]?.sessionId).toBe('agent-1')
   })
 
   it('getById returns undefined for unknown ids', async () => {
@@ -462,16 +526,31 @@ describe('AcpSessionService', () => {
   })
 
   it('cancelTurn aborts the pending session/prompt locally even if agent never responds', async () => {
+    // For this test we need a hanging prompt(). Build a service whose fake
+    // client wires a stub agent in promptHangs mode.
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      permission,
+      new StubProgressService(),
+      new StubLoggerService(),
+      makeHistory(),
+    )
     const s = await svc.createSession()
     const conn = client.connected[0]!
-    // Swap the connection's peer-side handler so initialize/session_new keep
-    // answering but session/prompt never resolves.
-    const before = conn.harness.written().length
+
     const promptPromise = s.sendPrompt('hi there')
-    // Give the prompt write time to land on the wire.
+    // Give the prompt request time to land on the agent side.
     await new Promise((r) => setTimeout(r, 10))
-    const writesAfter = conn.harness.written().slice(before).join('')
-    expect(writesAfter).toContain('"method":"session/prompt"')
+    expect(conn.agent.promptCalls).toHaveLength(1)
     expect(s.status.get()).toBe('running')
 
     await s.cancelTurn()
@@ -486,9 +565,9 @@ describe('AcpSessionService', () => {
     permission.autoApproveResult = { outcome: { outcome: 'selected', optionId: 'opt1' } }
     const result = await svc.onRequestPermission({
       sessionId: 'agent-1',
-      toolCall: { toolCallId: 'tc1', kind: 'fs.read' },
+      toolCall: { toolCallId: 'tc1', kind: 'read' },
       options: [{ optionId: 'opt1', name: 'Allow', kind: 'allow_once' }],
-    })
+    } as RequestPermissionRequest)
     expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'opt1' } })
     expect(s.pendingPermission.get()).toBeUndefined()
   })
@@ -499,14 +578,13 @@ describe('AcpSessionService', () => {
     void a // satisfy TS
     const pendingPromise = svc.onRequestPermission({
       sessionId: 'agent-2',
-      toolCall: { toolCallId: 'tc2', kind: 'fs.write', title: 'Edit src/foo.ts' },
+      toolCall: { toolCallId: 'tc2', kind: 'edit', title: 'Edit src/foo.ts' },
       options: [
         { optionId: 'once', name: 'Allow', kind: 'allow_once' },
         { optionId: 'always', name: 'Allow always', kind: 'allow_always' },
         { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
       ],
-    })
-    // Card lands on B, not A.
+    } as RequestPermissionRequest)
     await new Promise((r) => setTimeout(r, 0))
     expect(a.pendingPermission.get()).toBeUndefined()
     const pending = b.pendingPermission.get()
@@ -515,7 +593,7 @@ describe('AcpSessionService', () => {
     const result = await pendingPromise
     expect(result).toEqual({ outcome: { outcome: 'selected', optionId: 'always' } })
     expect(b.pendingPermission.get()).toBeUndefined()
-    expect(permission.persisted).toEqual(['fs.write'])
+    expect(permission.persisted).toEqual(['edit'])
   })
 
   it('returns cancelled when the user denies via the card', async () => {
@@ -524,7 +602,7 @@ describe('AcpSessionService', () => {
       sessionId: 'agent-1',
       toolCall: { toolCallId: 'tc3' },
       options: [{ optionId: 'deny', name: 'Deny', kind: 'reject_once' }],
-    })
+    } as RequestPermissionRequest)
     await new Promise((r) => setTimeout(r, 0))
     b.pendingPermission.get()!.cancel()
     await expect(promise).resolves.toEqual({ outcome: { outcome: 'cancelled' } })
@@ -536,7 +614,7 @@ describe('AcpSessionService', () => {
       sessionId: 'agent-1',
       toolCall: { toolCallId: 'tc4' },
       options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }],
-    })
+    } as RequestPermissionRequest)
     await new Promise((r) => setTimeout(r, 0))
     expect(b.pendingPermission.get()).toBeDefined()
     await svc.closeSession(b.id)
@@ -548,31 +626,15 @@ describe('AcpSessionService', () => {
       sessionId: 'agent-nope',
       toolCall: { toolCallId: 'tc5' },
       options: [{ optionId: 'once', name: 'Allow', kind: 'allow_once' }],
-    })
+    } as RequestPermissionRequest)
     expect(result).toEqual({ outcome: { outcome: 'cancelled' } })
   })
 })
 
-class TimeoutAcpClientService implements IAcpClientService {
-  declare readonly _serviceBrand: undefined
-  readonly harnesses: IAcpTransportTestHarness[] = []
-  async connect(_agentId: string, _sink: IAcpClientNotificationSink): Promise<AcpConnection> {
-    const harness = createInMemoryAcpHost()
-    this.harnesses.push(harness)
-    const handler: IAcpConnectionHandler = {
-      onRequest: () => Promise.reject(new AcpRpcError('not implemented', -32601)),
-      onNotification: () => {},
-    }
-    // Crucially: do NOT auto-respond to initialize. The connection will hang.
-    return new AcpConnection(harness.host, harness.handle, handler, new NullLogger())
-  }
-}
-
 describe('AcpSessionService — startup timeout', () => {
   it('rejects createSession when the agent never answers initialize', async () => {
-    const client = new TimeoutAcpClientService()
+    const client = new FakeAcpClientService({ stubOptions: { initializeHangs: true } })
     const config = new ConfigurationService()
-    // Cut the timeout to keep the test fast.
     await config.update('acp.startupTimeoutMs', 50)
     const svc = new AcpSessionService(
       client,
@@ -590,6 +652,3 @@ describe('AcpSessionService — startup timeout', () => {
     svc.dispose()
   })
 })
-
-// Suppress unused warnings for helpers kept for future tests.
-void flush

@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for MessageContent — renders AcpContentBlock[] as React. Validates
+ *  Tests for MessageContent — renders ContentBlock[] as React. Validates
  *  markdown rendering, image / resource_link handling, and the IEditorResolverService
  *  click wiring for file:// resources and file:// links.
  *--------------------------------------------------------------------------------------------*/
@@ -13,7 +13,7 @@ import {
   ServiceCollection,
 } from '@universe-editor/platform'
 import type { IEditorResolverService as IEditorResolverServiceType } from '@universe-editor/platform'
-import type { AcpContentBlock } from '../../../services/acp/acpProtocol.js'
+import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from '../MessageContent.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -42,7 +42,7 @@ function makeEditorResolver(): IEditorResolverServiceType & {
   } as unknown as IEditorResolverServiceType & { openEditor: ReturnType<typeof vi.fn> }
 }
 
-function renderContent(blocks: readonly AcpContentBlock[], resolver?: IEditorResolverServiceType) {
+function renderContent(blocks: readonly ContentBlock[], resolver?: IEditorResolverServiceType) {
   const services = new ServiceCollection()
   services.set(IEditorResolverService, resolver ?? makeEditorResolver())
   const inst = new InstantiationService(services)
@@ -136,7 +136,7 @@ describe('MessageContent', () => {
   })
 
   it('renders a `resource` block similarly to resource_link', () => {
-    renderContent([{ type: 'resource', uri: 'file:///workspace/bar.md' }])
+    renderContent([{ type: 'resource', resource: { uri: 'file:///workspace/bar.md', text: '' } }])
     const btn = screen.getByTestId('acp-resource-link') as HTMLButtonElement
     expect(btn.disabled).toBe(false)
     expect(btn.textContent).toContain('file:///workspace/bar.md')

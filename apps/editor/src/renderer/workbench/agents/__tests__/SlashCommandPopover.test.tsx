@@ -7,12 +7,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent } from '@testing-library/react'
-import type { AcpAvailableCommand } from '../../../services/acp/acpProtocol.js'
+import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import { SlashCommandPopover, filterCommands } from '../SlashCommandPopover.js'
 
 afterEach(() => cleanup())
 
-const COMMANDS: readonly AcpAvailableCommand[] = [
+const COMMANDS: readonly AvailableCommand[] = [
   { name: '/help', description: 'Show available commands' },
   { name: '/diff', description: 'Show diff', input: { hint: 'path' } },
   { name: '/clear', description: 'Clear the session' },

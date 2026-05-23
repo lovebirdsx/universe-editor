@@ -83,7 +83,7 @@ async function runPrompt(id, params) {
       sessionUpdate: 'tool_call',
       toolCallId: 'echo-tool',
       title: 'echo',
-      kind: 'echo',
+      kind: 'other',
       status: 'in_progress',
     },
   })
@@ -98,7 +98,7 @@ async function runPrompt(id, params) {
       sessionUpdate: 'tool_call_update',
       toolCallId: 'echo-tool',
       status: 'completed',
-      content: [{ type: 'text', text: userText }],
+      content: [{ type: 'content', content: { type: 'text', text: userText } }],
     },
   })
 

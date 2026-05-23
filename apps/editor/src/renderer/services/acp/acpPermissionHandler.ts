@@ -16,7 +16,7 @@ import {
   createDecorator,
   IConfigurationService,
 } from '@universe-editor/platform'
-import type { AcpRequestPermissionParams, AcpRequestPermissionResult } from './acpProtocol.js'
+import type { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk'
 
 export interface IAcpPermissionHandler {
   readonly _serviceBrand: undefined
@@ -25,7 +25,7 @@ export interface IAcpPermissionHandler {
    * a `selected` result naming the first `allow_*` option. Returns `undefined`
    * when the request must be presented to the user.
    */
-  tryAutoApprove(params: AcpRequestPermissionParams): AcpRequestPermissionResult | undefined
+  tryAutoApprove(params: RequestPermissionRequest): RequestPermissionResponse | undefined
   /** Persist `kind` into the Memory layer of `acp.permissions.autoApprove`. */
   persistAllow(kind: string): void
 }
@@ -37,7 +37,7 @@ export class AcpPermissionHandler implements IAcpPermissionHandler {
 
   constructor(@IConfigurationService private readonly _config: IConfigurationService) {}
 
-  tryAutoApprove(params: AcpRequestPermissionParams): AcpRequestPermissionResult | undefined {
+  tryAutoApprove(params: RequestPermissionRequest): RequestPermissionResponse | undefined {
     const kind = params.toolCall.kind
     if (!kind) return undefined
     if (!this._allowList().has(kind)) return undefined

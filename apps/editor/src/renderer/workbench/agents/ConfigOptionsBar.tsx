@@ -10,17 +10,19 @@
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/acpSessionService.js'
 import type {
-  AcpConfigOptionCategory,
-  AcpSessionConfigOption,
-} from '../../services/acp/acpProtocol.js'
+  SessionConfigOption,
+  SessionConfigOptionCategory,
+  SessionConfigSelectGroup,
+  SessionConfigSelectOption,
+} from '@agentclientprotocol/sdk'
 import styles from './agents.module.css'
 
 /** Display order — earlier categories render leftmost. */
-const CATEGORY_ORDER: AcpConfigOptionCategory[] = ['model', 'mode', 'thought_level']
+const CATEGORY_ORDER: SessionConfigOptionCategory[] = ['model', 'mode', 'thought_level']
 
-function compareByCategory(a: AcpSessionConfigOption, b: AcpSessionConfigOption): number {
-  const ai = a.category ? CATEGORY_ORDER.indexOf(a.category as AcpConfigOptionCategory) : -1
-  const bi = b.category ? CATEGORY_ORDER.indexOf(b.category as AcpConfigOptionCategory) : -1
+function compareByCategory(a: SessionConfigOption, b: SessionConfigOption): number {
+  const ai = a.category ? CATEGORY_ORDER.indexOf(a.category as SessionConfigOptionCategory) : -1
+  const bi = b.category ? CATEGORY_ORDER.indexOf(b.category as SessionConfigOptionCategory) : -1
   // Items missing from the reserved list keep their server-supplied order
   // (sorted to the end). Stable: equal keys → preserve original index.
   const aw = ai === -1 ? CATEGORY_ORDER.length + 1 : ai
@@ -46,8 +48,9 @@ function ConfigOptionSelect({
   option,
 }: {
   session: IAcpSession
-  option: AcpSessionConfigOption
+  option: SessionConfigOption
 }) {
+  if (option.type !== 'select') return null
   const onChange = (value: string): void => {
     if (value === option.currentValue) return
     void session.setConfigOption(option.id, value)
@@ -67,12 +70,36 @@ function ConfigOptionSelect({
         title={titleParts.join(' — ')}
         onChange={(e) => onChange(e.target.value)}
       >
-        {option.options.map((v) => (
+        {renderSelectOptions(option.options)}
+      </select>
+    </label>
+  )
+}
+
+function renderSelectOptions(
+  options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
+) {
+  if (options.length === 0) return null
+  // Discriminator: group entries carry `group` / `name` whereas leaf entries
+  // carry `value`. Both shapes are valid per spec; mixing groups + leaves
+  // inside a single options array is not, so a single peek is enough.
+  const first = options[0]!
+  if ('group' in first) {
+    const groups = options as readonly SessionConfigSelectGroup[]
+    return groups.map((g) => (
+      <optgroup key={g.group} label={g.name}>
+        {g.options.map((v) => (
           <option key={v.value} value={v.value} title={v.description ?? v.name}>
             {v.name}
           </option>
         ))}
-      </select>
-    </label>
-  )
+      </optgroup>
+    ))
+  }
+  const flat = options as readonly SessionConfigSelectOption[]
+  return flat.map((v) => (
+    <option key={v.value} value={v.value} title={v.description ?? v.name}>
+      {v.name}
+    </option>
+  ))
 }

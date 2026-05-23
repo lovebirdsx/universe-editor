@@ -9,10 +9,12 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  Emitter,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
   observableValue,
+  type IDisposable,
 } from '@universe-editor/platform'
 import type {
   IFileService,
@@ -29,7 +31,11 @@ import { AcpClientService } from '../acpClientService.js'
 import type { IAcpClientNotificationSink } from '../acpClientService.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
-import { createInMemoryAcpHost, type IAcpTransportTestHarness } from '../acpConnection.js'
+import type {
+  AcpExitEvent,
+  AcpStdioChunk,
+  IAcpHostService,
+} from '../../../../shared/ipc/acpHostService.js'
 import type {
   AcpTerminalCreateResultWire,
   AcpTerminalExitInfo,
@@ -37,6 +43,55 @@ import type {
   AcpTerminalSpec,
   IAcpTerminalService,
 } from '../../../../shared/ipc/acpTerminalService.js'
+
+interface InMemoryAcpHostHarness extends IDisposable {
+  readonly host: IAcpHostService
+  readonly handle: string
+  inject(data: string): void
+  written(): readonly string[]
+  exit(code: number | null, signal: string | null): void
+}
+
+function createInMemoryAcpHost(): InMemoryAcpHostHarness {
+  const onStdout = new Emitter<AcpStdioChunk>()
+  const onStderr = new Emitter<AcpStdioChunk>()
+  const onExit = new Emitter<AcpExitEvent>()
+  const handle = 'mem-' + Math.random().toString(36).slice(2, 10)
+  const writes: string[] = []
+  const host: IAcpHostService = {
+    _serviceBrand: undefined,
+    onStdout: onStdout.event,
+    onStderr: onStderr.event,
+    onExit: onExit.event,
+    start: () => Promise.resolve({ handle }),
+    writeStdin: (_h, data) => {
+      writes.push(data)
+      return Promise.resolve()
+    },
+    stop: () => Promise.resolve(),
+    probe: () => Promise.resolve(true),
+  }
+  return {
+    host,
+    handle,
+    inject(data) {
+      onStdout.fire({ handle, data })
+    },
+    written() {
+      return writes
+    },
+    exit(code, signal) {
+      onExit.fire({ handle, code, signal })
+    },
+    dispose() {
+      onStdout.dispose()
+      onStderr.dispose()
+      onExit.dispose()
+    },
+  }
+}
+
+type IAcpTransportTestHarness = InMemoryAcpHostHarness
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -316,7 +371,7 @@ describe('AcpClientService — terminal/create routing', () => {
     try {
       const resp = await h.callPeer('terminal/create', { sessionId: SESSION_ID })
       expect(resp.error?.code).toBe(-32602)
-      expect(resp.error?.message).toMatch(/Invalid params for terminal\/create/)
+      expect(resp.error?.message).toMatch(/Invalid params/)
       expect(h.terminals.create).not.toHaveBeenCalled()
     } finally {
       conn.dispose()
@@ -372,7 +427,7 @@ describe('AcpClientService — terminal/output|kill|wait|release routing', () =>
     }
   })
 
-  it('terminal/kill returns null on success', async () => {
+  it('terminal/kill returns an empty object on success', async () => {
     h = makeService()
     const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
     try {
@@ -382,7 +437,8 @@ describe('AcpClientService — terminal/output|kill|wait|release routing', () =>
         terminalId: 't1',
       })
       expect(resp.error).toBeUndefined()
-      expect(resp.result).toBeNull()
+      // SDK serializes the void-returning killTerminal handler as `{}`.
+      expect(resp.result).toEqual({})
       expect(h.terminals.kill).toHaveBeenCalledWith('t1')
     } finally {
       conn.dispose()

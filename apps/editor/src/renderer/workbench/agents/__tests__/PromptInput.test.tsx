@@ -29,10 +29,7 @@ import type {
   AcpToolCall,
   IAcpSession,
 } from '../../../services/acp/acpSessionService.js'
-import type {
-  AcpAvailableCommand,
-  AcpSessionConfigOption,
-} from '../../../services/acp/acpProtocol.js'
+import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import { ServicesContext } from '../../useService.js'
@@ -112,19 +109,19 @@ function renderWithServices(
 
 interface FakeSessionOptions {
   readonly status?: AcpSessionStatus
-  readonly commands?: readonly AcpAvailableCommand[]
+  readonly commands?: readonly AvailableCommand[]
 }
 
 interface FakeSession extends IAcpSession {
   readonly sendPrompt: ReturnType<typeof vi.fn> & IAcpSession['sendPrompt']
   readonly cancelTurn: ReturnType<typeof vi.fn> & IAcpSession['cancelTurn']
   readonly statusObs: ISettableObservable<AcpSessionStatus>
-  readonly commandsObs: ISettableObservable<readonly AcpAvailableCommand[]>
+  readonly commandsObs: ISettableObservable<readonly AvailableCommand[]>
 }
 
 function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const statusObs = observableValue<AcpSessionStatus>('test.status', opts.status ?? 'idle')
-  const commandsObs = observableValue<readonly AcpAvailableCommand[]>(
+  const commandsObs = observableValue<readonly AvailableCommand[]>(
     'test.commands',
     opts.commands ?? [],
   )
@@ -132,7 +129,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const toolCalls = observableValue<readonly AcpToolCall[]>('test.toolCalls', [])
   const plan = observableValue<readonly AcpPlanEntry[]>('test.plan', [])
   const permission = observableValue<AcpPendingPermission | undefined>('test.permission', undefined)
-  const configOptions = observableValue<readonly AcpSessionConfigOption[]>('test.configOptions', [])
+  const configOptions = observableValue<readonly SessionConfigOption[]>('test.configOptions', [])
   const sendPrompt = vi.fn().mockResolvedValue(undefined)
   const cancelTurn = vi.fn().mockResolvedValue(undefined)
   return {
@@ -157,7 +154,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   } satisfies FakeSession
 }
 
-const COMMANDS: readonly AcpAvailableCommand[] = [
+const COMMANDS: readonly AvailableCommand[] = [
   { name: '/help', description: 'help' },
   { name: '/diff', description: 'show diff', input: { hint: 'path' } },
   { name: '/clear', description: 'reset' },
