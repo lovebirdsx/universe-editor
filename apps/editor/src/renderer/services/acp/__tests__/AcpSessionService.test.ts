@@ -335,6 +335,7 @@ describe('AcpSessionService', () => {
       new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
+      new FakeStorage(),
     )
   })
 
@@ -543,6 +544,7 @@ describe('AcpSessionService', () => {
       new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
+      new FakeStorage(),
     )
     const s = await svc.createSession()
     const conn = client.connected[0]!
@@ -647,6 +649,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
+      new FakeStorage(),
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)
     svc.dispose()

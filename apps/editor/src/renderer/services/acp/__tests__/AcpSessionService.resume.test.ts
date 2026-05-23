@@ -326,6 +326,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new StubProgressService(),
     new StubLoggerService(),
     history,
+    storage,
   )
   return { svc, client, history, notifications, storage }
 }
@@ -565,5 +566,175 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(svc.activeSession.get()).toBeUndefined()
     expect(built.notifications.captured.length).toBe(1)
     expect(built.notifications.captured[0]?.message).toMatch(/Failed to resume/)
+  })
+})
+
+const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionHistoryId'
+
+/** Drain history-service's 100ms write debounce + the async set() microtask. */
+async function flushHistoryWrite(): Promise<void> {
+  await new Promise((r) => setTimeout(r, 130))
+}
+
+describe('AcpSessionService.tryRestoreActiveSession', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('persists the active session historyId to workspace storage on activation', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const session = await svc.createSession()
+    // The persistence autorun runs synchronously after activeSession changes,
+    // but FakeStorage.set is async — give it a microtask to land.
+    await Promise.resolve()
+    expect(built.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(session.historyId)
+  })
+
+  it('clears workspace storage when the last session closes', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const session = await svc.createSession()
+    await Promise.resolve()
+    expect(built.storage.store.has(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(true)
+    await svc.closeSession(session.id)
+    await Promise.resolve()
+    expect(built.storage.store.has(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(false)
+  })
+
+  it('resumes the persisted session on startup when none is active', async () => {
+    // Round 1: create a session, capture historyId + persisted entry.
+    const round1 = buildService({ loadSessionResult: {} })
+    await round1.history.initialize()
+    const original = await round1.svc.createSession()
+    const historyId = original.historyId!
+    await Promise.resolve()
+    expect(round1.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(historyId)
+    await flushHistoryWrite()
+    round1.svc.dispose()
+
+    // Round 2: simulate editor restart by reusing the same FakeStorage instance
+    // (history entry + pending-restore key carry over).
+    const client = new FakeAcpClientService({ loadSessionResult: {} })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const notifications = new StubNotificationService()
+    const history = new AcpSessionHistoryService(round1.storage, telemetry, new StubLoggerService())
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubProgressService(),
+      new StubLoggerService(),
+      history,
+      round1.storage,
+    )
+    expect(svc.activeSession.get()).toBeUndefined()
+    await svc.tryRestoreActiveSession()
+    expect(svc.activeSession.get()).toBeDefined()
+    expect(svc.activeSession.get()?.historyId).toBe(historyId)
+    expect(client.connected[0]?.agent.loadSessionCalls).toHaveLength(1)
+  })
+
+  it('is a noop when a session is already active and drops the pending restore', async () => {
+    const round1 = buildService({ loadSessionResult: {} })
+    await round1.history.initialize()
+    await round1.svc.createSession()
+    await Promise.resolve()
+    const storage = round1.storage
+    const persistedHistoryId = storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)
+    expect(persistedHistoryId).toBeDefined()
+    round1.svc.dispose()
+
+    const client = new FakeAcpClientService({ loadSessionResult: {} })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      new StubNotificationService(),
+      telemetry,
+      new StubPermissionHandler(),
+      new StubProgressService(),
+      new StubLoggerService(),
+      history,
+      storage,
+    )
+    // Let _loadPendingRestore() resolve.
+    await Promise.resolve()
+    // Pre-empt the pending restore by creating a fresh session ourselves.
+    await svc.createSession()
+    const preCount = client.connected.length
+    await svc.tryRestoreActiveSession()
+    expect(client.connected.length).toBe(preCount)
+  })
+
+  it('silently no-ops when the persisted historyId is gone from history', async () => {
+    const storage = new FakeStorage()
+    void storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, 'nonexistent-history-id')
+    const client = new FakeAcpClientService({ loadSessionResult: {} })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const notifications = new StubNotificationService()
+    const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubProgressService(),
+      new StubLoggerService(),
+      history,
+      storage,
+    )
+    await Promise.resolve()
+    await svc.tryRestoreActiveSession()
+    expect(svc.activeSession.get()).toBeUndefined()
+    expect(client.connected.length).toBe(0)
+  })
+
+  it('claims pending exactly once across concurrent invocations', async () => {
+    const round1 = buildService({ loadSessionResult: {} })
+    await round1.history.initialize()
+    await round1.svc.createSession()
+    await Promise.resolve()
+    const storage = round1.storage
+    await flushHistoryWrite()
+    round1.svc.dispose()
+
+    const client = new FakeAcpClientService({ loadSessionResult: {} })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      new StubNotificationService(),
+      telemetry,
+      new StubPermissionHandler(),
+      new StubProgressService(),
+      new StubLoggerService(),
+      history,
+      storage,
+    )
+    await Promise.resolve()
+    await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])
+    expect(client.connected.length).toBe(1)
   })
 })

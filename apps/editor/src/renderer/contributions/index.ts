@@ -32,6 +32,7 @@ import { LogTailContribution } from './LogTailContribution.js'
 import {
   AgentsConfigurationContribution,
   AgentsEditorProviderContribution,
+  AgentsSessionRestoreContribution,
   AgentsStatusBarContribution,
   AgentsViewContainerContribution,
 } from './AgentsContributions.js'
@@ -207,6 +208,11 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsStatusBar',
   AgentsStatusBarContribution,
+  WorkbenchPhase.AfterRestore,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsSessionRestore',
+  AgentsSessionRestoreContribution,
   WorkbenchPhase.AfterRestore,
 )
 

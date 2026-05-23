@@ -318,6 +318,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new StubProgressService(),
     new StubLoggerService(),
     new AcpSessionHistoryService(new FakeStorage(), telemetry, new StubLoggerService()),
+    new FakeStorage(),
   )
   return { svc, client }
 }

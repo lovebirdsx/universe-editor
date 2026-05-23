@@ -10,8 +10,11 @@ import {
   Disposable,
   EditorRegistry,
   IEditorService,
+  ILayoutService,
   IStatusBarService,
+  IViewsService,
   IWorkbenchContribution,
+  PartId,
   StatusBarAlignment,
   ViewContainerLocation,
   ViewContainerRegistry,
@@ -166,6 +169,31 @@ export class AgentsStatusBarContribution extends Disposable implements IWorkbenc
             command: 'workbench.action.agent.openInEditor',
           })
         }
+      }),
+    )
+  }
+}
+
+/**
+ * Lazy-restores the previously-active ACP session when the AGENTS view first
+ * becomes visible after an editor restart. Mirrors LogTailContribution's
+ * autorun-driven restore for the Output panel: persisting the historyId is
+ * AcpSessionService's job, this contribution only owns the visibility trigger.
+ */
+export class AgentsSessionRestoreContribution extends Disposable implements IWorkbenchContribution {
+  constructor(
+    @ILayoutService layout: ILayoutService,
+    @IViewsService views: IViewsService,
+    @IAcpSessionService sessions: IAcpSessionService,
+  ) {
+    super()
+    this._register(
+      autorun((r) => {
+        if (!layout.visible.read(r)[PartId.SecondarySideBar]) return
+        const active =
+          views.activeContainerByLocation.read(r)[ViewContainerLocation.SecondarySideBar]
+        if (active !== 'workbench.view.agents') return
+        void sessions.tryRestoreActiveSession()
       }),
     )
   }

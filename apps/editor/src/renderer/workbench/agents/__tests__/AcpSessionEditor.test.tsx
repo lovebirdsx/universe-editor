@@ -63,6 +63,7 @@ function makeService(
     getByHistoryId(id: string): IAcpSession | undefined {
       return byHistoryId.get(id)
     },
+    async tryRestoreActiveSession(): Promise<void> {},
   } satisfies FakeAcpSessionService
 }
 

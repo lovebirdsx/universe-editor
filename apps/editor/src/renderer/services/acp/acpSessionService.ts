@@ -16,6 +16,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  autorun,
   createDecorator,
   Disposable,
   Emitter,
@@ -23,10 +24,12 @@ import {
   ILoggerService,
   INotificationService,
   IProgressService,
+  IStorageService,
   ITelemetryService,
   IWorkspaceService,
   ProgressLocation,
   Severity,
+  StorageScope,
   observableValue,
   transaction,
   TransactionImpl,
@@ -184,6 +187,13 @@ export interface IAcpSessionService {
    * the caller (e.g. AcpSessionEditor) can then issue `resumeSession(historyId)`.
    */
   getByHistoryId(historyId: string): IAcpSession | undefined
+  /**
+   * If a previously-active session's historyId was persisted (workspace scope),
+   * resume it. No-op when no pending restore exists, when a session is already
+   * active, or when the history entry has been removed. Idempotent — the pending
+   * id is claimed on first call so concurrent invocations resume at most once.
+   */
+  tryRestoreActiveSession(): Promise<void>
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -193,6 +203,8 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 // ---------------------------------------------------------------------------
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
+
+const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionHistoryId'
 
 /**
  * Local error type signalling "the in-flight prompt was cancelled locally
@@ -722,6 +734,18 @@ export class AcpSessionService
   private _seq = 0
   private readonly _logger: ILogger
 
+  /**
+   * Workspace-persisted historyId of the previously-active session, captured on
+   * startup and consumed by `tryRestoreActiveSession()` once. Cleared after the
+   * first successful (or attempted) restore so the autorun-driven persistence
+   * loop doesn't keep re-firing the lazy resume.
+   */
+  private _pendingRestoreHistoryId: string | undefined
+  /** Resolves once `_loadPendingRestore()` has hydrated `_pendingRestoreHistoryId`. */
+  private readonly _loadPendingRestorePromise: Promise<void>
+  /** While true, the activeSessionId autorun skips writing to storage. */
+  private _suspendActivePersist = false
+
   constructor(
     @IAcpClientService private readonly _client: IAcpClientService,
     @IAcpAgentRegistry private readonly _registry: IAcpAgentRegistry,
@@ -733,12 +757,70 @@ export class AcpSessionService
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
+    @IStorageService private readonly _storage: IStorageService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
     this.sessions = observableValue<readonly IAcpSession[]>('acp.sessions', [])
     this.activeSessionId = observableValue<string | undefined>('acp.activeSessionId', undefined)
     this.activeSession = observableValue<IAcpSession | undefined>('acp.activeSession', undefined)
+
+    this._loadPendingRestorePromise = this._loadPendingRestore()
+    // Persist the active session's historyId so we can restore it on the next
+    // editor launch. Mirrors OutputService's "restore last active" pattern.
+    this._register(
+      autorun((r) => {
+        const session = this.activeSession.read(r)
+        if (this._suspendActivePersist) return
+        const historyId = session?.historyId
+        if (historyId) {
+          void this._storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, historyId, StorageScope.WORKSPACE)
+        } else {
+          void this._storage.remove(ACP_ACTIVE_SESSION_STORAGE_KEY, StorageScope.WORKSPACE)
+        }
+      }),
+    )
+  }
+
+  private async _loadPendingRestore(): Promise<void> {
+    try {
+      const historyId = await this._storage.get<string>(
+        ACP_ACTIVE_SESSION_STORAGE_KEY,
+        StorageScope.WORKSPACE,
+      )
+      if (typeof historyId === 'string' && historyId.length > 0) {
+        this._pendingRestoreHistoryId = historyId
+      }
+    } catch (err) {
+      this._logger.warn(`[acp] failed to read pending restore: ${(err as Error).message}`)
+    }
+  }
+
+  async tryRestoreActiveSession(): Promise<void> {
+    await this._loadPendingRestorePromise
+    if (this._pendingRestoreHistoryId === undefined) return
+    if (this.activeSessionId.get() !== undefined) {
+      // User already created/switched a session — drop the pending restore so
+      // the autorun-driven persist stays in sync with the live active session.
+      this._pendingRestoreHistoryId = undefined
+      return
+    }
+    // History is loaded fire-and-forget at bootstrap; wait for it before
+    // looking up the entry so the very first call after restart still works.
+    try {
+      await this._history.initialize()
+    } catch {
+      // best-effort
+    }
+    // Claim the pending id before awaiting resume so concurrent triggers
+    // (e.g. autorun firing twice for visibility + active container) restore once.
+    const historyId = this._pendingRestoreHistoryId
+    this._pendingRestoreHistoryId = undefined
+    try {
+      await this.resumeSession(historyId)
+    } catch (err) {
+      this._logger.warn(`[acp] tryRestoreActiveSession failed: ${(err as Error).message}`)
+    }
   }
 
   async createSession(agentId?: string): Promise<IAcpSession> {
