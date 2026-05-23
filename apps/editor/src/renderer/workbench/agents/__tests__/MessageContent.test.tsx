@@ -204,4 +204,56 @@ describe('MessageContent', () => {
     expect(screen.getByTestId('acp-resource-link')).toBeTruthy()
     expect(screen.getByTestId('acp-image-block')).toBeTruthy()
   })
+
+  it('renders a slash-command wrapper as a compact badge', () => {
+    renderContent([
+      {
+        type: 'text',
+        text:
+          '<command-name>/model</command-name>\n' +
+          '<command-message>model</command-message>\n' +
+          '<command-args>default</command-args>\n' +
+          '<local-command-stdout>Set model to claude-sonnet-4-6</local-command-stdout>',
+      },
+    ])
+    const badge = screen.getByTestId('acp-command-badge')
+    expect(badge.textContent).toContain('/model default')
+    expect(screen.getByTestId('acp-command-badge-stdout').textContent).toContain(
+      'Set model to claude-sonnet-4-6',
+    )
+    // The raw XML tags must not leak through to the markdown renderer.
+    expect(screen.queryByText(/<command-name>/)).toBeNull()
+  })
+
+  it('reassembles wrappers split across consecutive text blocks (streaming case)', () => {
+    renderContent([
+      { type: 'text', text: '<command-name>/cle' },
+      { type: 'text', text: 'ar</command-name>' },
+    ])
+    const badge = screen.getByTestId('acp-command-badge')
+    expect(badge.textContent).toContain('/clear')
+    expect(screen.queryByText(/<command-name>/)).toBeNull()
+  })
+
+  it('keeps surrounding prose around a badge', () => {
+    renderContent([
+      {
+        type: 'text',
+        text: 'before text\n<command-name>/clear</command-name>\nafter text',
+      },
+    ])
+    expect(screen.getByTestId('acp-command-badge')).toBeTruthy()
+    expect(screen.getByText('before text')).toBeTruthy()
+    expect(screen.getByText('after text')).toBeTruthy()
+  })
+
+  it('renders back-to-back invocations as two badges', () => {
+    renderContent([
+      {
+        type: 'text',
+        text: '<command-name>/a</command-name><command-name>/b</command-name>',
+      },
+    ])
+    expect(screen.getAllByTestId('acp-command-badge')).toHaveLength(2)
+  })
 })

@@ -61,6 +61,7 @@ import {
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -181,6 +182,14 @@ class FakeStorage implements IStorageService {
 
 function makeHistory(): AcpSessionHistoryService {
   return new AcpSessionHistoryService(
+    new FakeStorage(),
+    new NoopTelemetryService(),
+    new StubLoggerService(),
+  )
+}
+
+function makeAgentDefaults(): AcpAgentDefaultsService {
+  return new AcpAgentDefaultsService(
     new FakeStorage(),
     new NoopTelemetryService(),
     new StubLoggerService(),
@@ -336,6 +345,7 @@ describe('AcpSessionService', () => {
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
+      makeAgentDefaults(),
     )
   })
 
@@ -545,6 +555,7 @@ describe('AcpSessionService', () => {
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
+      makeAgentDefaults(),
     )
     const s = await svc.createSession()
     const conn = client.connected[0]!
@@ -650,6 +661,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
+      makeAgentDefaults(),
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)
     svc.dispose()

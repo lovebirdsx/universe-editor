@@ -94,6 +94,10 @@ import {
   AcpSessionHistoryService,
   IAcpSessionHistoryService,
 } from './services/acp/acpSessionHistory.js'
+import {
+  AcpAgentDefaultsService,
+  IAcpAgentDefaultsService,
+} from './services/acp/acpAgentDefaultsService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
@@ -313,6 +317,12 @@ async function bootstrapWorkbench(): Promise<void> {
   const acpSessionHistoryService = instantiation.createInstance(AcpSessionHistoryService)
   services.set(IAcpSessionHistoryService, acpSessionHistoryService)
   void acpSessionHistoryService.initialize()
+  // Per-agent MODEL/MODE defaults — separate storage key from history so users
+  // clearing one don't blow away the other. Must be available before
+  // SessionService so createSession can apply saved defaults on first use.
+  const acpAgentDefaultsService = instantiation.createInstance(AcpAgentDefaultsService)
+  services.set(IAcpAgentDefaultsService, acpAgentDefaultsService)
+  void acpAgentDefaultsService.initialize()
   const acpSessionService = instantiation.createInstance(AcpSessionService)
   services.set(IAcpSessionService, acpSessionService)
 

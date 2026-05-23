@@ -204,7 +204,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.GLOBAL)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(1)
+    expect(persisted.schemaVersion).toBe(2)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -306,5 +306,144 @@ describe('AcpSessionHistoryService — persistence', () => {
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toContain('early-s')
     expect(ids).toContain('persisted-s')
+  })
+
+  it('migrates v1 entries forward (no configOptions field) without dropping them', async () => {
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 'h1-old',
+          agentId: 'a',
+          sessionIdOnAgent: 'old',
+          title: 'old-v1',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.title)).toEqual(['old-v1'])
+    // First write after migration should write v2.
+    svc.add({ agentId: 'a', sessionIdOnAgent: 'new', title: 'new-v2' })
+    await flushWrite()
+    const lastCall = storage.setCalls[storage.setCalls.length - 1]!
+    expect((lastCall.value as { schemaVersion: number }).schemaVersion).toBe(2)
+  })
+
+  it('loads v2 entries that carry configOptions verbatim', async () => {
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'h1-v2',
+          agentId: 'a',
+          sessionIdOnAgent: 'with-opts',
+          title: 'has opts',
+          createdAt: 1,
+          lastUsedAt: 1,
+          configOptions: { model: 'claude-sonnet-4-6', thought_level: 'high' },
+        },
+      ],
+    })
+    await svc.initialize()
+    const entry = svc.list()[0]
+    expect(entry?.configOptions).toEqual({
+      model: 'claude-sonnet-4-6',
+      thought_level: 'high',
+    })
+  })
+
+  it('rejects v2 entries whose configOptions has non-string values', async () => {
+    storage.store.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'x',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 1,
+          configOptions: { model: 123 },
+        },
+        {
+          id: 'good',
+          agentId: 'a',
+          sessionIdOnAgent: 'y',
+          title: 't2',
+          createdAt: 1,
+          lastUsedAt: 2,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['good'])
+  })
+})
+
+describe('AcpSessionHistoryService — setHistoryConfigOption', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('sets a fresh configOption on an entry with none', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryConfigOption(e.id, 'model', 'claude-sonnet-4-6')
+    expect(svc.get(e.id)?.configOptions).toEqual({ model: 'claude-sonnet-4-6' })
+  })
+
+  it('merges into existing configOptions, preserving siblings', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryConfigOption(e.id, 'model', 'A')
+    svc.setHistoryConfigOption(e.id, 'thought_level', 'high')
+    expect(svc.get(e.id)?.configOptions).toEqual({ model: 'A', thought_level: 'high' })
+  })
+
+  it('overwrites the same key without duplicating it', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryConfigOption(e.id, 'model', 'A')
+    svc.setHistoryConfigOption(e.id, 'model', 'B')
+    expect(svc.get(e.id)?.configOptions).toEqual({ model: 'B' })
+  })
+
+  it('is a no-op for unknown ids', async () => {
+    await svc.initialize()
+    svc.setHistoryConfigOption('nope', 'model', 'A')
+    expect(svc.list()).toEqual([])
+  })
+
+  it('skips the write when value is unchanged', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryConfigOption(e.id, 'model', 'A')
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    // Same value again — no new write.
+    svc.setHistoryConfigOption(e.id, 'model', 'A')
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('preserves a configOptions cache when add() re-inserts the same session', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't1' })
+    svc.setHistoryConfigOption(first.id, 'model', 'A')
+    // Re-add the same (agentId, sessionIdOnAgent) without configOptions — should
+    // preserve the cache. This mirrors the touch path used by resumeSession.
+    const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
+    expect(second.configOptions).toEqual({ model: 'A' })
   })
 })

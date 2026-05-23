@@ -62,6 +62,7 @@ import {
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -190,6 +191,12 @@ interface FakeAcpClientOptions {
   setConfigOptionError?: { code: number; message: string }
   /** Result for `session/set_mode`. Defaults to an empty object. */
   setSessionModeResult?: Record<string, unknown>
+  /**
+   * Optional promise the agent will await BEFORE returning from
+   * `session/set_config_option` — used by the in-flight suppression test to
+   * keep the call pending while we inject a rogue `config_option_update`.
+   */
+  setConfigOptionGate?: () => Promise<void>
 }
 
 class StubAgent implements Agent {
@@ -247,15 +254,22 @@ class StubAgent implements Agent {
     params: SetSessionConfigOptionRequest,
   ): Promise<SetSessionConfigOptionResponse> {
     this.setConfigOptionCalls.push(params)
-    if (this._opts.setConfigOptionError) {
-      throw new RequestError(
-        this._opts.setConfigOptionError.code,
-        this._opts.setConfigOptionError.message,
-      )
+    const tail = (): SetSessionConfigOptionResponse => {
+      if (this._opts.setConfigOptionError) {
+        throw new RequestError(
+          this._opts.setConfigOptionError.code,
+          this._opts.setConfigOptionError.message,
+        )
+      }
+      return (this._opts.setConfigOptionResult ?? {
+        configOptions: [],
+      }) as SetSessionConfigOptionResponse
     }
-    return Promise.resolve(
-      (this._opts.setConfigOptionResult ?? { configOptions: [] }) as SetSessionConfigOptionResponse,
-    )
+    const gate = this._opts.setConfigOptionGate
+    if (gate) {
+      return gate().then(tail)
+    }
+    return Promise.resolve(tail())
   }
 
   authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
@@ -303,10 +317,22 @@ class FakeAcpClientService implements IAcpClientService {
 function buildService(opts: FakeAcpClientOptions = {}): {
   svc: AcpSessionService
   client: FakeAcpClientService
+  history: AcpSessionHistoryService
+  agentDefaults: AcpAgentDefaultsService
 } {
   const client = new FakeAcpClientService(opts)
   const config: IConfigurationService = new ConfigurationService()
   const telemetry: ITelemetryService = new NoopTelemetryService()
+  const history = new AcpSessionHistoryService(
+    new FakeStorage(),
+    telemetry,
+    new StubLoggerService(),
+  )
+  const agentDefaults = new AcpAgentDefaultsService(
+    new FakeStorage(),
+    telemetry,
+    new StubLoggerService(),
+  )
   const svc = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
@@ -317,10 +343,11 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new StubPermissionHandler(),
     new StubProgressService(),
     new StubLoggerService(),
-    new AcpSessionHistoryService(new FakeStorage(), telemetry, new StubLoggerService()),
+    history,
     new FakeStorage(),
+    agentDefaults,
   )
-  return { svc, client }
+  return { svc, client, history, agentDefaults }
 }
 
 describe('AcpSessionService — Stage 7 init', () => {
@@ -629,5 +656,268 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
     await expect(s.setConfigOption('model', 'gpt-5')).rejects.toThrow(/unsupported value/)
     // State should be unchanged.
     expect(s.configOptions.get()[0]?.currentValue).toBe('sonnet')
+  })
+})
+
+describe('AcpSessionService — setConfigOption persistence side-effects', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('writes both per-session history and per-agent default on a successful modern call', async () => {
+    const initial: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const updated: SessionConfigOption = { ...initial, currentValue: 'opus' }
+    const built = buildService({
+      newSessionResult: { configOptions: [initial] },
+      setConfigOptionResult: { configOptions: [updated] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession()
+    await s.setConfigOption('model', 'opus')
+    const entry = built.history.list().find((e) => e.id === s.historyId)
+    expect(entry?.configOptions).toEqual({ model: 'opus' })
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({ model: 'opus' })
+  })
+
+  it('does NOT persist when the legacy mode path is taken (synthetic id has no cross-agent meaning)', async () => {
+    const modes: SessionModeState = {
+      currentModeId: 'plan',
+      availableModes: [
+        { id: 'plan', name: 'Plan' },
+        { id: 'act', name: 'Act' },
+      ],
+    }
+    const built = buildService({ newSessionResult: { modes } })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    const s = await svc.createSession()
+    const legacyOpt = s.configOptions.get()[0]!
+    expect(legacyOpt.category).toBe('mode')
+    await s.setConfigOption(legacyOpt.id, 'act')
+    // setSessionMode must have been called and persistence must NOT have happened.
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setSessionModeCalls).toHaveLength(1)
+    const entry = built.history.list().find((e) => e.id === s.historyId)
+    expect(entry?.configOptions).toBeUndefined()
+    expect(built.agentDefaults.getDefaults('fake')).toEqual({})
+  })
+
+  it('suppresses an in-flight `config_option_update` echo for the same configId (user wins)', async () => {
+    const initial: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+        { value: 'haiku', name: 'Haiku' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...initial, currentValue: 'opus' }
+    let release!: () => void
+    const gateP = new Promise<void>((r) => {
+      release = r
+    })
+    const built = buildService({
+      newSessionResult: { configOptions: [initial] },
+      setConfigOptionResult: { configOptions: [acked] },
+      setConfigOptionGate: () => gateP,
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const s = await svc.createSession()
+    const sink = built.client.connected[0]!.sink
+    // Start a write but DON'T await — _pendingPushes now has 'model'.
+    const writeP = s.setConfigOption('model', 'opus')
+    // Inject a rogue echo for the same configId. Must be filtered.
+    sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [{ ...initial, currentValue: 'haiku' }],
+      },
+    })
+    // Still pending — should NOT have flipped to 'haiku'.
+    expect(s.configOptions.get()[0]?.currentValue).toBe('sonnet')
+    release()
+    await writeP
+    // Agent's response wins; rogue echo was suppressed.
+    expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
+  })
+
+  it('lets `config_option_update` for OTHER ids through merged into current state while one is in-flight', async () => {
+    // When the update contains both the in-flight id AND a different id, the
+    // filter strips the in-flight id and the remaining ids merge into the
+    // existing array (so OTHER ids see the new value, model is preserved).
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+        { value: 'haiku', name: 'Haiku' },
+      ],
+    }
+    const thoughtFresh: SessionConfigOption = {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'high',
+      options: [
+        { value: 'low', name: 'Low' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    let release!: () => void
+    const gateP = new Promise<void>((r) => {
+      release = r
+    })
+    const built = buildService({
+      newSessionResult: { configOptions: [model] },
+      setConfigOptionResult: { configOptions: [{ ...model, currentValue: 'opus' }] },
+      setConfigOptionGate: () => gateP,
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const s = await svc.createSession()
+    const sink = built.client.connected[0]!.sink
+    const writeP = s.setConfigOption('model', 'opus')
+    // Update contains BOTH the in-flight model (filtered) and thought_level (merged).
+    sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [{ ...model, currentValue: 'haiku' }, thoughtFresh],
+      },
+    })
+    const mid = s.configOptions.get()
+    // model preserved at 'sonnet' (rogue echo filtered).
+    expect(mid.find((o) => o.id === 'model')?.currentValue).toBe('sonnet')
+    // thought_level was merged into the existing array.
+    expect(mid.find((o) => o.id === 'thought_level')?.currentValue).toBe('high')
+    release()
+    await writeP
+  })
+
+  it('clears the in-flight gate even when the agent throws', async () => {
+    const initial: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const built = buildService({
+      newSessionResult: { configOptions: [initial] },
+      setConfigOptionError: { code: -32603, message: 'boom' },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const s = await svc.createSession()
+    await expect(s.setConfigOption('model', 'opus')).rejects.toThrow(/boom/)
+    // A subsequent legitimate update for the same id must NOT be filtered.
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'config_option_update',
+        configOptions: [{ ...initial, currentValue: 'sonnet' }],
+      },
+    })
+    // The update went through (still 'sonnet', but the array reference was
+    // replaced — the assertion here is that `_pendingPushes` is empty so the
+    // filter no longer rejects 'model').
+    expect(s.configOptions.get()[0]?.currentValue).toBe('sonnet')
+  })
+})
+
+describe('AcpSessionService — createSession push-back of agent defaults', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  it('pushes back saved agent defaults to a freshly minted session', async () => {
+    const initial: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...initial, currentValue: 'opus' }
+    const built = buildService({
+      newSessionResult: { configOptions: [initial] },
+      setConfigOptionResult: { configOptions: [acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    // Seed a default BEFORE creating the session.
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    const s = await svc.createSession()
+    // Push-back is scheduled via queueMicrotask. Yield a couple cycles.
+    await new Promise((r) => setTimeout(r, 20))
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toHaveLength(1)
+    expect(agent.setConfigOptionCalls[0]).toMatchObject({ configId: 'model', value: 'opus' })
+    expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
+  })
+
+  it('skips push-back when the agent default already matches the server currentValue', async () => {
+    const initial: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const built = buildService({ newSessionResult: { configOptions: [initial] } })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'model', 'sonnet')
+    await svc.createSession()
+    await new Promise((r) => setTimeout(r, 20))
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toHaveLength(0)
+  })
+
+  it('skips push-back for configIds the agent did not advertise', async () => {
+    const built = buildService({ newSessionResult: { configOptions: [] } })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'mystery', 'value')
+    await svc.createSession()
+    await new Promise((r) => setTimeout(r, 20))
+    expect(built.client.connected[0]!.agent.setConfigOptionCalls).toHaveLength(0)
   })
 })

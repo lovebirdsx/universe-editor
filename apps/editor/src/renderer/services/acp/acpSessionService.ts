@@ -63,6 +63,7 @@ import {
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
+import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 
 export type { PromptMention }
@@ -247,6 +248,15 @@ class AcpSession extends Disposable implements IAcpSession {
    */
   private _legacyModes: SessionModeState | undefined
 
+  /**
+   * Guard against ping-pong between user-driven `setConfigOption` and the
+   * agent's echoed `config_option_update`. We add the configId before issuing
+   * the RPC and remove it after the response (or after one cycle of the
+   * applyUpdate flush). Updates that arrive while a configId is in this set
+   * are skipped — the user's local change wins.
+   */
+  private readonly _pendingPushes = new Set<string>()
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -257,6 +267,7 @@ class AcpSession extends Disposable implements IAcpSession {
     initState?: IAcpSessionInitState,
     private readonly _historyId?: string,
     private readonly _history?: IAcpSessionHistoryService,
+    private readonly _agentDefaults?: IAcpAgentDefaultsService,
   ) {
     super()
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
@@ -466,9 +477,28 @@ class AcpSession extends Disposable implements IAcpSession {
         }
         this._reconcileLegacyModeOption(update.currentModeId)
         break
-      case 'config_option_update':
-        this.configOptions.set(this._materializeConfigOptions(update.configOptions), undefined)
+      case 'config_option_update': {
+        // Skip echoes that arrive while we still have an in-flight user-driven
+        // push for the same configId — otherwise we'd flicker back to the
+        // server's pre-change value before the response lands.
+        const filtered =
+          this._pendingPushes.size === 0
+            ? update.configOptions
+            : update.configOptions.filter((o) => !this._pendingPushes.has(o.id))
+        if (filtered.length === update.configOptions.length) {
+          this.configOptions.set(this._materializeConfigOptions(update.configOptions), undefined)
+        } else if (filtered.length > 0) {
+          // Merge filtered (non-pending) updates into the existing array.
+          const cur = this.configOptions.get()
+          const byId = new Map(cur.map((o) => [o.id, o] as const))
+          for (const f of filtered) byId.set(f.id, f)
+          this.configOptions.set(
+            this._materializeConfigOptions(Array.from(byId.values())),
+            undefined,
+          )
+        }
         break
+      }
       default:
         // session_info_update / usage_update etc. — ignored for now.
         break
@@ -483,6 +513,9 @@ class AcpSession extends Disposable implements IAcpSession {
       this._legacyModes !== undefined &&
       !cur.some((o) => o.category === 'mode' && this._lastSeenFromConfigOptionsServer.has(o.id))
     // Legacy path: only modes were advertised → use session/set_mode.
+    // We do NOT persist to history / agent defaults here — the legacy mode
+    // ConfigOption uses a client-synthesised id that has no cross-agent meaning,
+    // so caching it would only confuse later resumes against different agents.
     if (isLegacyMode) {
       const params: SetSessionModeRequest = {
         sessionId: this._sessionIdOnAgent,
@@ -503,12 +536,24 @@ class AcpSession extends Disposable implements IAcpSession {
       configId,
       value,
     }
-    const resp = await this._conn.conn.setSessionConfigOption(params)
-    if (resp.configOptions) {
-      this._markServerConfigIds(resp.configOptions)
-      this.configOptions.set(this._materializeConfigOptions(resp.configOptions), undefined)
+    this._pendingPushes.add(configId)
+    try {
+      const resp = await this._conn.conn.setSessionConfigOption(params)
+      if (resp.configOptions) {
+        this._markServerConfigIds(resp.configOptions)
+        this.configOptions.set(this._materializeConfigOptions(resp.configOptions), undefined)
+      }
+      // Mirror the user-driven choice to both persistence layers. Only the
+      // modern (configOptions) path writes — legacy mode synthetic ids are
+      // intentionally skipped above.
+      if (this._history && this._historyId) {
+        this._history.setHistoryConfigOption(this._historyId, configId, value)
+      }
+      this._agentDefaults?.setDefault(this.agentId, configId, value)
+      this._telemetry.publicLog('acp.config_option_set', { sessionId: this.id, configId })
+    } finally {
+      this._pendingPushes.delete(configId)
     }
-    this._telemetry.publicLog('acp.config_option_set', { sessionId: this.id, configId })
   }
 
   /** Synthesize / refresh the mode ConfigOption from `_legacyModes`. */
@@ -758,6 +803,7 @@ export class AcpSessionService
     @ILoggerService loggerService: ILoggerService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IStorageService private readonly _storage: IStorageService,
+    @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -890,6 +936,7 @@ export class AcpSessionService
             initState,
             histEntry.id,
             this._history,
+            this._agentDefaults,
           )
           this._byAgentSessionId.set(result.sessionId, session)
           transaction((tx) => {
@@ -900,6 +947,10 @@ export class AcpSessionService
           })
           this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
           this._onDidCreate.fire(session)
+          // Apply per-agent saved defaults to the freshly-minted session. Done in
+          // a microtask so the caller sees `createSession` return before any
+          // async push-back races with the constructor's initial values.
+          this._scheduleConfigPushBack(session, this._agentDefaults.getDefaults(resolvedAgentId))
           return session
         } catch (err) {
           conn.dispose()
@@ -976,6 +1027,7 @@ export class AcpSessionService
         undefined,
         historyId,
         this._history,
+        this._agentDefaults,
       )
       this._byAgentSessionId.set(entry.sessionIdOnAgent, session)
       const captured = session
@@ -1008,6 +1060,15 @@ export class AcpSessionService
         agentId: entry.agentId,
       })
       this._onDidCreate.fire(session)
+      // Schedule push-back of cached MODEL/MODE selections to the agent.
+      // Per-session history wins over per-agent defaults: a user who picked
+      // distinct values for a specific session expects them on resume even if
+      // the global default has since changed.
+      const cached: Record<string, string> = {
+        ...this._agentDefaults.getDefaults(entry.agentId),
+        ...(entry.configOptions ?? {}),
+      }
+      this._scheduleConfigPushBack(session, cached)
       return session
     } catch (err) {
       if (registered && session) {
@@ -1066,6 +1127,45 @@ export class AcpSessionService
 
   getByHistoryId(historyId: string): IAcpSession | undefined {
     return this._sessions.find((x) => x.historyId === historyId)
+  }
+
+  /**
+   * Reconcile a cached `configOptions` bag against the session's current
+   * server-advertised values, and push the diff back to the agent. Used by
+   * `createSession` (per-agent default) and `resumeSession` (per-session
+   * history + per-agent default). Scheduled via `queueMicrotask` so the
+   * push-back fences against any in-flight `session/update` notifications
+   * that the agent may emit during `session/new` or `session/load`.
+   *
+   * Failures on a single push are logged but never thrown — one stale cached
+   * value should not abort the session creation flow.
+   */
+  private _scheduleConfigPushBack(
+    session: AcpSession,
+    cached: Readonly<Record<string, string>>,
+  ): void {
+    const ids = Object.keys(cached)
+    if (ids.length === 0) return
+    queueMicrotask(async () => {
+      if (session.status.get() === 'closed') return
+      const cur = session.configOptions.get()
+      for (const id of ids) {
+        const desired = cached[id]
+        if (desired === undefined) continue
+        const opt = cur.find((o) => o.id === id)
+        // Only push known configs whose current server value differs.
+        if (!opt) continue
+        const currentValue = (opt as { currentValue?: unknown }).currentValue
+        if (currentValue === desired) continue
+        try {
+          await session.setConfigOption(id, desired)
+        } catch (err) {
+          this._logger.warn(
+            `[acp] failed to restore configOption ${id}=${desired}: ${(err as Error).message}`,
+          )
+        }
+      }
+    })
   }
 
   // -- IAcpClientNotificationSink ---------------------------------------

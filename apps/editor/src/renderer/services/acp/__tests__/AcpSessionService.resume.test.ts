@@ -60,6 +60,8 @@ import {
   type SessionConfigOption,
   type SessionModeState,
   type SessionNotification,
+  type SetSessionConfigOptionRequest,
+  type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import {
@@ -70,6 +72,7 @@ import {
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
 // ---------------------------------------------------------------------------
@@ -194,6 +197,8 @@ interface FakeAcpClientOptions {
   loadSessionError?: { code: number; message: string }
   /** Trigger session/update notifications BEFORE session/load resolves. */
   loadSessionUpdates?: readonly SessionNotification[]
+  /** Result for session/set_config_option. Default: `{ configOptions: [] }`. */
+  setConfigOptionResult?: { configOptions: readonly SessionConfigOption[] }
 }
 
 class StubAgent implements Agent {
@@ -202,6 +207,7 @@ class StubAgent implements Agent {
   readonly loadSessionCalls: LoadSessionRequest[] = []
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
+  readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
   /** Set by the fake client right after construction so the agent can stream updates. */
   connection?: AgentSideConnection
 
@@ -248,6 +254,15 @@ class StubAgent implements Agent {
   cancel(params: CancelNotification): Promise<void> {
     this.cancelCalls.push(params)
     return Promise.resolve()
+  }
+
+  setSessionConfigOption(
+    params: SetSessionConfigOptionRequest,
+  ): Promise<SetSessionConfigOptionResponse> {
+    this.setConfigOptionCalls.push(params)
+    return Promise.resolve(
+      (this._opts.setConfigOptionResult ?? { configOptions: [] }) as SetSessionConfigOptionResponse,
+    )
   }
 
   authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
@@ -306,6 +321,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   svc: AcpSessionService
   client: FakeAcpClientService
   history: AcpSessionHistoryService
+  agentDefaults: AcpAgentDefaultsService
   notifications: StubNotificationService
   storage: FakeStorage
 } {
@@ -315,6 +331,11 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   const notifications = new StubNotificationService()
   const storage = new FakeStorage()
   const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+  const agentDefaults = new AcpAgentDefaultsService(
+    new FakeStorage(),
+    telemetry,
+    new StubLoggerService(),
+  )
   const svc = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
@@ -327,8 +348,9 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new StubLoggerService(),
     history,
     storage,
+    agentDefaults,
   )
-  return { svc, client, history, notifications, storage }
+  return { svc, client, history, agentDefaults, notifications, storage }
 }
 
 // ---------------------------------------------------------------------------
@@ -636,6 +658,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       round1.storage,
+      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -670,6 +693,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       storage,
+      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -700,6 +724,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       storage,
+      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -732,9 +757,168 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       storage,
+      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])
     expect(client.connected.length).toBe(1)
+  })
+})
+
+describe('AcpSessionService.resumeSession — configOption push-back', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  /**
+   * Sets up: per-session history caches `model=opus`; agent's `session/load`
+   * advertises currentValue='sonnet' for the same id. On resume the service
+   * should schedule a push-back that sends `setSessionConfigOption(model, opus)`
+   * to the agent, and apply the agent's ACK back into the session.
+   */
+  it('pushes cached per-session configOptions back to the agent on resume', async () => {
+    const loadFixture: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...loadFixture, currentValue: 'opus' }
+    const built = buildService({
+      loadSessionResult: { configOptions: [loadFixture] },
+      setConfigOptionResult: { configOptions: [acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    // Cache the per-session preference directly on the history entry.
+    built.history.setHistoryConfigOption(historyId, 'model', 'opus')
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    // The push-back is microtask-scheduled and itself awaits a wire RPC; give
+    // it a couple cycles to settle.
+    await new Promise((r) => setTimeout(r, 30))
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.setConfigOptionCalls).toHaveLength(1)
+    expect(resumeAgent.setConfigOptionCalls[0]).toMatchObject({
+      configId: 'model',
+      value: 'opus',
+    })
+    expect(resumed.configOptions.get().find((o) => o.id === 'model')?.currentValue).toBe('opus')
+  })
+
+  it('per-session history overrides per-agent default when both are cached', async () => {
+    const loadFixture: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+        { value: 'haiku', name: 'Haiku' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...loadFixture, currentValue: 'haiku' }
+    const built = buildService({
+      loadSessionResult: { configOptions: [loadFixture] },
+      setConfigOptionResult: { configOptions: [acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    // Per-agent default says 'opus'. Per-session history says 'haiku'.
+    // The session-specific choice MUST win — a user who explicitly chose
+    // 'haiku' for THIS session doesn't want the global default to override.
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    built.history.setHistoryConfigOption(historyId, 'model', 'haiku')
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+    await new Promise((r) => setTimeout(r, 30))
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.setConfigOptionCalls).toHaveLength(1)
+    expect(resumeAgent.setConfigOptionCalls[0]?.value).toBe('haiku')
+  })
+
+  it('falls back to per-agent default when per-session history has no cache for the id', async () => {
+    const loadFixture: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...loadFixture, currentValue: 'opus' }
+    const built = buildService({
+      loadSessionResult: { configOptions: [loadFixture] },
+      setConfigOptionResult: { configOptions: [acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    // No per-session override — only the global default.
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+    await new Promise((r) => setTimeout(r, 30))
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.setConfigOptionCalls).toHaveLength(1)
+    expect(resumeAgent.setConfigOptionCalls[0]?.value).toBe('opus')
+  })
+
+  it('skips push-back when the cached value already matches the agent state', async () => {
+    const loadFixture: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'opus',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const built = buildService({ loadSessionResult: { configOptions: [loadFixture] } })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    built.history.setHistoryConfigOption(historyId, 'model', 'opus')
+    await svc.closeSession(original.id)
+
+    await svc.resumeSession(historyId)
+    await new Promise((r) => setTimeout(r, 30))
+
+    const resumeAgent = built.client.connected[1]!.agent
+    expect(resumeAgent.setConfigOptionCalls).toHaveLength(0)
   })
 })

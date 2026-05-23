@@ -41,6 +41,12 @@ export interface AcpSessionHistoryEntry {
   readonly createdAt: number
   /** Unix epoch milliseconds — updated on resume + on outbound prompt. */
   readonly lastUsedAt: number
+  /**
+   * Cached configOption selections (configId → currentValue) — replayed back
+   * after `session/load` so MODEL/MODE survive editor restart. ACP itself
+   * keeps the state on the agent side; we mirror it here per-session.
+   */
+  readonly configOptions?: Readonly<Record<string, string>>
 }
 
 export interface IAcpSessionHistoryService {
@@ -58,6 +64,12 @@ export interface IAcpSessionHistoryService {
   touch(id: string): void
   remove(id: string): void
   clear(): void
+  /**
+   * Patch a single configOption value on a history entry. No-op if id is
+   * unknown. Used by `AcpSession.setConfigOption` to mirror user-driven
+   * selections so they survive editor restart.
+   */
+  setHistoryConfigOption(historyId: string, configId: string, value: string): void
 }
 
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
@@ -65,7 +77,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 const MAX_ENTRIES = 100
 
 interface PersistedShape {
@@ -122,6 +134,11 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
     )
     const id = existingIdx >= 0 ? this._entries[existingIdx]!.id : this._mintId()
     const createdAt = existingIdx >= 0 ? this._entries[existingIdx]!.createdAt : now
+    // Preserve any prior configOptions cache if the caller didn't supply one —
+    // re-adding the same session shouldn't blow away saved MODEL/MODE state.
+    const carriedConfigOptions =
+      entry.configOptions ??
+      (existingIdx >= 0 ? this._entries[existingIdx]!.configOptions : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -130,6 +147,7 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
       createdAt,
       lastUsedAt: now,
+      ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
     }
     if (existingIdx >= 0) {
       this._entries = [next, ...this._entries.filter((_, i) => i !== existingIdx)]
@@ -168,6 +186,19 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
     this._scheduleWrite()
   }
 
+  setHistoryConfigOption(historyId: string, configId: string, value: string): void {
+    const idx = this._entries.findIndex((e) => e.id === historyId)
+    if (idx === -1) return
+    const cur = this._entries[idx]!
+    const prevOpts = cur.configOptions ?? {}
+    if (prevOpts[configId] === value) return
+    const nextOpts: Readonly<Record<string, string>> = { ...prevOpts, [configId]: value }
+    const next: AcpSessionHistoryEntry = { ...cur, configOptions: nextOpts }
+    this._entries = this._entries.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
   override dispose(): void {
     if (this._writeTimer) {
       clearTimeout(this._writeTimer)
@@ -184,10 +215,9 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
     try {
       const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, StorageScope.GLOBAL)
       if (raw && typeof raw === 'object' && Array.isArray(raw.entries)) {
-        // Schema-version guard: if a future version is found, fail closed
-        // (start empty) rather than try to interpret unknown fields.
-        if (raw.schemaVersion === SCHEMA_VERSION) {
-          const persisted = raw.entries.filter(isValidEntry)
+        const migrated = migrate(raw.schemaVersion, raw.entries)
+        if (migrated) {
+          const persisted = migrated.filter(isValidEntry)
           // Merge: any entries the caller already added before load completed
           // win over the persisted row with the same id.
           const seen = new Set(this._entries.map((e) => e.id))
@@ -266,8 +296,29 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     typeof o['title'] === 'string' &&
     (o['cwd'] === undefined || typeof o['cwd'] === 'string') &&
     typeof o['createdAt'] === 'number' &&
-    typeof o['lastUsedAt'] === 'number'
+    typeof o['lastUsedAt'] === 'number' &&
+    (o['configOptions'] === undefined || isStringRecord(o['configOptions']))
   )
+}
+
+function isStringRecord(v: unknown): v is Readonly<Record<string, string>> {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false
+  for (const val of Object.values(v as Record<string, unknown>)) {
+    if (typeof val !== 'string') return false
+  }
+  return true
+}
+
+/**
+ * Promote persisted entries to the current schema. Returns `undefined` on
+ * unknown/future versions so the caller can fail closed. v1 entries are
+ * forward-compatible — the only new field (`configOptions`) is optional, so
+ * the raw v1 rows are valid v2 rows already.
+ */
+function migrate(version: unknown, entries: readonly unknown[]): readonly unknown[] | undefined {
+  if (version === SCHEMA_VERSION) return entries
+  if (version === 1) return entries
+  return undefined
 }
 
 function parseLocalSeq(id: string): number | undefined {
