@@ -71,6 +71,9 @@ export interface IHostService {
    * Returns an error string on failure, or empty string on success.
    */
   openWithDefaultApp(path: string): Promise<string>
+
+  /** Open the user-data directory (settings, keybindings, state) in the OS file manager. */
+  openUserDataFolder(): Promise<void>
 }
 
 export interface IShowOpenFileOptions {

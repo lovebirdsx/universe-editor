@@ -57,6 +57,7 @@ import {
   AboutAction,
   CloseWindowAction,
   NewWindowAction,
+  OpenUserDataFolderAction,
   RestartEditorAction,
   ToggleDevToolsAction,
 } from './windowActions.js'
@@ -199,6 +200,7 @@ registerAction2(RestartEditorAction)
 registerAction2(CloseWindowAction)
 registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)
+registerAction2(OpenUserDataFolderAction)
 registerAction2(ShowLogsAction)
 registerAction2(RefreshLogOutputAction)
 registerAction2(OpenActiveLogFileAction)

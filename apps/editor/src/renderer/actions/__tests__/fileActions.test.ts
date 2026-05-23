@@ -177,6 +177,7 @@ class FakeHostService implements IHostServiceType {
   async openWithDefaultApp(_path: string) {
     return ''
   }
+  async openUserDataFolder() {}
   async openNewWindow() {}
 }
 

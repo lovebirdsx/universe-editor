@@ -133,6 +133,12 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return shell.openPath(path)
   }
 
+  async openUserDataFolder(): Promise<void> {
+    const dir = app.getPath('userData')
+    const error = await shell.openPath(dir)
+    if (error) throw new Error(error)
+  }
+
   dispose(): void {
     if (!this._win.isDestroyed()) {
       this._win.removeListener('maximize', this._onMaximize)

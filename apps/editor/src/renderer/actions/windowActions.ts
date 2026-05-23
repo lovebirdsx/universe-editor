@@ -84,6 +84,23 @@ export class ToggleDevToolsAction extends Action2 {
   }
 }
 
+export class OpenUserDataFolderAction extends Action2 {
+  static readonly ID = 'workbench.action.openUserDataFolder'
+  constructor() {
+    super({
+      id: OpenUserDataFolderAction.ID,
+      title: localize('action.openUserDataFolder.title', 'Developer: Open User Data Folder'),
+      category: localize('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 3 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void accessor.get(IHostService).openUserDataFolder()
+  }
+}
+
 export class AboutAction extends Action2 {
   static readonly ID = 'workbench.action.about'
   constructor() {
