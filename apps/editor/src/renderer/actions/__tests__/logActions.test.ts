@@ -17,6 +17,7 @@ import {
   registerAction2,
   type IDisposable,
   type IQuickPickItem,
+  type IStorageService,
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../../shared/ipc/services.js'
 import { OutputService } from '../../services/output/OutputService.js'
@@ -67,6 +68,16 @@ async function runCommand(id: string, services: ServiceCollection): Promise<void
   })
 }
 
+function makeStorage(): IStorageService {
+  return {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as unknown as IStorageService
+}
+
 describe('logActions', () => {
   const disposables: IDisposable[] = []
 
@@ -77,7 +88,7 @@ describe('logActions', () => {
 
   it('ShowLogsAction picks a log, reads it, and activates a Log output channel', async () => {
     disposables.push(registerAction2(ShowLogsAction))
-    const output = new OutputService()
+    const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
     const pick = vi.fn(async (items: readonly IQuickPickItem[]) => items[0])
     const logFiles = makeLogFilesService()
@@ -98,7 +109,7 @@ describe('logActions', () => {
 
   it('ShowLogsAction does nothing after the user cancels the quick pick', async () => {
     disposables.push(registerAction2(ShowLogsAction))
-    const output = new OutputService()
+    const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
     const pick = vi.fn().mockResolvedValue(undefined)
     const logFiles = makeLogFilesService()
@@ -117,7 +128,7 @@ describe('logActions', () => {
 
   it('ShowLogsAction opens a message in Output when no logs exist', async () => {
     disposables.push(registerAction2(ShowLogsAction))
-    const output = new OutputService()
+    const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
     const pick = vi.fn()
     const logFiles = makeLogFilesService({
@@ -154,7 +165,7 @@ describe('logActions', () => {
 
   it('RefreshLogOutputAction re-reads the log file matching the active Log (X) channel', async () => {
     disposables.push(registerAction2(RefreshLogOutputAction))
-    const output = new OutputService()
+    const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
     const logFiles = makeLogFilesService()
     output.createChannel(`Log (${descriptor.name})`)
@@ -173,7 +184,7 @@ describe('logActions', () => {
 
   it('RefreshLogOutputAction is a no-op when no Log channel is active', async () => {
     disposables.push(registerAction2(RefreshLogOutputAction))
-    const output = new OutputService()
+    const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
     const logFiles = makeLogFilesService()
     const services = new ServiceCollection()

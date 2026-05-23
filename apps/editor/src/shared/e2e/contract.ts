@@ -113,6 +113,13 @@ export interface E2EProbe {
   getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */
   getAcpToolCalls(): ReadonlyArray<{ id: string; title: string; status: string; text: string }>
+  // -- Output probe --------------------------------------------------------
+  /** Name of the currently active output channel, or undefined if none. */
+  getActiveOutputChannelName(): string | undefined
+  /** Snapshot of all currently registered output channel names. */
+  getOutputChannelNames(): readonly string[]
+  /** Create a named output channel (for testing restore without ACP). */
+  createOutputChannel(name: string): void
 }
 
 declare global {

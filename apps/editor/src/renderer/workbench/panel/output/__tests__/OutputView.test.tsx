@@ -5,6 +5,7 @@ import {
   IOutputService,
   InstantiationService,
   ServiceCollection,
+  type IStorageService,
 } from '@universe-editor/platform'
 import { OutputService } from '../../../../services/output/OutputService.js'
 import { ServicesContext } from '../../../useService.js'
@@ -20,7 +21,17 @@ const mockConfigService: IConfigurationService = {
   onDidChangeConfiguration: { event: vi.fn(), dispose: vi.fn() } as never,
 }
 
-function renderOutputView(outputService = new OutputService()) {
+function makeStorage(): IStorageService {
+  return {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as unknown as IStorageService
+}
+
+function renderOutputView(outputService = new OutputService(makeStorage())) {
   const services = new ServiceCollection()
   services.set(IOutputService, outputService)
   services.set(IConfigurationService, mockConfigService)
@@ -37,7 +48,7 @@ function renderOutputView(outputService = new OutputService()) {
 
 describe('OutputView', () => {
   it('clears the active output channel from the icon button', () => {
-    const outputService = new OutputService()
+    const outputService = new OutputService(makeStorage())
     const channel = outputService.createChannel('Renderer')
     channel.appendLine('ready')
     const clear = vi.spyOn(channel, 'clear')

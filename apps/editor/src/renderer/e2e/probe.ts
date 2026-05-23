@@ -23,6 +23,7 @@ import {
   type IEditorService,
   type ILayoutService,
   type ILifecycleService,
+  type IOutputService,
   type IStatusBarService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -47,6 +48,7 @@ export interface E2EProbeServices {
   readonly layoutService: ILayoutService
   readonly configurationService: IConfigurationService
   readonly acpSessionService: IAcpSessionService
+  readonly outputService: IOutputService
 }
 
 class DummyEditorInput extends EditorInput {
@@ -158,6 +160,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         status: t.status,
         text: t.text,
       }))
+    },
+    getActiveOutputChannelName: () => services.outputService.activeChannelName.get(),
+    getOutputChannelNames: () => services.outputService.channelNames.get(),
+    createOutputChannel: (name: string) => {
+      services.outputService.createChannel(name)
     },
   }
 

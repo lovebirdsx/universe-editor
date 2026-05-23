@@ -230,7 +230,7 @@ async function bootstrapWorkbench(): Promise<void> {
     loggerService.createLogger({ id: 'editor', name: 'Editor' }),
   )
   const statusBarService = new StatusBarService()
-  const outputService = new OutputService()
+  const outputService = instantiation.createInstance(OutputService)
   const commandService = new CommandService(
     instantiation,
     telemetry,
@@ -361,6 +361,7 @@ async function bootstrapWorkbench(): Promise<void> {
     layoutService,
     configurationService,
     acpSessionService,
+    outputService,
   })
 
   // Load persisted layout and view state before mounting React so Allotment starts with the

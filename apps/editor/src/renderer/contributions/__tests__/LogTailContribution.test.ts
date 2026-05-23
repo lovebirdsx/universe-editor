@@ -8,6 +8,7 @@ import {
   IOutputService,
   InstantiationService,
   ServiceCollection,
+  type IStorageService,
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogAppendEvent } from '../../../shared/ipc/services.js'
 import { OutputService } from '../../services/output/OutputService.js'
@@ -59,12 +60,22 @@ function instantiate(output: OutputService, logFiles: FakeLogFilesService): LogT
   return inst.createInstance(LogTailContribution)
 }
 
+function makeStorage(): IStorageService {
+  return {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as unknown as IStorageService
+}
+
 describe('LogTailContribution', () => {
   let output: OutputService
   let logFiles: FakeLogFilesService
 
   beforeEach(() => {
-    output = new OutputService()
+    output = new OutputService(makeStorage())
     logFiles = makeLogFiles([
       { name: 'Main', channelId: 'main' },
       { name: 'External Change', channelId: 'externalChange' },

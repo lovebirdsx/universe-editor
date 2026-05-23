@@ -5,13 +5,21 @@
  *  as the log file grows without requiring a manual Refresh.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, IOutputService, type IWorkbenchContribution } from '@universe-editor/platform'
+import {
+  Disposable,
+  IOutputService,
+  autorun,
+  type IWorkbenchContribution,
+} from '@universe-editor/platform'
 import { ILogFilesService, type LogAppendEvent } from '../../shared/ipc/services.js'
 
 const LOG_CHANNEL_PREFIX = 'Log ('
+const LOG_READ_MAX_BYTES = 1024 * 1024
 
 export class LogTailContribution extends Disposable implements IWorkbenchContribution {
   private readonly _nameToChannelId = new Map<string, string>()
+  private readonly _nameToDescriptorId = new Map<string, string>()
+  private readonly _channelIdToName = new Map<string, string>()
   private readonly _pending = new Map<string, string>()
   private _flushScheduled = false
   private _refreshing = false
@@ -23,6 +31,17 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
     super()
     void this._refreshDescriptors()
     this._register(this._logFiles.onDidAppendEntry((event) => this._handleAppend(event)))
+    // Lazy-load file content the first time a Log (X) channel becomes active —
+    // covers both the restore path (channel restored as active by OutputService
+    // before LogTailContribution finishes refreshing descriptors) and any future
+    // direct activation that bypasses Show Logs...
+    this._register(
+      autorun((r) => {
+        const active = this._output.activeChannelName.read(r)
+        if (!active || !active.startsWith(LOG_CHANNEL_PREFIX) || !active.endsWith(')')) return
+        void this._populateLogChannelIfEmpty(active)
+      }),
+    )
   }
 
   private async _refreshDescriptors(): Promise<void> {
@@ -31,8 +50,15 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
     try {
       const descriptors = await this._logFiles.listLogFiles()
       this._nameToChannelId.clear()
+      this._nameToDescriptorId.clear()
+      this._channelIdToName.clear()
       for (const d of descriptors) {
         this._nameToChannelId.set(d.name, d.channelId)
+        this._nameToDescriptorId.set(d.name, d.id)
+        this._channelIdToName.set(d.channelId, d.name)
+        // Pre-create the channel so it appears in the Output dropdown and so
+        // OutputService can activate it when it matches a pending restored name.
+        this._output.createChannel(`${LOG_CHANNEL_PREFIX}${d.name})`)
       }
     } catch {
       // best-effort; next event will retry
@@ -41,7 +67,37 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
     }
   }
 
+  private async _populateLogChannelIfEmpty(channelName: string): Promise<void> {
+    const channel = this._output.getChannel(channelName)
+    if (!channel || channel.content.get() !== '') return
+    const name = channelName.slice(LOG_CHANNEL_PREFIX.length, -1)
+    let descriptorId = this._nameToDescriptorId.get(name)
+    if (descriptorId === undefined) {
+      await this._refreshDescriptors()
+      descriptorId = this._nameToDescriptorId.get(name)
+    }
+    if (descriptorId === undefined) return
+    let content: string
+    try {
+      content = await this._logFiles.readLogFile(descriptorId, LOG_READ_MAX_BYTES)
+    } catch {
+      return
+    }
+    if (typeof content !== 'string') return
+    if (channel.content.get() !== '') return
+    channel.append(content)
+  }
+
   private _handleAppend(event: LogAppendEvent): void {
+    // An append from a previously unknown channelId means a new logger
+    // materialized after the initial _refreshDescriptors snapshot — flushes
+    // are debounced by 150ms in main, so the .log file may not have existed
+    // when we first listed. Refresh now so the corresponding Log (X) channel
+    // is created and any pending restore can activate it.
+    if (!this._channelIdToName.has(event.channelId)) {
+      void this._refreshDescriptors()
+    }
+
     const active = this._output.activeChannelName.get()
     if (!active || !active.startsWith(LOG_CHANNEL_PREFIX) || !active.endsWith(')')) {
       return
