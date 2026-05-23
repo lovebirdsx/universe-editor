@@ -89,7 +89,7 @@
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-ui);
   font-size: 12px;
   line-height: 1.4;
 }
@@ -163,7 +163,7 @@
 }
 
 .inlineCode {
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   padding: 1px 4px;
   background: var(--color-input-bg, #2d2d2d);
@@ -180,7 +180,7 @@
   border: 1px solid var(--color-border, #333);
   border-radius: 4px;
   overflow-x: auto;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
   font-size: 11px;
   line-height: 1.4;
   white-space: pre;
@@ -212,7 +212,7 @@
   border-radius: 4px;
   cursor: pointer;
   font-size: 11px;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-mono);
   text-align: left;
   max-width: 100%;
 }
@@ -328,7 +328,7 @@
 .promptTextarea {
   width: 100%;
   resize: vertical;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-ui);
   font-size: 12px;
   padding: 4px 6px;
   background: var(--color-input-bg, #3c3c3c);
@@ -641,13 +641,13 @@
 }
 
 .slashName {
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-ui);
   font-weight: 600;
   color: var(--color-badge-progress, #4fa6e2);
 }
 
 .slashHint {
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-ui);
   color: var(--color-message-role-fg, #888);
 }
 

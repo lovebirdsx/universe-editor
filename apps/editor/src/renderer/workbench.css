@@ -21,6 +21,7 @@ html, body, #root {
 :root {
   /* Typography */
   --font-ui: 'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'Cascadia Code', 'Consolas', 'Menlo', 'Courier New', monospace;
 
   /* Base */
   --color-background: #1a1a1c;
