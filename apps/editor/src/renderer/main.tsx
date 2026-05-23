@@ -99,6 +99,11 @@ import {
   IAcpAgentDefaultsService,
 } from './services/acp/acpAgentDefaultsService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
+import { AcpFocusService, IAcpFocusService } from './services/acp/acpFocusService.js'
+import {
+  AcpChatLocationService,
+  IAcpChatLocationService,
+} from './services/acp/acpChatLocationService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
@@ -325,6 +330,14 @@ async function bootstrapWorkbench(): Promise<void> {
   void acpAgentDefaultsService.initialize()
   const acpSessionService = instantiation.createInstance(AcpSessionService)
   services.set(IAcpSessionService, acpSessionService)
+
+  // Renderer-only AGENTS UI state. Focus is a pure event bus; ChatLocation
+  // persists across restarts and owns the EditorArea↔SecondarySideBar toggle.
+  const acpFocusService = new AcpFocusService()
+  services.set(IAcpFocusService, acpFocusService)
+  const acpChatLocationService = instantiation.createInstance(AcpChatLocationService)
+  services.set(IAcpChatLocationService, acpChatLocationService)
+  void acpChatLocationService.initialize()
 
   // Kick off async load of user settings from storage. Once it resolves,
   // ConfigurationService fires onDidChangeConfiguration so any subscribers

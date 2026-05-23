@@ -31,6 +31,7 @@ import type {
 } from '../../../services/acp/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
+import { AcpFocusService, IAcpFocusService } from '../../../services/acp/acpFocusService.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -98,16 +99,25 @@ function makeFileService(paths: readonly string[]): IFileServiceType {
 
 function renderWithServices(
   node: React.ReactNode,
-  opts: { fileService?: IFileServiceType; workspace?: IWorkspaceServiceType } = {},
+  opts: {
+    fileService?: IFileServiceType
+    workspace?: IWorkspaceServiceType
+    focusService?: AcpFocusService
+  } = {},
 ) {
   const services = new ServiceCollection()
   services.set(IFileService, opts.fileService ?? stubFileService)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
+  services.set(IAcpFocusService, opts.focusService ?? new AcpFocusService())
   const inst = new InstantiationService(services)
-  return render(<ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>)
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
+    <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
+  )
+  return render(node, { wrapper: Wrapper })
 }
 
 interface FakeSessionOptions {
+  readonly id?: string
   readonly status?: AcpSessionStatus
   readonly commands?: readonly AvailableCommand[]
 }
@@ -133,7 +143,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const sendPrompt = vi.fn().mockResolvedValue(undefined)
   const cancelTurn = vi.fn().mockResolvedValue(undefined)
   return {
-    id: 's1',
+    id: opts.id ?? 's1',
     agentId: 'fake',
     title: 'Fake',
     historyId: undefined,
@@ -460,5 +470,44 @@ describe('PromptInput — @-mention popover', () => {
     typeAt(ta, '/diff')
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
     expect(screen.queryByTestId('acp-mention-popover')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Focus handoff — Ctrl+Alt+I command (via IAcpFocusService) and the auto-focus
+// on session swap. Both must land on the same textarea.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — focus handoff', () => {
+  it('focuses the textarea when IAcpFocusService fires onDidRequestFocus', () => {
+    const focusService = new AcpFocusService()
+    renderWithServices(<PromptInput session={makeSession()} />, { focusService })
+    const ta = getTextarea()
+    expect(document.activeElement).not.toBe(ta)
+    act(() => {
+      focusService.requestFocus()
+    })
+    expect(document.activeElement).toBe(ta)
+  })
+
+  it('focuses the textarea when the active session id changes', () => {
+    const first = makeSession({ id: 's1' })
+    const { rerender } = renderWithServices(<PromptInput session={first} />)
+    const ta = getTextarea()
+    // Initial mount must NOT auto-focus — we don't want to steal focus from
+    // whatever click opened the panel.
+    expect(document.activeElement).not.toBe(ta)
+    const second = makeSession({ id: 's2' })
+    rerender(<PromptInput session={second} />)
+    expect(document.activeElement).toBe(ta)
+  })
+
+  it('does not refocus when the same session re-renders', () => {
+    const session = makeSession()
+    const { rerender } = renderWithServices(<PromptInput session={session} />)
+    const ta = getTextarea()
+    expect(document.activeElement).not.toBe(ta)
+    rerender(<PromptInput session={session} />)
+    expect(document.activeElement).not.toBe(ta)
   })
 })

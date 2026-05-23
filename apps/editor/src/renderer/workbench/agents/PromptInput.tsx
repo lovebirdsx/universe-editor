@@ -3,7 +3,7 @@
  *  PromptInput — the textarea plus two inline popovers (slash-command +
  *  @-mention) for the agent chat. Owns local state (text, caret-tracked
  *  popover index/dismissal, recorded mentions); writes go to the session
- *  via `sendPrompt` / `cancelTurn`. Kept out of ChatView so the keyboard
+ *  via `sendPrompt` / `cancelTurn`. Kept out of ChatBody so the keyboard
  *  wiring can be exercised in unit tests without standing up the DI graph.
  *
  *  Mentions strategy: when the user picks a file we record the entry's
@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import { IFileService, IWorkspaceService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
+import { IAcpFocusService } from '../../services/acp/acpFocusService.js'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
   applyMentionPick,
@@ -50,11 +51,32 @@ export function PromptInput({ session }: { session: IAcpSession }) {
 
   const fileService = useService(IFileService)
   const workspace = useService(IWorkspaceService)
+  const focusService = useService(IAcpFocusService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
   const running = status === 'running'
+
+  // External focus requests (Ctrl+Alt+I, session-switch helpers in tests).
+  useEffect(() => {
+    const sub = focusService.onDidRequestFocus(() => {
+      textareaRef.current?.focus()
+    })
+    return () => sub.dispose()
+  }, [focusService])
+
+  // Auto-focus on session swap so the user can keep typing without clicking
+  // the textarea. Skip the initial mount so we don't steal focus from a
+  // button click that opened the panel.
+  const prevSessionIdRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    const prev = prevSessionIdRef.current
+    prevSessionIdRef.current = session.id
+    if (prev !== undefined && prev !== session.id) {
+      textareaRef.current?.focus()
+    }
+  }, [session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text), [text])
   const slashMatches = useMemo<readonly AvailableCommand[]>(

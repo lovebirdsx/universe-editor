@@ -103,6 +103,7 @@ import {
 import {
   CancelAgentTurnAction,
   ClearAgentSessionHistoryAction,
+  FocusAgentInputAction,
   NewAgentSessionAction,
   OpenAgentInEditorAction,
   ResumeAgentSessionAction,
@@ -110,6 +111,7 @@ import {
   SelectAgentModeAction,
   SelectAgentModelAction,
   SelectAgentThoughtLevelAction,
+  ToggleAgentChatLocationAction,
 } from './agentActions.js'
 
 // Layout
@@ -230,6 +232,8 @@ registerAction2(ReopenWithAction)
 registerAction2(NewAgentSessionAction)
 registerAction2(CancelAgentTurnAction)
 registerAction2(OpenAgentInEditorAction)
+registerAction2(ToggleAgentChatLocationAction)
+registerAction2(FocusAgentInputAction)
 registerAction2(SelectAgentAction)
 registerAction2(SelectAgentModelAction)
 registerAction2(SelectAgentModeAction)

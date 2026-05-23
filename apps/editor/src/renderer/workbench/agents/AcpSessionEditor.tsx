@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpSessionEditor — full-screen editor variant of ChatView. Looks the session
+ *  AcpSessionEditor — full-screen editor variant of ChatBody. Looks the session
  *  up by id from the AcpSessionService.
  *--------------------------------------------------------------------------------------------*/
 
@@ -9,7 +9,7 @@ import { IEditorInput, IEditorService, localize } from '@universe-editor/platfor
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
-import { ChatView } from './ChatView.js'
+import { ChatBody } from './ChatBody.js'
 import styles from './agents.module.css'
 
 export function AcpSessionEditor({ input }: { input: IEditorInput }) {
@@ -80,5 +80,5 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
       </div>
     )
   }
-  return <ChatView session={session} />
+  return <ChatBody session={session} />
 }

@@ -94,21 +94,11 @@ export class AgentsViewContainerContribution extends Disposable implements IWork
 
     this._register(
       ViewRegistry.registerView({
-        id: 'workbench.view.agents.chat',
-        name: localize('view.agents.chat', 'Chat'),
+        id: 'workbench.view.agents.main',
+        name: localize('view.agents.main', 'Agents'),
         containerId: 'workbench.view.agents',
-        componentKey: 'agents.chat',
+        componentKey: 'agents.main',
         order: 1,
-      }),
-    )
-
-    this._register(
-      ViewRegistry.registerView({
-        id: 'workbench.view.agents.sessions',
-        name: localize('view.agents.sessions', 'Sessions'),
-        containerId: 'workbench.view.agents',
-        componentKey: 'agents.sessions',
-        order: 2,
       }),
     )
   }

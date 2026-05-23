@@ -7,7 +7,6 @@
 import {
   Action2,
   IDialogService,
-  IEditorService,
   INotificationService,
   IQuickInputService,
   IViewsService,
@@ -21,7 +20,8 @@ import {
 import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
-import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
+import { IAcpFocusService } from '../services/acp/acpFocusService.js'
 import type {
   SessionConfigOptionCategory,
   SessionConfigSelectGroup,
@@ -82,11 +82,42 @@ export class OpenAgentInEditorAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    const session = accessor.get(IAcpSessionService).activeSession.get()
-    if (!session) return
-    accessor
-      .get(IEditorService)
-      .openEditor(new AcpSessionEditorInput(session.id, session.agentId, session.historyId))
+    // Flip the global location flag so the side-effect handler opens the
+    // active session as a tab and (if it was docked) clears the sidebar
+    // version. Callers that simply want a tab opened still get the same
+    // outcome — the location service is idempotent on its current value.
+    accessor.get(IAcpChatLocationService).setLocation('editor')
+  }
+}
+
+export class ToggleAgentChatLocationAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.toggleChatLocation'
+  constructor() {
+    super({
+      id: ToggleAgentChatLocationAction.ID,
+      title: localize('action.agent.toggleChatLocation', 'Toggle Agent Chat Location'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatLocationService).toggle()
+  }
+}
+
+export class FocusAgentInputAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusInput'
+  constructor() {
+    super({
+      id: FocusAgentInputAction.ID,
+      title: localize('action.agent.focusInput', 'Focus Agent Input'),
+      category: CATEGORY,
+      keybinding: { primary: 'ctrl+alt+i' },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpFocusService).requestFocus()
   }
 }
 

@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for the slash-command popover: pure filtering helper + render
  *  behaviour. Keyboard wiring is covered via PromptInput integration tests
- *  in ChatView.test.tsx (kept separate because we need the session/service
+ *  in PromptInput.test.tsx (kept separate because we need the session/service
  *  scaffolding there).
  *--------------------------------------------------------------------------------------------*/
 

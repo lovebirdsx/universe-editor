@@ -6,37 +6,90 @@
   color: var(--color-editor-fg, #d4d4d4);
 }
 
-.chatHeader {
+.chatPanel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: var(--color-editor-bg, #1e1e1e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.chatToolbar {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
+  gap: 6px;
+  padding: 4px 8px;
   border-bottom: 1px solid var(--color-border, #333);
   font-size: 12px;
+  min-height: 28px;
+  box-sizing: border-box;
 }
 
-.chatTitle {
-  font-weight: 600;
+.chatToolbarLeft {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chatToolbarTitle {
   flex: 1;
-}
-
-.chatStatus {
   font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  padding: 2px 6px;
-  border-radius: 3px;
-  background: var(--color-badge-bg, #333);
+  font-weight: 600;
+  color: var(--color-message-role-fg, #aaa);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 0 4px;
 }
 
-.chatStatus[data-status='running'] {
-  background: var(--color-badge-progress, #0e639c);
+.toolbarButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  line-height: 1;
 }
-.chatStatus[data-status='errored'] {
-  background: var(--color-badge-error, #a1260d);
+
+.toolbarButton:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
 }
-.chatStatus[data-status='closed'] {
-  background: var(--color-badge-muted, #555);
+
+.toolbarButton:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
+}
+
+.toolbarButton[aria-expanded='true'] {
+  background: var(--color-list-active-bg, #094771);
+}
+
+.sessionsPopover {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 4px;
+  right: 4px;
+  z-index: 5;
+  background: var(--color-message-bg, #2a2a2a);
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  max-height: 60vh;
+  overflow-y: auto;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.sessionsPopover ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 
 .chatBody {
@@ -640,7 +693,7 @@
   flex-wrap: wrap;
   gap: 8px;
   padding: 4px 12px;
-  border-bottom: 1px solid var(--color-border, #333);
+  border-top: 1px solid var(--color-border, #333);
   background: var(--color-toolbar-bg, #252525);
   font-size: 11px;
 }
