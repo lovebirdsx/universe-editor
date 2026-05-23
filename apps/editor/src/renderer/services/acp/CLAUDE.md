@@ -123,13 +123,21 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 
 ## 持久化
 
-`AcpSessionHistory` → `IStorageService` GLOBAL scope，`key='acp.sessionHistory'`，`schemaVersion=1`：
+`AcpSessionHistory` → `IStorageService`，`key='acp.sessionHistory'`，`schemaVersion=2`，**双桶 scope 策略**：
+
+- 有 workspace 打开 → `StorageScope.WORKSPACE`（每个工作区独立的 100 条 LRU 历史）
+- 空窗口 → `StorageScope.GLOBAL` 兜底桶
+- workspace 切换由 `IStorageService.onDidChangeWorkspaceScope` 驱动：服务内 `_reload()` 刷新 in-memory 状态，AcpSessionService 联动关闭所有 live sessions 并从新桶尝试恢复 `acp.activeSessionHistoryId`
+
+`AcpAgentDefaults`（`key='acp.agentDefaults'`）同样的双桶策略——workspace-A 选过的 `MODEL=opus` 不会污染 workspace-B 的新会话默认值。
 
 ```
-{ schemaVersion: 1, entries: [{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt }] }
+{ schemaVersion: 2, entries: [{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt, configOptions? }] }
 ```
 
 **只存字符串元数据**——无 `ContentBlock` / `SessionUpdate` 落盘。恢复时拿 `sessionIdOnAgent` 调 `loadSession` 让 agent 重放历史。
+
+升级路径：旧版本 GLOBAL 桶里的 `acp.sessionHistory` / `acp.agentDefaults` 由 `MainStorageService._purgeLegacyWorkspaceKeys()` 启动时一次性 purge——不迁移，按用户决策直接丢弃。
 
 ## SDK 关键约定（易踩坑清单）
 

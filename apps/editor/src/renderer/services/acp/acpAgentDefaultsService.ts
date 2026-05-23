@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpAgentDefaultsService — per-agent global default for `configOptions`.
+ *  AcpAgentDefaultsService — per-agent default for `configOptions`.
  *
  *  Distinct from `AcpSessionHistoryService`: history caches per-session
  *  selections (so resuming one specific conversation restores its MODEL/MODE);
@@ -9,14 +9,20 @@
  *  the user picked. Different lifetimes (history can be cleared without
  *  blowing away the user's MODEL/MODE preference), so we keep separate
  *  storage keys.
+ *
+ *  Scope follows the same workspace-first + global-fallback policy as session
+ *  history: each workspace keeps its own per-agent defaults so a `MODEL=opus`
+ *  choice in workspace-A doesn't seep into workspace-B's brand new sessions.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
   Disposable,
+  Event,
   IStorageService,
   ILoggerService,
   ITelemetryService,
+  IWorkspaceService,
   StorageScope,
   observableValue,
   type ILogger,
@@ -42,6 +48,7 @@ export const IAcpAgentDefaultsService =
 
 const STORAGE_KEY = 'acp.agentDefaults'
 const SCHEMA_VERSION = 1
+const INITIAL_LOAD_TIMEOUT_MS = 500
 
 interface PersistedShape {
   readonly schemaVersion: number
@@ -59,10 +66,15 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
   private _loaded = false
   private _loadPromise: Promise<void> | undefined
   private _writeTimer: ReturnType<typeof setTimeout> | undefined
+  /** Set while `_reload` is mid-swap so the debounced write doesn't fire into a half-built state. */
+  private _writeSuspended = false
+  /** The scope our current `_defaults` snapshot was loaded from; flush writes go here. */
+  private _currentLoadedScope: StorageScope | undefined
   private readonly _logger: ILogger
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
   ) {
@@ -75,12 +87,13 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
       'acp.agentDefaults',
       {},
     )
+    this._register(this._storage.onDidChangeWorkspaceScope(() => void this._reload()))
   }
 
   initialize(): Promise<void> {
     if (this._loaded) return Promise.resolve()
     if (this._loadPromise) return this._loadPromise
-    this._loadPromise = this._load()
+    this._loadPromise = this._scheduleInitialLoad()
     return this._loadPromise
   }
 
@@ -109,9 +122,42 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
 
   // -- internals ---------------------------------------------------------
 
-  private async _load(): Promise<void> {
+  private _currentScope(): StorageScope {
+    return this._workspace.current ? StorageScope.WORKSPACE : StorageScope.GLOBAL
+  }
+
+  private async _scheduleInitialLoad(): Promise<void> {
+    if (!this._workspace.current) {
+      await Promise.race([
+        Event.toPromise(this._storage.onDidChangeWorkspaceScope),
+        new Promise<void>((resolve) => setTimeout(resolve, INITIAL_LOAD_TIMEOUT_MS)),
+      ])
+    }
+    await this._loadFromScope(this._currentScope())
+  }
+
+  private async _reload(): Promise<void> {
+    this._writeSuspended = true
     try {
-      const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, StorageScope.GLOBAL)
+      if (this._writeTimer) {
+        clearTimeout(this._writeTimer)
+        this._writeTimer = undefined
+        await this._writeNow()
+      }
+      this._defaults = {}
+      this._currentLoadedScope = undefined
+      this._loaded = false
+      this._loadPromise = undefined
+      this._publish()
+      await this._loadFromScope(this._currentScope())
+    } finally {
+      this._writeSuspended = false
+    }
+  }
+
+  private async _loadFromScope(scope: StorageScope): Promise<void> {
+    try {
+      const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, scope)
       if (
         raw &&
         typeof raw === 'object' &&
@@ -123,6 +169,11 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
         const next: Record<string, Record<string, string>> = {}
         for (const [agentId, m] of Object.entries(raw.defaults)) {
           next[agentId] = { ...m }
+        }
+        // Merge: any defaults set in-memory before load completed win over the
+        // persisted row for the same agentId.
+        for (const [agentId, m] of Object.entries(this._defaults)) {
+          next[agentId] = { ...(next[agentId] ?? {}), ...m }
         }
         this._defaults = next
         this._publish()
@@ -137,6 +188,7 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
       this._logger.warn(`[acp] failed to load agent defaults: ${(err as Error).message}`)
     } finally {
       this._loaded = true
+      this._currentLoadedScope = scope
     }
   }
 
@@ -150,6 +202,7 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
   }
 
   private _scheduleWrite(): void {
+    if (this._writeSuspended) return
     if (this._writeTimer) return
     this._writeTimer = setTimeout(() => {
       this._writeTimer = undefined
@@ -158,12 +211,13 @@ export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefa
   }
 
   private async _writeNow(): Promise<void> {
+    const scope = this._currentLoadedScope ?? this._currentScope()
     try {
       const payload: PersistedShape = {
         schemaVersion: SCHEMA_VERSION,
         defaults: this._defaults,
       }
-      await this._storage.set(STORAGE_KEY, payload, StorageScope.GLOBAL)
+      await this._storage.set(STORAGE_KEY, payload, scope)
     } catch (err) {
       this._telemetry.publicLogError('acp.agent_defaults_persist_failed', {
         error: (err as Error).message,

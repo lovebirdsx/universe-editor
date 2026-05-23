@@ -14,7 +14,6 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   ConfigurationService,
   Emitter,
-  Event,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
@@ -172,7 +171,15 @@ class StubPermissionHandler implements IAcpPermissionHandler {
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
   readonly store = new Map<string, unknown>()
-  readonly onDidChangeWorkspaceScope = Event.None
+  private readonly _onDidChangeWorkspaceScope = new Emitter<void>()
+  readonly onDidChangeWorkspaceScope = this._onDidChangeWorkspaceScope.event
+  constructor() {
+    // Mirror production behaviour: MainStorageService fires onDidChangeWorkspaceScope
+    // once on startup. Doing it on a microtask lets the history/defaults services
+    // subscribe first (via Event.toPromise) and avoids the 500ms cold-start timeout
+    // in _scheduleInitialLoad.
+    queueMicrotask(() => this._onDidChangeWorkspaceScope.fire())
+  }
   async get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
     return this.store.get(key) as T | undefined
   }
@@ -181,6 +188,9 @@ class FakeStorage implements IStorageService {
   }
   async remove(key: string): Promise<void> {
     this.store.delete(key)
+  }
+  fireWorkspaceScopeChange(): void {
+    this._onDidChangeWorkspaceScope.fire()
   }
 }
 
@@ -330,9 +340,15 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   const telemetry: ITelemetryService = new NoopTelemetryService()
   const notifications = new StubNotificationService()
   const storage = new FakeStorage()
-  const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+  const history = new AcpSessionHistoryService(
+    storage,
+    new FakeWorkspaceService(),
+    telemetry,
+    new StubLoggerService(),
+  )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
+    new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
   )
@@ -645,7 +661,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     const config: IConfigurationService = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
     const notifications = new StubNotificationService()
-    const history = new AcpSessionHistoryService(round1.storage, telemetry, new StubLoggerService())
+    const history = new AcpSessionHistoryService(
+      round1.storage,
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -658,7 +679,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       round1.storage,
-      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
+      new AcpAgentDefaultsService(
+        new FakeStorage(),
+        new FakeWorkspaceService(),
+        telemetry,
+        new StubLoggerService(),
+      ),
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -680,7 +706,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     const client = new FakeAcpClientService({ loadSessionResult: {} })
     const config: IConfigurationService = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
-    const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+    const history = new AcpSessionHistoryService(
+      storage,
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -693,7 +724,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
+      new AcpAgentDefaultsService(
+        new FakeStorage(),
+        new FakeWorkspaceService(),
+        telemetry,
+        new StubLoggerService(),
+      ),
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -711,7 +747,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     const config: IConfigurationService = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
     const notifications = new StubNotificationService()
-    const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+    const history = new AcpSessionHistoryService(
+      storage,
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -724,7 +765,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
+      new AcpAgentDefaultsService(
+        new FakeStorage(),
+        new FakeWorkspaceService(),
+        telemetry,
+        new StubLoggerService(),
+      ),
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -744,7 +790,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     const client = new FakeAcpClientService({ loadSessionResult: {} })
     const config: IConfigurationService = new ConfigurationService()
     const telemetry: ITelemetryService = new NoopTelemetryService()
-    const history = new AcpSessionHistoryService(storage, telemetry, new StubLoggerService())
+    const history = new AcpSessionHistoryService(
+      storage,
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+    )
     svc = new AcpSessionService(
       client,
       new FakeAgentRegistry(),
@@ -757,7 +808,12 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubLoggerService(),
       history,
       storage,
-      new AcpAgentDefaultsService(new FakeStorage(), telemetry, new StubLoggerService()),
+      new AcpAgentDefaultsService(
+        new FakeStorage(),
+        new FakeWorkspaceService(),
+        telemetry,
+        new StubLoggerService(),
+      ),
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

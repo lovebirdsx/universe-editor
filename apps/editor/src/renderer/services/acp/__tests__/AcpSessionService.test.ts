@@ -183,6 +183,7 @@ class FakeStorage implements IStorageService {
 function makeHistory(): AcpSessionHistoryService {
   return new AcpSessionHistoryService(
     new FakeStorage(),
+    new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
   )
@@ -191,6 +192,7 @@ function makeHistory(): AcpSessionHistoryService {
 function makeAgentDefaults(): AcpAgentDefaultsService {
   return new AcpAgentDefaultsService(
     new FakeStorage(),
+    new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
   )

@@ -10,17 +10,21 @@
  *  The conversation messages themselves stay on the agent side; we never try
  *  to mirror them locally.
  *
- *  Storage uses IStorageService at GLOBAL scope (history follows the user, not
- *  the workspace) under a single JSON value with a schema version so future
- *  shape changes can migrate forward without crashing on stale data.
+ *  Storage uses IStorageService with a workspace-first + global-fallback policy:
+ *  when a folder is open the entries live in WORKSPACE scope so each workspace
+ *  keeps its own history; with no folder open we read/write GLOBAL as a
+ *  fallback bucket. The schema version lets future shape changes migrate
+ *  forward without crashing on stale data.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
   Disposable,
+  Event,
   IStorageService,
   ILoggerService,
   ITelemetryService,
+  IWorkspaceService,
   StorageScope,
   observableValue,
   type ILogger,
@@ -79,6 +83,7 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 const STORAGE_KEY = 'acp.sessionHistory'
 const SCHEMA_VERSION = 2
 const MAX_ENTRIES = 100
+const INITIAL_LOAD_TIMEOUT_MS = 500
 
 interface PersistedShape {
   readonly schemaVersion: number
@@ -95,22 +100,28 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
   private _loadPromise: Promise<void> | undefined
   private _seq = 0
   private _writeTimer: ReturnType<typeof setTimeout> | undefined
+  /** Set while `_reload` is mid-swap so the debounced write doesn't fire into a half-built state. */
+  private _writeSuspended = false
+  /** The scope our current `_entries` snapshot was loaded from; flush writes go here. */
+  private _currentLoadedScope: StorageScope | undefined
   private readonly _logger: ILogger
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSessionHistory', name: 'ACP History' })
     this.entries = observableValue<readonly AcpSessionHistoryEntry[]>('acp.sessionHistory', [])
+    this._register(this._storage.onDidChangeWorkspaceScope(() => void this._reload()))
   }
 
   initialize(): Promise<void> {
     if (this._loaded) return Promise.resolve()
     if (this._loadPromise) return this._loadPromise
-    this._loadPromise = this._load()
+    this._loadPromise = this._scheduleInitialLoad()
     return this._loadPromise
   }
 
@@ -211,9 +222,55 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
 
   // -- internals ---------------------------------------------------------
 
-  private async _load(): Promise<void> {
+  private _currentScope(): StorageScope {
+    return this._workspace.current ? StorageScope.WORKSPACE : StorageScope.GLOBAL
+  }
+
+  /**
+   * `RendererWorkspaceService.current` is `null` at construction time and gets
+   * hydrated asynchronously; once hydrated, the storage layer fires
+   * `onDidChangeWorkspaceScope`. To avoid reading the wrong bucket on cold
+   * start we wait for either the first scope event or a short timeout (true
+   * empty-window case), then load whichever scope is correct at that point.
+   */
+  private async _scheduleInitialLoad(): Promise<void> {
+    if (!this._workspace.current) {
+      await Promise.race([
+        Event.toPromise(this._storage.onDidChangeWorkspaceScope),
+        new Promise<void>((resolve) => setTimeout(resolve, INITIAL_LOAD_TIMEOUT_MS)),
+      ])
+    }
+    await this._loadFromScope(this._currentScope())
+  }
+
+  /**
+   * Workspace switched: flush any pending write to the OLD bucket, clear state,
+   * and load from the NEW bucket. Writes are suspended in between so the
+   * debounced timer can't deposit half-built state into the wrong scope.
+   */
+  private async _reload(): Promise<void> {
+    this._writeSuspended = true
     try {
-      const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, StorageScope.GLOBAL)
+      if (this._writeTimer) {
+        clearTimeout(this._writeTimer)
+        this._writeTimer = undefined
+        // Flush to the OLD scope using _currentLoadedScope (set by the previous load).
+        await this._writeNow()
+      }
+      this._entries = []
+      this._currentLoadedScope = undefined
+      this._loaded = false
+      this._loadPromise = undefined
+      this._publish()
+      await this._loadFromScope(this._currentScope())
+    } finally {
+      this._writeSuspended = false
+    }
+  }
+
+  private async _loadFromScope(scope: StorageScope): Promise<void> {
+    try {
+      const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, scope)
       if (raw && typeof raw === 'object' && Array.isArray(raw.entries)) {
         const migrated = migrate(raw.schemaVersion, raw.entries)
         if (migrated) {
@@ -244,6 +301,7 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
       this._logger.warn(`[acp] failed to load session history: ${(err as Error).message}`)
     } finally {
       this._loaded = true
+      this._currentLoadedScope = scope
     }
   }
 
@@ -258,6 +316,7 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
   }
 
   private _scheduleWrite(): void {
+    if (this._writeSuspended) return
     if (this._writeTimer) return
     this._writeTimer = setTimeout(() => {
       this._writeTimer = undefined
@@ -266,12 +325,13 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
   }
 
   private async _writeNow(): Promise<void> {
+    const scope = this._currentLoadedScope ?? this._currentScope()
     try {
       const payload: PersistedShape = {
         schemaVersion: SCHEMA_VERSION,
         entries: this._entries,
       }
-      await this._storage.set(STORAGE_KEY, payload, StorageScope.GLOBAL)
+      await this._storage.set(STORAGE_KEY, payload, scope)
     } catch (err) {
       this._telemetry.publicLogError('acp.session_history_persist_failed', {
         error: (err as Error).message,

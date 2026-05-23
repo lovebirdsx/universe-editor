@@ -4,32 +4,74 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  Emitter,
   Event,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
   StorageScope,
+  URI,
   type ILogger,
   type ILoggerService,
   type IStorageService,
+  type IWorkspace,
+  type IWorkspaceService,
 } from '@universe-editor/platform'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
-  readonly store = new Map<string, unknown>()
-  readonly setCalls: Array<{ key: string; value: unknown; scope?: StorageScope }> = []
-  readonly onDidChangeWorkspaceScope = Event.None
-  async get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
-    return this.store.get(key) as T | undefined
+  readonly buckets = new Map<StorageScope, Map<string, unknown>>([
+    [StorageScope.GLOBAL, new Map()],
+    [StorageScope.WORKSPACE, new Map()],
+  ])
+  readonly setCalls: Array<{ key: string; value: unknown; scope: StorageScope }> = []
+  private readonly _onDidChangeWorkspaceScope = new Emitter<void>()
+  readonly onDidChangeWorkspaceScope = this._onDidChangeWorkspaceScope.event
+  async get<T = unknown>(
+    key: string,
+    scope: StorageScope = StorageScope.GLOBAL,
+  ): Promise<T | undefined> {
+    return this.buckets.get(scope)?.get(key) as T | undefined
   }
-  async set(key: string, value: unknown, scope?: StorageScope): Promise<void> {
-    this.store.set(key, value)
-    this.setCalls.push({ key, value, ...(scope !== undefined ? { scope } : {}) })
+  async set(key: string, value: unknown, scope: StorageScope = StorageScope.GLOBAL): Promise<void> {
+    this.buckets.get(scope)!.set(key, value)
+    this.setCalls.push({ key, value, scope })
   }
-  async remove(key: string): Promise<void> {
-    this.store.delete(key)
+  async remove(key: string, scope: StorageScope = StorageScope.GLOBAL): Promise<void> {
+    this.buckets.get(scope)!.delete(key)
   }
+  fireWorkspaceScopeChange(): void {
+    this._onDidChangeWorkspaceScope.fire()
+  }
+  /** Convenience for asserting against the legacy "single store" shape. */
+  get store(): Map<string, unknown> {
+    return this.buckets.get(StorageScope.WORKSPACE)!
+  }
+}
+
+class FakeWorkspaceService implements IWorkspaceService {
+  declare readonly _serviceBrand: undefined
+  private _current: IWorkspace | null
+  readonly recent = []
+  readonly onDidChangeRecent = Event.None
+  readonly onDidChangeWorkspace = Event.None
+  constructor(initial: IWorkspace | null = makeFakeWorkspace('/work')) {
+    this._current = initial
+  }
+  get current(): IWorkspace | null {
+    return this._current
+  }
+  setCurrent(w: IWorkspace | null): void {
+    this._current = w
+  }
+  async openFolder(): Promise<void> {}
+  async closeFolder(): Promise<void> {}
+  async clearRecent(): Promise<void> {}
+}
+
+function makeFakeWorkspace(path: string): IWorkspace {
+  return { folder: URI.file(path), name: path }
 }
 
 class StubLoggerService implements ILoggerService {
@@ -43,16 +85,25 @@ class StubLoggerService implements ILoggerService {
   }
 }
 
-function makeService(storage: FakeStorage = new FakeStorage()): {
+interface MakeOptions {
+  storage?: FakeStorage
+  workspace?: FakeWorkspaceService
+}
+
+function makeService(opts: MakeOptions = {}): {
   svc: AcpAgentDefaultsService
   storage: FakeStorage
+  workspace: FakeWorkspaceService
 } {
+  const storage = opts.storage ?? new FakeStorage()
+  const workspace = opts.workspace ?? new FakeWorkspaceService()
   const svc = new AcpAgentDefaultsService(
     storage,
+    workspace,
     new NoopTelemetryService(),
     new StubLoggerService(),
   )
-  return { svc, storage }
+  return { svc, storage, workspace }
 }
 
 async function flushWrite(): Promise<void> {
@@ -137,7 +188,7 @@ describe('AcpAgentDefaultsService — persistence', () => {
     expect(storage.setCalls.length).toBe(1)
     const call = storage.setCalls[0]!
     expect(call.key).toBe('acp.agentDefaults')
-    expect(call.scope).toBe(StorageScope.GLOBAL)
+    expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; defaults: unknown }
     expect(persisted.schemaVersion).toBe(1)
     expect(persisted.defaults).toEqual({ 'claude-code': { model: 'A' } })
@@ -163,7 +214,7 @@ describe('AcpAgentDefaultsService — persistence', () => {
   })
 
   it('hydrates from storage on initialize()', async () => {
-    storage.store.set('acp.agentDefaults', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.agentDefaults', {
       schemaVersion: 1,
       defaults: { 'claude-code': { model: 'A', thought_level: 'high' } },
     })
@@ -172,7 +223,7 @@ describe('AcpAgentDefaultsService — persistence', () => {
   })
 
   it('ignores unknown schemaVersion (fails closed, empty map)', async () => {
-    storage.store.set('acp.agentDefaults', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.agentDefaults', {
       schemaVersion: 999,
       defaults: { a: { k: 'v' } },
     })
@@ -181,7 +232,7 @@ describe('AcpAgentDefaultsService — persistence', () => {
   })
 
   it('rejects malformed defaults (non-string values)', async () => {
-    storage.store.set('acp.agentDefaults', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.agentDefaults', {
       schemaVersion: 1,
       defaults: { a: { k: 123 } },
     })
@@ -191,11 +242,55 @@ describe('AcpAgentDefaultsService — persistence', () => {
 
   it('initialize() is idempotent — second call does not re-read', async () => {
     await svc.initialize()
-    storage.store.set('acp.agentDefaults', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.agentDefaults', {
       schemaVersion: 1,
       defaults: { late: { k: 'v' } },
     })
     await svc.initialize()
     expect(svc.getDefaults('late')).toEqual({})
+  })
+})
+
+describe('AcpAgentDefaultsService — workspace scope', () => {
+  it('with no workspace: falls back to GLOBAL once the scope event fires', async () => {
+    const storage = new FakeStorage()
+    const workspace = new FakeWorkspaceService(null)
+    const { svc } = makeService({ storage, workspace })
+    try {
+      const initPromise = svc.initialize()
+      storage.fireWorkspaceScopeChange()
+      await initPromise
+      svc.setDefault('a', 'k', 'v')
+      await flushWrite()
+      expect(storage.setCalls.at(-1)?.scope).toBe(StorageScope.GLOBAL)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('workspace swap reloads defaults from the new bucket', async () => {
+    const storage = new FakeStorage()
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.agentDefaults', {
+      schemaVersion: 1,
+      defaults: { 'claude-code': { model: 'A' } },
+    })
+    const workspace = new FakeWorkspaceService(makeFakeWorkspace('/work-a'))
+    const { svc } = makeService({ storage, workspace })
+    try {
+      await svc.initialize()
+      expect(svc.getDefaults('claude-code')).toEqual({ model: 'A' })
+
+      // Simulate workspace B: clear bucket and seed different data, then fire event.
+      storage.buckets.get(StorageScope.WORKSPACE)!.clear()
+      storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.agentDefaults', {
+        schemaVersion: 1,
+        defaults: { 'claude-code': { model: 'B' } },
+      })
+      storage.fireWorkspaceScopeChange()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(svc.getDefaults('claude-code')).toEqual({ model: 'B' })
+    } finally {
+      svc.dispose()
+    }
   })
 })

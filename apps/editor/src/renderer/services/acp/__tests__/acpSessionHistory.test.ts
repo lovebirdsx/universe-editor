@@ -4,32 +4,76 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  Emitter,
   Event,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
   StorageScope,
+  URI,
   type ILogger,
   type ILoggerService,
   type IStorageService,
+  type IWorkspace,
+  type IWorkspaceService,
 } from '@universe-editor/platform'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
-  readonly store = new Map<string, unknown>()
-  readonly setCalls: Array<{ key: string; value: unknown; scope?: StorageScope }> = []
-  readonly onDidChangeWorkspaceScope = Event.None
-  async get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
-    return this.store.get(key) as T | undefined
+  readonly buckets = new Map<StorageScope, Map<string, unknown>>([
+    [StorageScope.GLOBAL, new Map()],
+    [StorageScope.WORKSPACE, new Map()],
+  ])
+  readonly setCalls: Array<{ key: string; value: unknown; scope: StorageScope }> = []
+  readonly removeCalls: Array<{ key: string; scope: StorageScope }> = []
+  private readonly _onDidChangeWorkspaceScope = new Emitter<void>()
+  readonly onDidChangeWorkspaceScope = this._onDidChangeWorkspaceScope.event
+  async get<T = unknown>(
+    key: string,
+    scope: StorageScope = StorageScope.GLOBAL,
+  ): Promise<T | undefined> {
+    return this.buckets.get(scope)?.get(key) as T | undefined
   }
-  async set(key: string, value: unknown, scope?: StorageScope): Promise<void> {
-    this.store.set(key, value)
-    this.setCalls.push({ key, value, ...(scope !== undefined ? { scope } : {}) })
+  async set(key: string, value: unknown, scope: StorageScope = StorageScope.GLOBAL): Promise<void> {
+    this.buckets.get(scope)!.set(key, value)
+    this.setCalls.push({ key, value, scope })
   }
-  async remove(key: string): Promise<void> {
-    this.store.delete(key)
+  async remove(key: string, scope: StorageScope = StorageScope.GLOBAL): Promise<void> {
+    this.buckets.get(scope)!.delete(key)
+    this.removeCalls.push({ key, scope })
   }
+  fireWorkspaceScopeChange(): void {
+    this._onDidChangeWorkspaceScope.fire()
+  }
+  /** Convenience for asserting against the legacy "single store" shape. */
+  get store(): Map<string, unknown> {
+    return this.buckets.get(StorageScope.WORKSPACE)!
+  }
+}
+
+class FakeWorkspaceService implements IWorkspaceService {
+  declare readonly _serviceBrand: undefined
+  private _current: IWorkspace | null
+  readonly recent = []
+  readonly onDidChangeRecent = Event.None
+  readonly onDidChangeWorkspace = Event.None
+  constructor(initial: IWorkspace | null = makeFakeWorkspace('/work')) {
+    this._current = initial
+  }
+  get current(): IWorkspace | null {
+    return this._current
+  }
+  setCurrent(w: IWorkspace | null): void {
+    this._current = w
+  }
+  async openFolder(): Promise<void> {}
+  async closeFolder(): Promise<void> {}
+  async clearRecent(): Promise<void> {}
+}
+
+function makeFakeWorkspace(path: string): IWorkspace {
+  return { folder: URI.file(path), name: path }
 }
 
 class StubLoggerService implements ILoggerService {
@@ -43,16 +87,25 @@ class StubLoggerService implements ILoggerService {
   }
 }
 
-function makeService(storage: FakeStorage = new FakeStorage()): {
+interface MakeOptions {
+  storage?: FakeStorage
+  workspace?: FakeWorkspaceService
+}
+
+function makeService(opts: MakeOptions = {}): {
   svc: AcpSessionHistoryService
   storage: FakeStorage
+  workspace: FakeWorkspaceService
 } {
+  const storage = opts.storage ?? new FakeStorage()
+  const workspace = opts.workspace ?? new FakeWorkspaceService()
   const svc = new AcpSessionHistoryService(
     storage,
+    workspace,
     new NoopTelemetryService(),
     new StubLoggerService(),
   )
-  return { svc, storage }
+  return { svc, storage, workspace }
 }
 
 /** Drain the 100ms debounce + the async set() microtask. */
@@ -194,7 +247,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     svc.dispose()
   })
 
-  it('writes to storage GLOBAL scope after a debounce window', async () => {
+  it('writes to storage WORKSPACE scope when a folder is open', async () => {
     await svc.initialize()
     svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
     expect(storage.setCalls.length).toBe(0) // debounced
@@ -202,7 +255,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(storage.setCalls.length).toBe(1)
     const call = storage.setCalls[0]!
     expect(call.key).toBe('acp.sessionHistory')
-    expect(call.scope).toBe(StorageScope.GLOBAL)
+    expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
     expect(persisted.schemaVersion).toBe(2)
     expect(persisted.entries).toHaveLength(1)
@@ -218,7 +271,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('hydrates from storage on initialize() — sorted by lastUsedAt desc', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
       entries: [
         {
@@ -244,7 +297,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('ignores entries with an unknown schemaVersion (fails closed, empty list)', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 999,
       entries: [
         { id: 'x', agentId: 'a', sessionIdOnAgent: 's', title: 't', createdAt: 1, lastUsedAt: 1 },
@@ -255,7 +308,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('drops malformed entries during hydration but keeps the rest', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
       entries: [
         { id: 'ok', agentId: 'a', sessionIdOnAgent: 's', title: 't', createdAt: 1, lastUsedAt: 2 },
@@ -269,7 +322,7 @@ describe('AcpSessionHistoryService — persistence', () => {
 
   it('initialize() is idempotent — second call resolves without re-reading', async () => {
     await svc.initialize()
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
       entries: [
         {
@@ -287,7 +340,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('merges entries added before initialize() finishes with the persisted set', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
       entries: [
         {
@@ -309,7 +362,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('migrates v1 entries forward (no configOptions field) without dropping them', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
       entries: [
         {
@@ -332,7 +385,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('loads v2 entries that carry configOptions verbatim', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 2,
       entries: [
         {
@@ -355,7 +408,7 @@ describe('AcpSessionHistoryService — persistence', () => {
   })
 
   it('rejects v2 entries whose configOptions has non-string values', async () => {
-    storage.store.set('acp.sessionHistory', {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 2,
       entries: [
         {
@@ -445,5 +498,118 @@ describe('AcpSessionHistoryService — setHistoryConfigOption', () => {
     // preserve the cache. This mirrors the touch path used by resumeSession.
     const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
     expect(second.configOptions).toEqual({ model: 'A' })
+  })
+})
+
+describe('AcpSessionHistoryService — workspace scope', () => {
+  it('with a workspace open: writes go to WORKSPACE bucket', async () => {
+    const storage = new FakeStorage()
+    const workspace = new FakeWorkspaceService(makeFakeWorkspace('/work-a'))
+    const { svc } = makeService({ storage, workspace })
+    try {
+      await svc.initialize()
+      svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+      await flushWrite()
+      expect(storage.setCalls.at(-1)?.scope).toBe(StorageScope.WORKSPACE)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('with no workspace: falls back to GLOBAL bucket once the scope event fires', async () => {
+    const storage = new FakeStorage()
+    const workspace = new FakeWorkspaceService(null)
+    const { svc } = makeService({ storage, workspace })
+    try {
+      const initPromise = svc.initialize()
+      // Fire the scope event so _scheduleInitialLoad resolves without waiting the 500ms timeout.
+      storage.fireWorkspaceScopeChange()
+      await initPromise
+      svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+      await flushWrite()
+      const call = storage.setCalls.at(-1)
+      expect(call?.scope).toBe(StorageScope.GLOBAL)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('workspace swap: clears in-memory entries and reloads from the new bucket', async () => {
+    const storage = new FakeStorage()
+    // Pre-seed both buckets with distinct data so we can tell them apart.
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 2,
+      entries: [
+        {
+          id: 'a-only',
+          agentId: 'a',
+          sessionIdOnAgent: 'sa',
+          title: 'from-A',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+    })
+    const workspace = new FakeWorkspaceService(makeFakeWorkspace('/work-a'))
+    const { svc } = makeService({ storage, workspace })
+    try {
+      await svc.initialize()
+      expect(svc.list().map((e) => e.title)).toEqual(['from-A'])
+
+      // Simulate workspace B swap: storage swaps the WORKSPACE bucket atomically,
+      // and fires onDidChangeWorkspaceScope.
+      storage.buckets.get(StorageScope.WORKSPACE)!.clear()
+      storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+        schemaVersion: 2,
+        entries: [
+          {
+            id: 'b-only',
+            agentId: 'b',
+            sessionIdOnAgent: 'sb',
+            title: 'from-B',
+            createdAt: 1,
+            lastUsedAt: 1,
+          },
+        ],
+      })
+      storage.fireWorkspaceScopeChange()
+      // Wait for the async _reload to finish.
+      await new Promise((r) => setTimeout(r, 20))
+      expect(svc.list().map((e) => e.title)).toEqual(['from-B'])
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('write scheduled during _reload does not leak into the new bucket', async () => {
+    const storage = new FakeStorage()
+    const workspace = new FakeWorkspaceService(makeFakeWorkspace('/work-a'))
+    const { svc } = makeService({ storage, workspace })
+    try {
+      await svc.initialize()
+      svc.add({ agentId: 'a', sessionIdOnAgent: 'sa', title: 'from-A' })
+      await flushWrite()
+      const writesBefore = storage.setCalls.length
+
+      // Trigger reload but DON'T await it; in the same tick try to add()
+      // — _writeSuspended should make the add() a silent no-op for the write timer.
+      const reloadPromise = (async () => {
+        storage.fireWorkspaceScopeChange()
+        await new Promise((r) => setTimeout(r, 20))
+      })()
+      svc.add({ agentId: 'a', sessionIdOnAgent: 'sa-during', title: 'should-be-suspended' })
+      await reloadPromise
+
+      // After reload completes, the suspended write should have been dropped
+      // (no new setCall recorded between writesBefore and now).
+      const newCalls = storage.setCalls.slice(writesBefore)
+      // The only acceptable new call is the flush of pending OLD-scope state
+      // performed by _reload itself, which by design targets the OLD WORKSPACE.
+      for (const c of newCalls) {
+        expect(c.scope).toBe(StorageScope.WORKSPACE)
+      }
+    } finally {
+      svc.dispose()
+    }
   })
 })

@@ -10,7 +10,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ConfigurationService,
   Emitter,
-  Event,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
@@ -163,7 +162,15 @@ class StubPermissionHandler implements IAcpPermissionHandler {
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
   readonly store = new Map<string, unknown>()
-  readonly onDidChangeWorkspaceScope = Event.None
+  private readonly _onDidChangeWorkspaceScope = new Emitter<void>()
+  readonly onDidChangeWorkspaceScope = this._onDidChangeWorkspaceScope.event
+  constructor() {
+    // Mirror production behaviour: MainStorageService fires onDidChangeWorkspaceScope
+    // once on startup. Doing it on a microtask lets the history/defaults services
+    // subscribe first (via Event.toPromise) and avoids the 500ms cold-start timeout
+    // in _scheduleInitialLoad.
+    queueMicrotask(() => this._onDidChangeWorkspaceScope.fire())
+  }
   async get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
     return this.store.get(key) as T | undefined
   }
@@ -325,11 +332,13 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   const telemetry: ITelemetryService = new NoopTelemetryService()
   const history = new AcpSessionHistoryService(
     new FakeStorage(),
+    new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
+    new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
   )

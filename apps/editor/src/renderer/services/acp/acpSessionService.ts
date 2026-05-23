@@ -786,8 +786,12 @@ export class AcpSessionService
    * loop doesn't keep re-firing the lazy resume.
    */
   private _pendingRestoreHistoryId: string | undefined
-  /** Resolves once `_loadPendingRestore()` has hydrated `_pendingRestoreHistoryId`. */
-  private readonly _loadPendingRestorePromise: Promise<void>
+  /**
+   * Resolves once `_loadPendingRestore()` has hydrated `_pendingRestoreHistoryId`.
+   * Mutable so we can re-run the restore after a workspace swap pulls in a
+   * different `acp.activeSessionHistoryId` from the new bucket.
+   */
+  private _loadPendingRestorePromise: Promise<void>
   /** While true, the activeSessionId autorun skips writing to storage. */
   private _suspendActivePersist = false
 
@@ -826,6 +830,10 @@ export class AcpSessionService
         }
       }),
     )
+    // Workspace swap: close all live sessions and re-read the active-session
+    // pointer from the new bucket. The history / defaults services react to the
+    // same event independently.
+    this._register(this._storage.onDidChangeWorkspaceScope(() => void this._onWorkspaceSwap()))
   }
 
   private async _loadPendingRestore(): Promise<void> {
@@ -840,6 +848,47 @@ export class AcpSessionService
     } catch (err) {
       this._logger.warn(`[acp] failed to read pending restore: ${(err as Error).message}`)
     }
+  }
+
+  /**
+   * The user switched (or closed) the workspace folder. All live sessions point
+   * at agent processes spawned with the OLD cwd, so we tear them down and
+   * re-read the active-session pointer from the new bucket. Order is critical:
+   *
+   *  1. `_suspendActivePersist` MUST go up *before* clearing `activeSession`,
+   *     otherwise the autorun fires while activeSession is undefined and
+   *     writes "remove" into the new bucket — deleting whatever active-id the
+   *     new workspace actually had stored.
+   *  2. Clear observable state in a single `transaction()` so the UI sees one
+   *     atomic empty-state.
+   *  3. Fire-and-forget close on each session — `IAcpHostService.stop(handle)`
+   *     kills the child process asynchronously.
+   *  4. Re-run `_loadPendingRestore()` against the new scope (workspace OR
+   *     fallback global), then attempt restore.
+   */
+  private async _onWorkspaceSwap(): Promise<void> {
+    this._suspendActivePersist = true
+    const oldSessions = this._sessions
+    transaction((tx) => {
+      this._sessions = []
+      this.sessions.set(this._sessions, tx)
+      this.activeSessionId.set(undefined, tx)
+      this.activeSession.set(undefined, tx)
+    })
+    this._byAgentSessionId.clear()
+    this._pendingRestoreHistoryId = undefined
+    for (const session of oldSessions) {
+      void session.close().catch((err) => {
+        this._logger.warn(`[acp] close on workspace swap failed: ${(err as Error).message}`)
+      })
+    }
+    this._loadPendingRestorePromise = this._loadPendingRestore()
+    try {
+      await this._loadPendingRestorePromise
+    } finally {
+      this._suspendActivePersist = false
+    }
+    void this.tryRestoreActiveSession()
   }
 
   async tryRestoreActiveSession(): Promise<void> {
