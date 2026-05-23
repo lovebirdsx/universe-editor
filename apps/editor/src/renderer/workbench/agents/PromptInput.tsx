@@ -92,7 +92,10 @@ export function PromptInput({ session }: { session: IAcpSession }) {
   const mentionOpen = mentionQuery !== null && !mentionDismissed && workspaceRoot !== undefined
 
   const acceptSlash = (cmd: AvailableCommand): void => {
-    setText(`${cmd.name} `)
+    // ACP schema 规定 name 不带 `/`（例如 `create_plan`），但部分实现会带上 —
+    // 两种形态都要还原成 `/<name>`，否则提交给 agent 时丢掉 `/`，被当作普通文本。
+    const name = cmd.name.startsWith('/') ? cmd.name : `/${cmd.name}`
+    setText(`${name} `)
     setSlashDismissed(true)
     setSlashIndex(0)
     // Caret will be re-synced by the next textarea event.

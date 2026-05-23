@@ -155,9 +155,9 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
 }
 
 const COMMANDS: readonly AvailableCommand[] = [
-  { name: '/help', description: 'help' },
-  { name: '/diff', description: 'show diff', input: { hint: 'path' } },
-  { name: '/clear', description: 'reset' },
+  { name: 'help', description: 'help' },
+  { name: 'diff', description: 'show diff', input: { hint: 'path' } },
+  { name: 'clear', description: 'reset' },
 ]
 
 function getTextarea(): HTMLTextAreaElement {
@@ -275,6 +275,30 @@ describe('PromptInput — slash keyboard navigation', () => {
     const options = screen.getAllByRole('option')
     fireEvent.mouseDown(options[2]!)
     expect(ta.value).toBe('/clear ')
+  })
+
+  it('accepts a command name that already has a leading slash without doubling it', () => {
+    // 部分 agent 实现会把 `/` 写进 name 字段（schema 推荐不带）。两种形态都要还原成 `/<name> `。
+    const prefixed: readonly AvailableCommand[] = [{ name: '/diff', description: 'show diff' }]
+    renderWithServices(<PromptInput session={makeSession({ commands: prefixed })} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '/' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(ta.value).toBe('/diff ')
+  })
+
+  it('popover always renders names with a leading slash regardless of fixture form', () => {
+    const mixed: readonly AvailableCommand[] = [
+      { name: 'help', description: 'h' },
+      { name: '/diff', description: 'd' },
+    ]
+    renderWithServices(<PromptInput session={makeSession({ commands: mixed })} />)
+    fireEvent.change(getTextarea(), { target: { value: '/' } })
+    const options = screen.getAllByRole('option')
+    expect(options[0]?.textContent).toContain('/help')
+    expect(options[1]?.textContent).toContain('/diff')
+    // 不能出现 //
+    expect(options[1]?.textContent).not.toContain('//')
   })
 })
 

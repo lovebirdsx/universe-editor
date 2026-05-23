@@ -88,7 +88,9 @@ export function SlashCommandPopover({
           }}
           onMouseEnter={() => onHover(i)}
         >
-          <span className={styles['slashName']}>{c.name}</span>
+          <span className={styles['slashName']}>
+            {c.name.startsWith('/') ? c.name : `/${c.name}`}
+          </span>
           {c.input ? <span className={styles['slashHint']}>{`<${c.input.hint}>`}</span> : null}
           <span className={styles['slashDesc']}>{c.description}</span>
         </div>
