@@ -124,6 +124,7 @@ function EditorTab({
   input,
   isActive,
   isGroupActive,
+  hasInputFocus,
   isPreview,
   onActivate,
   onPin,
@@ -135,6 +136,7 @@ function EditorTab({
   input: EditorInput
   isActive: boolean
   isGroupActive: boolean
+  hasInputFocus: boolean
   isPreview: boolean
   onActivate: () => void
   onPin: () => void
@@ -153,10 +155,11 @@ function EditorTab({
     sourceGroupId: groupId,
   })
 
+  const fullyActive = isActive && isGroupActive && hasInputFocus
   const tabClass = [
     styles['tab'],
-    isActive && isGroupActive ? styles['active'] : '',
-    isActive && !isGroupActive ? styles['activeUnfocused'] : '',
+    fullyActive ? styles['active'] : '',
+    isActive && !fullyActive ? styles['activeUnfocused'] : '',
     isPreview ? (styles['preview'] ?? '') : '',
   ]
     .filter(Boolean)
@@ -220,6 +223,8 @@ export function EditorGroupView({
   const bodyDropPosRef = useRef<{ x: number; y: number } | null>(null)
   const [canScrollLeft, setCanScrollLeft] = useState(false)
   const [canScrollRight, setCanScrollRight] = useState(false)
+  /** Whether DOM focus is currently inside the editor body (Monaco). Drives tab highlight. */
+  const [hasInputFocus, setHasInputFocus] = useState(false)
 
   const { dropTargetProps } = useDropTarget<{ editor: EditorInput; sourceGroupId: number }>(
     ({ editor, sourceGroupId }) => {
@@ -343,6 +348,26 @@ export function EditorGroupView({
     }
   }, [])
 
+  // Track real DOM focus inside the editor body so we can mute the tab highlight
+  // when the user is interacting with another part of the workbench (sidebar,
+  // panel, etc.). `activeGroup` alone stays active across such focus moves.
+  useEffect(() => {
+    const el = bodyRef.current
+    if (!el) return
+    const onFocusIn = () => setHasInputFocus(true)
+    const onFocusOut = (e: FocusEvent) => {
+      if (!el.contains(e.relatedTarget as Node | null)) setHasInputFocus(false)
+    }
+    el.addEventListener('focusin', onFocusIn)
+    el.addEventListener('focusout', onFocusOut)
+    // Initialize from current document state in case we mount with focus already inside.
+    setHasInputFocus(el.contains(document.activeElement))
+    return () => {
+      el.removeEventListener('focusin', onFocusIn)
+      el.removeEventListener('focusout', onFocusOut)
+    }
+  }, [])
+
   const scrollTabs = (direction: 'left' | 'right') => {
     tabBarRef.current?.scrollBy({ left: direction === 'left' ? -150 : 150, behavior: 'smooth' })
   }
@@ -424,6 +449,7 @@ export function EditorGroupView({
                 groupId={group.id}
                 isActive={group.activeEditor?.id === e.id}
                 isGroupActive={isActiveGroup}
+                hasInputFocus={hasInputFocus}
                 isPreview={group.previewEditor === e}
                 showDropIndicator={dropIndex === idx}
                 onActivate={() => group.setActive(e)}
