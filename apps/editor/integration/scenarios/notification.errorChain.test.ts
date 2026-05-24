@@ -10,14 +10,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { LogLevel } from '@universe-editor/platform'
 import { createTestWorkbench, type TestWorkbench } from '../fixtures/createTestWorkbench.js'
 
-function todayStr(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
-
 describe('notification.errorChain (integration)', () => {
   let wb: TestWorkbench
 
@@ -37,7 +29,7 @@ describe('notification.errorChain (integration)', () => {
 
     await new Promise((r) => setTimeout(r, 250))
 
-    const logFile = join(wb.userDataDir, 'logs', todayStr(), 'test-error.log')
+    const logFile = join(wb.userDataDir, 'logs', wb.logService.getSessionId(), 'test-error.log')
     const content = await fs.readFile(logFile, 'utf8')
     expect(content).toContain('something went wrong')
     expect(content).toContain('[error]')
@@ -52,7 +44,7 @@ describe('notification.errorChain (integration)', () => {
 
     await new Promise((r) => setTimeout(r, 250))
 
-    const logFile = join(wb.userDataDir, 'logs', todayStr(), 'test-multi.log')
+    const logFile = join(wb.userDataDir, 'logs', wb.logService.getSessionId(), 'test-multi.log')
     const content = await fs.readFile(logFile, 'utf8')
     expect(content).toContain('error one')
     expect(content).toContain('error two')
@@ -68,7 +60,7 @@ describe('notification.errorChain (integration)', () => {
 
     await new Promise((r) => setTimeout(r, 250))
 
-    const logFile = join(wb.userDataDir, 'logs', todayStr(), 'test-filter.log')
+    const logFile = join(wb.userDataDir, 'logs', wb.logService.getSessionId(), 'test-filter.log')
     const content = await fs.readFile(logFile, 'utf8')
     expect(content).not.toContain('should be filtered')
     expect(content).toContain('should appear')

@@ -34,10 +34,10 @@ function makeLogFiles(
     _serviceBrand: undefined,
     listLogFiles: vi.fn().mockResolvedValue(
       descriptors.map((d) => ({
-        id: `2026-05-21/${d.channelId}.log`,
+        id: `20260521T100000/${d.channelId}.log`,
         name: d.name,
         channelId: d.channelId,
-        date: '2026-05-21',
+        sessionStartedAt: '2026-05-21 10:00:00',
         size: 0,
         modifiedTime: 0,
       })),

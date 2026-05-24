@@ -124,7 +124,7 @@ void app.whenReady().then(async () => {
   await windows.createWindow()
 
   setTimeout(() => {
-    void logMainService.cleanupOldLogs().catch((err) => {
+    void logMainService.cleanupOldLogs(20).catch((err) => {
       mainLogger.warn(`cleanupOldLogs failed: ${(err as Error).message}`)
     })
   }, 5000)

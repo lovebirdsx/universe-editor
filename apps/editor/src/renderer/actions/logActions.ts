@@ -41,6 +41,12 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`
 }
 
+function formatTimeOfDay(ms: number): string {
+  const d = new Date(ms)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 function channelNameForLog(descriptor: LogFileDescriptor): string {
   return descriptor.name
 }
@@ -123,7 +129,7 @@ export class ShowLogsAction extends Action2 {
     const items: LogFileQuickPickItem[] = descriptors.map((descriptor) => ({
       id: descriptor.id,
       label: descriptor.name,
-      description: `${descriptor.date} - ${formatBytes(descriptor.size)}`,
+      description: `${formatTimeOfDay(descriptor.modifiedTime)} - ${formatBytes(descriptor.size)}`,
       detail: descriptor.channelId,
       descriptor,
     }))

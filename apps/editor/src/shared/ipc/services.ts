@@ -58,7 +58,8 @@ export interface LogFileDescriptor {
   readonly id: string
   readonly name: string
   readonly channelId: string
-  readonly date: string
+  /** Human-readable timestamp (YYYY-MM-DD HH:mm:ss) of when the current session was started. */
+  readonly sessionStartedAt: string
   readonly size: number
   readonly modifiedTime: number
 }

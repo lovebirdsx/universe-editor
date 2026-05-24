@@ -29,10 +29,10 @@ import {
 } from '../logActions.js'
 
 const descriptor: LogFileDescriptor = {
-  id: '2026-05-21/main.log',
+  id: '20260521T100000/main.log',
   name: 'Main',
   channelId: 'main',
-  date: '2026-05-21',
+  sessionStartedAt: '2026-05-21 10:00:00',
   size: 12,
   modifiedTime: 1,
 }
@@ -54,7 +54,7 @@ function baseLogFilesService() {
     _serviceBrand: undefined,
     listLogFiles: vi.fn().mockResolvedValue([descriptor]),
     readLogFile: vi.fn().mockResolvedValue('hello log'),
-    resolveLogPath: vi.fn().mockResolvedValue('/userData/logs/2026-05-21/main.log'),
+    resolveLogPath: vi.fn().mockResolvedValue('/userData/logs/20260521T100000/main.log'),
     openLogsFolder: vi.fn().mockResolvedValue(undefined),
     setLogLevel: vi.fn().mockResolvedValue(undefined),
     getLogLevel: vi.fn().mockResolvedValue(LogLevel.Info),

@@ -1,8 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Main-process ILoggerService: writes per-channel log files under
- *  <userData>/logs/<YYYY-MM-DD>/{channel}.log, with daily rotation and a
- *  10 MB per-file size cap.
+ *  <userData>/logs/<sessionId>/{channel}.log. Each process launch picks a fresh
+ *  sessionId (YYYYMMDDTHHmmss) so the Output panel only ever shows logs from
+ *  this run; historical sessions are retained on disk (capped at the latest N)
+ *  for post-mortem inspection.
  *--------------------------------------------------------------------------------------------*/
 
 import { app } from 'electron'
@@ -28,7 +30,7 @@ export interface LogAppendEvent {
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 const FLUSH_DEBOUNCE_MS = 150
 const MAX_BUFFER_LINES = 10000
-const DATE_DIR_RE = /^\d{4}-\d{2}-\d{2}$/
+export const SESSION_DIR_RE = /^\d{8}T\d{6}$/
 
 const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
   [LogLevel.Off]: 'off',
@@ -39,18 +41,30 @@ const LOG_LEVEL_LABELS: Record<LogLevel, string> = {
   [LogLevel.Error]: 'error',
 }
 
-function todayDateString(): string {
-  const d = new Date()
-  const y = d.getFullYear()
-  const m = String(d.getMonth() + 1).padStart(2, '0')
-  const day = String(d.getDate()).padStart(2, '0')
-  return `${y}-${m}-${day}`
+function pad2(n: number): string {
+  return String(n).padStart(2, '0')
+}
+
+function formatSessionId(d: Date): string {
+  return `${d.getFullYear()}${pad2(d.getMonth() + 1)}${pad2(d.getDate())}T${pad2(d.getHours())}${pad2(d.getMinutes())}${pad2(d.getSeconds())}`
+}
+
+function parseSessionId(name: string): number | null {
+  const m = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/.exec(name)
+  if (!m) return null
+  const [, y, mo, d, h, mi, s] = m
+  const t = new Date(Number(y), Number(mo) - 1, Number(d), Number(h), Number(mi), Number(s))
+  const ms = t.getTime()
+  return Number.isFinite(ms) ? ms : null
+}
+
+function formatSessionStartedAt(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`
 }
 
 class FileLogger extends AbstractLogger {
-  private _logPath: string
-  private _currentDate: string
-  private readonly _logDir: string
+  private readonly _logPath: string
+  private readonly _sessionDir: string
   private readonly _channelId: string
   private readonly _onChunk: (channelId: string, chunk: string) => void
   private _writeQueue: string[] = []
@@ -59,17 +73,16 @@ class FileLogger extends AbstractLogger {
   private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
 
   constructor(
-    logDir: string,
+    sessionDir: string,
     channelId: string,
     level: LogLevel,
     onChunk: (channelId: string, chunk: string) => void,
   ) {
     super(level)
-    this._logDir = logDir
+    this._sessionDir = sessionDir
     this._channelId = channelId
     this._onChunk = onChunk
-    this._currentDate = todayDateString()
-    this._logPath = join(logDir, this._currentDate, `${channelId}.log`)
+    this._logPath = join(sessionDir, `${channelId}.log`)
   }
 
   setTimestampFormat(format: string): void {
@@ -87,13 +100,6 @@ class FileLogger extends AbstractLogger {
   }
 
   private _enqueue(level: LogLevel, message: string, timestampMs: number): void {
-    const now = todayDateString()
-    if (now !== this._currentDate) {
-      this._currentDate = now
-      this._logPath = join(this._logDir, this._currentDate, `${this._channelId}.log`)
-      this._estimatedSize = 0
-    }
-
     const ts = formatLogTimestamp(new Date(timestampMs), this._timestampFormat)
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
     const line = `[${ts}] [${label}] ${message}\n`
@@ -129,7 +135,7 @@ class FileLogger extends AbstractLogger {
     const lines = this._writeQueue.splice(0)
     const content = lines.join('')
     try {
-      await this._ensureLogDir()
+      await this._ensureSessionDir()
       if (this._estimatedSize > MAX_FILE_SIZE) {
         await this._rotate()
       }
@@ -140,13 +146,12 @@ class FileLogger extends AbstractLogger {
     }
   }
 
-  private async _ensureLogDir(): Promise<void> {
-    const dir = join(this._logDir, this._currentDate)
-    await fs.mkdir(dir, { recursive: true })
+  private async _ensureSessionDir(): Promise<void> {
+    await fs.mkdir(this._sessionDir, { recursive: true })
   }
 
   private async _rotate(): Promise<void> {
-    const rotatedDir = join(this._logDir, this._currentDate, 'rotated')
+    const rotatedDir = join(this._sessionDir, 'rotated')
     await fs.mkdir(rotatedDir, { recursive: true })
     const ts = new Date().toISOString().replace(/[:.]/g, '-')
     const rotated = join(rotatedDir, `${this._channelId}.${ts}.log`)
@@ -166,12 +171,18 @@ class FileLogger extends AbstractLogger {
 
 /**
  * Main-process implementation of ILoggerService. Each call to `createLogger`
- * returns (or retrieves) a FileLogger writing to `<userData>/logs/<date>/<channelId>.log`.
+ * returns (or retrieves) a FileLogger writing to
+ * `<userData>/logs/<sessionId>/<channelId>.log`. The sessionId is chosen once
+ * per process launch (mirroring VS Code's behavior) so the Output panel never
+ * surfaces logs from a previous run.
  */
 export class LogMainService implements ILoggerService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logDir: string
+  private readonly _sessionId: string
+  private readonly _sessionDir: string
+  private readonly _sessionStartedAt: string
   private _level: LogLevel = LogLevel.Info
   private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
   private readonly _loggers = new Map<string, FileLogger>()
@@ -181,10 +192,26 @@ export class LogMainService implements ILoggerService {
 
   constructor() {
     this._logDir = join(app.getPath('userData'), 'logs')
+    const now = new Date()
+    this._sessionId = formatSessionId(now)
+    this._sessionDir = join(this._logDir, this._sessionId)
+    this._sessionStartedAt = formatSessionStartedAt(now)
   }
 
   getLogRoot(): string {
     return this._logDir
+  }
+
+  getSessionId(): string {
+    return this._sessionId
+  }
+
+  getSessionDir(): string {
+    return this._sessionDir
+  }
+
+  getSessionStartedAt(): string {
+    return this._sessionStartedAt
   }
 
   getChannel(id: string): ILogChannel | undefined {
@@ -199,7 +226,7 @@ export class LogMainService implements ILoggerService {
     this._channels.set(channel.id, channel)
     let logger = this._loggers.get(channel.id)
     if (!logger) {
-      logger = new FileLogger(this._logDir, channel.id, this._level, this._fireAppend)
+      logger = new FileLogger(this._sessionDir, channel.id, this._level, this._fireAppend)
       logger.setTimestampFormat(this._timestampFormat)
       this._loggers.set(channel.id, logger)
     }
@@ -221,7 +248,7 @@ export class LogMainService implements ILoggerService {
     this._channels.set(channel.id, channel)
     let logger = this._loggers.get(channel.id)
     if (!logger) {
-      logger = new FileLogger(this._logDir, channel.id, this._level, this._fireAppend)
+      logger = new FileLogger(this._sessionDir, channel.id, this._level, this._fireAppend)
       logger.setTimestampFormat(this._timestampFormat)
       this._loggers.set(channel.id, logger)
     }
@@ -250,21 +277,41 @@ export class LogMainService implements ILoggerService {
     return this._timestampFormat
   }
 
-  async cleanupOldLogs(retainDays = 30): Promise<void> {
-    let dirs
+  /**
+   * Keep at most `retainSessions` past session directories (the current one is
+   * always kept). Pre-existing directories that don't match the session naming
+   * (e.g. legacy YYYY-MM-DD folders from earlier builds) are removed wholesale.
+   */
+  async cleanupOldLogs(retainSessions = 20): Promise<void> {
+    let entries
     try {
-      dirs = await fs.readdir(this._logDir, { withFileTypes: true })
+      entries = await fs.readdir(this._logDir, { withFileTypes: true })
     } catch {
       return
     }
-    const cutoff = Date.now() - retainDays * 24 * 60 * 60 * 1000
+
+    const sessions: { name: string; time: number }[] = []
+    const legacy: string[] = []
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue
+      const t = SESSION_DIR_RE.test(entry.name) ? parseSessionId(entry.name) : null
+      if (t !== null) {
+        sessions.push({ name: entry.name, time: t })
+      } else {
+        legacy.push(entry.name)
+      }
+    }
+
+    sessions.sort((a, b) => b.time - a.time)
+    const toRemove = sessions
+      .slice(retainSessions)
+      .filter((s) => s.name !== this._sessionId)
+      .map((s) => s.name)
+
     await Promise.all(
-      dirs.map(async (entry) => {
-        if (!entry.isDirectory() || !DATE_DIR_RE.test(entry.name)) return
-        const t = Date.parse(`${entry.name}T00:00:00Z`)
-        if (!Number.isFinite(t) || t >= cutoff) return
+      [...toRemove, ...legacy].map(async (name) => {
         try {
-          await fs.rm(join(this._logDir, entry.name), { recursive: true, force: true })
+          await fs.rm(join(this._logDir, name), { recursive: true, force: true })
         } catch {
           // best-effort cleanup; do not fail startup
         }
