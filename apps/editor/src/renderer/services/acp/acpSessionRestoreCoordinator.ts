@@ -73,8 +73,8 @@ export interface RestoreCoordinatorCallbacks {
   getCurrentCwd(): string | undefined
   /**
    * Resolves once the workspace service has finished its initial hydration.
-   * `start()` awaits this before reading `getCurrentCwd()` so the cold-start
-   * hydrate sweep does not race the renderer's IPC roundtrip and end up
+   * `requestHydrate()` awaits this before reading `getCurrentCwd()` so the
+   * first sweep does not race the renderer's IPC roundtrip and end up
    * passing `cwd: null` to `session/list` (which agents treat as "no filter"
    * and return sessions across all workspaces).
    */
@@ -104,6 +104,17 @@ export class AcpSessionRestoreCoordinator extends Disposable {
    */
   private _hydrateGen = 0
   /**
+   * cwd of the last successful hydrate. `requestHydrate()` is a no-op when it
+   * matches the current cwd (idempotency); workspace swaps reset this back to
+   * `undefined` so the next visibility trigger re-hydrates the new bucket.
+   */
+  private _hydratedForCwd: string | undefined
+  /**
+   * In-flight hydrate promise, so concurrent `requestHydrate()` calls dedupe
+   * onto the same sweep instead of spawning N agent subprocesses in parallel.
+   */
+  private _hydrateInFlight: Promise<void> | undefined
+  /**
    * Capability snapshot per agentId, refreshed every time the hydrate sweep
    * finishes a connection's `initialize`. Read by `deleteOnAgent` to decide
    * whether to attempt `unstable_deleteSession` or fall back to local-only.
@@ -129,28 +140,56 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     })
   }
 
-  /** Kick off bootstrap-time restore + hydrate. Fire-and-forget. */
+  /** Kick off bootstrap-time restore. Fire-and-forget. */
   start(): void {
     this._loadPendingRestorePromise = this._loadPendingRestore()
-    // Defer the hydrate until the workspace service has settled its initial
-    // IPC hydration — otherwise `getCurrentCwd()` reads `null` synchronously
-    // and the sweep sends `cwd: null` to every agent (= "all workspaces").
-    void this._callbacks
-      .whenWorkspaceReady()
-      .then(() => this._hydrateHistoryFromAgents(this._callbacks.getCurrentCwd()))
   }
 
   /**
    * Called by the facade after it has cleared its own observable state and
    * closed all live sessions on a workspace swap. We re-load the pending
-   * restore id from the new bucket and trigger another hydrate sweep.
+   * restore id from the new bucket and reset hydrate state — the next time
+   * the Agents view becomes visible, `requestHydrate()` will re-sweep the
+   * new cwd. In-flight hydrates from the old cwd are aborted via
+   * `_hydrateGen`.
    */
   async onWorkspaceSwap(): Promise<void> {
     this._pendingRestoreHistoryId = undefined
+    this._hydratedForCwd = undefined
+    this._hydrateInFlight = undefined
+    this._hydrateGen++
     this._loadPendingRestorePromise = this._loadPendingRestore()
     await this._loadPendingRestorePromise
-    void this._hydrateHistoryFromAgents(this._callbacks.getCurrentCwd())
     void this.tryRestoreActiveSession()
+  }
+
+  /**
+   * Lazy hydrate trigger. Wired to the Agents view visibility autorun so the
+   * `session/list` sweep — which spawns a `claude-code` subprocess inside
+   * the workspace cwd — only runs when the user actually opens the Agents
+   * UI. Idempotent per cwd; concurrent calls dedupe onto the same in-flight
+   * promise. Fire-and-forget by design.
+   */
+  requestHydrate(): void {
+    if (this._hydrateInFlight) return
+    const run = (async () => {
+      await this._callbacks.whenWorkspaceReady()
+      const cwd = this._callbacks.getCurrentCwd()
+      if (cwd === undefined) return
+      if (this._hydratedForCwd === cwd) return
+      try {
+        await this._hydrateHistoryFromAgents(cwd)
+        // Only mark hydrated if cwd hasn't changed underfoot during the sweep.
+        if (this._callbacks.getCurrentCwd() === cwd) {
+          this._hydratedForCwd = cwd
+        }
+      } catch (err) {
+        this._logger.warn(`[acp] requestHydrate failed: ${(err as Error).message}`)
+      }
+    })()
+    this._hydrateInFlight = run.finally(() => {
+      this._hydrateInFlight = undefined
+    })
   }
 
   async tryRestoreActiveSession(): Promise<void> {

@@ -107,6 +107,14 @@ export interface IAcpSessionService {
    */
   tryRestoreActiveSession(): Promise<void>
   /**
+   * Lazily kick off the cross-agent `session/list` hydrate sweep. Idempotent
+   * per workspace cwd: a second call within the same workspace is a no-op
+   * unless `onDidChangeWorkspaceScope` has fired since. Wired to the Agents
+   * view visibility autorun so we never spawn agent subprocesses inside the
+   * workspace cwd until the user actually opens the Agents UI.
+   */
+  requestHydrateIfNeeded(): void
+  /**
    * Best-effort: ask the owning agent to delete a session via `session/delete`.
    * Returns `'unsupported'` if the agent did not advertise
    * `sessionCapabilities.delete` at last hydrate, `'unknown'` if we have no
@@ -234,6 +242,10 @@ export class AcpSessionService
 
   tryRestoreActiveSession(): Promise<void> {
     return this._coordinator.tryRestoreActiveSession()
+  }
+
+  requestHydrateIfNeeded(): void {
+    this._coordinator.requestHydrate()
   }
 
   async createSession(agentId?: string): Promise<IAcpSession> {

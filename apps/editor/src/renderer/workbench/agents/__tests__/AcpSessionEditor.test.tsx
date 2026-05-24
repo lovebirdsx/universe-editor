@@ -64,6 +64,7 @@ function makeService(
       return byHistoryId.get(id)
     },
     async tryRestoreActiveSession(): Promise<void> {},
+    requestHydrateIfNeeded(): void {},
     async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
       return 'unsupported'
     },

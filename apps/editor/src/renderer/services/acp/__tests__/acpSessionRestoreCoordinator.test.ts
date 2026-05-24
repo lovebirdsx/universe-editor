@@ -3,13 +3,18 @@
  *
  *  The coordinator's job is to:
  *    1) on construction-time `start()`, read `acp.activeSessionHistoryId` from
- *       WORKSPACE storage and kick off a fire-and-forget hydrate sweep
- *    2) on `tryRestoreActiveSession()`, call back into the facade's
+ *       WORKSPACE storage (hydrate is NOT auto-fired — it must be requested
+ *       lazily once the user reveals the Agents view, see `requestHydrate()`)
+ *    2) on `requestHydrate()`, run the cross-agent `session/list` sweep once
+ *       per cwd; idempotent within the same workspace; deferred until
+ *       `whenWorkspaceReady` resolves so the cwd is known
+ *    3) on `tryRestoreActiveSession()`, call back into the facade's
  *       resumeSession exactly once for the pending id (and only if no live
  *       session has already taken its place)
- *    3) on `onWorkspaceSwap()`, repeat the bootstrap flow against the new
- *       storage bucket
- *    4) on `deleteOnAgent()`, gate the protocol call on the agent's advertised
+ *    4) on `onWorkspaceSwap()`, repeat the pending-restore load against the
+ *       new bucket and reset the hydrate gate so the next `requestHydrate()`
+ *       re-sweeps with the new cwd
+ *    5) on `deleteOnAgent()`, gate the protocol call on the agent's advertised
  *       sessionCapabilities.delete and translate the RPC result to a coarse
  *       'ok' / 'unsupported' / 'unknown' / 'error' tag for the facade
  *
@@ -508,6 +513,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     // Default StubAgentOptions has empty capabilities — list cap absent.
     await built.history.initialize()
     coordinator.start()
+    coordinator.requestHydrate()
     // Give the fire-and-forget hydrate a chance to land.
     await new Promise<void>((r) => setTimeout(r, 30))
     // Connection was opened (to learn capabilities) but no listSessions call.
@@ -543,6 +549,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     await built.history.initialize()
     coordinator = built.coordinator
     coordinator.start()
+    coordinator.requestHydrate()
     // Hydrate is fire-and-forget; await a generous tick.
     await new Promise<void>((r) => setTimeout(r, 50))
     expect(built.client.agents[0]?.listCalls).toHaveLength(2)
@@ -560,6 +567,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     await built.history.initialize()
     coordinator = built.coordinator
     coordinator.start()
+    coordinator.requestHydrate()
     await new Promise<void>((r) => setTimeout(r, 30))
     expect(built.history.list()).toEqual([])
     // Connection still disposed.
@@ -571,9 +579,92 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     built.client.rejectAgents.add('fake')
     await built.history.initialize()
     coordinator = built.coordinator
-    expect(() => coordinator!.start()).not.toThrow()
+    expect(() => {
+      coordinator!.start()
+      coordinator!.requestHydrate()
+    }).not.toThrow()
     await new Promise<void>((r) => setTimeout(r, 20))
     expect(built.history.list()).toEqual([])
+  })
+
+  it('does not auto-fire on start() — hydrate must be requested explicitly', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    // Without requestHydrate(), no agent connection is opened.
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls).toHaveLength(0)
+  })
+
+  it('is idempotent within the same workspace cwd', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls).toHaveLength(1)
+    // Second request: must NOT spawn another connection.
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls).toHaveLength(1)
+  })
+
+  it('re-hydrates after onWorkspaceSwap resets the gate', async () => {
+    const storage = new FakeStorage()
+    let currentCwd: string | undefined = 'C:/ws-A'
+    const client = new FakeAcpClientService()
+    const registry = new FakeAgentRegistry(['fake'])
+    const history = new AcpSessionHistoryService(
+      storage,
+      new FakeWorkspaceService(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+    )
+    client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    const callbacks: RestoreCoordinatorCallbacks = {
+      resumeSession: async (historyId: string) =>
+        ({ id: 'live', historyId }) as unknown as IAcpSession,
+      hasActiveSession: () => false,
+      getCurrentCwd: () => currentCwd,
+      whenWorkspaceReady: () => Promise.resolve(),
+    }
+    coordinator = new AcpSessionRestoreCoordinator(
+      client,
+      registry,
+      history,
+      storage,
+      new StubNotificationService(),
+      new NoopTelemetryService(),
+      new StubLoggerService(),
+      callbacks,
+    )
+    await history.initialize()
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(client.connectCalls).toEqual([{ agentId: 'fake', cwd: 'C:/ws-A' }])
+
+    currentCwd = 'C:/ws-B'
+    await coordinator.onWorkspaceSwap()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(client.connectCalls).toEqual([
+      { agentId: 'fake', cwd: 'C:/ws-A' },
+      { agentId: 'fake', cwd: 'C:/ws-B' },
+    ])
   })
 
   it('defers the hydrate sweep until whenWorkspaceReady resolves', async () => {
@@ -602,6 +693,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     await built.history.initialize()
     coordinator = built.coordinator
     coordinator.start()
+    coordinator.requestHydrate()
     // Before workspace is ready: no connect should have happened.
     await new Promise<void>((r) => setTimeout(r, 20))
     expect(built.client.connectCalls).toHaveLength(0)
@@ -636,6 +728,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     await built.history.initialize()
     coordinator = built.coordinator
     coordinator.start()
+    coordinator.requestHydrate()
     await new Promise<void>((r) => setTimeout(r, 30))
     const titles = built.history.list().map((e) => e.title)
     expect(titles).toContain('mine')
@@ -661,6 +754,7 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
     // Trigger hydrate so `_agentCaps` gets populated. Without this, deleteOnAgent
     // can't tell whether `delete` is supported and returns 'unsupported'.
     built.coordinator.start()
+    built.coordinator.requestHydrate()
     await new Promise<void>((r) => setTimeout(r, 30))
   }
 
@@ -673,7 +767,7 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
   })
 
   it('returns unsupported when the agent does not advertise sessionCapabilities.delete', async () => {
-    const built = build({ agentIds: ['fake'] })
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     coordinator = built.coordinator
     await built.history.initialize()
     const entry = built.history.add({
@@ -687,7 +781,7 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
   })
 
   it('returns ok and dispatches session/delete when delete capability is present', async () => {
-    const built = build({ agentIds: ['fake'] })
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     coordinator = built.coordinator
     await built.history.initialize()
     const entry = built.history.add({
@@ -709,7 +803,7 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
   })
 
   it('returns error when the agent rejects unstable_deleteSession', async () => {
-    const built = build({ agentIds: ['fake'] })
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     coordinator = built.coordinator
     await built.history.initialize()
     const entry = built.history.add({

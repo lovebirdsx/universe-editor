@@ -165,10 +165,12 @@ export class AgentsStatusBarContribution extends Disposable implements IWorkbenc
 }
 
 /**
- * Lazy-restores the previously-active ACP session when the AGENTS view first
- * becomes visible after an editor restart. Mirrors LogTailContribution's
- * autorun-driven restore for the Output panel: persisting the historyId is
- * AcpSessionService's job, this contribution only owns the visibility trigger.
+ * Lazy-restores the previously-active ACP session AND kicks off the
+ * cross-agent `session/list` hydrate when the AGENTS view first becomes
+ * visible after an editor restart (or after a workspace swap). Both calls
+ * are idempotent on the service side — the contribution only owns the
+ * visibility trigger so we never spawn agent subprocesses inside the
+ * workspace cwd until the user actually looks at the Agents UI.
  */
 export class AgentsSessionRestoreContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -183,6 +185,7 @@ export class AgentsSessionRestoreContribution extends Disposable implements IWor
         const active =
           views.activeContainerByLocation.read(r)[ViewContainerLocation.SecondarySideBar]
         if (active !== 'workbench.view.agents') return
+        sessions.requestHydrateIfNeeded()
         void sessions.tryRestoreActiveSession()
       }),
     )
