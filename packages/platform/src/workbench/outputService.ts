@@ -9,6 +9,7 @@ import { createDecorator } from '../di/instantiation.js'
 
 export interface IOutputChannel extends IDisposable {
   readonly name: string
+  readonly kind?: string
   append(text: string): void
   appendLine(text: string): void
   clear(): void
@@ -19,7 +20,7 @@ export interface IOutputChannel extends IDisposable {
 export interface IOutputService {
   readonly _serviceBrand: undefined
 
-  createChannel(name: string): IOutputChannel
+  createChannel(name: string, kind?: string): IOutputChannel
   getChannel(name: string): IOutputChannel | undefined
   getChannels(): readonly IOutputChannel[]
 

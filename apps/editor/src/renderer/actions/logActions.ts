@@ -25,8 +25,7 @@ import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/servi
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 
 const LOG_READ_MAX_BYTES = 1024 * 1024
-const EMPTY_LOG_CHANNEL = 'Log'
-const LOG_CHANNEL_PREFIX = 'Log ('
+const EMPTY_LOG_CHANNEL = 'Logs'
 
 interface LogFileQuickPickItem extends IQuickPickItem {
   readonly descriptor: LogFileDescriptor
@@ -43,13 +42,12 @@ function formatBytes(bytes: number): string {
 }
 
 function channelNameForLog(descriptor: LogFileDescriptor): string {
-  return `${LOG_CHANNEL_PREFIX}${descriptor.name})`
+  return descriptor.name
 }
 
 function activeLogChannelName(outputService: IOutputService): string | undefined {
-  const active = outputService.activeChannel?.name
-  if (!active || !active.startsWith(LOG_CHANNEL_PREFIX) || !active.endsWith(')')) return undefined
-  return active.slice(LOG_CHANNEL_PREFIX.length, -1)
+  const ch = outputService.activeChannel
+  return ch?.kind === 'log' ? ch.name : undefined
 }
 
 function revealOutputPanel(layoutService: ILayoutService): void {
@@ -65,7 +63,7 @@ async function writeLogToOutput(
 ): Promise<void> {
   const content = await logFilesService.readLogFile(descriptor.id, LOG_READ_MAX_BYTES)
   const channelName = channelNameForLog(descriptor)
-  const channel = outputService.createChannel(channelName)
+  const channel = outputService.createChannel(channelName, 'log')
   channel.clear()
   channel.append(content)
   outputService.setActiveChannel(channelName)

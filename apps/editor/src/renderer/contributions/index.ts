@@ -180,7 +180,7 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
-// Live tail of main-side log writes into the active `Log (X)` Output channel.
+// Live tail of main-side log writes into the active log Output channel.
 // AfterRestore so the Output service and panel UI are already wired up.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.logTail',

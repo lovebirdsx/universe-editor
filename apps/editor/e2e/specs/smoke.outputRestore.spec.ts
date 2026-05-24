@@ -94,13 +94,13 @@ test.describe('@p1 output channel restore', () => {
     try {
       const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-out-'))
 
-      // Pre-seed: boot into the workspace and restore "Log (Main)" channel.
-      // Log (Main) is chosen because the main process always writes startup
+      // Pre-seed: boot into the workspace and restore "Main" channel.
+      // Main is chosen because the main process always writes startup
       // logs, so the file is guaranteed to exist after bootstrap — meaning
       // LogTailContribution pre-creates the channel and the OutputService
       // pending-restore can activate it.
       seedGlobalState(userDataDir, workspaceFolder)
-      seedWorkspaceKey(userDataDir, workspaceFolder, 'output.activeChannel', 'Log (Main)')
+      seedWorkspaceKey(userDataDir, workspaceFolder, 'output.activeChannel', 'Main')
 
       const { app, page } = await launchWithState(userDataDir)
       try {
@@ -108,7 +108,7 @@ test.describe('@p1 output channel restore', () => {
           .poll(() => page.evaluate(() => window.__E2E__!.getActiveOutputChannelName()), {
             timeout: 5000,
           })
-          .toBe('Log (Main)')
+          .toBe('Main')
       } finally {
         await app.close()
       }

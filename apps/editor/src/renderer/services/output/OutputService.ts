@@ -18,7 +18,10 @@ const OUTPUT_ACTIVE_CHANNEL_KEY = 'output.activeChannel'
 export class OutputChannel implements IOutputChannel {
   readonly content = observableValue<string>('OutputChannel.content', '')
 
-  constructor(readonly name: string) {}
+  constructor(
+    readonly name: string,
+    readonly kind: string = 'default',
+  ) {}
 
   append(text: string): void {
     this.content.set(this.content.get() + text, undefined)
@@ -73,11 +76,11 @@ export class OutputService extends Disposable implements IOutputService {
     }
   }
 
-  createChannel(name: string): IOutputChannel {
+  createChannel(name: string, kind?: string): IOutputChannel {
     const existing = this._channels.get(name)
     if (existing) return existing
 
-    const channel = new OutputChannel(name)
+    const channel = new OutputChannel(name, kind)
     this._channels.set(name, channel)
     transaction((tx) => {
       this.channelNames.set([...this.channelNames.get(), name], tx)

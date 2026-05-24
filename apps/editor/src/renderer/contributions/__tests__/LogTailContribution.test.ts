@@ -86,14 +86,14 @@ describe('LogTailContribution', () => {
     vi.clearAllMocks()
   })
 
-  it('appends incoming chunks to the active Log (X) Output channel', async () => {
+  it('appends incoming chunks to the active log Output channel', async () => {
     const contribution = instantiate(output, logFiles)
     // Wait for the bootstrap listLogFiles() promise to resolve
     await Promise.resolve()
     await Promise.resolve()
 
-    const channel = output.createChannel('Log (Main)')
-    output.setActiveChannel('Log (Main)')
+    const channel = output.createChannel('Main', 'log')
+    output.setActiveChannel('Main')
     logFiles._emitter.fire({ channelId: 'main', chunk: 'hello\n' })
     await Promise.resolve()
 
@@ -101,7 +101,7 @@ describe('LogTailContribution', () => {
     contribution.dispose()
   })
 
-  it('ignores chunks when the active channel is not a Log (X) channel', async () => {
+  it('ignores chunks when the active channel is not a log channel', async () => {
     const contribution = instantiate(output, logFiles)
     await Promise.resolve()
     await Promise.resolve()
@@ -120,8 +120,8 @@ describe('LogTailContribution', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    const channel = output.createChannel('Log (Main)')
-    output.setActiveChannel('Log (Main)')
+    const channel = output.createChannel('Main', 'log')
+    output.setActiveChannel('Main')
     logFiles._emitter.fire({ channelId: 'externalChange', chunk: 'other\n' })
     await Promise.resolve()
 
@@ -134,8 +134,8 @@ describe('LogTailContribution', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    const channel = output.createChannel('Log (Main)')
-    output.setActiveChannel('Log (Main)')
+    const channel = output.createChannel('Main', 'log')
+    output.setActiveChannel('Main')
     const appendSpy = vi.spyOn(channel, 'append')
     logFiles._emitter.fire({ channelId: 'main', chunk: 'a\n' })
     logFiles._emitter.fire({ channelId: 'main', chunk: 'b\n' })
@@ -154,8 +154,8 @@ describe('LogTailContribution', () => {
     await Promise.resolve()
     await Promise.resolve()
 
-    const channel = output.createChannel('Log (Main)')
-    output.setActiveChannel('Log (Main)')
+    const channel = output.createChannel('Main', 'log')
+    output.setActiveChannel('Main')
     // First fire: cache miss, refresh queued, this chunk is dropped
     logFiles._emitter.fire({ channelId: 'main', chunk: 'dropped\n' })
     await Promise.resolve()
@@ -172,8 +172,8 @@ describe('LogTailContribution', () => {
     const contribution = instantiate(output, logFiles)
     await Promise.resolve()
     await Promise.resolve()
-    const channel = output.createChannel('Log (Main)')
-    output.setActiveChannel('Log (Main)')
+    const channel = output.createChannel('Main', 'log')
+    output.setActiveChannel('Main')
     contribution.dispose()
     logFiles._emitter.fire({ channelId: 'main', chunk: 'after-dispose\n' })
     await Promise.resolve()

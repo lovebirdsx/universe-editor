@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  LogTailContribution — appends new log chunks from the main-side LogMainService
- *  to the matching `Log (X)` Output channel in real time, so the panel updates
+ *  to the matching log Output channel in real time, so the panel updates
  *  as the log file grows without requiring a manual Refresh.
  *--------------------------------------------------------------------------------------------*/
 
@@ -13,7 +13,6 @@ import {
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogAppendEvent } from '../../shared/ipc/services.js'
 
-const LOG_CHANNEL_PREFIX = 'Log ('
 const LOG_READ_MAX_BYTES = 1024 * 1024
 
 export class LogTailContribution extends Disposable implements IWorkbenchContribution {
@@ -31,14 +30,14 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
     super()
     void this._refreshDescriptors()
     this._register(this._logFiles.onDidAppendEntry((event) => this._handleAppend(event)))
-    // Lazy-load file content the first time a Log (X) channel becomes active —
+    // Lazy-load file content the first time a log channel becomes active —
     // covers both the restore path (channel restored as active by OutputService
     // before LogTailContribution finishes refreshing descriptors) and any future
     // direct activation that bypasses Show Logs...
     this._register(
       autorun((r) => {
         const active = this._output.activeChannelName.read(r)
-        if (!active || !active.startsWith(LOG_CHANNEL_PREFIX) || !active.endsWith(')')) return
+        if (!active || this._output.activeChannel?.kind !== 'log') return
         void this._populateLogChannelIfEmpty(active)
       }),
     )
@@ -58,7 +57,7 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
         this._channelIdToName.set(d.channelId, d.name)
         // Pre-create the channel so it appears in the Output dropdown and so
         // OutputService can activate it when it matches a pending restored name.
-        this._output.createChannel(`${LOG_CHANNEL_PREFIX}${d.name})`)
+        this._output.createChannel(d.name, 'log')
       }
     } catch {
       // best-effort; next event will retry
@@ -70,7 +69,7 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
   private async _populateLogChannelIfEmpty(channelName: string): Promise<void> {
     const channel = this._output.getChannel(channelName)
     if (!channel || channel.content.get() !== '') return
-    const name = channelName.slice(LOG_CHANNEL_PREFIX.length, -1)
+    const name = channelName
     let descriptorId = this._nameToDescriptorId.get(name)
     if (descriptorId === undefined) {
       await this._refreshDescriptors()
@@ -92,18 +91,18 @@ export class LogTailContribution extends Disposable implements IWorkbenchContrib
     // An append from a previously unknown channelId means a new logger
     // materialized after the initial _refreshDescriptors snapshot — flushes
     // are debounced by 150ms in main, so the .log file may not have existed
-    // when we first listed. Refresh now so the corresponding Log (X) channel
+    // when we first listed. Refresh now so the corresponding log channel
     // is created and any pending restore can activate it.
     if (!this._channelIdToName.has(event.channelId)) {
       void this._refreshDescriptors()
     }
 
     const active = this._output.activeChannelName.get()
-    if (!active || !active.startsWith(LOG_CHANNEL_PREFIX) || !active.endsWith(')')) {
+    if (!active || this._output.activeChannel?.kind !== 'log') {
       return
     }
 
-    const name = active.slice(LOG_CHANNEL_PREFIX.length, -1)
+    const name = active
     const mapped = this._nameToChannelId.get(name)
     if (mapped === undefined) {
       // Descriptor cache miss — refresh in the background so the next chunk

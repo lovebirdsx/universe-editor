@@ -102,7 +102,7 @@ describe('logActions', () => {
 
     expect(logFiles.listLogFiles).toHaveBeenCalledTimes(1)
     expect(logFiles.readLogFile).toHaveBeenCalledWith(descriptor.id, 1024 * 1024)
-    expect(output.activeChannelName.get()).toBe('Log (Main)')
+    expect(output.activeChannelName.get()).toBe('Main')
     expect(output.activeChannelContent.get()).toBe('hello log')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
   })
@@ -143,7 +143,7 @@ describe('logActions', () => {
     await runCommand(ShowLogsAction.ID, services)
 
     expect(pick).not.toHaveBeenCalled()
-    expect(output.activeChannelName.get()).toBe('Log')
+    expect(output.activeChannelName.get()).toBe('Logs')
     expect(output.activeChannelContent.get()).toContain('No log files found.')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
   })
@@ -168,8 +168,8 @@ describe('logActions', () => {
     const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
     const logFiles = makeLogFilesService()
-    output.createChannel(`Log (${descriptor.name})`)
-    output.setActiveChannel(`Log (${descriptor.name})`)
+    output.createChannel(`${descriptor.name}`, 'log')
+    output.setActiveChannel(`${descriptor.name}`)
     const services = new ServiceCollection()
     services.set(ILogFilesService, logFiles as never)
     services.set(IOutputService, output)
