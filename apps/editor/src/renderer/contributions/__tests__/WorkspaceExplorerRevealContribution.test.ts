@@ -35,6 +35,7 @@ function makeWorkspaceStub(initial: IWorkspace | null = null): IWorkspaceService
       return []
     },
     onDidChangeRecent: recentEmitter.event,
+    whenReady: Promise.resolve(),
     async openFolder() {},
     async closeFolder() {
       current = null

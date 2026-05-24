@@ -103,6 +103,7 @@ class FakeWorkspaceService implements IWorkspaceService {
   readonly recent: readonly never[] = []
   private readonly _onDidChangeRecent = new Emitter<readonly never[]>()
   readonly onDidChangeRecent = this._onDidChangeRecent.event
+  readonly whenReady: Promise<void> = Promise.resolve()
   async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}

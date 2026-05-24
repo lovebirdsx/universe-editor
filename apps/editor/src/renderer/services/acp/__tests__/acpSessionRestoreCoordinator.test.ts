@@ -91,6 +91,7 @@ class FakeWorkspaceService implements IWorkspaceService {
   readonly recent: readonly never[] = []
   private readonly _onDidChangeRecent = new Emitter<readonly never[]>()
   readonly onDidChangeRecent = this._onDidChangeRecent.event
+  readonly whenReady: Promise<void> = Promise.resolve()
   async openFolder(): Promise<void> {}
   async closeFolder(): Promise<void> {}
   async clearRecent(): Promise<void> {}
@@ -321,6 +322,12 @@ interface BuildOptions {
   readonly resumeSession?: (historyId: string) => Promise<IAcpSession>
   readonly storage?: FakeStorage
   readonly history?: AcpSessionHistoryService
+  /**
+   * Promise resolved when the test wants `start()` to proceed with the
+   * hydrate sweep. Defaults to `Promise.resolve()` so existing tests keep
+   * their synchronous-ish behavior.
+   */
+  readonly whenWorkspaceReady?: Promise<void>
 }
 
 interface BuildResult {
@@ -357,10 +364,12 @@ function build(opts: BuildOptions = {}): BuildResult {
     resumeCalls.push(historyId)
     return userResume(historyId)
   }
+  const whenWorkspaceReady = opts.whenWorkspaceReady ?? Promise.resolve()
   const callbacks: RestoreCoordinatorCallbacks = {
     resumeSession: recordingResume,
     hasActiveSession: opts.hasActiveSession ?? (() => false),
     getCurrentCwd: () => opts.cwd,
+    whenWorkspaceReady: () => whenWorkspaceReady,
   }
   const coordinator = new AcpSessionRestoreCoordinator(
     client,
@@ -497,9 +506,10 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     coordinator = built.coordinator
     // Default StubAgentOptions has empty capabilities — list cap absent.
+    await built.history.initialize()
     coordinator.start()
     // Give the fire-and-forget hydrate a chance to land.
-    await new Promise<void>((r) => setTimeout(r, 10))
+    await new Promise<void>((r) => setTimeout(r, 30))
     // Connection was opened (to learn capabilities) but no listSessions call.
     expect(built.client.connectCalls).toHaveLength(1)
     expect(built.client.agents[0]?.listCalls).toEqual([])
@@ -564,6 +574,72 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     expect(() => coordinator!.start()).not.toThrow()
     await new Promise<void>((r) => setTimeout(r, 20))
     expect(built.history.list()).toEqual([])
+  })
+
+  it('defers the hydrate sweep until whenWorkspaceReady resolves', async () => {
+    let resolveReady!: () => void
+    const ready = new Promise<void>((r) => {
+      resolveReady = r
+    })
+    const built = build({
+      agentIds: ['fake'],
+      cwd: 'C:/ws',
+      whenWorkspaceReady: ready,
+    })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [
+        [
+          {
+            sessionId: 's1',
+            cwd: 'C:/ws',
+            title: 'one',
+            updatedAt: '2026-01-01T00:00:00Z',
+          } as unknown as SessionInfo,
+        ],
+      ],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    // Before workspace is ready: no connect should have happened.
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(built.client.connectCalls).toHaveLength(0)
+    // Resolve workspace ready → hydrate proceeds.
+    resolveReady()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls).toHaveLength(1)
+    expect(built.history.list().map((e) => e.title)).toEqual(['one'])
+  })
+
+  it('drops cross-workspace sessions returned by an agent that ignores the cwd filter', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws-A' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [
+        [
+          {
+            sessionId: 's-A',
+            cwd: 'C:/ws-A',
+            title: 'mine',
+            updatedAt: '2026-01-01T00:00:00Z',
+          } as unknown as SessionInfo,
+          {
+            sessionId: 's-B',
+            cwd: 'C:/ws-B',
+            title: 'theirs',
+            updatedAt: '2026-01-02T00:00:00Z',
+          } as unknown as SessionInfo,
+        ],
+      ],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    const titles = built.history.list().map((e) => e.title)
+    expect(titles).toContain('mine')
+    expect(titles).not.toContain('theirs')
   })
 })
 

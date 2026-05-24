@@ -76,8 +76,19 @@ export interface IAcpSessionHistoryService {
    * (agentId, sessionIdOnAgent); existing configOptions are preserved;
    * lastUsedAt = max(protocol updatedAt, local lastUsedAt). Sorts the final
    * snapshot by lastUsedAt desc and truncates to MAX_ENTRIES.
+   *
+   * `currentCwd` is the workspace cwd at the moment the hydrate fired and acts
+   * as a defense-in-depth filter — even if an agent ignores the `cwd` param
+   * we passed to `session/list` and returns sessions from other workspaces,
+   * we will not merge them into the current bucket. When `currentCwd` is
+   * undefined (empty window) the call is a no-op so the GLOBAL fallback
+   * bucket stays empty.
    */
-  bulkMergeFromAgent(agentId: string, sessions: readonly BulkMergeSessionInfo[]): void
+  bulkMergeFromAgent(
+    agentId: string,
+    sessions: readonly BulkMergeSessionInfo[],
+    currentCwd: string | undefined,
+  ): void
   /**
    * Patch metadata for one entry from a `session_info_update` notification.
    * No-op if id is unknown.
@@ -88,7 +99,12 @@ export interface IAcpSessionHistoryService {
 /** Shape we accept from the protocol's `SessionInfo` — kept structural to avoid leaking SDK types into the history interface. */
 export interface BulkMergeSessionInfo {
   readonly sessionId: string
-  readonly cwd: string
+  /**
+   * Optional — some agents omit cwd. When absent, the entry is tolerated
+   * (existing.cwd wins on upsert); when present, it must match the current
+   * workspace cwd or the entry is dropped.
+   */
+  readonly cwd?: string | null
   readonly title?: string | null
   readonly updatedAt?: string | null
 }
@@ -216,8 +232,16 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
-  bulkMergeFromAgent(agentId: string, sessions: readonly BulkMergeSessionInfo[]): void {
+  bulkMergeFromAgent(
+    agentId: string,
+    sessions: readonly BulkMergeSessionInfo[],
+    currentCwd: string | undefined,
+  ): void {
     if (sessions.length === 0) return
+    // Empty window: refuse to absorb anything the agent reports. Otherwise a
+    // hydrate fired before the user opens a folder would pollute the GLOBAL
+    // fallback bucket with sessions from every prior workspace.
+    if (currentCwd === undefined) return
     const now = Date.now()
     const byKey = new Map<string, AcpSessionHistoryEntry>()
     for (const e of this._state) {
@@ -226,6 +250,10 @@ export class AcpSessionHistoryService
     let changed = false
     for (const info of sessions) {
       if (typeof info.sessionId !== 'string' || info.sessionId.length === 0) continue
+      // Defense-in-depth: skip cross-workspace entries even if the agent
+      // ignored the `cwd` filter on `session/list`. A missing `info.cwd` is
+      // tolerated — the agent simply did not report it; existing.cwd wins.
+      if (typeof info.cwd === 'string' && info.cwd !== currentCwd) continue
       const key = `${agentId} ${info.sessionId}`
       const existing = byKey.get(key)
       const protocolTs = parseIsoTimestamp(info.updatedAt)

@@ -175,6 +175,7 @@ export class AcpSessionService
           resumeSession: (historyId) => this.resumeSession(historyId),
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
           getCurrentCwd: () => this._workspace.current?.folder.fsPath,
+          whenWorkspaceReady: () => this._workspace.whenReady,
         },
       ),
     )

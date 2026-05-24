@@ -71,6 +71,14 @@ export interface RestoreCoordinatorCallbacks {
   hasActiveSession(): boolean
   /** Current workspace cwd, used for hydrate scoping. */
   getCurrentCwd(): string | undefined
+  /**
+   * Resolves once the workspace service has finished its initial hydration.
+   * `start()` awaits this before reading `getCurrentCwd()` so the cold-start
+   * hydrate sweep does not race the renderer's IPC roundtrip and end up
+   * passing `cwd: null` to `session/list` (which agents treat as "no filter"
+   * and return sessions across all workspaces).
+   */
+  whenWorkspaceReady(): Promise<void>
 }
 
 export class AcpSessionRestoreCoordinator extends Disposable {
@@ -124,7 +132,12 @@ export class AcpSessionRestoreCoordinator extends Disposable {
   /** Kick off bootstrap-time restore + hydrate. Fire-and-forget. */
   start(): void {
     this._loadPendingRestorePromise = this._loadPendingRestore()
-    void this._hydrateHistoryFromAgents(this._callbacks.getCurrentCwd())
+    // Defer the hydrate until the workspace service has settled its initial
+    // IPC hydration — otherwise `getCurrentCwd()` reads `null` synchronously
+    // and the sweep sends `cwd: null` to every agent (= "all workspaces").
+    void this._callbacks
+      .whenWorkspaceReady()
+      .then(() => this._hydrateHistoryFromAgents(this._callbacks.getCurrentCwd()))
   }
 
   /**
@@ -297,7 +310,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       }
       if (myGen !== this._hydrateGen) return
       if (collected.length === 0) return
-      this._history.bulkMergeFromAgent(agentId, collected)
+      this._history.bulkMergeFromAgent(agentId, collected, cwd)
       this._telemetry.publicLog('acp.session_hydrate_ok', {
         agentId,
         count: collected.length,

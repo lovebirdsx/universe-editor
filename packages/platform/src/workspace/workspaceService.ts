@@ -40,6 +40,14 @@ export interface IWorkspaceService {
   readonly recent: readonly IRecentWorkspace[]
   readonly onDidChangeRecent: Event<readonly IRecentWorkspace[]>
 
+  /**
+   * Resolves once the initial cross-process workspace hydration has settled,
+   * whether or not a workspace ended up being loaded. Services that need a
+   * startup-time cwd should await this before reading `current` — otherwise
+   * they race the renderer's first IPC roundtrip to the main process.
+   */
+  readonly whenReady: Promise<void>
+
   /** When `folder` is undefined, the main process surfaces an Open Folder dialog. */
   openFolder(folder?: URI): Promise<void>
   closeFolder(): Promise<void>

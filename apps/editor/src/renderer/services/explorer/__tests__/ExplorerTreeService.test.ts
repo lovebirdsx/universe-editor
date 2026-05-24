@@ -104,6 +104,7 @@ class FakeWorkspaceService implements IWorkspaceServiceType {
   readonly onDidChangeRecent = new Emitter<readonly never[]>().event
   current: IWorkspace | null
   readonly recent = [] as never[]
+  readonly whenReady: Promise<void> = Promise.resolve()
 
   constructor(initial: URI | null) {
     this.current = initial ? { folder: initial, name: 'ws' } : null

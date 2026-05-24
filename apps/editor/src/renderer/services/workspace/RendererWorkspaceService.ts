@@ -46,6 +46,11 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
   private readonly _onDidChangeRecent = this._register(new Emitter<readonly IRecentWorkspace[]>())
   readonly onDidChangeRecent: Event<readonly IRecentWorkspace[]> = this._onDidChangeRecent.event
 
+  private _resolveReady!: () => void
+  readonly whenReady: Promise<void> = new Promise<void>((resolve) => {
+    this._resolveReady = resolve
+  })
+
   constructor(
     private readonly _wire: IWorkspaceServiceWire,
     private readonly _telemetry?: ITelemetryService,
@@ -77,6 +82,7 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
         this._logger.debug(`hydrate current=${revived?.folder.toString() ?? '<none>'}`)
       })
       .catch((err) => this._logger.warn('hydrate current failed', err))
+      .finally(() => this._resolveReady())
     void _wire
       .getRecent()
       .then((r) => {

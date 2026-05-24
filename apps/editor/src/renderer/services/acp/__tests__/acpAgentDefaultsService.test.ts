@@ -56,6 +56,7 @@ class FakeWorkspaceService implements IWorkspaceService {
   readonly recent = []
   readonly onDidChangeRecent = Event.None
   readonly onDidChangeWorkspace = Event.None
+  readonly whenReady: Promise<void> = Promise.resolve()
   constructor(initial: IWorkspace | null = makeFakeWorkspace('/work')) {
     this._current = initial
   }
