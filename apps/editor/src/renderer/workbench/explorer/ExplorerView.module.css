@@ -64,10 +64,22 @@
   background: var(--color-list-active-bar, #007acc);
 }
 
-/* Selection: rows that are operation targets (single click, Ctrl/Shift-click multi-select). */
+/* Selection: rows that are operation targets (single click, Ctrl/Shift-click multi-select).
+   When the Explorer has focus → active highlight; when it loses focus → inactive tint
+   (same as .row.active) so the selection stays visible but doesn't compete with
+   whatever window/panel is now focused. */
 .row.selected {
   background: var(--color-list-active-bg, #094771);
   color: var(--color-list-active-fg, #ffffff);
+}
+
+.view:not([data-focused='true']) .row.selected {
+  background: var(--color-list-inactive-selection-bg, rgba(58, 61, 65, 0.6));
+  color: inherit;
+}
+
+.view:not([data-focused='true']) .row.focused {
+  outline: none;
 }
 
 /* Focus: the single keyboard-cursor row. Coexists with .selected/.active via outline. */

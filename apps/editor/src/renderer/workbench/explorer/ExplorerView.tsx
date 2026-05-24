@@ -70,6 +70,7 @@ export function ExplorerView() {
   }, [tree])
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
+  const [hasFocus, setHasFocus] = useState(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const virtualRef = useRef<VirtualListHandle>(null)
 
@@ -308,10 +309,13 @@ export function ExplorerView() {
       <div
         ref={containerRef}
         className={styles['view']}
+        data-focused={hasFocus}
         role="tree"
         tabIndex={0}
         onKeyDown={onKeyDown}
         onMouseDown={focusContainer}
+        onFocus={() => setHasFocus(true)}
+        onBlur={() => setHasFocus(false)}
         onContextMenu={(e) => onRowContextMenu(e, null)}
       >
         {visible.length > threshold ? (
