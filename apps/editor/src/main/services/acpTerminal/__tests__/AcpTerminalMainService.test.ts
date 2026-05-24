@@ -262,7 +262,7 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
       command: 'cmd',
       args: ['--flag'],
       cwd: '/abs/dir',
-      env: { FOO: 'bar' },
+      env: [{ name: 'FOO', value: 'bar' }],
     })
     const call = spawner.mock.calls[0]!
     expect(call[0]).toBe('cmd')
@@ -306,7 +306,10 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
     await svc.create({
       command: 'cmd',
       args: [],
-      env: { NODE_OPTIONS: '--require ./evil.js', SAFE: 'ok' },
+      env: [
+        { name: 'NODE_OPTIONS', value: '--require ./evil.js' },
+        { name: 'SAFE', value: 'ok' },
+      ],
     })
     const call = spawner.mock.calls[0]!
     expect(call[2].env?.NODE_OPTIONS).toBeUndefined()

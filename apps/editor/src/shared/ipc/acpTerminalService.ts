@@ -8,6 +8,11 @@
  *  service so the heavy lifting (child_process.spawn, stdout buffering, exit
  *  bookkeeping) lives in main where `node:child_process` is available.
  *
+ *  Types pass through from `@agentclientprotocol/sdk` unchanged — main owns the
+ *  protocol shape so renderer can passthrough without re-shaping fields.
+ *  `sessionId` is stripped at the renderer boundary because session routing /
+ *  ownership lives in renderer; main only spawns and bookkeeps the child proc.
+ *
  *  Security: cwd must be absolute and is validated against the session sandbox
  *  by the renderer before reaching this service; the main side additionally
  *  strips the ELECTRON_RUN_AS_NODE / NODE_OPTIONS env denylist (same set as the
@@ -16,37 +21,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
+import type {
+  CreateTerminalRequest,
+  CreateTerminalResponse,
+  TerminalOutputResponse,
+  WaitForTerminalExitResponse,
+} from '@agentclientprotocol/sdk'
 
-export interface AcpTerminalSpec {
-  /** Executable to run (resolved against PATH on the agent's behalf). */
-  readonly command: string
-  readonly args: readonly string[]
-  /** Extra environment variables merged on top of the inherited env. */
-  readonly env?: Readonly<Record<string, string>>
-  /** Absolute working directory. */
-  readonly cwd?: string
-  /**
-   * Maximum number of bytes of combined stdout+stderr buffered before the
-   * head is dropped and `truncated: true` is reported on subsequent reads.
-   * Defaults to the service's safety cap when unset.
-   */
-  readonly outputByteLimit?: number
-}
-
-export interface AcpTerminalExitInfo {
-  readonly exitCode?: number
-  readonly signal?: string
-}
-
-export interface AcpTerminalOutputSnapshot {
-  readonly output: string
-  readonly truncated: boolean
-  readonly exitStatus?: AcpTerminalExitInfo
-}
-
-export interface AcpTerminalCreateResultWire {
-  readonly terminalId: string
-}
+/** Spawn-time spec — SDK shape without the renderer-only `sessionId` field. */
+export type AcpTerminalCreateSpec = Omit<CreateTerminalRequest, 'sessionId'>
 
 /**
  * Main-side terminal pool. Lifecycle per terminalId:
@@ -61,9 +44,9 @@ export interface AcpTerminalCreateResultWire {
 export interface IAcpTerminalService {
   readonly _serviceBrand: undefined
 
-  create(spec: AcpTerminalSpec): Promise<AcpTerminalCreateResultWire>
-  output(terminalId: string): Promise<AcpTerminalOutputSnapshot>
-  waitForExit(terminalId: string): Promise<AcpTerminalExitInfo>
+  create(spec: AcpTerminalCreateSpec): Promise<CreateTerminalResponse>
+  output(terminalId: string): Promise<TerminalOutputResponse>
+  waitForExit(terminalId: string): Promise<WaitForTerminalExitResponse>
   kill(terminalId: string): Promise<void>
   release(terminalId: string): Promise<void>
 }

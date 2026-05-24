@@ -168,7 +168,10 @@ export class AcpClientService implements IAcpClientService {
         return {}
       },
       createTerminal: async (params: CreateTerminalRequest): Promise<CreateTerminalResponse> => {
-        let effectiveCwd: string | undefined
+        // path-policy gating: rewrite cwd to its normalized form so the agent
+        // can't smuggle `..` segments past the sandbox check.
+        const { sessionId: _sessionId, ...rest } = params
+        let spec: Omit<CreateTerminalRequest, 'sessionId'> = rest
         if (params.cwd != null) {
           const decision = this._pathPolicy.check(cwd, params.cwd)
           if (!decision.ok) {
@@ -178,50 +181,22 @@ export class AcpClientService implements IAcpClientService {
               `terminal/create rejected: ${decision.reason}`,
             )
           }
-          effectiveCwd = decision.normalized
+          spec = { ...rest, cwd: decision.normalized }
         }
-        const envRecord: Record<string, string> = {}
-        for (const v of params.env ?? []) envRecord[v.name] = v.value
-        const created = await this._terminals.create({
-          command: params.command,
-          args: params.args ?? [],
-          ...(Object.keys(envRecord).length > 0 ? { env: envRecord } : {}),
-          ...(effectiveCwd !== undefined ? { cwd: effectiveCwd } : {}),
-          ...(params.outputByteLimit != null ? { outputByteLimit: params.outputByteLimit } : {}),
-        })
+        const created = await this._terminals.create(spec)
         ownedTerminals.add(created.terminalId)
         this._telemetry.publicLog('acp.terminal_created', { command: params.command })
-        return { terminalId: created.terminalId }
+        return created
       },
       terminalOutput: async (params: TerminalOutputRequest): Promise<TerminalOutputResponse> => {
         assertTerminalOwned(ownedTerminals, params.terminalId)
-        const snap = await this._terminals.output(params.terminalId)
-        return {
-          output: snap.output,
-          truncated: snap.truncated,
-          ...(snap.exitStatus !== undefined
-            ? {
-                exitStatus: {
-                  ...(snap.exitStatus.exitCode !== undefined
-                    ? { exitCode: snap.exitStatus.exitCode }
-                    : {}),
-                  ...(snap.exitStatus.signal !== undefined
-                    ? { signal: snap.exitStatus.signal }
-                    : {}),
-                },
-              }
-            : {}),
-        }
+        return this._terminals.output(params.terminalId)
       },
       waitForTerminalExit: async (
         params: WaitForTerminalExitRequest,
       ): Promise<WaitForTerminalExitResponse> => {
         assertTerminalOwned(ownedTerminals, params.terminalId)
-        const exit = await this._terminals.waitForExit(params.terminalId)
-        return {
-          ...(exit.exitCode !== undefined ? { exitCode: exit.exitCode } : {}),
-          ...(exit.signal !== undefined ? { signal: exit.signal } : {}),
-        }
+        return this._terminals.waitForExit(params.terminalId)
       },
       killTerminal: async (params: KillTerminalRequest) => {
         assertTerminalOwned(ownedTerminals, params.terminalId)

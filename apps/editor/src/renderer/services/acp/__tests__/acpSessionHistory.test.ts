@@ -257,7 +257,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(2)
+    expect(persisted.schemaVersion).toBe(1)
     expect(persisted.entries).toHaveLength(1)
   })
 
@@ -361,32 +361,9 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(ids).toContain('persisted-s')
   })
 
-  it('migrates v1 entries forward (no configOptions field) without dropping them', async () => {
+  it('loads entries that carry configOptions verbatim', async () => {
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
-      entries: [
-        {
-          id: 'h1-old',
-          agentId: 'a',
-          sessionIdOnAgent: 'old',
-          title: 'old-v1',
-          createdAt: 1,
-          lastUsedAt: 1,
-        },
-      ],
-    })
-    await svc.initialize()
-    expect(svc.list().map((e) => e.title)).toEqual(['old-v1'])
-    // First write after migration should write v2.
-    svc.add({ agentId: 'a', sessionIdOnAgent: 'new', title: 'new-v2' })
-    await flushWrite()
-    const lastCall = storage.setCalls[storage.setCalls.length - 1]!
-    expect((lastCall.value as { schemaVersion: number }).schemaVersion).toBe(2)
-  })
-
-  it('loads v2 entries that carry configOptions verbatim', async () => {
-    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
-      schemaVersion: 2,
       entries: [
         {
           id: 'h1-v2',
@@ -407,9 +384,9 @@ describe('AcpSessionHistoryService — persistence', () => {
     })
   })
 
-  it('rejects v2 entries whose configOptions has non-string values', async () => {
+  it('rejects entries whose configOptions has non-string values', async () => {
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
-      schemaVersion: 2,
+      schemaVersion: 1,
       entries: [
         {
           id: 'bad',
@@ -733,7 +710,7 @@ describe('AcpSessionHistoryService — workspace scope', () => {
     const storage = new FakeStorage()
     // Pre-seed both buckets with distinct data so we can tell them apart.
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
-      schemaVersion: 2,
+      schemaVersion: 1,
       entries: [
         {
           id: 'a-only',
@@ -755,7 +732,7 @@ describe('AcpSessionHistoryService — workspace scope', () => {
       // and fires onDidChangeWorkspaceScope.
       storage.buckets.get(StorageScope.WORKSPACE)!.clear()
       storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
-        schemaVersion: 2,
+        schemaVersion: 1,
         entries: [
           {
             id: 'b-only',

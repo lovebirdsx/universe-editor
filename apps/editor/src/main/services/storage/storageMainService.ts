@@ -26,8 +26,6 @@ const LEGACY_WORKSPACE_KEYS = [
   'workbench.views',
   'workbench.layout',
   'workbench.recentFiles',
-  'acp.sessionHistory',
-  'acp.agentDefaults',
 ]
 
 export class MainStorageService implements IStorageService {

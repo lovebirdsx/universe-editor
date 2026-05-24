@@ -57,7 +57,6 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
-  type SessionModeState,
   type SessionNotification,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
@@ -506,12 +505,8 @@ describe('AcpSessionService.resumeSession — happy path', () => {
         { value: 'opus', name: 'Opus' },
       ],
     }
-    const modesFixture: SessionModeState = {
-      currentModeId: 'plan',
-      availableModes: [{ id: 'plan', name: 'Plan' }],
-    }
     const built = buildService({
-      loadSessionResult: { configOptions: [configFixture], modes: modesFixture },
+      loadSessionResult: { configOptions: [configFixture] },
     })
     svc = built.svc
     await built.history.initialize()
@@ -526,7 +521,6 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(svc.activeSession.get()?.id).toBe(resumed.id)
     const opts = resumed.configOptions.get()
     expect(opts.find((o) => o.id === 'model')?.currentValue).toBe('opus')
-    expect(opts.some((o) => o.category === 'mode')).toBe(true)
     // The resumed agent is the SECOND connection created by the fake client.
     expect(built.client.connected[1]?.agent.loadSessionCalls).toHaveLength(1)
   })

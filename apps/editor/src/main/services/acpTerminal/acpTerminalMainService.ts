@@ -12,6 +12,11 @@
  *  cwd must be absolute. The renderer additionally validates the path against
  *  the session sandbox via IAcpPathPolicy before reaching this service; this
  *  guard is defense-in-depth, not the primary check.
+ *
+ *  Data shape is SDK-native (`CreateTerminalResponse` / `TerminalOutputResponse`
+ *  / `WaitForTerminalExitResponse` / `TerminalExitStatus`). The SDK form of
+ *  `env` is `Array<EnvVariable>`; we convert to a Record only when feeding
+ *  child_process.spawn.
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
@@ -19,10 +24,14 @@ import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { Disposable, type ILogger } from '@universe-editor/platform'
 import type {
-  AcpTerminalCreateResultWire,
-  AcpTerminalExitInfo,
-  AcpTerminalOutputSnapshot,
-  AcpTerminalSpec,
+  CreateTerminalResponse,
+  EnvVariable,
+  TerminalExitStatus,
+  TerminalOutputResponse,
+  WaitForTerminalExitResponse,
+} from '@agentclientprotocol/sdk'
+import type {
+  AcpTerminalCreateSpec,
   IAcpTerminalService,
 } from '../../../shared/ipc/acpTerminalService.js'
 
@@ -57,20 +66,25 @@ const ENV_DENYLIST: readonly string[] = [
   'NODE_OPTIONS',
 ]
 
+function envArrayToRecord(env: readonly EnvVariable[] | undefined): Record<string, string> {
+  if (!env) return {}
+  const out: Record<string, string> = {}
+  for (const v of env) out[v.name] = v.value
+  return out
+}
+
 function sanitizeEnv(
   base: NodeJS.ProcessEnv,
-  overrides: Readonly<Record<string, string>> | undefined,
+  overrides: Readonly<Record<string, string>>,
 ): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) {
     if (ENV_DENYLIST.includes(k)) continue
     out[k] = v
   }
-  if (overrides) {
-    for (const [k, v] of Object.entries(overrides)) {
-      if (ENV_DENYLIST.includes(k)) continue
-      out[k] = v
-    }
+  for (const [k, v] of Object.entries(overrides)) {
+    if (ENV_DENYLIST.includes(k)) continue
+    out[k] = v
   }
   return out
 }
@@ -90,7 +104,7 @@ interface TerminalEntry {
    * terminal is released.
    */
   readonly waiters: Array<{
-    resolve(info: AcpTerminalExitInfo): void
+    resolve(info: WaitForTerminalExitResponse): void
     reject(err: Error): void
   }>
   /** UTF-8 decoded buffer of stdout+stderr interleaved in arrival order. */
@@ -98,7 +112,7 @@ interface TerminalEntry {
   /** True once we've dropped any bytes from `buffer`'s head. */
   truncated: boolean
   /** Set once we've observed `exit` or `error`. Stable for the entry's lifetime. */
-  exit?: AcpTerminalExitInfo
+  exit?: TerminalExitStatus
   /** True after `release()` — guards against double-release races. */
   released: boolean
 }
@@ -115,22 +129,22 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     super()
   }
 
-  create(spec: AcpTerminalSpec): Promise<AcpTerminalCreateResultWire> {
+  create(spec: AcpTerminalCreateSpec): Promise<CreateTerminalResponse> {
     if (typeof spec.command !== 'string' || spec.command.length === 0) {
       return Promise.reject(new Error('AcpTerminal: command must be a non-empty string'))
     }
-    if (spec.cwd !== undefined && !path.isAbsolute(spec.cwd)) {
+    if (spec.cwd != null && !path.isAbsolute(spec.cwd)) {
       return Promise.reject(
         new Error(`AcpTerminal: cwd must be an absolute path, got ${JSON.stringify(spec.cwd)}`),
       )
     }
-    const env = sanitizeEnv(process.env, spec.env)
+    const env = sanitizeEnv(process.env, envArrayToRecord(spec.env))
     const options: { cwd?: string; env?: NodeJS.ProcessEnv } = { env }
-    if (spec.cwd !== undefined) options.cwd = spec.cwd
+    if (spec.cwd != null) options.cwd = spec.cwd
 
     let proc: ChildProcessWithoutNullStreams
     try {
-      proc = this._spawn(spec.command, spec.args, options)
+      proc = this._spawn(spec.command, spec.args ?? [], options)
     } catch (err) {
       this._logger.warn(
         `[acpTerminal] spawn failed command=${spec.command}: ${(err as Error).message}`,
@@ -168,7 +182,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     proc.on('exit', (code, signal) => {
       if (entry.exit !== undefined) return
       this._logger.info(`[acpTerminal] exit id=${id} code=${code} signal=${signal}`)
-      const info: AcpTerminalExitInfo = {
+      const info: TerminalExitStatus = {
         ...(code !== null ? { exitCode: code } : {}),
         ...(signal !== null ? { signal } : {}),
       }
@@ -180,12 +194,12 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     return Promise.resolve({ terminalId: id })
   }
 
-  output(terminalId: string): Promise<AcpTerminalOutputSnapshot> {
+  output(terminalId: string): Promise<TerminalOutputResponse> {
     const entry = this._entries.get(terminalId)
     if (!entry || entry.released) {
       return Promise.reject(new Error(`AcpTerminal: unknown terminal ${terminalId}`))
     }
-    const snapshot: AcpTerminalOutputSnapshot = {
+    const snapshot: TerminalOutputResponse = {
       output: entry.buffer,
       truncated: entry.truncated,
       ...(entry.exit !== undefined ? { exitStatus: entry.exit } : {}),
@@ -193,15 +207,15 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     return Promise.resolve(snapshot)
   }
 
-  waitForExit(terminalId: string): Promise<AcpTerminalExitInfo> {
+  waitForExit(terminalId: string): Promise<WaitForTerminalExitResponse> {
     const entry = this._entries.get(terminalId)
     if (!entry || entry.released) {
       return Promise.reject(new Error(`AcpTerminal: unknown terminal ${terminalId}`))
     }
     if (entry.exit !== undefined) {
-      return Promise.resolve(entry.exit)
+      return Promise.resolve(exitStatusToWaitResponse(entry.exit))
     }
-    return new Promise<AcpTerminalExitInfo>((resolve, reject) => {
+    return new Promise<WaitForTerminalExitResponse>((resolve, reject) => {
       entry.waiters.push({ resolve, reject })
     })
   }
@@ -278,6 +292,14 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
   private _drainWaiters(entry: TerminalEntry): void {
     const info = entry.exit
     if (!info) return
-    for (const w of entry.waiters.splice(0)) w.resolve(info)
+    const resp = exitStatusToWaitResponse(info)
+    for (const w of entry.waiters.splice(0)) w.resolve(resp)
+  }
+}
+
+function exitStatusToWaitResponse(info: TerminalExitStatus): WaitForTerminalExitResponse {
+  return {
+    ...(info.exitCode != null ? { exitCode: info.exitCode } : {}),
+    ...(info.signal != null ? { signal: info.signal } : {}),
   }
 }

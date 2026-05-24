@@ -11,12 +11,17 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 
 | 文件 | 职责 |
 |---|---|
-| `acpSessionService.ts` | 多会话生命周期 + observable 聚合（messages / toolCalls / plan / configOptions） |
+| `acpSessionService.ts` | 多会话 facade：注册 / 查找 + `sessions` observable + IAcpClientNotificationSink 分发 + createSession/resumeSession |
+| `acpSession.ts` | `AcpSession` view-model：messages / toolCalls / plan / pendingPermission / availableCommands observable + `applyUpdate` 状态机 |
+| `acpSessionConfigOptions.ts` | `ConfigOptionStateMachine`：configOptions observable + echo 抑制 + `setSessionConfigOption` 推送（注入到 `AcpSession`） |
+| `acpSessionRestoreCoordinator.ts` | 启动 / workspace-swap 恢复协议 + `session/list` 扫描 + `session/delete` 转发 |
 | `acpClientService.ts` | 进程启动 + SDK `ClientSideConnection` 装配 + fs/terminal/permission 网关 |
 | `acpAgentRegistry.ts` | 内置 agent 预设 + 用户 `acp.agents` 配置合并 + PATH 探测 |
 | `acpPathPolicy.ts` | 沙盒纯函数：cwd 相对性 + 敏感前缀拒绝（`.ssh` / `.aws` / `.env`） |
 | `acpPermissionHandler.ts` | `acp.permissions.autoApprove` 自动批准 + Memory 层持久化 |
-| `acpSessionHistory.ts` | 会话元数据落盘（`IStorageService` GLOBAL，`MAX_ENTRIES=100`） |
+| `persistedStateBase.ts` | 双桶持久化基类（WORKSPACE + GLOBAL fallback），共享 `_reload` / `_writeNow` / debounce 框架 |
+| `acpSessionHistory.ts` | 会话元数据落盘（继承 `PersistedStateBase`，`MAX_ENTRIES=100`） |
+| `acpAgentDefaultsService.ts` | 每 agent configOption 默认值（继承 `PersistedStateBase`） |
 | `acpSessionEditorInput.ts` | `EditorInput` 子类——会话即编辑器输入，可序列化恢复 |
 | `sdkHostStream.ts` | `IAcpHostService`（字符串 IO）→ SDK `Stream<AnyMessage>`（Uint8Array IO）适配 |
 | `promptMentions.ts` | `@文件` 提及解析 → `resource_link` ContentBlock |
@@ -57,7 +62,7 @@ PromptInput / ChatView
 IAcpHostService.onStdout(chunk: string)
   → sdkHostStream 重编码为 Uint8Array
   → ndJsonStream 解析 → ClientSideConnection 回调 clientImpl
-    ├─ sessionUpdate(SessionNotification)        → AcpSession.applyUpdate
+    ├─ sessionUpdate(SessionNotification)        → AcpSessionService.onSessionUpdate → AcpSession.applyUpdate
     ├─ requestPermission(RequestPermissionRequest) → tryAutoApprove or PermissionCard
     ├─ readTextFile / writeTextFile               → AcpPathPolicy 检查 → IFileService
     └─ createTerminal / terminalOutput /
@@ -67,11 +72,11 @@ IAcpHostService.onStdout(chunk: string)
 
 **stderr 不进 SDK 流**：单独写 `OutputChannel`（喂进去会破坏 JSON 解析）。
 
-### `applyUpdate` 处理的九种 SessionUpdate
+### `applyUpdate` 处理的八种 SessionUpdate
 
-`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan` / `available_commands_update` / `current_mode_update` / `config_option_update`。
+`user_message_chunk` / `agent_message_chunk` / `agent_thought_chunk` / `tool_call` / `tool_call_update` / `plan` / `available_commands_update` / `config_option_update`。
 
-新增类型在 `acpSessionService.ts` 的 `applyUpdate()` switch 加 case；observable 更新走 `transaction()` 进 **16ms 防抖事务**（参见 `_openBatchedTx` / `_commitBatchedTx`），避免每个 chunk 触发一次 React 重渲染。
+新增类型在 `acpSession.ts` 的 `AcpSession.applyUpdate()` switch 加 case；observable 更新走 `transaction()` 进 **16ms 防抖事务**（参见 `_batchedTx` / `_commitBatchedTx`），避免每个 chunk 触发一次 React 重渲染。`config_option_update` 单独 delegate 到 `ConfigOptionStateMachine.ingestUpdate`，因为它需要 echo 抑制。
 
 ## 套路 ACP-A：加一个内置 agent 预设
 
@@ -79,7 +84,7 @@ IAcpHostService.onStdout(chunk: string)
 
 ## 套路 ACP-B：处理一个新的 SessionUpdate 类型
 
-1. `acpSessionService.ts` 的 `AcpSession.applyUpdate()` switch 加 case
+1. `acpSession.ts` 的 `AcpSession.applyUpdate()` switch 加 case
 2. 用 `transaction((tx) => { observable.set(value, tx) })` 包写入（共用 16ms 批次）
 3. 如需新 view-model，挂在 `AcpSession` 上而不是 SDK 类型上
 4. UI 通过 `useObservable` 自动 react，无需改组件订阅
@@ -97,19 +102,23 @@ IAcpHostService.onStdout(chunk: string)
 
 ## 套路 ACP-E：扩展会话历史持久化字段
 
-`acpSessionHistory.ts`：
+`acpSessionHistory.ts` 继承 `PersistedStateBase`：
 1. `SCHEMA_VERSION++`
-2. `IAcpSessionHistoryEntry` 加字段
-3. 在 load 路径加一段从旧版本迁移的代码（老版本 entry 缺字段时给默认值）
+2. `AcpSessionHistoryEntry` 加字段
+3. 在 `_deserialize` 的 `migrate()` 加一段从旧版本迁移的代码（老版本 entry 缺字段时给默认值）
 4. 不要随意提 `MAX_ENTRIES=100`（写入是全量序列化，提高会拖慢启动）
+
+新加双桶持久化服务时直接继承 `PersistedStateBase<TState>`，实现五个抽象钩子（`_emptyState` / `_serialize` / `_deserialize` / `_onStateReplaced`、可选 `_mergeOnLoad`），框架负责 cold-start 时序、workspace-swap 重读、100ms 防抖写、`dispose` 时同步 flush。
 
 ## 测试模式
 
 | 文件 | 焦点 |
 |---|---|
 | `AcpSessionService.test.ts` | 会话生命周期 / 消息聚合 / 工具调用 / 计划 / 权限分发 |
-| `AcpSessionService.configOptions.test.ts` | mode / configOption 兼容层 |
+| `AcpSessionService.configOptions.test.ts` | configOption 同步（facade 集成） |
+| `acpSessionConfigOptions.test.ts` | `ConfigOptionStateMachine` 单独单测：echo 抑制 + 持久化分支 |
 | `AcpSessionService.resume.test.ts` | `loadSession` 恢复路径 |
+| `acpSessionRestoreCoordinator.test.ts` | 启动期 hydrate + `_pendingRestoreHistoryId` + workspace-swap |
 | `AcpClientService.terminal.test.ts` | terminal 所有权 + 跨连接拒绝 + 连接退出回收 |
 | `AcpAgentRegistry.test.ts` | 预设合并 / PATH 探测 |
 | `acpPathPolicy.test.ts` | 沙盒边界（各 OS 路径标准化） |
@@ -123,16 +132,16 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 
 ## 持久化
 
-`AcpSessionHistory` → `IStorageService`，`key='acp.sessionHistory'`，`schemaVersion=2`，**双桶 scope 策略**：
+`AcpSessionHistory` → `IStorageService`，`key='acp.sessionHistory'`，`schemaVersion=1`，**双桶 scope 策略**（基类 `PersistedStateBase` 提供）：
 
 - 有 workspace 打开 → `StorageScope.WORKSPACE`（每个工作区独立的 100 条 LRU 历史）
 - 空窗口 → `StorageScope.GLOBAL` 兜底桶
-- workspace 切换由 `IStorageService.onDidChangeWorkspaceScope` 驱动：服务内 `_reload()` 刷新 in-memory 状态，AcpSessionService 联动关闭所有 live sessions 并从新桶尝试恢复 `acp.activeSessionHistoryId`
+- workspace 切换由 `IStorageService.onDidChangeWorkspaceScope` 驱动：基类 `_reload()` 刷新 in-memory 状态，AcpSessionService 联动关闭所有 live sessions 并通过 `AcpSessionRestoreCoordinator.onWorkspaceSwap()` 从新桶尝试恢复 `acp.activeSessionHistoryId`
 
 `AcpAgentDefaults`（`key='acp.agentDefaults'`）同样的双桶策略——workspace-A 选过的 `MODEL=opus` 不会污染 workspace-B 的新会话默认值。
 
 ```
-{ schemaVersion: 2, entries: [{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt, configOptions? }] }
+{ schemaVersion: 1, entries: [{ id, agentId, sessionIdOnAgent, title, cwd, createdAt, lastUsedAt, configOptions? }] }
 ```
 
 **只存字符串元数据**——无 `ContentBlock` / `SessionUpdate` 落盘。恢复时拿 `sessionIdOnAgent` 调 `loadSession` 让 agent 重放历史。
@@ -149,8 +158,7 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 6. **Terminal ownership 闭包**：`connect()` 里 `const ownedTerminals = new Set<string>()`，五个 terminal 方法都闭包它。**跨连接访问抛 `RequestError.invalidParams('Unknown terminal …')`**；连接关闭遍历 `release(id)` 兜底回收。
 7. **stderr 独立通道**：`IAcpHostService.onStderr` **绝不**喂给 SDK ndJsonStream——单独 `OutputChannel`，便于诊断。
 8. **env denylist**：spawn 子进程前剥 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`，否则继承 Electron 的 fork 上下文，agent 会怪异崩溃。main + renderer 两端都要做。
-9. **Legacy modes 兼容层别删**：旧 agent 返回 `modes[]` 而非 `configOptions[]`。`_legacyModes` / `_reconcileLegacyModeOption` / `_materializeConfigOptions` 合成虚拟 ConfigOption，并把 `setConfigOption` 路由到 `setSessionMode`。新 agent 直接走 `setSessionConfigOption`。
-10. **16ms 防抖事务**：`applyUpdate` 内 messages / toolCalls / plan 共用一个 `transaction()`，单次 observer 通知。新增更新类别也要进同一事务，否则会产生抖动。
+9. **16ms 防抖事务**：`applyUpdate` 内 messages / toolCalls / plan 共用一个 `transaction()`，单次 observer 通知。新增更新类别也要进同一事务，否则会产生抖动。
 
 ## 参考路径
 

@@ -11,24 +11,22 @@
  *  storage keys.
  *
  *  Scope follows the same workspace-first + global-fallback policy as session
- *  history: each workspace keeps its own per-agent defaults so a `MODEL=opus`
- *  choice in workspace-A doesn't seep into workspace-B's brand new sessions.
+ *  history (delegated to `PersistedStateBase`): each workspace keeps its own
+ *  per-agent defaults so a `MODEL=opus` choice in workspace-A doesn't seep
+ *  into workspace-B's brand new sessions.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
-  Disposable,
-  Event,
   IStorageService,
   ILoggerService,
   ITelemetryService,
   IWorkspaceService,
-  StorageScope,
   observableValue,
-  type ILogger,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
+import { PersistedStateBase } from './persistedStateBase.js'
 
 export interface IAcpAgentDefaultsService {
   readonly _serviceBrand: undefined
@@ -48,186 +46,115 @@ export const IAcpAgentDefaultsService =
 
 const STORAGE_KEY = 'acp.agentDefaults'
 const SCHEMA_VERSION = 1
-const INITIAL_LOAD_TIMEOUT_MS = 500
 
 interface PersistedShape {
   readonly schemaVersion: number
   readonly defaults: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
 
+type DefaultsState = Record<string, Record<string, string>>
+
 const EMPTY: Readonly<Record<string, string>> = Object.freeze({})
 
-export class AcpAgentDefaultsService extends Disposable implements IAcpAgentDefaultsService {
+export class AcpAgentDefaultsService
+  extends PersistedStateBase<DefaultsState>
+  implements IAcpAgentDefaultsService
+{
   declare readonly _serviceBrand: undefined
 
   readonly defaults: ISettableObservable<Readonly<Record<string, Readonly<Record<string, string>>>>>
 
-  private _defaults: Record<string, Record<string, string>> = {}
-  private _loaded = false
-  private _loadPromise: Promise<void> | undefined
-  private _writeTimer: ReturnType<typeof setTimeout> | undefined
-  /** Set while `_reload` is mid-swap so the debounced write doesn't fire into a half-built state. */
-  private _writeSuspended = false
-  /** The scope our current `_defaults` snapshot was loaded from; flush writes go here. */
-  private _currentLoadedScope: StorageScope | undefined
-  private readonly _logger: ILogger
-
   constructor(
-    @IStorageService private readonly _storage: IStorageService,
-    @IWorkspaceService private readonly _workspace: IWorkspaceService,
-    @ITelemetryService private readonly _telemetry: ITelemetryService,
+    @IStorageService storage: IStorageService,
+    @IWorkspaceService workspace: IWorkspaceService,
+    @ITelemetryService telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
   ) {
-    super()
-    this._logger = loggerService.createLogger({
-      id: 'acpAgentDefaults',
-      name: 'ACP Agent Defaults',
+    super(storage, workspace, telemetry, loggerService, {
+      storageKey: STORAGE_KEY,
+      loggerId: 'acpAgentDefaults',
+      loggerName: 'ACP Agent Defaults',
+      persistFailureEvent: 'acp.agent_defaults_persist_failed',
     })
     this.defaults = observableValue<Readonly<Record<string, Readonly<Record<string, string>>>>>(
       'acp.agentDefaults',
       {},
     )
-    this._register(this._storage.onDidChangeWorkspaceScope(() => void this._reload()))
-  }
-
-  initialize(): Promise<void> {
-    if (this._loaded) return Promise.resolve()
-    if (this._loadPromise) return this._loadPromise
-    this._loadPromise = this._scheduleInitialLoad()
-    return this._loadPromise
   }
 
   getDefaults(agentId: string): Readonly<Record<string, string>> {
-    const m = this._defaults[agentId]
+    const m = this._state[agentId]
     return m ? { ...m } : EMPTY
   }
 
   setDefault(agentId: string, configId: string, value: string): void {
-    const cur = this._defaults[agentId]
+    const cur = this._state[agentId]
     if (cur && cur[configId] === value) return
     const nextForAgent: Record<string, string> = { ...(cur ?? {}), [configId]: value }
-    this._defaults = { ...this._defaults, [agentId]: nextForAgent }
-    this._publish()
+    this._state = { ...this._state, [agentId]: nextForAgent }
+    this._publishState()
     this._scheduleWrite()
   }
 
-  override dispose(): void {
-    if (this._writeTimer) {
-      clearTimeout(this._writeTimer)
-      this._writeTimer = undefined
-      void this._writeNow()
+  // -- PersistedStateBase hooks ----------------------------------------
+
+  protected override _emptyState(): DefaultsState {
+    return {}
+  }
+
+  protected override _serialize(state: DefaultsState): PersistedShape {
+    return { schemaVersion: SCHEMA_VERSION, defaults: state }
+  }
+
+  protected override _deserialize(raw: unknown): DefaultsState | undefined {
+    if (typeof raw !== 'object' || raw === null) return undefined
+    const o = raw as PersistedShape
+    if (o.schemaVersion !== SCHEMA_VERSION || !isNestedStringRecord(o.defaults)) {
+      this._logger.warn(`[acp] ignoring acp.agentDefaults with schemaVersion=${o.schemaVersion}`)
+      return undefined
     }
-    super.dispose()
-  }
-
-  // -- internals ---------------------------------------------------------
-
-  private _currentScope(): StorageScope {
-    return this._workspace.current ? StorageScope.WORKSPACE : StorageScope.GLOBAL
-  }
-
-  private async _scheduleInitialLoad(): Promise<void> {
-    if (!this._workspace.current) {
-      await Promise.race([
-        Event.toPromise(this._storage.onDidChangeWorkspaceScope),
-        new Promise<void>((resolve) => setTimeout(resolve, INITIAL_LOAD_TIMEOUT_MS)),
-      ])
+    // Clone so we own the mutable shape.
+    const next: DefaultsState = {}
+    for (const [agentId, m] of Object.entries(o.defaults)) {
+      next[agentId] = { ...m }
     }
-    await this._loadFromScope(this._currentScope())
+    return next
   }
 
-  private async _reload(): Promise<void> {
-    this._writeSuspended = true
-    try {
-      if (this._writeTimer) {
-        clearTimeout(this._writeTimer)
-        this._writeTimer = undefined
-        await this._writeNow()
-      }
-      this._defaults = {}
-      this._currentLoadedScope = undefined
-      this._loaded = false
-      this._loadPromise = undefined
-      this._publish()
-      await this._loadFromScope(this._currentScope())
-    } finally {
-      this._writeSuspended = false
+  protected override _mergeOnLoad(loaded: DefaultsState, current: DefaultsState): DefaultsState {
+    // Any defaults set in-memory before load completed win over the persisted
+    // row for the same agentId.
+    const next: DefaultsState = {}
+    for (const [agentId, m] of Object.entries(loaded)) {
+      next[agentId] = { ...m }
     }
-  }
-
-  private async _loadFromScope(scope: StorageScope): Promise<void> {
-    try {
-      const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, scope)
-      if (
-        raw &&
-        typeof raw === 'object' &&
-        raw.schemaVersion === SCHEMA_VERSION &&
-        isStringRecord2(raw.defaults)
-      ) {
-        // Clone so we own the mutable shape; freeze ensures callers don't
-        // accidentally mutate the persisted-in-memory copy.
-        const next: Record<string, Record<string, string>> = {}
-        for (const [agentId, m] of Object.entries(raw.defaults)) {
-          next[agentId] = { ...m }
-        }
-        // Merge: any defaults set in-memory before load completed win over the
-        // persisted row for the same agentId.
-        for (const [agentId, m] of Object.entries(this._defaults)) {
-          next[agentId] = { ...(next[agentId] ?? {}), ...m }
-        }
-        this._defaults = next
-        this._publish()
-      } else if (raw !== undefined) {
-        this._logger.warn(
-          `[acp] ignoring acp.agentDefaults with schemaVersion=${
-            (raw as PersistedShape).schemaVersion
-          }`,
-        )
-      }
-    } catch (err) {
-      this._logger.warn(`[acp] failed to load agent defaults: ${(err as Error).message}`)
-    } finally {
-      this._loaded = true
-      this._currentLoadedScope = scope
+    for (const [agentId, m] of Object.entries(current)) {
+      next[agentId] = { ...(next[agentId] ?? {}), ...m }
     }
+    return next
   }
 
-  private _publish(): void {
+  protected override _onStateReplaced(state: DefaultsState): void {
+    this._publishSnapshot(state)
+  }
+
+  // -- private helpers -------------------------------------------------
+
+  private _publishState(): void {
+    this._publishSnapshot(this._state)
+  }
+
+  private _publishSnapshot(state: DefaultsState): void {
     // Freeze the inner maps so observers can rely on referential stability.
     const snapshot: Record<string, Readonly<Record<string, string>>> = {}
-    for (const [agentId, m] of Object.entries(this._defaults)) {
+    for (const [agentId, m] of Object.entries(state)) {
       snapshot[agentId] = { ...m }
     }
     this.defaults.set(snapshot, undefined)
   }
-
-  private _scheduleWrite(): void {
-    if (this._writeSuspended) return
-    if (this._writeTimer) return
-    this._writeTimer = setTimeout(() => {
-      this._writeTimer = undefined
-      void this._writeNow()
-    }, 100)
-  }
-
-  private async _writeNow(): Promise<void> {
-    const scope = this._currentLoadedScope ?? this._currentScope()
-    try {
-      const payload: PersistedShape = {
-        schemaVersion: SCHEMA_VERSION,
-        defaults: this._defaults,
-      }
-      await this._storage.set(STORAGE_KEY, payload, scope)
-    } catch (err) {
-      this._telemetry.publicLogError('acp.agent_defaults_persist_failed', {
-        error: (err as Error).message,
-      })
-      this._logger.warn(`[acp] failed to persist agent defaults: ${(err as Error).message}`)
-    }
-  }
 }
 
-function isStringRecord2(
+function isNestedStringRecord(
   v: unknown,
 ): v is Readonly<Record<string, Readonly<Record<string, string>>>> {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false

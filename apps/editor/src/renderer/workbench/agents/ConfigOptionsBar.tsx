@@ -2,9 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ConfigOptionsBar — renders session-level switches (model / mode / thought
  *  level / custom) as a row of compact <select> dropdowns above the prompt
- *  input. Legacy `modes` are surfaced through the same path: the service
- *  synthesizes a category="mode" ConfigOption from the legacy state so the UI
- *  doesn't branch on which protocol shape the agent uses.
+ *  input.
  *--------------------------------------------------------------------------------------------*/
 
 import { useObservable } from '../useService.js'

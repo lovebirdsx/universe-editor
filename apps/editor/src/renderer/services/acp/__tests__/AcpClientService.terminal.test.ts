@@ -36,13 +36,13 @@ import type {
   AcpStdioChunk,
   IAcpHostService,
 } from '../../../../shared/ipc/acpHostService.js'
+import type { IAcpTerminalService } from '../../../../shared/ipc/acpTerminalService.js'
 import type {
-  AcpTerminalCreateResultWire,
-  AcpTerminalExitInfo,
-  AcpTerminalOutputSnapshot,
-  AcpTerminalSpec,
-  IAcpTerminalService,
-} from '../../../../shared/ipc/acpTerminalService.js'
+  CreateTerminalRequest,
+  CreateTerminalResponse,
+  TerminalOutputResponse,
+  WaitForTerminalExitResponse,
+} from '@agentclientprotocol/sdk'
 
 interface InMemoryAcpHostHarness extends IDisposable {
   readonly host: IAcpHostService
@@ -207,17 +207,19 @@ interface FakeTerminalService extends IAcpTerminalService {
 function makeFakeTerminalService(): FakeTerminalService {
   let seq = 0
   const create = vi.fn(
-    async (_spec: AcpTerminalSpec): Promise<AcpTerminalCreateResultWire> => ({
+    async (_spec: Omit<CreateTerminalRequest, 'sessionId'>): Promise<CreateTerminalResponse> => ({
       terminalId: `t${++seq}`,
     }),
   )
   const output = vi.fn(
-    async (_id: string): Promise<AcpTerminalOutputSnapshot> => ({
+    async (_id: string): Promise<TerminalOutputResponse> => ({
       output: '',
       truncated: false,
     }),
   )
-  const waitForExit = vi.fn(async (_id: string): Promise<AcpTerminalExitInfo> => ({ exitCode: 0 }))
+  const waitForExit = vi.fn(
+    async (_id: string): Promise<WaitForTerminalExitResponse> => ({ exitCode: 0 }),
+  )
   const kill = vi.fn(async (_id: string): Promise<void> => {})
   const release = vi.fn(async (_id: string): Promise<void> => {})
   return {
@@ -319,10 +321,13 @@ describe('AcpClientService — terminal/create routing', () => {
       expect(resp.error).toBeUndefined()
       expect(resp.result).toEqual({ terminalId: 't1' })
       expect(h.terminals.create).toHaveBeenCalledTimes(1)
-      const passed = h.terminals.create.mock.calls[0]![0] as AcpTerminalSpec
+      const passed = h.terminals.create.mock.calls[0]![0] as Omit<
+        CreateTerminalRequest,
+        'sessionId'
+      >
       expect(passed.command).toBe('rg')
       expect(passed.args).toEqual(['--json', 'pattern'])
-      expect(passed.env).toEqual({ FOO: 'bar' })
+      expect(passed.env).toEqual([{ name: 'FOO', value: 'bar' }])
       expect(passed.cwd).toBe(`${CWD}/src`)
       expect(passed.outputByteLimit).toBe(8192)
     } finally {
@@ -339,8 +344,11 @@ describe('AcpClientService — terminal/create routing', () => {
         command: 'ls',
       })
       expect(resp.error).toBeUndefined()
-      const passed = h.terminals.create.mock.calls[0]![0] as AcpTerminalSpec
-      expect(passed.args).toEqual([])
+      const passed = h.terminals.create.mock.calls[0]![0] as Omit<
+        CreateTerminalRequest,
+        'sessionId'
+      >
+      expect(passed.args).toBeUndefined()
       expect(passed.env).toBeUndefined()
       expect(passed.cwd).toBeUndefined()
       expect(passed.outputByteLimit).toBeUndefined()

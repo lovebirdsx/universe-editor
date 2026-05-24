@@ -167,9 +167,7 @@ export class SelectAgentAction extends Action2 {
 //
 // These three actions all do the same thing: locate the active session's
 // ConfigOption for a given category, show a QuickPick of its values, then
-// apply the choice through `session.setConfigOption()`. The session service
-// already merges legacy `modes` into the `mode` category, so all three work
-// uniformly regardless of which protocol shape the agent uses.
+// apply the choice through `session.setConfigOption()`.
 // ---------------------------------------------------------------------------
 
 async function pickConfigOption(

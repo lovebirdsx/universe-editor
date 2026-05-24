@@ -56,8 +56,6 @@ import {
   type RequestPermissionResponse,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
-  type SetSessionModeRequest,
-  type SetSessionModeResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
@@ -223,7 +221,6 @@ class StubAgent implements Agent {
   readonly loadSessionCalls: LoadSessionRequest[] = []
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
-  readonly setSessionModeCalls: SetSessionModeRequest[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
 
   constructor(
@@ -254,11 +251,6 @@ class StubAgent implements Agent {
 
   cancel(params: CancelNotification): Promise<void> {
     this.cancelCalls.push(params)
-    return Promise.resolve()
-  }
-
-  setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse | void> {
-    this.setSessionModeCalls.push(params)
     return Promise.resolve()
   }
 

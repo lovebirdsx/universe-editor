@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Stage 7 tests for AcpSessionService — covers ConfigOption ingestion, legacy
- *  `modes` synthesis, and the setConfigOption write path (modern + legacy
- *  fallback). The fake ACP client wires an in-memory ACP stream pair to a stub
- *  Agent so each test can parameterize `session/new` response shape and the
- *  setConfigOption / setSessionMode behaviour.
+ *  Tests for AcpSessionService — covers ConfigOption ingestion, the
+ *  setConfigOption write path, and the in-flight echo-suppression guard. The
+ *  fake ACP client wires an in-memory ACP stream pair to a stub Agent so each
+ *  test can parameterize the `session/new` response shape and the
+ *  setConfigOption behaviour.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -53,11 +53,8 @@ import {
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionConfigOption,
-  type SessionModeState,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
-  type SetSessionModeRequest,
-  type SetSessionModeResponse,
 } from '@agentclientprotocol/sdk'
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
@@ -195,15 +192,12 @@ class FakeStorage implements IStorageService {
 interface FakeAcpClientOptions {
   /** Extra fields to merge into the `session/new` result. */
   newSessionResult?: {
-    modes?: SessionModeState
     configOptions?: readonly SessionConfigOption[]
   }
   /** Result handed back for `session/set_config_option`. Defaults to `{ configOptions: [] }`. */
   setConfigOptionResult?: { configOptions: readonly SessionConfigOption[] }
   /** Error code/message to throw from `session/set_config_option`. */
   setConfigOptionError?: { code: number; message: string }
-  /** Result for `session/set_mode`. Defaults to an empty object. */
-  setSessionModeResult?: Record<string, unknown>
   /**
    * Optional promise the agent will await BEFORE returning from
    * `session/set_config_option` — used by the in-flight suppression test to
@@ -218,7 +212,6 @@ class StubAgent implements Agent {
   readonly loadSessionCalls: LoadSessionRequest[] = []
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
-  readonly setSessionModeCalls: SetSessionModeRequest[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
 
   constructor(
@@ -256,11 +249,6 @@ class StubAgent implements Agent {
   cancel(params: CancelNotification): Promise<void> {
     this.cancelCalls.push(params)
     return Promise.resolve()
-  }
-
-  setSessionMode(params: SetSessionModeRequest): Promise<SetSessionModeResponse | void> {
-    this.setSessionModeCalls.push(params)
-    return Promise.resolve((this._opts.setSessionModeResult ?? {}) as SetSessionModeResponse)
   }
 
   setSessionConfigOption(
@@ -365,7 +353,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   return { svc, client, history, agentDefaults }
 }
 
-describe('AcpSessionService — Stage 7 init', () => {
+describe('AcpSessionService — init', () => {
   let svc: AcpSessionService
 
   afterEach(() => {
@@ -391,65 +379,9 @@ describe('AcpSessionService — Stage 7 init', () => {
     expect(opts).toHaveLength(1)
     expect(opts[0]).toEqual(fixture)
   })
-
-  it('synthesizes a mode ConfigOption from legacy modes', async () => {
-    const modes: SessionModeState = {
-      currentModeId: 'plan',
-      availableModes: [
-        { id: 'plan', name: 'Plan' },
-        { id: 'act', name: 'Act' },
-      ],
-    }
-    const built = buildService({ newSessionResult: { modes } })
-    svc = built.svc
-    const s = await svc.createSession()
-    const opts = s.configOptions.get()
-    expect(opts).toHaveLength(1)
-    expect(opts[0]?.category).toBe('mode')
-    expect(opts[0]?.currentValue).toBe('plan')
-    expect(opts[0]?.type).toBe('select')
-    const first = opts[0]
-    if (first && first.type === 'select') {
-      const values = (first.options as readonly { value: string }[]).map((o) => o.value)
-      expect(values).toEqual(['plan', 'act'])
-    }
-    // The synthetic id is stable so the upstream code can detect "legacy mode".
-    expect(opts[0]?.id).toBe('__legacy_mode__')
-  })
-
-  it('prefers server-supplied configOptions over legacy modes when both are present', async () => {
-    const built = buildService({
-      newSessionResult: {
-        modes: {
-          currentModeId: 'plan',
-          availableModes: [{ id: 'plan', name: 'Plan' }],
-        },
-        configOptions: [
-          {
-            id: 'mode',
-            name: 'Mode',
-            category: 'mode',
-            type: 'select',
-            currentValue: 'edit',
-            options: [
-              { value: 'edit', name: 'Edit' },
-              { value: 'chat', name: 'Chat' },
-            ],
-          },
-        ],
-      },
-    })
-    svc = built.svc
-    const s = await svc.createSession()
-    const opts = s.configOptions.get()
-    // Only the server's mode option appears — the synthetic one is suppressed.
-    expect(opts).toHaveLength(1)
-    expect(opts[0]?.id).toBe('mode')
-    expect(opts[0]?.currentValue).toBe('edit')
-  })
 })
 
-describe('AcpSessionService — Stage 7 session/update fan-out', () => {
+describe('AcpSessionService — session/update fan-out', () => {
   let svc: AcpSessionService
   let client: FakeAcpClientService
 
@@ -530,30 +462,9 @@ describe('AcpSessionService — Stage 7 session/update fan-out', () => {
     })
     expect(s.configOptions.get()[0]?.currentValue).toBe('low')
   })
-
-  it('applies current_mode_update to the synthetic mode option', async () => {
-    const modes: SessionModeState = {
-      currentModeId: 'plan',
-      availableModes: [
-        { id: 'plan', name: 'Plan' },
-        { id: 'act', name: 'Act' },
-      ],
-    }
-    svc.dispose()
-    const built = buildService({ newSessionResult: { modes } })
-    svc = built.svc
-    client = built.client
-    const s = await svc.createSession()
-    expect(s.configOptions.get()[0]?.currentValue).toBe('plan')
-    client.connected[0]!.sink.onSessionUpdate({
-      sessionId: 'agent-1',
-      update: { sessionUpdate: 'current_mode_update', currentModeId: 'act' },
-    })
-    expect(s.configOptions.get()[0]?.currentValue).toBe('act')
-  })
 })
 
-describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
+describe('AcpSessionService — setConfigOption write path', () => {
   let svc: AcpSessionService
   let client: FakeAcpClientService
 
@@ -584,73 +495,12 @@ describe('AcpSessionService — Stage 7 setConfigOption write path', () => {
     await s.setConfigOption('model', 'opus')
     const agent = client.connected[0]!.agent
     expect(agent.setConfigOptionCalls).toHaveLength(1)
-    expect(agent.setSessionModeCalls).toHaveLength(0)
     expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
     expect(agent.setConfigOptionCalls[0]).toMatchObject({
       sessionId: 'agent-1',
       configId: 'model',
       value: 'opus',
     })
-  })
-
-  it('falls back to session/set_mode for legacy-mode-only agents', async () => {
-    const modes: SessionModeState = {
-      currentModeId: 'plan',
-      availableModes: [
-        { id: 'plan', name: 'Plan' },
-        { id: 'act', name: 'Act' },
-      ],
-    }
-    const built = buildService({ newSessionResult: { modes } })
-    svc = built.svc
-    client = built.client
-    const s = await svc.createSession()
-    // The synthetic option's id is __legacy_mode__; the service must detect
-    // that and route through session/set_mode, not session/set_config_option.
-    const opt = s.configOptions.get()[0]!
-    await s.setConfigOption(opt.id, 'act')
-    const agent = client.connected[0]!.agent
-    expect(agent.setSessionModeCalls).toHaveLength(1)
-    expect(agent.setConfigOptionCalls).toHaveLength(0)
-    expect(s.configOptions.get()[0]?.currentValue).toBe('act')
-    expect(agent.setSessionModeCalls[0]).toMatchObject({
-      sessionId: 'agent-1',
-      modeId: 'act',
-    })
-  })
-
-  it('uses session/set_config_option when both legacy modes and a server mode option exist', async () => {
-    // Server provided a real mode ConfigOption — legacy `modes` is stored only
-    // for awareness, but writes must go through the modern endpoint.
-    const built = buildService({
-      newSessionResult: {
-        modes: {
-          currentModeId: 'plan',
-          availableModes: [{ id: 'plan', name: 'Plan' }],
-        },
-        configOptions: [
-          {
-            id: 'mode',
-            name: 'Mode',
-            category: 'mode',
-            type: 'select',
-            currentValue: 'edit',
-            options: [
-              { value: 'edit', name: 'Edit' },
-              { value: 'chat', name: 'Chat' },
-            ],
-          },
-        ],
-      },
-      setConfigOptionResult: { configOptions: [] },
-    })
-    svc = built.svc
-    client = built.client
-    const s = await svc.createSession()
-    await s.setConfigOption('mode', 'chat')
-    const agent = client.connected[0]!.agent
-    expect(agent.setConfigOptionCalls).toHaveLength(1)
-    expect(agent.setSessionModeCalls).toHaveLength(0)
   })
 
   it('propagates errors from session/set_config_option', async () => {
@@ -681,7 +531,7 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     svc?.dispose()
   })
 
-  it('writes both per-session history and per-agent default on a successful modern call', async () => {
+  it('writes both per-session history and per-agent default on a successful call', async () => {
     const initial: SessionConfigOption = {
       id: 'model',
       name: 'Model',
@@ -706,30 +556,6 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     const entry = built.history.list().find((e) => e.id === s.historyId)
     expect(entry?.configOptions).toEqual({ model: 'opus' })
     expect(built.agentDefaults.getDefaults('fake')).toEqual({ model: 'opus' })
-  })
-
-  it('does NOT persist when the legacy mode path is taken (synthetic id has no cross-agent meaning)', async () => {
-    const modes: SessionModeState = {
-      currentModeId: 'plan',
-      availableModes: [
-        { id: 'plan', name: 'Plan' },
-        { id: 'act', name: 'Act' },
-      ],
-    }
-    const built = buildService({ newSessionResult: { modes } })
-    svc = built.svc
-    await built.history.initialize()
-    await built.agentDefaults.initialize()
-    const s = await svc.createSession()
-    const legacyOpt = s.configOptions.get()[0]!
-    expect(legacyOpt.category).toBe('mode')
-    await s.setConfigOption(legacyOpt.id, 'act')
-    // setSessionMode must have been called and persistence must NOT have happened.
-    const agent = built.client.connected[0]!.agent
-    expect(agent.setSessionModeCalls).toHaveLength(1)
-    const entry = built.history.list().find((e) => e.id === s.historyId)
-    expect(entry?.configOptions).toBeUndefined()
-    expect(built.agentDefaults.getDefaults('fake')).toEqual({})
   })
 
   it('suppresses an in-flight `config_option_update` echo for the same configId (user wins)', async () => {

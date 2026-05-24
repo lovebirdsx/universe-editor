@@ -10,27 +10,23 @@
  *  The conversation messages themselves stay on the agent side; we never try
  *  to mirror them locally.
  *
- *  Storage uses IStorageService with a workspace-first + global-fallback policy:
- *  when a folder is open the entries live in WORKSPACE scope so each workspace
- *  keeps its own history; with no folder open we read/write GLOBAL as a
- *  fallback bucket. The schema version lets future shape changes migrate
- *  forward without crashing on stale data.
+ *  Storage uses IStorageService via `PersistedStateBase` with a workspace-first
+ *  + global-fallback policy: when a folder is open the entries live in
+ *  WORKSPACE scope so each workspace keeps its own history; with no folder
+ *  open we read/write GLOBAL as a fallback bucket.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   createDecorator,
-  Disposable,
-  Event,
   IStorageService,
   ILoggerService,
   ITelemetryService,
   IWorkspaceService,
-  StorageScope,
   observableValue,
-  type ILogger,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
+import { PersistedStateBase } from './persistedStateBase.js'
 
 export interface AcpSessionHistoryEntry {
   /** Local UUID-ish id — distinct from `sessionIdOnAgent`. */
@@ -102,56 +98,45 @@ export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryServi
 )
 
 const STORAGE_KEY = 'acp.sessionHistory'
-const SCHEMA_VERSION = 2
+const SCHEMA_VERSION = 1
 const MAX_ENTRIES = 100
-const INITIAL_LOAD_TIMEOUT_MS = 500
 
 interface PersistedShape {
   readonly schemaVersion: number
   readonly entries: readonly AcpSessionHistoryEntry[]
 }
 
-export class AcpSessionHistoryService extends Disposable implements IAcpSessionHistoryService {
+export class AcpSessionHistoryService
+  extends PersistedStateBase<AcpSessionHistoryEntry[]>
+  implements IAcpSessionHistoryService
+{
   declare readonly _serviceBrand: undefined
 
   readonly entries: ISettableObservable<readonly AcpSessionHistoryEntry[]>
 
-  private _entries: AcpSessionHistoryEntry[] = []
-  private _loaded = false
-  private _loadPromise: Promise<void> | undefined
   private _seq = 0
-  private _writeTimer: ReturnType<typeof setTimeout> | undefined
-  /** Set while `_reload` is mid-swap so the debounced write doesn't fire into a half-built state. */
-  private _writeSuspended = false
-  /** The scope our current `_entries` snapshot was loaded from; flush writes go here. */
-  private _currentLoadedScope: StorageScope | undefined
-  private readonly _logger: ILogger
 
   constructor(
-    @IStorageService private readonly _storage: IStorageService,
-    @IWorkspaceService private readonly _workspace: IWorkspaceService,
-    @ITelemetryService private readonly _telemetry: ITelemetryService,
+    @IStorageService storage: IStorageService,
+    @IWorkspaceService workspace: IWorkspaceService,
+    @ITelemetryService telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
   ) {
-    super()
-    this._logger = loggerService.createLogger({ id: 'acpSessionHistory', name: 'ACP History' })
+    super(storage, workspace, telemetry, loggerService, {
+      storageKey: STORAGE_KEY,
+      loggerId: 'acpSessionHistory',
+      loggerName: 'ACP History',
+      persistFailureEvent: 'acp.session_history_persist_failed',
+    })
     this.entries = observableValue<readonly AcpSessionHistoryEntry[]>('acp.sessionHistory', [])
-    this._register(this._storage.onDidChangeWorkspaceScope(() => void this._reload()))
-  }
-
-  initialize(): Promise<void> {
-    if (this._loaded) return Promise.resolve()
-    if (this._loadPromise) return this._loadPromise
-    this._loadPromise = this._scheduleInitialLoad()
-    return this._loadPromise
   }
 
   list(): readonly AcpSessionHistoryEntry[] {
-    return this._entries
+    return this._state
   }
 
   get(id: string): AcpSessionHistoryEntry | undefined {
-    return this._entries.find((e) => e.id === id)
+    return this._state.find((e) => e.id === id)
   }
 
   add(
@@ -161,16 +146,16 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
     // Same (agentId, sessionIdOnAgent) tuple replaces the prior local row —
     // restarting the editor and creating a new session against the same agent
     // session id should not produce duplicates.
-    const existingIdx = this._entries.findIndex(
+    const existingIdx = this._state.findIndex(
       (e) => e.agentId === entry.agentId && e.sessionIdOnAgent === entry.sessionIdOnAgent,
     )
-    const id = existingIdx >= 0 ? this._entries[existingIdx]!.id : this._mintId()
-    const createdAt = existingIdx >= 0 ? this._entries[existingIdx]!.createdAt : now
+    const id = existingIdx >= 0 ? this._state[existingIdx]!.id : this._mintId()
+    const createdAt = existingIdx >= 0 ? this._state[existingIdx]!.createdAt : now
     // Preserve any prior configOptions cache if the caller didn't supply one —
     // re-adding the same session shouldn't blow away saved MODEL/MODE state.
     const carriedConfigOptions =
       entry.configOptions ??
-      (existingIdx >= 0 ? this._entries[existingIdx]!.configOptions : undefined)
+      (existingIdx >= 0 ? this._state[existingIdx]!.configOptions : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -182,9 +167,9 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
     }
     if (existingIdx >= 0) {
-      this._entries = [next, ...this._entries.filter((_, i) => i !== existingIdx)]
+      this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
     } else {
-      this._entries = [next, ...this._entries]
+      this._state = [next, ...this._state]
     }
     this._truncate()
     this._publish()
@@ -193,40 +178,40 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
   }
 
   touch(id: string): void {
-    const idx = this._entries.findIndex((e) => e.id === id)
+    const idx = this._state.findIndex((e) => e.id === id)
     if (idx === -1) return
-    const cur = this._entries[idx]!
+    const cur = this._state[idx]!
     const next: AcpSessionHistoryEntry = { ...cur, lastUsedAt: Date.now() }
-    this._entries = [next, ...this._entries.filter((_, i) => i !== idx)]
+    this._state = [next, ...this._state.filter((_, i) => i !== idx)]
     this._publish()
     this._scheduleWrite()
   }
 
   remove(id: string): void {
-    const before = this._entries.length
-    this._entries = this._entries.filter((e) => e.id !== id)
-    if (this._entries.length !== before) {
+    const before = this._state.length
+    this._state = this._state.filter((e) => e.id !== id)
+    if (this._state.length !== before) {
       this._publish()
       this._scheduleWrite()
     }
   }
 
   clear(): void {
-    if (this._entries.length === 0) return
-    this._entries = []
+    if (this._state.length === 0) return
+    this._state = []
     this._publish()
     this._scheduleWrite()
   }
 
   setHistoryConfigOption(historyId: string, configId: string, value: string): void {
-    const idx = this._entries.findIndex((e) => e.id === historyId)
+    const idx = this._state.findIndex((e) => e.id === historyId)
     if (idx === -1) return
-    const cur = this._entries[idx]!
+    const cur = this._state[idx]!
     const prevOpts = cur.configOptions ?? {}
     if (prevOpts[configId] === value) return
     const nextOpts: Readonly<Record<string, string>> = { ...prevOpts, [configId]: value }
     const next: AcpSessionHistoryEntry = { ...cur, configOptions: nextOpts }
-    this._entries = this._entries.map((e, i) => (i === idx ? next : e))
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
   }
@@ -235,13 +220,13 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
     if (sessions.length === 0) return
     const now = Date.now()
     const byKey = new Map<string, AcpSessionHistoryEntry>()
-    for (const e of this._entries) {
-      byKey.set(`${e.agentId} ${e.sessionIdOnAgent}`, e)
+    for (const e of this._state) {
+      byKey.set(`${e.agentId} ${e.sessionIdOnAgent}`, e)
     }
     let changed = false
     for (const info of sessions) {
       if (typeof info.sessionId !== 'string' || info.sessionId.length === 0) continue
-      const key = `${agentId} ${info.sessionId}`
+      const key = `${agentId} ${info.sessionId}`
       const existing = byKey.get(key)
       const protocolTs = parseIsoTimestamp(info.updatedAt)
       const title =
@@ -279,16 +264,16 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
       }
     }
     if (!changed) return
-    this._entries = Array.from(byKey.values()).sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    this._state = Array.from(byKey.values()).sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     this._truncate()
     this._publish()
     this._scheduleWrite()
   }
 
   updateInfo(historyId: string, patch: { title?: string; updatedAt?: number }): void {
-    const idx = this._entries.findIndex((e) => e.id === historyId)
+    const idx = this._state.findIndex((e) => e.id === historyId)
     if (idx === -1) return
-    const cur = this._entries[idx]!
+    const cur = this._state[idx]!
     const nextTitle = patch.title !== undefined && patch.title.length > 0 ? patch.title : cur.title
     const nextLastUsedAt =
       patch.updatedAt !== undefined && Number.isFinite(patch.updatedAt)
@@ -300,140 +285,69 @@ export class AcpSessionHistoryService extends Disposable implements IAcpSessionH
       title: nextTitle,
       lastUsedAt: nextLastUsedAt,
     }
-    this._entries = this._entries.map((e, i) => (i === idx ? next : e))
-    this._entries.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._state.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     this._publish()
     this._scheduleWrite()
   }
 
-  override dispose(): void {
-    if (this._writeTimer) {
-      clearTimeout(this._writeTimer)
-      this._writeTimer = undefined
-      // Flush a final write synchronously so we don't lose the trailing edit.
-      void this._writeNow()
+  // -- PersistedStateBase hooks ----------------------------------------
+
+  protected override _emptyState(): AcpSessionHistoryEntry[] {
+    return []
+  }
+
+  protected override _serialize(state: AcpSessionHistoryEntry[]): PersistedShape {
+    return { schemaVersion: SCHEMA_VERSION, entries: state }
+  }
+
+  protected override _deserialize(raw: unknown): AcpSessionHistoryEntry[] | undefined {
+    if (typeof raw !== 'object' || raw === null) return undefined
+    const o = raw as PersistedShape
+    if (!Array.isArray(o.entries)) return undefined
+    const migrated = migrate(o.schemaVersion, o.entries)
+    if (!migrated) {
+      this._logger.warn(`[acp] ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
+      return undefined
     }
-    super.dispose()
+    return migrated.filter(isValidEntry)
   }
 
-  // -- internals ---------------------------------------------------------
-
-  private _currentScope(): StorageScope {
-    return this._workspace.current ? StorageScope.WORKSPACE : StorageScope.GLOBAL
-  }
-
-  /**
-   * `RendererWorkspaceService.current` is `null` at construction time and gets
-   * hydrated asynchronously; once hydrated, the storage layer fires
-   * `onDidChangeWorkspaceScope`. To avoid reading the wrong bucket on cold
-   * start we wait for either the first scope event or a short timeout (true
-   * empty-window case), then load whichever scope is correct at that point.
-   */
-  private async _scheduleInitialLoad(): Promise<void> {
-    if (!this._workspace.current) {
-      await Promise.race([
-        Event.toPromise(this._storage.onDidChangeWorkspaceScope),
-        new Promise<void>((resolve) => setTimeout(resolve, INITIAL_LOAD_TIMEOUT_MS)),
-      ])
+  protected override _mergeOnLoad(
+    loaded: AcpSessionHistoryEntry[],
+    current: AcpSessionHistoryEntry[],
+  ): AcpSessionHistoryEntry[] {
+    // Any entries the caller already added before load completed win over the
+    // persisted row with the same id.
+    const seen = new Set(current.map((e) => e.id))
+    const merged = [...current]
+    for (const e of loaded) {
+      if (!seen.has(e.id)) merged.push(e)
     }
-    await this._loadFromScope(this._currentScope())
+    merged.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+    if (merged.length > MAX_ENTRIES) merged.length = MAX_ENTRIES
+    // Bump _seq so newly-minted ids don't collide with anything we just loaded.
+    for (const e of merged) {
+      const n = parseLocalSeq(e.id)
+      if (n !== undefined && n > this._seq) this._seq = n
+    }
+    return merged
   }
 
-  /**
-   * Workspace switched: flush any pending write to the OLD bucket, clear state,
-   * and load from the NEW bucket. Writes are suspended in between so the
-   * debounced timer can't deposit half-built state into the wrong scope.
-   */
-  private async _reload(): Promise<void> {
-    this._writeSuspended = true
-    try {
-      if (this._writeTimer) {
-        clearTimeout(this._writeTimer)
-        this._writeTimer = undefined
-        // Flush to the OLD scope using _currentLoadedScope (set by the previous load).
-        await this._writeNow()
-      }
-      this._entries = []
-      this._currentLoadedScope = undefined
-      this._loaded = false
-      this._loadPromise = undefined
-      this._publish()
-      await this._loadFromScope(this._currentScope())
-    } finally {
-      this._writeSuspended = false
-    }
+  protected override _onStateReplaced(state: AcpSessionHistoryEntry[]): void {
+    this.entries.set(state, undefined)
   }
 
-  private async _loadFromScope(scope: StorageScope): Promise<void> {
-    try {
-      const raw = await this._storage.get<PersistedShape>(STORAGE_KEY, scope)
-      if (raw && typeof raw === 'object' && Array.isArray(raw.entries)) {
-        const migrated = migrate(raw.schemaVersion, raw.entries)
-        if (migrated) {
-          const persisted = migrated.filter(isValidEntry)
-          // Merge: any entries the caller already added before load completed
-          // win over the persisted row with the same id.
-          const seen = new Set(this._entries.map((e) => e.id))
-          const merged = [...this._entries]
-          for (const e of persisted) {
-            if (!seen.has(e.id)) merged.push(e)
-          }
-          merged.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-          this._entries = merged
-          this._truncate()
-          // Bump _seq so newly-minted ids don't collide with anything we just loaded.
-          for (const e of this._entries) {
-            const n = parseLocalSeq(e.id)
-            if (n !== undefined && n > this._seq) this._seq = n
-          }
-          this._publish()
-        } else {
-          this._logger.warn(
-            `[acp] ignoring acp.sessionHistory with schemaVersion=${raw.schemaVersion}`,
-          )
-        }
-      }
-    } catch (err) {
-      this._logger.warn(`[acp] failed to load session history: ${(err as Error).message}`)
-    } finally {
-      this._loaded = true
-      this._currentLoadedScope = scope
-    }
-  }
+  // -- private helpers -------------------------------------------------
 
   private _truncate(): void {
-    if (this._entries.length > MAX_ENTRIES) {
-      this._entries = this._entries.slice(0, MAX_ENTRIES)
+    if (this._state.length > MAX_ENTRIES) {
+      this._state = this._state.slice(0, MAX_ENTRIES)
     }
   }
 
   private _publish(): void {
-    this.entries.set(this._entries, undefined)
-  }
-
-  private _scheduleWrite(): void {
-    if (this._writeSuspended) return
-    if (this._writeTimer) return
-    this._writeTimer = setTimeout(() => {
-      this._writeTimer = undefined
-      void this._writeNow()
-    }, 100)
-  }
-
-  private async _writeNow(): Promise<void> {
-    const scope = this._currentLoadedScope ?? this._currentScope()
-    try {
-      const payload: PersistedShape = {
-        schemaVersion: SCHEMA_VERSION,
-        entries: this._entries,
-      }
-      await this._storage.set(STORAGE_KEY, payload, scope)
-    } catch (err) {
-      this._telemetry.publicLogError('acp.session_history_persist_failed', {
-        error: (err as Error).message,
-      })
-      this._logger.warn(`[acp] failed to persist session history: ${(err as Error).message}`)
-    }
+    this.entries.set(this._state, undefined)
   }
 
   private _mintId(): string {
@@ -467,13 +381,10 @@ function isStringRecord(v: unknown): v is Readonly<Record<string, string>> {
 
 /**
  * Promote persisted entries to the current schema. Returns `undefined` on
- * unknown/future versions so the caller can fail closed. v1 entries are
- * forward-compatible — the only new field (`configOptions`) is optional, so
- * the raw v1 rows are valid v2 rows already.
+ * unknown/future versions so the caller can fail closed.
  */
 function migrate(version: unknown, entries: readonly unknown[]): readonly unknown[] | undefined {
   if (version === SCHEMA_VERSION) return entries
-  if (version === 1) return entries
   return undefined
 }
 
