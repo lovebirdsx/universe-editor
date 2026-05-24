@@ -11,6 +11,7 @@ import {
 } from './src/renderer/workbench/editor/monaco/monacoNlsPatch'
 
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
+const workbenchUiSrc = resolve(__dirname, '../../packages/workbench-ui/src/index.ts')
 
 // platform/src uses `.js` suffix on relative imports (TS NodeNext convention).
 // Vite 7 removed extensionAlias; use a plugin instead to remap .js → .ts.
@@ -75,10 +76,11 @@ export default defineConfig({
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,
+        '@universe-editor/workbench-ui': workbenchUiSrc,
       },
     },
     optimizeDeps: {
-      exclude: ['@universe-editor/platform'],
+      exclude: ['@universe-editor/platform', '@universe-editor/workbench-ui'],
       include: [
         'monaco-editor',
         'allotment',
