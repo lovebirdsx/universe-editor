@@ -472,19 +472,9 @@
 
 .sessionListToolbar {
   display: flex;
+  align-items: center;
   gap: 4px;
   padding: 2px 0 6px;
-}
-
-.sessionListToolbar button {
-  flex: 1;
-  font-size: 11px;
-  padding: 4px;
-  background: var(--color-button-secondary-bg, #3c3c3c);
-  color: var(--color-button-secondary-fg, #d4d4d4);
-  border: 1px solid var(--color-border, #555);
-  border-radius: 3px;
-  cursor: pointer;
 }
 
 .sessionList ul {

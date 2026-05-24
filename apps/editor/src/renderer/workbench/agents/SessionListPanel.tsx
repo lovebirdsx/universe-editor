@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ICommandService, localize } from '@universe-editor/platform'
+import { ArrowLeftRight, Bot, Plus } from 'lucide-react'
 import { useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -26,25 +27,39 @@ export function SessionListPanel() {
       <div className={styles['sessionListToolbar']}>
         <button
           type="button"
+          className={styles['toolbarButton']}
           onClick={() => void service.createSession(registry.defaultAgentId())}
           data-testid="acp-new-session"
+          title={localize('acp.newSession', 'New session')}
+          aria-label={localize('acp.newSession', 'New session')}
         >
-          {localize('acp.newSession', 'New session')}
+          <span aria-hidden="true">
+            <Plus size={14} strokeWidth={1.75} />
+          </span>
         </button>
         <button
           type="button"
+          className={styles['toolbarButton']}
           onClick={() => void commands.executeCommand('workbench.action.agent.selectAgent')}
           data-testid="acp-select-agent"
+          title={localize('acp.selectAgent', 'Switch agent…')}
+          aria-label={localize('acp.selectAgent', 'Switch agent…')}
         >
-          {localize('acp.selectAgent', 'Switch agent…')}
+          <span aria-hidden="true">
+            <Bot size={14} strokeWidth={1.75} />
+          </span>
         </button>
         <button
           type="button"
+          className={styles['toolbarButton']}
           onClick={() => location.setLocation('sidebar')}
           data-testid="acp-switch-to-sidebar"
           title={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
+          aria-label={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
         >
-          {localize('acp.switchToSidebar', '⇄ Sidebar')}
+          <span aria-hidden="true">
+            <ArrowLeftRight size={14} strokeWidth={1.75} />
+          </span>
         </button>
       </div>
       <SessionListBody />
