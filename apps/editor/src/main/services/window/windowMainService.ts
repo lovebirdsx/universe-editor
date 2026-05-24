@@ -125,6 +125,13 @@ export class WindowMainService implements IWindowMainService {
     })
 
     if (rendererUrl) {
+      if (process.env['VSCODE_RENDERER_DEBUG'] === '1') {
+        // Give VS Code's Chrome debugger time to attach to the BrowserWindow at about:blank
+        // before the renderer URL loads. Without this delay, main.tsx executes before the
+        // debugger can register breakpoints, making startup breakpoints unreachable.
+        logger.info(`VSCODE_RENDERER_DEBUG: waiting 3s for Chrome debugger to attach`)
+        await new Promise<void>((resolve) => setTimeout(resolve, 3000))
+      }
       logger.info(`loadURL id=${win.id} url=${rendererUrl}`)
       void win.loadURL(rendererUrl).catch((err) => {
         logger.error(`loadURL failed id=${win.id}`, err)

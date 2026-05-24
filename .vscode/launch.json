@@ -24,10 +24,9 @@
       "type": "chrome",
       "request": "attach",
       "port": 9222,
-      "timeout": 30000,
+      "timeout": 60000,
       "webRoot": "${workspaceFolder}/apps/editor/src/renderer",
-      "sourceMaps": true,
-      "urlFilter": "http://localhost:*/*"
+      "sourceMaps": true
     },
     {
       "name": "Debug Vitest (main/node environment)",
