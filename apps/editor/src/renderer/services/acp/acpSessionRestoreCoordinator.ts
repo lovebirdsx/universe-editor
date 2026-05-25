@@ -21,6 +21,8 @@ import {
   ITelemetryService,
   Severity,
   StorageScope,
+  arePathsEqual,
+  type HostPlatform,
   type ILogger,
 } from '@universe-editor/platform'
 import {
@@ -139,6 +141,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     private readonly _notification: INotificationService,
     private readonly _telemetry: ITelemetryService,
     loggerService: ILoggerService,
+    private readonly _platform: HostPlatform,
     private readonly _callbacks: RestoreCoordinatorCallbacks,
   ) {
     super()
@@ -203,10 +206,10 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       await this._callbacks.whenWorkspaceReady()
       const cwd = this._callbacks.getCurrentCwd()
       if (cwd === undefined) return
-      if (this._hydratedForCwd === cwd) return
+      if (arePathsEqual(this._hydratedForCwd, cwd, this._platform)) return
       try {
         await this._hydrateHistoryFromAgents(cwd, replace)
-        if (this._callbacks.getCurrentCwd() === cwd) {
+        if (arePathsEqual(this._callbacks.getCurrentCwd(), cwd, this._platform)) {
           this._hydratedForCwd = cwd
         }
       } catch (err) {

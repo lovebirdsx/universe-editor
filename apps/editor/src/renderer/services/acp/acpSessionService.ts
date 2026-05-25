@@ -21,6 +21,7 @@ import {
   Disposable,
   Emitter,
   IConfigurationService,
+  IHostService,
   ILoggerService,
   INotificationService,
   IProgressService,
@@ -169,6 +170,7 @@ export class AcpSessionService
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IStorageService private readonly _storage: IStorageService,
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
+    @IHostService hostService: IHostService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
@@ -185,6 +187,7 @@ export class AcpSessionService
         this._notification,
         this._telemetry,
         loggerService,
+        hostService.platform,
         {
           resumeSession: (historyId) => this.resumeSession(historyId),
           hasActiveSession: () => this.activeSessionId.get() !== undefined,

@@ -22,6 +22,7 @@ import {
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
+  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -37,6 +38,8 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
+
+const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -351,6 +354,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
+    FAKE_HOST,
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
@@ -371,6 +375,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     history,
     storage,
     agentDefaults,
+    FAKE_HOST,
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -667,6 +672,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
+      FAKE_HOST,
     )
     svc = new AcpSessionService(
       client,
@@ -686,6 +692,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      FAKE_HOST,
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -712,6 +719,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
+      FAKE_HOST,
     )
     svc = new AcpSessionService(
       client,
@@ -731,6 +739,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      FAKE_HOST,
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -753,6 +762,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
+      FAKE_HOST,
     )
     svc = new AcpSessionService(
       client,
@@ -772,6 +782,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      FAKE_HOST,
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -796,6 +807,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
+      FAKE_HOST,
     )
     svc = new AcpSessionService(
       client,
@@ -815,6 +827,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      FAKE_HOST,
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

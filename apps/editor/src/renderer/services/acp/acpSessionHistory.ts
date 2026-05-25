@@ -18,11 +18,14 @@
 
 import {
   createDecorator,
+  IHostService,
   IStorageService,
   ILoggerService,
   ITelemetryService,
   IWorkspaceService,
+  arePathsEqual,
   observableValue,
+  type HostPlatform,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
@@ -153,11 +156,14 @@ export class AcpSessionHistoryService
 
   private _seq = 0
 
+  private readonly _platform: HostPlatform
+
   constructor(
     @IStorageService storage: IStorageService,
     @IWorkspaceService workspace: IWorkspaceService,
     @ITelemetryService telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
+    @IHostService hostService: IHostService,
   ) {
     super(storage, workspace, telemetry, loggerService, {
       storageKey: STORAGE_KEY,
@@ -165,6 +171,7 @@ export class AcpSessionHistoryService
       loggerName: 'ACP History',
       persistFailureEvent: 'acp.session_history_persist_failed',
     })
+    this._platform = hostService.platform
     this.entries = observableValue<readonly AcpSessionHistoryEntry[]>('acp.sessionHistory', [])
   }
 
@@ -296,7 +303,8 @@ export class AcpSessionHistoryService
       // Defense-in-depth: skip cross-workspace entries even if the agent
       // ignored the `cwd` filter on `session/list`. A missing `info.cwd` is
       // tolerated — the agent simply did not report it; existing.cwd wins.
-      if (typeof info.cwd === 'string' && info.cwd !== currentCwd) continue
+      if (typeof info.cwd === 'string' && !arePathsEqual(info.cwd, currentCwd, this._platform))
+        continue
       reportedSessionIds.add(info.sessionId)
       const key = `${agentId} ${info.sessionId}`
       const existing = byKey.get(key)
@@ -309,7 +317,7 @@ export class AcpSessionHistoryService
       if (existing) {
         const lastUsedAt = Math.max(existing.lastUsedAt, protocolTs ?? 0)
         const sameTitle = existing.title === title
-        const sameCwd = existing.cwd === cwd
+        const sameCwd = existing.cwd === cwd || arePathsEqual(existing.cwd, cwd, this._platform)
         const sameLastUsed = existing.lastUsedAt === lastUsedAt
         if (sameTitle && sameCwd && sameLastUsed) continue
         const next: AcpSessionHistoryEntry = {
@@ -342,7 +350,7 @@ export class AcpSessionHistoryService
     if (preserveIds !== undefined) {
       for (const [key, entry] of byKey) {
         if (entry.agentId !== agentId) continue
-        if (entry.cwd !== currentCwd) continue
+        if (!arePathsEqual(entry.cwd, currentCwd, this._platform)) continue
         if (reportedSessionIds.has(entry.sessionIdOnAgent)) continue
         if (preserveIds.has(entry.id)) continue
         byKey.delete(key)

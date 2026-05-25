@@ -18,6 +18,7 @@ import {
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
+  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -33,6 +34,8 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
+
+const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -330,6 +333,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
+    FAKE_HOST,
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
@@ -350,6 +354,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     history,
     new FakeStorage(),
     agentDefaults,
+    FAKE_HOST,
   )
   return { svc, client, history, agentDefaults }
 }

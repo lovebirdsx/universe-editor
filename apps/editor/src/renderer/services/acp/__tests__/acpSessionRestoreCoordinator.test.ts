@@ -34,6 +34,7 @@ import {
   StorageScope,
 } from '@universe-editor/platform'
 import type {
+  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -83,6 +84,8 @@ import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 import type { IAcpSession } from '../acpSession.js'
+
+const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 
 // ---------------------------------------------------------------------------
 // Stubs (kept close to existing patterns in this folder)
@@ -357,6 +360,7 @@ function build(opts: BuildOptions = {}): BuildResult {
       new FakeWorkspaceService(),
       new NoopTelemetryService(),
       new StubLoggerService(),
+      FAKE_HOST,
     )
   const notifications = new StubNotificationService()
   const resumeCalls: string[] = []
@@ -386,6 +390,7 @@ function build(opts: BuildOptions = {}): BuildResult {
     notifications,
     new NoopTelemetryService(),
     new StubLoggerService(),
+    'linux',
     callbacks,
   )
   return {
@@ -667,6 +672,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       new FakeWorkspaceService(),
       new NoopTelemetryService(),
       new StubLoggerService(),
+      FAKE_HOST,
     )
     client.agentOptions.set('fake', {
       capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
@@ -688,6 +694,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       new StubNotificationService(),
       new NoopTelemetryService(),
       new StubLoggerService(),
+      'linux',
       callbacks,
     )
     await history.initialize()

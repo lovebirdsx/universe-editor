@@ -12,6 +12,7 @@ export * from './base/functional.js'
 export * from './base/async.js'
 export * from './base/cancellation.js'
 export * from './base/uri.js'
+export * from './base/path.js'
 export * from './base/grid.js'
 export * from './base/observable/index.js'
 

@@ -21,6 +21,7 @@ import {
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
+  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -36,6 +37,8 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 import { CancellationToken } from '@universe-editor/platform'
+
+const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -191,6 +194,7 @@ function makeHistory(): AcpSessionHistoryService {
     new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
+    FAKE_HOST,
   )
 }
 
@@ -347,6 +351,7 @@ describe('AcpSessionService', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      FAKE_HOST,
     )
   })
 
@@ -557,6 +562,7 @@ describe('AcpSessionService', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      FAKE_HOST,
     )
     const s = await svc.createSession()
     const conn = client.connected[0]!
@@ -663,6 +669,7 @@ describe('AcpSessionService — startup timeout', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      FAKE_HOST,
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)
     svc.dispose()

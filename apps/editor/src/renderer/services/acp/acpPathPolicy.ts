@@ -13,7 +13,12 @@
  *  tested deterministically on every OS.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator, type HostPlatform } from '@universe-editor/platform'
+import {
+  createDecorator,
+  normalizeFsPath,
+  relativePathUnder,
+  type HostPlatform,
+} from '@universe-editor/platform'
 
 export type AcpPathDecision =
   | { readonly ok: true; readonly normalized: string }
@@ -52,42 +57,13 @@ const SENSITIVE_FILENAMES = new Set([
   'authorized_keys',
 ])
 
-function toForwardSlashes(p: string): string {
-  return p.replace(/\\/g, '/')
-}
-
-function stripTrailingSlash(p: string): string {
-  if (p.length <= 1) return p
-  return p.endsWith('/') ? p.slice(0, -1) : p
-}
-
-function normalizeSegments(p: string): string {
-  const fwd = toForwardSlashes(p)
-  const isAbsPosix = fwd.startsWith('/')
-  const driveMatch = /^([a-zA-Z]):\//.exec(fwd)
-  const drive = driveMatch ? driveMatch[1]!.toUpperCase() + ':' : ''
-  const rest = driveMatch ? fwd.slice(driveMatch[0].length - 1) : fwd
-  const parts = rest.split('/').filter((s) => s.length > 0 && s !== '.')
-  const out: string[] = []
-  let escaped = false
-  for (const seg of parts) {
-    if (seg === '..') {
-      if (out.length === 0) {
-        escaped = true
-        continue
-      }
-      out.pop()
-    } else {
-      out.push(seg)
-    }
-  }
-  const prefix = drive ? drive + '/' : isAbsPosix ? '/' : ''
-  return (escaped ? '__ESCAPED__' : '') + prefix + out.join('/')
-}
-
 function basename(p: string): string {
   const idx = p.lastIndexOf('/')
   return idx === -1 ? p : p.slice(idx + 1)
+}
+
+function toForwardSlashes(p: string): string {
+  return p.replace(/\\/g, '/')
 }
 
 export interface AcpPathPolicyEnv {
@@ -108,12 +84,12 @@ export class AcpPathPolicy implements IAcpPathPolicy {
     if (fwd.startsWith('//')) return { ok: false, reason: 'UNC paths are not allowed' }
     const isAbsolute = fwd.startsWith('/') || /^[a-zA-Z]:\//.test(fwd)
     if (!isAbsolute) return { ok: false, reason: 'path must be absolute' }
-    const absNorm = normalizeSegments(fwd)
+    const absNorm = normalizeFsPath(target)
     if (absNorm.startsWith('__ESCAPED__')) {
       return { ok: false, reason: 'parent-directory segments escape filesystem root' }
     }
 
-    const rel = this._relativeUnder(cwd, absNorm)
+    const rel = relativePathUnder(cwd, absNorm, this._env.platform)
     if (rel === null) {
       return { ok: false, reason: `path escapes workspace root (${cwd})` }
     }
@@ -127,26 +103,11 @@ export class AcpPathPolicy implements IAcpPathPolicy {
     return { ok: true, normalized: absNorm }
   }
 
-  private _relativeUnder(root: string, absNormTarget: string): string | null {
-    const r = stripTrailingSlash(normalizeSegments(root))
-    if (r.startsWith('__ESCAPED__')) return null
-    const t = absNormTarget
-    const rDrive = /^([a-zA-Z]):/.exec(r)?.[1]?.toUpperCase() ?? ''
-    const tDrive = /^([a-zA-Z]):/.exec(t)?.[1]?.toUpperCase() ?? ''
-    if (rDrive !== tDrive) return null
-    const ci = this._env.platform === 'win32' || this._env.platform === 'darwin'
-    const rNorm = ci ? r.toLowerCase() : r
-    const tNorm = ci ? t.toLowerCase() : t
-    if (tNorm === rNorm) return ''
-    if (tNorm.startsWith(rNorm + '/')) return t.slice(r.length + 1)
-    return null
-  }
-
   private _sensitivePrefix(absNormPath: string): string | null {
-    const home = this._env.home ? toForwardSlashes(this._env.home) : ''
-    if (home) {
+    const home = this._env.home ? normalizeFsPath(this._env.home) : ''
+    if (home && !home.startsWith('__ESCAPED__')) {
       for (const suffix of SENSITIVE_SUFFIXES) {
-        const probe = stripTrailingSlash(normalizeSegments(home)) + suffix
+        const probe = home + suffix
         if (absNormPath === probe || absNormPath.startsWith(probe + '/')) return probe
       }
     }

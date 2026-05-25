@@ -11,6 +11,8 @@ import {
   NullLogger,
   StorageScope,
   URI,
+  type HostPlatform,
+  type IHostService,
   type ILogger,
   type ILoggerService,
   type IStorageService,
@@ -91,6 +93,11 @@ class StubLoggerService implements ILoggerService {
 interface MakeOptions {
   storage?: FakeStorage
   workspace?: FakeWorkspaceService
+  platform?: HostPlatform
+}
+
+function makeStubHost(platform: HostPlatform): IHostService {
+  return { platform } as IHostService
 }
 
 function makeService(opts: MakeOptions = {}): {
@@ -105,6 +112,7 @@ function makeService(opts: MakeOptions = {}): {
     workspace,
     new NoopTelemetryService(),
     new StubLoggerService(),
+    makeStubHost(opts.platform ?? 'linux'),
   )
   return { svc, storage, workspace }
 }
