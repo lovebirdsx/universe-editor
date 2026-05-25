@@ -781,3 +781,20 @@
   font-style: italic;
 }
 
+.sessionsPopoverToolbar {
+  display: flex;
+  justify-content: flex-end;
+  padding: 2px 4px;
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+@keyframes acpSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.spin {
+  animation: acpSpin 0.8s linear infinite;
+}
+

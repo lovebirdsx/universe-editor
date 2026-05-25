@@ -90,6 +90,27 @@ export interface IAcpSessionHistoryService {
     currentCwd: string | undefined,
   ): void
   /**
+   * Replace semantics for a user-initiated refresh: upsert every reported
+   * session like `bulkMergeFromAgent`, AND prune any existing entry whose
+   * (agentId, cwd) matches but `sessionIdOnAgent` is not in the new list and
+   * whose `id` is not in `preserveIds`. `preserveIds` should carry the
+   * currently-live session historyIds so a session that hasn't been listed
+   * yet (e.g. just-created) does not get pruned from under the UI.
+   *
+   * Pruning is scoped to entries where `entry.cwd === currentCwd` exactly —
+   * entries with a missing `cwd` are left alone (we cannot tell which
+   * workspace they belong to). Entries for other agents or other cwds are
+   * untouched.
+   *
+   * Called by the Refresh Session List button via the coordinator.
+   */
+  replaceAgentEntries(
+    agentId: string,
+    sessions: readonly BulkMergeSessionInfo[],
+    currentCwd: string | undefined,
+    preserveIds: ReadonlySet<string>,
+  ): void
+  /**
    * Patch metadata for one entry from a `session_info_update` notification.
    * No-op if id is unknown.
    */
@@ -238,6 +259,27 @@ export class AcpSessionHistoryService
     currentCwd: string | undefined,
   ): void {
     if (sessions.length === 0) return
+    this._mergeOrReplace(agentId, sessions, currentCwd, undefined)
+  }
+
+  replaceAgentEntries(
+    agentId: string,
+    sessions: readonly BulkMergeSessionInfo[],
+    currentCwd: string | undefined,
+    preserveIds: ReadonlySet<string>,
+  ): void {
+    // Empty bucket protection: same as bulkMergeFromAgent. Without a workspace
+    // we don't know which rows to prune, so leave everything alone.
+    if (currentCwd === undefined) return
+    this._mergeOrReplace(agentId, sessions, currentCwd, preserveIds)
+  }
+
+  private _mergeOrReplace(
+    agentId: string,
+    sessions: readonly BulkMergeSessionInfo[],
+    currentCwd: string | undefined,
+    preserveIds: ReadonlySet<string> | undefined,
+  ): void {
     // Empty window: refuse to absorb anything the agent reports. Otherwise a
     // hydrate fired before the user opens a folder would pollute the GLOBAL
     // fallback bucket with sessions from every prior workspace.
@@ -248,12 +290,14 @@ export class AcpSessionHistoryService
       byKey.set(`${e.agentId} ${e.sessionIdOnAgent}`, e)
     }
     let changed = false
+    const reportedSessionIds = new Set<string>()
     for (const info of sessions) {
       if (typeof info.sessionId !== 'string' || info.sessionId.length === 0) continue
       // Defense-in-depth: skip cross-workspace entries even if the agent
       // ignored the `cwd` filter on `session/list`. A missing `info.cwd` is
       // tolerated — the agent simply did not report it; existing.cwd wins.
       if (typeof info.cwd === 'string' && info.cwd !== currentCwd) continue
+      reportedSessionIds.add(info.sessionId)
       const key = `${agentId} ${info.sessionId}`
       const existing = byKey.get(key)
       const protocolTs = parseIsoTimestamp(info.updatedAt)
@@ -288,6 +332,20 @@ export class AcpSessionHistoryService
           lastUsedAt: created,
         }
         byKey.set(key, next)
+        changed = true
+      }
+    }
+    // Replace mode: prune any entry that matches (agentId, cwd === currentCwd)
+    // but is absent from the new sessions list and not protected via preserveIds.
+    // Entries with no cwd are left alone — we cannot tell which workspace they
+    // belong to.
+    if (preserveIds !== undefined) {
+      for (const [key, entry] of byKey) {
+        if (entry.agentId !== agentId) continue
+        if (entry.cwd !== currentCwd) continue
+        if (reportedSessionIds.has(entry.sessionIdOnAgent)) continue
+        if (preserveIds.has(entry.id)) continue
+        byKey.delete(key)
         changed = true
       }
     }

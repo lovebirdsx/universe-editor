@@ -677,6 +677,91 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
   })
 })
 
+describe('AcpSessionHistoryService — replaceAgentEntries', () => {
+  let svc: AcpSessionHistoryService
+  beforeEach(() => {
+    svc = makeService().svc
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('prunes stale entries that the new list no longer reports (same agent + cwd)', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-keep', title: 'keep', cwd: '/work' })
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 's-keep', cwd: '/work', title: 'keep', updatedAt: null }],
+      '/work',
+      new Set<string>(),
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-keep'])
+  })
+
+  it('protects entries listed in preserveIds even when absent from the reported list', async () => {
+    await svc.initialize()
+    const live = svc.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 's-live',
+      title: 'live',
+      cwd: '/work',
+    })
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>([live.id]))
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-live'])
+  })
+
+  it('leaves entries for other agents untouched', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'other', sessionIdOnAgent: 's-other', title: 'other', cwd: '/work' })
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>())
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-other'])
+  })
+
+  it('leaves entries from other cwds untouched', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-other-ws', title: 'b', cwd: '/other' })
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>())
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-other-ws'])
+  })
+
+  it('leaves entries with no cwd untouched (we cannot tell which workspace they belong to)', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-nocwd', title: 'nocwd' })
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>())
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-nocwd'])
+  })
+
+  it('is a no-op when currentCwd is undefined (empty window)', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-keep', title: 'keep', cwd: '/work' })
+    svc.replaceAgentEntries('fake', [], undefined, new Set<string>())
+    expect(svc.list().map((e) => e.sessionIdOnAgent)).toEqual(['s-keep'])
+  })
+
+  it('still upserts new sessions while pruning stale ones in the same call', async () => {
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
+    svc.replaceAgentEntries(
+      'fake',
+      [{ sessionId: 's-new', cwd: '/work', title: 'new', updatedAt: '2024-02-01T00:00:00Z' }],
+      '/work',
+      new Set<string>(),
+    )
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-new'])
+  })
+})
+
 describe('AcpSessionHistoryService — updateInfo', () => {
   let svc: AcpSessionHistoryService
   beforeEach(() => {

@@ -65,6 +65,7 @@ function makeService(
     },
     async tryRestoreActiveSession(): Promise<void> {},
     requestHydrateIfNeeded(): void {},
+    async refreshSessions(): Promise<void> {},
     async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
       return 'unsupported'
     },

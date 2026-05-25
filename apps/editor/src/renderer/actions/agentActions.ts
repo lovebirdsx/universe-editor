@@ -427,3 +427,18 @@ export class ClearAgentSessionHistoryAction extends Action2 {
     })
   }
 }
+
+export class RefreshAgentSessionsAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.refreshSessions'
+  constructor() {
+    super({
+      id: RefreshAgentSessionsAction.ID,
+      title: localize('action.agent.refreshSessions', 'Refresh Agent Session List'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor.get(IAcpSessionService).refreshSessions()
+  }
+}

@@ -79,6 +79,14 @@ export interface RestoreCoordinatorCallbacks {
    * and return sessions across all workspaces).
    */
   whenWorkspaceReady(): Promise<void>
+  /**
+   * Snapshot of currently-live session historyIds. Used by the
+   * user-initiated refresh path to protect live sessions from being pruned
+   * when an agent's `session/list` response does not yet include them
+   * (e.g. a session that was just created and hasn't been persisted on the
+   * agent side yet).
+   */
+  getLiveHistoryIds(): ReadonlySet<string>
 }
 
 export class AcpSessionRestoreCoordinator extends Disposable {
@@ -172,24 +180,43 @@ export class AcpSessionRestoreCoordinator extends Disposable {
    */
   requestHydrate(): void {
     if (this._hydrateInFlight) return
+    void this._kickHydrate(false)
+  }
+
+  /**
+   * User-initiated refresh. Bypasses the `_hydratedForCwd` idempotency gate so
+   * repeated clicks actually re-run `session/list` against each agent, and
+   * also flips the hydrate sweep into "replace" mode so stale local entries
+   * the agent no longer reports get pruned (live sessions are protected via
+   * `getLiveHistoryIds`). Still shares `_hydrateInFlight` for concurrent
+   * dedup — back-to-back clicks collapse onto the same sweep instead of
+   * spawning N subprocesses.
+   */
+  refresh(): Promise<void> {
+    this._hydratedForCwd = undefined
+    if (this._hydrateInFlight) return this._hydrateInFlight
+    return this._kickHydrate(true)
+  }
+
+  private _kickHydrate(replace: boolean): Promise<void> {
     const run = (async () => {
       await this._callbacks.whenWorkspaceReady()
       const cwd = this._callbacks.getCurrentCwd()
       if (cwd === undefined) return
       if (this._hydratedForCwd === cwd) return
       try {
-        await this._hydrateHistoryFromAgents(cwd)
-        // Only mark hydrated if cwd hasn't changed underfoot during the sweep.
+        await this._hydrateHistoryFromAgents(cwd, replace)
         if (this._callbacks.getCurrentCwd() === cwd) {
           this._hydratedForCwd = cwd
         }
       } catch (err) {
-        this._logger.warn(`[acp] requestHydrate failed: ${(err as Error).message}`)
+        this._logger.warn(`[acp] hydrate failed: ${(err as Error).message}`)
       }
     })()
     this._hydrateInFlight = run.finally(() => {
       this._hydrateInFlight = undefined
     })
+    return this._hydrateInFlight
   }
 
   async tryRestoreActiveSession(): Promise<void> {
@@ -293,7 +320,10 @@ export class AcpSessionRestoreCoordinator extends Disposable {
    * time the async result lands. This is race-safe against workspace
    * A→B→A flips where a naive cwd-string comparison would alias.
    */
-  private async _hydrateHistoryFromAgents(cwd: string | undefined): Promise<void> {
+  private async _hydrateHistoryFromAgents(
+    cwd: string | undefined,
+    replace: boolean,
+  ): Promise<void> {
     const myGen = ++this._hydrateGen
     try {
       await this._history.initialize()
@@ -302,13 +332,16 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     }
     if (myGen !== this._hydrateGen) return
     const agentIds = this._registry.allAgentIds()
-    await Promise.all(agentIds.map((agentId) => this._hydrateOneAgent(agentId, cwd, myGen)))
+    await Promise.all(
+      agentIds.map((agentId) => this._hydrateOneAgent(agentId, cwd, myGen, replace)),
+    )
   }
 
   private async _hydrateOneAgent(
     agentId: string,
     cwd: string | undefined,
     myGen: number,
+    replace: boolean,
   ): Promise<void> {
     let conn: IAcpClientConnection | undefined
     try {
@@ -348,8 +381,23 @@ export class AcpSessionRestoreCoordinator extends Disposable {
         if (!cursor) break
       }
       if (myGen !== this._hydrateGen) return
-      if (collected.length === 0) return
-      this._history.bulkMergeFromAgent(agentId, collected, cwd)
+      // In replace mode we still call into history even when the agent
+      // returned 0 sessions — that's a valid "the agent has nothing for this
+      // workspace" signal and stale local rows should be pruned. In merge
+      // mode we skip the empty case to avoid a wasted write+publish.
+      if (replace) {
+        this._history.replaceAgentEntries(
+          agentId,
+          collected,
+          cwd,
+          this._callbacks.getLiveHistoryIds(),
+        )
+      } else if (collected.length > 0) {
+        this._history.bulkMergeFromAgent(agentId, collected, cwd)
+      }
+      this._logger.info(
+        `[acp] hydrated ${collected.length} sessions from ${agentId} for cwd=${cwd}`,
+      )
       this._telemetry.publicLog('acp.session_hydrate_ok', {
         agentId,
         count: collected.length,

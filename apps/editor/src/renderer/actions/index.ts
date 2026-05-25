@@ -106,6 +106,7 @@ import {
   FocusAgentInputAction,
   NewAgentSessionAction,
   OpenAgentInEditorAction,
+  RefreshAgentSessionsAction,
   ResumeAgentSessionAction,
   SelectAgentAction,
   SelectAgentModeAction,
@@ -240,3 +241,4 @@ registerAction2(SelectAgentModeAction)
 registerAction2(SelectAgentThoughtLevelAction)
 registerAction2(ResumeAgentSessionAction)
 registerAction2(ClearAgentSessionHistoryAction)
+registerAction2(RefreshAgentSessionsAction)

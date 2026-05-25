@@ -333,6 +333,7 @@ interface BuildOptions {
    * their synchronous-ish behavior.
    */
   readonly whenWorkspaceReady?: Promise<void>
+  readonly getLiveHistoryIds?: () => ReadonlySet<string>
 }
 
 interface BuildResult {
@@ -375,6 +376,7 @@ function build(opts: BuildOptions = {}): BuildResult {
     hasActiveSession: opts.hasActiveSession ?? (() => false),
     getCurrentCwd: () => opts.cwd,
     whenWorkspaceReady: () => whenWorkspaceReady,
+    getLiveHistoryIds: opts.getLiveHistoryIds ?? (() => new Set<string>()),
   }
   const coordinator = new AcpSessionRestoreCoordinator(
     client,
@@ -619,6 +621,42 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     expect(built.client.connectCalls).toHaveLength(1)
   })
 
+  it('refresh() bypasses the cwd idempotency gate and re-runs session/list', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 30))
+    expect(built.client.connectCalls).toHaveLength(1)
+    // Forced refresh: idempotency gate must not short-circuit even though cwd is unchanged.
+    await coordinator.refresh()
+    expect(built.client.connectCalls).toHaveLength(2)
+    expect(built.client.agents[0]?.listCalls).toHaveLength(1)
+    expect(built.client.agents[1]?.listCalls).toHaveLength(1)
+  })
+
+  it('refresh() folds concurrent calls onto a single in-flight sweep', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    built.client.agentOptions.set('fake', {
+      capabilities: { sessionCapabilities: { list: {} } } as AgentCapabilities,
+      listPages: [[]],
+    })
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    // Three back-to-back refresh calls before the first resolves.
+    const a = coordinator.refresh()
+    const b = coordinator.refresh()
+    const c = coordinator.refresh()
+    await Promise.all([a, b, c])
+    expect(built.client.connectCalls).toHaveLength(1)
+  })
+
   it('re-hydrates after onWorkspaceSwap resets the gate', async () => {
     const storage = new FakeStorage()
     let currentCwd: string | undefined = 'C:/ws-A'
@@ -640,6 +678,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       hasActiveSession: () => false,
       getCurrentCwd: () => currentCwd,
       whenWorkspaceReady: () => Promise.resolve(),
+      getLiveHistoryIds: () => new Set<string>(),
     }
     coordinator = new AcpSessionRestoreCoordinator(
       client,

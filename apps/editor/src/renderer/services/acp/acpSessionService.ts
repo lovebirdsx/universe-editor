@@ -115,6 +115,12 @@ export interface IAcpSessionService {
    */
   requestHydrateIfNeeded(): void
   /**
+   * 用户主动触发的刷新：强制重新执行 `session/list` 扫描，无视
+   * `requestHydrateIfNeeded` 的 cwd 幂等门。返回 Promise 便于 UI 展示
+   * loading 状态；并发调用会折叠到同一次 sweep。
+   */
+  refreshSessions(): Promise<void>
+  /**
    * Best-effort: ask the owning agent to delete a session via `session/delete`.
    * Returns `'unsupported'` if the agent did not advertise
    * `sessionCapabilities.delete` at last hydrate, `'unknown'` if we have no
@@ -184,6 +190,13 @@ export class AcpSessionService
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
           getCurrentCwd: () => this._workspace.current?.folder.fsPath,
           whenWorkspaceReady: () => this._workspace.whenReady,
+          getLiveHistoryIds: () => {
+            const ids = new Set<string>()
+            for (const s of this._sessions) {
+              if (s.historyId) ids.add(s.historyId)
+            }
+            return ids
+          },
         },
       ),
     )
@@ -246,6 +259,10 @@ export class AcpSessionService
 
   requestHydrateIfNeeded(): void {
     this._coordinator.requestHydrate()
+  }
+
+  refreshSessions(): Promise<void> {
+    return this._coordinator.refresh()
   }
 
   async createSession(agentId?: string): Promise<IAcpSession> {

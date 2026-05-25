@@ -8,7 +8,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ICommandService, localize } from '@universe-editor/platform'
-import { ArrowLeftRight, Bot, Plus } from 'lucide-react'
+import { ArrowLeftRight, Bot, Plus, RefreshCw } from 'lucide-react'
+import { useState } from 'react'
 import { useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -21,6 +22,13 @@ export function SessionListPanel() {
   const registry = useService(IAcpAgentRegistry)
   const commands = useService(ICommandService)
   const location = useService(IAcpChatLocationService)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const handleRefresh = () => {
+    if (refreshing) return
+    setRefreshing(true)
+    void service.refreshSessions().finally(() => setRefreshing(false))
+  }
 
   return (
     <div className={styles['sessionList']} data-testid="acp-session-list">
@@ -47,6 +55,23 @@ export function SessionListPanel() {
         >
           <span aria-hidden="true">
             <Bot size={14} strokeWidth={1.75} />
+          </span>
+        </button>
+        <button
+          type="button"
+          className={styles['toolbarButton']}
+          onClick={handleRefresh}
+          disabled={refreshing}
+          data-testid="acp-refresh-sessions"
+          title={localize('acp.refreshSessions', 'Refresh session list')}
+          aria-label={localize('acp.refreshSessions', 'Refresh session list')}
+        >
+          <span aria-hidden="true">
+            <RefreshCw
+              size={14}
+              strokeWidth={1.75}
+              className={refreshing ? styles['spin'] : undefined}
+            />
           </span>
         </button>
         <button

@@ -5,8 +5,11 @@
  *  a row both kicks off the resume and asks the parent to collapse the popover.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { localize } from '@universe-editor/platform'
+import { RefreshCw } from 'lucide-react'
+import { useService } from '../useService.js'
+import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { SessionListBody } from './SessionListBody.js'
 import styles from './agents.module.css'
 
@@ -16,6 +19,15 @@ export interface SessionsPopoverProps {
 
 export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const service = useService(IAcpSessionService)
+  const [refreshing, setRefreshing] = useState(false)
+
+  const handleRefresh = (e: ReactMouseEvent) => {
+    e.stopPropagation()
+    if (refreshing) return
+    setRefreshing(true)
+    void service.refreshSessions().finally(() => setRefreshing(false))
+  }
 
   useEffect(() => {
     const handlePointer = (ev: MouseEvent) => {
@@ -48,6 +60,25 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
       role="listbox"
       aria-label={localize('acp.sessions.popover', 'Sessions')}
     >
+      <div className={styles['sessionsPopoverToolbar']}>
+        <button
+          type="button"
+          className={styles['toolbarButton']}
+          onClick={handleRefresh}
+          disabled={refreshing}
+          data-testid="acp-refresh-sessions-popover"
+          title={localize('acp.refreshSessions', 'Refresh session list')}
+          aria-label={localize('acp.refreshSessions', 'Refresh session list')}
+        >
+          <span aria-hidden="true">
+            <RefreshCw
+              size={14}
+              strokeWidth={1.75}
+              className={refreshing ? styles['spin'] : undefined}
+            />
+          </span>
+        </button>
+      </div>
       <SessionListBody onPick={() => onDismiss()} disableOpenInEditor />
     </div>
   )
