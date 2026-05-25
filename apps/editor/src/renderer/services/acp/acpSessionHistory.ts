@@ -401,7 +401,7 @@ export class AcpSessionHistoryService
     if (!Array.isArray(o.entries)) return undefined
     const migrated = migrate(o.schemaVersion, o.entries)
     if (!migrated) {
-      this._logger.warn(`[acp] ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
+      this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
     return migrated.filter(isValidEntry)

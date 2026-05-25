@@ -110,7 +110,7 @@ export class AcpAgentDefaultsService
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (o.schemaVersion !== SCHEMA_VERSION || !isNestedStringRecord(o.defaults)) {
-      this._logger.warn(`[acp] ignoring acp.agentDefaults with schemaVersion=${o.schemaVersion}`)
+      this._logger.warn(`ignoring acp.agentDefaults with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
     // Clone so we own the mutable shape.

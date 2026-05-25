@@ -137,7 +137,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       proc = this._spawn(spec.command, spec.args, options)
     } catch (err) {
       this._logger.warn(
-        `[acpHost] spawn failed handle=${handle} command=${spec.command}: ${(err as Error).message}`,
+        `spawn failed handle=${handle} command=${spec.command}: ${(err as Error).message}`,
       )
       return Promise.reject(err as Error)
     }
@@ -154,7 +154,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       this._onStderr.fire({ handle, data })
     })
     proc.on('error', (err) => {
-      this._logger.warn(`[acpHost] proc error handle=${handle}: ${err.message}`)
+      this._logger.warn(`proc error handle=${handle}: ${err.message}`)
       // Treat spawn failures (ENOENT etc.) as a synthetic exit so callers get
       // a single, well-defined termination signal — without this, the renderer
       // would chase an undead handle and hit "Cannot call write after a stream
@@ -167,12 +167,12 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     proc.on('exit', (code, signal) => {
       if (entry.exited) return
       entry.exited = true
-      this._logger.info(`[acpHost] exit handle=${handle} code=${code} signal=${signal}`)
+      this._logger.info(`exit handle=${handle} code=${code} signal=${signal}`)
       this._onExit.fire({ handle, code, signal })
       this._procs.delete(handle)
     })
 
-    this._logger.info(`[acpHost] start handle=${handle} command=${spec.command}`)
+    this._logger.info(`start handle=${handle} command=${spec.command} cwd=${spec.cwd ?? ''}`)
     return Promise.resolve({ handle })
   }
 
@@ -204,7 +204,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     try {
       entry.proc.kill()
     } catch (err) {
-      this._logger.warn(`[acpHost] kill failed handle=${handle}: ${(err as Error).message}`)
+      this._logger.warn(`kill failed handle=${handle}: ${(err as Error).message}`)
     }
     return Promise.resolve()
   }
@@ -214,7 +214,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     try {
       return await this._lookup(command)
     } catch (err) {
-      this._logger.warn(`[acpHost] probe failed for ${command}: ${(err as Error).message}`)
+      this._logger.warn(`probe failed for ${command}: ${(err as Error).message}`)
       return false
     }
   }
@@ -227,7 +227,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         } catch {
           // ignore — we're shutting down
         }
-        this._logger.info(`[acpHost] dispose killed handle=${handle}`)
+        this._logger.info(`dispose killed handle=${handle}`)
       }
     }
     this._procs.clear()

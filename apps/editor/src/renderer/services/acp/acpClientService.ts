@@ -123,7 +123,7 @@ export class AcpClientService implements IAcpClientService {
       })
       throw err
     }
-    this._logger.info(`[acp] spawned agent=${agentId} handle=${handle}`)
+    this._logger.info(`spawned agent=${agentId} handle=${handle}`)
     this._telemetry.publicLog('acp.spawned', { agentId })
 
     const cwd = options?.cwd ?? ''
@@ -261,7 +261,7 @@ export class AcpClientService implements IAcpClientService {
     path: string,
     reason: string,
   ): void {
-    this._logger.warn(`[acp] blocked agent fs/${op}: ${path} (${reason})`)
+    this._logger.warn(`blocked agent fs/${op}: ${path} (${reason})`)
     this._telemetry.publicLog('acp.path_blocked', { op, reason })
     this._notification.notify({
       severity: Severity.Warning,

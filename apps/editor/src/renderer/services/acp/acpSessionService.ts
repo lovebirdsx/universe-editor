@@ -246,7 +246,7 @@ export class AcpSessionService
     this._byAgentSessionId.clear()
     for (const session of oldSessions) {
       void session.close().catch((err) => {
-        this._logger.warn(`[acp] close on workspace swap failed: ${(err as Error).message}`)
+        this._logger.warn(`close on workspace swap failed: ${(err as Error).message}`)
       })
     }
     try {
@@ -350,7 +350,7 @@ export class AcpSessionService
         } catch (err) {
           conn.dispose()
           const msg = (err as Error).message
-          this._logger.warn(`[acp] createSession failed: ${msg}`)
+          this._logger.warn(`createSession failed: ${msg}`)
           this._notification.notify({
             severity: Severity.Error,
             message: `Failed to start agent session: ${msg}`,
@@ -478,7 +478,7 @@ export class AcpSessionService
         conn.dispose()
       }
       const msg = (err as Error).message
-      this._logger.warn(`[acp] resumeSession failed: ${msg}`)
+      this._logger.warn(`resumeSession failed: ${msg}`)
       this._notification.notify({
         severity: Severity.Error,
         message: `Failed to resume agent session: ${msg}`,
@@ -556,7 +556,7 @@ export class AcpSessionService
           await session.setConfigOption(id, desired)
         } catch (err) {
           this._logger.warn(
-            `[acp] failed to restore configOption ${id}=${desired}: ${(err as Error).message}`,
+            `failed to restore configOption ${id}=${desired}: ${(err as Error).message}`,
           )
         }
       }
@@ -581,7 +581,7 @@ export class AcpSessionService
     }
     const session = this._byAgentSessionId.get(params.sessionId)
     if (!session) {
-      this._logger.warn(`[acp] request_permission for unknown session ${params.sessionId}`)
+      this._logger.warn(`request_permission for unknown session ${params.sessionId}`)
       return { outcome: { outcome: 'cancelled' } }
     }
     const allowAlways = params.options.find((o) => o.kind === 'allow_always')

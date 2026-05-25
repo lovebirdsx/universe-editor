@@ -136,13 +136,11 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
         this._publish()
       } else if (raw !== undefined) {
         this._logger.warn(
-          `[acp] ignoring acp.chatLocation with schemaVersion=${
-            (raw as PersistedShape).schemaVersion
-          }`,
+          `ignoring acp.chatLocation with schemaVersion=${(raw as PersistedShape).schemaVersion}`,
         )
       }
     } catch (err) {
-      this._logger.warn(`[acp] failed to load chat location: ${(err as Error).message}`)
+      this._logger.warn(`failed to load chat location: ${(err as Error).message}`)
     } finally {
       this._loaded = true
     }
@@ -167,7 +165,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
       this._telemetry.publicLogError('acp.chat_location_persist_failed', {
         error: (err as Error).message,
       })
-      this._logger.warn(`[acp] failed to persist chat location: ${(err as Error).message}`)
+      this._logger.warn(`failed to persist chat location: ${(err as Error).message}`)
     }
   }
 

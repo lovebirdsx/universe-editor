@@ -146,9 +146,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     try {
       proc = this._spawn(spec.command, spec.args ?? [], options)
     } catch (err) {
-      this._logger.warn(
-        `[acpTerminal] spawn failed command=${spec.command}: ${(err as Error).message}`,
-      )
+      this._logger.warn(`spawn failed command=${spec.command}: ${(err as Error).message}`)
       return Promise.reject(err as Error)
     }
 
@@ -170,7 +168,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     proc.stdout.on('data', (chunk: string) => this._appendOutput(entry, chunk))
     proc.stderr.on('data', (chunk: string) => this._appendOutput(entry, chunk))
     proc.on('error', (err) => {
-      this._logger.warn(`[acpTerminal] proc error id=${id}: ${err.message}`)
+      this._logger.warn(`proc error id=${id}: ${err.message}`)
       // Surface spawn failures (ENOENT etc.) as a synthetic exit so the agent
       // gets a deterministic terminal status instead of hanging on
       // wait_for_exit.
@@ -181,7 +179,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     })
     proc.on('exit', (code, signal) => {
       if (entry.exit !== undefined) return
-      this._logger.info(`[acpTerminal] exit id=${id} code=${code} signal=${signal}`)
+      this._logger.info(`exit id=${id} code=${code} signal=${signal}`)
       const info: TerminalExitStatus = {
         ...(code !== null ? { exitCode: code } : {}),
         ...(signal !== null ? { signal } : {}),
@@ -190,7 +188,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
       this._drainWaiters(entry)
     })
 
-    this._logger.info(`[acpTerminal] create id=${id} command=${spec.command}`)
+    this._logger.info(`create id=${id} command=${spec.command}`)
     return Promise.resolve({ terminalId: id })
   }
 
@@ -229,7 +227,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     try {
       entry.proc.kill()
     } catch (err) {
-      this._logger.warn(`[acpTerminal] kill failed id=${terminalId}: ${(err as Error).message}`)
+      this._logger.warn(`kill failed id=${terminalId}: ${(err as Error).message}`)
     }
     return Promise.resolve()
   }
@@ -253,7 +251,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     const releaseErr = new Error(`AcpTerminal: terminal ${terminalId} released`)
     for (const w of entry.waiters.splice(0)) w.reject(releaseErr)
     this._entries.delete(terminalId)
-    this._logger.info(`[acpTerminal] release id=${terminalId}`)
+    this._logger.info(`release id=${terminalId}`)
     return Promise.resolve()
   }
 
@@ -268,7 +266,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
       }
       const err = new Error('AcpTerminal: service disposed')
       for (const w of entry.waiters.splice(0)) w.reject(err)
-      this._logger.info(`[acpTerminal] dispose killed id=${id}`)
+      this._logger.info(`dispose killed id=${id}`)
     }
     this._entries.clear()
     super.dispose()

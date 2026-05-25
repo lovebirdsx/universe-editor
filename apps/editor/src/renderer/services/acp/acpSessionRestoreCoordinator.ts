@@ -213,7 +213,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
           this._hydratedForCwd = cwd
         }
       } catch (err) {
-        this._logger.warn(`[acp] hydrate failed: ${(err as Error).message}`)
+        this._logger.warn(`hydrate failed: ${(err as Error).message}`)
       }
     })()
     this._hydrateInFlight = run.finally(() => {
@@ -245,7 +245,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     try {
       await this._callbacks.resumeSession(historyId)
     } catch (err) {
-      this._logger.warn(`[acp] tryRestoreActiveSession failed: ${(err as Error).message}`)
+      this._logger.warn(`tryRestoreActiveSession failed: ${(err as Error).message}`)
     }
   }
 
@@ -279,7 +279,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       this._telemetry.publicLog('acp.session_delete_ok', { agentId: entry.agentId })
       return 'ok'
     } catch (err) {
-      this._logger.warn(`[acp] deleteOnAgent failed: ${(err as Error).message}`)
+      this._logger.warn(`deleteOnAgent failed: ${(err as Error).message}`)
       this._telemetry.publicLogError('acp.session_delete_failed', {
         agentId: entry.agentId,
         error: (err as Error).message,
@@ -305,7 +305,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
         this._pendingRestoreHistoryId = historyId
       }
     } catch (err) {
-      this._logger.warn(`[acp] failed to read pending restore: ${(err as Error).message}`)
+      this._logger.warn(`failed to read pending restore: ${(err as Error).message}`)
     }
   }
 
@@ -398,15 +398,13 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       } else if (collected.length > 0) {
         this._history.bulkMergeFromAgent(agentId, collected, cwd)
       }
-      this._logger.info(
-        `[acp] hydrated ${collected.length} sessions from ${agentId} for cwd=${cwd}`,
-      )
+      this._logger.info(`hydrated ${collected.length} sessions from ${agentId} for cwd=${cwd}`)
       this._telemetry.publicLog('acp.session_hydrate_ok', {
         agentId,
         count: collected.length,
       })
     } catch (err) {
-      this._logger.warn(`[acp] hydrate failed for ${agentId}: ${(err as Error).message}`)
+      this._logger.warn(`hydrate failed for ${agentId}: ${(err as Error).message}`)
       this._telemetry.publicLogError('acp.session_hydrate_failed', {
         agentId,
         error: (err as Error).message,

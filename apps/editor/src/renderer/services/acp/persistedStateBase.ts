@@ -166,11 +166,11 @@ export abstract class PersistedStateBase<TState> extends Disposable {
           this._state = this._mergeOnLoad(parsed, this._state)
           this._onStateReplaced(this._state)
         } else {
-          this._logger.warn(`[acp] ignoring ${this._storageKey} (unrecognized shape)`)
+          this._logger.warn(`ignoring ${this._storageKey} (unrecognized shape)`)
         }
       }
     } catch (err) {
-      this._logger.warn(`[acp] failed to load ${this._storageKey}: ${(err as Error).message}`)
+      this._logger.warn(`failed to load ${this._storageKey}: ${(err as Error).message}`)
     } finally {
       this._loaded = true
       this._currentLoadedScope = scope
@@ -194,7 +194,7 @@ export abstract class PersistedStateBase<TState> extends Disposable {
       this._telemetry.publicLogError(this._persistFailureEvent, {
         error: (err as Error).message,
       })
-      this._logger.warn(`[acp] failed to persist ${this._storageKey}: ${(err as Error).message}`)
+      this._logger.warn(`failed to persist ${this._storageKey}: ${(err as Error).message}`)
     }
   }
 }
