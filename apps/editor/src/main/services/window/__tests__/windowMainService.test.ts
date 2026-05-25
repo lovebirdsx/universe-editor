@@ -32,7 +32,7 @@ vi.mock('electron', () => ({
     isFullScreen: vi.fn().mockReturnValue(false),
     getNormalBounds: vi.fn().mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 }),
     getBounds: vi.fn().mockReturnValue({ x: 0, y: 0, width: 1280, height: 800 }),
-    webContents: { toggleDevTools: vi.fn() },
+    webContents: { toggleDevTools: vi.fn(), on: vi.fn(), openDevTools: vi.fn() },
   })),
   screen: {
     getAllDisplays: vi.fn().mockReturnValue([]),

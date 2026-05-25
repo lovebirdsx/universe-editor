@@ -14,6 +14,7 @@ import { MainHostService } from '../host/hostMainService.js'
 import { MainLogChannelService } from '../log/mainLogChannelService.js'
 import { type LogMainService } from '../log/logMainService.js'
 import { applyWindowState, loadWindowState, trackWindowState } from '../../windowState.js'
+import { loadDevToolsOpen, trackDevToolsState } from '../../devToolsState.js'
 import { getDefaultStorage } from '../../storage.js'
 import type {
   ApplicationServices,
@@ -67,6 +68,7 @@ export class WindowMainService implements IWindowMainService {
     const isMac = process.platform === 'darwin'
     const storage = getDefaultStorage()
     const windowState = await loadWindowState(storage)
+    const devToolsOpen = await loadDevToolsOpen(storage)
     logger.info(
       `createWindow start e2e=${e2eEnabled} dev=${rendererUrl !== undefined} restoredState=${windowState !== null}`,
     )
@@ -97,10 +99,12 @@ export class WindowMainService implements IWindowMainService {
     win.once('ready-to-show', () => {
       if (windowState) applyWindowState(win, windowState)
       win.show()
+      if (devToolsOpen) win.webContents.openDevTools()
       logger.info(`readyToShow id=${win.id}`)
     })
 
     trackWindowState(win, storage)
+    trackDevToolsState(win, storage)
 
     // Per-window services
     const host = new MainHostService(
