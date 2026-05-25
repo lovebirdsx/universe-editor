@@ -436,7 +436,6 @@ export class AcpSessionService
       if (loadResult?.configOptions) {
         session.applyInitState({ configOptions: loadResult.configOptions })
       }
-      this._history.touch(historyId)
       this._telemetry.publicLog('acp.session_resumed', {
         agentId: entry.agentId,
       })
