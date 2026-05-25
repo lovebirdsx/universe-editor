@@ -1,18 +1,24 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AcpClientService — boots an ACP agent and returns a wired ClientSideConnection
- *  from `@agentclientprotocol/sdk`.
+ *  AcpClientService — connection-pooled ACP client.
  *
- *  The Client side of ACP answers peer-initiated requests by implementing the
- *  SDK's `Client` interface (readTextFile / writeTextFile / requestPermission /
- *  the five terminal methods) plus the `sessionUpdate` notification handler.
- *  Everything else (unstable_*, extMethod, extNotification) is left undefined so
- *  the SDK returns `Method not found` automatically.
+ *  Same (agentId, cwd) shares one ClientSideConnection backed by one agent
+ *  subprocess. Each caller (a session or a hydrate sweep) gets a refcounted
+ *  "lease". When all leases are released the pool entry enters a short grace
+ *  window (POOL_GRACE_MS); a re-acquire during grace reuses the connection,
+ *  otherwise the process is stopped and the entry evicted.
  *
- *  All fs/* requests are gated through IAcpPathPolicy against the session cwd
- *  the caller supplied. Anything outside the cwd or under a sensitive prefix
- *  fails closed with `RequestError.invalidParams` and surfaces a user-visible
- *  notification — the agent process is untrusted code.
+ *  Notification routing is owned by a single `IAcpClientNotificationSink`
+ *  (`AcpSessionService`), installed once via `setNotificationSink`. The sink
+ *  is sessionId-aware, so a shared connection's sessionUpdate / requestPermission
+ *  fan out correctly across leases.
+ *
+ *  Terminal ownership is tracked per `sessionId` (the leaseFor) so multiple
+ *  sessions sharing a connection cannot reach each other's terminals, and a
+ *  single lease.dispose() reaps only its own terminals.
+ *
+ *  All fs/* requests are gated through IAcpPathPolicy against the pool entry's
+ *  cwd. Anything outside cwd or under a sensitive prefix fails closed.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -21,16 +27,22 @@ import {
   IFileService,
   INotificationService,
   ITelemetryService,
+  IHostService,
   Severity,
   URI,
+  normalizeFsPath,
+  type HostPlatform,
 } from '@universe-editor/platform'
-import type { ILogger } from '@universe-editor/platform'
+import type { IDisposable, ILogger, IOutputChannel } from '@universe-editor/platform'
 import {
   ClientSideConnection,
+  PROTOCOL_VERSION,
   RequestError,
   type Client,
   type CreateTerminalRequest,
   type CreateTerminalResponse,
+  type InitializeRequest,
+  type InitializeResponse,
   type KillTerminalRequest,
   type ReadTextFileRequest,
   type ReadTextFileResponse,
@@ -49,7 +61,7 @@ import { IAcpHostService } from '../../../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../../../shared/ipc/acpTerminalService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
-import { createSdkHostStream } from './sdkHostStream.js'
+import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { IOutputService } from '@universe-editor/platform'
 
 export interface IAcpClientNotificationSink {
@@ -63,31 +75,88 @@ export interface IAcpClientNotificationSink {
 
 export interface IAcpClientConnection {
   readonly conn: ClientSideConnection
-  /** Stop the agent process and detach all listeners. Idempotent. */
+  /** Resolves to the pool's cached `initialize()` response. */
+  readonly initializeResult: Promise<InitializeResponse>
+  /**
+   * Tag this lease with its `sessionIdOnAgent`. Terminals opened by the agent
+   * under that sessionId become the lease's property and are released on
+   * `dispose()`. Callers without an established session (hydrate sweeps) may
+   * skip this. Idempotent — only the first call takes effect.
+   */
+  attachSession(sessionIdOnAgent: string): void
+  /** Release this lease. Idempotent. Does not stop the process unless this is the last lease. */
   dispose(): void
 }
 
 export interface IAcpClientService {
   readonly _serviceBrand: undefined
   /**
-   * Spawn the agent for `agentId` and return a wired ClientSideConnection.
-   * The supplied sink receives forwarded `session/update` notifications and
-   * `session/request_permission` requests. The `cwd` option doubles as the
-   * path-sandbox root for fs/* peer requests.
+   * Install the notification sink. Must be called once at bootstrap before any
+   * `connect()` lease is awaited. The sink is shared across every lease — it
+   * routes incoming `session/update` / `session/request_permission` by
+   * sessionId, so a single sink supports a shared connection.
+   */
+  setNotificationSink(sink: IAcpClientNotificationSink): void
+  /**
+   * Acquire a connection lease for `agentId` rooted at `options.cwd`. If a live
+   * pool entry exists, it is reused; otherwise a new agent process is spawned
+   * and ACP `initialize` is run once and cached.
+   *
+   * `options.leaseFor` should be the `sessionIdOnAgent` the lease will be used
+   * for, when known up-front (e.g. `resumeSession`). For paths that learn the
+   * sessionId only after `newSession()` returns, omit it here and call
+   * `lease.attachSession(sessionId)` once it's known.
    */
   connect(
     agentId: string,
-    sink: IAcpClientNotificationSink,
-    options?: { cwd?: string },
+    options?: { cwd?: string; leaseFor?: string },
   ): Promise<IAcpClientConnection>
+  /** Synchronously stop every pooled process and clear the pool. */
+  drainAll(): void
 }
 
 export const IAcpClientService = createDecorator<IAcpClientService>('acpClientService')
+
+/** Grace period after the last lease is released before the agent process is stopped. */
+const POOL_GRACE_MS = 30_000
+
+const TERMINAL_BUCKET_UNTAGGED = '\0__untagged__'
+
+const DEFAULT_INIT_PARAMS: InitializeRequest = {
+  protocolVersion: PROTOCOL_VERSION,
+  clientCapabilities: {
+    fs: { readTextFile: true, writeTextFile: true },
+    terminal: true,
+  },
+}
+
+interface PoolEntry {
+  readonly key: string
+  readonly agentId: string
+  readonly cwd: string
+  readonly handle: string
+  readonly conn: ClientSideConnection
+  readonly initializeResult: Promise<InitializeResponse>
+  readonly stderr: IOutputChannel
+  readonly stderrSub: IDisposable
+  readonly hostStream: SdkHostStream
+  /** sessionId → terminalIds owned by leases tagged with that sessionId. */
+  readonly terminalsBySession: Map<string, Set<string>>
+  refcount: number
+  graceTimer: ReturnType<typeof setTimeout> | undefined
+  evicted: boolean
+}
 
 export class AcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
+  private readonly _platform: HostPlatform
+  /** Maps pool-key → in-flight or settled PoolEntry. Stored as Promise so
+   *  concurrent `connect()` calls share the same spawn. On creation failure
+   *  the catch handler evicts the entry. */
+  private readonly _pool = new Map<string, Promise<PoolEntry>>()
+  private _sink: IAcpClientNotificationSink | undefined
 
   constructor(
     @IAcpHostService private readonly _host: IAcpHostService,
@@ -99,16 +168,79 @@ export class AcpClientService implements IAcpClientService {
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpTerminalService private readonly _terminals: IAcpTerminalService,
     @ILoggerService loggerService: ILoggerService,
+    @IHostService hostService: IHostService,
   ) {
     this._logger = loggerService.createLogger({ id: 'acpClient', name: 'ACP Client' })
+    this._platform = hostService.platform
+  }
+
+  setNotificationSink(sink: IAcpClientNotificationSink): void {
+    this._sink = sink
   }
 
   async connect(
     agentId: string,
-    sink: IAcpClientNotificationSink,
-    options?: { cwd?: string },
+    options?: { cwd?: string; leaseFor?: string },
   ): Promise<IAcpClientConnection> {
-    const spec = this._registry.resolve(agentId, options?.cwd)
+    if (!this._sink) {
+      throw new Error('AcpClientService.connect: notification sink not installed')
+    }
+    const cwd = options?.cwd ?? ''
+    const key = this._poolKey(agentId, cwd)
+    let entryPromise = this._pool.get(key)
+    if (!entryPromise) {
+      entryPromise = this._createEntry(agentId, key, cwd)
+      this._pool.set(key, entryPromise)
+      // If spawn fails, drop the entry so the next caller retries.
+      entryPromise.catch(() => {
+        if (this._pool.get(key) === entryPromise) this._pool.delete(key)
+      })
+    }
+    const entry = await entryPromise
+    if (entry.evicted) {
+      // Lost the race to a concurrent eviction. Retry — fresh entry will be
+      // created on this call.
+      return this.connect(agentId, options)
+    }
+    if (entry.graceTimer !== undefined) {
+      clearTimeout(entry.graceTimer)
+      entry.graceTimer = undefined
+    }
+    entry.refcount++
+    try {
+      await entry.initializeResult
+    } catch (err) {
+      // initializeResult rejection already evicted the entry; just unwind.
+      entry.refcount--
+      throw err
+    }
+    return this._createLease(entry, options?.leaseFor)
+  }
+
+  drainAll(): void {
+    for (const entryPromise of [...this._pool.values()]) {
+      entryPromise.then(
+        (entry) => this._evictNow(entry),
+        () => {
+          // Spawn failed — already self-evicted via the catch in connect().
+        },
+      )
+    }
+  }
+
+  // -- internals -----------------------------------------------------------
+
+  private _poolKey(agentId: string, cwd: string): string {
+    if (!cwd) return `${agentId} `
+    const norm = normalizeFsPath(cwd)
+    if (norm.startsWith('__ESCAPED__')) return `${agentId} ${cwd}`
+    const ci = this._platform === 'win32' || this._platform === 'darwin'
+    return `${agentId} ${ci ? norm.toLowerCase() : norm}`
+  }
+
+  private async _createEntry(agentId: string, key: string, cwd: string): Promise<PoolEntry> {
+    const sink = this._sink!
+    const spec = this._registry.resolve(agentId, cwd || undefined)
     let handle: string
     try {
       handle = (await this._host.start(spec)).handle
@@ -123,18 +255,14 @@ export class AcpClientService implements IAcpClientService {
       })
       throw err
     }
-    this._logger.info(`spawned agent=${agentId} handle=${handle}`)
+    this._logger.info(`spawned agent=${agentId} handle=${handle} cwd=${cwd || '<none>'}`)
     this._telemetry.publicLog('acp.spawned', { agentId })
 
-    const cwd = options?.cwd ?? ''
     const stderr = this._output.createChannel(`acp/${agentId}/${handle}`)
     const stderrSub = this._host.onStderr((chunk) => {
       if (chunk.handle === handle) stderr.append(chunk.data)
     })
-    // Per-connection registry of terminals the agent has opened. Tracked
-    // here so we can both (a) reject cross-connection terminalId references
-    // and (b) reap leftover terminals if the agent crashes without releasing.
-    const ownedTerminals = new Set<string>()
+    const terminalsBySession = new Map<string, Set<string>>()
 
     const clientImpl: Client = {
       requestPermission: (params) => sink.onRequestPermission(params),
@@ -168,10 +296,8 @@ export class AcpClientService implements IAcpClientService {
         return {}
       },
       createTerminal: async (params: CreateTerminalRequest): Promise<CreateTerminalResponse> => {
-        // path-policy gating: rewrite cwd to its normalized form so the agent
-        // can't smuggle `..` segments past the sandbox check.
-        const { sessionId: _sessionId, ...rest } = params
-        let spec: Omit<CreateTerminalRequest, 'sessionId'> = rest
+        const { sessionId, ...rest } = params
+        let createSpec: Omit<CreateTerminalRequest, 'sessionId'> = rest
         if (params.cwd != null) {
           const decision = this._pathPolicy.check(cwd, params.cwd)
           if (!decision.ok) {
@@ -181,30 +307,32 @@ export class AcpClientService implements IAcpClientService {
               `terminal/create rejected: ${decision.reason}`,
             )
           }
-          spec = { ...rest, cwd: decision.normalized }
+          createSpec = { ...rest, cwd: decision.normalized }
         }
-        const created = await this._terminals.create(spec)
-        ownedTerminals.add(created.terminalId)
+        const created = await this._terminals.create(createSpec)
+        bucketFor(terminalsBySession, sessionId).add(created.terminalId)
         this._telemetry.publicLog('acp.terminal_created', { command: params.command })
         return created
       },
       terminalOutput: async (params: TerminalOutputRequest): Promise<TerminalOutputResponse> => {
-        assertTerminalOwned(ownedTerminals, params.terminalId)
+        assertTerminalOwned(terminalsBySession, params.sessionId, params.terminalId)
         return this._terminals.output(params.terminalId)
       },
       waitForTerminalExit: async (
         params: WaitForTerminalExitRequest,
       ): Promise<WaitForTerminalExitResponse> => {
-        assertTerminalOwned(ownedTerminals, params.terminalId)
+        assertTerminalOwned(terminalsBySession, params.sessionId, params.terminalId)
         return this._terminals.waitForExit(params.terminalId)
       },
       killTerminal: async (params: KillTerminalRequest) => {
-        assertTerminalOwned(ownedTerminals, params.terminalId)
+        assertTerminalOwned(terminalsBySession, params.sessionId, params.terminalId)
         await this._terminals.kill(params.terminalId)
       },
       releaseTerminal: async (params: ReleaseTerminalRequest) => {
-        assertTerminalOwned(ownedTerminals, params.terminalId)
-        ownedTerminals.delete(params.terminalId)
+        assertTerminalOwned(terminalsBySession, params.sessionId, params.terminalId)
+        const bucket = terminalsBySession.get(params.sessionId)
+        bucket?.delete(params.terminalId)
+        if (bucket && bucket.size === 0) terminalsBySession.delete(params.sessionId)
         await this._terminals.release(params.terminalId)
       },
     }
@@ -212,47 +340,131 @@ export class AcpClientService implements IAcpClientService {
     const hostStream = createSdkHostStream(this._host, handle)
     const conn = new ClientSideConnection(() => clientImpl, hostStream.stream)
 
+    const entry: PoolEntry = {
+      key,
+      agentId,
+      cwd,
+      handle,
+      conn,
+      stderr,
+      stderrSub,
+      hostStream,
+      terminalsBySession,
+      refcount: 0,
+      graceTimer: undefined,
+      evicted: false,
+      // Filled below — the field is readonly only externally; we patch via the
+      // mutable alias before returning.
+      initializeResult: undefined as unknown as Promise<InitializeResponse>,
+    }
+
+    conn.signal.addEventListener(
+      'abort',
+      () => {
+        // Process died (stop / kill / crash). Drop the entry so the next
+        // connect() spawns a fresh process; existing leases will see their
+        // sessions seal via the AcpSession's own signal.abort listener.
+        this._evictNow(entry)
+      },
+      { once: true },
+    )
+
+    const initializeResult = conn.initialize(DEFAULT_INIT_PARAMS).catch((err: unknown) => {
+      this._logger.warn(`initialize failed for ${agentId}: ${(err as Error).message}`)
+      this._evictNow(entry)
+      throw err
+    })
+    // Prevent unhandled-rejection noise if no lease awaits the result (e.g.
+    // drainAll arrived first).
+    initializeResult.catch(() => {})
+    ;(entry as { initializeResult: Promise<InitializeResponse> }).initializeResult =
+      initializeResult
+
+    return entry
+  }
+
+  private _createLease(entry: PoolEntry, leaseFor: string | undefined): IAcpClientConnection {
     let disposed = false
-    const cleanup = (): void => {
-      if (disposed) return
-      disposed = true
-      stderrSub.dispose()
-      try {
-        stderr.dispose()
-      } catch {
-        // OutputChannel.dispose is idempotent; swallow if already gone.
+    let tag: string | undefined = leaseFor
+    return {
+      conn: entry.conn,
+      initializeResult: entry.initializeResult,
+      attachSession: (sessionIdOnAgent: string): void => {
+        if (tag === undefined) tag = sessionIdOnAgent
+      },
+      dispose: (): void => {
+        if (disposed) return
+        disposed = true
+        this._releaseLease(entry, tag)
+      },
+    }
+  }
+
+  private _releaseLease(entry: PoolEntry, leaseFor: string | undefined): void {
+    if (entry.evicted) return
+    // Release terminals owned by this lease.
+    const bucketKey = leaseFor ?? TERMINAL_BUCKET_UNTAGGED
+    const bucket = entry.terminalsBySession.get(bucketKey)
+    if (bucket && bucket.size > 0) {
+      const ids = [...bucket]
+      bucket.clear()
+      entry.terminalsBySession.delete(bucketKey)
+      for (const id of ids) {
+        void this._terminals.release(id).catch(() => {
+          // best-effort
+        })
       }
-      hostStream.dispose()
-      // Reap terminals the agent left dangling. `release` kills the proc if
-      // still alive; we swallow errors because the process may be racing exit.
-      if (ownedTerminals.size > 0) {
-        const ids = [...ownedTerminals]
-        ownedTerminals.clear()
+    }
+    entry.refcount--
+    if (entry.refcount > 0) return
+    // Last lease gone — schedule lazy eviction.
+    entry.graceTimer = setTimeout(() => {
+      entry.graceTimer = undefined
+      if (entry.refcount > 0 || entry.evicted) return
+      this._evictNow(entry)
+    }, POOL_GRACE_MS)
+  }
+
+  private _evictNow(entry: PoolEntry): void {
+    if (entry.evicted) return
+    entry.evicted = true
+    if (entry.graceTimer !== undefined) {
+      clearTimeout(entry.graceTimer)
+      entry.graceTimer = undefined
+    }
+    const inflight = this._pool.get(entry.key)
+    if (inflight) {
+      // Only drop our own entry if it's still the one mapped to the key.
+      void inflight.then(
+        (e) => {
+          if (e === entry && this._pool.get(entry.key) === inflight) {
+            this._pool.delete(entry.key)
+          }
+        },
+        () => {
+          // creation failure — already self-deleted.
+        },
+      )
+    }
+    void this._host.stop(entry.handle).catch(() => {
+      // best-effort
+    })
+    entry.stderrSub.dispose()
+    try {
+      entry.stderr.dispose()
+    } catch {
+      // OutputChannel.dispose is idempotent.
+    }
+    entry.hostStream.dispose()
+    if (entry.terminalsBySession.size > 0) {
+      for (const ids of entry.terminalsBySession.values()) {
         for (const id of ids) {
           void this._terminals.release(id).catch(() => {
             // best-effort
           })
         }
       }
-    }
-
-    // Connection closes when the underlying stream ends (host exits or stop is
-    // called). Use the SDK's abort signal as the canonical "connection done"
-    // hook — it fires before `closed` resolves.
-    conn.signal.addEventListener('abort', cleanup, { once: true })
-
-    return {
-      conn,
-      dispose: (): void => {
-        // Manual dispose: kill the agent process if alive. The host's onExit
-        // will propagate into the SDK stream and fire `signal.abort`, which
-        // triggers `cleanup` above. Calling `cleanup` here too keeps things
-        // idempotent if `stop` rejects or races.
-        void this._host.stop(handle).catch(() => {
-          // best-effort
-        })
-        cleanup()
-      },
+      entry.terminalsBySession.clear()
     }
   }
 
@@ -270,8 +482,22 @@ export class AcpClientService implements IAcpClientService {
   }
 }
 
-function assertTerminalOwned(owned: Set<string>, terminalId: string): void {
-  if (!owned.has(terminalId)) {
+function bucketFor(map: Map<string, Set<string>>, sessionId: string): Set<string> {
+  let s = map.get(sessionId)
+  if (!s) {
+    s = new Set<string>()
+    map.set(sessionId, s)
+  }
+  return s
+}
+
+function assertTerminalOwned(
+  map: Map<string, Set<string>>,
+  sessionId: string,
+  terminalId: string,
+): void {
+  const bucket = map.get(sessionId)
+  if (!bucket || !bucket.has(terminalId)) {
     throw RequestError.invalidParams(undefined, `Unknown terminal: ${terminalId}`)
   }
 }

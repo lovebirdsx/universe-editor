@@ -39,6 +39,7 @@ const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
   AgentSideConnection,
   ClientSideConnection,
+  PROTOCOL_VERSION,
   RequestError,
   type Agent,
   type AuthenticateRequest,
@@ -293,10 +294,19 @@ class FakeAcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
   readonly connected: ConnectedSession[] = []
   private _agentSeq = 0
+  private _sink: IAcpClientNotificationSink | undefined
 
   constructor(private readonly _opts: FakeAcpClientOptions = {}) {}
 
-  async connect(_agentId: string, sink: IAcpClientNotificationSink): Promise<IAcpClientConnection> {
+  setNotificationSink(sink: IAcpClientNotificationSink): void {
+    this._sink = sink
+  }
+
+  drainAll(): void {}
+
+  async connect(_agentId: string): Promise<IAcpClientConnection> {
+    const sink = this._sink
+    if (!sink) throw new Error('FakeAcpClientService.connect: sink not installed')
     const agentSessionId = `agent-${++this._agentSeq}`
     const pair = createInMemoryAcpPair()
     const agent = new StubAgent(agentSessionId, this._opts)
@@ -308,9 +318,19 @@ class FakeAcpClientService implements IAcpClientService {
       },
     }
     const clientConn = new ClientSideConnection(() => clientImpl, pair.clientStream)
+    const initializeResult = clientConn.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+    })
+    initializeResult.catch(() => {})
     this.connected.push({ sink, agent, agentConn, clientConn })
     return {
       conn: clientConn,
+      initializeResult,
+      attachSession: (): void => {},
       dispose: (): void => {
         void pair.clientStream.writable.close().catch(() => {})
         void pair.agentStream.writable.close().catch(() => {})

@@ -38,8 +38,6 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import {
-  PROTOCOL_VERSION,
-  type InitializeRequest,
   type LoadSessionRequest,
   type NewSessionRequest,
   type RequestPermissionRequest,
@@ -177,6 +175,11 @@ export class AcpSessionService
     this.sessions = observableValue<readonly IAcpSession[]>('acp.sessions', [])
     this.activeSessionId = observableValue<string | undefined>('acp.activeSessionId', undefined)
     this.activeSession = observableValue<IAcpSession | undefined>('acp.activeSession', undefined)
+    // Install the notification sink on the (singleton) client service. The
+    // pool fans out session/update + session/request_permission via this sink,
+    // routing by params.sessionId, so a single sink supports the shared
+    // connection per (agentId, cwd).
+    this._client.setNotificationSink(this)
 
     this._coordinator = this._register(
       new AcpSessionRestoreCoordinator(
@@ -249,6 +252,10 @@ export class AcpSessionService
         this._logger.warn(`close on workspace swap failed: ${(err as Error).message}`)
       })
     }
+    // Sessions belong to the OLD cwd; their connections must die immediately so
+    // the new workspace doesn't accidentally reuse a process rooted in the old
+    // sandbox during the 30s grace window.
+    this._client.drainAll()
     try {
       await this._coordinator.onWorkspaceSwap()
     } finally {
@@ -281,25 +288,14 @@ export class AcpSessionService
       async (progress, token) => {
         const cwd = this._workspace.current?.folder.fsPath
         progress.report({ message: 'Spawning agent process…' })
-        const conn = await this._client.connect(
-          resolvedAgentId,
-          this,
-          cwd !== undefined ? { cwd } : {},
-        )
+        const conn = await this._client.connect(resolvedAgentId, cwd !== undefined ? { cwd } : {})
         const cancelSub = token.onCancellationRequested(() => conn.dispose())
         const timeoutMs =
           this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
         const mcpServers = this._readMcpServers()
-        const initParams: InitializeRequest = {
-          protocolVersion: PROTOCOL_VERSION,
-          clientCapabilities: {
-            fs: { readTextFile: true, writeTextFile: true },
-            terminal: true,
-          },
-        }
         try {
           progress.report({ message: 'Negotiating ACP protocol…' })
-          await withTimeout(conn.conn.initialize(initParams), timeoutMs, 'ACP initialize')
+          await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
           progress.report({ message: 'Creating session…' })
           const newParams: NewSessionRequest = {
             cwd: cwd ?? '',
@@ -310,6 +306,7 @@ export class AcpSessionService
             timeoutMs,
             'ACP session/new',
           )
+          conn.attachSession(result.sessionId)
           const localId = `s${++this._seq}`
           const title = `${agentName} · ${localId}`
           const initState: IAcpSessionInitState = result.configOptions
@@ -387,24 +384,16 @@ export class AcpSessionService
       return existing
     }
     const cwd = entry.cwd
-    const conn = await this._client.connect(entry.agentId, this, cwd !== undefined ? { cwd } : {})
+    const conn = await this._client.connect(entry.agentId, {
+      ...(cwd !== undefined ? { cwd } : {}),
+      leaseFor: entry.sessionIdOnAgent,
+    })
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const mcpServers = this._readMcpServers()
-    const initParams: InitializeRequest = {
-      protocolVersion: PROTOCOL_VERSION,
-      clientCapabilities: {
-        fs: { readTextFile: true, writeTextFile: true },
-        terminal: true,
-      },
-    }
     let session: AcpSession | undefined
     let registered = false
     try {
-      const initResult = await withTimeout(
-        conn.conn.initialize(initParams),
-        timeoutMs,
-        'ACP initialize',
-      )
+      const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
       if (initResult.agentCapabilities?.loadSession !== true) {
         throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
       }

@@ -26,21 +26,13 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import {
-  PROTOCOL_VERSION,
   type AgentCapabilities,
   type DeleteSessionRequest,
-  type InitializeRequest,
   type ListSessionsRequest,
   type ListSessionsResponse,
-  type RequestPermissionRequest,
-  type RequestPermissionResponse,
   type SessionInfo,
 } from '@agentclientprotocol/sdk'
-import type {
-  IAcpClientService,
-  IAcpClientConnection,
-  IAcpClientNotificationSink,
-} from './acpClientService.js'
+import type { IAcpClientService, IAcpClientConnection } from './acpClientService.js'
 import type { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpSession } from './acpSession.js'
@@ -51,20 +43,6 @@ export const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionHistoryId'
 const HYDRATE_MAX_PAGES = 5
 /** Per-agent timeout for the initialize+listSessions roundtrip. */
 const HYDRATE_TIMEOUT_MS = 10_000
-
-/**
- * Notification sink for listing-only connections. These connections live just
- * long enough to call `initialize` + `listSessions` and then dispose, so they
- * should never receive `session/update` or `session/request_permission`. We
- * still need a real implementation because `IAcpClientService.connect` requires
- * one — refuse permissions and drop updates on the floor.
- */
-const NULL_SINK: IAcpClientNotificationSink = {
-  onSessionUpdate: () => {},
-  onRequestPermission: async (
-    _params: RequestPermissionRequest,
-  ): Promise<RequestPermissionResponse> => ({ outcome: { outcome: 'cancelled' } }),
-}
 
 export interface RestoreCoordinatorCallbacks {
   /** Resume a session by historyId — facade's `resumeSession`. */
@@ -257,19 +235,8 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     const cwd = entry.cwd
     let conn: IAcpClientConnection | undefined
     try {
-      conn = await this._client.connect(entry.agentId, NULL_SINK, cwd !== undefined ? { cwd } : {})
-      const initParams: InitializeRequest = {
-        protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
-          terminal: true,
-        },
-      }
-      await withTimeout(
-        conn.conn.initialize(initParams),
-        HYDRATE_TIMEOUT_MS,
-        'ACP delete initialize',
-      )
+      conn = await this._client.connect(entry.agentId, cwd !== undefined ? { cwd } : {})
+      await withTimeout(conn.initializeResult, HYDRATE_TIMEOUT_MS, 'ACP delete initialize')
       const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
       await withTimeout(
         conn.conn.unstable_deleteSession(params),
@@ -348,17 +315,10 @@ export class AcpSessionRestoreCoordinator extends Disposable {
   ): Promise<void> {
     let conn: IAcpClientConnection | undefined
     try {
-      conn = await this._client.connect(agentId, NULL_SINK, cwd !== undefined ? { cwd } : {})
+      conn = await this._client.connect(agentId, cwd !== undefined ? { cwd } : {})
       if (myGen !== this._hydrateGen) return
-      const initParams: InitializeRequest = {
-        protocolVersion: PROTOCOL_VERSION,
-        clientCapabilities: {
-          fs: { readTextFile: true, writeTextFile: true },
-          terminal: true,
-        },
-      }
       const init = await withTimeout(
-        conn.conn.initialize(initParams),
+        conn.initializeResult,
         HYDRATE_TIMEOUT_MS,
         'ACP hydrate initialize',
       )

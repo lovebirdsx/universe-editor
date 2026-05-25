@@ -62,6 +62,8 @@ function makeFakeConn(opts: {
         return {}
       },
     } as unknown as IAcpClientConnection['conn'],
+    initializeResult: Promise.resolve({} as never),
+    attachSession: () => {},
     dispose: () => {},
   }
   return {

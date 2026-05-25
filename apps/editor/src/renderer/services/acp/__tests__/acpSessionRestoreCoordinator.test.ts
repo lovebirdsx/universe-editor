@@ -48,6 +48,7 @@ import type {
 import {
   AgentSideConnection,
   ClientSideConnection,
+  PROTOCOL_VERSION,
   RequestError,
   type Agent,
   type AgentCapabilities,
@@ -283,12 +284,22 @@ class FakeAcpClientService implements IAcpClientService {
   rejectAgents = new Set<string>()
   /** Map per-agent options, falling back to default StubAgent behaviour. */
   agentOptions = new Map<string, StubAgentOptions>()
+  private _sink: IAcpClientNotificationSink | undefined
+
+  setNotificationSink(sink: IAcpClientNotificationSink): void {
+    this._sink = sink
+  }
+
+  drainAll(): void {}
 
   async connect(
     agentId: string,
-    sink: IAcpClientNotificationSink,
-    options?: { cwd?: string },
+    options?: { cwd?: string; leaseFor?: string },
   ): Promise<IAcpClientConnection> {
+    const sink: IAcpClientNotificationSink = this._sink ?? {
+      onSessionUpdate: () => {},
+      onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }) as never,
+    }
     this.connectCalls.push({ agentId, cwd: options?.cwd })
     if (this.rejectAgents.has(agentId)) {
       throw new Error(`spawn failed for ${agentId}`)
@@ -306,10 +317,20 @@ class FakeAcpClientService implements IAcpClientService {
       },
     }
     const clientConn = new ClientSideConnection(() => clientImpl, pair.clientStream)
+    const initializeResult = clientConn.initialize({
+      protocolVersion: PROTOCOL_VERSION,
+      clientCapabilities: {
+        fs: { readTextFile: true, writeTextFile: true },
+        terminal: true,
+      },
+    })
+    initializeResult.catch(() => {})
     const index = this.disposed.length
     this.disposed.push(false)
     return {
       conn: clientConn,
+      initializeResult,
+      attachSession: (): void => {},
       dispose: (): void => {
         this.disposed[index] = true
         void pair.clientStream.writable.close().catch(() => {})

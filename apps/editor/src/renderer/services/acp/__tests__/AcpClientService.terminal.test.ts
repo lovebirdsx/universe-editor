@@ -18,6 +18,7 @@ import {
 } from '@universe-editor/platform'
 import type {
   IFileService,
+  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -266,7 +267,35 @@ function makeService(): Harness {
     new NoopTelemetryService(),
     terminals,
     new StubLoggerService(),
+    { platform: 'linux' } as IHostService,
   )
+  svc.setNotificationSink(sink)
+  // Connect now awaits initializeResult — auto-respond to the SDK's
+  // initialize request so connect() can return.
+  let initialized = false
+  void (async () => {
+    for (let i = 0; i < 500 && !initialized; i++) {
+      const writes = transport.written()
+      const init = writes.find((w) => w.includes('"method":"initialize"'))
+      if (init) {
+        try {
+          const req = JSON.parse(init.trim()) as { id: number }
+          transport.inject(
+            JSON.stringify({
+              jsonrpc: '2.0',
+              id: req.id,
+              result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
+            }) + '\n',
+          )
+          initialized = true
+        } catch {
+          // try again
+        }
+        return
+      }
+      await new Promise((r) => setTimeout(r, 1))
+    }
+  })()
   let nextId = 100
   return {
     svc,
@@ -308,7 +337,7 @@ describe('AcpClientService — terminal/create routing', () => {
 
   it('passes command/args/env/cwd into IAcpTerminalService.create and returns the id', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       const resp = await h.callPeer('terminal/create', {
         sessionId: SESSION_ID,
@@ -337,7 +366,7 @@ describe('AcpClientService — terminal/create routing', () => {
 
   it('defaults args to [] when omitted and drops env/cwd when absent', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       const resp = await h.callPeer('terminal/create', {
         sessionId: SESSION_ID,
@@ -359,7 +388,7 @@ describe('AcpClientService — terminal/create routing', () => {
 
   it('rejects cwd outside the session sandbox with -32602 and notifies', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       const resp = await h.callPeer('terminal/create', {
         sessionId: SESSION_ID,
@@ -378,7 +407,7 @@ describe('AcpClientService — terminal/create routing', () => {
 
   it('rejects malformed terminal/create params with -32602', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       const resp = await h.callPeer('terminal/create', { sessionId: SESSION_ID })
       expect(resp.error?.code).toBe(-32602)
@@ -398,7 +427,7 @@ describe('AcpClientService — terminal/output|kill|wait|release routing', () =>
 
   it('terminal/output proxies to the service and surfaces truncated/exitStatus', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       h.terminals.output.mockResolvedValueOnce({
         output: 'hello',
@@ -424,7 +453,7 @@ describe('AcpClientService — terminal/output|kill|wait|release routing', () =>
 
   it('terminal/wait_for_exit returns the exit status verbatim', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       h.terminals.waitForExit.mockResolvedValueOnce({ signal: 'SIGTERM' })
       await h.callPeer('terminal/create', { sessionId: SESSION_ID, command: 'sleep' })
@@ -440,7 +469,7 @@ describe('AcpClientService — terminal/output|kill|wait|release routing', () =>
 
   it('terminal/kill returns an empty object on success', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       await h.callPeer('terminal/create', { sessionId: SESSION_ID, command: 'sleep' })
       const resp = await h.callPeer('terminal/kill', {
@@ -458,7 +487,7 @@ describe('AcpClientService — terminal/output|kill|wait|release routing', () =>
 
   it('terminal/release calls the service and forgets ownership', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       await h.callPeer('terminal/create', { sessionId: SESSION_ID, command: 'sleep' })
       const ok = await h.callPeer('terminal/release', {
@@ -489,7 +518,7 @@ describe('AcpClientService — terminal ownership gating', () => {
 
   it('rejects output/kill/wait/release for unknown terminal ids with -32602', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       for (const method of [
         'terminal/output',
@@ -515,7 +544,7 @@ describe('AcpClientService — terminal ownership gating', () => {
 
   it('rejects all four terminal operations when params themselves are malformed', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       for (const method of [
         'terminal/output',
@@ -541,7 +570,7 @@ describe('AcpClientService — connection exit reaps owned terminals', () => {
 
   it('releases each owned terminal once when the agent process exits', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       h.terminals.create
         .mockResolvedValueOnce({ terminalId: 'r-1' })
@@ -560,7 +589,7 @@ describe('AcpClientService — connection exit reaps owned terminals', () => {
 
   it('does not call release after the agent exits with no terminals owned', async () => {
     h = makeService()
-    const conn = await h.svc.connect('fake', h.sink, { cwd: CWD })
+    const conn = await h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })
     try {
       h.transport.exit(0, null)
       await new Promise((r) => setTimeout(r, 5))
