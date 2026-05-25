@@ -9,7 +9,7 @@
 import { LogLevel } from '@universe-editor/platform'
 import type { ILogChannelService, LogEntry } from '../../../shared/ipc/services.js'
 import type { LogMainService } from './logMainService.js'
-import { humanizeChannelId } from './logLabels.js'
+import { humanizeChannelId } from '../../../shared/log/logLabels.js'
 
 export class MainLogChannelService implements ILogChannelService {
   declare readonly _serviceBrand: undefined

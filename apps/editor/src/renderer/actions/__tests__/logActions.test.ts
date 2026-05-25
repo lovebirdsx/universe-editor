@@ -26,6 +26,7 @@ import {
   RefreshLogOutputAction,
   SetLogLevelAction,
   ShowLogsAction,
+  ShowOutputChannelAction,
 } from '../logActions.js'
 
 const descriptor: LogFileDescriptor = {
@@ -237,5 +238,47 @@ describe('logActions', () => {
       ConfigurationTarget.User,
     )
     expect(info).toHaveBeenCalledWith('Log level set to Debug')
+  })
+
+  it('ShowOutputChannelAction sorts All first and activates the chosen channel', async () => {
+    disposables.push(registerAction2(ShowOutputChannelAction))
+    const output = new OutputService(makeStorage())
+    output.createChannel('Main', 'log')
+    output.createChannel('Console', 'log')
+    output.createChannel('All', 'aggregated')
+    const layout = makeLayoutService()
+    const pick = vi.fn(async (items: readonly IQuickPickItem[]) => {
+      // First option must be 'All' (sorted to top).
+      expect(items[0]?.label).toBe('All')
+      return items.find((item) => item.label === 'Console')
+    })
+    const services = new ServiceCollection()
+    services.set(IOutputService, output)
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ILayoutService, layout as never)
+
+    await runCommand(ShowOutputChannelAction.ID, services)
+
+    expect(pick).toHaveBeenCalledTimes(1)
+    expect(output.activeChannelName.get()).toBe('Console')
+    expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
+  })
+
+  it('ShowOutputChannelAction does nothing when the user cancels the pick', async () => {
+    disposables.push(registerAction2(ShowOutputChannelAction))
+    const output = new OutputService(makeStorage())
+    output.createChannel('Main', 'log')
+    const before = output.activeChannelName.get()
+    const layout = makeLayoutService()
+    const pick = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IOutputService, output)
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ILayoutService, layout as never)
+
+    await runCommand(ShowOutputChannelAction.ID, services)
+
+    expect(output.activeChannelName.get()).toBe(before)
+    expect(layout.setVisible).not.toHaveBeenCalled()
   })
 })

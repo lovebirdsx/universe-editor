@@ -99,6 +99,7 @@ import {
   RefreshLogOutputAction,
   SetLogLevelAction,
   ShowLogsAction,
+  ShowOutputChannelAction,
 } from './logActions.js'
 import {
   CancelAgentTurnAction,
@@ -209,6 +210,7 @@ registerAction2(RefreshLogOutputAction)
 registerAction2(OpenActiveLogFileAction)
 registerAction2(OpenLogsFolderAction)
 registerAction2(SetLogLevelAction)
+registerAction2(ShowOutputChannelAction)
 
 // Search
 registerAction2(FindInFilesAction)

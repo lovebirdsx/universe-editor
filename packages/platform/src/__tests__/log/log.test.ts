@@ -7,6 +7,7 @@ import {
   AbstractLogger,
   canLog,
   ConsoleLogger,
+  getOriginalConsole,
   LogLevel,
   MultiplexLogger,
   NullLogger,
@@ -78,8 +79,8 @@ describe('AbstractLogger level check', () => {
 })
 
 describe('ConsoleLogger', () => {
-  it('calls console.info for Info level', () => {
-    const spy = vi.spyOn(console, 'info').mockImplementation(() => {})
+  it('calls the captured console.info for Info level', () => {
+    const spy = vi.spyOn(getOriginalConsole(), 'info').mockImplementation(() => {})
     const log = new ConsoleLogger(LogLevel.Info)
     log.info('hello')
     expect(spy).toHaveBeenCalledOnce()
@@ -87,8 +88,8 @@ describe('ConsoleLogger', () => {
     spy.mockRestore()
   })
 
-  it('calls console.error for Error level', () => {
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
+  it('calls the captured console.error for Error level', () => {
+    const spy = vi.spyOn(getOriginalConsole(), 'error').mockImplementation(() => {})
     const log = new ConsoleLogger(LogLevel.Info)
     log.error('boom')
     expect(spy).toHaveBeenCalledOnce()
@@ -96,7 +97,7 @@ describe('ConsoleLogger', () => {
   })
 
   it('does not call console when level is Off', () => {
-    const spy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const spy = vi.spyOn(getOriginalConsole(), 'info').mockImplementation(() => {})
     const log = new ConsoleLogger(LogLevel.Off)
     log.info('should not log')
     expect(spy).not.toHaveBeenCalled()

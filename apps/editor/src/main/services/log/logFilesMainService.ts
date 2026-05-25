@@ -15,7 +15,7 @@ import type {
   LogFileDescriptor,
 } from '../../../shared/ipc/services.js'
 import { SESSION_DIR_RE, type LogMainService } from './logMainService.js'
-import { humanizeChannelId } from './logLabels.js'
+import { humanizeChannelId } from '../../../shared/log/logLabels.js'
 
 const DEFAULT_MAX_BYTES = 1024 * 1024
 const MAX_READ_BYTES = 10 * 1024 * 1024

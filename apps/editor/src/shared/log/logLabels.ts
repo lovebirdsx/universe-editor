@@ -6,6 +6,7 @@
 
 const KNOWN_LABELS: Record<string, string> = {
   main: 'Main',
+  console: 'Console',
   renderer: 'Renderer',
   window: 'Window',
   workspace: 'Workspace',

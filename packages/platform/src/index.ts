@@ -26,6 +26,7 @@ export * from './di/instantiationService.js'
 // logging
 export * from './log/log.js'
 export * from './log/loggerService.js'
+export * from './log/consoleInterceptor.js'
 
 // localization
 export * from './nls/nls.js'

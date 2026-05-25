@@ -3,7 +3,12 @@ import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { existsSync } from 'node:fs'
-import { DisposableTracker, setDisposableTracker } from '@universe-editor/platform'
+import {
+  DisposableTracker,
+  setDisposableTracker,
+  installConsoleInterceptor,
+  getOriginalConsole,
+} from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { MainStorageService } from './services/storage/storageMainService.js'
@@ -30,7 +35,9 @@ if (import.meta.env.DEV) {
   process.on('exit', () => {
     const report = tracker.computeLeakingDisposables()
     if (report) {
-      console.warn(`[main] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`)
+      getOriginalConsole().warn(
+        `[main] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
+      )
     }
   })
 }
@@ -46,6 +53,12 @@ if (import.meta.env.DEV && process.env['VSCODE_RENDERER_DEBUG'] === '1') {
 const logMainService = new LogMainService()
 const mainLogger = logMainService.createLogger({ id: 'main', name: 'Main' })
 installMainErrorHandlers(mainLogger)
+
+// Route console.* through the log system so ad-hoc console output and
+// third-party library noise reach the Console channel (and therefore the
+// Output panel) without requiring stdout/DevTools to be open.
+const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Console' })
+const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 
 const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 
@@ -148,5 +161,6 @@ app.on('will-quit', () => {
   acpHostService?.dispose()
   acpTerminalService?.dispose()
   windowMainService?.dispose()
+  consoleInterceptor.dispose()
   logMainService.dispose()
 })

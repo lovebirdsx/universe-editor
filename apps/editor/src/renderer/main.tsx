@@ -44,6 +44,7 @@ import {
   setErrorTelemetryHook,
   setUnexpectedErrorHandler,
   normalizePlatform,
+  installConsoleInterceptor,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { ILogChannelService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
@@ -160,6 +161,13 @@ async function bootstrapWorkbench(): Promise<void> {
   // Update the global unexpected-error handler to also send to the file logger.
   const rootLogger = loggerService.createLogger({ id: 'renderer', name: 'Renderer' })
   rootLogger.info(`bootstrap start windowId=${windowId}`)
+
+  // Route console.* through the log system so ad-hoc console output and
+  // third-party library noise reach the Console channel and Output panel
+  // without requiring DevTools to be open.
+  const consoleLogger = loggerService.createLogger({ id: 'console', name: 'Console' })
+  installConsoleInterceptor({ logger: consoleLogger })
+
   setMonacoLoaderLogger(loggerService.createLogger({ id: 'monaco', name: 'Monaco' }))
   setUnexpectedErrorHandler((e) => {
     const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
@@ -251,6 +259,8 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IEditorService, editorService)
   services.set(IStatusBarService, statusBarService)
   services.set(IOutputService, outputService)
+
+  outputService.createChannel('All', 'aggregated')
 
   // EditorResolverService depends on IInstantiationService + IEditorService, both available now.
   const editorResolverService = instantiation.createInstance(EditorResolverService)

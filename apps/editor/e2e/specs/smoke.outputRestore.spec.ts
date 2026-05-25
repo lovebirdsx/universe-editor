@@ -138,9 +138,9 @@ test.describe('@p1 output channel restore', () => {
 
       const { app, page } = await launchWithState(userDataDir)
       try {
-        // Initially falls back to the default "Universe Editor".
+        // Initially falls back to the default "All".
         const initial = await page.evaluate(() => window.__E2E__!.getActiveOutputChannelName())
-        expect(initial).toBe('Universe Editor')
+        expect(initial).toBe('All')
 
         // Creating "TestChannel" should trigger the pending restore activation.
         await page.evaluate(() => window.__E2E__!.createOutputChannel('TestChannel'))
@@ -190,9 +190,9 @@ test.describe('@p1 output channel restore', () => {
 
       const { app, page } = await launchWithState(userDataDir)
       try {
-        // Initially "Universe Editor" because "acp/claude/old-handle" doesn't exist.
+        // Initially "All" because "acp/claude/old-handle" doesn't exist.
         const initial = await page.evaluate(() => window.__E2E__!.getActiveOutputChannelName())
-        expect(initial).toBe('Universe Editor')
+        expect(initial).toBe('All')
 
         // ACP service reconnects and creates a channel with a NEW handle.
         await page.evaluate(() => window.__E2E__!.createOutputChannel('acp/claude/new-handle'))

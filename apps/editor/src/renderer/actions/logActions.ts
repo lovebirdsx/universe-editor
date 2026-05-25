@@ -144,6 +144,51 @@ export class ShowLogsAction extends Action2 {
   }
 }
 
+export class ShowOutputChannelAction extends Action2 {
+  static readonly ID = 'workbench.action.showOutputChannel'
+
+  constructor() {
+    super({
+      id: ShowOutputChannelAction.ID,
+      title: localize('action.showOutputChannel.title', 'Output: Show Output Channels...'),
+      category: localize('command.category.view', 'View'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const outputService = accessor.get(IOutputService)
+    const quickInputService = accessor.get(IQuickInputService)
+    const layoutService = accessor.get(ILayoutService)
+    const names = outputService.channelNames.get()
+    if (names.length === 0) return
+
+    // Pin "All" first so users land on the cross-channel view by default,
+    // mirroring the OutputView dropdown sort order.
+    const sorted = [...names].sort((a, b) => {
+      if (a === 'All') return -1
+      if (b === 'All') return 1
+      return a.localeCompare(b)
+    })
+    const active = outputService.activeChannelName.get()
+    const items: IQuickPickItem[] = sorted.map((name) => ({
+      id: name,
+      label: name,
+      ...(name === active ? { description: localize('output.active', 'Active') } : {}),
+    }))
+    const selected = await quickInputService.pick(items, {
+      id: 'workbench.outputChannel',
+      placeholder: localize(
+        'quickInput.outputChannel.placeholder',
+        'Select an Output channel to show',
+      ),
+    })
+    if (!selected?.id) return
+    outputService.setActiveChannel(selected.id)
+    revealOutputPanel(layoutService)
+  }
+}
+
 export class RefreshLogOutputAction extends Action2 {
   static readonly ID = 'workbench.action.refreshLogOutput'
 

@@ -29,6 +29,7 @@ import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContri
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 import { LogLevelContribution } from './LogLevelContribution.js'
 import { LogTailContribution } from './LogTailContribution.js'
+import { AggregatedLogChannelContribution } from './AggregatedLogChannelContribution.js'
 import {
   AgentsConfigurationContribution,
   AgentsEditorProviderContribution,
@@ -186,6 +187,17 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.logTail',
   LogTailContribution,
   WorkbenchPhase.AfterRestore,
+)
+
+// "All" aggregated Output channel — merges every log channel in time order so
+// users can see cross-channel activity at a glance. BlockRestore so the All
+// channel appears in the dropdown before AfterRestore contributions stream
+// their first chunks (otherwise early appends are dropped while descriptors
+// are being fetched).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aggregatedLogChannel',
+  AggregatedLogChannelContribution,
+  WorkbenchPhase.BlockRestore,
 )
 
 // ACP integration: configuration schema, view container/views, editor provider

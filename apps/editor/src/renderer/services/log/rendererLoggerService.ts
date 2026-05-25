@@ -10,6 +10,7 @@ import {
   ILoggerService,
   LogLevel,
   MultiplexLogger,
+  getOriginalConsole,
   type ILogger,
   type ILogChannel,
   type ILoggerService as ILoggerServiceType,
@@ -56,7 +57,9 @@ class WindowLogBatcher implements IpcBatcher {
     const batch = this._pending
     this._pending = []
     const work = this._proxy.appendBatch(this._windowId, batch).catch((err) => {
-      console.error('[RendererLogger] failed to forward log batch:', err)
+      // Critical: bypass the console interceptor so an IPC failure here cannot
+      // recurse through the interceptor into this same batcher.
+      getOriginalConsole().error('[RendererLogger] failed to forward log batch:', err)
     })
     this._inFlight = work
     try {

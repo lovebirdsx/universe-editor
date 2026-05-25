@@ -17,6 +17,7 @@ import {
   LogLevel,
   formatLogTimestamp,
   LOG_TIMESTAMP_FORMAT_DEFAULT,
+  getOriginalConsole,
   type ILogger,
   type ILoggerService,
   type ILogChannel,
@@ -142,7 +143,9 @@ class FileLogger extends AbstractLogger {
       await fs.appendFile(this._logPath, content, 'utf8')
       this._onChunk(this._channelId, content)
     } catch (err) {
-      console.error('[LogMainService] Failed to write log:', err)
+      // Critical: use the pre-interceptor console so a logging failure cannot
+      // recurse through the console interceptor back into this same logger.
+      getOriginalConsole().error('[LogMainService] Failed to write log:', err)
     }
   }
 

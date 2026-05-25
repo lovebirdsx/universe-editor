@@ -10,6 +10,26 @@ import { Emitter, Event } from '../base/event.js'
 import { createDecorator } from '../di/instantiation.js'
 import type { ILogChannel } from './loggerService.js'
 
+/**
+ * One-time snapshot of the global console methods, taken at module load before
+ * any interceptor can patch them. Loggers and crash-path code use these to
+ * avoid recursing into the interceptor (which would call back into a logger
+ * that just failed to write).
+ */
+const ORIGINAL_CONSOLE: Pick<Console, 'log' | 'info' | 'warn' | 'error' | 'debug' | 'trace'> = {
+  log: console.log.bind(console),
+  info: console.info.bind(console),
+  warn: console.warn.bind(console),
+  error: console.error.bind(console),
+  debug: console.debug.bind(console),
+  trace: console.trace.bind(console),
+}
+
+/** Returns the pre-interceptor console methods. Use from logger fallbacks. */
+export function getOriginalConsole(): typeof ORIGINAL_CONSOLE {
+  return ORIGINAL_CONSOLE
+}
+
 export const enum LogLevel {
   Off = 0,
   Trace = 1,
@@ -172,19 +192,22 @@ export class ConsoleLogger extends AbstractLogger {
     const timestamp = formatLogTimestamp(new Date(), LOG_TIMESTAMP_FORMAT_DEFAULT)
     const line = `[${timestamp}] [${label}] ${message}`
 
+    // Always go through the captured originals so MultiplexLogger setups
+    // (renderer dev mode mirrors logs to console) cannot recurse via an
+    // installed console interceptor.
     switch (level) {
       case LogLevel.Trace:
       case LogLevel.Debug:
-        console.debug(line)
+        ORIGINAL_CONSOLE.debug(line)
         break
       case LogLevel.Info:
-        console.info(line)
+        ORIGINAL_CONSOLE.info(line)
         break
       case LogLevel.Warning:
-        console.warn(line)
+        ORIGINAL_CONSOLE.warn(line)
         break
       case LogLevel.Error:
-        console.error(line)
+        ORIGINAL_CONSOLE.error(line)
         break
     }
   }

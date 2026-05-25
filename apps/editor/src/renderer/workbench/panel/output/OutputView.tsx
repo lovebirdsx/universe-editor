@@ -14,6 +14,14 @@ export function OutputView() {
   const activeChannel = activeChannelName ? outputService.getChannel(activeChannelName) : undefined
   const theme = configService.get<string>('workbench.colorTheme') === 'light' ? 'vs' : 'vs-dark'
 
+  // Pin the aggregated "All" channel to the top of the dropdown so users land
+  // on the cross-channel view by default.
+  const sortedChannelNames = [...channelNames].sort((a, b) => {
+    if (a === 'All') return -1
+    if (b === 'All') return 1
+    return 0
+  })
+
   const handleChannelChange = (e: ChangeEvent<HTMLSelectElement>) => {
     outputService.setActiveChannel(e.target.value)
   }
@@ -27,12 +35,12 @@ export function OutputView() {
           onChange={handleChannelChange}
           aria-label="Select output channel"
         >
-          {channelNames.map((name) => (
+          {sortedChannelNames.map((name) => (
             <option key={name} value={name}>
               {name}
             </option>
           ))}
-          {channelNames.length === 0 && <option value="">No channels</option>}
+          {sortedChannelNames.length === 0 && <option value="">No channels</option>}
         </select>
         <button
           className={styles['clearBtn']}
