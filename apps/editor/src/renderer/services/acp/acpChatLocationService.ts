@@ -97,14 +97,19 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     this.location = observableValue<AcpChatLocation>('acp.chatLocation', DEFAULT_LOCATION)
     this._contextKey = contextKeyService.createKey<string>('acpChatLocation', DEFAULT_LOCATION)
     // Keep the editor area in sync with activeSession changes when in 'editor'
-    // mode. We do NOT set `_migrating` here — the lifecycle contribution
-    // already filters out the no-op "same input in another group" case, and
-    // we want a user-driven session swap to count as a real close on the
-    // outgoing tab. `openEditor` is idempotent on identical inputs.
+    // mode. Both `location` and `activeSession` are read unconditionally so the
+    // autorun keeps its subscription alive across mode flips — bailing out via
+    // a non-observable field would drop the activeSession subscription and
+    // later swaps would silently no-op. We do NOT set `_migrating` here — the
+    // lifecycle contribution already filters out the no-op "same input in
+    // another group" case, and we want a user-driven session swap to count as
+    // a real close on the outgoing tab. `openEditor` is idempotent on
+    // identical inputs.
     this._register(
       autorun((r) => {
-        if (this._location !== 'editor') return
+        const location = this.location.read(r)
         const active = this._sessions.activeSession.read(r)
+        if (location !== 'editor') return
         if (!active) return
         this._editor.openEditor(
           this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId),
@@ -215,10 +220,9 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
       }
       return
     }
-    const active = this._sessions.activeSession.get()
-    if (!active) return
-    this._editor.openEditor(
-      this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId),
-    )
+    // 'editor' branch: the activeSession autorun re-fires when this.location
+    // flips to 'editor' and opens the active session as a tab. No need (and
+    // not safe) to also open it here — doing both would race against the
+    // autorun's idempotent openEditor.
   }
 }

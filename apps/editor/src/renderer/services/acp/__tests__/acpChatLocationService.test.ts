@@ -287,6 +287,68 @@ describe('AcpChatLocationService — side effects', () => {
     h.svc.dispose()
   })
 
+  it('switching active session after entering editor mode opens the new session as a tab', async () => {
+    // Regression: sidebar → pick A → switch to editor (A becomes a tab) →
+    // pick B in the sidebar list. B must follow into the editor area.
+    // Previously the activeSession autorun was gated by a non-observable
+    // `this._location` field — when the service was first constructed in
+    // sidebar mode the autorun's early-return path dropped its subscription
+    // to activeSession, so later `setActive` calls never re-ran the open.
+    const storage = new FakeStorage()
+    storage.store.set('acp.chatLocation', { schemaVersion: 1, location: 'sidebar' })
+    const h = makeHarness(storage)
+    await h.svc.initialize()
+    expect(h.svc.location.get()).toBe('sidebar')
+
+    // 1. User picks session A while in sidebar mode (nothing opens in editor).
+    h.sessions.setActiveSession(makeSession('s1', 'fake'))
+    expect(h.editor.opened).toHaveLength(0)
+
+    // 2. Switch to editor mode → A opens as an editor tab.
+    h.svc.setLocation('editor')
+    expect(h.editor.opened).toHaveLength(1)
+    expect((h.editor.opened[0] as AcpSessionEditorInput).sessionId).toBe('s1')
+
+    // 3. User picks session B from the sidebar list — must open as an editor tab.
+    h.sessions.setActiveSession(makeSession('s2', 'fake'))
+    expect(h.editor.opened).toHaveLength(2)
+    expect((h.editor.opened[1] as AcpSessionEditorInput).sessionId).toBe('s2')
+
+    h.svc.dispose()
+  })
+
+  it('activeSession changes while in editor mode keep opening new tabs', async () => {
+    // Companion to the regression above: even when the service starts
+    // already in 'editor' mode, swapping active session must keep opening
+    // tabs for each new sessionId.
+    const h = makeHarness()
+    await h.svc.initialize()
+    expect(h.svc.location.get()).toBe('editor')
+
+    h.sessions.setActiveSession(makeSession('s1', 'fake'))
+    expect(h.editor.opened).toHaveLength(1)
+    expect((h.editor.opened[0] as AcpSessionEditorInput).sessionId).toBe('s1')
+
+    h.sessions.setActiveSession(makeSession('s2', 'fake'))
+    expect(h.editor.opened).toHaveLength(2)
+    expect((h.editor.opened[1] as AcpSessionEditorInput).sessionId).toBe('s2')
+
+    h.svc.dispose()
+  })
+
+  it('activeSession changes while in sidebar mode do NOT open editor tabs', async () => {
+    const storage = new FakeStorage()
+    storage.store.set('acp.chatLocation', { schemaVersion: 1, location: 'sidebar' })
+    const h = makeHarness(storage)
+    await h.svc.initialize()
+
+    h.sessions.setActiveSession(makeSession('s1', 'fake'))
+    h.sessions.setActiveSession(makeSession('s2', 'fake'))
+    expect(h.editor.opened).toHaveLength(0)
+
+    h.svc.dispose()
+  })
+
   it('isMigrating is true only while side effects run, false outside', async () => {
     const h = makeHarness()
     await h.svc.initialize()
