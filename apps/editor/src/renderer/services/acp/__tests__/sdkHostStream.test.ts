@@ -185,4 +185,32 @@ describe('createSdkHostStream', () => {
     }
     harness.dispose()
   })
+
+  it('invokes tap.onStdout / tap.onStdin with decoded text on both directions', async () => {
+    const harness = createInMemoryHost()
+    const stdoutSeen: string[] = []
+    const stdinSeen: string[] = []
+    const adapter = createSdkHostStream(harness.host, harness.handle, {
+      onStdout: (t) => stdoutSeen.push(t),
+      onStdin: (t) => stdinSeen.push(t),
+    })
+
+    const inbound: AnyMessage = { jsonrpc: '2.0', method: 'in', params: null }
+    const outbound: AnyMessage = { jsonrpc: '2.0', id: 1, result: { ok: true } }
+
+    harness.inject(JSON.stringify(inbound) + '\n')
+    await readNextMessage(adapter.stream.readable)
+
+    const writer = adapter.stream.writable.getWriter()
+    await writer.write(outbound)
+    writer.releaseLock()
+
+    expect(stdoutSeen).toHaveLength(1)
+    expect(JSON.parse(stdoutSeen[0]!.trim())).toEqual(inbound)
+    expect(stdinSeen).toHaveLength(1)
+    expect(JSON.parse(stdinSeen[0]!.trim())).toEqual(outbound)
+
+    adapter.dispose()
+    harness.dispose()
+  })
 })

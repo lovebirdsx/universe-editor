@@ -62,6 +62,7 @@ import { IAcpTerminalService } from '../../../shared/ipc/acpTerminalService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
+import { AcpProtocolTracer } from './acpProtocolTracer.js'
 import { IOutputService } from '@universe-editor/platform'
 
 export interface IAcpClientNotificationSink {
@@ -140,6 +141,7 @@ interface PoolEntry {
   readonly stderr: IOutputChannel
   readonly stderrSub: IDisposable
   readonly hostStream: SdkHostStream
+  readonly tracer: AcpProtocolTracer
   /** sessionId → terminalIds owned by leases tagged with that sessionId. */
   readonly terminalsBySession: Map<string, Set<string>>
   refcount: number
@@ -151,12 +153,14 @@ export class AcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
+  private readonly _protocolLogger: ILogger
   private readonly _platform: HostPlatform
   /** Maps pool-key → in-flight or settled PoolEntry. Stored as Promise so
    *  concurrent `connect()` calls share the same spawn. On creation failure
    *  the catch handler evicts the entry. */
   private readonly _pool = new Map<string, Promise<PoolEntry>>()
   private _sink: IAcpClientNotificationSink | undefined
+  private _protocolChannel: IOutputChannel | undefined
 
   constructor(
     @IAcpHostService private readonly _host: IAcpHostService,
@@ -171,6 +175,10 @@ export class AcpClientService implements IAcpClientService {
     @IHostService hostService: IHostService,
   ) {
     this._logger = loggerService.createLogger({ id: 'acpClient', name: 'ACP Client' })
+    this._protocolLogger = loggerService.createLogger({
+      id: 'acpProtocol',
+      name: 'ACP Protocol',
+    })
     this._platform = hostService.platform
   }
 
@@ -229,6 +237,13 @@ export class AcpClientService implements IAcpClientService {
   }
 
   // -- internals -----------------------------------------------------------
+
+  private _getProtocolChannel(): IOutputChannel {
+    if (!this._protocolChannel) {
+      this._protocolChannel = this._output.createChannel('acp/protocol')
+    }
+    return this._protocolChannel
+  }
 
   private _poolKey(agentId: string, cwd: string): string {
     if (!cwd) return `${agentId} `
@@ -337,7 +352,15 @@ export class AcpClientService implements IAcpClientService {
       },
     }
 
-    const hostStream = createSdkHostStream(this._host, handle)
+    const tracer = new AcpProtocolTracer(
+      this._getProtocolChannel(),
+      this._protocolLogger,
+      `${agentId}#${handle.slice(-6)}`,
+    )
+    const hostStream = createSdkHostStream(this._host, handle, {
+      onStdout: (text) => tracer.traceInboundChunk(text),
+      onStdin: (text) => tracer.traceOutboundChunk(text),
+    })
     const conn = new ClientSideConnection(() => clientImpl, hostStream.stream)
 
     const entry: PoolEntry = {
@@ -349,6 +372,7 @@ export class AcpClientService implements IAcpClientService {
       stderr,
       stderrSub,
       hostStream,
+      tracer,
       terminalsBySession,
       refcount: 0,
       graceTimer: undefined,
@@ -456,6 +480,7 @@ export class AcpClientService implements IAcpClientService {
       // OutputChannel.dispose is idempotent.
     }
     entry.hostStream.dispose()
+    entry.tracer.dispose()
     if (entry.terminalsBySession.size > 0) {
       for (const ids of entry.terminalsBySession.values()) {
         for (const id of ids) {

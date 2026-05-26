@@ -24,6 +24,11 @@ export interface SdkHostStream {
   dispose(): void
 }
 
+export interface SdkHostStreamTap {
+  onStdout?(text: string): void
+  onStdin?(text: string): void
+}
+
 /**
  * Wrap a running agent (identified by `handle`) into an ACP SDK `Stream`.
  *
@@ -38,7 +43,11 @@ export interface SdkHostStream {
  *   never propagates close to its underlying byte writable. Callers are
  *   responsible for invoking `host.stop(handle)` when they're done.
  */
-export function createSdkHostStream(host: IAcpHostService, handle: string): SdkHostStream {
+export function createSdkHostStream(
+  host: IAcpHostService,
+  handle: string,
+  tap?: SdkHostStreamTap,
+): SdkHostStream {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
   let stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined
@@ -59,6 +68,7 @@ export function createSdkHostStream(host: IAcpHostService, handle: string): SdkH
   disposables.push(
     host.onStdout((chunk: AcpStdioChunk) => {
       if (chunk.handle !== handle || readableClosed) return
+      tap?.onStdout?.(chunk.data)
       stdoutController?.enqueue(encoder.encode(chunk.data))
     }),
   )
@@ -81,7 +91,9 @@ export function createSdkHostStream(host: IAcpHostService, handle: string): SdkH
 
   const writable = new WritableStream<Uint8Array>({
     async write(chunk) {
-      await host.writeStdin(handle, decoder.decode(chunk))
+      const text = decoder.decode(chunk)
+      tap?.onStdin?.(text)
+      await host.writeStdin(handle, text)
     },
   })
 
