@@ -180,6 +180,7 @@ class FakeHostService implements IHostServiceType {
   }
   async openUserDataFolder() {}
   async openNewWindow() {}
+  async openTerminal() {}
 }
 
 class FakeCommandService implements ICommandServiceType {

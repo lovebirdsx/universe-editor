@@ -4,12 +4,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import path from 'node:path'
+import { spawn } from 'node:child_process'
 import { app, dialog, shell, type BrowserWindow } from 'electron'
 import {
   Emitter,
   NullLogger,
   URI,
   type Event,
+  type ExternalTerminalKind,
   type ILogger,
   type IDisposable,
   type IHostServiceWire,
@@ -137,6 +139,57 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     const dir = app.getPath('userData')
     const error = await shell.openPath(dir)
     if (error) throw new Error(error)
+  }
+
+  openTerminal(cwd: string, kind: ExternalTerminalKind = 'powershell'): Promise<void> {
+    try {
+      if (process.platform === 'win32') {
+        // Build a single cmd.exe command line; rely on `start` to spawn an
+        // independent console window. `windowsVerbatimArguments: true` is
+        // required so Node doesn't re-escape `""` (the empty title) or our
+        // pre-quoted cwd — matches VSCode's externalTerminalService.
+        const quotedCwd = `"${cwd.replace(/"/g, '""')}"`
+        const exec =
+          kind === 'wt'
+            ? `wt.exe -d ${quotedCwd}`
+            : kind === 'powershell'
+              ? 'powershell.exe'
+              : kind === 'pwsh'
+                ? 'pwsh.exe'
+                : 'cmd.exe'
+        const command = `start "" /D ${quotedCwd} ${exec}`
+        const child = spawn('cmd.exe', ['/c', command], {
+          cwd,
+          windowsVerbatimArguments: true,
+          windowsHide: true,
+        })
+        child.on('error', (err) => this._logger.error(`openTerminal (win32, ${kind}) failed`, err))
+        child.on('exit', (code) => {
+          if (code !== 0) {
+            this._logger.warn(`openTerminal (win32, ${kind}) cmd exited code=${code}`)
+          }
+        })
+      } else if (process.platform === 'darwin') {
+        const child = spawn('open', ['-a', 'Terminal', cwd], { detached: true, stdio: 'ignore' })
+        child.on('error', (err) => this._logger.error('openTerminal (darwin) failed', err))
+        child.unref()
+      } else {
+        const child = spawn('x-terminal-emulator', [], { cwd, detached: true, stdio: 'ignore' })
+        child.on('error', () => {
+          const fallback = spawn('xterm', [], { cwd, detached: true, stdio: 'ignore' })
+          fallback.on('error', (err) =>
+            this._logger.error('openTerminal (linux) fallback failed', err),
+          )
+          fallback.unref()
+        })
+        child.unref()
+      }
+      this._logger.info(`openTerminal cwd=${cwd} kind=${kind}`)
+    } catch (err) {
+      this._logger.error('openTerminal failed', err)
+      throw err
+    }
+    return Promise.resolve()
   }
 
   dispose(): void {

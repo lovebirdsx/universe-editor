@@ -179,6 +179,30 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
 
     this._register(
       ConfigurationRegistry.registerConfiguration({
+        id: 'terminal',
+        title: localize('settings.terminal', 'Terminal'),
+        properties: {
+          'terminal.external.windowsExec': {
+            type: 'string',
+            default: 'pwsh',
+            enum: ['wt', 'cmd', 'powershell', 'pwsh'],
+            enumItemLabels: {
+              wt: localize('settings.enum.terminal.wt', 'Windows Terminal'),
+              cmd: localize('settings.enum.terminal.cmd', 'Command Prompt'),
+              powershell: localize('settings.enum.terminal.powershell', 'PowerShell'),
+              pwsh: localize('settings.enum.terminal.pwsh', 'PowerShell Core'),
+            },
+            description: localize(
+              'settings.terminal.external.windowsExec.description',
+              'Which terminal to launch on Windows when running "Open in External Terminal".',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
         id: 'logging',
         title: localize('settings.logging', 'Logging'),
         properties: {

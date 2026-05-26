@@ -9,6 +9,9 @@ import type { URI, UriComponents } from '../base/uri.js'
 
 export type HostPlatform = 'win32' | 'darwin' | 'linux' | 'unknown'
 
+/** Known external terminal binaries (Windows only — other platforms use the system default). */
+export type ExternalTerminalKind = 'wt' | 'cmd' | 'powershell' | 'pwsh'
+
 const KNOWN_PLATFORMS = new Set<HostPlatform>(['win32', 'darwin', 'linux'])
 
 /** Coerce a raw `process.platform`-shaped string into our known set. */
@@ -74,6 +77,13 @@ export interface IHostService {
 
   /** Open the user-data directory (settings, keybindings, state) in the OS file manager. */
   openUserDataFolder(): Promise<void>
+
+  /**
+   * Open the OS external terminal with `cwd` as its working directory.
+   * On Windows, `kind` selects the terminal binary (defaults to 'wt' if omitted).
+   * On macOS / Linux, `kind` is ignored — the system default terminal is used.
+   */
+  openTerminal(cwd: string, kind?: ExternalTerminalKind): Promise<void>
 }
 
 export interface IShowOpenFileOptions {

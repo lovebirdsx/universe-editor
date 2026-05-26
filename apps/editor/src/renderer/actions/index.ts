@@ -82,6 +82,7 @@ import {
   RefreshExplorerAction,
 } from './fileOpenActions.js'
 import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from './revealActions.js'
+import { OpenInTerminalAction } from './terminalActions.js'
 import {
   FindInFileAction,
   FindInFilesAction,
@@ -236,6 +237,9 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// Terminal
+registerAction2(OpenInTerminalAction)
 
 // Agents
 registerAction2(NewAgentSessionAction)
