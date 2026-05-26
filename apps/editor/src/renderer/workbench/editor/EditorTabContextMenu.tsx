@@ -20,6 +20,7 @@ import styles from './EditorArea.module.css'
 export interface TabContextMenuState {
   readonly x: number
   readonly y: number
+  readonly groupId: number
   readonly resource: URI | null
 }
 
@@ -55,7 +56,10 @@ export function EditorTabContextMenu({ state, commandService, onClose }: Props) 
 
   const items = useMemo<MenuItemModel[]>(() => {
     const entries = MenuRegistry.getMenuItems(MenuId.EditorTabContext)
-    const arg = state.resource ? { resource: state.resource.toJSON() } : undefined
+    const arg = {
+      groupId: state.groupId,
+      resource: state.resource ? state.resource.toJSON() : undefined,
+    }
     const out: MenuItemModel[] = []
     for (const entry of entries) {
       if (isSubmenuEntry(entry)) continue
@@ -71,7 +75,7 @@ export function EditorTabContextMenu({ state, commandService, onClose }: Props) 
       })
     }
     return out
-  }, [state.resource, commandService, onClose])
+  }, [state.groupId, state.resource, commandService, onClose])
 
   if (items.length === 0) return null
 

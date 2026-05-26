@@ -4,6 +4,7 @@ import {
   ContextKeyService,
   EditorInput,
   IContextKeyService,
+  IDialogService,
   IEditorGroupsService,
   InstantiationService,
   KeybindingsRegistry,
@@ -17,8 +18,11 @@ import {
 import {
   CloseActiveEditorAction,
   CloseAllEditorsAction,
+  CloseEditorsInGroupAction,
+  CloseEditorsToTheLeftAction,
   CloseEditorsToTheRightAction,
   CloseOtherEditorsAction,
+  CloseUnmodifiedEditorsAction,
   FirstEditorInGroupAction,
   FocusActiveEditorGroupAction,
   FocusFirstGroupAction,
@@ -33,6 +37,7 @@ import {
   SplitEditorRightAction,
   SplitEditorUpAction,
 } from '../editorActions.js'
+import { resolveTargetEditor } from '../editorActionHelpers.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -53,10 +58,19 @@ class TestEditor extends EditorInput {
   }
 }
 
-function makeAccessor(groups: EditorGroupsService) {
+interface FakeDialog {
+  confirm: ReturnType<typeof vi.fn>
+}
+
+function makeFakeDialog(choice: 'primary' | 'secondary' | 'cancel' = 'secondary'): FakeDialog {
+  return { confirm: vi.fn().mockResolvedValue({ choice }) }
+}
+
+function makeAccessor(groups: EditorGroupsService, dialog?: FakeDialog) {
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)
   services.set(IContextKeyService, new ContextKeyService())
+  if (dialog) services.set(IDialogService, dialog as unknown as IDialogService)
   return new InstantiationService(services)
 }
 
@@ -72,6 +86,25 @@ function exec(actionCtor: new () => unknown, groups: EditorGroupsService): unkno
   })
   for (const d of disposables) d.dispose()
   return result
+}
+
+async function execWithArg(
+  actionCtor: new () => unknown,
+  groups: EditorGroupsService,
+  arg: unknown,
+  dialog?: FakeDialog,
+): Promise<void> {
+  const disposables: IDisposable[] = []
+  disposables.push(registerAction2(actionCtor as never))
+  const inst = makeAccessor(groups, dialog)
+  let promise: unknown
+  inst.invokeFunction((accessor) => {
+    const id = (actionCtor as unknown as { ID: string }).ID
+    const cmd = CommandsRegistry.getCommand(id)!
+    promise = cmd.handler(accessor, arg)
+  })
+  await promise
+  for (const d of disposables) d.dispose()
 }
 
 describe('Built-in editor Action2s', () => {
@@ -91,26 +124,26 @@ describe('Built-in editor Action2s', () => {
     ).toBe(true)
   })
 
-  it('CloseActiveEditor closes the active editor in the active group', () => {
+  it('CloseActiveEditor closes the active editor in the active group', async () => {
     const svc = new EditorGroupsService()
     const a = new TestEditor('a')
     const b = new TestEditor('b')
     svc.activeGroup.openEditor(a)
     svc.activeGroup.openEditor(b)
-    exec(CloseActiveEditorAction, svc)
+    await exec(CloseActiveEditorAction, svc)
     expect(svc.activeGroup.editors).toHaveLength(1)
     expect(svc.activeGroup.activeEditor).toBe(a)
   })
 
-  it('CloseAllEditors closes all groups', () => {
+  it('CloseAllEditors closes all groups', async () => {
     const svc = new EditorGroupsService()
     svc.activeGroup.openEditor(new TestEditor('a'))
     svc.activeGroup.openEditor(new TestEditor('b'))
-    exec(CloseAllEditorsAction, svc)
+    await exec(CloseAllEditorsAction, svc)
     expect(svc.activeGroup.editors).toHaveLength(0)
   })
 
-  it('CloseOtherEditors keeps only the active editor', () => {
+  it('CloseOtherEditors keeps only the active editor', async () => {
     const svc = new EditorGroupsService()
     const a = new TestEditor('a')
     const b = new TestEditor('b')
@@ -119,12 +152,12 @@ describe('Built-in editor Action2s', () => {
     svc.activeGroup.openEditor(b)
     svc.activeGroup.openEditor(c)
     svc.activeGroup.setActive(b)
-    exec(CloseOtherEditorsAction, svc)
+    await exec(CloseOtherEditorsAction, svc)
     expect(svc.activeGroup.editors).toHaveLength(1)
     expect(svc.activeGroup.activeEditor).toBe(b)
   })
 
-  it('CloseEditorsToTheRight closes only editors to the right', () => {
+  it('CloseEditorsToTheRight closes only editors to the right', async () => {
     const svc = new EditorGroupsService()
     const a = new TestEditor('a')
     const b = new TestEditor('b')
@@ -133,8 +166,124 @@ describe('Built-in editor Action2s', () => {
     svc.activeGroup.openEditor(b)
     svc.activeGroup.openEditor(c)
     svc.activeGroup.setActive(b)
-    exec(CloseEditorsToTheRightAction, svc)
+    await exec(CloseEditorsToTheRightAction, svc)
     expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['a', 'b'])
+  })
+
+  it('CloseEditorsToTheLeft closes only editors to the left', async () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    const c = new TestEditor('c')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(c)
+    svc.activeGroup.setActive(b)
+    await exec(CloseEditorsToTheLeftAction, svc)
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['b', 'c'])
+  })
+
+  it('CloseUnmodifiedEditors keeps dirty editors and closes the rest', () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    const c = new TestEditor('c')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(c)
+    b.isDirty = true
+    exec(CloseUnmodifiedEditorsAction, svc)
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['b'])
+  })
+
+  it('CloseEditorsInGroup closes the editors of the target group only', async () => {
+    const svc = new EditorGroupsService()
+    const g1 = svc.activeGroup
+    const g2 = svc.addGroup(g1, 3 /* Right */)
+    g1.openEditor(new TestEditor('a'))
+    g1.openEditor(new TestEditor('b'))
+    g2.openEditor(new TestEditor('c'))
+    svc.activateGroup(g1)
+    await exec(CloseEditorsInGroupAction, svc)
+    expect(g1.editors).toHaveLength(0)
+    expect(g2.editors).toHaveLength(1)
+  })
+
+  it('CloseEditorsInGroup with a groupId arg targets that group regardless of active group', async () => {
+    const svc = new EditorGroupsService()
+    const g1 = svc.activeGroup
+    const g2 = svc.addGroup(g1, 3)
+    const cEditor = new TestEditor('c')
+    g1.openEditor(new TestEditor('a'))
+    g1.openEditor(new TestEditor('b'))
+    g2.openEditor(cEditor)
+    svc.activateGroup(g1)
+    await execWithArg(CloseEditorsInGroupAction, svc, {
+      groupId: g2.id,
+      resource: cEditor.resource.toJSON(),
+    })
+    expect(g1.editors).toHaveLength(2)
+    expect(g2.editors).toHaveLength(0)
+  })
+
+  it('CloseOtherEditors with a resource arg pivots on the right-clicked tab, not the active one', async () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    const c = new TestEditor('c')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(c)
+    svc.activeGroup.setActive(b) // active is b
+    await execWithArg(CloseOtherEditorsAction, svc, {
+      groupId: svc.activeGroup.id,
+      resource: c.resource.toJSON(),
+    })
+    // Should keep `c` (the right-clicked tab), not `b`.
+    expect(svc.activeGroup.editors).toHaveLength(1)
+    expect((svc.activeGroup.editors[0] as TestEditor).getName()).toBe('c')
+  })
+
+  it('CloseEditorsInGroup stops at user Cancel on a dirty editor', async () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a') // clean
+    const b = new TestEditor('b')
+    const c = new TestEditor('c') // clean
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(c)
+    b.isDirty = true
+    const dialog = makeFakeDialog('cancel')
+    await execWithArg(CloseEditorsInGroupAction, svc, { groupId: svc.activeGroup.id }, dialog)
+    // a closed; b prompted + cancelled → loop breaks; c untouched.
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['b', 'c'])
+    expect(dialog.confirm).toHaveBeenCalledTimes(1)
+  })
+
+  it('resolveTargetEditor falls back to active editor when no arg given', () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    svc.activeGroup.openEditor(a)
+    const inst = makeAccessor(svc)
+    const result = inst.invokeFunction((accessor) => resolveTargetEditor(accessor, undefined))
+    expect(result?.editor).toBe(a)
+    expect(result?.group).toBe(svc.activeGroup)
+  })
+
+  it('resolveTargetEditor honors groupId + resource across groups', () => {
+    const svc = new EditorGroupsService()
+    const g1 = svc.activeGroup
+    const g2 = svc.addGroup(g1, 3)
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    g1.openEditor(a)
+    g2.openEditor(b)
+    const inst = makeAccessor(svc)
+    const result = inst.invokeFunction((accessor) =>
+      resolveTargetEditor(accessor, { groupId: g2.id, resource: b.resource.toJSON() }),
+    )
+    expect(result?.editor).toBe(b)
+    expect(result?.group).toBe(g2)
   })
 
   it('NextEditor wraps to first editor', () => {

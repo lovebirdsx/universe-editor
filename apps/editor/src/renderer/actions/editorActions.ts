@@ -7,6 +7,7 @@
 import {
   Action2,
   ConfigurationTarget,
+  type EditorInput,
   GroupDirection,
   GroupLocation,
   IConfigurationService,
@@ -25,6 +26,7 @@ import { focusEditorInput } from '../services/editor/editorFocus.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IRecentEditorsService } from '../services/editor/RecentEditorsService.js'
+import { resolveTargetEditor } from './editorActionHelpers.js'
 
 // ---------------------------------------------------------------------------
 // Shared helper: activate a group and transfer DOM focus to Monaco
@@ -41,6 +43,22 @@ function activateGroupAndFocus(groups: IEditorGroupsService, group: IEditorGroup
 // Close group
 // ---------------------------------------------------------------------------
 
+/**
+ * Close a batch of editors from a single group, confirming with the user on
+ * each dirty editor. Stops at the first cancel — matching VSCode behaviour
+ * (already-closed editors are not reopened).
+ */
+async function closeEditorsWithConfirm(
+  editors: readonly EditorInput[],
+  group: IEditorGroup,
+  dialogService: IDialogService,
+): Promise<void> {
+  for (const e of editors) {
+    const ok = await closeEditorWithConfirm(e, group, dialogService)
+    if (!ok) return
+  }
+}
+
 export class CloseActiveEditorAction extends Action2 {
   static readonly ID = 'workbench.action.closeActiveEditor'
   constructor() {
@@ -50,33 +68,17 @@ export class CloseActiveEditorAction extends Action2 {
       category: localize('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+w' },
       precondition: 'hasActiveEditor',
-      menu: { id: MenuId.EditorTitle, group: '1_close', order: 1 },
+      menu: [
+        { id: MenuId.EditorTitle, group: '1_close', order: 10 },
+        { id: MenuId.EditorTabContext, group: '1_close', order: 10 },
+      ],
       f1: true,
     })
   }
-  override async run(accessor: ServicesAccessor): Promise<void> {
-    const groups = accessor.get(IEditorGroupsService)
-    const editor = groups.activeGroup.activeEditor
-    if (editor)
-      await closeEditorWithConfirm(editor, groups.activeGroup, accessor.get(IDialogService))
-  }
-}
-
-export class CloseAllEditorsAction extends Action2 {
-  static readonly ID = 'workbench.action.closeAllEditors'
-  constructor() {
-    super({
-      id: CloseAllEditorsAction.ID,
-      title: localize('action.closeAllEditors.title', 'Close All Editors'),
-      category: localize('command.category.view', 'View'),
-      precondition: 'editorIsOpen',
-      menu: { id: MenuId.EditorTitle, group: '1_close', order: 4 },
-      f1: true,
-    })
-  }
-  override run(accessor: ServicesAccessor): void {
-    const groups = accessor.get(IEditorGroupsService)
-    for (const g of groups.groups) g.closeAllEditors()
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    await closeEditorWithConfirm(target.editor, target.group, accessor.get(IDialogService))
   }
 }
 
@@ -88,17 +90,19 @@ export class CloseOtherEditorsAction extends Action2 {
       title: localize('action.closeOtherEditors.title', 'Close Other Editors'),
       category: localize('command.category.view', 'View'),
       precondition: 'hasActiveEditor',
-      menu: { id: MenuId.EditorTitle, group: '1_close', order: 2 },
+      menu: [
+        { id: MenuId.EditorTitle, group: '1_close', order: 20 },
+        { id: MenuId.EditorTabContext, group: '1_close', order: 20 },
+      ],
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    const group = accessor.get(IEditorGroupsService).activeGroup
-    const active = group.activeEditor
-    if (!active) return
-    for (const e of [...group.editors]) {
-      if (e !== active) group.closeEditor(e)
-    }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const { group, editor } = target
+    const others = group.editors.filter((e) => e !== editor)
+    await closeEditorsWithConfirm(others, group, accessor.get(IDialogService))
   }
 }
 
@@ -110,18 +114,118 @@ export class CloseEditorsToTheRightAction extends Action2 {
       title: localize('action.closeEditorsToTheRight.title', 'Close Editors to the Right'),
       category: localize('command.category.view', 'View'),
       precondition: 'hasActiveEditor && !activeEditorIsLastInGroup',
-      menu: { id: MenuId.EditorTitle, group: '1_close', order: 3 },
+      menu: [
+        { id: MenuId.EditorTitle, group: '1_close', order: 30 },
+        { id: MenuId.EditorTabContext, group: '1_close', order: 30 },
+      ],
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    const group = accessor.get(IEditorGroupsService).activeGroup
-    const active = group.activeEditor
-    if (!active) return
-    const idx = group.indexOf(active)
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const { group, editor } = target
+    const idx = group.indexOf(editor)
     if (idx === -1) return
-    for (const e of group.editors.slice(idx + 1)) {
-      group.closeEditor(e)
+    await closeEditorsWithConfirm(group.editors.slice(idx + 1), group, accessor.get(IDialogService))
+  }
+}
+
+export class CloseEditorsToTheLeftAction extends Action2 {
+  static readonly ID = 'workbench.action.closeEditorsToTheLeft'
+  constructor() {
+    super({
+      id: CloseEditorsToTheLeftAction.ID,
+      title: localize('action.closeEditorsToTheLeft.title', 'Close Editors to the Left'),
+      category: localize('command.category.view', 'View'),
+      precondition: 'hasActiveEditor && !activeEditorIsFirstInGroup',
+      menu: [
+        { id: MenuId.EditorTitle, group: '1_close', order: 40 },
+        { id: MenuId.EditorTabContext, group: '1_close', order: 40 },
+      ],
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const { group, editor } = target
+    const idx = group.indexOf(editor)
+    if (idx <= 0) return
+    await closeEditorsWithConfirm(group.editors.slice(0, idx), group, accessor.get(IDialogService))
+  }
+}
+
+export class CloseUnmodifiedEditorsAction extends Action2 {
+  static readonly ID = 'workbench.action.closeUnmodifiedEditors'
+  constructor() {
+    super({
+      id: CloseUnmodifiedEditorsAction.ID,
+      title: localize('action.closeUnmodifiedEditors.title', 'Close Saved Editors'),
+      category: localize('command.category.view', 'View'),
+      precondition: 'editorIsOpen',
+      menu: [
+        { id: MenuId.EditorTitle, group: '1_close', order: 50 },
+        { id: MenuId.EditorTabContext, group: '1_close', order: 50 },
+      ],
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    const { group } = target
+    for (const e of [...group.editors]) {
+      if (!e.isDirty) group.closeEditor(e)
+    }
+  }
+}
+
+export class CloseEditorsInGroupAction extends Action2 {
+  static readonly ID = 'workbench.action.closeEditorsInGroup'
+  constructor() {
+    super({
+      id: CloseEditorsInGroupAction.ID,
+      title: localize('action.closeEditorsInGroup.title', 'Close All Editors in Group'),
+      category: localize('command.category.view', 'View'),
+      precondition: 'editorIsOpen',
+      menu: [
+        { id: MenuId.EditorTitle, group: '1_close', order: 60 },
+        { id: MenuId.EditorTabContext, group: '1_close', order: 60 },
+      ],
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
+    const target = resolveTargetEditor(accessor, arg)
+    if (!target) return
+    await closeEditorsWithConfirm(
+      [...target.group.editors],
+      target.group,
+      accessor.get(IDialogService),
+    )
+  }
+}
+
+export class CloseAllEditorsAction extends Action2 {
+  static readonly ID = 'workbench.action.closeAllEditors'
+  constructor() {
+    super({
+      id: CloseAllEditorsAction.ID,
+      title: localize('action.closeAllEditors.title', 'Close All Editors'),
+      category: localize('command.category.view', 'View'),
+      precondition: 'editorIsOpen',
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const groups = accessor.get(IEditorGroupsService)
+    const dialogService = accessor.get(IDialogService)
+    for (const g of groups.groups) {
+      for (const e of [...g.editors]) {
+        const ok = await closeEditorWithConfirm(e, g, dialogService)
+        if (!ok) return
+      }
     }
   }
 }

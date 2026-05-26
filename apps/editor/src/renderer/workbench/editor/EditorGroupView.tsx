@@ -461,6 +461,7 @@ export function EditorGroupView({
                   setTabMenu({
                     x: ev.clientX,
                     y: ev.clientY,
+                    groupId: group.id,
                     resource: resourceLike instanceof URI ? resourceLike : null,
                   })
                 }}

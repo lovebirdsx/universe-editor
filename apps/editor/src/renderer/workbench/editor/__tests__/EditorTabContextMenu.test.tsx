@@ -43,7 +43,7 @@ describe('EditorTabContextMenu', () => {
       const onClose = () => {}
       render(
         <EditorTabContextMenu
-          state={{ x: 10, y: 20, resource: URI.file('/a.txt') }}
+          state={{ x: 10, y: 20, groupId: 0, resource: URI.file('/a.txt') }}
           commandService={new FakeCommand() as unknown as ICommandService}
           onClose={onClose}
         />,
@@ -70,7 +70,7 @@ describe('EditorTabContextMenu', () => {
       const target = URI.file('/ws/src/main.ts')
       render(
         <EditorTabContextMenu
-          state={{ x: 0, y: 0, resource: target }}
+          state={{ x: 0, y: 0, groupId: 0, resource: target }}
           commandService={cmd as unknown as ICommandService}
           onClose={() => closed++}
         />,

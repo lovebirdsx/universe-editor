@@ -15,8 +15,11 @@ import {
 import {
   CloseActiveEditorAction,
   CloseAllEditorsAction,
+  CloseEditorsInGroupAction,
+  CloseEditorsToTheLeftAction,
   CloseEditorsToTheRightAction,
   CloseOtherEditorsAction,
+  CloseUnmodifiedEditorsAction,
   FirstEditorInGroupAction,
   FocusAboveGroupAction,
   FocusActiveEditorGroupAction,
@@ -132,6 +135,9 @@ registerAction2(CloseActiveEditorAction)
 registerAction2(CloseAllEditorsAction)
 registerAction2(CloseOtherEditorsAction)
 registerAction2(CloseEditorsToTheRightAction)
+registerAction2(CloseEditorsToTheLeftAction)
+registerAction2(CloseUnmodifiedEditorsAction)
+registerAction2(CloseEditorsInGroupAction)
 
 // Editor — tab navigation
 registerAction2(NextEditorAction)
