@@ -499,12 +499,14 @@ describe('AcpSessionService — history wiring', () => {
     const a = await svc.createSession()
     await new Promise((r) => setTimeout(r, 5))
     const b = await svc.createSession()
-    expect(built.history.list().map((e) => e.title)).toEqual([b.title, a.title])
+    expect(built.history.list().map((e) => e.sessionIdOnAgent)).toEqual([b.id, a.id])
     await new Promise((r) => setTimeout(r, 5))
     // Bumping `a` via sendPrompt: history.touch() runs synchronously at the
     // start of sendPrompt. We cancel the never-resolving prompt afterwards.
+    // Note: sendPrompt also derives the title from the first prompt — so we
+    // assert by id (stable) rather than by title.
     void a.sendPrompt('hi')
-    expect(built.history.list().map((e) => e.title)).toEqual([a.title, b.title])
+    expect(built.history.list().map((e) => e.sessionIdOnAgent)).toEqual([a.id, b.id])
     await a.cancelTurn()
   })
 })
@@ -686,6 +688,93 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(svc.activeSession.get()).toBe(resumed)
     expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed'])
     expect(original.messages.get()).toEqual([])
+  })
+})
+
+describe('AcpSessionService.resumeSession — editor-restart race', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  /**
+   * Repro for the "tab shows GUID with Resuming agent session… stuck forever"
+   * bug seen after editor restart. The renderer restores `AcpSessionEditorInput`
+   * synchronously at BlockRestore, then React mounts and `AcpSessionEditor`'s
+   * `useEffect` calls `service.resumeSession(sessionId)` BEFORE the
+   * fire-and-forget `acpSessionHistoryService.initialize()` from main.tsx
+   * resolves. `_resumeSessionInner` synchronously reads `history.get(sessionId)`
+   * → undefined → throws "Unknown agent session id". The notification fires
+   * once, then the spinner stays forever because `resumeAttempted` is set.
+   *
+   * resumeSession must wait for history hydration before treating a missing
+   * entry as a real "unknown id".
+   */
+  it('awaits history hydration before treating a missing entry as unknown', async () => {
+    // Round 1: prime storage with a session entry.
+    const round1 = buildService({ loadSessionResult: {} })
+    await round1.history.initialize()
+    const original = await round1.svc.createSession()
+    const sessionId = original.id
+    await flushHistoryWrite()
+    round1.svc.dispose()
+
+    // Round 2: simulate editor restart. Build a fresh history+service and
+    // call resumeSession WITHOUT awaiting history.initialize() — this mirrors
+    // the real bootstrap order where AcpSessionEditor fires resumeSession in
+    // useEffect before main.tsx's `void historyService.initialize()` resolves.
+    const storage = round1.storage
+    const client = new FakeAcpClientService({ loadSessionResult: {} })
+    const config: IConfigurationService = new ConfigurationService()
+    const telemetry: ITelemetryService = new NoopTelemetryService()
+    const notifications = new StubNotificationService()
+    const history = new AcpSessionHistoryService(
+      storage,
+      new FakeWorkspaceService(),
+      telemetry,
+      new StubLoggerService(),
+      FAKE_HOST,
+    )
+    svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      notifications,
+      telemetry,
+      new StubPermissionHandler(),
+      new StubProgressService(),
+      new StubLoggerService(),
+      history,
+      storage,
+      new AcpAgentDefaultsService(
+        new FakeStorage(),
+        new FakeWorkspaceService(),
+        telemetry,
+        new StubLoggerService(),
+      ),
+      FAKE_HOST,
+    )
+    // Kick off history hydration but DO NOT await — race the resume call.
+    void history.initialize()
+
+    const resumed = await svc.resumeSession(sessionId)
+    expect(resumed.id).toBe(sessionId)
+    expect(svc.getById(sessionId)?.id).toBe(sessionId)
+    expect(client.connected[0]?.agent.loadSessionCalls).toHaveLength(1)
+    // No spurious "Failed to resume" notification should have fired.
+    expect(notifications.captured.filter((n) => /Failed to resume/.test(n.message))).toEqual([])
+  })
+
+  it('still rejects for a genuinely unknown id after history finished loading', async () => {
+    const built = buildService()
+    svc = built.svc
+    await built.history.initialize()
+    await expect(svc.resumeSession('definitely-not-a-real-id')).rejects.toThrow(
+      /Unknown agent session id/,
+    )
+    expect(built.client.connected).toHaveLength(0)
   })
 })
 

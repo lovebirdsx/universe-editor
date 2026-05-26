@@ -127,7 +127,7 @@ function makeHarness(): Harness {
 }
 
 function makeInput(inst: IInstantiationService, sessionId: string, agentId: string) {
-  return inst.createInstance(AcpSessionEditorInput, sessionId, agentId)
+  return inst.createInstance(AcpSessionEditorInput, sessionId, agentId, undefined)
 }
 
 describe('AgentsSessionEditorLifecycleContribution', () => {

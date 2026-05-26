@@ -38,20 +38,28 @@ export class AcpSessionEditorInput extends EditorInput {
   constructor(
     readonly sessionId: string,
     readonly agentId: string | undefined,
+    initialTitle: string | undefined,
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
   ) {
     super()
     this._resource = URI.from({ scheme: 'universe', path: `/acp/session/${sessionId}` })
-    this._lastTitle = this._computeTitle()
+    this._lastTitle =
+      initialTitle !== undefined && initialTitle.length > 0
+        ? truncateTitle(initialTitle)
+        : this._computeTitle()
     // Watch live session title + history entry title so renames + resumed
     // sessions update the tab label without manual refresh. The autorun fires
     // synchronously once; we only emit onDidChangeLabel on actual changes.
     this._titleSub = autorun((r) => {
-      const live = this._sessions.getById(this.sessionId)
       // Subscribe to entries so history-side renames also trigger us.
       this._history.entries.read(r)
-      const title = live ? live.title : (this._history.get(this.sessionId)?.title ?? this.sessionId)
+      // history.title 优先于 live.title——后者是构造时锁定的死字符串，rename 后并不会更新。
+      // 没拿到 title 时不要回落到 sessionId 覆盖构造期写入的 initialTitle / _computeTitle 结果。
+      const fromHistory = this._history.get(this.sessionId)?.title
+      const fromLive = this._sessions.getById(this.sessionId)?.title
+      const title = fromHistory ?? fromLive
+      if (title === undefined) return
       const truncated = truncateTitle(title)
       if (truncated !== this._lastTitle) {
         this._lastTitle = truncated
@@ -74,8 +82,9 @@ export class AcpSessionEditorInput extends EditorInput {
   }
 
   private _computeTitle(): string {
-    const live = this._sessions.getById(this.sessionId)
-    const raw = live?.title ?? this._history.get(this.sessionId)?.title ?? this.sessionId
+    const fromHistory = this._history.get(this.sessionId)?.title
+    const fromLive = this._sessions.getById(this.sessionId)?.title
+    const raw = fromHistory ?? fromLive ?? this.sessionId
     return truncateTitle(raw)
   }
 
@@ -83,6 +92,7 @@ export class AcpSessionEditorInput extends EditorInput {
     return JSON.stringify({
       sessionId: this.sessionId,
       ...(this.agentId !== undefined ? { agentId: this.agentId } : {}),
+      title: this._lastTitle,
     })
   }
 
@@ -92,11 +102,13 @@ export class AcpSessionEditorInput extends EditorInput {
       const parsed = JSON.parse(data) as {
         sessionId?: unknown
         agentId?: unknown
+        title?: unknown
       }
       if (typeof parsed.sessionId !== 'string' || parsed.sessionId.length === 0) return null
       const agentId = typeof parsed.agentId === 'string' ? parsed.agentId : undefined
+      const title = typeof parsed.title === 'string' ? parsed.title : undefined
       const inst = accessor.get(IInstantiationService)
-      return inst.createInstance(AcpSessionEditorInput, parsed.sessionId, agentId)
+      return inst.createInstance(AcpSessionEditorInput, parsed.sessionId, agentId, title)
     } catch {
       return null
     }

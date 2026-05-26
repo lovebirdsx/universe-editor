@@ -112,7 +112,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
         if (location !== 'editor') return
         if (!active) return
         this._editor.openEditor(
-          this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId),
+          this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId, undefined),
         )
       }),
     )

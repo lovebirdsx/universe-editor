@@ -329,6 +329,31 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(svc.list().map((e) => e.id)).toEqual(['ok'])
   })
 
+  it('normalizes legacy entries whose id !== sessionIdOnAgent so get(sessionIdOnAgent) hits', async () => {
+    // Regression: legacy persisted shape used auto-increment ids like 'h5-mpl5owcr'
+    // while the agent's sessionId lives in `sessionIdOnAgent`. The current schema
+    // requires `id === sessionIdOnAgent`; without normalization, restoring a session
+    // via history.get(sessionIdOnAgent) misses and the editor sits on a permanent spinner.
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 'h5-mpl5owcr',
+          agentId: 'claude-code',
+          sessionIdOnAgent: '04470b5c-fcf7-473e-814d-cb9f2ac997f3',
+          title: '你的工作目录是？',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+    })
+    await svc.initialize()
+    const got = svc.get('04470b5c-fcf7-473e-814d-cb9f2ac997f3')
+    expect(got).toBeDefined()
+    expect(got?.id).toBe('04470b5c-fcf7-473e-814d-cb9f2ac997f3')
+    expect(got?.title).toBe('你的工作目录是？')
+  })
+
   it('initialize() is idempotent — second call resolves without re-reading', async () => {
     await svc.initialize()
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {

@@ -306,7 +306,10 @@ export class AcpSessionService
             'ACP session/new',
           )
           conn.attachSession(result.sessionId)
-          const title = result.sessionId
+          const now = new Date()
+          const hh = String(now.getHours()).padStart(2, '0')
+          const mm = String(now.getMinutes()).padStart(2, '0')
+          const title = `${agentName} ${hh}:${mm}`
           const initState: IAcpSessionInitState = result.configOptions
             ? { configOptions: result.configOptions }
             : {}
@@ -387,6 +390,15 @@ export class AcpSessionService
   }
 
   private async _resumeSessionInner(sessionId: string): Promise<IAcpSession> {
+    // History hydration is fire-and-forget at bootstrap; on editor restart the
+    // restored AcpSessionEditorInput triggers an auto-resume via useEffect that
+    // races with the load. Wait for hydration so a transient empty-state
+    // lookup doesn't masquerade as a genuine "unknown id".
+    try {
+      await this._history.initialize()
+    } catch {
+      // best-effort — proceed and let the lookup decide
+    }
     const entry = this._history.get(sessionId)
     if (!entry) {
       throw new Error(`Unknown agent session id: ${sessionId}`)

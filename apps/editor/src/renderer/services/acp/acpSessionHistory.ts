@@ -406,7 +406,11 @@ export class AcpSessionHistoryService
       this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
-    return o.entries.filter(isValidEntry)
+    // schema 约定 id === sessionIdOnAgent；老版本曾用自增 id，这里在反序列化时无损归一化，
+    // 否则 history.get(sessionIdOnAgent) 永远 miss。
+    return o.entries
+      .filter(isValidEntry)
+      .map((e) => (e.id === e.sessionIdOnAgent ? e : { ...e, id: e.sessionIdOnAgent }))
   }
 
   protected override _mergeOnLoad(

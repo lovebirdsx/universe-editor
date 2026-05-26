@@ -53,7 +53,9 @@ export class NewAgentSessionAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const session = await sessions.createSession(registry.defaultAgentId())
     if (location.location.get() === 'editor') {
-      editor.openEditor(inst.createInstance(AcpSessionEditorInput, session.id, session.agentId))
+      editor.openEditor(
+        inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+      )
     } else {
       // Sidebar mode: just make sure the Agents view is visible so the new
       // session is reachable.
@@ -387,7 +389,9 @@ export class ResumeAgentSessionAction extends Action2 {
     try {
       const session = await sessions.resumeSession(picked.id)
       if (location.location.get() === 'editor') {
-        editor.openEditor(inst.createInstance(AcpSessionEditorInput, session.id, session.agentId))
+        editor.openEditor(
+          inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+        )
       } else {
         sessions.setActive(session.id)
         if (!layout.getVisible(PartId.SecondarySideBar)) {

@@ -64,13 +64,13 @@ function makeAccessor(): {
 
 function makeInput(sessionId: string, agentId?: string): AcpSessionEditorInput {
   const { inst } = makeAccessor()
-  return inst.createInstance(AcpSessionEditorInput, sessionId, agentId)
+  return inst.createInstance(AcpSessionEditorInput, sessionId, agentId, undefined)
 }
 
 describe('AcpSessionEditorInput', () => {
   it('serialize/deserialize round-trips sessionId and agentId', () => {
     const { accessor, inst } = makeAccessor()
-    const input = inst.createInstance(AcpSessionEditorInput, 'sess-1', 'claude-code')
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-1', 'claude-code', undefined)
     const restored = AcpSessionEditorInput.deserialize(input.serialize(), accessor)
     expect(restored?.sessionId).toBe('sess-1')
     expect(restored?.agentId).toBe('claude-code')
@@ -78,7 +78,16 @@ describe('AcpSessionEditorInput', () => {
 
   it('serialize omits agentId when not provided so payload stays minimal', () => {
     const input = makeInput('sess-2')
-    expect(JSON.parse(input.serialize())).toEqual({ sessionId: 'sess-2' })
+    const payload = JSON.parse(input.serialize())
+    expect(payload.sessionId).toBe('sess-2')
+    expect('agentId' in payload).toBe(false)
+  })
+
+  it('serialize persists the current title so the tab can render it before history hydrates', () => {
+    const { inst } = makeAccessor()
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-2t', 'fake', '我的会话')
+    const payload = JSON.parse(input.serialize())
+    expect(payload.title).toBe('我的会话')
   })
 
   it('deserialize accepts payloads without agentId', () => {
@@ -89,6 +98,15 @@ describe('AcpSessionEditorInput', () => {
     )
     expect(restored?.sessionId).toBe('sess-3')
     expect(restored?.agentId).toBeUndefined()
+  })
+
+  it('deserialize preserves persisted title even when no live session and no history entry exists', () => {
+    const { accessor } = makeAccessor()
+    const restored = AcpSessionEditorInput.deserialize(
+      JSON.stringify({ sessionId: 'sess-3t', title: '上次的会话' }),
+      accessor,
+    )
+    expect(restored?.getName()).toBe('上次的会话')
   })
 
   it('deserialize ignores malformed payloads', () => {
@@ -112,8 +130,8 @@ describe('AcpSessionEditorInput', () => {
 
   it('resource is keyed by sessionId so two inputs with the same id collapse', () => {
     const { inst } = makeAccessor()
-    const a = inst.createInstance(AcpSessionEditorInput, 'sess-9', 'fake')
-    const b = inst.createInstance(AcpSessionEditorInput, 'sess-9', 'fake')
+    const a = inst.createInstance(AcpSessionEditorInput, 'sess-9', 'fake', undefined)
+    const b = inst.createInstance(AcpSessionEditorInput, 'sess-9', 'fake', undefined)
     expect(a.resource.toString()).toBe(b.resource.toString())
     expect(a.matches(b)).toBe(true)
   })

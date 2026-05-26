@@ -5,75 +5,83 @@
  *  a session that exists in history but isn't live yet.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
-import { Loader2 } from 'lucide-react'
-import {
-  IEditorInput,
-  IEditorService,
-  IInstantiationService,
-  localize,
-} from '@universe-editor/platform'
+import { useEffect, useState } from 'react'
+import { AlertCircle, Loader2, RotateCw } from 'lucide-react'
+import { IEditorInput, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
+import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { ChatBody } from './ChatBody.js'
 import styles from './agents.module.css'
 
+type ResumePhase = { kind: 'idle' } | { kind: 'pending' } | { kind: 'error'; message: string }
+
 export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   const service = useService(IAcpSessionService)
-  const editor = useService(IEditorService)
-  const inst = useService(IInstantiationService)
-  useObservable(service.sessions) // re-render when sessions change
+  const history = useService(IAcpSessionHistoryService)
+  useObservable(service.sessions)
+  // 订阅 history 是为了让水化完成时触发重渲——_resumeSessionInner 在 history hydrate 之前
+  // 可能 throw "Unknown agent session id"，那次失败后用户没有显式动作的话就需要这条路径
+  // 把组件叫醒，让 useEffect 在 phase 转回 idle 后重新尝试 resume。
+  useObservable(history.entries)
 
   const acpInput = input instanceof AcpSessionEditorInput ? input : undefined
   const session = acpInput ? service.getById(acpInput.sessionId) : undefined
 
-  // One-shot auto-resume: if no live session matches the input's sessionId,
-  // kick off `resumeSession`. The service dedupes concurrent resumes for the
-  // same id; the ref here just suppresses the second call on the same render
-  // (React 19 strict-mode double-invoke) before the dedup map sees it.
-  const resumeAttempted = useRef<string | undefined>(undefined)
+  const [phase, setPhase] = useState<ResumePhase>({ kind: 'idle' })
+
   useEffect(() => {
     if (!acpInput || session) return
-    if (resumeAttempted.current === acpInput.sessionId) return
-    resumeAttempted.current = acpInput.sessionId
-    void service.resumeSession(acpInput.sessionId).catch(() => {
-      // resumeSession publishes its own notification; nothing to do here.
-    })
-  }, [acpInput, service, session])
+    if (phase.kind !== 'idle') return
+    setPhase({ kind: 'pending' })
+    service.resumeSession(acpInput.sessionId).then(
+      () => {
+        // 成功路径：service.sessions 的变更会驱动 useObservable 重渲，
+        // 渲染分支自动切到 <ChatBody />，无需在此 setPhase。
+      },
+      (err: unknown) => {
+        setPhase({ kind: 'error', message: (err as Error).message })
+      },
+    )
+  }, [acpInput, service, session, phase.kind])
 
   if (!acpInput) return null
 
-  if (!session) {
+  if (session) return <ChatBody session={session} autoFocus />
+
+  if (phase.kind === 'error') {
     return (
-      <div className={styles['sessionLoading']} data-testid="acp-session-resuming">
+      <div className={styles['sessionLoading']} data-testid="acp-session-resume-error">
         <div className={styles['sessionLoadingHeader']}>
-          <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+          <AlertCircle size={20} strokeWidth={1.75} aria-hidden="true" />
           <p className={styles['sessionLoadingMessage']}>
-            {localize('acp.session.resuming', 'Resuming agent session...')}
+            {localize('acp.session.resumeFailed', 'Failed to resume agent session: {error}', {
+              error: phase.message,
+            })}
           </p>
         </div>
-        {acpInput.agentId && (
-          <button
-            type="button"
-            data-testid="acp-session-reconnect"
-            onClick={() => {
-              const agentId = acpInput.agentId!
-              const inputId = acpInput.id
-              void (async () => {
-                const fresh = await service.createSession(agentId)
-                editor.openEditor(
-                  inst.createInstance(AcpSessionEditorInput, fresh.id, fresh.agentId),
-                )
-                editor.closeEditor(inputId)
-              })()
-            }}
-          >
-            {localize('acp.session.reconnect', 'Start a new session with the same agent')}
-          </button>
-        )}
+        <button
+          type="button"
+          className={styles['sessionRetryButton']}
+          onClick={() => setPhase({ kind: 'idle' })}
+          data-testid="acp-session-resume-retry"
+        >
+          <RotateCw size={14} strokeWidth={1.75} aria-hidden="true" />
+          {localize('acp.session.retry', 'Retry')}
+        </button>
       </div>
     )
   }
-  return <ChatBody session={session} autoFocus />
+
+  return (
+    <div className={styles['sessionLoading']} data-testid="acp-session-resuming">
+      <div className={styles['sessionLoadingHeader']}>
+        <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+        <p className={styles['sessionLoadingMessage']}>
+          {localize('acp.session.resuming', 'Resuming agent session...')}
+        </p>
+      </div>
+    </div>
+  )
 }

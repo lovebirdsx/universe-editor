@@ -244,6 +244,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
     // Safe no-op when this session wasn't created with a history reference.
     this._history?.touch(this.id)
+    // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
+    this._maybeDeriveTitleFromPrompt(text)
     this._appendMessage('user', text)
     this.status.set('running', undefined)
     const prompt = composePromptBlocks(text, mentions ?? [])
@@ -291,6 +293,14 @@ export class AcpSession extends Disposable implements IAcpSession {
       // swallow — cancel is best-effort
     }
     this._activeAbort?.abort()
+  }
+
+  private _maybeDeriveTitleFromPrompt(text: string): void {
+    if (!this._history) return
+    if (this._messages.length > 0) return
+    const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
+    if (derived.length === 0) return
+    this._history.updateInfo(this.id, { title: derived })
   }
 
   async close(): Promise<void> {

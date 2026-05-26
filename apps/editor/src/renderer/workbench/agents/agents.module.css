@@ -907,3 +907,24 @@
   animation: acpSpin 0.8s linear infinite;
 }
 
+.sessionRetryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--color-button-bg, #0e639c);
+  color: var(--color-button-fg, #ffffff);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.sessionRetryButton:hover {
+  background: var(--color-button-hover-bg, #1177bb);
+}
+
+.sessionRetryButton:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
+}

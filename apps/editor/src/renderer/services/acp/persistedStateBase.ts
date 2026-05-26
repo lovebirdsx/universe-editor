@@ -164,6 +164,9 @@ export abstract class PersistedStateBase<TState> extends Disposable {
         const parsed = this._deserialize(raw)
         if (parsed !== undefined) {
           this._state = this._mergeOnLoad(parsed, this._state)
+          this._logger.info(
+            `${this._storageKey} loaded from ${StorageScope[scope]} with ${JSON.stringify(this._state)}`,
+          )
           this._onStateReplaced(this._state)
         } else {
           this._logger.warn(`ignoring ${this._storageKey} (unrecognized shape)`)

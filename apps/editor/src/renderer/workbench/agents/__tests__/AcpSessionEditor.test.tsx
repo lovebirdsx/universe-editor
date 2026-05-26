@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for AcpSessionEditor — focuses on the "editor restart" path where a
+ *  Tests for AcpSessionEditor — covers the "editor restart" path where a
  *  serialized AcpSessionEditorInput is restored but no live session matches.
- *  The editor should auto-resume the session by id.
+ *  The editor should auto-resume; on failure it should show an error and a
+ *  retry button that re-triggers resume.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, cleanup, act } from '@testing-library/react'
+import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 import {
   InstantiationService,
   ServiceCollection,
@@ -39,13 +40,18 @@ interface FakeAcpSessionService extends IAcpSessionServiceType {
 function makeService(
   initial: {
     byId?: Record<string, IAcpSession>
+    resumeResult?: () => Promise<IAcpSession>
   } = {},
 ): FakeAcpSessionService {
   const byId = new Map<string, IAcpSession>(Object.entries(initial.byId ?? {}))
   const sessions = observableValue<readonly IAcpSession[]>('test.sessions', [...byId.values()])
   const activeSessionId = observableValue<string | undefined>('test.activeId', undefined)
   const activeSession = observableValue<IAcpSession | undefined>('test.active', undefined)
-  const resumeSession = vi.fn().mockResolvedValue(undefined as unknown as IAcpSession)
+  const resumeSession = vi
+    .fn()
+    .mockImplementation(
+      initial.resumeResult ?? (() => Promise.resolve(undefined as unknown as IAcpSession)),
+    )
   const createSession = vi.fn().mockResolvedValue(undefined as unknown as IAcpSession)
   return {
     _serviceBrand: undefined,
@@ -86,21 +92,25 @@ const stubEditor: IEditorServiceType = {
   closeEditor: vi.fn(),
 } as unknown as IEditorServiceType
 
-function makeCollection(service: FakeAcpSessionService) {
+function makeCollection(service: FakeAcpSessionService, history?: IAcpSessionHistoryServiceType) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, service)
-  services.set(IAcpSessionHistoryService, makeHistory())
+  services.set(IAcpSessionHistoryService, history ?? makeHistory())
   services.set(IEditorService, stubEditor)
   return services
 }
 
 function buildInput(service: FakeAcpSessionService, sessionId: string, agentId?: string) {
   const inst = new InstantiationService(makeCollection(service))
-  return { inst, input: inst.createInstance(AcpSessionEditorInput, sessionId, agentId) }
+  return { inst, input: inst.createInstance(AcpSessionEditorInput, sessionId, agentId, undefined) }
 }
 
-function renderEditor(service: FakeAcpSessionService, input: AcpSessionEditorInput) {
-  const inst = new InstantiationService(makeCollection(service))
+function renderEditor(
+  service: FakeAcpSessionService,
+  input: AcpSessionEditorInput,
+  history?: IAcpSessionHistoryServiceType,
+) {
+  const inst = new InstantiationService(makeCollection(service, history))
   return render(
     <ServicesContext.Provider value={inst}>
       <AcpSessionEditor input={input} />
@@ -117,9 +127,7 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
     })
     expect(service.resumeSession).toHaveBeenCalledTimes(1)
     expect(service.resumeSession).toHaveBeenCalledWith('sess-stale')
-    // While resume is pending, the resuming placeholder should be shown.
     expect(screen.getByTestId('acp-session-resuming')).toBeTruthy()
-    expect(screen.getByTestId('acp-session-reconnect')).toBeTruthy()
   })
 
   it('does not call resumeSession a second time even if the component re-renders', async () => {
@@ -139,5 +147,23 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
       )
     })
     expect(service.resumeSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('renders an error + Retry when resumeSession rejects, and retry re-invokes resumeSession', async () => {
+    const service = makeService({
+      resumeResult: () => Promise.reject(new Error('boom')),
+    })
+    const { input } = buildInput(service, 'sess-broken', 'fake')
+    await act(async () => {
+      renderEditor(service, input)
+    })
+    // First call failed -> error UI replaces the spinner.
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    const retry = await screen.findByTestId('acp-session-resume-retry')
+    expect(screen.getByTestId('acp-session-resume-error')).toBeTruthy()
+    await act(async () => {
+      fireEvent.click(retry)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(2)
   })
 })

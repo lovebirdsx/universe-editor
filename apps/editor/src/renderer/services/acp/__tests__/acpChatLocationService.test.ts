@@ -247,8 +247,8 @@ describe('AcpChatLocationService — side effects', () => {
     const h = makeHarness()
     await h.svc.initialize()
     const fileInput = { id: 'file:foo' } as unknown as EditorInput
-    const acpA = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake')
-    const acpB = h.inst.createInstance(AcpSessionEditorInput, 's2', 'fake')
+    const acpA = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake', undefined)
+    const acpB = h.inst.createInstance(AcpSessionEditorInput, 's2', 'fake', undefined)
     h.groups.groupList[0]!.editors.push(fileInput, acpA)
     // Second group with another ACP tab.
     const g2 = new FakeGroup()
@@ -355,7 +355,7 @@ describe('AcpChatLocationService — side effects', () => {
     expect(h.svc.isMigrating).toBe(false)
 
     // Push an ACP tab whose closeEditor we instrument to observe isMigrating mid-flight.
-    const acp = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake')
+    const acp = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake', undefined)
     const seen: boolean[] = []
     const group = h.groups.groupList[0]!
     group.editors.push(acp)
