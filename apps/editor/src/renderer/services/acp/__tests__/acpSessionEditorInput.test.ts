@@ -67,4 +67,17 @@ describe('AcpSessionEditorInput', () => {
     expect(restored?.sessionId).toBe('sess-8')
     expect(restored?.historyId).toBeUndefined()
   })
+
+  it('resource is keyed by historyId so two inputs with the same history collapse', () => {
+    // Same history row, different live sessionIds (one pre-resume, one post).
+    const a = new AcpSessionEditorInput('h7', 'fake', 'h7')
+    const b = new AcpSessionEditorInput('s1', 'fake', 'h7')
+    expect(a.resource.toString()).toBe(b.resource.toString())
+    expect(a.matches(b)).toBe(true)
+  })
+
+  it('resource falls back to sessionId when historyId is absent', () => {
+    const input = new AcpSessionEditorInput('s1', 'fake')
+    expect(input.resource.path).toBe('/acp/session/s1')
+  })
 })

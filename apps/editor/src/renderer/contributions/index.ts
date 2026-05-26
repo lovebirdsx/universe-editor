@@ -33,6 +33,7 @@ import { AggregatedLogChannelContribution } from './AggregatedLogChannelContribu
 import {
   AgentsConfigurationContribution,
   AgentsEditorProviderContribution,
+  AgentsSessionEditorLifecycleContribution,
   AgentsSessionRestoreContribution,
   AgentsStatusBarContribution,
   AgentsViewContainerContribution,
@@ -225,6 +226,11 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsSessionRestore',
   AgentsSessionRestoreContribution,
+  WorkbenchPhase.AfterRestore,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsSessionEditorLifecycle',
+  AgentsSessionEditorLifecycleContribution,
   WorkbenchPhase.AfterRestore,
 )
 

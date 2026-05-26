@@ -9,6 +9,7 @@ import {
   ConfigurationRegistry,
   Disposable,
   EditorRegistry,
+  IEditorGroupsService,
   IEditorService,
   ILayoutService,
   IStatusBarService,
@@ -21,9 +22,11 @@ import {
   ViewRegistry,
   autorun,
   localize,
+  type IEditorGroup,
 } from '@universe-editor/platform'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 
 export class AgentsConfigurationContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -187,6 +190,55 @@ export class AgentsSessionRestoreContribution extends Disposable implements IWor
         if (active !== 'workbench.view.agents') return
         sessions.requestHydrateIfNeeded()
         void sessions.tryRestoreActiveSession()
+      }),
+    )
+  }
+}
+
+/**
+ * Stops the live agent subprocess whenever the user closes an
+ * AcpSessionEditorInput tab. The session history entry is preserved so a later
+ * click in the session list can re-resume it.
+ *
+ * Two close paths are filtered out so we don't kill sessions the user still
+ * cares about:
+ *   - `AcpChatLocationService.isMigrating` — `setLocation('sidebar')` closes
+ *     editor tabs as a relocation, not a termination.
+ *   - The same `AcpSessionEditorInput` still open in another group (future
+ *     split-view) — treat that as "still showing" and skip.
+ */
+export class AgentsSessionEditorLifecycleContribution
+  extends Disposable
+  implements IWorkbenchContribution
+{
+  constructor(
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+    @IAcpSessionService private readonly _sessions: IAcpSessionService,
+    @IAcpChatLocationService private readonly _location: IAcpChatLocationService,
+  ) {
+    super()
+    for (const group of this._editorGroups.groups) {
+      this._subscribeGroup(group)
+    }
+    this._register(this._editorGroups.onDidAddGroup((group) => this._subscribeGroup(group)))
+  }
+
+  private _subscribeGroup(group: IEditorGroup): void {
+    this._register(
+      group.onDidChangeModel((e) => {
+        if (e.kind !== 'close') return
+        const closed = e.editor
+        if (!(closed instanceof AcpSessionEditorInput)) return
+        if (this._location.isMigrating) return
+        const stillOpen = this._editorGroups.groups.some((g) =>
+          g.editors.some((ed) => ed instanceof AcpSessionEditorInput && ed.id === closed.id),
+        )
+        if (stillOpen) return
+        const session =
+          (closed.historyId ? this._sessions.getByHistoryId(closed.historyId) : undefined) ??
+          this._sessions.getById(closed.sessionId)
+        if (!session) return
+        void this._sessions.closeSession(session.id)
       }),
     )
   }

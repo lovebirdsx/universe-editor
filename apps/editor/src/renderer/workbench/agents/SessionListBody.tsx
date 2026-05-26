@@ -1,10 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionListBody — the pure list rendering reused by SessionListPanel (full
- *  sidebar view) and SessionsPopover (Copilot-style dropdown). Picks resolve
- *  a live session if one exists, otherwise call `resumeSession`. The optional
- *  `onPick` callback fires after the click handler kicks off so consumers can
- *  collapse the popover or otherwise react to the selection.
+ *  sidebar view) and SessionsPopover (Copilot-style dropdown). A single click
+ *  opens the session as an editor tab and activates / resumes it; the optional
+ *  `onPick` callback fires afterwards so popovers can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
 import { IEditorService, localize } from '@universe-editor/platform'
@@ -37,24 +36,14 @@ export interface SessionListBodyProps {
   /** Suppress the inline "no sessions" line — popovers render their own. */
   hideEmptyState?: boolean
   /**
-   * Called after a row is picked (single click or resume kicked off). The
-   * popover variant uses this to dismiss itself. The list still drives the
-   * actual session activation; this hook is fire-and-forget.
+   * Called after a row is picked. Popover variant uses this to dismiss itself.
+   * The list still drives session activation + editor open; this hook is
+   * fire-and-forget.
    */
   onPick?: (entry: AcpSessionHistoryEntry) => void
-  /**
-   * Suppress the double-click-promotes-to-editor affordance. Useful inside the
-   * popover where the user is already in sidebar mode and probably doesn't
-   * want an Editor tab spawned out from under them.
-   */
-  disableOpenInEditor?: boolean
 }
 
-export function SessionListBody({
-  hideEmptyState,
-  onPick,
-  disableOpenInEditor,
-}: SessionListBodyProps) {
+export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const editor = useService(IEditorService)
@@ -80,6 +69,9 @@ export function SessionListBody({
             data-active={isActive ? 'true' : 'false'}
             data-running={running !== undefined ? 'true' : 'false'}
             onClick={() => {
+              editor.openEditor(
+                new AcpSessionEditorInput(running?.id ?? entry.id, entry.agentId, entry.id),
+              )
               if (running) {
                 service.setActive(running.id)
               } else {
@@ -87,13 +79,6 @@ export function SessionListBody({
                   // resumeSession publishes its own notification.
                 })
               }
-              onPick?.(entry)
-            }}
-            onDoubleClick={() => {
-              if (disableOpenInEditor) return
-              editor.openEditor(
-                new AcpSessionEditorInput(running?.id ?? entry.id, entry.agentId, entry.id),
-              )
               onPick?.(entry)
             }}
           >

@@ -38,6 +38,13 @@ export type AcpChatLocation = 'editor' | 'sidebar'
 export interface IAcpChatLocationService {
   readonly _serviceBrand: undefined
   readonly location: IObservable<AcpChatLocation>
+  /**
+   * True synchronously while `setLocation` is closing/opening editor tabs as
+   * part of a chat-location migration. Consumed by
+   * `AgentsSessionEditorLifecycleContribution` to distinguish a user-driven
+   * tab close (→ stop the agent) from a migration close (→ keep it running).
+   */
+  readonly isMigrating: boolean
   /** Idempotent. main.tsx fire-and-forgets at startup. */
   initialize(): Promise<void>
   setLocation(location: AcpChatLocation): void
@@ -66,6 +73,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
   private _loaded = false
   private _loadPromise: Promise<void> | undefined
   private _writeTimer: ReturnType<typeof setTimeout> | undefined
+  private _migrating = false
   private readonly _contextKey: IContextKey<string>
   private readonly _logger: ILogger
 
@@ -94,12 +102,21 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     return this._loadPromise
   }
 
+  get isMigrating(): boolean {
+    return this._migrating
+  }
+
   setLocation(location: AcpChatLocation): void {
     if (this._location === location) return
     this._location = location
     this._publish()
     this._scheduleWrite()
-    this._applySideEffect(location)
+    this._migrating = true
+    try {
+      this._applySideEffect(location)
+    } finally {
+      this._migrating = false
+    }
     this._telemetry.publicLog('acp.chat_location_set', { location })
   }
 

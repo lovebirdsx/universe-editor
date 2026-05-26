@@ -32,7 +32,13 @@ export class AcpSessionEditorInput extends EditorInput {
   }
 
   override get resource(): URI {
-    return URI.from({ scheme: 'universe', path: `/acp/session/${this.sessionId}` })
+    // Keyed by historyId so two clicks on the same list row — one before the
+    // live session exists (sessionId = historyId), one after (sessionId =
+    // freshly minted local id like 's1') — produce the same resource and
+    // collapse into a single tab. sessionId remains only as a fallback for
+    // ephemeral sessions that never get a historyId.
+    const key = this.historyId ?? this.sessionId
+    return URI.from({ scheme: 'universe', path: `/acp/session/${key}` })
   }
 
   override getName(): string {

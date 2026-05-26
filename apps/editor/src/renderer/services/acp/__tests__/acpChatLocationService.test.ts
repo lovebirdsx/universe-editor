@@ -259,4 +259,26 @@ describe('AcpChatLocationService — side effects', () => {
     expect(h.editor.opened).toHaveLength(0)
     h.svc.dispose()
   })
+
+  it('isMigrating is true only while side effects run, false outside', async () => {
+    const h = makeHarness()
+    await h.svc.initialize()
+    expect(h.svc.isMigrating).toBe(false)
+
+    // Push an ACP tab whose closeEditor we instrument to observe isMigrating mid-flight.
+    const acp = new AcpSessionEditorInput('s1', 'fake', 'h1')
+    const seen: boolean[] = []
+    const group = h.groups.groupList[0]!
+    group.editors.push(acp)
+    const origClose = group.closeEditor.bind(group)
+    group.closeEditor = (e: EditorInput) => {
+      seen.push(h.svc.isMigrating)
+      return origClose(e)
+    }
+
+    h.svc.setLocation('sidebar')
+    expect(seen).toEqual([true])
+    expect(h.svc.isMigrating).toBe(false)
+    h.svc.dispose()
+  })
 })

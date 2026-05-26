@@ -79,7 +79,7 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
           </span>
         </button>
       </div>
-      <SessionListBody onPick={() => onDismiss()} disableOpenInEditor />
+      <SessionListBody onPick={() => onDismiss()} />
     </div>
   )
 }
