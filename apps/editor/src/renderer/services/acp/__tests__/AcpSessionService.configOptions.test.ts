@@ -579,7 +579,7 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     await built.agentDefaults.initialize()
     const s = await svc.createSession()
     await s.setConfigOption('model', 'opus')
-    const entry = built.history.list().find((e) => e.id === s.historyId)
+    const entry = built.history.list().find((e) => e.id === s.id)
     expect(entry?.configOptions).toEqual({ model: 'opus' })
     expect(built.agentDefaults.getDefaults('fake')).toEqual({ model: 'opus' })
   })

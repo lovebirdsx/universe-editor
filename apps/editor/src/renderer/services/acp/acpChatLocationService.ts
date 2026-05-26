@@ -15,11 +15,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  autorun,
   createDecorator,
   Disposable,
   IContextKeyService,
   IEditorGroupsService,
   IEditorService,
+  IInstantiationService,
   ILoggerService,
   IStorageService,
   ITelemetryService,
@@ -85,6 +87,7 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
+    @IInstantiationService private readonly _inst: IInstantiationService,
   ) {
     super()
     this._logger = loggerService.createLogger({
@@ -93,6 +96,21 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     })
     this.location = observableValue<AcpChatLocation>('acp.chatLocation', DEFAULT_LOCATION)
     this._contextKey = contextKeyService.createKey<string>('acpChatLocation', DEFAULT_LOCATION)
+    // Keep the editor area in sync with activeSession changes when in 'editor'
+    // mode. We do NOT set `_migrating` here — the lifecycle contribution
+    // already filters out the no-op "same input in another group" case, and
+    // we want a user-driven session swap to count as a real close on the
+    // outgoing tab. `openEditor` is idempotent on identical inputs.
+    this._register(
+      autorun((r) => {
+        if (this._location !== 'editor') return
+        const active = this._sessions.activeSession.read(r)
+        if (!active) return
+        this._editor.openEditor(
+          this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId),
+        )
+      }),
+    )
   }
 
   initialize(): Promise<void> {
@@ -199,6 +217,8 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     }
     const active = this._sessions.activeSession.get()
     if (!active) return
-    this._editor.openEditor(new AcpSessionEditorInput(active.id, active.agentId, active.historyId))
+    this._editor.openEditor(
+      this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId),
+    )
   }
 }

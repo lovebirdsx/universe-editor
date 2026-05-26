@@ -3,81 +3,123 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
+import {
+  IInstantiationService,
+  InstantiationService,
+  ServiceCollection,
+  observableValue,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
 import { AcpSessionEditorInput } from '../acpSessionEditorInput.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+  type IAcpSessionService as IAcpSessionServiceType,
+} from '../acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+  type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
+} from '../acpSessionHistory.js'
+
+function makeAccessor(): {
+  accessor: ServicesAccessor
+  inst: IInstantiationService
+} {
+  const sessions = {
+    _serviceBrand: undefined,
+    sessions: observableValue<readonly IAcpSession[]>('test.sessions', []),
+    activeSessionId: observableValue<string | undefined>('test.activeId', undefined),
+    activeSession: observableValue<IAcpSession | undefined>('test.active', undefined),
+    getById: () => undefined,
+    setActive() {},
+    async createSession(): Promise<IAcpSession> {
+      throw new Error('unused')
+    },
+    async resumeSession(): Promise<IAcpSession> {
+      throw new Error('unused')
+    },
+    async closeSession() {},
+    async tryRestoreActiveSession() {},
+    requestHydrateIfNeeded() {},
+    async refreshSessions() {},
+    async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
+      return 'unsupported'
+    },
+  } as unknown as IAcpSessionServiceType
+  const history = {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', []),
+    get: () => undefined,
+    list: () => [],
+    async initialize() {},
+  } as unknown as IAcpSessionHistoryServiceType
+  const services = new ServiceCollection()
+  services.set(IAcpSessionService, sessions)
+  services.set(IAcpSessionHistoryService, history)
+  const inst = new InstantiationService(services)
+  const accessor: ServicesAccessor = { get: (id) => inst.invokeFunction((a) => a.get(id)) }
+  return { accessor, inst }
+}
+
+function makeInput(sessionId: string, agentId?: string): AcpSessionEditorInput {
+  const { inst } = makeAccessor()
+  return inst.createInstance(AcpSessionEditorInput, sessionId, agentId)
+}
 
 describe('AcpSessionEditorInput', () => {
   it('serialize/deserialize round-trips sessionId and agentId', () => {
-    const input = new AcpSessionEditorInput('sess-1', 'claude-code')
-    const restored = AcpSessionEditorInput.deserialize(input.serialize())
+    const { accessor, inst } = makeAccessor()
+    const input = inst.createInstance(AcpSessionEditorInput, 'sess-1', 'claude-code')
+    const restored = AcpSessionEditorInput.deserialize(input.serialize(), accessor)
     expect(restored?.sessionId).toBe('sess-1')
     expect(restored?.agentId).toBe('claude-code')
   })
 
   it('serialize omits agentId when not provided so payload stays minimal', () => {
-    const input = new AcpSessionEditorInput('sess-2')
+    const input = makeInput('sess-2')
     expect(JSON.parse(input.serialize())).toEqual({ sessionId: 'sess-2' })
   })
 
-  it('deserialize accepts legacy payloads without agentId', () => {
-    const restored = AcpSessionEditorInput.deserialize(JSON.stringify({ sessionId: 'sess-3' }))
+  it('deserialize accepts payloads without agentId', () => {
+    const { accessor } = makeAccessor()
+    const restored = AcpSessionEditorInput.deserialize(
+      JSON.stringify({ sessionId: 'sess-3' }),
+      accessor,
+    )
     expect(restored?.sessionId).toBe('sess-3')
     expect(restored?.agentId).toBeUndefined()
   })
 
   it('deserialize ignores malformed payloads', () => {
-    expect(AcpSessionEditorInput.deserialize('not-json')).toBeNull()
-    expect(AcpSessionEditorInput.deserialize(JSON.stringify({ sessionId: 42 }))).toBeNull()
-    expect(AcpSessionEditorInput.deserialize(42 as unknown)).toBeNull()
+    const { accessor } = makeAccessor()
+    expect(AcpSessionEditorInput.deserialize('not-json', accessor)).toBeNull()
+    expect(
+      AcpSessionEditorInput.deserialize(JSON.stringify({ sessionId: 42 }), accessor),
+    ).toBeNull()
+    expect(AcpSessionEditorInput.deserialize(42 as unknown, accessor)).toBeNull()
   })
 
   it('deserialize discards agentId of wrong type while keeping sessionId', () => {
+    const { accessor } = makeAccessor()
     const restored = AcpSessionEditorInput.deserialize(
       JSON.stringify({ sessionId: 'sess-4', agentId: 7 }),
+      accessor,
     )
     expect(restored?.sessionId).toBe('sess-4')
     expect(restored?.agentId).toBeUndefined()
   })
 
-  it('serialize/deserialize round-trips historyId so editor restart can auto-resume', () => {
-    const input = new AcpSessionEditorInput('sess-5', 'claude-code', 'h7-xyz')
-    const restored = AcpSessionEditorInput.deserialize(input.serialize())
-    expect(restored?.sessionId).toBe('sess-5')
-    expect(restored?.agentId).toBe('claude-code')
-    expect(restored?.historyId).toBe('h7-xyz')
-  })
-
-  it('serialize omits historyId when not provided', () => {
-    const input = new AcpSessionEditorInput('sess-6', 'claude-code')
-    const parsed = JSON.parse(input.serialize()) as Record<string, unknown>
-    expect(parsed['historyId']).toBeUndefined()
-  })
-
-  it('deserialize accepts legacy payloads without historyId', () => {
-    const restored = AcpSessionEditorInput.deserialize(
-      JSON.stringify({ sessionId: 'sess-7', agentId: 'fake' }),
-    )
-    expect(restored?.sessionId).toBe('sess-7')
-    expect(restored?.historyId).toBeUndefined()
-  })
-
-  it('deserialize discards historyId of wrong type while keeping sessionId', () => {
-    const restored = AcpSessionEditorInput.deserialize(
-      JSON.stringify({ sessionId: 'sess-8', historyId: 9 }),
-    )
-    expect(restored?.sessionId).toBe('sess-8')
-    expect(restored?.historyId).toBeUndefined()
-  })
-
-  it('resource is keyed by historyId so two inputs with the same history collapse', () => {
-    // Same history row, different live sessionIds (one pre-resume, one post).
-    const a = new AcpSessionEditorInput('h7', 'fake', 'h7')
-    const b = new AcpSessionEditorInput('s1', 'fake', 'h7')
+  it('resource is keyed by sessionId so two inputs with the same id collapse', () => {
+    const { inst } = makeAccessor()
+    const a = inst.createInstance(AcpSessionEditorInput, 'sess-9', 'fake')
+    const b = inst.createInstance(AcpSessionEditorInput, 'sess-9', 'fake')
     expect(a.resource.toString()).toBe(b.resource.toString())
     expect(a.matches(b)).toBe(true)
   })
 
-  it('resource falls back to sessionId when historyId is absent', () => {
-    const input = new AcpSessionEditorInput('s1', 'fake')
-    expect(input.resource.path).toBe('/acp/session/s1')
+  it('resource path encodes the sessionId', () => {
+    const input = makeInput('sess-10')
+    expect(input.resource.path).toBe('/acp/session/sess-10')
   })
 })

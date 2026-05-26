@@ -141,7 +141,7 @@ describe('AcpSessionHistoryService — add / list', () => {
       cwd: '/work',
     })
     const after = Date.now()
-    expect(entry.id).toMatch(/^h\d+-/)
+    expect(entry.id).toBe('agent-1')
     expect(entry.createdAt).toBeGreaterThanOrEqual(before)
     expect(entry.createdAt).toBeLessThanOrEqual(after)
     expect(entry.lastUsedAt).toBe(entry.createdAt)
@@ -320,7 +320,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
       schemaVersion: 1,
       entries: [
-        { id: 'ok', agentId: 'a', sessionIdOnAgent: 's', title: 't', createdAt: 1, lastUsedAt: 2 },
+        { id: 'ok', agentId: 'a', sessionIdOnAgent: 'ok', title: 't', createdAt: 1, lastUsedAt: 2 },
         { id: 1 }, // garbage
         null,
       ],
@@ -400,7 +400,7 @@ describe('AcpSessionHistoryService — persistence', () => {
         {
           id: 'bad',
           agentId: 'a',
-          sessionIdOnAgent: 'x',
+          sessionIdOnAgent: 'bad',
           title: 't',
           createdAt: 1,
           lastUsedAt: 1,
@@ -409,7 +409,7 @@ describe('AcpSessionHistoryService — persistence', () => {
         {
           id: 'good',
           agentId: 'a',
-          sessionIdOnAgent: 'y',
+          sessionIdOnAgent: 'good',
           title: 't2',
           createdAt: 1,
           lastUsedAt: 2,

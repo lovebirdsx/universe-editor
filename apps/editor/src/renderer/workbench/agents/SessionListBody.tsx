@@ -1,18 +1,20 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionListBody — the pure list rendering reused by SessionListPanel (full
- *  sidebar view) and SessionsPopover (Copilot-style dropdown). A single click
- *  opens the session as an editor tab and activates / resumes it; the optional
- *  `onPick` callback fires afterwards so popovers can collapse themselves.
+ *  sidebar view) and SessionsPopover (Copilot-style dropdown). Click behavior
+ *  depends on the global chat location: editor mode opens (or focuses) a tab,
+ *  sidebar mode just flips the active session. The optional `onPick` callback
+ *  fires afterwards so popovers can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
-import { IEditorService, localize } from '@universe-editor/platform'
+import { IEditorService, IInstantiationService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/acpSessionHistory.js'
+import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import styles from './agents.module.css'
 
@@ -47,10 +49,13 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const editor = useService(IEditorService)
+  const inst = useService(IInstantiationService)
+  const location = useService(IAcpChatLocationService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
   const activeId = useObservable(service.activeSessionId)
+  const currentLocation = useObservable(location.location)
 
   if (entries.length === 0) {
     if (hideEmptyState) return null
@@ -60,7 +65,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   return (
     <ul>
       {entries.map((entry) => {
-        const running = service.getByHistoryId(entry.id)
+        const running = service.getById(entry.id)
         const isActive = running !== undefined && running.id === activeId
         return (
           <li
@@ -69,15 +74,23 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
             data-active={isActive ? 'true' : 'false'}
             data-running={running !== undefined ? 'true' : 'false'}
             onClick={() => {
-              editor.openEditor(
-                new AcpSessionEditorInput(running?.id ?? entry.id, entry.agentId, entry.id),
-              )
-              if (running) {
-                service.setActive(running.id)
+              if (currentLocation === 'editor') {
+                // Editor mode: open (or focus) the tab. The editor's useEffect
+                // takes care of resuming if the session isn't live yet — we
+                // don't fire resumeSession here to avoid double-invoking it.
+                editor.openEditor(
+                  inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId),
+                )
+                if (running) service.setActive(running.id)
               } else {
-                service.resumeSession(entry.id).catch(() => {
-                  // resumeSession publishes its own notification.
-                })
+                // Sidebar mode: just flip activeSession. No tab is opened.
+                if (running) {
+                  service.setActive(running.id)
+                } else {
+                  service.resumeSession(entry.id).catch(() => {
+                    // resumeSession publishes its own notification.
+                  })
+                }
               }
               onPick?.(entry)
             }}

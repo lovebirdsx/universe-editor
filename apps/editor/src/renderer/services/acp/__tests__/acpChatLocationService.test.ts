@@ -11,9 +11,11 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   ContextKeyService,
   Event,
+  InstantiationService,
   LogLevel,
   NoopTelemetryService,
   NullLogger,
+  ServiceCollection,
   StorageScope,
   observableValue,
   type EditorInput,
@@ -21,6 +23,7 @@ import {
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorService,
+  type IInstantiationService,
   type ILogger,
   type ILoggerService,
   type IObservable,
@@ -28,7 +31,16 @@ import {
 } from '@universe-editor/platform'
 import { AcpChatLocationService } from '../acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../acpSessionEditorInput.js'
-import type { IAcpSession, IAcpSessionService } from '../acpSessionService.js'
+import {
+  IAcpSessionService,
+  type IAcpSession,
+  type IAcpSessionService as IAcpSessionServiceType,
+} from '../acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+  type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
+} from '../acpSessionHistory.js'
 
 class FakeStorage implements IStorageService {
   declare readonly _serviceBrand: undefined
@@ -96,14 +108,17 @@ class FakeSessionService {
   setActiveSession(s: IAcpSession | undefined): void {
     this.activeSessionObs.set(s, undefined)
   }
+  getById(id: string): IAcpSession | undefined {
+    const active = this.activeSessionObs.get()
+    return active && active.id === id ? active : undefined
+  }
 }
 
-function makeSession(id: string, agentId: string, historyId?: string): IAcpSession {
+function makeSession(id: string, agentId: string): IAcpSession {
   return {
     id,
     agentId,
     title: 'Test',
-    historyId,
   } as unknown as IAcpSession
 }
 
@@ -114,6 +129,7 @@ interface Harness {
   editor: FakeEditorService
   groups: FakeEditorGroupsService
   sessions: FakeSessionService
+  inst: IInstantiationService
 }
 
 function makeHarness(storage: FakeStorage = new FakeStorage()): Harness {
@@ -121,16 +137,28 @@ function makeHarness(storage: FakeStorage = new FakeStorage()): Harness {
   const editor = new FakeEditorService()
   const groups = new FakeEditorGroupsService()
   const sessions = new FakeSessionService()
+  const history = {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', []),
+    get: () => undefined,
+    list: () => [],
+    async initialize() {},
+  } as unknown as IAcpSessionHistoryServiceType
+  const services = new ServiceCollection()
+  services.set(IAcpSessionService, sessions as unknown as IAcpSessionServiceType)
+  services.set(IAcpSessionHistoryService, history)
+  const inst = new InstantiationService(services)
   const svc = new AcpChatLocationService(
     storage,
     ctx as unknown as IContextKeyService,
     editor as unknown as IEditorService,
     groups as unknown as IEditorGroupsService,
-    sessions as unknown as IAcpSessionService,
+    sessions as unknown as IAcpSessionServiceType,
     new NoopTelemetryService(),
     new StubLoggerService(),
+    inst,
   )
-  return { svc, storage, ctx, editor, groups, sessions }
+  return { svc, storage, ctx, editor, groups, sessions, inst }
 }
 
 /** Drain the 100ms debounce + the async set() microtask. */
@@ -219,8 +247,8 @@ describe('AcpChatLocationService — side effects', () => {
     const h = makeHarness()
     await h.svc.initialize()
     const fileInput = { id: 'file:foo' } as unknown as EditorInput
-    const acpA = new AcpSessionEditorInput('s1', 'fake', 'h1')
-    const acpB = new AcpSessionEditorInput('s2', 'fake', 'h2')
+    const acpA = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake')
+    const acpB = h.inst.createInstance(AcpSessionEditorInput, 's2', 'fake')
     h.groups.groupList[0]!.editors.push(fileInput, acpA)
     // Second group with another ACP tab.
     const g2 = new FakeGroup()
@@ -241,13 +269,12 @@ describe('AcpChatLocationService — side effects', () => {
     // Start in sidebar so the next flip triggers the editor side effect.
     h.svc.setLocation('sidebar')
     expect(h.editor.opened).toHaveLength(0)
-    h.sessions.setActiveSession(makeSession('s1', 'fake', 'h1'))
+    h.sessions.setActiveSession(makeSession('s1', 'fake'))
     h.svc.setLocation('editor')
     expect(h.editor.opened).toHaveLength(1)
     const opened = h.editor.opened[0] as AcpSessionEditorInput
     expect(opened.sessionId).toBe('s1')
     expect(opened.agentId).toBe('fake')
-    expect(opened.historyId).toBe('h1')
     h.svc.dispose()
   })
 
@@ -266,7 +293,7 @@ describe('AcpChatLocationService — side effects', () => {
     expect(h.svc.isMigrating).toBe(false)
 
     // Push an ACP tab whose closeEditor we instrument to observe isMigrating mid-flight.
-    const acp = new AcpSessionEditorInput('s1', 'fake', 'h1')
+    const acp = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake')
     const seen: boolean[] = []
     const group = h.groups.groupList[0]!
     group.editors.push(acp)

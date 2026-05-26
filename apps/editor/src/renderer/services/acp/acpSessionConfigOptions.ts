@@ -20,10 +20,9 @@ import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 
 export interface ConfigOptionSessionInfo {
-  readonly localId: string
+  /** The session's canonical id (agent-issued — equals `sessionIdOnAgent`). */
+  readonly sessionId: string
   readonly agentId: string
-  readonly sessionIdOnAgent: string
-  readonly historyId?: string
 }
 
 export interface ConfigOptionStateMachineDeps {
@@ -47,7 +46,7 @@ export class ConfigOptionStateMachine {
 
   constructor(private readonly _deps: ConfigOptionStateMachineDeps) {
     this.configOptions = observableValue<readonly SessionConfigOption[]>(
-      `acp.session.configOptions.${_deps.sessionInfo.localId}`,
+      `acp.session.configOptions.${_deps.sessionInfo.sessionId}`,
       [],
     )
   }
@@ -75,7 +74,7 @@ export class ConfigOptionStateMachine {
 
   async setConfigOption(configId: string, value: string): Promise<void> {
     const params: SetSessionConfigOptionRequest = {
-      sessionId: this._deps.sessionInfo.sessionIdOnAgent,
+      sessionId: this._deps.sessionInfo.sessionId,
       configId,
       value,
     }
@@ -85,12 +84,10 @@ export class ConfigOptionStateMachine {
       if (resp.configOptions) {
         this.configOptions.set(resp.configOptions, undefined)
       }
-      const { historyId, agentId, localId } = this._deps.sessionInfo
-      if (this._deps.history && historyId) {
-        this._deps.history.setHistoryConfigOption(historyId, configId, value)
-      }
+      const { sessionId, agentId } = this._deps.sessionInfo
+      this._deps.history?.setHistoryConfigOption(sessionId, configId, value)
       this._deps.defaults?.setDefault(agentId, configId, value)
-      this._deps.telemetry.publicLog('acp.config_option_set', { sessionId: localId, configId })
+      this._deps.telemetry.publicLog('acp.config_option_set', { sessionId, configId })
     } finally {
       this._pendingPushes.delete(configId)
     }

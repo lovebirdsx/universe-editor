@@ -37,7 +37,7 @@ import type { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpSession } from './acpSession.js'
 
-export const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionHistoryId'
+export const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionId'
 
 /** Page cap for the hydrate sweep — 5 pages × default page size keeps cold-start latency bounded even on big histories. */
 const HYDRATE_MAX_PAGES = 5
@@ -45,8 +45,8 @@ const HYDRATE_MAX_PAGES = 5
 const HYDRATE_TIMEOUT_MS = 10_000
 
 export interface RestoreCoordinatorCallbacks {
-  /** Resume a session by historyId — facade's `resumeSession`. */
-  resumeSession(historyId: string): Promise<IAcpSession>
+  /** Resume a session by its (agent-issued) sessionId — facade's `resumeSession`. */
+  resumeSession(sessionId: string): Promise<IAcpSession>
   /** True if a session is currently active — facade's `activeSessionId.get() !== undefined`. */
   hasActiveSession(): boolean
   /** Current workspace cwd, used for hydrate scoping. */
@@ -60,27 +60,26 @@ export interface RestoreCoordinatorCallbacks {
    */
   whenWorkspaceReady(): Promise<void>
   /**
-   * Snapshot of currently-live session historyIds. Used by the
-   * user-initiated refresh path to protect live sessions from being pruned
-   * when an agent's `session/list` response does not yet include them
-   * (e.g. a session that was just created and hasn't been persisted on the
-   * agent side yet).
+   * Snapshot of currently-live session ids. Used by the user-initiated
+   * refresh path to protect live sessions from being pruned when an agent's
+   * `session/list` response does not yet include them (e.g. a session that
+   * was just created and hasn't been persisted on the agent side yet).
    */
-  getLiveHistoryIds(): ReadonlySet<string>
+  getLiveSessionIds(): ReadonlySet<string>
 }
 
 export class AcpSessionRestoreCoordinator extends Disposable {
   /**
-   * Workspace-persisted historyId of the previously-active session, captured on
-   * startup and consumed by `tryRestoreActiveSession()` once. Cleared after the
-   * first successful (or attempted) restore so the autorun-driven persistence
-   * loop doesn't keep re-firing the lazy resume.
+   * Workspace-persisted sessionId of the previously-active session, captured
+   * on startup and consumed by `tryRestoreActiveSession()` once. Cleared
+   * after the first successful (or attempted) restore so the autorun-driven
+   * persistence loop doesn't keep re-firing the lazy resume.
    */
-  private _pendingRestoreHistoryId: string | undefined
+  private _pendingRestoreSessionId: string | undefined
   /**
-   * Resolves once `_loadPendingRestore()` has hydrated `_pendingRestoreHistoryId`.
+   * Resolves once `_loadPendingRestore()` has hydrated `_pendingRestoreSessionId`.
    * Mutable so we can re-run the restore after a workspace swap pulls in a
-   * different `acp.activeSessionHistoryId` from the new bucket.
+   * different `acp.activeSessionId` from the new bucket.
    */
   private _loadPendingRestorePromise: Promise<void> = Promise.resolve()
 
@@ -143,7 +142,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
    * `_hydrateGen`.
    */
   async onWorkspaceSwap(): Promise<void> {
-    this._pendingRestoreHistoryId = undefined
+    this._pendingRestoreSessionId = undefined
     this._hydratedForCwd = undefined
     this._hydrateInFlight = undefined
     this._hydrateGen++
@@ -202,11 +201,11 @@ export class AcpSessionRestoreCoordinator extends Disposable {
 
   async tryRestoreActiveSession(): Promise<void> {
     await this._loadPendingRestorePromise
-    if (this._pendingRestoreHistoryId === undefined) return
+    if (this._pendingRestoreSessionId === undefined) return
     if (this._callbacks.hasActiveSession()) {
       // User already created/switched a session — drop the pending restore so
       // the autorun-driven persist stays in sync with the live active session.
-      this._pendingRestoreHistoryId = undefined
+      this._pendingRestoreSessionId = undefined
       return
     }
     // History is loaded fire-and-forget at bootstrap; wait for it before
@@ -218,17 +217,17 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     }
     // Claim the pending id before awaiting resume so concurrent triggers
     // (e.g. autorun firing twice for visibility + active container) restore once.
-    const historyId = this._pendingRestoreHistoryId
-    this._pendingRestoreHistoryId = undefined
+    const sessionId = this._pendingRestoreSessionId
+    this._pendingRestoreSessionId = undefined
     try {
-      await this._callbacks.resumeSession(historyId)
+      await this._callbacks.resumeSession(sessionId)
     } catch (err) {
       this._logger.warn(`tryRestoreActiveSession failed: ${(err as Error).message}`)
     }
   }
 
-  async deleteOnAgent(historyId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
-    const entry = this._history.get(historyId)
+  async deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
+    const entry = this._history.get(sessionId)
     if (!entry) return 'unknown'
     const caps = this._agentCaps.get(entry.agentId)
     if (caps?.sessionCapabilities?.delete == null) return 'unsupported'
@@ -264,12 +263,12 @@ export class AcpSessionRestoreCoordinator extends Disposable {
 
   private async _loadPendingRestore(): Promise<void> {
     try {
-      const historyId = await this._storage.get<string>(
+      const sessionId = await this._storage.get<string>(
         ACP_ACTIVE_SESSION_STORAGE_KEY,
         StorageScope.WORKSPACE,
       )
-      if (typeof historyId === 'string' && historyId.length > 0) {
-        this._pendingRestoreHistoryId = historyId
+      if (typeof sessionId === 'string' && sessionId.length > 0) {
+        this._pendingRestoreSessionId = sessionId
       }
     } catch (err) {
       this._logger.warn(`failed to read pending restore: ${(err as Error).message}`)
@@ -353,7 +352,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
           agentId,
           collected,
           cwd,
-          this._callbacks.getLiveHistoryIds(),
+          this._callbacks.getLiveSessionIds(),
         )
       } else if (collected.length > 0) {
         this._history.bulkMergeFromAgent(agentId, collected, cwd)

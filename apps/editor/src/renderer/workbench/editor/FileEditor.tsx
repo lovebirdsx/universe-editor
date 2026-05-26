@@ -193,7 +193,16 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
     }
-  }, [monacoNs, commandService, userKeybindingsSvc, configService, contextKeyService])
+  }, [
+    monacoNs,
+    commandService,
+    userKeybindingsSvc,
+    configService,
+    contextKeyService,
+    group,
+    groupsService.activeGroup,
+    fileInput,
+  ])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {

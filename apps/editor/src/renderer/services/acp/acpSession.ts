@@ -86,14 +86,14 @@ export interface IAcpSessionInitState {
 }
 
 export interface IAcpSession {
+  /**
+   * The session's canonical id is the agent-issued `sessionId` from
+   * `session/new` (a.k.a. `sessionIdOnAgent`). It is durable across editor
+   * restarts and is the single key used by every other ACP service.
+   */
   readonly id: string
   readonly agentId: string
   readonly title: string
-  /**
-   * Stable identifier from AcpSessionHistoryService — survives editor restarts.
-   * Sessions created or resumed through AcpSessionService always carry one.
-   */
-  readonly historyId: string | undefined
   readonly messages: IObservable<readonly AcpMessage[]>
   readonly toolCalls: IObservable<readonly AcpToolCall[]>
   readonly plan: IObservable<readonly AcpPlanEntry[]>
@@ -159,10 +159,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     readonly agentId: string,
     readonly title: string,
     private readonly _conn: IAcpClientConnection,
-    private readonly _sessionIdOnAgent: string,
     private readonly _telemetry: ITelemetryService,
     initState?: IAcpSessionInitState,
-    private readonly _historyId?: string,
     private readonly _history?: IAcpSessionHistoryService,
     private readonly _agentDefaults?: IAcpAgentDefaultsService,
   ) {
@@ -182,12 +180,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._configOptions = new ConfigOptionStateMachine({
       conn: _conn,
       telemetry: _telemetry,
-      sessionInfo: {
-        localId: id,
-        agentId,
-        sessionIdOnAgent: _sessionIdOnAgent,
-        ...(_historyId !== undefined ? { historyId: _historyId } : {}),
-      },
+      sessionInfo: { sessionId: id, agentId },
       ...(_history !== undefined ? { history: _history } : {}),
       ...(_agentDefaults !== undefined ? { defaults: _agentDefaults } : {}),
     })
@@ -223,11 +216,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
   }
 
-  /** History id this session was minted with — undefined for sessions created without persistence. */
-  get historyId(): string | undefined {
-    return this._historyId
-  }
-
   presentPermission(p: AcpPendingPermission): void {
     // Replace any prior pending request — only one card at a time per session.
     this._cancelPending()
@@ -244,15 +232,13 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   async sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void> {
     // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
-    // Safe no-op when this session wasn't created with a history id.
-    if (this._history && this._historyId) {
-      this._history.touch(this._historyId)
-    }
+    // Safe no-op when this session wasn't created with a history reference.
+    this._history?.touch(this.id)
     this._appendMessage('user', text)
     this.status.set('running', undefined)
     const prompt = composePromptBlocks(text, mentions ?? [])
     const params: PromptRequest = {
-      sessionId: this._sessionIdOnAgent,
+      sessionId: this.id,
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
       prompt: prompt.length > 0 ? [...prompt] : [{ type: 'text', text }],
@@ -290,7 +276,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   async cancelTurn(): Promise<void> {
     try {
-      await this._conn.conn.cancel({ sessionId: this._sessionIdOnAgent })
+      await this._conn.conn.cancel({ sessionId: this.id })
     } catch {
       // swallow — cancel is best-effort
     }
@@ -379,7 +365,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       case 'session_info_update': {
         // Push title / updatedAt into the durable history entry so the sidebar
         // reflects renames and activity without waiting for the next hydrate.
-        if (this._history && this._historyId) {
+        if (this._history) {
           const patch: { title?: string; updatedAt?: number } = {}
           if (typeof update.title === 'string' && update.title.length > 0) {
             patch.title = update.title
@@ -389,7 +375,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             if (Number.isFinite(ts)) patch.updatedAt = ts
           }
           if (Object.keys(patch).length > 0) {
-            this._history.updateInfo(this._historyId, patch)
+            this._history.updateInfo(this.id, patch)
           }
         }
         break

@@ -32,10 +32,15 @@ import {
 import { PersistedStateBase } from './persistedStateBase.js'
 
 export interface AcpSessionHistoryEntry {
-  /** Local UUID-ish id — distinct from `sessionIdOnAgent`. */
+  /**
+   * The agent-issued session id from `session/new` — durable across editor
+   * restarts. Identical to `sessionIdOnAgent`; kept as `id` for ergonomics on
+   * the lookup/index side. The duplicate `sessionIdOnAgent` field is retained
+   * so callers can still talk in protocol terms without grepping the schema.
+   */
   readonly id: string
   readonly agentId: string
-  /** The id the agent assigned at `session/new` time; replayed via `session/load`. */
+  /** Equal to `id`. Kept for protocol-side clarity and bulk-merge keying. */
   readonly sessionIdOnAgent: string
   readonly title: string
   /** Workspace cwd at creation time. Optional because users may run agent-only. */
@@ -72,7 +77,7 @@ export interface IAcpSessionHistoryService {
    * unknown. Used by `AcpSession.setConfigOption` to mirror user-driven
    * selections so they survive editor restart.
    */
-  setHistoryConfigOption(historyId: string, configId: string, value: string): void
+  setHistoryConfigOption(sessionId: string, configId: string, value: string): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -117,7 +122,7 @@ export interface IAcpSessionHistoryService {
    * Patch metadata for one entry from a `session_info_update` notification.
    * No-op if id is unknown.
    */
-  updateInfo(historyId: string, patch: { title?: string; updatedAt?: number }): void
+  updateInfo(sessionId: string, patch: { title?: string; updatedAt?: number }): void
 }
 
 /** Shape we accept from the protocol's `SessionInfo` — kept structural to avoid leaking SDK types into the history interface. */
@@ -154,8 +159,6 @@ export class AcpSessionHistoryService
 
   readonly entries: ISettableObservable<readonly AcpSessionHistoryEntry[]>
 
-  private _seq = 0
-
   private readonly _platform: HostPlatform
 
   constructor(
@@ -187,13 +190,13 @@ export class AcpSessionHistoryService
     entry: Omit<AcpSessionHistoryEntry, 'id' | 'createdAt' | 'lastUsedAt'>,
   ): AcpSessionHistoryEntry {
     const now = Date.now()
-    // Same (agentId, sessionIdOnAgent) tuple replaces the prior local row —
-    // restarting the editor and creating a new session against the same agent
-    // session id should not produce duplicates.
+    // The canonical id is the agent-issued sessionId. Re-adding the same
+    // (agentId, sessionIdOnAgent) tuple updates the existing row in-place
+    // rather than producing a duplicate.
+    const id = entry.sessionIdOnAgent
     const existingIdx = this._state.findIndex(
       (e) => e.agentId === entry.agentId && e.sessionIdOnAgent === entry.sessionIdOnAgent,
     )
-    const id = existingIdx >= 0 ? this._state[existingIdx]!.id : this._mintId()
     const createdAt = existingIdx >= 0 ? this._state[existingIdx]!.createdAt : now
     // Preserve any prior configOptions cache if the caller didn't supply one —
     // re-adding the same session shouldn't blow away saved MODEL/MODE state.
@@ -247,8 +250,8 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
-  setHistoryConfigOption(historyId: string, configId: string, value: string): void {
-    const idx = this._state.findIndex((e) => e.id === historyId)
+  setHistoryConfigOption(sessionId: string, configId: string, value: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
     if (idx === -1) return
     const cur = this._state[idx]!
     const prevOpts = cur.configOptions ?? {}
@@ -331,7 +334,7 @@ export class AcpSessionHistoryService
       } else {
         const created = protocolTs ?? now
         const next: AcpSessionHistoryEntry = {
-          id: this._mintId(),
+          id: info.sessionId,
           agentId,
           sessionIdOnAgent: info.sessionId,
           title,
@@ -364,8 +367,8 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
-  updateInfo(historyId: string, patch: { title?: string; updatedAt?: number }): void {
-    const idx = this._state.findIndex((e) => e.id === historyId)
+  updateInfo(sessionId: string, patch: { title?: string; updatedAt?: number }): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
     if (idx === -1) return
     const cur = this._state[idx]!
     const nextTitle = patch.title !== undefined && patch.title.length > 0 ? patch.title : cur.title
@@ -399,12 +402,11 @@ export class AcpSessionHistoryService
     if (typeof raw !== 'object' || raw === null) return undefined
     const o = raw as PersistedShape
     if (!Array.isArray(o.entries)) return undefined
-    const migrated = migrate(o.schemaVersion, o.entries)
-    if (!migrated) {
+    if (o.schemaVersion !== SCHEMA_VERSION) {
       this._logger.warn(`ignoring acp.sessionHistory with schemaVersion=${o.schemaVersion}`)
       return undefined
     }
-    return migrated.filter(isValidEntry)
+    return o.entries.filter(isValidEntry)
   }
 
   protected override _mergeOnLoad(
@@ -420,11 +422,6 @@ export class AcpSessionHistoryService
     }
     merged.sort((a, b) => b.lastUsedAt - a.lastUsedAt)
     if (merged.length > MAX_ENTRIES) merged.length = MAX_ENTRIES
-    // Bump _seq so newly-minted ids don't collide with anything we just loaded.
-    for (const e of merged) {
-      const n = parseLocalSeq(e.id)
-      if (n !== undefined && n > this._seq) this._seq = n
-    }
     return merged
   }
 
@@ -442,11 +439,6 @@ export class AcpSessionHistoryService
 
   private _publish(): void {
     this.entries.set(this._state, undefined)
-  }
-
-  private _mintId(): string {
-    this._seq++
-    return `h${this._seq}-${Date.now().toString(36)}`
   }
 }
 
@@ -471,23 +463,6 @@ function isStringRecord(v: unknown): v is Readonly<Record<string, string>> {
     if (typeof val !== 'string') return false
   }
   return true
-}
-
-/**
- * Promote persisted entries to the current schema. Returns `undefined` on
- * unknown/future versions so the caller can fail closed.
- */
-function migrate(version: unknown, entries: readonly unknown[]): readonly unknown[] | undefined {
-  if (version === SCHEMA_VERSION) return entries
-  return undefined
-}
-
-function parseLocalSeq(id: string): number | undefined {
-  // ids minted here are `h<n>-<base36>` — extract the n part.
-  const m = /^h(\d+)-/.exec(id)
-  if (!m) return undefined
-  const n = Number(m[1])
-  return Number.isFinite(n) ? n : undefined
 }
 
 function parseIsoTimestamp(value: string | null | undefined): number | undefined {

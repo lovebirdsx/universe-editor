@@ -114,8 +114,8 @@ export class AgentsEditorProviderContribution extends Disposable implements IWor
       EditorRegistry.registerEditorProvider({
         typeId: AcpSessionEditorInput.TYPE_ID,
         componentKey: 'agents.session',
-        deserialize: (data) =>
-          typeof data === 'string' ? AcpSessionEditorInput.deserialize(data) : null,
+        deserialize: (data, accessor) =>
+          typeof data === 'string' ? AcpSessionEditorInput.deserialize(data, accessor) : null,
       }),
     )
   }
@@ -234,9 +234,7 @@ export class AgentsSessionEditorLifecycleContribution
           g.editors.some((ed) => ed instanceof AcpSessionEditorInput && ed.id === closed.id),
         )
         if (stillOpen) return
-        const session =
-          (closed.historyId ? this._sessions.getByHistoryId(closed.historyId) : undefined) ??
-          this._sessions.getById(closed.sessionId)
+        const session = this._sessions.getById(closed.sessionId)
         if (!session) return
         void this._sessions.closeSession(session.id)
       }),

@@ -82,25 +82,20 @@ export interface IAcpSessionService {
   readonly activeSession: IObservable<IAcpSession | undefined>
   createSession(agentId?: string): Promise<IAcpSession>
   /**
-   * Resume a previously-persisted session by its local history id.
+   * Resume a previously-persisted session by its (agent-issued) sessionId.
    * Spawns a fresh agent process, validates `agentCapabilities.loadSession`,
    * replays the conversation via `session/load`, and registers the session
    * before issuing the load so streaming `session/update` notifications during
-   * replay are routed correctly.
+   * replay are routed correctly. Concurrent calls for the same sessionId
+   * dedupe onto a single in-flight promise.
    */
-  resumeSession(historyId: string): Promise<IAcpSession>
+  resumeSession(sessionId: string): Promise<IAcpSession>
   setActive(sessionId: string): void
   closeSession(sessionId: string): Promise<void>
   getById(sessionId: string): IAcpSession | undefined
   /**
-   * Look up a live session by its history id (the durable id from
-   * AcpSessionHistoryService). Returns undefined if no live session matches —
-   * the caller (e.g. AcpSessionEditor) can then issue `resumeSession(historyId)`.
-   */
-  getByHistoryId(historyId: string): IAcpSession | undefined
-  /**
-   * If a previously-active session's historyId was persisted (workspace scope),
-   * resume it. No-op when no pending restore exists, when a session is already
+   * If a previously-active session id was persisted (workspace scope), resume
+   * it. No-op when no pending restore exists, when a session is already
    * active, or when the history entry has been removed. Idempotent — the pending
    * id is claimed on first call so concurrent invocations resume at most once.
    */
@@ -126,7 +121,7 @@ export interface IAcpSessionService {
    * history entry for the id, `'ok'` if the call succeeded, `'error'` for any
    * RPC / spawn failure (caller is expected to still remove the local row).
    */
-  deleteOnAgent(historyId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'>
+  deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'>
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -146,11 +141,16 @@ export class AcpSessionService
   private readonly _onDidCreate = this._register(new Emitter<IAcpSession>())
   readonly onDidCreate = this._onDidCreate.event
 
-  private readonly _byAgentSessionId = new Map<string, AcpSession>()
   private _sessions: AcpSession[] = []
-  private _seq = 0
   private readonly _logger: ILogger
   private readonly _coordinator: AcpSessionRestoreCoordinator
+
+  /**
+   * In-flight `resumeSession` promises keyed by sessionId. Concurrent callers
+   * (e.g. AcpSessionEditor's useEffect + a click handler) dedupe onto the
+   * same promise so we never spawn two agent subprocesses for one session.
+   */
+  private readonly _resumingBySessionId = new Map<string, Promise<IAcpSession>>()
 
   /** While true, the activeSessionId autorun skips writing to storage. */
   private _suspendActivePersist = false
@@ -192,15 +192,13 @@ export class AcpSessionService
         loggerService,
         hostService.platform,
         {
-          resumeSession: (historyId) => this.resumeSession(historyId),
+          resumeSession: (sessionId) => this.resumeSession(sessionId),
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
           getCurrentCwd: () => this._workspace.current?.folder.fsPath,
           whenWorkspaceReady: () => this._workspace.whenReady,
-          getLiveHistoryIds: () => {
+          getLiveSessionIds: () => {
             const ids = new Set<string>()
-            for (const s of this._sessions) {
-              if (s.historyId) ids.add(s.historyId)
-            }
+            for (const s of this._sessions) ids.add(s.id)
             return ids
           },
         },
@@ -208,15 +206,15 @@ export class AcpSessionService
     )
     this._coordinator.start()
 
-    // Persist the active session's historyId so we can restore it on the next
-    // editor launch. Mirrors OutputService's "restore last active" pattern.
+    // Persist the active session's id so we can restore it on the next editor
+    // launch. The id is the agent-issued sessionId — durable across restarts.
     this._register(
       autorun((r) => {
         const session = this.activeSession.read(r)
         if (this._suspendActivePersist) return
-        const historyId = session?.historyId
-        if (historyId) {
-          void this._storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, historyId, StorageScope.WORKSPACE)
+        const sessionId = session?.id
+        if (sessionId) {
+          void this._storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, sessionId, StorageScope.WORKSPACE)
         } else {
           void this._storage.remove(ACP_ACTIVE_SESSION_STORAGE_KEY, StorageScope.WORKSPACE)
         }
@@ -246,7 +244,7 @@ export class AcpSessionService
       this.activeSessionId.set(undefined, tx)
       this.activeSession.set(undefined, tx)
     })
-    this._byAgentSessionId.clear()
+    this._resumingBySessionId.clear()
     for (const session of oldSessions) {
       void session.close().catch((err) => {
         this._logger.warn(`close on workspace swap failed: ${(err as Error).message}`)
@@ -307,37 +305,33 @@ export class AcpSessionService
             'ACP session/new',
           )
           conn.attachSession(result.sessionId)
-          const localId = `s${++this._seq}`
-          const title = `${agentName} · ${localId}`
+          const title = `${agentName} · ${result.sessionId}`
           const initState: IAcpSessionInitState = result.configOptions
             ? { configOptions: result.configOptions }
             : {}
           // Record the session in persistent history BEFORE constructing AcpSession
-          // so the session has its historyId from the first sendPrompt onwards. The
-          // history.add call returns synchronously; the storage write is debounced.
-          const histEntry = this._history.add({
+          // so the session has its history entry from the first sendPrompt onwards.
+          // history.add returns synchronously; the storage write is debounced.
+          this._history.add({
             agentId: resolvedAgentId,
             sessionIdOnAgent: result.sessionId,
             title,
             ...(cwd !== undefined ? { cwd } : {}),
           })
           const session = new AcpSession(
-            localId,
+            result.sessionId,
             resolvedAgentId,
             title,
             conn,
-            result.sessionId,
             this._telemetry,
             initState,
-            histEntry.id,
             this._history,
             this._agentDefaults,
           )
-          this._byAgentSessionId.set(result.sessionId, session)
           transaction((tx) => {
             this._sessions = [...this._sessions, session]
             this.sessions.set(this._sessions, tx)
-            this.activeSessionId.set(localId, tx)
+            this.activeSessionId.set(session.id, tx)
             this.activeSession.set(session, tx)
           })
           this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
@@ -371,17 +365,30 @@ export class AcpSessionService
     this.activeSession.set(s, undefined)
   }
 
-  async resumeSession(historyId: string): Promise<IAcpSession> {
-    const entry = this._history.get(historyId)
-    if (!entry) {
-      throw new Error(`Unknown agent session history id: ${historyId}`)
-    }
-    // If a live session backed by the same sessionIdOnAgent is already open,
-    // surface it instead of spawning a duplicate agent process.
-    const existing = this._byAgentSessionId.get(entry.sessionIdOnAgent)
+  async resumeSession(sessionId: string): Promise<IAcpSession> {
+    // Concurrent callers (e.g. AcpSessionEditor's useEffect + a sidebar click
+    // landing in the same frame) must dedupe — otherwise both race past the
+    // existing-session check and we spawn two agent subprocesses, the second
+    // of which overwrites the first in _sessions and corrupts the routing
+    // map. The in-flight promise is settled before being removed.
+    const inflight = this._resumingBySessionId.get(sessionId)
+    if (inflight) return inflight
+    const existing = this._sessions.find((s) => s.id === sessionId)
     if (existing && existing.status.get() !== 'closed') {
       this.setActive(existing.id)
       return existing
+    }
+    const promise = this._resumeSessionInner(sessionId).finally(() => {
+      this._resumingBySessionId.delete(sessionId)
+    })
+    this._resumingBySessionId.set(sessionId, promise)
+    return promise
+  }
+
+  private async _resumeSessionInner(sessionId: string): Promise<IAcpSession> {
+    const entry = this._history.get(sessionId)
+    if (!entry) {
+      throw new Error(`Unknown agent session id: ${sessionId}`)
     }
     const cwd = entry.cwd
     const conn = await this._client.connect(entry.agentId, {
@@ -397,28 +404,25 @@ export class AcpSessionService
       if (initResult.agentCapabilities?.loadSession !== true) {
         throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
       }
-      const localId = `s${++this._seq}`
-      const title = `${this._registry.get(entry.agentId).name} · ${localId}`
+      const title = `${this._registry.get(entry.agentId).name} · ${entry.title}`
       // Construct the AcpSession BEFORE session/load so any session/update
-      // notifications the agent emits during replay route through this._byAgentSessionId.
+      // notifications the agent emits during replay route to the right
+      // session via this._sessions lookup.
       session = new AcpSession(
-        localId,
+        entry.sessionIdOnAgent,
         entry.agentId,
         title,
         conn,
-        entry.sessionIdOnAgent,
         this._telemetry,
         undefined,
-        historyId,
         this._history,
         this._agentDefaults,
       )
-      this._byAgentSessionId.set(entry.sessionIdOnAgent, session)
       const captured = session
       transaction((tx) => {
         this._sessions = [...this._sessions, captured]
         this.sessions.set(this._sessions, tx)
-        this.activeSessionId.set(localId, tx)
+        this.activeSessionId.set(captured.id, tx)
         this.activeSession.set(captured, tx)
       })
       registered = true
@@ -455,7 +459,6 @@ export class AcpSessionService
         // Rollback: drop the partial session before bubbling the error.
         this._sessions = this._sessions.filter((x) => x !== captured)
         this.sessions.set(this._sessions, undefined)
-        this._byAgentSessionId.delete(entry.sessionIdOnAgent)
         if (this.activeSession.get() === captured) {
           const next = this._sessions[0]
           this.activeSessionId.set(next?.id, undefined)
@@ -486,12 +489,6 @@ export class AcpSessionService
     await session.close()
     this._sessions = this._sessions.filter((x) => x.id !== sessionId)
     this.sessions.set(this._sessions, undefined)
-    for (const [k, v] of this._byAgentSessionId) {
-      if (v === session) {
-        this._byAgentSessionId.delete(k)
-        break
-      }
-    }
     if (this.activeSessionId.get() === sessionId) {
       const next = this._sessions[0]
       this.activeSessionId.set(next?.id, undefined)
@@ -504,12 +501,8 @@ export class AcpSessionService
     return this._sessions.find((x) => x.id === sessionId)
   }
 
-  getByHistoryId(historyId: string): IAcpSession | undefined {
-    return this._sessions.find((x) => x.historyId === historyId)
-  }
-
-  deleteOnAgent(historyId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
-    return this._coordinator.deleteOnAgent(historyId)
+  deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
+    return this._coordinator.deleteOnAgent(sessionId)
   }
 
   /**
@@ -554,7 +547,7 @@ export class AcpSessionService
   // -- IAcpClientNotificationSink ---------------------------------------
 
   onSessionUpdate(params: SessionNotification): void {
-    const session = this._byAgentSessionId.get(params.sessionId)
+    const session = this._sessions.find((s) => s.id === params.sessionId)
     if (!session) return
     session.applyUpdate(params.update)
   }
@@ -567,7 +560,7 @@ export class AcpSessionService
       })
       return auto
     }
-    const session = this._byAgentSessionId.get(params.sessionId)
+    const session = this._sessions.find((s) => s.id === params.sessionId)
     if (!session) {
       this._logger.warn(`request_permission for unknown session ${params.sessionId}`)
       return { outcome: { outcome: 'cancelled' } }

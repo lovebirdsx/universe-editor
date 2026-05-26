@@ -357,7 +357,7 @@ interface BuildOptions {
    * their synchronous-ish behavior.
    */
   readonly whenWorkspaceReady?: Promise<void>
-  readonly getLiveHistoryIds?: () => ReadonlySet<string>
+  readonly getLiveSessionIds?: () => ReadonlySet<string>
 }
 
 interface BuildResult {
@@ -401,7 +401,7 @@ function build(opts: BuildOptions = {}): BuildResult {
     hasActiveSession: opts.hasActiveSession ?? (() => false),
     getCurrentCwd: () => opts.cwd,
     whenWorkspaceReady: () => whenWorkspaceReady,
-    getLiveHistoryIds: opts.getLiveHistoryIds ?? (() => new Set<string>()),
+    getLiveSessionIds: opts.getLiveSessionIds ?? (() => new Set<string>()),
   }
   const coordinator = new AcpSessionRestoreCoordinator(
     client,
@@ -705,7 +705,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       hasActiveSession: () => false,
       getCurrentCwd: () => currentCwd,
       whenWorkspaceReady: () => Promise.resolve(),
-      getLiveHistoryIds: () => new Set<string>(),
+      getLiveSessionIds: () => new Set<string>(),
     }
     coordinator = new AcpSessionRestoreCoordinator(
       client,

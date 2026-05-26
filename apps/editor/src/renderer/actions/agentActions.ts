@@ -7,6 +7,8 @@
 import {
   Action2,
   IDialogService,
+  IEditorService,
+  IInstantiationService,
   INotificationService,
   IQuickInputService,
   IViewsService,
@@ -22,6 +24,7 @@ import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { IAcpFocusService } from '../services/acp/acpFocusService.js'
+import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import type {
   SessionConfigOptionCategory,
   SessionConfigSelectGroup,
@@ -45,12 +48,20 @@ export class NewAgentSessionAction extends Action2 {
     const registry = accessor.get(IAcpAgentRegistry)
     const layout = accessor.get(ILayoutService)
     const views = accessor.get(IViewsService)
-    await sessions.createSession(registry.defaultAgentId())
-    // Make sure the Agents view is visible so the new session is reachable.
-    if (!layout.getVisible(PartId.SecondarySideBar)) {
-      layout.toggleVisible(PartId.SecondarySideBar)
+    const location = accessor.get(IAcpChatLocationService)
+    const editor = accessor.get(IEditorService)
+    const inst = accessor.get(IInstantiationService)
+    const session = await sessions.createSession(registry.defaultAgentId())
+    if (location.location.get() === 'editor') {
+      editor.openEditor(inst.createInstance(AcpSessionEditorInput, session.id, session.agentId))
+    } else {
+      // Sidebar mode: just make sure the Agents view is visible so the new
+      // session is reachable.
+      if (!layout.getVisible(PartId.SecondarySideBar)) {
+        layout.toggleVisible(PartId.SecondarySideBar)
+      }
+      views.openViewContainer('workbench.view.agents')
     }
-    views.openViewContainer('workbench.view.agents')
   }
 }
 
@@ -343,6 +354,9 @@ export class ResumeAgentSessionAction extends Action2 {
     const notification = accessor.get(INotificationService)
     const layout = accessor.get(ILayoutService)
     const views = accessor.get(IViewsService)
+    const location = accessor.get(IAcpChatLocationService)
+    const editor = accessor.get(IEditorService)
+    const inst = accessor.get(IInstantiationService)
 
     const entries = history.list()
     if (entries.length === 0) {
@@ -372,12 +386,15 @@ export class ResumeAgentSessionAction extends Action2 {
 
     try {
       const session = await sessions.resumeSession(picked.id)
-      // Reveal the Agents view + focus the resumed session.
-      sessions.setActive(session.id)
-      if (!layout.getVisible(PartId.SecondarySideBar)) {
-        layout.toggleVisible(PartId.SecondarySideBar)
+      if (location.location.get() === 'editor') {
+        editor.openEditor(inst.createInstance(AcpSessionEditorInput, session.id, session.agentId))
+      } else {
+        sessions.setActive(session.id)
+        if (!layout.getVisible(PartId.SecondarySideBar)) {
+          layout.toggleVisible(PartId.SecondarySideBar)
+        }
+        views.openViewContainer('workbench.view.agents')
       }
-      views.openViewContainer('workbench.view.agents')
     } catch {
       // resumeSession publishes its own notification; nothing to do.
     }

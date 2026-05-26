@@ -410,44 +410,44 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     svc?.dispose()
   })
 
-  it('exposes historyId on the IAcpSession returned by createSession', async () => {
+  it('uses sessionIdOnAgent as both AcpSession.id and the history entry id', async () => {
     const built = buildService()
     svc = built.svc
     await built.history.initialize()
     const session = await svc.createSession()
-    const historyId = built.history.list()[0]?.id
-    expect(historyId).toBeDefined()
-    expect(session.historyId).toBe(historyId)
+    const entryId = built.history.list()[0]?.id
+    expect(entryId).toBeDefined()
+    expect(session.id).toBe(entryId)
   })
 
-  it('getByHistoryId returns the live session with that history id', async () => {
+  it('getById returns the live session by its sessionId', async () => {
     const built = buildService()
     svc = built.svc
     await built.history.initialize()
     const a = await svc.createSession()
     await new Promise((r) => setTimeout(r, 5))
     const b = await svc.createSession()
-    expect(svc.getByHistoryId(a.historyId!)?.id).toBe(a.id)
-    expect(svc.getByHistoryId(b.historyId!)?.id).toBe(b.id)
+    expect(svc.getById(a.id)?.id).toBe(a.id)
+    expect(svc.getById(b.id)?.id).toBe(b.id)
   })
 
-  it('getByHistoryId returns undefined when no live session matches', async () => {
+  it('getById returns undefined when no live session matches', async () => {
     const built = buildService()
     svc = built.svc
     await built.history.initialize()
-    expect(svc.getByHistoryId('nope')).toBeUndefined()
+    expect(svc.getById('nope')).toBeUndefined()
   })
 
-  it('resumeSession yields a session whose historyId matches the resumed entry', async () => {
+  it('resumeSession yields a session whose id matches the resumed entry', async () => {
     const built = buildService({ loadSessionResult: {} })
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
-    const historyId = original.historyId!
+    const sessionId = original.id
     await svc.closeSession(original.id)
-    const resumed = await svc.resumeSession(historyId)
-    expect(resumed.historyId).toBe(historyId)
-    expect(svc.getByHistoryId(historyId)?.id).toBe(resumed.id)
+    const resumed = await svc.resumeSession(sessionId)
+    expect(resumed.id).toBe(sessionId)
+    expect(svc.getById(sessionId)?.id).toBe(resumed.id)
   })
 })
 
@@ -500,7 +500,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     const built = buildService()
     svc = built.svc
     await built.history.initialize()
-    await expect(svc.resumeSession('bogus')).rejects.toThrow(/Unknown agent session history id/)
+    await expect(svc.resumeSession('bogus')).rejects.toThrow(/Unknown agent session id/)
     expect(built.client.connected).toHaveLength(0)
   })
 
@@ -632,7 +632,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
   })
 })
 
-const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionHistoryId'
+const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionId'
 
 /** Drain history-service's 100ms write debounce + the async set() microtask. */
 async function flushHistoryWrite(): Promise<void> {
@@ -654,7 +654,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     // The persistence autorun runs synchronously after activeSession changes,
     // but FakeStorage.set is async — give it a microtask to land.
     await Promise.resolve()
-    expect(built.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(session.historyId)
+    expect(built.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(session.id)
   })
 
   it('clears workspace storage when the last session closes', async () => {
@@ -670,13 +670,13 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
   })
 
   it('resumes the persisted session on startup when none is active', async () => {
-    // Round 1: create a session, capture historyId + persisted entry.
+    // Round 1: create a session, capture sessionId + persisted entry.
     const round1 = buildService({ loadSessionResult: {} })
     await round1.history.initialize()
     const original = await round1.svc.createSession()
-    const historyId = original.historyId!
+    const sessionId = original.id
     await Promise.resolve()
-    expect(round1.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(historyId)
+    expect(round1.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(sessionId)
     await flushHistoryWrite()
     round1.svc.dispose()
 
@@ -716,7 +716,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
     expect(svc.activeSession.get()).toBeDefined()
-    expect(svc.activeSession.get()?.historyId).toBe(historyId)
+    expect(svc.activeSession.get()?.id).toBe(sessionId)
     expect(client.connected[0]?.agent.loadSessionCalls).toHaveLength(1)
   })
 
