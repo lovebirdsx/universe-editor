@@ -25,7 +25,35 @@
       },
       "presentation": {
         "reveal": "silent",
-        "panel": "dedicated",
+        "panel": "dedicated"
+      }
+    },
+    {
+      "type": "npm",
+      "script": "dev",
+      "problemMatcher": [],
+      "label": "npm: dev",
+      "detail": "pnpm --filter @universe-editor/editor dev",
+      "presentation": {
+        "reveal": "silent"
+      },
+      "runOptions": {
+        "instanceLimit": 1,
+        "instancePolicy": "terminateOldest"
+      }
+    },
+    {
+      "type": "npm",
+      "script": "e2e",
+      "problemMatcher": [],
+      "label": "npm: e2e",
+      "detail": "pnpm build && pnpm --filter @universe-editor/editor e2e",
+      "presentation": {
+        "reveal": "silent"
+      },
+      "runOptions": {
+        "instanceLimit": 1,
+        "instancePolicy": "terminateOldest"
       }
     }
   ]
