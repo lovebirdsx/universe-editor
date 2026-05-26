@@ -16,6 +16,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, EditorRegistry, type IWorkbenchContribution } from '@universe-editor/platform'
+import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
@@ -61,6 +62,12 @@ export class BuiltInEditorProvidersContribution
         typeId: UntitledEditorInput.TYPE_ID,
         componentKey: 'file',
         deserialize: (data) => UntitledEditorInput.deserialize(data),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: DiffEditorInput.TYPE_ID,
+        componentKey: 'diff',
       }),
     )
   }
