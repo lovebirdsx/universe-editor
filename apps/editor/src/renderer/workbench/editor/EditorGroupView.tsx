@@ -378,8 +378,8 @@ export function EditorGroupView({
   useLayoutEffect(() => {
     if (!isActiveGroup) return
     if (!activeEditor) return
-    focusEditorInput(activeEditor, contextKeyService)
-  }, [contextKeyService, isActiveGroup, activeEditor])
+    focusEditorInput(activeEditor, contextKeyService, group.id)
+  }, [contextKeyService, group.id, isActiveGroup, activeEditor])
 
   const renderContent = () => {
     const active = group.activeEditor

@@ -136,7 +136,22 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       contextKeyService.set('editorFocus', true)
     })
     const blurSub = ed.onDidBlurEditorWidget(() => {
-      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
+      queueMicrotask(() => {
+        syncEditorFocusContext(contextKeyService)
+        // Chromium's default behavior after a click on a non-focusable element
+        // (e.g. a tab div) moves focus to document.body. Reclaim it immediately
+        // if this editor is still the active group's active editor. This check
+        // is safe for drag-and-drop: dragging never moves focus to body.
+        if (
+          document.activeElement === document.body &&
+          group !== null &&
+          groupsService.activeGroup === group &&
+          groupsService.activeGroup.activeEditor === fileInput
+        ) {
+          ed.focus()
+          syncEditorFocusContext(contextKeyService)
+        }
+      })
     })
     const modelChangeSub = ed.onDidChangeModel(() => {
       const lang = ed.getModel()?.getLanguageId()
@@ -245,7 +260,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       }
 
       if (editorRef.current) {
-        FileEditorRegistry.register(fileInput, editorRef.current)
+        FileEditorRegistry.register(fileInput, editorRef.current, group?.id)
         if (groupsService.activeGroup.activeEditor === fileInput) {
           focusStandaloneEditor(editorRef.current, contextKeyService)
         }

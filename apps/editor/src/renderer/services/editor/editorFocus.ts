@@ -11,8 +11,9 @@ export function syncEditorFocusContext(contextKeyService: IContextKeyService): v
 export function focusEditorInput(
   input: EditorInput,
   contextKeyService: IContextKeyService,
+  groupId?: number,
 ): boolean {
-  const editor = FileEditorRegistry.get(input)
+  const editor = FileEditorRegistry.get(input, groupId)
   if (!editor) return false
   focusStandaloneEditor(editor, contextKeyService)
   return true
