@@ -294,6 +294,7 @@ interface ConnectedSession {
   readonly sink: IAcpClientNotificationSink
   readonly agent: StubAgent
   readonly clientConn: ClientSideConnection
+  readonly pair: ReturnType<typeof createInMemoryAcpPair>
 }
 
 class FakeAcpClientService implements IAcpClientService {
@@ -310,6 +311,25 @@ class FakeAcpClientService implements IAcpClientService {
   }
 
   drainAll(): void {}
+
+  /**
+   * Simulate "connection closed without going through session.close()" —
+   * e.g. pool grace expiry, agent crash, drainAll. Closes both writable
+   * sides of the in-memory pair so the SDK detects EOF and aborts the
+   * ClientSideConnection's signal, which fires AcpSession's onClose listener.
+   */
+  async simulateConnectionAbort(idx: number): Promise<void> {
+    const entry = this.connected[idx]
+    if (!entry) throw new Error(`no connection at ${idx}`)
+    await entry.pair.clientStream.writable.close().catch(() => {})
+    await entry.pair.agentStream.writable.close().catch(() => {})
+    // Let the SDK read loops see EOF and abort their signals.
+    const deadline = Date.now() + 500
+    while (!entry.clientConn.signal.aborted) {
+      if (Date.now() > deadline) throw new Error('connection signal did not abort in time')
+      await new Promise((r) => setTimeout(r, 5))
+    }
+  }
 
   async connect(
     agentId: string,
@@ -338,7 +358,7 @@ class FakeAcpClientService implements IAcpClientService {
       },
     })
     initializeResult.catch(() => {})
-    this.connected.push({ sink, agent, clientConn })
+    this.connected.push({ sink, agent, clientConn, pair })
     return {
       conn: clientConn,
       initializeResult,
@@ -629,6 +649,43 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(svc.activeSession.get()).toBeUndefined()
     expect(built.notifications.captured.length).toBe(1)
     expect(built.notifications.captured[0]?.message).toMatch(/Failed to resume/)
+  })
+
+  it('replaces a same-id session that closed without going through closeSession', async () => {
+    // The connection-pool grace timer, drainAll(), and agent crashes all flip
+    // a live AcpSession to status='closed' WITHOUT removing it from _sessions
+    // (the onClose listener in acpSession.ts is the only handler). resumeSession
+    // must purge the stale instance before appending the new one, otherwise
+    // _sessions ends up with two entries for the same id — find()-based routing
+    // hits the stale one and replayed messages either duplicate (editor mode,
+    // reads via getById) or vanish (sidebar mode, reads via activeSession).
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'replayed' },
+          },
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    await built.client.simulateConnectionAbort(0)
+    expect(original.status.get()).toBe('closed')
+    expect(svc.sessions.get()).toHaveLength(1)
+
+    const resumed = await svc.resumeSession(historyId)
+    expect(resumed).not.toBe(original)
+    expect(svc.sessions.get()).toHaveLength(1)
+    expect(svc.getById(historyId)).toBe(resumed)
+    expect(svc.activeSession.get()).toBe(resumed)
+    expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed'])
+    expect(original.messages.get()).toEqual([])
   })
 })
 

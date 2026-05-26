@@ -61,7 +61,8 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   return (
     <ul>
       {entries.map((entry) => {
-        const running = service.getById(entry.id)
+        const live = service.getById(entry.id)
+        const running = live && live.status.get() !== 'closed' ? live : undefined
         const isActive = running !== undefined && running.id === activeId
         return (
           <li
@@ -70,8 +71,10 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
             data-active={isActive ? 'true' : 'false'}
             data-running={running !== undefined ? 'true' : 'false'}
             onClick={() => {
-              if (running) {
-                service.setActive(running.id)
+              const fresh = service.getById(entry.id)
+              const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
+              if (liveNow) {
+                service.setActive(liveNow.id)
               } else {
                 service.resumeSession(entry.id).catch(() => {
                   // resumeSession publishes its own notification.

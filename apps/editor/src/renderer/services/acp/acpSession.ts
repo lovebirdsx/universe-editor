@@ -298,6 +298,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.status.set('closed', undefined)
     this._activeAbort?.abort()
     this._cancelPending()
+    this._messages = []
+    this._toolCalls = []
+    this.messages.set(this._messages, undefined)
+    this.toolCalls.set(this._toolCalls, undefined)
     this.dispose()
   }
 

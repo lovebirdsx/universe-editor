@@ -420,13 +420,15 @@ export class AcpSessionService
         this._agentDefaults,
       )
       const captured = session
+      const prior = this._sessions.find((s) => s.id === captured.id)
       transaction((tx) => {
-        this._sessions = [...this._sessions, captured]
+        this._sessions = [...this._sessions.filter((s) => s.id !== captured.id), captured]
         this.sessions.set(this._sessions, tx)
         this.activeSessionId.set(captured.id, tx)
         this.activeSession.set(captured, tx)
       })
       registered = true
+      prior?.dispose()
 
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
@@ -458,7 +460,7 @@ export class AcpSessionService
       if (registered && session) {
         const captured = session
         // Rollback: drop the partial session before bubbling the error.
-        this._sessions = this._sessions.filter((x) => x !== captured)
+        this._sessions = this._sessions.filter((x) => x.id !== captured.id)
         this.sessions.set(this._sessions, undefined)
         if (this.activeSession.get() === captured) {
           const next = this._sessions[0]
