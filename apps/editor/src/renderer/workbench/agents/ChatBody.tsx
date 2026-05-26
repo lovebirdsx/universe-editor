@@ -21,7 +21,7 @@ import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
 
-export function ChatBody({ session }: { session?: IAcpSession }) {
+export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
   const service = useService(IAcpSessionService)
   const registry = useService(IAcpAgentRegistry)
   const active = useObservable(service.activeSession)
@@ -36,7 +36,7 @@ export function ChatBody({ session }: { session?: IAcpSession }) {
       <ChatScroll session={target} />
       <PermissionCard session={target} />
       <ConfigOptionsBar session={target} />
-      <PromptInput session={target} />
+      <PromptInput session={target} {...(autoFocus !== undefined ? { autoFocus } : {})} />
     </div>
   )
 }

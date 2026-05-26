@@ -34,7 +34,13 @@ import { MentionPopover } from './MentionPopover.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import styles from './agents.module.css'
 
-export function PromptInput({ session }: { session: IAcpSession }) {
+export function PromptInput({
+  session,
+  autoFocus = false,
+}: {
+  session: IAcpSession
+  autoFocus?: boolean
+}) {
   const [text, setText] = useState('')
   const [caret, setCaret] = useState(0)
   const [slashIndex, setSlashIndex] = useState(0)
@@ -77,6 +83,13 @@ export function PromptInput({ session }: { session: IAcpSession }) {
       textareaRef.current?.focus()
     }
   }, [session.id])
+
+  // Initial-mount focus for callers that opt in (full-screen editor).
+  // Sidebar leaves this false so opening the ChatPanel doesn't yank focus
+  // from whatever the user just clicked.
+  useEffect(() => {
+    if (autoFocus) textareaRef.current?.focus()
+  }, [autoFocus])
 
   const slashQuery = useMemo(() => extractSlashQuery(text), [text])
   const slashMatches = useMemo<readonly AvailableCommand[]>(

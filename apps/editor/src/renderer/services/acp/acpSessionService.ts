@@ -305,7 +305,7 @@ export class AcpSessionService
             'ACP session/new',
           )
           conn.attachSession(result.sessionId)
-          const title = `${agentName} · ${result.sessionId}`
+          const title = result.sessionId
           const initState: IAcpSessionInitState = result.configOptions
             ? { configOptions: result.configOptions }
             : {}
@@ -404,7 +404,7 @@ export class AcpSessionService
       if (initResult.agentCapabilities?.loadSession !== true) {
         throw new Error('Agent does not advertise agentCapabilities.loadSession — cannot resume')
       }
-      const title = `${this._registry.get(entry.agentId).name} · ${entry.title}`
+      const title = entry.title
       // Construct the AcpSession BEFORE session/load so any session/update
       // notifications the agent emits during replay route to the right
       // session via this._sessions lookup.

@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useRef } from 'react'
+import { Loader2 } from 'lucide-react'
 import {
   IEditorInput,
   IEditorService,
@@ -45,8 +46,13 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
 
   if (!session) {
     return (
-      <div className={styles['sessionMissing']} data-testid="acp-session-resuming">
-        <p>{localize('acp.session.resuming', 'Resuming agent session…')}</p>
+      <div className={styles['sessionLoading']} data-testid="acp-session-resuming">
+        <div className={styles['sessionLoadingHeader']}>
+          <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+          <p className={styles['sessionLoadingMessage']}>
+            {localize('acp.session.resuming', 'Resuming agent session...')}
+          </p>
+        </div>
         {acpInput.agentId && (
           <button
             type="button"
@@ -69,5 +75,5 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
       </div>
     )
   }
-  return <ChatBody session={session} />
+  return <ChatBody session={session} autoFocus />
 }
