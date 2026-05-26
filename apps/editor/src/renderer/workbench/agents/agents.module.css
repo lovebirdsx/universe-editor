@@ -417,6 +417,98 @@
   font-size: 11px;
 }
 
+.toolCallDiffs {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
+.inlineDiff {
+  border: 1px solid var(--color-border, #333);
+  border-radius: 3px;
+  background: var(--color-message-bg, #1f1f1f);
+  overflow: hidden;
+}
+
+.inlineDiffHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  border-bottom: 1px solid var(--color-border, #333);
+  background: var(--color-list-hover-bg, #2a2d2e);
+  font-size: 11px;
+}
+
+.inlineDiffPath {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
+}
+
+.inlineDiffOpen {
+  border: 1px solid var(--color-border, #555);
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.inlineDiffOpen:hover {
+  background: var(--color-list-active-bg, #094771);
+}
+
+.inlineDiffBody {
+  margin: 0;
+  padding: 4px 6px;
+  font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre;
+}
+
+.diffLineAdd {
+  display: block;
+  background: rgba(46, 160, 67, 0.18);
+  color: #b5e0bd;
+}
+
+.diffLineDel {
+  display: block;
+  background: rgba(248, 81, 73, 0.18);
+  color: #f1b0ab;
+}
+
+.diffLineCtx {
+  display: block;
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.inlineDiffExpand {
+  display: block;
+  width: 100%;
+  margin-top: 2px;
+  padding: 2px 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-message-role-fg, #888);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.inlineDiffExpand:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
 .promptForm {
   border-top: 1px solid var(--color-border, #333);
   padding: 8px;

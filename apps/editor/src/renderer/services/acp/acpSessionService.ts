@@ -67,6 +67,7 @@ export {
   type AcpMessage,
   type AcpMessageRole,
   type AcpToolCall,
+  type AcpToolCallDiff,
   type AcpToolCallStatus,
   type AcpPlanEntry,
   type AcpPendingPermission,

@@ -45,6 +45,13 @@ export interface AcpMessage {
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
 
+export interface AcpToolCallDiff {
+  readonly path: string
+  /** Empty string when the agent reported `null` (i.e. file creation). */
+  readonly oldText: string
+  readonly newText: string
+}
+
 export interface AcpToolCall {
   readonly id: string
   readonly title: string
@@ -54,10 +61,13 @@ export interface AcpToolCall {
   readonly text: string
   /**
    * Tool call output normalized into ContentBlock[]. ToolCallContent variants
-   * `content` are unwrapped; `diff` and `terminal` are converted to a placeholder
-   * text block so the existing MessageContent renderer keeps working unchanged.
+   * `content` are unwrapped; `terminal` is converted to a placeholder text block.
+   * `diff` entries are *not* included here — they live in `diffs` so the UI can
+   * render a dedicated diff preview.
    */
   readonly blocks: readonly ContentBlock[]
+  /** Structured diff entries extracted from ToolCallContent.diff. */
+  readonly diffs: readonly AcpToolCallDiff[]
 }
 
 export interface AcpPlanEntry {
@@ -305,13 +315,14 @@ export class AcpSession extends Disposable implements IAcpSession {
         this._appendChunk('thought', update.content)
         break
       case 'tool_call': {
-        const blocks = toolCallContentToBlocks(update.content ?? [])
+        const { blocks, diffs } = splitToolCallContent(update.content ?? [])
         this._upsertToolCall({
           id: update.toolCallId,
           title: update.title,
           kind: update.kind ?? 'unknown',
           status: (update.status as AcpToolCallStatus | undefined) ?? 'pending',
           blocks,
+          diffs,
           text: blocksToText(blocks),
         })
         this._telemetry.publicLog('acp.tool_call_started', {
@@ -322,16 +333,16 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
       case 'tool_call_update': {
         const existing = this._toolCalls.find((t) => t.id === update.toolCallId)
-        const blocks =
-          update.content != null
-            ? toolCallContentToBlocks(update.content)
-            : (existing?.blocks ?? [])
+        const split = update.content != null ? splitToolCallContent(update.content) : undefined
+        const blocks = split?.blocks ?? existing?.blocks ?? []
+        const diffs = split?.diffs ?? existing?.diffs ?? []
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: existing?.title ?? update.toolCallId,
           kind: existing?.kind ?? 'unknown',
           status: (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending',
           blocks,
+          diffs,
           text: blocksToText(blocks),
         }
         this._upsertToolCall(next)
@@ -475,30 +486,37 @@ export function blocksToText(blocks: readonly ContentBlock[] | undefined): strin
 }
 
 /**
- * Flatten the SDK's ToolCallContent[] (a discriminated union of content / diff /
- * terminal wrappers) into a flat ContentBlock[] so the existing MessageContent
- * renderer can display tool call output uniformly. Non-text variants (diff,
- * terminal) become a labelled text placeholder — full rendering can land in a
- * follow-up.
+ * Split the SDK's ToolCallContent[] (a discriminated union of content / diff /
+ * terminal wrappers) into a flat ContentBlock[] plus structured diff entries.
+ * - `content` items are unwrapped into the block list.
+ * - `diff` items are pulled out into `diffs` (so the UI can render a dedicated
+ *   diff preview); they no longer leak into `blocks` as `[diff: path]`.
+ * - `terminal` items become a labelled text placeholder for now.
  */
-export function toolCallContentToBlocks(
-  content: readonly ToolCallContent[],
-): readonly ContentBlock[] {
-  const out: ContentBlock[] = []
+export function splitToolCallContent(content: readonly ToolCallContent[]): {
+  readonly blocks: readonly ContentBlock[]
+  readonly diffs: readonly AcpToolCallDiff[]
+} {
+  const blocks: ContentBlock[] = []
+  const diffs: AcpToolCallDiff[] = []
   for (const item of content) {
     switch (item.type) {
       case 'content':
-        out.push(item.content)
+        blocks.push(item.content)
         break
       case 'diff':
-        out.push({ type: 'text', text: `[diff: ${item.path}]` })
+        diffs.push({
+          path: item.path,
+          oldText: item.oldText ?? '',
+          newText: item.newText,
+        })
         break
       case 'terminal':
-        out.push({ type: 'text', text: `[terminal: ${item.terminalId}]` })
+        blocks.push({ type: 'text', text: `[terminal: ${item.terminalId}]` })
         break
     }
   }
-  return out
+  return { blocks, diffs }
 }
 
 /**

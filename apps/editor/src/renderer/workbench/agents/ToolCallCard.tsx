@@ -3,8 +3,15 @@
  *  ToolCallCard / ToolCallList — renders the tool-call lane below the chat log.
  *--------------------------------------------------------------------------------------------*/
 
-import { useObservable } from '../useService.js'
-import type { AcpToolCall, IAcpSession } from '../../services/acp/acpSessionService.js'
+import { IEditorService, URI } from '@universe-editor/platform'
+import { useObservable, useService } from '../useService.js'
+import type {
+  AcpToolCall,
+  AcpToolCallDiff,
+  IAcpSession,
+} from '../../services/acp/acpSessionService.js'
+import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { MessageContent } from './MessageContent.js'
 import styles from './agents.module.css'
 
@@ -21,6 +28,13 @@ export function ToolCallList({ session }: { session: IAcpSession }) {
 }
 
 export function ToolCallCard({ call }: { call: AcpToolCall }) {
+  const editorService = useService(IEditorService)
+
+  const openDiff = (diff: AcpToolCallDiff): void => {
+    const uri = diff.path.includes('://') ? URI.parse(diff.path) : URI.file(diff.path)
+    void editorService.openEditor(new DiffEditorInput(uri, diff.oldText, diff.newText))
+  }
+
   return (
     <li className={styles['toolCallCard']} data-status={call.status}>
       <header className={styles['toolCallHeader']}>
@@ -28,6 +42,19 @@ export function ToolCallCard({ call }: { call: AcpToolCall }) {
         <span className={styles['toolCallTitle']}>{call.title}</span>
         <span className={styles['toolCallStatus']}>{call.status}</span>
       </header>
+      {call.diffs.length > 0 && (
+        <div className={styles['toolCallDiffs']}>
+          {call.diffs.map((d, i) => (
+            <InlineDiffPreview
+              key={`${d.path}-${i}`}
+              path={d.path}
+              oldText={d.oldText}
+              newText={d.newText}
+              onOpen={() => openDiff(d)}
+            />
+          ))}
+        </div>
+      )}
       {call.blocks.length > 0 && (
         <div className={styles['toolCallBody']}>
           <MessageContent blocks={call.blocks} />
