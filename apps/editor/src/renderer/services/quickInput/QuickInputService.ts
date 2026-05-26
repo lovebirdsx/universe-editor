@@ -89,6 +89,10 @@ export class QuickInputService implements IQuickInputService {
     if (!target) return
 
     const focus = () => {
+      // A chained Action2 may have synchronously opened another QuickPick after
+      // the previous one closed; restoring focus to the pre-palette target would
+      // yank focus from the new picker's input.
+      if (this._currentState !== null) return
       if (!target.isConnected) return
       // A command executed from the palette may have already moved DOM focus to a
       // Monaco editor. Don't steal it back — that would undo the command's intent.

@@ -239,4 +239,57 @@ describe('QuickInputService — focus restoration', () => {
     await vi.runAllTimersAsync()
     expect(document.activeElement).not.toBe(button)
   })
+
+  it('does not steal focus from a new pick that opened immediately after the previous one closed', async () => {
+    // Chained QuickPick scenario: command palette closes (which schedules a
+    // setTimeout to restore focus to the editor), then an Action2 synchronously
+    // opens a second pick. The deferred restoreFocus must NOT fire while the
+    // second pick is visible — otherwise it yanks focus away from the new
+    // picker's input.
+    const { svc } = createService()
+    const editor = document.createElement('button')
+    editor.setAttribute('data-role', 'editor')
+    const pickerInput = document.createElement('input')
+    pickerInput.setAttribute('data-role', 'picker')
+    document.body.append(editor, pickerInput)
+
+    // Editor has focus before the user opens the command palette.
+    editor.focus()
+    expect(document.activeElement).toBe(editor)
+
+    // Capture the first pick's onAccept so we can simulate confirmation.
+    let firstAccept: ((items: { id: string; label: string }[]) => void) | undefined
+    const sub = svc.onDidChangeState((s) => {
+      if (s?.type === 'pick' && firstAccept === undefined) firstAccept = s.onAccept
+    })
+
+    // Open first pick (the command palette).
+    const firstPromise = svc.pick([{ id: 'cmd', label: 'Command' }])
+    // The QuickPick rendering would focus its input here.
+    pickerInput.focus()
+    expect(document.activeElement).toBe(pickerInput)
+
+    // User accepts an item in the command palette. The accept callback
+    // synchronously closes the first pick (which schedules the focus restore
+    // for the editor).
+    firstAccept?.([{ id: 'cmd', label: 'Command' }])
+    await firstPromise
+
+    // Without yielding to macrotasks (setTimeout(0) hasn't fired yet), the
+    // chained Action2 opens its own pick. In real code the panel's input is
+    // reused across this state swap, so picker focus is conceptually retained.
+    void svc.pick([{ id: 'session', label: 'Session' }])
+    pickerInput.focus() // simulate the new pick's input being focused on render
+
+    expect(svc.currentState).not.toBeNull()
+
+    // Now let the deferred setTimeout(focus, 0) fire. With the bug, it
+    // unconditionally calls `target.focus()` and the editor steals focus.
+    // With the fix, it bails because a new pick is already visible.
+    await vi.runAllTimersAsync()
+
+    expect(document.activeElement).toBe(pickerInput)
+    expect(document.activeElement).not.toBe(editor)
+    sub.dispose()
+  })
 })

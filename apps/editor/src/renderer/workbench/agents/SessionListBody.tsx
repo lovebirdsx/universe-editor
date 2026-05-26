@@ -2,20 +2,20 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionListBody — the pure list rendering reused by SessionListPanel (full
  *  sidebar view) and SessionsPopover (Copilot-style dropdown). Click behavior
- *  depends on the global chat location: editor mode opens (or focuses) a tab,
- *  sidebar mode just flips the active session. The optional `onPick` callback
- *  fires afterwards so popovers can collapse themselves.
+ *  flips the active session (resuming if necessary); in editor mode the tab is
+ *  opened by AcpChatLocationService's activeSession autorun — keeping a single
+ *  source of truth for "which input is open" avoids races that produced
+ *  duplicate tabs. The optional `onPick` callback fires afterwards so popovers
+ *  can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
-import { IEditorService, IInstantiationService, localize } from '@universe-editor/platform'
+import { localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/acpSessionHistory.js'
-import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
-import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import styles from './agents.module.css'
 
 function relativeTime(timestamp: number): string {
@@ -48,14 +48,10 @@ export interface SessionListBodyProps {
 export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
-  const editor = useService(IEditorService)
-  const inst = useService(IInstantiationService)
-  const location = useService(IAcpChatLocationService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
   const activeId = useObservable(service.activeSessionId)
-  const currentLocation = useObservable(location.location)
 
   if (entries.length === 0) {
     if (hideEmptyState) return null
@@ -74,23 +70,12 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
             data-active={isActive ? 'true' : 'false'}
             data-running={running !== undefined ? 'true' : 'false'}
             onClick={() => {
-              if (currentLocation === 'editor') {
-                // Editor mode: open (or focus) the tab. The editor's useEffect
-                // takes care of resuming if the session isn't live yet — we
-                // don't fire resumeSession here to avoid double-invoking it.
-                editor.openEditor(
-                  inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId),
-                )
-                if (running) service.setActive(running.id)
+              if (running) {
+                service.setActive(running.id)
               } else {
-                // Sidebar mode: just flip activeSession. No tab is opened.
-                if (running) {
-                  service.setActive(running.id)
-                } else {
-                  service.resumeSession(entry.id).catch(() => {
-                    // resumeSession publishes its own notification.
-                  })
-                }
+                service.resumeSession(entry.id).catch(() => {
+                  // resumeSession publishes its own notification.
+                })
               }
               onPick?.(entry)
             }}
