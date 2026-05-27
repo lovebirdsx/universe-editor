@@ -7,7 +7,7 @@ export class PanelPO {
   }
 
   tab(id: string): Locator {
-    return this.page.getByTestId(`panel-tab-${id}`)
+    return this.page.getByTestId(`view-container-tab-${id}`)
   }
 
   /**

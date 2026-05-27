@@ -137,7 +137,13 @@ export class TogglePanelAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(ILayoutService).toggleVisible(PartId.Panel)
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    layoutService.toggleVisible(PartId.Panel)
+    if (layoutService.getVisible(PartId.Panel)) {
+      const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.Panel)
+      if (!activeId) viewsService.openViewContainer('workbench.view.output')
+    }
   }
 }
 

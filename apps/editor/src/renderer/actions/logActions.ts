@@ -13,6 +13,7 @@ import {
   ILayoutService,
   IOutputService,
   IQuickInputService,
+  IViewsService,
   LogLevel,
   MenuId,
   PartId,
@@ -56,7 +57,8 @@ function activeLogChannelName(outputService: IOutputService): string | undefined
   return ch?.kind === 'log' ? ch.name : undefined
 }
 
-function revealOutputPanel(layoutService: ILayoutService): void {
+function revealOutputPanel(layoutService: ILayoutService, viewsService: IViewsService): void {
+  viewsService.openViewContainer('workbench.view.output')
   layoutService.setVisible(PartId.Panel, true)
   layoutService.getPart(PartId.Panel)?.focus()
 }
@@ -65,6 +67,7 @@ async function writeLogToOutput(
   logFilesService: ILogFilesService,
   outputService: IOutputService,
   layoutService: ILayoutService,
+  viewsService: IViewsService,
   descriptor: LogFileDescriptor,
 ): Promise<void> {
   const content = await logFilesService.readLogFile(descriptor.id, LOG_READ_MAX_BYTES)
@@ -73,15 +76,19 @@ async function writeLogToOutput(
   channel.clear()
   channel.append(content)
   outputService.setActiveChannel(channelName)
-  revealOutputPanel(layoutService)
+  revealOutputPanel(layoutService, viewsService)
 }
 
-function showNoLogs(outputService: IOutputService, layoutService: ILayoutService): void {
+function showNoLogs(
+  outputService: IOutputService,
+  layoutService: ILayoutService,
+  viewsService: IViewsService,
+): void {
   const channel = outputService.createChannel(EMPTY_LOG_CHANNEL)
   channel.clear()
   channel.appendLine(localize('logs.noneFound', 'No log files found.'))
   outputService.setActiveChannel(EMPTY_LOG_CHANNEL)
-  revealOutputPanel(layoutService)
+  revealOutputPanel(layoutService, viewsService)
 }
 
 const LOG_LEVEL_ITEMS: readonly LogLevelQuickPickItem[] = [
@@ -120,9 +127,10 @@ export class ShowLogsAction extends Action2 {
     const quickInputService = accessor.get(IQuickInputService)
     const outputService = accessor.get(IOutputService)
     const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
     const descriptors = await logFilesService.listLogFiles()
     if (descriptors.length === 0) {
-      showNoLogs(outputService, layoutService)
+      showNoLogs(outputService, layoutService, viewsService)
       return
     }
     const selected = await pickLogFileDescriptor(
@@ -132,7 +140,7 @@ export class ShowLogsAction extends Action2 {
       localize('quickInput.logs.placeholder', 'Select a log file'),
     )
     if (!selected) return
-    await writeLogToOutput(logFilesService, outputService, layoutService, selected)
+    await writeLogToOutput(logFilesService, outputService, layoutService, viewsService, selected)
   }
 }
 
@@ -174,6 +182,7 @@ export class ShowOutputChannelAction extends Action2 {
     const outputService = accessor.get(IOutputService)
     const quickInputService = accessor.get(IQuickInputService)
     const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
     const names = outputService.channelNames.get()
     if (names.length === 0) return
 
@@ -207,7 +216,7 @@ export class ShowOutputChannelAction extends Action2 {
     })
     if (!selected?.id) return
     outputService.setActiveChannel(selected.id)
-    revealOutputPanel(layoutService)
+    revealOutputPanel(layoutService, viewsService)
   }
 }
 
@@ -227,12 +236,13 @@ export class RefreshLogOutputAction extends Action2 {
     const logFilesService = accessor.get(ILogFilesService)
     const outputService = accessor.get(IOutputService)
     const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
     const currentName = activeLogChannelName(outputService)
     if (!currentName) return
     const descriptors = await logFilesService.listLogFiles()
     const descriptor = descriptors.find((candidate) => candidate.name === currentName)
     if (!descriptor) return
-    await writeLogToOutput(logFilesService, outputService, layoutService, descriptor)
+    await writeLogToOutput(logFilesService, outputService, layoutService, viewsService, descriptor)
   }
 }
 
@@ -320,14 +330,26 @@ export class ClearOutputAction extends Action2 {
   constructor() {
     super({
       id: ClearOutputAction.ID,
-      title: localize('action.clearOutput.title', 'Output: Clear Output'),
+      title: localize('action.clearOutput.title', 'Clear Output'),
       category: localize('command.category.view', 'View'),
+      icon: 'trash-2',
+      menu: [
+        {
+          id: MenuId.ViewContainerTitle,
+          when: 'activeViewContainer == workbench.view.output',
+          group: 'navigation',
+          order: 1,
+        },
+      ],
       f1: true,
     })
   }
 
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IOutputService).activeChannel?.clear()
+    const outputService = accessor.get(IOutputService)
+    const channelName = outputService.activeChannelName.get()
+    if (!channelName) return
+    outputService.getChannel(channelName)?.clear()
   }
 }
 

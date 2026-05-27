@@ -45,9 +45,19 @@ export class BuiltInViewContainersContribution
       ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.outline',
         label: localize('viewContainer.outline', 'Outline'),
-        icon: 'search',
+        icon: 'outline',
         order: 1,
         location: ViewContainerLocation.SecondarySideBar,
+      }),
+    )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.output',
+        label: localize('viewContainer.output', 'Output'),
+        icon: 'output',
+        order: 1,
+        location: ViewContainerLocation.Panel,
       }),
     )
   }

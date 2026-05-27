@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import {
   IConfigurationService,
   IOutputService,
@@ -47,23 +47,14 @@ function renderOutputView(outputService = new OutputService(makeStorage())) {
 }
 
 describe('OutputView', () => {
-  it('clears the active output channel from the icon button', () => {
-    const outputService = new OutputService(makeStorage())
-    const channel = outputService.createChannel('Renderer')
-    channel.appendLine('ready')
-    const clear = vi.spyOn(channel, 'clear')
-
-    renderOutputView(outputService)
-    fireEvent.click(screen.getByRole('button', { name: 'Clear Output' }))
-
-    expect(clear).toHaveBeenCalledTimes(1)
+  it('shows the empty state when no channel has content', () => {
+    renderOutputView()
+    expect(screen.getByText('No output.')).toBeTruthy()
   })
 
-  it('disables the clear button when there is no active output channel', () => {
+  it('does not embed a toolbar (toolbar lives in the shared header now)', () => {
     renderOutputView()
-
-    expect(screen.getByRole<HTMLButtonElement>('button', { name: 'Clear Output' }).disabled).toBe(
-      true,
-    )
+    expect(screen.queryByRole('button', { name: 'Clear Output' })).toBeNull()
+    expect(screen.queryByLabelText('Select output channel')).toBeNull()
   })
 })

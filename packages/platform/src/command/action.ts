@@ -130,6 +130,7 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
       ...(menu.group !== undefined ? { group: menu.group } : {}),
       ...(menu.order !== undefined ? { order: menu.order } : {}),
       title: titleString(desc.title),
+      ...(desc.icon !== undefined ? { icon: desc.icon } : {}),
     }
     disposables.push(MenuRegistry.addMenuItem(menu.id, item))
   }

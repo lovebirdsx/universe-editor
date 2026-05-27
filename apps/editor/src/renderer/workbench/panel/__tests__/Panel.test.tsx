@@ -1,15 +1,60 @@
-import { describe, expect, it, vi } from 'vitest'
-import { fireEvent, render, screen } from '@testing-library/react'
-import { ILayoutService, InstantiationService, ServiceCollection } from '@universe-editor/platform'
-import { Panel } from '../Panel.js'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { render, screen } from '@testing-library/react'
+import {
+  IConfigurationService,
+  IOutputService,
+  InstantiationService,
+  ServiceCollection,
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  ViewRegistry,
+  type IStorageService,
+} from '@universe-editor/platform'
+import { ILayoutService, IViewsService } from '@universe-editor/platform'
+import { OutputService } from '../../../services/output/OutputService.js'
+import { ViewsService } from '../../../services/views/ViewsService.js'
 import { ServicesContext } from '../../useService.js'
+import { Panel } from '../Panel.js'
 
 vi.mock('../output/OutputView.js', () => ({
   OutputView: () => <div data-testid="output-view">Output Content</div>,
 }))
 
-function renderPanel() {
+vi.mock('../output/OutputViewToolbar.js', () => ({
+  OutputViewToolbar: () => <div data-testid="output-toolbar">Toolbar</div>,
+}))
+
+vi.mock('../../viewContainerHeader/ViewContainerHeader.js', () => ({
+  ViewContainerHeader: () => <div data-testid="view-container-header" />,
+}))
+
+function makeStorage(): IStorageService {
+  return {
+    _serviceBrand: undefined,
+    get: vi.fn().mockResolvedValue(undefined),
+    set: vi.fn().mockResolvedValue(undefined),
+    remove: vi.fn().mockResolvedValue(undefined),
+    onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+  } as unknown as IStorageService
+}
+
+const mockConfigService: IConfigurationService = {
+  _serviceBrand: undefined,
+  get: vi.fn().mockReturnValue(undefined),
+  update: vi.fn(),
+  loadLayer: vi.fn(),
+  getLayerSnapshot: vi.fn().mockReturnValue({}),
+  getValueOrigin: vi.fn().mockReturnValue(undefined),
+  onDidChangeConfiguration: { event: vi.fn(), dispose: vi.fn() } as never,
+}
+
+function renderPanel(activeContainerId: string | undefined) {
   const services = new ServiceCollection()
+  const viewsService = new ViewsService(makeStorage())
+  if (activeContainerId) viewsService.openViewContainer(activeContainerId)
+  services.set(IViewsService, viewsService)
+  services.set(IOutputService, new OutputService(makeStorage()))
+  services.set(IConfigurationService, mockConfigService)
   services.set(ILayoutService, {
     _serviceBrand: undefined,
     getVisible: () => false,
@@ -25,39 +70,57 @@ function renderPanel() {
 }
 
 describe('Panel', () => {
-  it('renders the Output tab selected by default', () => {
-    renderPanel()
-    const tab = screen.getByTestId('panel-tab-output')
-    expect(tab.getAttribute('aria-selected')).toBe('true')
+  const disposables: Array<{ dispose: () => void }> = []
+
+  afterEach(() => {
+    while (disposables.length) disposables.pop()?.dispose()
   })
 
-  it('renders the Output tab with a compact icon and label', () => {
-    renderPanel()
-    const tab = screen.getByTestId('panel-tab-output')
-    expect(tab.textContent).toContain('Output')
-    expect(tab.querySelector('svg')).toBeTruthy()
+  function registerOutput() {
+    disposables.push(
+      ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.output',
+        label: 'Output',
+        icon: 'output',
+        order: 1,
+        location: ViewContainerLocation.Panel,
+      }),
+    )
+    disposables.push(
+      ViewRegistry.registerView({
+        id: 'workbench.view.output.main',
+        name: 'Output',
+        containerId: 'workbench.view.output',
+        componentKey: 'output.main',
+        order: 1,
+      }),
+    )
+  }
+
+  it('renders the active container id on the part element', () => {
+    registerOutput()
+    renderPanel('workbench.view.output')
+    expect(screen.getByTestId('part-panel').getAttribute('data-active-view-container')).toBe(
+      'workbench.view.output',
+    )
   })
 
-  it('renders the active tab content', () => {
-    renderPanel()
+  it('renders the view component bound to the active container', () => {
+    registerOutput()
+    renderPanel('workbench.view.output')
     expect(screen.getByTestId('output-view')).toBeTruthy()
   })
 
-  it('has correct ARIA role on the tab', () => {
-    renderPanel()
-    const tab = screen.getByTestId('panel-tab-output')
-    expect(tab.getAttribute('role')).toBe('tab')
+  it('renders no view content when no container is active', () => {
+    registerOutput()
+    renderPanel(undefined)
+    expect(screen.queryByTestId('output-view')).toBeNull()
+    expect(screen.getByTestId('part-panel').getAttribute('data-active-view-container')).toBe('')
   })
 
-  it('tab list has role tablist', () => {
-    renderPanel()
-    expect(screen.getByRole('tablist')).toBeTruthy()
-  })
-
-  it('clicking the active tab keeps it selected', () => {
-    renderPanel()
-    const tab = screen.getByTestId('panel-tab-output')
-    fireEvent.click(tab)
-    expect(tab.getAttribute('aria-selected')).toBe('true')
+  it('always mounts the shared ViewContainerHeader', () => {
+    registerOutput()
+    renderPanel('workbench.view.output')
+    expect(screen.getByTestId('view-container-header')).toBeTruthy()
   })
 })

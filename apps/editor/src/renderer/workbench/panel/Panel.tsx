@@ -1,85 +1,53 @@
-import { useState, type ComponentType } from 'react'
-import { localize, ILayoutService, PartId } from '@universe-editor/platform'
+import type { ComponentType } from 'react'
+import {
+  IViewsService,
+  PartId,
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  ViewRegistry,
+} from '@universe-editor/platform'
 import type { IPart } from '@universe-editor/platform'
-import { X } from 'lucide-react'
-import { useService } from '../useService.js'
+import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
+import { ViewContainerHeader } from '../viewContainerHeader/ViewContainerHeader.js'
 import { OutputView } from './output/OutputView.js'
-import { resolvePanelIcon } from './icon-map.js'
+import { OutputViewToolbar } from './output/OutputViewToolbar.js'
 import styles from './Panel.module.css'
 
-interface PanelTab {
-  id: string
-  label: string
-  icon: string
-  component: ComponentType
-}
+/** Registry of React components keyed by IViewDescriptor.componentKey. */
+const panelViewComponentMap = new Map<string, ComponentType>([['output.main', OutputView]])
+
+/** Per-view custom right-side toolbar widgets (channel selector, etc). */
+const panelViewToolbarMap = new Map<string, ComponentType>([
+  ['workbench.view.output', OutputViewToolbar],
+])
 
 export function Panel({ part }: { part?: IPart | undefined } = {}) {
-  const builtInTabs: PanelTab[] = [
-    {
-      id: 'output',
-      label: localize('panel.output', 'Output'),
-      icon: 'output',
-      component: OutputView,
-    },
-  ]
-  const [activeTabId, setActiveTabId] = useState(builtInTabs[0]?.id ?? '')
   const containerRef = usePartContainer(part)
-  const layoutService = useService(ILayoutService)
-
-  const activeTab = builtInTabs.find((t) => t.id === activeTabId)
-  const ActiveComponent = activeTab?.component ?? null
-
-  return (
-    <div ref={containerRef} className={styles['panel']} data-testid="part-panel">
-      <div className={styles['tabBar']} role="tablist">
-        <div className={styles['tabs']}>
-          {builtInTabs.map((tab) => (
-            <PanelTabButton
-              key={tab.id}
-              tab={tab}
-              active={activeTabId === tab.id}
-              onClick={() => setActiveTabId(tab.id)}
-            />
-          ))}
-        </div>
-        <button
-          className={styles['closeButton']}
-          onClick={() => layoutService.setVisible(PartId.Panel, false)}
-          title={localize('panel.close', 'Close Panel')}
-          aria-label={localize('panel.close', 'Close Panel')}
-        >
-          <X size={14} strokeWidth={1.75} aria-hidden="true" />
-        </button>
-      </div>
-      <div className={styles['content']}>{ActiveComponent && <ActiveComponent />}</div>
-    </div>
-  )
-}
-
-function PanelTabButton({
-  tab,
-  active,
-  onClick,
-}: {
-  tab: PanelTab
-  active: boolean
-  onClick: () => void
-}) {
-  const Icon = resolvePanelIcon(tab.icon)
+  const viewsService = useService(IViewsService)
+  const activeByLocation = useObservable(viewsService.activeContainerByLocation)
+  const activeId = activeByLocation[ViewContainerLocation.Panel]
+  const activeContainer = activeId ? ViewContainerRegistry.getViewContainer(activeId) : undefined
+  const views = activeContainer ? ViewRegistry.getViewsForContainer(activeContainer.id) : []
 
   return (
-    <button
-      className={`${styles['tab']} ${active ? styles['active'] : ''}`}
-      role="tab"
-      aria-selected={active}
-      onClick={onClick}
-      title={tab.label}
-      data-testid={`panel-tab-${tab.id}`}
+    <div
+      ref={containerRef}
+      className={styles['panel']}
+      data-testid="part-panel"
+      data-active-view-container={activeContainer?.id ?? ''}
     >
-      <Icon className={styles['tabIcon']} size={14} strokeWidth={1.75} aria-hidden="true" />
-      <span className={styles['tabLabel']}>{tab.label}</span>
-    </button>
+      <ViewContainerHeader
+        location={ViewContainerLocation.Panel}
+        partId={PartId.Panel}
+        customToolbarMap={panelViewToolbarMap}
+      />
+      <div className={styles['content']}>
+        {views.map((v) => {
+          const Component = panelViewComponentMap.get(v.componentKey)
+          return Component ? <Component key={v.id} /> : null
+        })}
+      </div>
+    </div>
   )
 }

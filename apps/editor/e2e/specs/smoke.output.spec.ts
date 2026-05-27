@@ -12,8 +12,11 @@ test.describe('@p1 output panel', () => {
       await workbench.runCommand('workbench.action.togglePanel')
     }
     await workbench.panel.waitForVisible()
-    await expect(workbench.panel.tab('output')).toBeAttached()
-    await expect(workbench.panel.tab('output')).toHaveAttribute('aria-selected', 'true')
+    await expect(workbench.panel.tab('workbench.view.output')).toBeAttached()
+    await expect(workbench.panel.tab('workbench.view.output')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
 
     // Toggle off — verifies the command actually drives the layout observable.
     await workbench.runCommand('workbench.action.togglePanel')

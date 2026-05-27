@@ -10,7 +10,7 @@ describe('BuiltInViewContainersContribution', () => {
     contribution = undefined
   })
 
-  it('registers the Explorer and Outline view containers on construction', () => {
+  it('registers the Explorer, Outline, and Output view containers on construction', () => {
     contribution = new BuiltInViewContainersContribution()
 
     const explorer = ViewContainerRegistry.getViewContainer('workbench.view.explorer')
@@ -22,6 +22,11 @@ describe('BuiltInViewContainersContribution', () => {
     expect(outline).toBeDefined()
     expect(outline?.label).toBe('Outline')
     expect(outline?.location).toBe(ViewContainerLocation.SecondarySideBar)
+
+    const output = ViewContainerRegistry.getViewContainer('workbench.view.output')
+    expect(output).toBeDefined()
+    expect(output?.label).toBe('Output')
+    expect(output?.location).toBe(ViewContainerLocation.Panel)
   })
 
   it('places each container in the expected location', () => {
@@ -36,14 +41,21 @@ describe('BuiltInViewContainersContribution', () => {
       ViewContainerLocation.SecondarySideBar,
     ).map((c) => c.id)
     expect(secondarySideBarIds).toContain('workbench.view.outline')
+
+    const panelIds = ViewContainerRegistry.getViewContainers(ViewContainerLocation.Panel).map(
+      (c) => c.id,
+    )
+    expect(panelIds).toContain('workbench.view.output')
   })
 
-  it('dispose unregisters both containers', () => {
+  it('dispose unregisters every container', () => {
     const local = new BuiltInViewContainersContribution()
     expect(ViewContainerRegistry.getViewContainer('workbench.view.explorer')).toBeDefined()
     expect(ViewContainerRegistry.getViewContainer('workbench.view.outline')).toBeDefined()
+    expect(ViewContainerRegistry.getViewContainer('workbench.view.output')).toBeDefined()
     local.dispose()
     expect(ViewContainerRegistry.getViewContainer('workbench.view.explorer')).toBeUndefined()
     expect(ViewContainerRegistry.getViewContainer('workbench.view.outline')).toBeUndefined()
+    expect(ViewContainerRegistry.getViewContainer('workbench.view.output')).toBeUndefined()
   })
 })

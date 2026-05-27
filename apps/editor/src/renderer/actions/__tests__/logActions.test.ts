@@ -7,6 +7,7 @@ import {
   ILayoutService,
   IOutputService,
   IQuickInputService,
+  IViewsService,
   InstantiationService,
   LogLevel,
   MenuId,
@@ -43,6 +44,15 @@ function makeLayoutService() {
     _serviceBrand: undefined,
     setVisible: vi.fn(),
     getPart: vi.fn(() => ({ focus: vi.fn() })),
+  }
+}
+
+function makeViewsService() {
+  return {
+    _serviceBrand: undefined,
+    openViewContainer: vi.fn(),
+    getActiveViewContainerId: vi.fn().mockReturnValue(undefined),
+    activeContainerByLocation: undefined,
   }
 }
 
@@ -91,6 +101,7 @@ describe('logActions', () => {
     disposables.push(registerAction2(ShowLogsAction))
     const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
+    const views = makeViewsService()
     const pick = vi.fn(async (items: readonly IQuickPickItem[]) => items[0])
     const logFiles = makeLogFilesService()
     const services = new ServiceCollection()
@@ -98,6 +109,7 @@ describe('logActions', () => {
     services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
     services.set(IOutputService, output)
     services.set(ILayoutService, layout as never)
+    services.set(IViewsService, views as never)
 
     await runCommand(ShowLogsAction.ID, services)
 
@@ -105,6 +117,7 @@ describe('logActions', () => {
     expect(logFiles.readLogFile).toHaveBeenCalledWith(descriptor.id, 1024 * 1024)
     expect(output.activeChannelName.get()).toBe('Main')
     expect(output.activeChannelContent.get()).toBe('hello log')
+    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.output')
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
   })
 
@@ -131,6 +144,7 @@ describe('logActions', () => {
     disposables.push(registerAction2(ShowLogsAction))
     const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
+    const views = makeViewsService()
     const pick = vi.fn()
     const logFiles = makeLogFilesService({
       listLogFiles: vi.fn().mockResolvedValue([]),
@@ -140,6 +154,7 @@ describe('logActions', () => {
     services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
     services.set(IOutputService, output)
     services.set(ILayoutService, layout as never)
+    services.set(IViewsService, views as never)
 
     await runCommand(ShowLogsAction.ID, services)
 
@@ -168,6 +183,7 @@ describe('logActions', () => {
     disposables.push(registerAction2(RefreshLogOutputAction))
     const output = new OutputService(makeStorage())
     const layout = makeLayoutService()
+    const views = makeViewsService()
     const logFiles = makeLogFilesService()
     output.createChannel(`${descriptor.name}`, 'log')
     output.setActiveChannel(`${descriptor.name}`)
@@ -175,6 +191,7 @@ describe('logActions', () => {
     services.set(ILogFilesService, logFiles as never)
     services.set(IOutputService, output)
     services.set(ILayoutService, layout as never)
+    services.set(IViewsService, views as never)
 
     await runCommand(RefreshLogOutputAction.ID, services)
 
@@ -247,6 +264,7 @@ describe('logActions', () => {
     output.createChannel('Console', 'log')
     output.createChannel('All', 'aggregated')
     const layout = makeLayoutService()
+    const views = makeViewsService()
     const pick = vi.fn(async (items: readonly IQuickPickItem[]) => {
       // First option must be 'All' (sorted to top).
       expect(items[0]?.label).toBe('All')
@@ -256,6 +274,7 @@ describe('logActions', () => {
     services.set(IOutputService, output)
     services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
     services.set(ILayoutService, layout as never)
+    services.set(IViewsService, views as never)
 
     await runCommand(ShowOutputChannelAction.ID, services)
 

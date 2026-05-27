@@ -93,10 +93,22 @@ describe('Built-in layout Action2s', () => {
     expect(openViewContainer).toHaveBeenCalledWith('workbench.view.outline')
   })
 
-  it('TogglePanel handler toggles Panel', async () => {
+  it('TogglePanel handler toggles Panel and opens Output if no container is active', async () => {
     const toggleVisible = vi.fn()
+    const getVisible = vi.fn().mockReturnValue(true)
+    const getActiveViewContainerId = vi.fn().mockReturnValue(undefined)
+    const openViewContainer = vi.fn()
     const services = new ServiceCollection()
-    services.set(ILayoutService, { _serviceBrand: undefined, toggleVisible } as never)
+    services.set(ILayoutService, {
+      _serviceBrand: undefined,
+      toggleVisible,
+      getVisible,
+    } as never)
+    services.set(IViewsService, {
+      _serviceBrand: undefined,
+      getActiveViewContainerId,
+      openViewContainer,
+    } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(TogglePanelAction))
     await inst.invokeFunction((accessor) => {
@@ -104,6 +116,7 @@ describe('Built-in layout Action2s', () => {
       cmd.handler(accessor)
     })
     expect(toggleVisible).toHaveBeenCalledWith(PartId.Panel)
+    expect(openViewContainer).toHaveBeenCalledWith('workbench.view.output')
   })
 
   it('ShowCommands invokes quick input and executes selected command', async () => {

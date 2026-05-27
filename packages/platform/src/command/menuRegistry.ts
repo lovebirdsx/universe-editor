@@ -20,6 +20,8 @@ export const enum MenuId {
   TitleBar = 'titleBar',
   StatusBar = 'statusBar',
   SideBarTitle = 'sideBarTitle',
+  /** Title-bar actions shown in the active ViewContainer's header (Panel / Secondary Side Bar). */
+  ViewContainerTitle = 'viewContainerTitle',
   // Title-bar menubar dropdowns
   MenubarFileMenu = 'menubar.file',
   MenubarEditMenu = 'menubar.edit',
@@ -44,6 +46,8 @@ export interface IMenuItem {
   order?: number
   /** Human-readable title override (falls back to command metadata). */
   title?: string
+  /** Optional icon identifier (resolved to a concrete icon by the renderer). */
+  icon?: string
 }
 
 /**
@@ -72,6 +76,7 @@ interface IResolvedMenuItem {
   group?: string
   order?: number
   title?: string
+  icon?: string
 }
 
 interface IResolvedSubmenuItem {
@@ -127,6 +132,7 @@ class MenuRegistryImpl implements IMenuRegistry {
       ...(item.group !== undefined ? { group: item.group } : {}),
       ...(item.order !== undefined ? { order: item.order } : {}),
       ...(item.title !== undefined ? { title: item.title } : {}),
+      ...(item.icon !== undefined ? { icon: item.icon } : {}),
     }
     items.push(resolved)
     this._onDidChangeMenu.fire(menuId)
@@ -202,6 +208,7 @@ class MenuRegistryImpl implements IMenuRegistry {
           ...(it.group !== undefined ? { group: it.group } : {}),
           ...(it.order !== undefined ? { order: it.order } : {}),
           ...(it.title !== undefined ? { title: it.title } : {}),
+          ...(it.icon !== undefined ? { icon: it.icon } : {}),
         } as IMenuItem
       })
   }

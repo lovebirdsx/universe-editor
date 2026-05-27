@@ -1,0 +1,23 @@
+.channelSelect {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--color-dropdown-bg, #2f2f35);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a8a92'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  color: var(--color-foreground, #c8c8c8);
+  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  border-radius: 3px;
+  padding: 2px 22px 2px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  cursor: default;
+  height: 22px;
+  min-width: 60px;
+  max-width: 120px;
+}
+
+.channelSelect:focus {
+  border-color: var(--color-focus-border, #0070e0);
+}
