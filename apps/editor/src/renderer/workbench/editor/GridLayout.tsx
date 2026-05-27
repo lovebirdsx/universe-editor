@@ -14,6 +14,7 @@ import {
   GridLeafNode,
   GridNode,
   IGridView,
+  markAsSingleton,
   Orientation,
 } from '@universe-editor/platform'
 import { Sash } from './Sash.js'
@@ -26,7 +27,7 @@ export interface GridLayoutProps<T extends IGridView> {
 function useGridVersion<T extends IGridView>(grid: Grid<T>): number {
   return useSyncExternalStore(
     (onChange) => {
-      const d = grid.onDidChange(() => onChange())
+      const d = markAsSingleton(grid.onDidChange(() => onChange()))
       return () => d.dispose()
     },
     () => grid.version,

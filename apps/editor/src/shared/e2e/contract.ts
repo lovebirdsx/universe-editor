@@ -16,6 +16,12 @@
 export const E2E_PROBE_ARGV_FLAG = '--enable-e2e-probe'
 export const E2E_PROBE_ENABLED_KEY = '__UNIVERSE_E2E_ENABLED__'
 export const E2E_PROBE_KEY = '__E2E__'
+export const DISPOSABLE_LEAK_REPORT_KEY = '__disposable_leak_report__'
+
+export interface E2EDisposableLeakReport {
+  readonly count: number
+  readonly details: string
+}
 
 export type E2ELifecyclePhase = 'Starting' | 'Ready' | 'Restored' | 'Eventually'
 
@@ -120,6 +126,12 @@ export interface E2EProbe {
   getOutputChannelNames(): readonly string[]
   /** Create a named output channel (for testing restore without ACP). */
   createOutputChannel(name: string): void
+  /**
+   * Read the Disposable leak report stored in sessionStorage by the previous
+   * session's beforeunload handler. Returns null if no leaks were detected
+   * (or if the tracker was not installed, e.g. in production builds).
+   */
+  getStoredLeakReport(): E2EDisposableLeakReport | null
 }
 
 declare global {

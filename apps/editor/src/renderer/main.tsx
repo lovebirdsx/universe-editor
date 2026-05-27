@@ -38,8 +38,10 @@ import {
   NoopTelemetryService,
   Severity,
   ProxyChannel,
+  DisposableStore,
   DisposableTracker,
   localize,
+  markAsSingleton,
   setDisposableTracker,
   setErrorTelemetryHook,
   setUnexpectedErrorHandler,
@@ -51,6 +53,7 @@ import { ILogChannelService, ILogFilesService, IPingService } from '../shared/ip
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
+import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
 import { installRendererErrorHandlers } from './errors.js'
 import { RendererLoggerService } from './services/log/rendererLoggerService.js'
@@ -113,19 +116,35 @@ setUnexpectedErrorHandler((e) => console.error('[renderer] unexpected error:', e
 installRendererErrorHandlers()
 
 async function bootstrapWorkbench(): Promise<void> {
-  // Dev-only: track Disposable leaks. Report on beforeunload.
-  if (import.meta.env.DEV) {
+  const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
+
+  // DEV or E2E: track Disposable leaks. DEV warns to console; E2E stores to sessionStorage.
+  if (import.meta.env.DEV || isE2E) {
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
     window.addEventListener('beforeunload', () => {
       const report = tracker.computeLeakingDisposables()
       if (report) {
-        console.warn(
-          `[renderer] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
-        )
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[renderer] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
+          )
+        }
+        if (isE2E) {
+          sessionStorage.setItem(
+            DISPOSABLE_LEAK_REPORT_KEY,
+            JSON.stringify({ count: report.leaks.length, details: report.details }),
+          )
+        }
+      } else if (isE2E) {
+        sessionStorage.removeItem(DISPOSABLE_LEAK_REPORT_KEY)
       }
     })
   }
+
+  // Singleton root store: all explicitly-created root services are added here so the
+  // DisposableTracker does not report them as leaks on page unload (e.g. Restart Editor).
+  const workbenchStore = markAsSingleton(new DisposableStore())
 
   const services = new ServiceCollection()
 
@@ -135,16 +154,16 @@ async function bootstrapWorkbench(): Promise<void> {
   setErrorTelemetryHook((name, data) => telemetry.publicLogError(name, data))
 
   // Platform services
-  const lifecycle = new LifecycleService()
+  const lifecycle = workbenchStore.add(new LifecycleService())
   services.set(ILifecycleService, lifecycle)
 
   // ContextKey service is consumed by menus, keybindings, and Action2 preconditions.
   // No dependencies on other services — safe to set this early.
-  const contextKeyService = new ContextKeyService()
+  const contextKeyService = workbenchStore.add(new ContextKeyService())
   services.set(IContextKeyService, contextKeyService)
 
   // IPC must be available before any service that proxies main-side channels.
-  const ipcService = createRendererIpcService()
+  const ipcService = workbenchStore.add(createRendererIpcService())
   services.set(IIpcService, ipcService)
 
   // Logger: route renderer logs to the main process for file-based aggregation.
@@ -153,7 +172,7 @@ async function bootstrapWorkbench(): Promise<void> {
   const logChannelProxy = ProxyChannel.toService<ILogChannelService>(
     ipcService.getChannel(ServiceChannels.Log),
   )
-  const loggerService = new RendererLoggerService(logChannelProxy, windowId)
+  const loggerService = workbenchStore.add(new RendererLoggerService(logChannelProxy, windowId))
   services.set(ILoggerService, loggerService)
   window.addEventListener('beforeunload', () => {
     void loggerService.flush()
@@ -166,7 +185,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // third-party library noise reach the Console channel and Output panel
   // without requiring DevTools to be open.
   const consoleLogger = loggerService.createLogger({ id: 'console', name: 'Console' })
-  installConsoleInterceptor({ logger: consoleLogger })
+  workbenchStore.add(installConsoleInterceptor({ logger: consoleLogger }))
 
   setMonacoLoaderLogger(loggerService.createLogger({ id: 'monaco', name: 'Monaco' }))
   setUnexpectedErrorHandler((e) => {
@@ -222,32 +241,38 @@ async function bootstrapWorkbench(): Promise<void> {
   const workspaceWire = ProxyChannel.toService<IWorkspaceServiceWire>(
     ipcService.getChannel(ServiceChannels.Workspace),
   )
-  const workspaceService = new RendererWorkspaceService(
-    workspaceWire,
-    telemetry,
-    loggerService.createLogger({ id: 'workspace', name: 'Workspace' }),
+  const workspaceService = workbenchStore.add(
+    new RendererWorkspaceService(
+      workspaceWire,
+      telemetry,
+      loggerService.createLogger({ id: 'workspace', name: 'Workspace' }),
+    ),
   )
   services.set(IWorkspaceService, workspaceService)
 
   // Configuration core. UserSettingsSync (below) bridges the User layer to
   // IStorageService so user settings persist across restarts.
-  const configurationService = new ConfigurationService()
+  const configurationService = workbenchStore.add(new ConfigurationService())
   services.set(IConfigurationService, configurationService)
 
   // Create the DI container (registers itself as IInstantiationService)
   const instantiation = new InstantiationService(services)
 
   // Renderer-only service implementations (pure local state, no IPC).
-  const editorGroupsService = new EditorGroupsService(
-    loggerService.createLogger({ id: 'editorGroups', name: 'Editor Groups' }),
+  const editorGroupsService = workbenchStore.add(
+    new EditorGroupsService(
+      loggerService.createLogger({ id: 'editorGroups', name: 'Editor Groups' }),
+    ),
   )
-  const editorService = new EditorService(
-    editorGroupsService,
-    telemetry,
-    loggerService.createLogger({ id: 'editor', name: 'Editor' }),
+  const editorService = workbenchStore.add(
+    new EditorService(
+      editorGroupsService,
+      telemetry,
+      loggerService.createLogger({ id: 'editor', name: 'Editor' }),
+    ),
   )
   const statusBarService = new StatusBarService()
-  const outputService = instantiation.createInstance(OutputService)
+  const outputService = workbenchStore.add(instantiation.createInstance(OutputService))
   const commandService = new CommandService(
     instantiation,
     telemetry,
@@ -267,29 +292,31 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IEditorResolverService, editorResolverService)
 
   // Services with @IStorageService dependencies go through DI.
-  const viewsService = instantiation.createInstance(ViewsService)
+  const viewsService = workbenchStore.add(instantiation.createInstance(ViewsService))
   services.set(IViewsService, viewsService)
   const quickInputService = instantiation.createInstance(QuickInputService)
   services.set(IQuickInputService, quickInputService)
-  const layoutService = instantiation.createInstance(LayoutService)
+  const layoutService = workbenchStore.add(instantiation.createInstance(LayoutService))
   services.set(ILayoutService, layoutService)
 
-  const recentFilesService = instantiation.createInstance(RecentFilesService)
+  const recentFilesService = workbenchStore.add(instantiation.createInstance(RecentFilesService))
   services.set(IRecentFilesService, recentFilesService)
 
-  const recentEditorsService = instantiation.createInstance(RecentEditorsService)
+  const recentEditorsService = workbenchStore.add(
+    instantiation.createInstance(RecentEditorsService),
+  )
   services.set(IRecentEditorsService, recentEditorsService)
 
   // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
-  const dialogService = new RendererDialogService()
+  const dialogService = workbenchStore.add(new RendererDialogService())
   services.set(IDialogService, dialogService)
 
   // INotificationService — per-window, renderer-only. <NotificationsToast /> and
   // <NotificationsCenter /> are mounted as portals by Workbench.
-  const notificationService = instantiation.createInstance(NotificationService)
+  const notificationService = workbenchStore.add(instantiation.createInstance(NotificationService))
   services.set(INotificationService, notificationService)
   // IProgressService — depends on StatusBar + Notification (both already set).
-  const progressService = instantiation.createInstance(ProgressService)
+  const progressService = workbenchStore.add(instantiation.createInstance(ProgressService))
   services.set(IProgressService, progressService)
   // Route unhandled errors to the sticky Error toast so they're visible to users.
   setUnexpectedErrorHandler((e) => {
@@ -304,7 +331,7 @@ async function bootstrapWorkbench(): Promise<void> {
 
   // Explorer tree state — single instance for the renderer; depends on
   // IWorkspaceService + IFileService so it must be created via DI.
-  const explorerTreeService = instantiation.createInstance(ExplorerTreeService)
+  const explorerTreeService = workbenchStore.add(instantiation.createInstance(ExplorerTreeService))
   services.set(IExplorerTreeService, explorerTreeService)
 
   // Workspace-wide text search. Reads via IFileService + IWorkspaceService.
@@ -329,49 +356,57 @@ async function bootstrapWorkbench(): Promise<void> {
   // History must be available before SessionService so createSession can record
   // to it from the very first call. initialize() is fire-and-forget — early
   // adds are merged in once hydration completes.
-  const acpSessionHistoryService = instantiation.createInstance(AcpSessionHistoryService)
+  const acpSessionHistoryService = workbenchStore.add(
+    instantiation.createInstance(AcpSessionHistoryService),
+  )
   services.set(IAcpSessionHistoryService, acpSessionHistoryService)
   void acpSessionHistoryService.initialize()
   // Per-agent MODEL/MODE defaults — separate storage key from history so users
   // clearing one don't blow away the other. Must be available before
   // SessionService so createSession can apply saved defaults on first use.
-  const acpAgentDefaultsService = instantiation.createInstance(AcpAgentDefaultsService)
+  const acpAgentDefaultsService = workbenchStore.add(
+    instantiation.createInstance(AcpAgentDefaultsService),
+  )
   services.set(IAcpAgentDefaultsService, acpAgentDefaultsService)
   void acpAgentDefaultsService.initialize()
-  const acpSessionService = instantiation.createInstance(AcpSessionService)
+  const acpSessionService = workbenchStore.add(instantiation.createInstance(AcpSessionService))
   services.set(IAcpSessionService, acpSessionService)
 
   // Renderer-only AGENTS UI state. Focus is a pure event bus; ChatLocation
   // persists across restarts and owns the EditorArea↔SecondarySideBar toggle.
-  const acpFocusService = new AcpFocusService()
+  const acpFocusService = workbenchStore.add(new AcpFocusService())
   services.set(IAcpFocusService, acpFocusService)
-  const acpChatLocationService = instantiation.createInstance(AcpChatLocationService)
+  const acpChatLocationService = workbenchStore.add(
+    instantiation.createInstance(AcpChatLocationService),
+  )
   services.set(IAcpChatLocationService, acpChatLocationService)
   void acpChatLocationService.initialize()
 
   // Kick off async load of user settings from storage. Once it resolves,
   // ConfigurationService fires onDidChangeConfiguration so any subscribers
   // (Settings editor, theme contributions) refresh — no need to await here.
-  const userSettingsSync = instantiation.createInstance(UserSettingsSync)
+  const userSettingsSync = workbenchStore.add(instantiation.createInstance(UserSettingsSync))
   void userSettingsSync.initialize()
 
   // User keybinding overrides. Must be created after all actions are registered
   // (they run at module-load time via side-effect imports) so the default
   // snapshot in the constructor captures all built-in keybindings.
   await import('./contributions/index.js')
-  const userKeybindingsService = instantiation.createInstance(UserKeybindingsService)
+  const userKeybindingsService = workbenchStore.add(
+    instantiation.createInstance(UserKeybindingsService),
+  )
   services.set(IUserKeybindingsService, userKeybindingsService)
   void userKeybindingsService.initialize()
 
   // Instantiate the six workbench Parts. Each Part auto-registers with the
   // LayoutService on construction; React lookups (`getPart`) resolve them.
   for (const Ctor of ALL_PART_CTORS) {
-    instantiation.createInstance(Ctor)
+    workbenchStore.add(instantiation.createInstance(Ctor))
   }
 
   // ContributionService wires lifecycle → built-in contributions auto-instantiate.
   // The side-effect import at the top of this file populated the registry.
-  const contributionService = new ContributionService(lifecycle, instantiation)
+  const contributionService = workbenchStore.add(new ContributionService(lifecycle, instantiation))
   services.set(IContributionService, contributionService)
 
   // Create default output channel

@@ -7,6 +7,7 @@
 import {
   AbstractLogger,
   ConsoleLogger,
+  Disposable,
   ILoggerService,
   LogLevel,
   MultiplexLogger,
@@ -98,7 +99,7 @@ class IpcLogger extends AbstractLogger {
  * Each `createLogger` call returns a logger that sends entries to the main process
  * via ILogChannelService IPC, plus a ConsoleLogger in dev builds.
  */
-export class RendererLoggerService implements ILoggerServiceType {
+export class RendererLoggerService extends Disposable implements ILoggerServiceType {
   declare readonly _serviceBrand: undefined
 
   private _level: LogLevel = LogLevel.Info
@@ -106,16 +107,18 @@ export class RendererLoggerService implements ILoggerServiceType {
   private readonly _batcher: WindowLogBatcher
 
   constructor(logChannelProxy: ILogChannelService, windowId: number) {
+    super()
     this._batcher = new WindowLogBatcher(logChannelProxy, windowId)
   }
 
   createLogger(channel: ILogChannel): ILogger {
     let logger = this._loggers.get(channel.id)
     if (!logger) {
-      const ipcLogger = new IpcLogger(this._batcher, channel.id, this._level)
+      const ipcLogger = this._register(new IpcLogger(this._batcher, channel.id, this._level))
       // In dev, also echo to console for quick iteration
       if (import.meta.env.DEV) {
-        logger = new MultiplexLogger([ipcLogger, new ConsoleLogger(this._level)], this._level)
+        const consoleLogger = this._register(new ConsoleLogger(this._level))
+        logger = this._register(new MultiplexLogger([ipcLogger, consoleLogger], this._level))
       } else {
         logger = ipcLogger
       }

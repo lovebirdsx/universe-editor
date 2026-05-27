@@ -17,7 +17,6 @@
 
 import {
   Disposable,
-  Event,
   type ILogger,
   type ILoggerService,
   type IStorageService,
@@ -124,10 +123,18 @@ export abstract class PersistedStateBase<TState> extends Disposable {
    */
   private async _scheduleInitialLoad(): Promise<void> {
     if (!this._workspace.current) {
-      await Promise.race([
-        Event.toPromise(this._storage.onDidChangeWorkspaceScope),
-        new Promise<void>((resolve) => setTimeout(resolve, this._initialLoadTimeoutMs)),
-      ])
+      await new Promise<void>((resolve) => {
+        let resolved = false
+        const settle = () => {
+          if (resolved) return
+          resolved = true
+          subscription.dispose()
+          clearTimeout(timer)
+          resolve()
+        }
+        const subscription = this._register(this._storage.onDidChangeWorkspaceScope(settle))
+        const timer = setTimeout(settle, this._initialLoadTimeoutMs)
+      })
     }
     await this._loadFromScope(this._currentScope())
   }

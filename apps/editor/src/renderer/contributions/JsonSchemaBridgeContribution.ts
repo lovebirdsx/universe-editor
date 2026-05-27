@@ -86,26 +86,32 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
     this._settingsDisposables.user?.dispose()
     this._settingsDisposables.project?.dispose()
 
-    this._settingsDisposables.user = JSONContributionRegistry.registerSchema({
-      uri: SETTINGS_USER_URI,
-      fileMatch: ['**/settings.json'],
-      schema,
-    })
-    this._settingsDisposables.project = JSONContributionRegistry.registerSchema({
-      uri: SETTINGS_PROJECT_URI,
-      fileMatch: ['**/.universe-editor/settings.json'],
-      schema,
-    })
+    this._settingsDisposables.user = this._register(
+      JSONContributionRegistry.registerSchema({
+        uri: SETTINGS_USER_URI,
+        fileMatch: ['**/settings.json'],
+        schema,
+      }),
+    )
+    this._settingsDisposables.project = this._register(
+      JSONContributionRegistry.registerSchema({
+        uri: SETTINGS_PROJECT_URI,
+        fileMatch: ['**/.universe-editor/settings.json'],
+        schema,
+      }),
+    )
   }
 
   private _refreshKeybindingsSchema(): void {
     const schema = buildKeybindingsJsonSchema()
     this._keybindingsDisposable?.dispose()
-    this._keybindingsDisposable = JSONContributionRegistry.registerSchema({
-      uri: KEYBINDINGS_URI,
-      fileMatch: ['**/keybindings.json'],
-      schema,
-    })
+    this._keybindingsDisposable = this._register(
+      JSONContributionRegistry.registerSchema({
+        uri: KEYBINDINGS_URI,
+        fileMatch: ['**/keybindings.json'],
+        schema,
+      }),
+    )
   }
 
   private _pushSchemasToMonaco(): void {

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IHostService } from '@universe-editor/platform'
+import { IHostService, markAsSingleton } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import styles from './TitleBar.module.css'
 
@@ -12,7 +12,7 @@ export function WindowControls() {
     void host.isMaximized().then((v) => {
       if (!cancelled) setIsMaximized(v)
     })
-    const sub = host.onDidChangeMaximized((v) => setIsMaximized(v))
+    const sub = markAsSingleton(host.onDidChangeMaximized((v) => setIsMaximized(v)))
     return () => {
       cancelled = true
       sub.dispose()

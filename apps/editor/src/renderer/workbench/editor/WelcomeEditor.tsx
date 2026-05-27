@@ -5,7 +5,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useSyncExternalStore } from 'react'
-import { IEditorInput, IWorkspaceService, localize } from '@universe-editor/platform'
+import {
+  IEditorInput,
+  IWorkspaceService,
+  localize,
+  markAsSingleton,
+} from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import styles from './EditorArea.module.css'
 
@@ -15,7 +20,7 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
   const workspace = useService(IWorkspaceService)
   const recent = useSyncExternalStore(
     (onChange) => {
-      const d = workspace.onDidChangeRecent(() => onChange())
+      const d = markAsSingleton(workspace.onDidChangeRecent(() => onChange()))
       return () => d.dispose()
     },
     () => workspace.recent,

@@ -86,11 +86,13 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
 
   private _attachGroup(group: IEditorGroup): void {
     if (this._groupListeners.has(group.id)) return
-    const sub1 = group.onDidChangeModel(() => {
-      this._syncEditorListeners()
-      this._schedulePersist()
-    })
-    const sub2 = group.onDidActiveEditorChange(() => this._schedulePersist())
+    const sub1 = this._register(
+      group.onDidChangeModel(() => {
+        this._syncEditorListeners()
+        this._schedulePersist()
+      }),
+    )
+    const sub2 = this._register(group.onDidActiveEditorChange(() => this._schedulePersist()))
     this._groupListeners.set(group.id, {
       dispose: () => {
         sub1.dispose()
@@ -108,7 +110,7 @@ export class WorkspaceRestoreContribution extends Disposable implements IWorkben
         if (!this._editorListeners.has(editor.id)) {
           this._editorListeners.set(
             editor.id,
-            editor.onDidChangeDirty(() => this._schedulePersist()),
+            this._register(editor.onDidChangeDirty(() => this._schedulePersist())),
           )
         }
       }

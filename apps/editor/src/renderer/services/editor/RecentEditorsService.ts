@@ -116,10 +116,12 @@ export class RecentEditorsService extends Disposable implements IRecentEditorsSe
 
   private _watchGroup(group: IEditorGroup): void {
     if (this._groupWatchers.has(group.id)) return
-    const d = group.onDidActiveEditorChange(() => {
-      const active = group.activeEditor
-      if (active) this._touch(group.id, active.id)
-    })
+    const d = this._register(
+      group.onDidActiveEditorChange(() => {
+        const active = group.activeEditor
+        if (active) this._touch(group.id, active.id)
+      }),
+    )
     this._groupWatchers.set(group.id, d)
   }
 

@@ -8,6 +8,7 @@ import { useSyncExternalStore } from 'react'
 import { createPortal } from 'react-dom'
 import {
   localize,
+  markAsSingleton,
   type IConfirmOptions,
   type IConfirmResult,
   type IPromptOptions,
@@ -18,7 +19,7 @@ import styles from './DialogHost.module.css'
 export function DialogHost({ service }: { service: RendererDialogService }) {
   const head = useSyncExternalStore(
     (onChange) => {
-      const d = service.onDidChange(onChange)
+      const d = markAsSingleton(service.onDidChange(onChange))
       return () => d.dispose()
     },
     () => service.queue[0],

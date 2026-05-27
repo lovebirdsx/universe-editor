@@ -10,7 +10,7 @@ import {
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { IQuickInputService } from '@universe-editor/platform'
+import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
 import type { IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import {
@@ -402,7 +402,7 @@ export function QuickInputPortal() {
   const [panelState, setPanelState] = useState<QuickPickState | null>(svc.currentState)
 
   useEffect(() => {
-    const d = svc.onDidChangeState((s) => setPanelState(s))
+    const d = markAsSingleton(svc.onDidChangeState((s) => setPanelState(s)))
     setPanelState(svc.currentState)
     return () => d.dispose()
   }, [svc])

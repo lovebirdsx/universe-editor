@@ -42,6 +42,7 @@ export class ViewsService extends Disposable implements IViewsService {
         void this._reload()
       }),
     )
+
     // Auto-select first container for a location whenever a new container
     // registers and the location has nothing active yet.
     this._register(

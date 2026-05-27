@@ -17,6 +17,7 @@ import type { IDisposable, IObservable } from '@universe-editor/platform'
 import {
   autorun,
   ICommandService,
+  markAsSingleton,
   type InstantiationService,
   type ServiceIdentifier,
 } from '@universe-editor/platform'
@@ -46,11 +47,13 @@ export function useObservable<T>(obs: IObservable<T>): T {
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       let firstRun = true
-      const d = autorun((r) => {
-        obs.read(r)
-        if (!firstRun) onStoreChange()
-        firstRun = false
-      })
+      const d = markAsSingleton(
+        autorun((r) => {
+          obs.read(r)
+          if (!firstRun) onStoreChange()
+          firstRun = false
+        }),
+      )
       return () => d.dispose()
     },
     [obs],

@@ -6,7 +6,7 @@
  *  KeybindingsRegistry.
  *--------------------------------------------------------------------------------------------*/
 
-import { combinedDisposable, IDisposable } from '../base/lifecycle.js'
+import { combinedDisposable, IDisposable, markAsSingleton } from '../base/lifecycle.js'
 import { ServicesAccessor } from '../di/instantiation.js'
 import { CommandsRegistry, ICommandMetadata } from './commandRegistry.js'
 import { ContextKeyExpr, ContextKeyExpression } from './contextKeyExpr.js'
@@ -145,5 +145,5 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
     disposables.push(KeybindingsRegistry.registerKeybinding(item))
   }
 
-  return combinedDisposable(...disposables)
+  return markAsSingleton(combinedDisposable(...disposables))
 }

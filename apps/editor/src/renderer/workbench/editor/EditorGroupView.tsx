@@ -19,12 +19,14 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import {
+  combinedDisposable,
   EditorInput,
   EditorRegistry,
   GroupDirection,
   ICommandService,
   IContextKeyService,
   IDialogService,
+  markAsSingleton,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
@@ -98,11 +100,10 @@ function useGroupVersion(group: IEditorGroup): string {
       const a = group.onDidChangeModel(() => onChange())
       const b = group.onDidActiveEditorChange(() => onChange())
       const dirtyUnsubs = group.editors.map((e) => e.onDidChangeDirty(() => onChange()))
-      return () => {
-        a.dispose()
-        b.dispose()
-        dirtyUnsubs.forEach((d) => d.dispose())
-      }
+      // React owns lifecycle via useSyncExternalStore; mark singleton so
+      // beforeunload (fires before React teardown on reload) doesn't report leaks.
+      const combined = markAsSingleton(combinedDisposable(a, b, ...dirtyUnsubs))
+      return () => combined.dispose()
     },
     () =>
       `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}`,
@@ -113,7 +114,7 @@ function useGroupVersion(group: IEditorGroup): string {
 function useActiveGroup(groupsService: IEditorGroupsService): IEditorGroup {
   return useSyncExternalStore(
     (onChange) => {
-      const d = groupsService.onDidActiveGroupChange(() => onChange())
+      const d = markAsSingleton(groupsService.onDidActiveGroupChange(() => onChange()))
       return () => d.dispose()
     },
     () => groupsService.activeGroup,

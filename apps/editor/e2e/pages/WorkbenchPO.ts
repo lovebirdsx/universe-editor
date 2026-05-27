@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test'
+import type { E2EDisposableLeakReport } from '../../src/shared/e2e/contract.js'
 import { ActivityBarPO } from './ActivityBarPO.js'
 import { SideBarPO } from './SideBarPO.js'
 import { StatusBarPO } from './StatusBarPO.js'
@@ -75,5 +76,44 @@ export class WorkbenchPO {
   /** Return the number of editor groups currently open. */
   async getEditorGroupCount(): Promise<number> {
     return this.page.evaluate(() => window.__E2E__!.getEditorGroupCount())
+  }
+
+  /**
+   * Read the Disposable leak report left in sessionStorage by the previous session.
+   * Returns null if the previous session detected no leaks (or if the tracker
+   * was not installed — i.e., the app was not launched in DEV or E2E mode).
+   */
+  async getLeakReport(): Promise<E2EDisposableLeakReport | null> {
+    return this.page.evaluate(() => window.__E2E__!.getStoredLeakReport())
+  }
+
+  /**
+   * Fire the "Restart Editor" command and wait for the reloaded page to reach
+   * Restored. Must be called instead of a bare runCommand + waitForRestored pair
+   * because the restart is IPC-async: waitForRestored() would resolve on the
+   * *old* (still-alive) page before the reload begins.
+   *
+   * Registers the navigation listener first, then fires the command, then
+   * awaits the reload + probe + Restored in order.
+   */
+  async waitForRestartRestore(): Promise<void> {
+    // Register listener BEFORE firing the command so we don't miss the reload event.
+    const loaded = this.page.waitForEvent('load')
+
+    // Fire restart. win.reload() is triggered via IPC (E2E mode uses reload not relaunch).
+    void this.page
+      .evaluate(() => void window.__E2E__!.runCommand('workbench.action.restartEditor'))
+      .catch(() => {})
+
+    // Wait for the page to reload and reach 'load' state.
+    await loaded
+
+    // Wait for the E2E probe to be reinstalled (set at LifecyclePhase.Ready).
+    await this.page.waitForFunction(() =>
+      Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+    )
+
+    // Wait for the workbench to reach Restored.
+    await this.page.evaluate(() => window.__E2E__!.whenRestored())
   }
 }

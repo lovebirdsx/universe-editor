@@ -81,12 +81,18 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
 
   constructor(private readonly _logger: ILogger = new NullLogger()) {
     super()
-    const initial = new EditorGroup(new EditorGroupModel(), this)
+    const initial = new EditorGroup(this._register(new EditorGroupModel()), this)
     this._groups.push(initial)
     this._mru.push(initial)
     this._grid = new Grid<EditorGroup>(initial, Orientation.Horizontal)
     this._activeGroup = observableValue<EditorGroup>('activeGroup', initial)
     this._watchGroup(initial)
+    this._register({
+      dispose: () => {
+        for (const d of this._groupWatchers.values()) d.dispose()
+        this._groupWatchers.clear()
+      },
+    })
   }
 
   get activeGroup(): IEditorGroup {
@@ -211,7 +217,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
 
   addGroup(location: IEditorGroup | number, direction: GroupDirection): IEditorGroup {
     const target = this._resolve(location) ?? (this.activeGroup as EditorGroup)
-    const newGroup = new EditorGroup(new EditorGroupModel(), this)
+    const newGroup = new EditorGroup(this._register(new EditorGroupModel()), this)
     this._grid.addView(newGroup, 200, target as EditorGroup, directionToGridDirection(direction))
     this._groups.push(newGroup)
     this._mru.push(newGroup)
@@ -278,15 +284,17 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
   // Helpers ------------------------------------------------------------------
 
   private _watchGroup(group: EditorGroup): void {
-    const d = group.model.onDidChangeModel(() => {
-      if (group.count === 0 && this._groups.length > 1) {
-        queueMicrotask(() => {
-          if (group.count === 0 && this._groups.includes(group)) {
-            this.removeGroup(group)
-          }
-        })
-      }
-    })
+    const d = this._register(
+      group.model.onDidChangeModel(() => {
+        if (group.count === 0 && this._groups.length > 1) {
+          queueMicrotask(() => {
+            if (group.count === 0 && this._groups.includes(group)) {
+              this.removeGroup(group)
+            }
+          })
+        }
+      }),
+    )
     this._groupWatchers.set(group.id, d)
   }
 
@@ -363,7 +371,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       if (i === 0) {
         leafGroups.push(seed)
       } else {
-        const newGroup = new EditorGroup(new EditorGroupModel(), this)
+        const newGroup = new EditorGroup(this._register(new EditorGroupModel()), this)
         leafGroups.push(newGroup)
         this._groups.push(newGroup)
         this._mru.push(newGroup)

@@ -22,6 +22,7 @@ import {
   CommandsRegistry,
   IEditorGroupsService,
   combinedDisposable,
+  markAsSingleton,
   type IDisposable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -100,7 +101,7 @@ export async function bridgeAllMonacoActions(): Promise<IDisposable> {
   const mod = (await import('monaco-editor/esm/vs/editor/browser/editorExtensions.js')) as {
     EditorExtensionsRegistry: IMonacoEditorExtensionsRegistry
   }
-  return bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, [])
+  return markAsSingleton(bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, []))
 }
 
 /**

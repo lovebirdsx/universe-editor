@@ -1,4 +1,5 @@
 import {
+  Disposable,
   IStorageService,
   StorageScope,
   URI,
@@ -30,14 +31,15 @@ interface PersistedRecentFile {
 const STORAGE_KEY = 'workbench.recentFiles'
 const MAX_ITEMS = 50
 
-export class RecentFilesService implements IRecentFilesService {
+export class RecentFilesService extends Disposable implements IRecentFilesService {
   readonly _serviceBrand: undefined
 
   private _items: IRecentFile[] = []
   private _loadPromise: Promise<void> | null = null
 
   constructor(@IStorageService private readonly _storage: IStorageService) {
-    this._storage.onDidChangeWorkspaceScope(() => this._reset())
+    super()
+    this._register(this._storage.onDidChangeWorkspaceScope(() => this._reset()))
   }
 
   private _ensureLoaded(): Promise<void> {

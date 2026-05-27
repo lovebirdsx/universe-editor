@@ -10,7 +10,9 @@ import {
   IContextKeyService,
   MenuId,
   MenuRegistry,
+  combinedDisposable,
   isSubmenuEntry,
+  markAsSingleton,
 } from '@universe-editor/platform'
 import type { IMenuItem } from '@universe-editor/platform'
 
@@ -65,10 +67,8 @@ export function useViewTitleActions(
         cacheRef.current = resolve(menuId, ctx)
         onChange()
       })
-      return () => {
-        d1.dispose()
-        d2.dispose()
-      }
+      const combined = markAsSingleton(combinedDisposable(d1, d2))
+      return () => combined.dispose()
     },
     [menuId, ctx],
   )

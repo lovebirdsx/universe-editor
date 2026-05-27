@@ -20,6 +20,7 @@ import {
   IContextKeyService,
   ILayoutService,
   IViewsService,
+  markAsSingleton,
   PartId,
   ViewContainerLocation,
   ViewContainerRegistry,
@@ -58,10 +59,15 @@ export function ViewContainerHeader({ location, partId, customToolbarMap }: Prop
 
   const scopedCtxRef = useRef<IScopedContextKeyService | null>(null)
   if (scopedCtxRef.current === null) {
-    scopedCtxRef.current = rootCtx.createScoped({
-      activeViewContainerLocation: locationKey(location),
-      activeViewContainer: activeId,
-    })
+    // React useEffect cleanup disposes on unmount, but beforeunload (page
+    // reload / Restart Editor) fires before React teardown — mark singleton
+    // so the leak tracker doesn't flag this scoped service and its descendants.
+    scopedCtxRef.current = markAsSingleton(
+      rootCtx.createScoped({
+        activeViewContainerLocation: locationKey(location),
+        activeViewContainer: activeId,
+      }),
+    )
   }
 
   useEffect(() => {

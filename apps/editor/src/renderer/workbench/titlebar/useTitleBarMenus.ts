@@ -9,7 +9,9 @@ import {
   CommandsRegistry,
   IContextKeyService,
   MenuRegistry,
+  combinedDisposable,
   isSubmenuEntry,
+  markAsSingleton,
 } from '@universe-editor/platform'
 import type { IMenuItem, ISubmenuItem, MenuId } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -98,10 +100,11 @@ export function useMenuItems(menuId: MenuId): ResolvedMenuSection[] {
         cacheRef.current = { menuId, resolved: resolveSections(menuId, contextKeyService) }
         onChange()
       })
-      return () => {
-        d1.dispose()
-        d2.dispose()
-      }
+      // React owns lifecycle via useSyncExternalStore — these are disposed on
+      // unmount. Mark as singleton so beforeunload (which fires before React
+      // teardown on page reload) doesn't report them as leaks.
+      const combined = markAsSingleton(combinedDisposable(d1, d2))
+      return () => combined.dispose()
     },
     [menuId, contextKeyService],
   )

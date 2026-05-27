@@ -66,10 +66,10 @@ export class MainHostService implements IHostServiceWire, IDisposable {
   }
 
   restart(): Promise<void> {
-    // Under `electron-vite dev`, reloading the current window keeps the app
-    // attached to the live Vite dev server instead of relaunching a detached
-    // Electron process with no managed renderer.
-    if (process.env['ELECTRON_RENDERER_URL']) {
+    // In dev mode (Vite dev server) or E2E mode, reload the current window.
+    // In E2E mode, relaunch would start a new process that Playwright can't follow,
+    // and sessionStorage wouldn't survive across process boundaries.
+    if (process.env['ELECTRON_RENDERER_URL'] || process.env['UNIVERSE_E2E']) {
       this._win.reload()
       this._logger.info(`restart reloadWindow id=${this._win.id}`)
       return Promise.resolve()

@@ -1,8 +1,10 @@
 import { useCallback, useState, useSyncExternalStore } from 'react'
 import {
+  combinedDisposable,
   IEditorGroupsService,
   IHostService,
   IWorkspaceService,
+  markAsSingleton,
   type IEditorGroup,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -46,7 +48,7 @@ export function TitleBar() {
 
   const current = useSyncExternalStore(
     (onChange) => {
-      const d = workspace.onDidChangeWorkspace(() => onChange())
+      const d = markAsSingleton(workspace.onDidChangeWorkspace(() => onChange()))
       return () => d.dispose()
     },
     () => workspace.current,
@@ -57,17 +59,17 @@ export function TitleBar() {
       const subscribeGroup = (group: IEditorGroup) => {
         const a = group.onDidChangeModel(() => onChange())
         const b = group.onDidActiveEditorChange(() => onChange())
-        return () => {
-          a.dispose()
-          b.dispose()
-        }
+        const combined = markAsSingleton(combinedDisposable(a, b))
+        return () => combined.dispose()
       }
       let unsubGroup = subscribeGroup(groupsService.activeGroup)
-      const d = groupsService.onDidActiveGroupChange((newGroup) => {
-        unsubGroup()
-        unsubGroup = subscribeGroup(newGroup)
-        onChange()
-      })
+      const d = markAsSingleton(
+        groupsService.onDidActiveGroupChange((newGroup) => {
+          unsubGroup()
+          unsubGroup = subscribeGroup(newGroup)
+          onChange()
+        }),
+      )
       return () => {
         d.dispose()
         unsubGroup()

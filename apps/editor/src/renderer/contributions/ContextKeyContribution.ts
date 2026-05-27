@@ -125,8 +125,8 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // Subscribe to all group / editor mutations.
     const subscribeActiveGroup = () => {
       const group = editorGroupsService.activeGroup
-      const a = group.onDidChangeModel(syncGroupKeys)
-      const b = group.onDidActiveEditorChange(syncGroupKeys)
+      const a = this._register(group.onDidChangeModel(syncGroupKeys))
+      const b = this._register(group.onDidActiveEditorChange(syncGroupKeys))
       return () => {
         a.dispose()
         b.dispose()

@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Disposable,
   EditorInput,
   IEditorGroupsService,
   IEditorInput,
@@ -18,6 +19,7 @@ import {
   URI,
   derived,
   observableValue,
+  toDisposable,
   transaction,
   type ILogger,
 } from '@universe-editor/platform'
@@ -53,7 +55,7 @@ function toLegacy(editor: EditorInput | undefined): IEditorInput | undefined {
   return editor
 }
 
-export class EditorService implements IEditorService {
+export class EditorService extends Disposable implements IEditorService {
   declare readonly _serviceBrand: undefined
 
   private readonly _groupsService: IEditorGroupsService
@@ -76,17 +78,21 @@ export class EditorService implements IEditorService {
     private readonly _telemetry?: ITelemetryService,
     private readonly _logger: ILogger = new NullLogger(),
   ) {
+    super()
     this._groupsService = groupsService ?? new EditorGroupsService()
     this._sync()
     // Re-sync on every active-group transition AND on every editor change within
     // the active group — otherwise actions that call `group.openEditor()` directly
     // (e.g. NewUntitledFileAction) would not be reflected in activeEditor / openEditors.
     let unsubscribeActive = this._subscribeActiveGroup()
-    this._groupsService.onDidActiveGroupChange(() => {
-      unsubscribeActive()
-      unsubscribeActive = this._subscribeActiveGroup()
-      this._sync()
-    })
+    this._register(
+      this._groupsService.onDidActiveGroupChange(() => {
+        unsubscribeActive()
+        unsubscribeActive = this._subscribeActiveGroup()
+        this._sync()
+      }),
+    )
+    this._register(toDisposable(() => unsubscribeActive()))
   }
 
   private _subscribeActiveGroup(): () => void {
@@ -94,8 +100,8 @@ export class EditorService implements IEditorService {
     const handler = () => {
       if (this._suppressGroupSync === 0) this._sync()
     }
-    const a = group.onDidChangeModel(handler)
-    const b = group.onDidActiveEditorChange(handler)
+    const a = this._register(group.onDidChangeModel(handler))
+    const b = this._register(group.onDidActiveEditorChange(handler))
     return () => {
       a.dispose()
       b.dispose()

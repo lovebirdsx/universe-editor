@@ -31,6 +31,8 @@ import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import {
   E2E_PROBE_ENABLED_KEY,
   E2E_PROBE_KEY,
+  DISPOSABLE_LEAK_REPORT_KEY,
+  type E2EDisposableLeakReport,
   type E2ELifecyclePhase,
   type E2EProbe,
   type E2EStatusBarEntry,
@@ -165,6 +167,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     getOutputChannelNames: () => services.outputService.channelNames.get(),
     createOutputChannel: (name: string) => {
       services.outputService.createChannel(name)
+    },
+    getStoredLeakReport: (): E2EDisposableLeakReport | null => {
+      const raw = sessionStorage.getItem(DISPOSABLE_LEAK_REPORT_KEY)
+      if (!raw) return null
+      return JSON.parse(raw) as E2EDisposableLeakReport
     },
   }
 

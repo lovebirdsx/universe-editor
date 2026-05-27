@@ -25,6 +25,8 @@ import {
   IEditorResolverService,
   IFileService,
   IWorkspaceService,
+  combinedDisposable,
+  markAsSingleton,
   type URI,
 } from '@universe-editor/platform'
 import {
@@ -63,10 +65,8 @@ export function ExplorerView() {
   useEffect(() => {
     const ds = tree.onDidChangeStructure(() => setStructureVersion((v) => v + 1))
     const dsel = tree.onDidChangeSelection(() => setSelectionVersion((v) => v + 1))
-    return () => {
-      ds.dispose()
-      dsel.dispose()
-    }
+    const combined = markAsSingleton(combinedDisposable(ds, dsel))
+    return () => combined.dispose()
   }, [tree])
 
   const [menu, setMenu] = useState<ContextMenuState | null>(null)
@@ -100,10 +100,12 @@ export function ExplorerView() {
   // only when the target row is outside the virtualizer's overscan window.
   const [revealRequest, setRevealRequest] = useState<{ key: string; tick: number } | null>(null)
   useEffect(() => {
-    const d = tree.onReveal((uri) => {
-      const key = uri.toString()
-      setRevealRequest((prev) => ({ key, tick: (prev?.tick ?? 0) + 1 }))
-    })
+    const d = markAsSingleton(
+      tree.onReveal((uri) => {
+        const key = uri.toString()
+        setRevealRequest((prev) => ({ key, tick: (prev?.tick ?? 0) + 1 }))
+      }),
+    )
     return () => d.dispose()
   }, [tree])
 

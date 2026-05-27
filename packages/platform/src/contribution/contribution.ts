@@ -3,7 +3,7 @@
  *  Inspired by VSCode's WorkbenchContributionsRegistry (workbench/common/contributions.ts).
  *--------------------------------------------------------------------------------------------*/
 
-import { IDisposable, toDisposable } from '../base/lifecycle.js'
+import { Disposable, IDisposable } from '../base/lifecycle.js'
 import { createDecorator, ServicesAccessor } from '../di/instantiation.js'
 import { InstantiationService } from '../di/instantiationService.js'
 import { ILifecycleService, LifecyclePhase } from '../lifecycle/lifecycleService.js'
@@ -72,15 +72,17 @@ class ContributionsRegistryImpl implements IContributionsRegistry {
     const descriptor: IContributionDescriptor = { id, ctor, phase }
     list.push(descriptor)
 
-    return toDisposable(() => {
-      const arr = this._contributions.get(phase)
-      if (arr) {
-        const idx = arr.indexOf(descriptor)
-        if (idx !== -1) {
-          arr.splice(idx, 1)
+    return {
+      dispose: () => {
+        const arr = this._contributions.get(phase)
+        if (arr) {
+          const idx = arr.indexOf(descriptor)
+          if (idx !== -1) {
+            arr.splice(idx, 1)
+          }
         }
-      }
-    })
+      },
+    }
   }
 
   getContributions(phase: WorkbenchPhase): readonly IContributionDescriptor[] {
@@ -107,7 +109,7 @@ export const IContributionService = createDecorator<IContributionService>('contr
  * Manages the instantiation of all registered workbench contributions.
  * Wire this up with the lifecycle service to automatically advance through phases.
  */
-export class ContributionService implements IContributionService {
+export class ContributionService extends Disposable implements IContributionService {
   declare readonly _serviceBrand: undefined
 
   private readonly _instances = new Map<string, IWorkbenchContribution>()
@@ -116,6 +118,7 @@ export class ContributionService implements IContributionService {
     @ILifecycleService private readonly _lifecycle: ILifecycleService,
     private readonly _instantiationService: InstantiationService,
   ) {
+    super()
     // Schedule each phase when the lifecycle advances
     this._lifecycle
       .when(LifecyclePhase.Starting)
@@ -134,7 +137,7 @@ export class ContributionService implements IContributionService {
       if (this._instances.has(descriptor.id)) {
         continue // already instantiated
       }
-      const instance = this._instantiationService.createInstance(descriptor.ctor)
+      const instance = this._register(this._instantiationService.createInstance(descriptor.ctor))
       this._instances.set(descriptor.id, instance)
     }
   }

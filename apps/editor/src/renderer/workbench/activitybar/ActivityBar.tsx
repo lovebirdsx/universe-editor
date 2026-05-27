@@ -4,6 +4,7 @@ import {
   ViewContainerLocation,
   IViewsService,
   ILayoutService,
+  markAsSingleton,
   PartId,
   localize,
 } from '@universe-editor/platform'
@@ -53,7 +54,7 @@ export function ActivityBar({ part }: { part?: IPart | undefined } = {}) {
       setContainers([...ViewContainerRegistry.getViewContainers(ViewContainerLocation.SideBar)])
     }
     refresh()
-    const disposable = ViewContainerRegistry.onDidRegisterViewContainer(refresh)
+    const disposable = markAsSingleton(ViewContainerRegistry.onDidRegisterViewContainer(refresh))
     return () => disposable.dispose()
   }, [])
 

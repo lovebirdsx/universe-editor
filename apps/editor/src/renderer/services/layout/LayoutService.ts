@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Disposable,
   Emitter,
   IStorageService,
   StorageScope,
@@ -36,7 +37,7 @@ interface PersistedLayout {
   sizes?: Partial<LayoutSizes>
 }
 
-export class LayoutService implements ILayoutService {
+export class LayoutService extends Disposable implements ILayoutService {
   declare readonly _serviceBrand: undefined
 
   readonly visible = observableValue<Readonly<Record<PartId, boolean>>>(
@@ -49,15 +50,17 @@ export class LayoutService implements ILayoutService {
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
 
   private readonly _parts = new Map<PartId, IPart>()
-  private readonly _onDidRegisterPart = new Emitter<IPart>()
+  private readonly _onDidRegisterPart = this._register(new Emitter<IPart>())
   readonly onDidRegisterPart = this._onDidRegisterPart.event
 
   constructor(@IStorageService private readonly _storage: IStorageService) {
-    // Reload from the new workspace's storage whenever the WORKSPACE scope
-    // swaps. Application-singleton — no disposal needed.
-    this._storage.onDidChangeWorkspaceScope(() => {
-      void this._reload()
-    })
+    super()
+    // Reload from the new workspace's storage whenever the WORKSPACE scope swaps.
+    this._register(
+      this._storage.onDidChangeWorkspaceScope(() => {
+        void this._reload()
+      }),
+    )
   }
 
   getVisible(part: PartId): boolean {

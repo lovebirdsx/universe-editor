@@ -4,7 +4,7 @@
  *  M1 scope: abstraction layer only. Electron adapter lives in apps/editor (M2).
  *--------------------------------------------------------------------------------------------*/
 
-import { IDisposable, toDisposable } from '../base/lifecycle.js'
+import { Disposable, IDisposable, toDisposable } from '../base/lifecycle.js'
 import { Emitter, Event } from '../base/event.js'
 
 // -------- Transport abstraction --------
@@ -129,7 +129,7 @@ function decode(data: Uint8Array): IpcMessage {
  * Client side: sends requests over a protocol and routes responses back to callers.
  * Also receives event messages and fires them on local Emitters.
  */
-export class ChannelClient implements IChannelClient, IDisposable {
+export class ChannelClient extends Disposable implements IChannelClient {
   private _requestId = 0
   private _disposed = false
   private readonly _pendingRequests = new Map<
@@ -137,10 +137,10 @@ export class ChannelClient implements IChannelClient, IDisposable {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >()
   private readonly _eventEmitters = new Map<string, Emitter<unknown>>()
-  private readonly _disposable: IDisposable
 
   constructor(private readonly _protocol: IMessagePassingProtocol) {
-    this._disposable = _protocol.onMessage((data) => this._handleMessage(decode(data)))
+    super()
+    this._register(_protocol.onMessage((data) => this._handleMessage(decode(data))))
   }
 
   private _handleMessage(msg: IpcMessage): void {
@@ -196,14 +196,14 @@ export class ChannelClient implements IChannelClient, IDisposable {
     }
   }
 
-  dispose(): void {
+  override dispose(): void {
     this._disposed = true
-    this._disposable.dispose()
     this._pendingRequests.clear()
     for (const emitter of this._eventEmitters.values()) {
       emitter.dispose()
     }
     this._eventEmitters.clear()
+    super.dispose()
   }
 }
 
@@ -211,13 +211,13 @@ export class ChannelClient implements IChannelClient, IDisposable {
  * Server side: receives requests, routes them to registered channels, sends responses.
  * Also allows channels to push events to the client.
  */
-export class ChannelServer implements IChannelServer {
+export class ChannelServer extends Disposable implements IChannelServer {
   private readonly _channels = new Map<string, IChannel>()
-  private readonly _disposable: IDisposable
   private readonly _eventSubscriptions = new Map<string, IDisposable>()
 
   constructor(private readonly _protocol: IMessagePassingProtocol) {
-    this._disposable = _protocol.onMessage((data) => this._handleMessage(decode(data)))
+    super()
+    this._register(_protocol.onMessage((data) => this._handleMessage(decode(data))))
   }
 
   registerChannel(channelName: string, channel: IChannel): void {
@@ -284,12 +284,12 @@ export class ChannelServer implements IChannelServer {
     this._eventSubscriptions.delete(key)
   }
 
-  dispose(): void {
-    this._disposable.dispose()
+  override dispose(): void {
     for (const sub of this._eventSubscriptions.values()) {
       sub.dispose()
     }
     this._eventSubscriptions.clear()
+    super.dispose()
   }
 }
 
@@ -329,15 +329,16 @@ export interface IIpcService {
 
 export const IIpcService = createDecorator<IIpcService>('ipcService')
 
-export class IpcService implements IIpcService, IDisposable {
+export class IpcService extends Disposable implements IIpcService {
   declare readonly _serviceBrand: undefined
 
   private readonly _client: ChannelClient
   private readonly _server: ChannelServer
 
   constructor(protocol: IMessagePassingProtocol) {
-    this._client = new ChannelClient(protocol)
-    this._server = new ChannelServer(protocol)
+    super()
+    this._client = this._register(new ChannelClient(protocol))
+    this._server = this._register(new ChannelServer(protocol))
   }
 
   getChannel(channelName: string): IChannel {
@@ -346,11 +347,6 @@ export class IpcService implements IIpcService, IDisposable {
 
   registerChannel(channelName: string, channel: IChannel): void {
     this._server.registerChannel(channelName, channel)
-  }
-
-  dispose(): void {
-    this._client.dispose()
-    this._server.dispose()
   }
 }
 
