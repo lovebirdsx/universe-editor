@@ -39,7 +39,7 @@ describe('AcpAgentRegistry', () => {
     const claude = list.find((a) => a.id === 'claude-code')
     expect(claude).toBeDefined()
     expect(claude?.command).toBe('npx')
-    expect(claude?.args).toContain('@zed-industries/claude-agent-acp')
+    expect(claude?.args).toContain('@agentclientprotocol/claude-agent-acp')
   })
 
   it('defaultAgentId falls back to claude-code when no config is set', () => {
