@@ -48,11 +48,8 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
-    // ACP-mode entry for Claude Code is the Zed-maintained wrapper package
-    // `@zed-industries/claude-agent-acp` — the official `@anthropic-ai/claude-code`
-    // CLI does not speak ACP itself. Users can override via `acp.agents`.
     command: 'npx',
-    args: ['-y', '@zed-industries/claude-agent-acp'],
+    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
   },
 ]
 
