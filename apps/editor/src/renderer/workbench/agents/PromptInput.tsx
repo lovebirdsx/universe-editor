@@ -32,6 +32,7 @@ import {
 } from '../../services/acp/mentionFileSearch.js'
 import { MentionPopover } from './MentionPopover.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
+import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import styles from './agents.module.css'
 
 export function PromptInput({
@@ -285,6 +286,7 @@ export function PromptInput({
         />
       </div>
       <div className={styles['promptActions']}>
+        <ConfigOptionsBar session={session} />
         {running ? (
           <button
             type="button"

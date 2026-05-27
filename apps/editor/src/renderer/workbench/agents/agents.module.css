@@ -569,6 +569,7 @@
 
 .promptActions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
   gap: 4px;
 }
@@ -821,47 +822,118 @@
   background: var(--color-badge-error, #a1260d);
 }
 
-.configOptionsBar {
+.configBar {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  padding: 4px 12px;
-  border-top: 1px solid var(--color-border, #333);
-  background: var(--color-toolbar-bg, #252525);
-  font-size: 11px;
+  gap: 4px;
+  margin-right: auto;
+  min-width: 0;
 }
 
-.configOption {
+.configTriggerWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.configTrigger {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  background: transparent;
+  color: var(--color-message-role-fg, #aaa);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  max-width: 160px;
 }
 
-.configOptionLabel {
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 10px;
-  color: var(--color-message-role-fg, #888);
+.configTrigger:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: var(--color-editor-fg, #d4d4d4);
 }
 
-.configOption[data-category='model'] .configOptionLabel {
+.configTrigger:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
+}
+
+.configTrigger[aria-expanded='true'] {
+  background: var(--color-list-active-bg, #094771);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.configTrigger[data-category='model'] {
   color: var(--color-badge-progress, #4fa6e2);
 }
 
-.configOption[data-category='thought_level'] .configOptionLabel {
+.configTrigger[data-category='thought_level'] {
   color: var(--color-badge-warning, #d7ba7d);
 }
 
-.configOptionSelect {
+.configTriggerValue {
   font-size: 11px;
-  padding: 2px 4px;
-  background: var(--color-input-bg, #3c3c3c);
-  color: var(--color-input-fg, #d4d4d4);
-  border: 1px solid var(--color-input-border, #555);
-  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.configPopover {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 4px);
+  z-index: 6;
+  min-width: 160px;
+  max-width: 280px;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--color-message-bg, #2a2a2a);
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  padding: 2px 0;
+  font-size: 12px;
+}
+
+.configPopoverGroup {
+  display: flex;
+  flex-direction: column;
+}
+
+.configPopoverGroupLabel {
+  padding: 4px 8px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-message-role-fg, #888);
+}
+
+.configPopoverItem {
+  display: flex;
+  align-items: center;
+  padding: 4px 10px;
   cursor: pointer;
-  max-width: 220px;
+}
+
+.configPopoverItem:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.configPopoverItem[data-active='true'] {
+  background: var(--color-list-active-bg, #094771);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.configPopoverItemName {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .promptComposer {

@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ChatBody — the Copilot-style stack rendered both by SecondarySideBar's
- *  ChatPanel and the full-screen AcpSessionEditor. No header chip; settings
- *  bar sits directly above the prompt input so user attention stays at the
- *  bottom of the panel where the action is.
+ *  ChatPanel and the full-screen AcpSessionEditor. Session-level config
+ *  switches live inside PromptInput's action row to keep the bottom bar
+ *  compact.
  *
  *  ChatScroll renders one unified timeline of message / tool_call / plan slots
  *  in arrival order — the canonical view-model is `session.timeline`. Each
@@ -27,7 +27,6 @@ import {
 } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpFocusService } from '../../services/acp/acpFocusService.js'
-import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { PlanCard } from './PlanView.js'
@@ -51,7 +50,6 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
     <div className={styles['chat']} data-testid="acp-chat">
       <ChatScroll session={target} />
       <PermissionCard session={target} />
-      <ConfigOptionsBar session={target} />
       <PromptInput session={target} {...(autoFocus !== undefined ? { autoFocus } : {})} />
     </div>
   )
