@@ -16,8 +16,6 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 
-export const SEARCH_FOCUS_INPUT_EVENT = 'search:focus-input'
-
 export class FindInFilesAction extends Action2 {
   static readonly ID = 'workbench.action.findInFiles'
   constructor() {
@@ -30,27 +28,20 @@ export class FindInFilesAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor, args?: { query?: string }): void {
+  override async run(accessor: ServicesAccessor): Promise<void> {
     const layoutService = accessor.get(ILayoutService)
     const viewsService = accessor.get(IViewsService)
     const sidebarVisible = layoutService.getVisible(PartId.SideBar)
     const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
-    if (sidebarVisible && activeId === 'workbench.view.search') {
-      if (layoutService.getPart(PartId.SideBar)?.isFocused()) {
-        layoutService.setVisible(PartId.SideBar, false)
-        return
-      }
-    } else {
-      viewsService.openViewContainer('workbench.view.search')
-      if (!sidebarVisible) {
-        layoutService.setVisible(PartId.SideBar, true)
-      }
+    if (
+      sidebarVisible &&
+      activeId === 'workbench.view.search' &&
+      layoutService.getPart(PartId.SideBar)?.isFocused()
+    ) {
+      layoutService.setVisible(PartId.SideBar, false)
+      return
     }
-    if (typeof document !== 'undefined' && typeof CustomEvent === 'function') {
-      document.dispatchEvent(
-        new CustomEvent(SEARCH_FOCUS_INPUT_EVENT, { detail: args?.query ?? null }),
-      )
-    }
+    await layoutService.focusView('workbench.view.search.results', { source: 'command' })
   }
 }
 

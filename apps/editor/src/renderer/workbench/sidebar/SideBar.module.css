@@ -34,3 +34,7 @@
   color: var(--color-sidebar-fg, #888888);
   font-size: 12px;
 }
+
+.viewBody {
+  display: contents;
+}

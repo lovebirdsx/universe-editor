@@ -45,7 +45,11 @@ export function Panel({ part }: { part?: IPart | undefined } = {}) {
       <div className={styles['content']}>
         {views.map((v) => {
           const Component = panelViewComponentMap.get(v.componentKey)
-          return Component ? <Component key={v.id} /> : null
+          return Component ? (
+            <div key={v.id} data-view-id={v.id} className={styles['viewBody'] ?? ''}>
+              <Component />
+            </div>
+          ) : null
         })}
       </div>
     </div>

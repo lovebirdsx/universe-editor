@@ -91,6 +91,8 @@ import {
   FindReplaceInFileAction,
 } from './searchActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
+import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
+import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
 import {
   ClearAllNotificationsAction,
   TestNotificationAction,
@@ -169,6 +171,15 @@ registerAction2(FocusLeftGroupAction)
 registerAction2(FocusRightGroupAction)
 registerAction2(FocusAboveGroupAction)
 registerAction2(FocusBelowGroupAction)
+
+// Focus — cross-part navigation
+registerAction2(FocusNextPartAction)
+registerAction2(FocusPreviousPartAction)
+
+// History — back/forward navigation
+registerAction2(GoBackAction)
+registerAction2(GoForwardAction)
+registerAction2(ClearHistoryAction)
 
 // Editor — move editor to group
 registerAction2(MoveEditorToLeftGroupAction)

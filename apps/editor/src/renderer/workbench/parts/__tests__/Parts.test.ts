@@ -1,13 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
+  IFocusableRegistry,
   ILayoutService,
   InstantiationService,
   IStorageService,
+  IViewsService,
   PartId,
   ServiceCollection,
 } from '@universe-editor/platform'
 import { LayoutService } from '../../../services/layout/LayoutService.js'
+import {
+  IViewContainerMemoryService,
+  ViewContainerMemoryService,
+} from '../../../services/focus/ViewContainerMemoryService.js'
 import {
   ActivityBarPart,
   ALL_PART_CTORS,
@@ -28,9 +34,29 @@ function makeStorage(): IStorageService {
   } as unknown as IStorageService
 }
 
+function makeViewsService(): IViewsService {
+  return {
+    _serviceBrand: undefined,
+    openViewContainer: vi.fn(),
+    getActiveViewContainerId: vi.fn(),
+  } as unknown as IViewsService
+}
+
+function makeFocusableRegistry(): IFocusableRegistry {
+  return {
+    _serviceBrand: undefined,
+    register: vi.fn(() => ({ dispose() {} })),
+    get: vi.fn(),
+    onDidChange: Event.None,
+  } as unknown as IFocusableRegistry
+}
+
 function makeContainer() {
   const services = new ServiceCollection()
   services.set(IStorageService, makeStorage())
+  services.set(IViewsService, makeViewsService())
+  services.set(IFocusableRegistry, makeFocusableRegistry())
+  services.set(IViewContainerMemoryService, new ViewContainerMemoryService())
   const instantiation = new InstantiationService(services, true)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)

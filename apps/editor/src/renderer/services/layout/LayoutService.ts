@@ -6,13 +6,26 @@
 import {
   Disposable,
   Emitter,
+  IFocusableRegistry,
   IStorageService,
+  IViewsService,
   StorageScope,
+  ViewContainerLocation,
+  ViewContainerRegistry,
+  ViewRegistry,
   observableValue,
   toDisposable,
 } from '@universe-editor/platform'
-import type { IDisposable, ILayoutService, IPart, LayoutSizes } from '@universe-editor/platform'
+import type {
+  IDisposable,
+  IFocusPartOptions,
+  ILayoutService,
+  IPart,
+  IViewDescriptor,
+  LayoutSizes,
+} from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
+import { IViewContainerMemoryService } from '../focus/ViewContainerMemoryService.js'
 
 const STORAGE_KEY = 'workbench.layout'
 const SAVE_DEBOUNCE_MS = 200
@@ -53,7 +66,13 @@ export class LayoutService extends Disposable implements ILayoutService {
   private readonly _onDidRegisterPart = this._register(new Emitter<IPart>())
   readonly onDidRegisterPart = this._onDidRegisterPart.event
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {
+  constructor(
+    @IStorageService private readonly _storage: IStorageService,
+    @IViewsService private readonly _viewsService: IViewsService,
+    @IFocusableRegistry private readonly _focusableRegistry: IFocusableRegistry,
+    @IViewContainerMemoryService
+    private readonly _viewContainerMemory: IViewContainerMemoryService,
+  ) {
     super()
     // Reload from the new workspace's storage whenever the WORKSPACE scope swaps.
     this._register(
@@ -185,5 +204,97 @@ export class LayoutService extends Disposable implements ILayoutService {
 
   getParts(): readonly IPart[] {
     return [...this._parts.values()]
+  }
+
+  // -- Focus routing --------------------------------------------------------
+
+  async focusPart(id: PartId, opts: IFocusPartOptions = {}): Promise<boolean> {
+    const part = this._parts.get(id)
+    if (!part) return false
+    if (!this.getVisible(id)) this.setVisible(id, true)
+
+    const lastViewId = this._lastFocusedViewForPart(id)
+    if (lastViewId) {
+      const ok = await this.focusView(lastViewId, opts)
+      if (ok) return true
+    }
+
+    try {
+      await part.whenMounted(opts.timeoutMs)
+    } catch {
+      return false
+    }
+    part.focus()
+    return true
+  }
+
+  private _lastFocusedViewForPart(id: PartId): string | undefined {
+    const location = LayoutService._locationForPartId(id)
+    if (location === undefined) return undefined
+    const containerId = this._viewsService.getActiveViewContainerId(location)
+    if (!containerId) return undefined
+    return this._viewContainerMemory.getLastFocusedView(containerId)
+  }
+
+  private static _locationForPartId(id: PartId): ViewContainerLocation | undefined {
+    switch (id) {
+      case PartId.SideBar:
+        return ViewContainerLocation.SideBar
+      case PartId.SecondarySideBar:
+        return ViewContainerLocation.SecondarySideBar
+      case PartId.Panel:
+        return ViewContainerLocation.Panel
+      default:
+        return undefined
+    }
+  }
+
+  async focusView(viewId: string, opts: IFocusPartOptions = {}): Promise<boolean> {
+    const descriptor = this._findViewDescriptor(viewId)
+    if (!descriptor) return false
+    const container = ViewContainerRegistry.getViewContainer(descriptor.containerId)
+    if (!container) return false
+
+    // Make the container visible at its location, then bring its hosting part up.
+    this._viewsService.openViewContainer(descriptor.containerId)
+    const partId = LayoutService._partIdForLocation(container.location)
+    const ok = await this.focusPart(partId, opts)
+    if (!ok) return false
+
+    // Wait one rAF / microtask so the React subtree gets a chance to mount the
+    // view component and call useViewFocusable.
+    const getter = this._focusableRegistry.get(viewId)
+    if (getter) {
+      await new Promise<void>((r) => {
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => r())
+        else queueMicrotask(r)
+      })
+      const el = this._focusableRegistry.get(viewId)?.() ?? getter()
+      ;(el as { focus?(): void } | null)?.focus?.()
+    }
+    return true
+  }
+
+  private _findViewDescriptor(viewId: string): IViewDescriptor | undefined {
+    for (const c of [
+      ...ViewContainerRegistry.getViewContainers(ViewContainerLocation.SideBar),
+      ...ViewContainerRegistry.getViewContainers(ViewContainerLocation.SecondarySideBar),
+      ...ViewContainerRegistry.getViewContainers(ViewContainerLocation.Panel),
+    ]) {
+      const v = ViewRegistry.getViewsForContainer(c.id).find((d) => d.id === viewId)
+      if (v) return v
+    }
+    return undefined
+  }
+
+  private static _partIdForLocation(loc: ViewContainerLocation): PartId {
+    switch (loc) {
+      case ViewContainerLocation.SideBar:
+        return PartId.SideBar
+      case ViewContainerLocation.SecondarySideBar:
+        return PartId.SecondarySideBar
+      case ViewContainerLocation.Panel:
+        return PartId.Panel
+    }
   }
 }

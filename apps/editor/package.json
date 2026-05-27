@@ -32,6 +32,7 @@
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
     "@fontsource/roboto": "catalog:",
+    "@react-aria/focus": "catalog:",
     "@tanstack/react-virtual": "catalog:",
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",

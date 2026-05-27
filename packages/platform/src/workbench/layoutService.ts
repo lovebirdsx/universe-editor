@@ -27,6 +27,13 @@ export interface LayoutSizes {
   panel: number
 }
 
+export interface IFocusPartOptions {
+  /** Distinguishes call sites for telemetry / behaviour gating. */
+  source?: 'user' | 'restore' | 'command'
+  /** Override the default 2000ms whenMounted timeout. */
+  timeoutMs?: number
+}
+
 export interface ILayoutService {
   readonly _serviceBrand: undefined
 
@@ -57,6 +64,22 @@ export interface ILayoutService {
   getParts(): readonly IPart[]
   /** Fires when a Part has just been registered. */
   readonly onDidRegisterPart: Event<IPart>
+
+  // -- Focus routing --------------------------------------------------------
+
+  /**
+   * Reveal `part` (making it visible if necessary), wait for it to mount, then
+   * call `focus()` on it. Resolves to true on success, false on timeout / no
+   * such part. Never throws.
+   */
+  focusPart(part: PartId, opts?: IFocusPartOptions): Promise<boolean>
+
+  /**
+   * Open the view container that hosts `viewId`, focus the hosting part, then
+   * focus the view's registered focusable element (if any). Resolves to true
+   * on success.
+   */
+  focusView(viewId: string, opts?: IFocusPartOptions): Promise<boolean>
 }
 
 export const ILayoutService = createDecorator<ILayoutService>('layoutService')

@@ -25,7 +25,6 @@ import {
   FindInFilesAction,
   FindNextAction,
   FindReplaceInFileAction,
-  SEARCH_FOCUS_INPUT_EVENT,
 } from '../searchActions.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -42,14 +41,18 @@ describe('FindInFilesAction', () => {
   function makeLayoutService(visible: boolean, focused: boolean) {
     const part = { focus: vi.fn(), isFocused: vi.fn().mockReturnValue(focused) }
     const setVisible = vi.fn()
+    const focusView = vi.fn().mockResolvedValue(true)
+    const focusPart = vi.fn().mockResolvedValue(true)
     const mock = {
       _serviceBrand: undefined,
       getVisible: vi.fn().mockReturnValue(visible),
       setVisible,
       toggleVisible: vi.fn(),
       getPart: vi.fn().mockReturnValue(part),
+      focusPart,
+      focusView,
     } as never
-    return { mock, setVisible, part }
+    return { mock, setVisible, part, focusView, focusPart }
   }
 
   function makeViewsService(activeId: string | undefined) {
@@ -73,7 +76,7 @@ describe('FindInFilesAction', () => {
     ).toBe(true)
   })
 
-  it('run() shows SideBar and dispatches focus event when hidden', async () => {
+  it('run() calls focusView when SideBar is hidden', async () => {
     const layout = makeLayoutService(false, false)
     const views = makeViewsService(undefined)
     const services = new ServiceCollection()
@@ -82,24 +85,18 @@ describe('FindInFilesAction', () => {
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
-    let fired: string | null | undefined
-    const listener = (e: Event) => {
-      fired = (e as CustomEvent<string | null>).detail
-    }
-    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-
     await inst.invokeFunction((accessor) => {
       const cmd = CommandsRegistry.getCommand(FindInFilesAction.ID)!
-      cmd.handler(accessor, { query: 'foo' })
+      return cmd.handler(accessor)
     })
 
-    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.search')
-    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
-    expect(fired).toBe('foo')
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
+      source: 'command',
+    })
+    expect(layout.setVisible).not.toHaveBeenCalled()
   })
 
-  it('run() dispatches focus event when search is visible but SideBar not focused', async () => {
+  it('run() calls focusView when search is visible but SideBar not focused', async () => {
     const layout = makeLayoutService(true, false)
     const views = makeViewsService('workbench.view.search')
     const services = new ServiceCollection()
@@ -108,20 +105,14 @@ describe('FindInFilesAction', () => {
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
-    let fired: string | null | undefined = 'unset'
-    const listener = (e: Event) => {
-      fired = (e as CustomEvent<string | null>).detail
-    }
-    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
     })
 
-    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-    expect(fired).toBeNull()
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
+      source: 'command',
+    })
     expect(layout.setVisible).not.toHaveBeenCalled()
-    expect(views.openViewContainer).not.toHaveBeenCalled()
   })
 
   it('run() hides SideBar when search is active and SideBar is focused', async () => {
@@ -133,22 +124,15 @@ describe('FindInFilesAction', () => {
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
-    let fired: string | null | undefined = 'unset'
-    const listener = (e: Event) => {
-      fired = (e as CustomEvent<string | null>).detail
-    }
-    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
     })
-    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
 
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
-    expect(views.openViewContainer).not.toHaveBeenCalled()
-    expect(fired).toBe('unset')
+    expect(layout.focusView).not.toHaveBeenCalled()
   })
 
-  it('run() switches to search and dispatches focus event when a different container is active', async () => {
+  it('run() calls focusView when a different container is active', async () => {
     const layout = makeLayoutService(true, false)
     const views = makeViewsService('workbench.view.explorer')
     const services = new ServiceCollection()
@@ -157,43 +141,14 @@ describe('FindInFilesAction', () => {
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
-    let fired: string | null | undefined = 'unset'
-    const listener = (e: Event) => {
-      fired = (e as CustomEvent<string | null>).detail
-    }
-    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(FindInFilesAction.ID)!.handler(accessor)
     })
-    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
 
-    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.search')
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.search.results', {
+      source: 'command',
+    })
     expect(layout.setVisible).not.toHaveBeenCalled()
-    expect(fired).not.toBe('unset')
-  })
-
-  it('run() with no query dispatches null detail', async () => {
-    const layout = makeLayoutService(false, false)
-    const views = makeViewsService(undefined)
-    const services = new ServiceCollection()
-    services.set(ILayoutService, layout.mock)
-    services.set(IViewsService, views.mock)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(FindInFilesAction))
-
-    let fired: string | null | undefined = 'unset'
-    const listener = (e: Event) => {
-      fired = (e as CustomEvent<string | null>).detail
-    }
-    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-
-    await inst.invokeFunction((accessor) => {
-      const cmd = CommandsRegistry.getCommand(FindInFilesAction.ID)!
-      cmd.handler(accessor)
-    })
-
-    document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, listener)
-    expect(fired).toBeNull()
   })
 })
 

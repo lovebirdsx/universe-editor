@@ -293,13 +293,17 @@ describe('ShowExplorerAction', () => {
   function makeLayoutService(visible: boolean, focused: boolean) {
     const part = makePart(focused)
     const setVisible = vi.fn()
+    const focusView = vi.fn().mockResolvedValue(true)
+    const focusPart = vi.fn().mockResolvedValue(true)
     const mock = {
       _serviceBrand: undefined,
       getVisible: vi.fn().mockReturnValue(visible),
       setVisible,
       getPart: vi.fn().mockReturnValue(part),
+      focusView,
+      focusPart,
     } as never
-    return { mock, setVisible, part }
+    return { mock, setVisible, part, focusView, focusPart }
   }
 
   function makeViewsService(activeId: string | undefined) {
@@ -323,7 +327,7 @@ describe('ShowExplorerAction', () => {
     ).toBe(true)
   })
 
-  it('run() shows SideBar and focuses when it is hidden', async () => {
+  it('run() calls focusView when SideBar is hidden', async () => {
     const layout = makeLayoutService(false, false)
     const views = makeViewsService(undefined)
     const services = new ServiceCollection()
@@ -333,15 +337,16 @@ describe('ShowExplorerAction', () => {
     disposables.push(registerAction2(ShowExplorerAction))
 
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
-    expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, true)
-    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
-    expect(layout.part.focus).toHaveBeenCalled()
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
+    expect(layout.setVisible).not.toHaveBeenCalled()
   })
 
-  it('run() focuses SideBar when visible with explorer active but not focused', async () => {
+  it('run() calls focusView when SideBar is visible with explorer active but not focused', async () => {
     const layout = makeLayoutService(true, false)
     const views = makeViewsService('workbench.view.explorer')
     const services = new ServiceCollection()
@@ -351,10 +356,12 @@ describe('ShowExplorerAction', () => {
     disposables.push(registerAction2(ShowExplorerAction))
 
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
-    expect(layout.part.focus).toHaveBeenCalled()
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(layout.setVisible).not.toHaveBeenCalled()
   })
 
@@ -368,15 +375,14 @@ describe('ShowExplorerAction', () => {
     disposables.push(registerAction2(ShowExplorerAction))
 
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.SideBar, false)
-    expect(views.openViewContainer).not.toHaveBeenCalled()
-    expect(layout.part.focus).not.toHaveBeenCalled()
+    expect(layout.focusView).not.toHaveBeenCalled()
   })
 
-  it('run() switches to explorer and focuses when SideBar is visible with a different container', async () => {
+  it('run() calls focusView when SideBar is visible with a different container', async () => {
     const layout = makeLayoutService(true, false)
     const views = makeViewsService('workbench.view.search')
     const services = new ServiceCollection()
@@ -386,11 +392,12 @@ describe('ShowExplorerAction', () => {
     disposables.push(registerAction2(ShowExplorerAction))
 
     await inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
+      return CommandsRegistry.getCommand(ShowExplorerAction.ID)!.handler(accessor)
     })
 
-    expect(views.openViewContainer).toHaveBeenCalledWith('workbench.view.explorer')
+    expect(layout.focusView).toHaveBeenCalledWith('workbench.view.explorer.tree', {
+      source: 'command',
+    })
     expect(layout.setVisible).not.toHaveBeenCalled()
-    expect(layout.part.focus).toHaveBeenCalled()
   })
 })

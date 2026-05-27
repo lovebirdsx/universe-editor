@@ -9,12 +9,12 @@
  *    • SearchResultsTree — virtualised file/match tree
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useRef, useState } from 'react'
 import { SearchInputBar } from './SearchInputBar.js'
 import { SearchResultsTree } from './SearchResultsTree.js'
 import { useSearchEngine, type ISearchQuery } from './useSearchEngine.js'
 import { useSearchActions } from './useSearchActions.js'
-import { SEARCH_FOCUS_INPUT_EVENT } from '../../actions/searchActions.js'
+import { useViewFocusable } from '../useViewFocusable.js'
 import styles from './SearchView.module.css'
 
 function splitGlobs(text: string): string[] {
@@ -58,16 +58,10 @@ export function SearchView() {
   )
 
   // Focus event from FindInFilesAction.
-  useEffect(() => {
-    const onFocus = (e: Event) => {
-      const detail = (e as CustomEvent<string | null>).detail
-      if (typeof detail === 'string' && detail.length > 0) setPattern(detail)
-      inputRef.current?.focus()
-      inputRef.current?.select()
-    }
-    document.addEventListener(SEARCH_FOCUS_INPUT_EVENT, onFocus)
-    return () => document.removeEventListener(SEARCH_FOCUS_INPUT_EVENT, onFocus)
-  }, [])
+  useViewFocusable(
+    'workbench.view.search.results',
+    useCallback(() => inputRef.current, []),
+  )
 
   const rerunSearch = useCallback(() => {
     rerun()

@@ -13,6 +13,8 @@ import { BuiltInEditorProvidersContribution } from './BuiltInEditorProvidersCont
 import { BuiltInViewContainersContribution } from './BuiltInViewContainersContribution.js'
 import { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
 import { ContextKeyContribution } from './ContextKeyContribution.js'
+import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
+import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
 import { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
 import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
@@ -43,6 +45,15 @@ import {
 ContributionsRegistry.registerContribution(
   'workbench.contrib.contextKey',
   ContextKeyContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Focus-related context keys. BlockStartup so when-clauses involving
+// focusedPart/focusedView/sideBarFocus/etc. resolve correctly from the very
+// first command dispatch.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.focusContextKey',
+  FocusContextKeyContribution,
   WorkbenchPhase.BlockStartup,
 )
 
@@ -241,6 +252,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceRestore',
   WorkspaceRestoreContribution,
   WorkbenchPhase.BlockRestore,
+)
+
+// Navigation history (Alt+Left / Alt+Right). AfterRestore because cursor
+// listeners attach via FileEditorRegistry events that only fire once Monaco
+// editors mount, which happens after the editor area renders.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.history',
+  HistoryContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 export {

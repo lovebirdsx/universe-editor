@@ -39,6 +39,27 @@ export function useService<T>(id: ServiceIdentifier<T>): T {
 }
 
 /**
+ * Same as useService but returns undefined when the identifier is not bound
+ * (or invokeFunction throws). Use for soft dependencies — e.g. features that
+ * are optional under unit tests.
+ */
+export function useOptionalService<T>(id: ServiceIdentifier<T>): T | undefined {
+  const container = useContext(ServicesContext)
+  const ref = useRef<{ id: ServiceIdentifier<T>; value: T | undefined } | null>(null)
+  if (!container) return undefined
+  if (ref.current === null || ref.current.id !== id) {
+    let value: T | undefined
+    try {
+      value = container.invokeFunction((accessor) => accessor.get(id)) as T | undefined
+    } catch {
+      value = undefined
+    }
+    ref.current = { id, value }
+  }
+  return ref.current.value
+}
+
+/**
  * Subscribe to an IObservable and return its current value.
  * Re-renders the component whenever the observable changes.
  * Concurrent-safe: backed by useSyncExternalStore.

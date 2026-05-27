@@ -19,6 +19,8 @@ import {
   IConfigurationService,
   IContextKeyService,
   IEditorGroupsService,
+  IFocusStackService,
+  PartId,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
@@ -86,6 +88,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const commandService = useService(ICommandService)
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
+  const focusStackService = useService(IFocusStackService)
   const userKeybindingsSvc = useService(IUserKeybindingsService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -139,18 +142,18 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       queueMicrotask(() => {
         syncEditorFocusContext(contextKeyService)
         // Chromium's default behavior after a click on a non-focusable element
-        // (e.g. a tab div) moves focus to document.body. Reclaim it immediately
-        // if this editor is still the active group's active editor. This check
-        // is safe for drag-and-drop: dragging never moves focus to body.
-        if (
-          document.activeElement === document.body &&
-          group !== null &&
-          groupsService.activeGroup === group &&
-          groupsService.activeGroup.activeEditor === fileInput
-        ) {
-          ed.focus()
-          syncEditorFocusContext(contextKeyService)
-        }
+        // (e.g. a tab div) moves focus to document.body. Reclaim it only if the
+        // user hasn't moved focus elsewhere — focusStack.getTop() is the source
+        // of truth because FocusTracker observed any real navigation already.
+        if (document.activeElement !== document.body) return
+        if (group === null) return
+        if (groupsService.activeGroup !== group) return
+        if (groupsService.activeGroup.activeEditor !== fileInput) return
+        const top = focusStackService.getTop()
+        if (top && top.partId !== PartId.EditorArea) return
+        if (top && top.groupId !== undefined && top.groupId !== group.id) return
+        ed.focus()
+        syncEditorFocusContext(contextKeyService)
       })
     })
     const modelChangeSub = ed.onDidChangeModel(() => {
@@ -199,6 +202,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     userKeybindingsSvc,
     configService,
     contextKeyService,
+    focusStackService,
     group,
     groupsService.activeGroup,
     fileInput,

@@ -36,7 +36,9 @@ export function SecondarySideBar({ part }: { part?: IPart | undefined } = {}) {
             const Component = viewComponentMap.get(v.componentKey)
             return (
               <ViewPane key={v.id} title={v.name}>
-                {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
+                <div data-view-id={v.id} className={styles['viewBody']}>
+                  {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
+                </div>
               </ViewPane>
             )
           })

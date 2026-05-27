@@ -1,9 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Bridge between React refs and the platform `Part` instance.
+ *
+ *  Uses `useLayoutEffect` (not `useEffect`) so the Part's mount state advances
+ *  synchronously after DOM commit but before any post-render effect runs. This
+ *  closes the microsecond race where a sibling effect could call `part.focus()`
+ *  while `mountState` still reads `unmounted`.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, type RefObject } from 'react'
+import { useLayoutEffect, useRef, type RefObject } from 'react'
 import type { IPart } from '@universe-editor/platform'
 
 interface PartInternal {
@@ -15,17 +20,12 @@ function asInternal(part: IPart): PartInternal {
   return part as unknown as PartInternal
 }
 
-/**
- * Returns a ref to attach to the Part's root container element. The hook keeps
- * the Part's internal `_container` in sync with the React element: it attaches
- * on mount/update and detaches on unmount.
- */
 export function usePartContainer<E extends HTMLElement = HTMLDivElement>(
   part: IPart | undefined,
 ): RefObject<E | null> {
   const ref = useRef<E | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!part) return
     const el = ref.current
     if (el) {
@@ -39,14 +39,10 @@ export function usePartContainer<E extends HTMLElement = HTMLDivElement>(
   return ref
 }
 
-/**
- * Designate a focusable child element as the Part's focus target. The Part's
- * `focus()` will dispatch to this element (falling back to the container).
- */
 export function usePartFocusTarget(part: IPart | undefined): RefObject<HTMLElement | null> {
   const ref = useRef<HTMLElement | null>(null)
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!part) return
     asInternal(part)._setFocusTarget(ref.current)
     return () => {

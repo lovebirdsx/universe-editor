@@ -13,6 +13,7 @@ import { useVirtualizer } from '@tanstack/react-virtual'
 import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
 import type { IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { FocusScopeOverlay } from '../common/FocusScopeOverlay.js'
 import {
   QuickInputService,
   type QuickPickState,
@@ -412,15 +413,17 @@ export function QuickInputPortal() {
   const close = () => svc.hide()
 
   return createPortal(
-    <div className={styles['overlay']} onClick={close} data-testid="quick-input-overlay">
-      <div onClick={(e) => e.stopPropagation()}>
-        {panelState.type === 'pick' ? (
-          <QuickPickPanel state={panelState} onClose={close} />
-        ) : (
-          <InputPanel state={panelState} onClose={close} />
-        )}
+    <FocusScopeOverlay visible onEscape={close}>
+      <div className={styles['overlay']} onClick={close} data-testid="quick-input-overlay">
+        <div onClick={(e) => e.stopPropagation()}>
+          {panelState.type === 'pick' ? (
+            <QuickPickPanel state={panelState} onClose={close} />
+          ) : (
+            <InputPanel state={panelState} onClose={close} />
+          )}
+        </div>
       </div>
-    </div>,
+    </FocusScopeOverlay>,
     document.body,
   )
 }

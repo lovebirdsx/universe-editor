@@ -48,7 +48,6 @@ export class QuickInputService implements IQuickInputService {
   private _currentState: QuickPickState | null = null
   private _currentOnHide: (() => void) | undefined
   private readonly _visibleKey: IContextKey<boolean>
-  private _restoreFocusTarget: HTMLElement | null = null
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
@@ -62,49 +61,9 @@ export class QuickInputService implements IQuickInputService {
   }
 
   private _setState(state: QuickPickState | null): void {
-    const wasVisible = this._currentState !== null
-    const willBeVisible = state !== null
-    if (!wasVisible && willBeVisible) this._captureFocusTarget()
     this._currentState = state
     this._visibleKey.set(state !== null)
     this._onDidChangeState.fire(state)
-    if (wasVisible && !willBeVisible) this._restoreFocus()
-  }
-
-  private _captureFocusTarget(): void {
-    if (typeof document === 'undefined') {
-      this._restoreFocusTarget = null
-      return
-    }
-    const active = document.activeElement
-    this._restoreFocusTarget =
-      active instanceof HTMLElement && active !== document.body && active.isConnected
-        ? active
-        : null
-  }
-
-  private _restoreFocus(): void {
-    const target = this._restoreFocusTarget
-    this._restoreFocusTarget = null
-    if (!target) return
-
-    const focus = () => {
-      // A chained Action2 may have synchronously opened another QuickPick after
-      // the previous one closed; restoring focus to the pre-palette target would
-      // yank focus from the new picker's input.
-      if (this._currentState !== null) return
-      if (!target.isConnected) return
-      // A command executed from the palette may have already moved DOM focus to a
-      // Monaco editor. Don't steal it back — that would undo the command's intent.
-      if (document.activeElement?.closest('.monaco-editor') !== null) return
-      target.focus()
-    }
-
-    if (typeof window !== 'undefined' && typeof window.setTimeout === 'function') {
-      window.setTimeout(focus, 0)
-      return
-    }
-    focus()
   }
 
   hide(): void {

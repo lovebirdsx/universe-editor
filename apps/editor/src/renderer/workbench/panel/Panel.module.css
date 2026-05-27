@@ -11,3 +11,7 @@
   flex: 1;
   overflow: hidden;
 }
+
+.viewBody {
+  display: contents;
+}

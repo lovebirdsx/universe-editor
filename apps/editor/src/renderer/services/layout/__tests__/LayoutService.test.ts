@@ -1,6 +1,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { autorun, Event, PartId, type IStorageService } from '@universe-editor/platform'
+import {
+  autorun,
+  Event,
+  PartId,
+  type IFocusableRegistry,
+  type IStorageService,
+  type IViewsService,
+} from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
+import {
+  IViewContainerMemoryService,
+  ViewContainerMemoryService,
+} from '../../focus/ViewContainerMemoryService.js'
 
 interface FakeStorage extends IStorageService {
   readonly get: ReturnType<typeof vi.fn>
@@ -18,6 +29,36 @@ function makeStorage(initial: unknown = undefined): FakeStorage {
   return fake
 }
 
+function makeViewsService(): IViewsService {
+  return {
+    _serviceBrand: undefined,
+    openViewContainer: vi.fn(),
+    getActiveViewContainerId: vi.fn(),
+  } as unknown as IViewsService
+}
+
+function makeFocusableRegistry(): IFocusableRegistry {
+  return {
+    _serviceBrand: undefined,
+    register: vi.fn(() => ({ dispose() {} })),
+    get: vi.fn(),
+    onDidChange: Event.None,
+  } as unknown as IFocusableRegistry
+}
+
+function makeViewContainerMemory(): IViewContainerMemoryService {
+  return new ViewContainerMemoryService()
+}
+
+function newSvc(storage: IStorageService = makeStorage()): LayoutService {
+  return new LayoutService(
+    storage,
+    makeViewsService(),
+    makeFocusableRegistry(),
+    makeViewContainerMemory(),
+  )
+}
+
 describe('LayoutService', () => {
   beforeEach(() => {
     vi.useFakeTimers()
@@ -28,7 +69,7 @@ describe('LayoutService', () => {
   })
 
   it('defaults all parts to visible', () => {
-    const svc = new LayoutService(makeStorage())
+    const svc = newSvc()
     expect(svc.getVisible(PartId.ActivityBar)).toBe(true)
     expect(svc.getVisible(PartId.SideBar)).toBe(true)
     expect(svc.getVisible(PartId.Panel)).toBe(true)
@@ -36,12 +77,12 @@ describe('LayoutService', () => {
   })
 
   it('defaults sizes to sensible values', () => {
-    const svc = new LayoutService(makeStorage())
+    const svc = newSvc()
     expect(svc.sizes.get()).toEqual({ sidebar: 240, secondarySidebar: 300, panel: 200 })
   })
 
   it('setVisible only notifies on actual change', () => {
-    const svc = new LayoutService(makeStorage())
+    const svc = newSvc()
     const spy = vi.fn()
     const d = autorun((r) => {
       svc.visible.read(r)
@@ -59,7 +100,7 @@ describe('LayoutService', () => {
   })
 
   it('toggleVisible flips the part', () => {
-    const svc = new LayoutService(makeStorage())
+    const svc = newSvc()
     svc.toggleVisible(PartId.Panel)
     expect(svc.getVisible(PartId.Panel)).toBe(false)
     svc.toggleVisible(PartId.Panel)
@@ -67,14 +108,14 @@ describe('LayoutService', () => {
   })
 
   it('setVisible preserves other parts', () => {
-    const svc = new LayoutService(makeStorage())
+    const svc = newSvc()
     svc.setVisible(PartId.SideBar, false)
     expect(svc.getVisible(PartId.ActivityBar)).toBe(true)
     expect(svc.getVisible(PartId.Panel)).toBe(true)
   })
 
   it('setSize updates observable and ignores no-op writes', () => {
-    const svc = new LayoutService(makeStorage())
+    const svc = newSvc()
     const spy = vi.fn()
     const d = autorun((r) => {
       svc.sizes.read(r)
@@ -92,7 +133,7 @@ describe('LayoutService', () => {
   })
 
   it('load is a no-op when storage returns undefined', async () => {
-    const svc = new LayoutService(makeStorage(undefined))
+    const svc = newSvc(makeStorage(undefined))
     await expect(svc.load()).resolves.toBeUndefined()
     expect(svc.sizes.get()).toEqual({ sidebar: 240, secondarySidebar: 300, panel: 200 })
   })
@@ -102,7 +143,7 @@ describe('LayoutService', () => {
       visible: { [PartId.SideBar]: false },
       sizes: { sidebar: 333, secondarySidebar: 400, panel: 444 },
     })
-    const svc = new LayoutService(storage)
+    const svc = newSvc(storage)
     await svc.load()
 
     expect(svc.getVisible(PartId.SideBar)).toBe(false)
@@ -112,7 +153,7 @@ describe('LayoutService', () => {
 
   it('setSize triggers debounced save', async () => {
     const storage = makeStorage()
-    const svc = new LayoutService(storage)
+    const svc = newSvc(storage)
     svc.setSize('sidebar', 250)
     svc.setSize('sidebar', 260)
     svc.setSize('sidebar', 270)
@@ -132,7 +173,7 @@ describe('LayoutService', () => {
 
   it('setVisible also triggers persist', async () => {
     const storage = makeStorage()
-    const svc = new LayoutService(storage)
+    const svc = newSvc(storage)
     svc.setVisible(PartId.Panel, false)
     await vi.advanceTimersByTimeAsync(250)
 
@@ -141,7 +182,7 @@ describe('LayoutService', () => {
 
   it('save() flushes pending debounce immediately', async () => {
     const storage = makeStorage()
-    const svc = new LayoutService(storage)
+    const svc = newSvc(storage)
     svc.setSize('panel', 300)
     await svc.save()
 
@@ -158,14 +199,14 @@ describe('LayoutService', () => {
       savedPayload = value
       return Promise.resolve()
     })
-    const svc1 = new LayoutService(storage1)
+    const svc1 = newSvc(storage1)
     svc1.setSize('sidebar', 350)
     await vi.advanceTimersByTimeAsync(250)
     expect(storage1.set).toHaveBeenCalledTimes(1)
 
     // Session 2: new LayoutService instance with same storage, loads persisted state
     const storage2 = makeStorage(savedPayload)
-    const svc2 = new LayoutService(storage2)
+    const svc2 = newSvc(storage2)
     await svc2.load()
 
     expect(svc2.sizes.get().sidebar).toBe(350)

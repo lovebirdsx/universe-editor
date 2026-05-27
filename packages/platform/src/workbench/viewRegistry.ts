@@ -70,6 +70,7 @@ export const ViewContainerRegistry: IViewContainerRegistry = new ViewContainerRe
 
 export interface IViewRegistry {
   registerView(descriptor: IViewDescriptor): IDisposable
+  getView(id: string): IViewDescriptor | undefined
   getViewsForContainer(containerId: string): readonly IViewDescriptor[]
   readonly onDidRegisterView: Event<IViewDescriptor>
 }
@@ -84,6 +85,10 @@ class ViewRegistryImpl implements IViewRegistry {
     this._views.set(descriptor.id, descriptor)
     this._onDidRegister.fire(descriptor)
     return toDisposable(() => this._views.delete(descriptor.id))
+  }
+
+  getView(id: string): IViewDescriptor | undefined {
+    return this._views.get(id)
   }
 
   getViewsForContainer(containerId: string): readonly IViewDescriptor[] {

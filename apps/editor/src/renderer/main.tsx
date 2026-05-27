@@ -15,6 +15,9 @@ import {
   IEditorGroupsService,
   IFileService,
   IFileWatcherService,
+  IFocusableRegistry,
+  IFocusStackService,
+  IHistoryService,
   IStatusBarService,
   ITextSearchService,
   IViewsService,
@@ -27,6 +30,7 @@ import {
   IConfigurationService,
   IUserDataFilesService,
   IWorkspaceService,
+  IFocusTrackerService,
   type IWorkspaceServiceWire,
   ConfigurationService,
   ContributionService,
@@ -42,6 +46,7 @@ import {
   DisposableTracker,
   localize,
   markAsSingleton,
+  MutableDisposable,
   setDisposableTracker,
   setErrorTelemetryHook,
   setUnexpectedErrorHandler,
@@ -68,6 +73,14 @@ import { LayoutService } from './services/layout/LayoutService.js'
 import { RendererDialogService } from './services/dialog/RendererDialogService.js'
 import { NotificationService } from './services/notification/NotificationService.js'
 import { ProgressService } from './services/progress/ProgressService.js'
+import { RendererFocusTrackerService } from './services/focus/RendererFocusTrackerService.js'
+import { FocusableRegistry } from './services/focus/FocusableRegistry.js'
+import {
+  IViewContainerMemoryService,
+  ViewContainerMemoryService,
+} from './services/focus/ViewContainerMemoryService.js'
+import { FocusStackService } from './services/focus/FocusStackService.js'
+import { HistoryService } from './services/history/HistoryService.js'
 import { UserSettingsSync } from './services/configuration/UserSettingsSync.js'
 import {
   UserKeybindingsService,
@@ -161,6 +174,24 @@ async function bootstrapWorkbench(): Promise<void> {
   // No dependencies on other services — safe to set this early.
   const contextKeyService = workbenchStore.add(new ContextKeyService())
   services.set(IContextKeyService, contextKeyService)
+
+  // FocusTracker observes document-level focusin/focusout with debounce. Used
+  // by FocusContextKeyContribution + LayoutService.focusPart to settle DOM
+  // transitions before re-reading focus.
+  const focusTracker = workbenchStore.add(new RendererFocusTrackerService(window.document))
+  services.set(IFocusTrackerService, focusTracker)
+
+  // FocusableRegistry: viewId → focusable element getter. Views register via
+  // useViewFocusable; LayoutService.focusView consults this to focus the right
+  // input/tree after the host part mounts.
+  const focusableRegistry = workbenchStore.add(new FocusableRegistry())
+  services.set(IFocusableRegistry, focusableRegistry)
+
+  // ViewContainerMemory: containerId → lastFocusedViewId. Pure storage with no
+  // deps; FocusStackService writes to it on focus changes, LayoutService.focusPart
+  // reads it to delegate to focusView when re-entering a part.
+  const viewContainerMemory = workbenchStore.add(new ViewContainerMemoryService())
+  services.set(IViewContainerMemoryService, viewContainerMemory)
 
   // IPC must be available before any service that proxies main-side channels.
   const ipcService = workbenchStore.add(createRendererIpcService())
@@ -299,6 +330,18 @@ async function bootstrapWorkbench(): Promise<void> {
   const layoutService = workbenchStore.add(instantiation.createInstance(LayoutService))
   services.set(ILayoutService, layoutService)
 
+  // FocusStack: bounded-size focus history backed by IFocusTrackerService.
+  // Drives F6/Shift+F6 cross-Part navigation and Monaco blur arbitration; also
+  // updates ViewContainerMemory whenever a view-scoped focus is recorded.
+  const focusStackService = workbenchStore.add(instantiation.createInstance(FocusStackService))
+  services.set(IFocusStackService, focusStackService)
+
+  // HistoryService: bounded back/forward navigation across editors. Records
+  // are pushed by HistoryContribution from Monaco cursor changes; GoBack /
+  // GoForward actions pop entries and reopen + restore selection.
+  const historyService = workbenchStore.add(new HistoryService())
+  services.set(IHistoryService, historyService)
+
   const recentFilesService = workbenchStore.add(instantiation.createInstance(RecentFilesService))
   services.set(IRecentFilesService, recentFilesService)
 
@@ -405,6 +448,28 @@ async function bootstrapWorkbench(): Promise<void> {
   // LayoutService on construction; React lookups (`getPart`) resolve them.
   for (const Ctor of ALL_PART_CTORS) {
     workbenchStore.add(instantiation.createInstance(Ctor))
+  }
+
+  // Bridge FocusTracker → per-Part onDidFocus/onDidBlur. We use trackElement on
+  // each Part's container as it mounts; unmount clears the tracker disposable.
+  // MutableDisposable + workbenchStore: parent chain reaches a singleton root, so
+  // the leak detector won't report the tracker subscription when beforeunload
+  // fires before React unmounts.
+  for (const part of layoutService.getParts()) {
+    const trackerSub = workbenchStore.add(new MutableDisposable())
+    const attach = () => {
+      const container = part.getContainer() as unknown as HTMLElement | undefined
+      if (!container) {
+        trackerSub.clear()
+        return
+      }
+      trackerSub.value = focusTracker.trackElement(container, (focused) => {
+        ;(part as unknown as { _notifyFocusChange(f: boolean): void })._notifyFocusChange(focused)
+      })
+    }
+    workbenchStore.add(part.onDidMount(attach))
+    workbenchStore.add(part.onDidUnmount(() => trackerSub.clear()))
+    if (part.mountState === 'mounted') attach()
   }
 
   // ContributionService wires lifecycle → built-in contributions auto-instantiate.

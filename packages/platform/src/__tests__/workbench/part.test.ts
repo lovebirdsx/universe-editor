@@ -65,6 +65,12 @@ class StubLayoutService implements ILayoutService {
   getParts(): readonly IPart[] {
     return [...this._parts.values()]
   }
+  async focusPart(): Promise<boolean> {
+    return false
+  }
+  async focusView(): Promise<boolean> {
+    return false
+  }
 }
 
 class TestPart extends Part {
@@ -178,5 +184,110 @@ describe('Part', () => {
     const part = new TestPart(PartId.SideBar, 'complementary', ls)
     expect(() => part.focus()).not.toThrow()
     part.dispose()
+  })
+
+  it('starts in unmounted state and transitions to mounted on attach', () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.SideBar, 'complementary', ls)
+    expect(part.mountState).toBe('unmounted')
+    const internal = part as unknown as { _attachContainer(e: { focus(): void } | null): void }
+    internal._attachContainer({ focus: vi.fn() })
+    expect(part.mountState).toBe('mounted')
+    internal._attachContainer(null)
+    expect(part.mountState).toBe('unmounted')
+    part.dispose()
+  })
+
+  it('fires onDidMount / onDidUnmount on attach / detach', () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.Panel, 'region', ls)
+    const mounted: number[] = []
+    const unmounted: number[] = []
+    part.onDidMount(() => mounted.push(1))
+    part.onDidUnmount(() => unmounted.push(1))
+    const internal = part as unknown as { _attachContainer(e: { focus(): void } | null): void }
+    const el = { focus: vi.fn() }
+    internal._attachContainer(el)
+    internal._attachContainer(el) // same element, mounted state unchanged
+    expect(mounted).toHaveLength(1)
+    internal._attachContainer(null)
+    expect(unmounted).toHaveLength(1)
+    part.dispose()
+  })
+
+  it('whenMounted() resolves immediately if mounted, otherwise on next mount', async () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.SideBar, 'complementary', ls)
+    const internal = part as unknown as { _attachContainer(e: { focus(): void } | null): void }
+
+    const p = part.whenMounted(1000)
+    internal._attachContainer({ focus: vi.fn() })
+    await expect(p).resolves.toBeUndefined()
+
+    await expect(part.whenMounted(1000)).resolves.toBeUndefined()
+    part.dispose()
+  })
+
+  it('whenMounted() rejects on timeout', async () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.SideBar, 'complementary', ls)
+    await expect(part.whenMounted(10)).rejects.toThrow(/did not mount/)
+    part.dispose()
+  })
+
+  it('focus() before mount queues; on attach the focus target gets called', async () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.SideBar, 'complementary', ls)
+    const target = { focus: vi.fn() }
+    part.focus()
+    expect(part.hasPendingFocus()).toBe(true)
+    expect(target.focus).not.toHaveBeenCalled()
+
+    const internal = part as unknown as { _attachContainer(e: { focus(): void } | null): void }
+    internal._attachContainer(target)
+    // The pending focus is flushed via queueMicrotask.
+    await new Promise<void>((r) => queueMicrotask(r))
+    expect(target.focus).toHaveBeenCalledOnce()
+    expect(part.hasPendingFocus()).toBe(false)
+    part.dispose()
+  })
+
+  it('focus() while mounted fires onDidFocus immediately', () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.SideBar, 'complementary', ls)
+    const internal = part as unknown as {
+      _attachContainer(e: { focus(): void } | null): void
+    }
+    internal._attachContainer({ focus: vi.fn() })
+    const spy = vi.fn()
+    part.onDidFocus(spy)
+    part.focus()
+    expect(spy).toHaveBeenCalledOnce()
+    part.dispose()
+  })
+
+  it('_notifyFocusChange fires onDidFocus / onDidBlur', () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.SideBar, 'complementary', ls)
+    const focused = vi.fn()
+    const blurred = vi.fn()
+    part.onDidFocus(focused)
+    part.onDidBlur(blurred)
+    ;(part as unknown as { _notifyFocusChange(f: boolean): void })._notifyFocusChange(true)
+    expect(focused).toHaveBeenCalledOnce()
+    ;(part as unknown as { _notifyFocusChange(f: boolean): void })._notifyFocusChange(false)
+    expect(blurred).toHaveBeenCalledOnce()
+    part.dispose()
+  })
+
+  it('dispose fires onDidUnmount if currently mounted', () => {
+    const ls = new StubLayoutService()
+    const part = new TestPart(PartId.Panel, 'region', ls)
+    const internal = part as unknown as { _attachContainer(e: { focus(): void } | null): void }
+    internal._attachContainer({ focus: vi.fn() })
+    const spy = vi.fn()
+    part.onDidUnmount(spy)
+    part.dispose()
+    expect(spy).toHaveBeenCalledOnce()
   })
 })

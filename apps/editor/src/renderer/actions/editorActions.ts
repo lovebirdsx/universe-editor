@@ -15,9 +15,11 @@ import {
   IDialogService,
   IEditorGroupsService,
   type IEditorGroup,
+  IFocusStackService,
   IQuickInputService,
   type IQuickPickItem,
   MenuId,
+  PartId,
   localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -32,8 +34,13 @@ import { resolveTargetEditor } from './editorActionHelpers.js'
 // Shared helper: activate a group and transfer DOM focus to Monaco
 // ---------------------------------------------------------------------------
 
-function activateGroupAndFocus(groups: IEditorGroupsService, group: IEditorGroup): void {
+function activateGroupAndFocus(
+  groups: IEditorGroupsService,
+  group: IEditorGroup,
+  focusStack?: IFocusStackService,
+): void {
   groups.activateGroup(group)
+  focusStack?.push({ partId: PartId.EditorArea, groupId: group.id })
   const ae = group.activeEditor
   if (!(ae instanceof FileEditorInput)) return
   FileEditorRegistry.get(ae)?.focus()
@@ -306,6 +313,7 @@ async function runQuickOpenRecentEditor(
   const groups = accessor.get(IEditorGroupsService)
   const recentService = accessor.get(IRecentEditorsService)
   const quickInput = accessor.get(IQuickInputService)
+  const focusStack = accessor.get(IFocusStackService)
 
   const items = buildRecentEditorPickItems(recentService)
   if (items.length <= 1) return
@@ -328,7 +336,7 @@ async function runQuickOpenRecentEditor(
 
   groups.activateGroup(group)
   group.setActive(editor)
-  activateGroupAndFocus(groups, group)
+  activateGroupAndFocus(groups, group, focusStack)
 }
 
 export class QuickOpenRecentEditorAction extends Action2 {
@@ -415,7 +423,7 @@ function splitInDirection(accessor: ServicesAccessor, direction: GroupDirection)
   if (!active) return
   const newGroup = groups.addGroup(source, direction)
   groups.copyEditor(active, newGroup)
-  activateGroupAndFocus(groups, newGroup)
+  activateGroupAndFocus(groups, newGroup, accessor.get(IFocusStackService))
 }
 
 export class SplitEditorRightAction extends Action2 {
@@ -498,7 +506,7 @@ export class FocusNextGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const next = groups.findGroup({ location: GroupLocation.Next }, undefined, true)
-    if (next) activateGroupAndFocus(groups, next)
+    if (next) activateGroupAndFocus(groups, next, accessor.get(IFocusStackService))
   }
 }
 
@@ -517,7 +525,7 @@ export class FocusPreviousGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const prev = groups.findGroup({ location: GroupLocation.Previous }, undefined, true)
-    if (prev) activateGroupAndFocus(groups, prev)
+    if (prev) activateGroupAndFocus(groups, prev, accessor.get(IFocusStackService))
   }
 }
 
@@ -535,7 +543,7 @@ export class FocusFirstGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const first = groups.findGroup({ location: GroupLocation.First })
-    if (first) activateGroupAndFocus(groups, first)
+    if (first) activateGroupAndFocus(groups, first, accessor.get(IFocusStackService))
   }
 }
 
@@ -553,7 +561,7 @@ export class FocusLastGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const last = groups.findGroup({ location: GroupLocation.Last })
-    if (last) activateGroupAndFocus(groups, last)
+    if (last) activateGroupAndFocus(groups, last, accessor.get(IFocusStackService))
   }
 }
 
@@ -594,7 +602,7 @@ export class FocusLeftGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Left })
-    if (target) activateGroupAndFocus(groups, target)
+    if (target) activateGroupAndFocus(groups, target, accessor.get(IFocusStackService))
   }
 }
 
@@ -613,7 +621,7 @@ export class FocusRightGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Right })
-    if (target) activateGroupAndFocus(groups, target)
+    if (target) activateGroupAndFocus(groups, target, accessor.get(IFocusStackService))
   }
 }
 
@@ -632,7 +640,7 @@ export class FocusAboveGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Up })
-    if (target) activateGroupAndFocus(groups, target)
+    if (target) activateGroupAndFocus(groups, target, accessor.get(IFocusStackService))
   }
 }
 
@@ -651,7 +659,7 @@ export class FocusBelowGroupAction extends Action2 {
   override run(accessor: ServicesAccessor): void {
     const groups = accessor.get(IEditorGroupsService)
     const target = groups.findGroup({ direction: GroupDirection.Down })
-    if (target) activateGroupAndFocus(groups, target)
+    if (target) activateGroupAndFocus(groups, target, accessor.get(IFocusStackService))
   }
 }
 
@@ -667,7 +675,7 @@ function moveEditorInDirection(accessor: ServicesAccessor, direction: GroupDirec
   let target = groups.findGroup({ direction }, source)
   if (!target) target = groups.addGroup(source, direction)
   groups.moveEditor(editor, target)
-  activateGroupAndFocus(groups, target)
+  activateGroupAndFocus(groups, target, accessor.get(IFocusStackService))
 }
 
 function moveEditorByLocation(
@@ -682,7 +690,7 @@ function moveEditorByLocation(
   const target = groups.findGroup({ location }, source, wrap)
   if (!target || target === source) return
   groups.moveEditor(editor, target)
-  activateGroupAndFocus(groups, target)
+  activateGroupAndFocus(groups, target, accessor.get(IFocusStackService))
 }
 
 export class MoveEditorToLeftGroupAction extends Action2 {

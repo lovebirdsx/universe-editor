@@ -38,7 +38,7 @@ import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeServic
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
 import { confirmLargeFile } from '../../services/editor/largeFileGuard.js'
-import { EXPLORER_FOCUS_VIEW_EVENT } from '../../actions/layoutActions.js'
+import { useViewFocusable } from '../useViewFocusable.js'
 import styles from './ExplorerView.module.css'
 
 const PAGE_STEP = 10
@@ -74,11 +74,10 @@ export function ExplorerView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const virtualRef = useRef<VirtualListHandle>(null)
 
-  useEffect(() => {
-    const onFocus = () => containerRef.current?.focus()
-    document.addEventListener(EXPLORER_FOCUS_VIEW_EVENT, onFocus)
-    return () => document.removeEventListener(EXPLORER_FOCUS_VIEW_EVENT, onFocus)
-  }, [])
+  useViewFocusable(
+    'workbench.view.explorer.tree',
+    useCallback(() => containerRef.current, []),
+  )
 
   const root = tree.root
   const visible = useMemo(
