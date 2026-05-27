@@ -20,6 +20,7 @@ import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRe
 interface ISerializedFileEditor {
   readonly resource: UriComponents
   readonly dirtyContent?: string
+  readonly isReadonly?: boolean
 }
 
 export class FileEditorInput extends EditorInput {
@@ -33,6 +34,7 @@ export class FileEditorInput extends EditorInput {
   private _language: string
   /** Dirty content pending application on next resolve() (hot exit restore). */
   private _pendingDirtyContent: string | undefined
+  private _isReadonly = false
 
   constructor(
     private readonly _resource: URI,
@@ -40,6 +42,15 @@ export class FileEditorInput extends EditorInput {
   ) {
     super()
     this._language = languageForResource(this._resource)
+  }
+
+  get isReadonly(): boolean {
+    return this._isReadonly
+  }
+
+  markReadonly(): this {
+    this._isReadonly = true
+    return this
   }
 
   override get typeId(): string {
@@ -90,6 +101,7 @@ export class FileEditorInput extends EditorInput {
   }
 
   override async save(): Promise<boolean> {
+    if (this._isReadonly) return true
     const model = MonacoModelRegistry.peek(this._resource)
     if (!model) return true
     const text = model.getValue()
@@ -173,6 +185,7 @@ export class FileEditorInput extends EditorInput {
     return {
       resource: this._resource.toJSON(),
       ...(dirtyContent !== undefined && { dirtyContent }),
+      ...(this._isReadonly && { isReadonly: true }),
     }
   }
 
@@ -183,6 +196,7 @@ export class FileEditorInput extends EditorInput {
     const resource = URI.revive(d.resource) as URI
     const inst = accessor.get(IInstantiationService)
     const input = inst.createInstance(FileEditorInput, resource)
+    if (d.isReadonly === true) input.markReadonly()
     if (d.dirtyContent !== undefined) {
       input._pendingDirtyContent = d.dirtyContent
     }

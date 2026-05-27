@@ -118,7 +118,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       scrollBeyondLastLine: false,
       tabSize: 2,
       insertSpaces: true,
-      readOnly: false,
+      readOnly: fileInput.isReadonly,
       unicodeHighlight: {
         allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
       },

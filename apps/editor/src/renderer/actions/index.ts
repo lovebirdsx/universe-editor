@@ -98,12 +98,15 @@ import {
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
 import {
+  ClearOutputAction,
   OpenActiveLogFileAction,
+  OpenLogFileAction,
   OpenLogsFolderAction,
   RefreshLogOutputAction,
   SetLogLevelAction,
   ShowLogsAction,
   ShowOutputChannelAction,
+  ToggleOutputAction,
 } from './logActions.js'
 import {
   CancelAgentTurnAction,
@@ -215,9 +218,12 @@ registerAction2(OpenUserDataFolderAction)
 registerAction2(ShowLogsAction)
 registerAction2(RefreshLogOutputAction)
 registerAction2(OpenActiveLogFileAction)
+registerAction2(OpenLogFileAction)
 registerAction2(OpenLogsFolderAction)
 registerAction2(SetLogLevelAction)
 registerAction2(ShowOutputChannelAction)
+registerAction2(ClearOutputAction)
+registerAction2(ToggleOutputAction)
 
 // Search
 registerAction2(FindInFilesAction)
