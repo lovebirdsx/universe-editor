@@ -28,6 +28,7 @@ import type {
   AcpSessionStatus,
   AcpToolCall,
   IAcpSession,
+  TimelineItem,
 } from '../../../services/acp/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
@@ -138,6 +139,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   const messages = observableValue<readonly AcpMessage[]>('test.messages', [])
   const toolCalls = observableValue<readonly AcpToolCall[]>('test.toolCalls', [])
   const plan = observableValue<readonly AcpPlanEntry[]>('test.plan', [])
+  const timeline = observableValue<readonly TimelineItem[]>('test.timeline', [])
   const permission = observableValue<AcpPendingPermission | undefined>('test.permission', undefined)
   const configOptions = observableValue<readonly SessionConfigOption[]>('test.configOptions', [])
   const sendPrompt = vi.fn().mockResolvedValue(undefined)
@@ -149,6 +151,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     messages,
     toolCalls,
     plan,
+    timeline,
     status: statusObs,
     pendingPermission: permission,
     configOptions,

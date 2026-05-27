@@ -1,17 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  PlanView — renders the agent's running plan (one of the streamed update
- *  variants). Collapsed by default once the agent declares it; the plan rarely
- *  needs to dominate the chat surface.
+ *  PlanCard — renders the agent's running plan (one of the streamed update
+ *  variants). Collapsible header; plan rarely needs to dominate the chat
+ *  surface so it stays compact. Stateless w.r.t. the session — `ChatBody`
+ *  feeds entries from the unified timeline.
  *--------------------------------------------------------------------------------------------*/
 
 import { useState } from 'react'
-import { useObservable } from '../useService.js'
-import type { IAcpSession } from '../../services/acp/acpSessionService.js'
+import type { AcpPlanEntry } from '../../services/acp/acpSessionService.js'
 import styles from './agents.module.css'
 
-export function PlanView({ session }: { session: IAcpSession }) {
-  const entries = useObservable(session.plan)
+export function PlanCard({ entries }: { entries: readonly AcpPlanEntry[] }) {
   const [open, setOpen] = useState(true)
   if (entries.length === 0) return null
   return (

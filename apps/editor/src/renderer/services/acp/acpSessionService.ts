@@ -74,6 +74,7 @@ export {
   type AcpSessionStatus,
   type IAcpSession,
   type IAcpSessionInitState,
+  type TimelineItem,
 } from './acpSession.js'
 
 export interface IAcpSessionService {

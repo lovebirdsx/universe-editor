@@ -41,6 +41,8 @@ export interface AcpMessage {
   readonly text: string
   /** Structured content blocks — used by the renderer for markdown / images / resource links. */
   readonly blocks: readonly ContentBlock[]
+  /** True while this message is still receiving streaming chunks; the UI uses this to render a blinking caret. */
+  readonly streaming: boolean
 }
 
 export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
@@ -75,6 +77,25 @@ export interface AcpPlanEntry {
   readonly priority?: string
 }
 
+/**
+ * A single slot on the unified chat timeline. The UI renders one ordered list
+ * of these so message / tool_call / plan cards interleave by arrival order,
+ * matching Copilot-style agent chat layout.
+ *
+ * Slot identity rules:
+ * - `kind: 'message'` reuses the underlying `message.id` so React keys are
+ *   stable across chunk merges.
+ * - `kind: 'toolCall'` reuses the agent-issued `toolCallId` so `tool_call_update`
+ *   replaces the existing slot in place.
+ * - `kind: 'plan'` is a singleton lane — the literal `'plan'` id anchors the
+ *   slot at first appearance and subsequent plan events replace `entries` in
+ *   place rather than appending a new slot.
+ */
+export type TimelineItem =
+  | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
+  | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
+  | { readonly kind: 'plan'; readonly id: 'plan'; readonly entries: readonly AcpPlanEntry[] }
+
 export interface AcpPendingPermission {
   readonly toolCallId: string
   readonly title: string
@@ -107,6 +128,12 @@ export interface IAcpSession {
   readonly messages: IObservable<readonly AcpMessage[]>
   readonly toolCalls: IObservable<readonly AcpToolCall[]>
   readonly plan: IObservable<readonly AcpPlanEntry[]>
+  /**
+   * Unified chronological view: message / tool_call / plan slots ordered by
+   * insertion. The canonical observable consumed by the chat UI; the three
+   * lane-specific observables above remain for back-compat and selector reads.
+   */
+  readonly timeline: IObservable<readonly TimelineItem[]>
   readonly status: IObservable<AcpSessionStatus>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
   /** Configuration options the agent has advertised for this session. */
@@ -143,6 +170,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly messages: ISettableObservable<readonly AcpMessage[]>
   readonly toolCalls: ISettableObservable<readonly AcpToolCall[]>
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
+  readonly timeline: ISettableObservable<readonly TimelineItem[]>
   readonly status: ISettableObservable<AcpSessionStatus>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
@@ -151,6 +179,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _messages: AcpMessage[] = []
   private _toolCalls: AcpToolCall[] = []
+  private _timeline: TimelineItem[] = []
   private _msgCounter = 0
 
   /** Abort controller for the in-flight `session/prompt`. */
@@ -178,6 +207,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
     this.toolCalls = observableValue<readonly AcpToolCall[]>(`acp.session.toolCalls.${id}`, [])
     this.plan = observableValue<readonly AcpPlanEntry[]>(`acp.session.plan.${id}`, [])
+    this.timeline = observableValue<readonly TimelineItem[]>(`acp.session.timeline.${id}`, [])
     this.status = observableValue<AcpSessionStatus>(`acp.session.status.${id}`, 'idle')
     this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
       `acp.session.pendingPermission.${id}`,
@@ -310,8 +340,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._cancelPending()
     this._messages = []
     this._toolCalls = []
+    this._timeline = []
     this.messages.set(this._messages, undefined)
     this.toolCalls.set(this._toolCalls, undefined)
+    this.timeline.set(this._timeline, undefined)
     this.dispose()
   }
 
@@ -368,15 +400,17 @@ export class AcpSession extends Disposable implements IAcpSession {
         }
         break
       }
-      case 'plan':
-        this.plan.set(
-          update.entries.map((e) => ({
-            content: e.content,
-            ...(e.priority !== undefined ? { priority: e.priority } : {}),
-          })),
-          undefined,
-        )
+      case 'plan': {
+        const entries: readonly AcpPlanEntry[] = update.entries.map((e) => ({
+          content: e.content,
+          ...(e.priority !== undefined ? { priority: e.priority } : {}),
+        }))
+        this._upsertPlanInTimeline(entries)
+        const tx = this._batchedTx()
+        this.plan.set(entries, tx)
+        this.timeline.set(this._timeline, tx)
         break
+      }
       case 'available_commands_update':
         this.availableCommands.set(update.availableCommands, undefined)
         this._telemetry.publicLog('acp.commands_advertised', {
@@ -417,34 +451,68 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _appendChunk(role: AcpMessageRole, block: ContentBlock): void {
     const last = this._messages[this._messages.length - 1]
+    let next: AcpMessage
     if (last && last.role === role && this._isStreaming(last.id)) {
       const blocks = mergeStreamingBlock(last.blocks, block)
-      const next: AcpMessage = { id: last.id, role, blocks, text: blocksToText(blocks) }
+      next = { id: last.id, role, blocks, text: blocksToText(blocks), streaming: true }
       this._messages = [...this._messages.slice(0, -1), next]
+      this._upsertMessageInTimeline(next)
     } else {
+      // Only the message currently receiving chunks should be marked streaming.
+      // Close out any prior streaming slot (e.g. when agent transitions
+      // thought → message) before opening a new one.
+      const closed = this._closePriorStreaming()
       const id = `m${++this._msgCounter}`
       this._streamingIds.add(id)
       const blocks: readonly ContentBlock[] = [block]
-      this._messages = [...this._messages, { id, role, blocks, text: blocksToText(blocks) }]
+      next = { id, role, blocks, text: blocksToText(blocks), streaming: true }
+      this._messages = [...this._messages, next]
+      for (const c of closed) this._upsertMessageInTimeline(c)
+      this._upsertMessageInTimeline(next)
     }
-    this.messages.set(this._messages, this._batchedTx())
+    const tx = this._batchedTx()
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
   }
 
   private _isStreaming(id: string): boolean {
     return this._streamingIds.has(id)
   }
 
+  private _closePriorStreaming(): AcpMessage[] {
+    if (this._streamingIds.size === 0) return []
+    const closed: AcpMessage[] = []
+    this._messages = this._messages.map((m) => {
+      if (m.streaming) {
+        const c = { ...m, streaming: false }
+        closed.push(c)
+        return c
+      }
+      return m
+    })
+    this._streamingIds.clear()
+    return closed
+  }
+
   private _flushStream(): void {
     this._streamingIds.clear()
+    this._messages = this._messages.map((m) => (m.streaming ? { ...m, streaming: false } : m))
+    for (const m of this._messages) {
+      this._upsertMessageInTimeline(m)
+    }
     this.messages.set(this._messages, undefined)
+    this.timeline.set(this._timeline, undefined)
     this._commitBatchedTx()
   }
 
   private _appendMessage(role: AcpMessageRole, text: string): void {
     const id = `m${++this._msgCounter}`
     const blocks: readonly ContentBlock[] = [{ type: 'text', text }]
-    this._messages = [...this._messages, { id, role, blocks, text }]
+    const message: AcpMessage = { id, role, blocks, text, streaming: false }
+    this._messages = [...this._messages, message]
+    this._upsertMessageInTimeline(message)
     this.messages.set(this._messages, undefined)
+    this.timeline.set(this._timeline, undefined)
   }
 
   private _upsertToolCall(call: AcpToolCall): void {
@@ -454,7 +522,40 @@ export class AcpSession extends Disposable implements IAcpSession {
     } else {
       this._toolCalls = [...this._toolCalls.slice(0, idx), call, ...this._toolCalls.slice(idx + 1)]
     }
-    this.toolCalls.set(this._toolCalls, this._batchedTx())
+    this._upsertToolCallInTimeline(call)
+    const tx = this._batchedTx()
+    this.toolCalls.set(this._toolCalls, tx)
+    this.timeline.set(this._timeline, tx)
+  }
+
+  private _upsertMessageInTimeline(message: AcpMessage): void {
+    const idx = this._timeline.findIndex((it) => it.kind === 'message' && it.id === message.id)
+    const slot: TimelineItem = { kind: 'message', id: message.id, message }
+    if (idx === -1) {
+      this._timeline = [...this._timeline, slot]
+    } else {
+      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
+    }
+  }
+
+  private _upsertToolCallInTimeline(call: AcpToolCall): void {
+    const idx = this._timeline.findIndex((it) => it.kind === 'toolCall' && it.id === call.id)
+    const slot: TimelineItem = { kind: 'toolCall', id: call.id, call }
+    if (idx === -1) {
+      this._timeline = [...this._timeline, slot]
+    } else {
+      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
+    }
+  }
+
+  private _upsertPlanInTimeline(entries: readonly AcpPlanEntry[]): void {
+    const idx = this._timeline.findIndex((it) => it.kind === 'plan')
+    const slot: TimelineItem = { kind: 'plan', id: 'plan', entries }
+    if (idx === -1) {
+      this._timeline = [...this._timeline, slot]
+    } else {
+      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
+    }
   }
 
   /** Lazily open a 16ms-deadlined transaction for streaming bursts. */

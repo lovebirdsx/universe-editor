@@ -103,6 +103,36 @@
   gap: 8px;
 }
 
+.timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timelinePlan {
+  list-style: none;
+}
+
+.streamingCaret {
+  display: inline-block;
+  width: 0.55em;
+  margin-left: 2px;
+  color: var(--color-badge-progress, #4fa6e2);
+  font-weight: 600;
+  line-height: 1;
+  vertical-align: baseline;
+  animation: acp-caret-blink 1s steps(2, end) infinite;
+}
+
+@keyframes acp-caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
 .messageList {
   list-style: none;
   margin: 0;
