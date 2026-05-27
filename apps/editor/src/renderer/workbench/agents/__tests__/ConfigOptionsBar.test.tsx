@@ -34,7 +34,6 @@ import type {
   TimelineItem,
 } from '../../../services/acp/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
-import { AcpFocusService, IAcpFocusService } from '../../../services/acp/acpFocusService.js'
 import { ConfigOptionsBar } from '../ConfigOptionsBar.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -56,7 +55,6 @@ function renderWithServices(node: React.ReactNode) {
   const services = new ServiceCollection()
   services.set(IFileService, stubFileService)
   services.set(IWorkspaceService, stubWorkspaceService)
-  services.set(IAcpFocusService, new AcpFocusService())
   const inst = new InstantiationService(services)
   return render(node, {
     wrapper: ({ children }) => (
