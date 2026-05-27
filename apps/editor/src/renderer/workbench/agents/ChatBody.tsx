@@ -10,15 +10,14 @@
  *  streaming agent / thought message shows a blinking caret until the chunk
  *  stream is flushed.
  *
- *  Keyboard navigation: while ChatBody is mounted, the `acpTimelineFocusable`
- *  contextKey is true so Alt+J / Alt+K dispatch through the timeline-move
- *  event bus on IAcpFocusService. ChatScroll moves a "focused" item indicator
- *  one slot at a time (VSCode chat-style), scrolls it into view and disables
- *  the auto-stick-to-bottom so streaming chunks don't yank focus away.
+ *  Keyboard navigation: ChatBody registers itself as an AcpChatWidget on
+ *  mount. The widget service drives the `acpChatFocused` contextKey from
+ *  focusin/focusout on this container, so Alt+J / Alt+K (and Ctrl+Alt+I) only
+ *  target whichever ChatBody currently holds DOM focus.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
-import { IContextKeyService, localize } from '@universe-editor/platform'
+import { useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -26,7 +25,10 @@ import {
   type TimelineItem,
 } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
-import { IAcpFocusService } from '../../services/acp/acpFocusService.js'
+import {
+  IAcpChatWidgetService,
+  type AcpTimelineMoveDirection,
+} from '../../services/acp/acpChatWidgetService.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { PlanCard } from './PlanView.js'
@@ -36,31 +38,60 @@ import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
 
+export interface WidgetHandle {
+  move: (direction: AcpTimelineMoveDirection) => void
+  focus: () => void
+}
+
+const noop = (): void => {}
+
 export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
   const service = useService(IAcpSessionService)
   const registry = useService(IAcpAgentRegistry)
+  const widgetService = useService(IAcpChatWidgetService)
   const active = useObservable(service.activeSession)
   const target = session ?? active
+  const containerRef = useRef<HTMLDivElement | null>(null)
+  const handleRef = useRef<WidgetHandle>({ move: noop, focus: noop })
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const sub = widgetService.register({
+      container,
+      moveTimeline: (d) => handleRef.current.move(d),
+      focusInput: () => handleRef.current.focus(),
+    })
+    return () => sub.dispose()
+  }, [widgetService, target?.id])
 
   if (!target) {
     return <EmptyChat onCreate={() => void service.createSession(registry.defaultAgentId())} />
   }
 
   return (
-    <div className={styles['chat']} data-testid="acp-chat">
-      <ChatScroll session={target} />
+    <div ref={containerRef} className={styles['chat']} data-testid="acp-chat">
+      <ChatScroll session={target} handleRef={handleRef} />
       <PermissionCard session={target} />
-      <PromptInput session={target} {...(autoFocus !== undefined ? { autoFocus } : {})} />
+      <PromptInput
+        session={target}
+        handleRef={handleRef}
+        {...(autoFocus !== undefined ? { autoFocus } : {})}
+      />
     </div>
   )
 }
 
-function ChatScroll({ session }: { session: IAcpSession }) {
+function ChatScroll({
+  session,
+  handleRef,
+}: {
+  session: IAcpSession
+  handleRef: MutableRefObject<WidgetHandle>
+}) {
   const timeline = useObservable(session.timeline)
   const status = useObservable(session.status)
   const isRunning = status === 'running'
-  const focusService = useService(IAcpFocusService)
-  const contextKeyService = useService(IContextKeyService)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const stickRef = useRef(true)
   const [focusedKey, setFocusedKey] = useState<string | null>(null)
@@ -86,24 +117,15 @@ function ChatScroll({ session }: { session: IAcpSession }) {
     el.scrollTop = el.scrollHeight
   }, [timeline.length, tailSignature])
 
-  // Seed the gating contextKey while ChatBody is mounted — actions check it
-  // in their `when` clause to scope Alt+J / Alt+K to the ACP view only.
-  // Default false so reset() (which re-applies the default) clears it on
-  // unmount; we flip it true imperatively.
-  useEffect(() => {
-    const key = contextKeyService.createKey<boolean>('acpTimelineFocusable', false)
-    key.set(true)
-    return () => key.reset()
-  }, [contextKeyService])
-
-  // Keep latest timeline available to the event handler without re-subscribing
-  // on every render — capturing timeline in the effect deps would tear the
-  // subscription mid-stream and lose events fired within the same tick.
+  // Keep the timeline available to handle.move without re-binding the handle
+  // on every render. Capturing timeline in the assignment would not be wrong,
+  // but we'd re-allocate the closure on every render — the ref read is cheap.
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
 
   useEffect(() => {
-    const sub = focusService.onDidRequestTimelineMove((direction) => {
+    const handle = handleRef.current
+    handle.move = (direction) => {
       const list = timelineRef.current
       if (list.length === 0) return
       const keys = list.map(slotKey)
@@ -130,9 +152,11 @@ function ChatScroll({ session }: { session: IAcpSession }) {
         `[data-timeline-key="${cssEscape(nextKey)}"]`,
       )
       el?.scrollIntoView({ block: 'nearest' })
-    })
-    return () => sub.dispose()
-  }, [focusService])
+    }
+    return () => {
+      handle.move = noop
+    }
+  }, [handleRef])
 
   return (
     <div ref={containerRef} className={styles['chatBody']} onScroll={handleScroll}>

@@ -103,7 +103,7 @@ import {
   IAcpAgentDefaultsService,
 } from './services/acp/acpAgentDefaultsService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
-import { AcpFocusService, IAcpFocusService } from './services/acp/acpFocusService.js'
+import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
 import {
   AcpChatLocationService,
   IAcpChatLocationService,
@@ -372,10 +372,13 @@ async function bootstrapWorkbench(): Promise<void> {
   const acpSessionService = workbenchStore.add(instantiation.createInstance(AcpSessionService))
   services.set(IAcpSessionService, acpSessionService)
 
-  // Renderer-only AGENTS UI state. Focus is a pure event bus; ChatLocation
-  // persists across restarts and owns the EditorArea↔SecondarySideBar toggle.
-  const acpFocusService = workbenchStore.add(new AcpFocusService())
-  services.set(IAcpFocusService, acpFocusService)
+  // Renderer-only AGENTS UI state. ChatWidget tracks focused ChatBody for
+  // single-target action dispatch. ChatLocation persists across restarts and
+  // owns the EditorArea↔SecondarySideBar toggle.
+  const acpChatWidgetService = workbenchStore.add(
+    instantiation.createInstance(AcpChatWidgetService),
+  )
+  services.set(IAcpChatWidgetService, acpChatWidgetService)
   const acpChatLocationService = workbenchStore.add(
     instantiation.createInstance(AcpChatLocationService),
   )

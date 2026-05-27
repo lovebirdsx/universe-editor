@@ -14,11 +14,19 @@
  *  before sending, the link silently disappears — by design.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from 'react'
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type MutableRefObject,
+} from 'react'
 import { IFileService, IWorkspaceService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
-import { IAcpFocusService } from '../../services/acp/acpFocusService.js'
+import type { WidgetHandle } from './ChatBody.js'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
   applyMentionPick,
@@ -38,9 +46,11 @@ import styles from './agents.module.css'
 export function PromptInput({
   session,
   autoFocus = false,
+  handleRef,
 }: {
   session: IAcpSession
   autoFocus?: boolean
+  handleRef?: MutableRefObject<WidgetHandle>
 }) {
   const [text, setText] = useState('')
   const [caret, setCaret] = useState(0)
@@ -58,20 +68,24 @@ export function PromptInput({
 
   const fileService = useService(IFileService)
   const workspace = useService(IWorkspaceService)
-  const focusService = useService(IAcpFocusService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
   const running = status === 'running'
 
-  // External focus requests (Ctrl+Alt+I, session-switch helpers in tests).
+  // Expose `focus()` to the AcpChatWidget handle so the registered widget can
+  // serve Ctrl+Alt+I (Focus Agent Input) without a global event bus.
   useEffect(() => {
-    const sub = focusService.onDidRequestFocus(() => {
+    if (!handleRef) return
+    const ref = handleRef
+    ref.current.focus = () => {
       textareaRef.current?.focus()
-    })
-    return () => sub.dispose()
-  }, [focusService])
+    }
+    return () => {
+      ref.current.focus = () => {}
+    }
+  }, [handleRef])
 
   // Auto-focus on session swap so the user can keep typing without clicking
   // the textarea. Skip the initial mount so we don't steal focus from a

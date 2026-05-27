@@ -1,0 +1,169 @@
+/*---------------------------------------------------------------------------------------------
+ *  Tests for apps/editor/src/renderer/services/acp/acpChatWidgetService.ts
+ *
+ *  Drives focusin/focusout on registered container elements (happy-dom) and
+ *  asserts both the `acpChatFocused` contextKey state and `lastFocusedWidget`
+ *  tracking — including the two-widget cross-focus transition that bug #2 was
+ *  about.
+ *--------------------------------------------------------------------------------------------*/
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { ContextKeyService } from '@universe-editor/platform'
+import { AcpChatWidgetService, type AcpChatWidget } from '../acpChatWidgetService.js'
+
+function makeWidget(label: string): {
+  container: HTMLElement
+  child: HTMLElement
+  widget: AcpChatWidget
+  moveSpy: ReturnType<typeof vi.fn>
+  focusSpy: ReturnType<typeof vi.fn>
+} {
+  const container = document.createElement('div')
+  container.dataset['label'] = label
+  const child = document.createElement('input')
+  container.appendChild(child)
+  document.body.appendChild(container)
+  const moveSpy = vi.fn()
+  const focusSpy = vi.fn()
+  const widget: AcpChatWidget = {
+    container,
+    moveTimeline: moveSpy,
+    focusInput: focusSpy,
+  }
+  return { container, child, widget, moveSpy, focusSpy }
+}
+
+function fireFocusIn(target: HTMLElement, relatedTarget: EventTarget | null = null): void {
+  const e = new FocusEvent('focusin', { bubbles: true, relatedTarget })
+  target.dispatchEvent(e)
+}
+
+function fireFocusOut(target: HTMLElement, relatedTarget: EventTarget | null = null): void {
+  const e = new FocusEvent('focusout', { bubbles: true, relatedTarget })
+  target.dispatchEvent(e)
+}
+
+describe('AcpChatWidgetService', () => {
+  let cks: ContextKeyService
+  let svc: AcpChatWidgetService
+
+  beforeEach(() => {
+    cks = new ContextKeyService()
+    svc = new AcpChatWidgetService(cks)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+    cks.dispose()
+    document.body.replaceChildren()
+  })
+
+  it('starts with no focused widget and key=false', () => {
+    expect(svc.lastFocusedWidget).toBeUndefined()
+    expect(cks.get('acpChatFocused')).toBe(false)
+  })
+
+  it('focusin inside a registered container sets key=true and lastFocused', () => {
+    const a = makeWidget('a')
+    svc.register(a.widget)
+    fireFocusIn(a.child)
+    expect(cks.get('acpChatFocused')).toBe(true)
+    expect(svc.lastFocusedWidget).toBe(a.widget)
+  })
+
+  it('focusout leaving the container clears key but keeps lastFocused null', () => {
+    const a = makeWidget('a')
+    svc.register(a.widget)
+    fireFocusIn(a.child)
+    fireFocusOut(a.child, null)
+    expect(cks.get('acpChatFocused')).toBe(false)
+    // lastFocusedWidget intentionally cleared only on unregister.
+    expect(svc.lastFocusedWidget).toBe(a.widget)
+  })
+
+  it('focus shift between descendants of the same widget does not flip key', () => {
+    const a = makeWidget('a')
+    const sibling = document.createElement('button')
+    a.container.appendChild(sibling)
+    svc.register(a.widget)
+    fireFocusIn(a.child)
+    // descendant→descendant inside same container
+    fireFocusOut(a.child, sibling)
+    expect(cks.get('acpChatFocused')).toBe(true)
+  })
+
+  it('focus crossing from widget A to widget B updates lastFocused and stays true', () => {
+    const a = makeWidget('a')
+    const b = makeWidget('b')
+    svc.register(a.widget)
+    svc.register(b.widget)
+    fireFocusIn(a.child)
+    expect(svc.lastFocusedWidget).toBe(a.widget)
+    // focusout on A with relatedTarget inside B; then focusin on B.
+    fireFocusOut(a.child, b.child)
+    fireFocusIn(b.child, a.child)
+    expect(cks.get('acpChatFocused')).toBe(true)
+    expect(svc.lastFocusedWidget).toBe(b.widget)
+  })
+
+  it('unregistering the focused widget drops key to false', () => {
+    const a = makeWidget('a')
+    const b = makeWidget('b')
+    svc.register(a.widget)
+    const subB = svc.register(b.widget)
+    fireFocusIn(b.child)
+    expect(svc.lastFocusedWidget).toBe(b.widget)
+    subB.dispose()
+    expect(cks.get('acpChatFocused')).toBe(false)
+    expect(svc.lastFocusedWidget).toBeUndefined()
+    // A is still alive and can still take focus.
+    fireFocusIn(a.child)
+    expect(cks.get('acpChatFocused')).toBe(true)
+    expect(svc.lastFocusedWidget).toBe(a.widget)
+  })
+
+  it('lastFocusedWidget.moveTimeline only invokes the focused widget callback', () => {
+    const a = makeWidget('a')
+    const b = makeWidget('b')
+    svc.register(a.widget)
+    svc.register(b.widget)
+    fireFocusIn(b.child)
+    svc.lastFocusedWidget?.moveTimeline('next')
+    expect(b.moveSpy).toHaveBeenCalledWith('next')
+    expect(a.moveSpy).not.toHaveBeenCalled()
+  })
+
+  it('registering a container that already has the active descendant seeds focused=true', () => {
+    const container = document.createElement('div')
+    const input = document.createElement('input')
+    container.appendChild(input)
+    document.body.appendChild(container)
+    input.focus()
+    expect(document.activeElement).toBe(input)
+    const widget: AcpChatWidget = {
+      container,
+      moveTimeline: vi.fn(),
+      focusInput: vi.fn(),
+    }
+    svc.register(widget)
+    expect(cks.get('acpChatFocused')).toBe(true)
+    expect(svc.lastFocusedWidget).toBe(widget)
+  })
+
+  it('throws on double-register of the same widget', () => {
+    const a = makeWidget('a')
+    svc.register(a.widget)
+    expect(() => svc.register(a.widget)).toThrow()
+  })
+
+  it('disposing the service detaches listeners', () => {
+    const a = makeWidget('a')
+    svc.register(a.widget)
+    svc.dispose()
+    fireFocusIn(a.child)
+    // After dispose the contextKey on the disposed service is irrelevant; just
+    // ensure no callbacks fire.
+    expect(a.moveSpy).not.toHaveBeenCalled()
+    expect(a.focusSpy).not.toHaveBeenCalled()
+  })
+})

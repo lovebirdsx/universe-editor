@@ -32,8 +32,8 @@ import type {
 } from '../../../services/acp/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
-import { AcpFocusService, IAcpFocusService } from '../../../services/acp/acpFocusService.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
+import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 
 afterEach(() => {
@@ -103,13 +103,11 @@ function renderWithServices(
   opts: {
     fileService?: IFileServiceType
     workspace?: IWorkspaceServiceType
-    focusService?: AcpFocusService
   } = {},
 ) {
   const services = new ServiceCollection()
   services.set(IFileService, opts.fileService ?? stubFileService)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
-  services.set(IAcpFocusService, opts.focusService ?? new AcpFocusService())
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -476,18 +474,20 @@ describe('PromptInput — @-mention popover', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Focus handoff — Ctrl+Alt+I command (via IAcpFocusService) and the auto-focus
-// on session swap. Both must land on the same textarea.
+// Focus handoff — Ctrl+Alt+I command (via the AcpChatWidget handle) and the
+// auto-focus on session swap. Both must land on the same textarea.
 // ---------------------------------------------------------------------------
 
 describe('PromptInput — focus handoff', () => {
-  it('focuses the textarea when IAcpFocusService fires onDidRequestFocus', () => {
-    const focusService = new AcpFocusService()
-    renderWithServices(<PromptInput session={makeSession()} />, { focusService })
+  it('exposes focus() on the widget handle to focus the textarea', () => {
+    const handleRef: { current: WidgetHandle } = {
+      current: { move: () => {}, focus: () => {} },
+    }
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
     const ta = getTextarea()
     expect(document.activeElement).not.toBe(ta)
     act(() => {
-      focusService.requestFocus()
+      handleRef.current.focus()
     })
     expect(document.activeElement).toBe(ta)
   })

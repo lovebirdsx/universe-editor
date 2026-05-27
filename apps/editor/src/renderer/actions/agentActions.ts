@@ -23,7 +23,7 @@ import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSession
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { IAcpFocusService } from '../services/acp/acpFocusService.js'
+import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import type {
   SessionConfigOptionCategory,
@@ -130,7 +130,7 @@ export class FocusAgentInputAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpFocusService).requestFocus()
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.focusInput()
   }
 }
 
@@ -466,9 +466,8 @@ export class RefreshAgentSessionsAction extends Action2 {
 
 // ---------------------------------------------------------------------------
 // Timeline keyboard navigation (Alt+J / Alt+K, vim-style)
-// Mirrors VSCode chat's nextUserPrompt/previousUserPrompt: focuses the next/
-// previous timeline item and reveals it. Gated by `acpTimelineFocusable`,
-// which ChatBody seeds while mounted in the DOM.
+// Targets the focused AcpChatWidget via IAcpChatWidgetService. Gated by
+// `acpChatFocused`, which the widget service toggles based on real DOM focus.
 // ---------------------------------------------------------------------------
 
 export class FocusNextAcpTimelineItemAction extends Action2 {
@@ -478,13 +477,13 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
       id: FocusNextAcpTimelineItemAction.ID,
       title: localize('action.agent.focusNextTimelineItem', 'Focus Next Timeline Item'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+j', when: 'acpTimelineFocusable' },
-      precondition: 'acpTimelineFocusable',
+      keybinding: { primary: 'alt+j', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpFocusService).requestTimelineMove('next')
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('next')
   }
 }
 
@@ -495,12 +494,12 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
       id: FocusPreviousAcpTimelineItemAction.ID,
       title: localize('action.agent.focusPreviousTimelineItem', 'Focus Previous Timeline Item'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+k', when: 'acpTimelineFocusable' },
-      precondition: 'acpTimelineFocusable',
+      keybinding: { primary: 'alt+k', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpFocusService).requestTimelineMove('prev')
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('prev')
   }
 }
