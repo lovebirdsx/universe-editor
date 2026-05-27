@@ -3,18 +3,29 @@
  *  IViewsService implementation for the renderer process.
  *--------------------------------------------------------------------------------------------*/
 
-import { IStorageService, StorageScope, observableValue } from '@universe-editor/platform'
+import {
+  Disposable,
+  IStorageService,
+  StorageScope,
+  observableValue,
+} from '@universe-editor/platform'
 import type { IViewsService } from '@universe-editor/platform'
 import { ViewContainerLocation, ViewContainerRegistry } from '@universe-editor/platform'
 
 const STORAGE_KEY = 'workbench.views'
 const SAVE_DEBOUNCE_MS = 200
 
+const ALL_LOCATIONS: readonly ViewContainerLocation[] = [
+  ViewContainerLocation.SideBar,
+  ViewContainerLocation.SecondarySideBar,
+  ViewContainerLocation.Panel,
+]
+
 interface PersistedViews {
   activeContainerByLocation?: Partial<Record<number, string>>
 }
 
-export class ViewsService implements IViewsService {
+export class ViewsService extends Disposable implements IViewsService {
   declare readonly _serviceBrand: undefined
 
   readonly activeContainerByLocation = observableValue<
@@ -25,9 +36,19 @@ export class ViewsService implements IViewsService {
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(@IStorageService private readonly _storage: IStorageService) {
-    this._storage.onDidChangeWorkspaceScope(() => {
-      void this._reload()
-    })
+    super()
+    this._register(
+      this._storage.onDidChangeWorkspaceScope(() => {
+        void this._reload()
+      }),
+    )
+    // Auto-select first container for a location whenever a new container
+    // registers and the location has nothing active yet.
+    this._register(
+      ViewContainerRegistry.onDidRegisterViewContainer(() => {
+        this._seedDefaults()
+      }),
+    )
   }
 
   openViewContainer(containerId: string): void {
@@ -57,9 +78,13 @@ export class ViewsService implements IViewsService {
     try {
       data = await this._storage.get<PersistedViews>(STORAGE_KEY, StorageScope.WORKSPACE)
     } catch {
+      this._seedDefaults()
       return
     }
-    if (!data?.activeContainerByLocation) return
+    if (!data?.activeContainerByLocation) {
+      this._seedDefaults()
+      return
+    }
 
     this._suspendPersist = true
     try {
@@ -71,6 +96,7 @@ export class ViewsService implements IViewsService {
     } finally {
       this._suspendPersist = false
     }
+    this._seedDefaults()
   }
 
   async save(): Promise<void> {
@@ -115,5 +141,30 @@ export class ViewsService implements IViewsService {
   private _getLocation(id: string): number {
     const descriptor = ViewContainerRegistry.getViewContainer(id)
     return descriptor?.location ?? ViewContainerLocation.SideBar
+  }
+
+  /**
+   * Ensure every location that has at least one registered container also has
+   * an active container. Persistence stays untouched (defaults are derived,
+   * not user choices) so save/load remain idempotent for unselected locations.
+   */
+  private _seedDefaults(): void {
+    const cur = this.activeContainerByLocation.get()
+    const next: Record<number, string | undefined> = { ...cur }
+    let changed = false
+    for (const loc of ALL_LOCATIONS) {
+      if (next[loc]) continue
+      const first = ViewContainerRegistry.getViewContainers(loc)[0]
+      if (!first) continue
+      next[loc] = first.id
+      changed = true
+    }
+    if (!changed) return
+    this._suspendPersist = true
+    try {
+      this.activeContainerByLocation.set(next, undefined)
+    } finally {
+      this._suspendPersist = false
+    }
   }
 }

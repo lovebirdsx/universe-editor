@@ -17,14 +17,15 @@ test.describe('@p0 activitybar', () => {
     await expect(activityBar.item(EXPLORER)).toBeVisible()
     await expect(activityBar.item(SEARCH)).toBeVisible()
 
-    await activityBar.click(EXPLORER)
-    await expect(sideBar.root).toHaveAttribute('data-active-view-container', EXPLORER)
-
+    // Explorer is auto-selected by default; click switches to Search.
     await activityBar.click(SEARCH)
     await expect(sideBar.root).toHaveAttribute('data-active-view-container', SEARCH)
 
+    await activityBar.click(EXPLORER)
+    await expect(sideBar.root).toHaveAttribute('data-active-view-container', EXPLORER)
+
     // 再次点击当前激活项 = 关闭
-    await activityBar.click(SEARCH)
-    await expect(sideBar.root).not.toHaveAttribute('data-active-view-container', SEARCH)
+    await activityBar.click(EXPLORER)
+    await expect(sideBar.root).not.toHaveAttribute('data-active-view-container', EXPLORER)
   })
 })
