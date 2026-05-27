@@ -116,6 +116,11 @@
   list-style: none;
 }
 
+.timelineSlotFocused {
+  outline: 1px solid var(--color-focus-border, var(--color-badge-progress, #4fa6e2));
+  outline-offset: -1px;
+}
+
 .streamingCaret {
   display: inline-block;
   width: 0.55em;

@@ -112,6 +112,8 @@ import {
   CancelAgentTurnAction,
   ClearAgentSessionHistoryAction,
   FocusAgentInputAction,
+  FocusNextAcpTimelineItemAction,
+  FocusPreviousAcpTimelineItemAction,
   NewAgentSessionAction,
   OpenAgentInEditorAction,
   RefreshAgentSessionsAction,
@@ -260,3 +262,5 @@ registerAction2(SelectAgentThoughtLevelAction)
 registerAction2(ResumeAgentSessionAction)
 registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
+registerAction2(FocusNextAcpTimelineItemAction)
+registerAction2(FocusPreviousAcpTimelineItemAction)

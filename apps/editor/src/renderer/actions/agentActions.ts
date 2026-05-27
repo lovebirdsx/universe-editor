@@ -463,3 +463,44 @@ export class RefreshAgentSessionsAction extends Action2 {
     await accessor.get(IAcpSessionService).refreshSessions()
   }
 }
+
+// ---------------------------------------------------------------------------
+// Timeline keyboard navigation (Alt+J / Alt+K, vim-style)
+// Mirrors VSCode chat's nextUserPrompt/previousUserPrompt: focuses the next/
+// previous timeline item and reveals it. Gated by `acpTimelineFocusable`,
+// which ChatBody seeds while mounted in the DOM.
+// ---------------------------------------------------------------------------
+
+export class FocusNextAcpTimelineItemAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusNextTimelineItem'
+  constructor() {
+    super({
+      id: FocusNextAcpTimelineItemAction.ID,
+      title: localize('action.agent.focusNextTimelineItem', 'Focus Next Timeline Item'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+j', when: 'acpTimelineFocusable' },
+      precondition: 'acpTimelineFocusable',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpFocusService).requestTimelineMove('next')
+  }
+}
+
+export class FocusPreviousAcpTimelineItemAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusPreviousTimelineItem'
+  constructor() {
+    super({
+      id: FocusPreviousAcpTimelineItemAction.ID,
+      title: localize('action.agent.focusPreviousTimelineItem', 'Focus Previous Timeline Item'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+k', when: 'acpTimelineFocusable' },
+      precondition: 'acpTimelineFocusable',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpFocusService).requestTimelineMove('prev')
+  }
+}

@@ -27,7 +27,15 @@ export function ToolCallList({ session }: { session: IAcpSession }) {
   )
 }
 
-export function ToolCallCard({ call }: { call: AcpToolCall }) {
+export function ToolCallCard({
+  call,
+  extraClassName,
+  dataTimelineKey,
+}: {
+  call: AcpToolCall
+  extraClassName?: string
+  dataTimelineKey?: string
+}) {
   const editorService = useService(IEditorService)
 
   const openDiff = (diff: AcpToolCallDiff): void => {
@@ -35,8 +43,16 @@ export function ToolCallCard({ call }: { call: AcpToolCall }) {
     void editorService.openEditor(new DiffEditorInput(uri, diff.oldText, diff.newText))
   }
 
+  const className = extraClassName
+    ? `${styles['toolCallCard']} ${extraClassName}`
+    : styles['toolCallCard']
+
   return (
-    <li className={styles['toolCallCard']} data-status={call.status}>
+    <li
+      className={className}
+      data-status={call.status}
+      {...(dataTimelineKey !== undefined ? { 'data-timeline-key': dataTimelineKey } : {})}
+    >
       <header className={styles['toolCallHeader']}>
         <span className={styles['toolCallKind']}>{call.kind}</span>
         <span className={styles['toolCallTitle']}>{call.title}</span>
