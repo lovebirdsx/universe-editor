@@ -89,4 +89,84 @@ test.describe('@p0 history navigation', () => {
       }
     }
   })
+
+  test('GoBack after opening b on top of a (no cursor movement) returns to a', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-history-open-'))
+    const fileA = join(tmpDir, 'a.txt')
+    const fileB = join(tmpDir, 'b.txt')
+    writeFileSync(fileA, 'content of a\n')
+    writeFileSync(fileB, 'content of b\n')
+
+    try {
+      await page.evaluate(([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }), [
+        fileA.replace(/\\/g, '/'),
+      ] as const)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 5000 })
+        .toContain('a.txt')
+
+      await page.evaluate(([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }), [
+        fileB.replace(/\\/g, '/'),
+      ] as const)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 5000 })
+        .toContain('b.txt')
+
+      // No cursor manipulation at all — just open a, open b. GoBack must work.
+      await expect.poll(() => workbench.getContextKey<boolean>('canGoBack')).toBe(true)
+
+      await workbench.runCommand('workbench.action.goBack')
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 5000 })
+        .toContain('a.txt')
+    } finally {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      } catch {
+        /* best-effort */
+      }
+    }
+  })
+
+  test('GoBack across a non-text editor (Settings) returns to it', async ({ page, workbench }) => {
+    await workbench.waitForRestored()
+
+    const tmpDir = mkdtempSync(join(tmpdir(), 'universe-editor-history-settings-'))
+    const fileA = join(tmpDir, 'a.txt')
+    writeFileSync(fileA, 'content of a\n')
+
+    try {
+      await workbench.runCommand('workbench.action.openSettings')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+        .toBe('settings')
+
+      await page.evaluate(([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }), [
+        fileA.replace(/\\/g, '/'),
+      ] as const)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorUri()), { timeout: 5000 })
+        .toContain('a.txt')
+
+      await expect.poll(() => workbench.getContextKey<boolean>('canGoBack')).toBe(true)
+
+      await workbench.runCommand('workbench.action.goBack')
+
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+        .toBe('settings')
+    } finally {
+      try {
+        rmSync(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+      } catch {
+        /* best-effort */
+      }
+    }
+  })
 })

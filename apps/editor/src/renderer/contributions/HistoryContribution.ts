@@ -14,10 +14,13 @@
 
 import {
   Disposable,
+  EditorInput,
   IContextKeyService,
+  IEditorService,
   IHistoryService,
   IWorkbenchContribution,
   URI,
+  autorun,
   toDisposable,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -49,6 +52,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
   constructor(
     @IHistoryService private readonly _historyService: IHistoryService,
     @IContextKeyService contextKeyService: IContextKeyService,
+    @IEditorService editorService: IEditorService,
   ) {
     super()
 
@@ -64,6 +68,31 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
       this._historyService.onDidChange(() => {
         canGoBack.set(this._historyService.canGoBack())
         canGoForward.set(this._historyService.canGoForward())
+      }),
+    )
+
+    // Record an entry whenever the active editor changes so that simply
+    // opening file a then file b (or Settings then file a, etc.) is enough
+    // for GoBack to work. Covers every EditorInput subclass — file, Settings,
+    // Welcome, Agents, ... — by capturing typeId + serialized so the action
+    // can rebuild the input via EditorRegistry.deserialize when it is no
+    // longer open in any group. The cursor listener below upgrades file
+    // entries in-place once Monaco mounts and the user moves the caret.
+    let lastRecordedResource: string | undefined
+    this._register(
+      autorun((reader) => {
+        const active = editorService.activeEditor.read(reader)
+        if (!(active instanceof EditorInput)) return
+        const resource = active.resource
+        if (!resource) return
+        const uri = resource.toString()
+        if (uri === lastRecordedResource) return
+        lastRecordedResource = uri
+        this._historyService.record({
+          resource,
+          typeId: active.typeId,
+          serialized: active.serialize?.(),
+        })
       }),
     )
 

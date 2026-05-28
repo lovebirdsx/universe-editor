@@ -5,13 +5,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   ContextKeyService,
+  EditorInput as ImportedEditorInput,
   Emitter,
   IContextKeyService,
+  IEditorService,
   IFileService,
   IHistoryService,
   InstantiationService,
   ServiceCollection,
   URI,
+  derived,
+  observableValue,
+  type IEditorInput,
+  type IEditorService as IEditorServiceType,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -86,6 +92,28 @@ function makeFileService(): IFileServiceType {
   }
 }
 
+function makeFakeEditorService(): {
+  service: IEditorServiceType
+  setActive: (input: IEditorInput | undefined) => void
+} {
+  const openEditors = observableValue<readonly IEditorInput[]>('openEditors', [])
+  const activeEditor = observableValue<IEditorInput | undefined>('activeEditor', undefined)
+  const activeEditorId = derived((reader) => activeEditor.read(reader)?.id)
+  const service: IEditorServiceType = {
+    _serviceBrand: undefined,
+    openEditor: () => {},
+    closeEditor: () => {},
+    closeAllEditors: () => {},
+    openEditors,
+    activeEditorId,
+    activeEditor,
+  }
+  return {
+    service,
+    setActive: (input) => activeEditor.set(input, undefined),
+  }
+}
+
 function setup() {
   FileEditorRegistry._resetForTests()
   const services = new ServiceCollection()
@@ -94,9 +122,11 @@ function setup() {
   services.set(IContextKeyService, contextKeyService)
   const historyService = new HistoryService()
   services.set(IHistoryService, historyService)
+  const editor = makeFakeEditorService()
+  services.set(IEditorService, editor.service)
   const inst = new InstantiationService(services)
   const contrib = inst.createInstance(HistoryContribution)
-  return { historyService, contextKeyService, inst, contrib }
+  return { historyService, contextKeyService, inst, contrib, setActiveEditor: editor.setActive }
 }
 
 describe('HistoryContribution', () => {
@@ -122,6 +152,47 @@ describe('HistoryContribution', () => {
     expect(contextKeyService.get('canGoBack')).toBe(true)
     historyService.goBack()
     expect(contextKeyService.get('canGoForward')).toBe(true)
+  })
+
+  it('records on active editor change so GoBack works after open-a then open-b without cursor movement', () => {
+    const { historyService, inst, setActiveEditor } = setup()
+    const inputA = inst.createInstance(FileEditorInput, URI.file('/a.ts'))
+    const inputB = inst.createInstance(FileEditorInput, URI.file('/b.ts'))
+    setActiveEditor(inputA)
+    setActiveEditor(inputB)
+    expect(historyService.canGoBack()).toBe(true)
+    const stack = historyService.getBackStack()
+    expect(stack.map((e) => e.resource.fsPath)).toEqual([
+      URI.file('/a.ts').fsPath,
+      URI.file('/b.ts').fsPath,
+    ])
+  })
+
+  it('records non-file editor inputs with typeId + serialized so GoBack can rebuild them', () => {
+    const { historyService, setActiveEditor } = setup()
+
+    class FakeSettingsInput extends ImportedEditorInput {
+      static readonly TYPE_ID = 'settings'
+      override get typeId() {
+        return FakeSettingsInput.TYPE_ID
+      }
+      override get resource() {
+        return URI.from({ scheme: 'universe', path: '/settings' })
+      }
+      override getName() {
+        return 'Settings'
+      }
+      override serialize() {
+        return JSON.stringify({ target: 1 })
+      }
+    }
+
+    setActiveEditor(new FakeSettingsInput())
+
+    const stack = historyService.getBackStack()
+    expect(stack).toHaveLength(1)
+    expect(stack[0]?.typeId).toBe(FakeSettingsInput.TYPE_ID)
+    expect(stack[0]?.serialized).toBe(JSON.stringify({ target: 1 }))
   })
 
   it('records a cursor change after the debounce window', () => {

@@ -54,6 +54,8 @@ export class HistoryService extends Disposable implements IHistoryService {
     const next: Omit<IHistoryEntry, 'timestamp'> = {
       resource: reviveResource,
       selection: entry.selection,
+      ...(entry.typeId !== undefined && { typeId: entry.typeId }),
+      ...(entry.serialized !== undefined && { serialized: entry.serialized }),
     }
     const top = this._back[this._back.length - 1]
     if (top && sameFile(top, next) && sameLine(top, next)) {

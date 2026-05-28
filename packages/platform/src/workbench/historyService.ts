@@ -21,6 +21,15 @@ export interface IHistorySelection {
 export interface IHistoryEntry {
   readonly resource: URI
   readonly selection?: IHistorySelection | undefined
+  /**
+   * Editor input typeId, set by recorders when the entry corresponds to a
+   * non-text editor (Settings, Welcome, Agents, ...). Used by GoBack/GoForward
+   * to recreate the input via `EditorRegistry.deserialize(typeId, serialized)`
+   * when no live instance is found in any group.
+   */
+  readonly typeId?: string
+  /** Serialized payload from `EditorInput.serialize?.()` — paired with `typeId`. */
+  readonly serialized?: unknown
   readonly timestamp: number
 }
 

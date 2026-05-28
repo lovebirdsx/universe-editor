@@ -9,6 +9,8 @@
 
 import {
   Action2,
+  EditorInput,
+  EditorRegistry,
   IEditorGroupsService,
   IHistoryEntry,
   IHistoryService,
@@ -24,10 +26,10 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
   const inst = accessor.get(IInstantiationService)
   const target = entry.resource.toString()
 
-  let opened: FileEditorInput | undefined
+  let opened: EditorInput | undefined
   for (const group of groups.groups) {
     for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && editor.resource.toString() === target) {
+      if (editor instanceof EditorInput && editor.resource?.toString() === target) {
         groups.activateGroup(group)
         group.setActive(editor)
         opened = editor
@@ -37,21 +39,28 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
     if (opened) break
   }
   if (!opened) {
-    const input = inst.createInstance(FileEditorInput, entry.resource)
-    // History navigation to a file no longer in any group opens into the
+    // History navigation to an editor no longer in any group opens into the
     // preview slot — matches VSCode and prevents leaving a stale duplicate
-    // alongside whatever previously replaced this file in preview.
+    // alongside whatever previously replaced this entry. Non-text editors
+    // (Settings, Welcome, ...) rebuild via the registered EditorProvider;
+    // fall back to FileEditorInput when typeId is missing or unknown.
+    let recreated: EditorInput | null = null
+    if (entry.typeId) {
+      recreated = EditorRegistry.deserialize(entry.typeId, entry.serialized, accessor)
+    }
+    const input = recreated ?? inst.createInstance(FileEditorInput, entry.resource)
     groups.activeGroup.openEditor(input, { activate: true, pinned: false })
     opened = input
   }
 
   const selection = entry.selection
-  if (!selection) return
+  if (!selection || !(opened instanceof FileEditorInput)) return
 
   // Monaco may not be mounted yet (first open). Poll briefly until the
   // registry has the editor instance, then set cursor + reveal.
+  const fileInput = opened
   const restore = (): boolean => {
-    const monacoEditor = FileEditorRegistry.get(opened!)
+    const monacoEditor = FileEditorRegistry.get(fileInput)
     if (!monacoEditor) return false
     monacoEditor.setPosition({ lineNumber: selection.startLine, column: selection.startColumn })
     monacoEditor.revealLineInCenterIfOutsideViewport(selection.startLine)
