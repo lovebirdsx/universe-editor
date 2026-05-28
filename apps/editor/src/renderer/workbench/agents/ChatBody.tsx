@@ -34,6 +34,7 @@ import { PermissionCard } from './PermissionCard.js'
 import { PlanCard } from './PlanView.js'
 import { PromptInput } from './PromptInput.js'
 import { ToolCallCard } from './ToolCallCard.js'
+import { UserMessageItem } from './UserMessageItem.js'
 import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
@@ -194,15 +195,18 @@ function TimelineSlot({
     case 'message': {
       const m = item.message
       const showCaret = sessionRunning && m.streaming
+      const isUser = m.role === 'user'
+      const className =
+        styles['messageItem'] + (isUser ? ` ${styles['stickyUserMessage']}` : '') + focusedClass
       return (
         <li
-          className={styles['messageItem'] + focusedClass}
+          className={className}
           data-role={m.role}
           data-testid={`acp-message-${m.role}`}
           data-timeline-key={key}
         >
           <span className={styles['messageRole']}>{m.role}</span>
-          <MessageContent blocks={m.blocks} />
+          {isUser ? <UserMessageItem blocks={m.blocks} /> : <MessageContent blocks={m.blocks} />}
           {showCaret && (
             <span className={styles['streamingCaret']} aria-hidden="true" data-testid="acp-caret">
               ▍

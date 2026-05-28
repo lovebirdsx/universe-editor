@@ -160,6 +160,58 @@
   background: var(--color-message-user-bg, #2a3550);
 }
 
+.stickyUserMessage {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.userMessageBody {
+  position: relative;
+  overflow: hidden;
+}
+
+.userMessageBody[data-collapsed='true'] {
+  max-height: 160px;
+}
+
+.userMessageBody[data-collapsed='true'][data-overflow='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  background: linear-gradient(to bottom, transparent, var(--color-message-user-bg, #2a3550));
+  pointer-events: none;
+}
+
+.userMessageToggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-message-role-fg, #888);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.userMessageToggle:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.userMessageToggle:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
+}
+
 .messageItem[data-role='thought'] {
   opacity: 0.7;
   font-style: italic;

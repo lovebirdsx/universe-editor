@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import { win32 as pathWin32 } from 'node:path'
-import { applyProductIdentity, parseUserDataDirArg, resolveProductIdentity, type ResolveEnv } from '../productPaths.js'
+import {
+  applyProductIdentity,
+  parseUserDataDirArg,
+  resolveProductIdentity,
+  type ResolveEnv,
+} from '../productPaths.js'
 
 const winBase: ResolveEnv = {
   isDev: false,

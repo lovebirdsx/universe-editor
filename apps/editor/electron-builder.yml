@@ -24,3 +24,5 @@ mac:
   target: dmg
 linux:
   target: AppImage
+electronDownload:
+  mirror: https://npmmirror.com/mirrors/electron/
