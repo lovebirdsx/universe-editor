@@ -38,7 +38,10 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
   }
   if (!opened) {
     const input = inst.createInstance(FileEditorInput, entry.resource)
-    groups.activeGroup.openEditor(input, { activate: true })
+    // History navigation to a file no longer in any group opens into the
+    // preview slot — matches VSCode and prevents leaving a stale duplicate
+    // alongside whatever previously replaced this file in preview.
+    groups.activeGroup.openEditor(input, { activate: true, pinned: false })
     opened = input
   }
 

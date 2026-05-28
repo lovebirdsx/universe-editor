@@ -180,19 +180,26 @@ describe('HistoryContribution', () => {
     const { historyService, inst } = setup()
     const uriA = URI.file('/a.ts')
     const inputA = inst.createInstance(FileEditorInput, uriA)
-    const editor = makeFakeEditor(uriA)
+    const editorA = makeFakeEditor(uriA)
     FileEditorRegistry.register(
       inputA,
-      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+      editorA as unknown as Parameters<typeof FileEditorRegistry.register>[1],
     )
-    editor.position = { lineNumber: 5, column: 1 }
-    editor.triggerCursor()
+    editorA.position = { lineNumber: 5, column: 1 }
+    editorA.triggerCursor()
     vi.advanceTimersByTime(300)
 
-    // Same Monaco instance, model swapped to file B (this is what happens on tab switch).
-    editor.uri = URI.file('/b.ts')
-    editor.position = { lineNumber: 5, column: 1 }
-    editor.triggerCursor()
+    // Switching tabs in production mounts a fresh Monaco instance for B —
+    // not the same instance with a swapped model.
+    const uriB = URI.file('/b.ts')
+    const inputB = inst.createInstance(FileEditorInput, uriB)
+    const editorB = makeFakeEditor(uriB)
+    FileEditorRegistry.register(
+      inputB,
+      editorB as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editorB.position = { lineNumber: 5, column: 1 }
+    editorB.triggerCursor()
     vi.advanceTimersByTime(300)
 
     expect(historyService.getBackStack().length).toBe(2)

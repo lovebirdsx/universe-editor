@@ -28,6 +28,8 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import {
   E2E_PROBE_ENABLED_KEY,
   E2E_PROBE_KEY,
@@ -125,10 +127,24 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     getActiveEditorTypeId: () => {
       return services.editorGroupsService.activeGroup?.activeEditor?.typeId
     },
-    openFileUri: (fsPath: string) => {
-      return services.editorResolverService.openEditor(URI.file(fsPath))
+    openFileUri: (fsPath: string, options?: { pinned?: boolean }) => {
+      return services.editorResolverService.openEditor(URI.file(fsPath), options)
     },
     getEditorGroupCount: () => services.editorGroupsService.count,
+    getActiveGroupEditorCount: () => services.editorGroupsService.activeGroup?.editors.length ?? 0,
+    getActiveGroupEditorUris: () =>
+      (services.editorGroupsService.activeGroup?.editors ?? [])
+        .map((e) => e.resource?.toString())
+        .filter((u): u is string => u !== undefined),
+    setActiveEditorCursor: (lineNumber: number, column: number) => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return false
+      const monaco = FileEditorRegistry.get(active)
+      if (!monaco) return false
+      monaco.setPosition({ lineNumber, column })
+      monaco.focus()
+      return true
+    },
     installAcpEchoAgent: (agentId, jsPath) => {
       services.configurationService.update(
         'acp.agents',

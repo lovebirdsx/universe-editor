@@ -25,6 +25,17 @@ test.describe('@p1 disposable leak detection', () => {
     // Fire restart and wait for the reloaded page to reach Restored.
     await workbench.waitForRestartRestore()
 
+    // Open a tow editor groups to increase the chance of leaks being detected.
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await workbench.runCommand('workbench.action.focusActiveEditorGroup')
+    await workbench.runCommand('workbench.action.splitEditorRight')
+
+    // Open the Secondary Sidebar to trigger creation of some more Disposables.
+    await workbench.runCommand('workbench.action.toggleSecondarySidebar')
+
+    // Open the Panel to trigger creation of some more Disposables.
+    await workbench.runCommand('workbench.action.togglePanel')
+
     // The beforeunload handler of the old session wrote the leak report (or
     // removed the key if there were no leaks). Read it via the probe.
     const report = await workbench.getLeakReport()

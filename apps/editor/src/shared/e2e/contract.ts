@@ -94,9 +94,19 @@ export interface E2EProbe {
    * the native file picker dialog. Used by E2E specs that need to open a specific
    * file for resolver testing.
    */
-  openFileUri(fsPath: string): Promise<void>
+  openFileUri(fsPath: string, options?: { pinned?: boolean }): Promise<void>
   /** Returns the number of editor groups currently open. */
   getEditorGroupCount(): number
+  /** Number of editors in the active group. */
+  getActiveGroupEditorCount(): number
+  /** URIs of every editor in the active group, in tab order. */
+  getActiveGroupEditorUris(): readonly string[]
+  /**
+   * Move the active Monaco editor's cursor to the given (1-based) line/column
+   * and synchronously emit cursor + selection events. Used by E2E specs to
+   * exercise HistoryContribution's debounced cursor recorder without typing.
+   */
+  setActiveEditorCursor(lineNumber: number, column: number): boolean
   // -- ACP probe -----------------------------------------------------------
   /**
    * Inject a test ACP agent that runs `node <jsPath>`. Writes into the Memory

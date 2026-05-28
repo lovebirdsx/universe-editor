@@ -31,6 +31,11 @@ type MonacoLikeEditor = NonNullable<ReturnType<typeof FileEditorRegistry.get>>
 
 interface AttachedListener {
   editor: MonacoLikeEditor
+  // Canonical resource of the backing FileEditorInput. Monaco normalizes
+  // Windows drive letters to lowercase on its model URI, so using the input's
+  // resource keeps history keys byte-equal to EditorInput.resource — without
+  // which GoBack's `===` lookup would miss the existing tab.
+  resource: URI
   cursorSub: IDisposable
   disposeSub: IDisposable
   timer: ReturnType<typeof setTimeout> | undefined
@@ -66,7 +71,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
       FileEditorRegistry.onDidChange((input) => {
         if (!(input instanceof FileEditorInput)) return
         const editor = FileEditorRegistry.get(input)
-        if (editor) this._attach(editor)
+        if (editor) this._attach(editor, input.resource)
       }),
     )
 
@@ -78,10 +83,11 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     )
   }
 
-  private _attach(editor: MonacoLikeEditor): void {
+  private _attach(editor: MonacoLikeEditor, resource: URI): void {
     if (this._listeners.has(editor)) return
     const state: AttachedListener = {
       editor,
+      resource,
       cursorSub: undefined as unknown as IDisposable,
       disposeSub: undefined as unknown as IDisposable,
       timer: undefined,
@@ -114,7 +120,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     if (!model) return
     const pos = state.editor.getPosition()
     if (!pos) return
-    const uri = model.uri.toString()
+    const uri = state.resource.toString()
     const fileChanged = uri !== state.lastResource
     const lineDelta = Math.abs(pos.lineNumber - state.lastLine)
     if (!fileChanged && lineDelta <= SIGNIFICANT_LINE_DELTA) return
@@ -123,7 +129,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     state.lastLine = pos.lineNumber
 
     this._historyService.record({
-      resource: URI.parse(uri),
+      resource: state.resource,
       selection: {
         startLine: pos.lineNumber,
         startColumn: pos.column,
