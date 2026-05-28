@@ -135,8 +135,26 @@ describe('ContextKeyContribution', () => {
       makeGroupsStub() as never,
       new LifecycleService(),
     )
+    expect(ctx.get('activityBarVisible')).toBe(true)
     expect(ctx.get('sideBarVisible')).toBe(true)
     expect(ctx.get('panelVisible')).toBe(false)
+    ctx.dispose()
+  })
+
+  it('synchronises activityBarVisible when LayoutService.visible changes', () => {
+    const ctx = new ContextKeyService()
+    const layout = makeLayoutStub({ [PartId.ActivityBar]: true })
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('linux') as never,
+      layout as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+    )
+    expect(ctx.get('activityBarVisible')).toBe(true)
+    layout.visible.set({ ...layout.visible.get(), [PartId.ActivityBar]: false }, undefined)
+    expect(ctx.get('activityBarVisible')).toBe(false)
     ctx.dispose()
   })
 

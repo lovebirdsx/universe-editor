@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Sets up the standard ContextKeys consumed by built-in commands and menus:
  *   - isWindows / isMac / isLinux  (platform identity)
- *   - sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
+ *   - activityBarVisible / sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorPartMultipleEditorGroups / editorIsOpen
@@ -48,6 +48,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     contextKeyService.createKey<boolean>('isLinux', platform === 'linux')
 
     // -- Part visibility keys
+    const activityBarVisible = contextKeyService.createKey<boolean>('activityBarVisible', false)
     const sideBarVisible = contextKeyService.createKey<boolean>('sideBarVisible', false)
     const secondarySideBarVisible = contextKeyService.createKey<boolean>(
       'secondarySideBarVisible',
@@ -57,6 +58,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     this._register(
       autorun((reader) => {
         const visible = layoutService.visible.read(reader)
+        activityBarVisible.set(visible[PartId.ActivityBar])
         sideBarVisible.set(visible[PartId.SideBar])
         secondarySideBarVisible.set(visible[PartId.SecondarySideBar])
         panelVisible.set(visible[PartId.Panel])
