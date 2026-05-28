@@ -24,6 +24,7 @@ import {
   IQuickInputService,
   IOutputService,
   ILayoutService,
+  PartId,
   IHostService,
   IIpcService,
   IStorageService,
@@ -54,7 +55,12 @@ import {
   installConsoleInterceptor,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
-import { ILogChannelService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
+import {
+  IDisposableLeakService,
+  ILogChannelService,
+  ILogFilesService,
+  IPingService,
+} from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
@@ -121,6 +127,10 @@ import {
   AcpChatLocationService,
   IAcpChatLocationService,
 } from './services/acp/acpChatLocationService.js'
+import {
+  IRendererDisposableLeakService,
+  RendererDisposableLeakService,
+} from './services/disposableLeak/DisposableLeakService.js'
 import './workbench.css'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
@@ -136,29 +146,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // subscriptions in FileEditor) haven't run yet and show up as false leaks.
   let reactRoot: Root | null = null
 
-  // DEV or E2E: track Disposable leaks. DEV warns to console; E2E stores to sessionStorage.
-  if (import.meta.env.DEV || isE2E) {
-    const tracker = new DisposableTracker()
+  // DEV or E2E: install the Disposable tracker. The beforeunload handler is
+  // registered later (after the IPC + leak proxy are up) so it can persist the
+  // report to main for the next session.
+  const tracker = import.meta.env.DEV || isE2E ? new DisposableTracker() : null
+  if (tracker) {
     setDisposableTracker(tracker)
-    window.addEventListener('beforeunload', () => {
-      reactRoot?.unmount()
-      const report = tracker.computeLeakingDisposables()
-      if (report) {
-        if (import.meta.env.DEV) {
-          console.warn(
-            `[renderer] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
-          )
-        }
-        if (isE2E) {
-          sessionStorage.setItem(
-            DISPOSABLE_LEAK_REPORT_KEY,
-            JSON.stringify({ count: report.leaks.length, details: report.details }),
-          )
-        }
-      } else if (isE2E) {
-        sessionStorage.removeItem(DISPOSABLE_LEAK_REPORT_KEY)
-      }
-    })
   }
 
   // Singleton root store: all explicitly-created root services are added here so the
@@ -202,6 +195,47 @@ async function bootstrapWorkbench(): Promise<void> {
   // IPC must be available before any service that proxies main-side channels.
   const ipcService = workbenchStore.add(createRendererIpcService())
   services.set(IIpcService, ipcService)
+
+  // Disposable leak reporting (dev/E2E only): cross-process service that
+  // persists this session's leaks for the next bootstrap to surface. Created
+  // here because the beforeunload handler below references it.
+  const disposableLeakProxy = ProxyChannel.toService<IDisposableLeakService>(
+    ipcService.getChannel(ServiceChannels.DisposableLeak),
+  )
+  const rendererLeakService = new RendererDisposableLeakService(disposableLeakProxy)
+  services.set(IRendererDisposableLeakService, rendererLeakService)
+
+  if (tracker) {
+    window.addEventListener('beforeunload', () => {
+      reactRoot?.unmount()
+      const report = tracker.computeLeakingDisposables()
+      if (report) {
+        if (import.meta.env.DEV) {
+          console.warn(
+            `[renderer] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
+          )
+        }
+        if (isE2E) {
+          sessionStorage.setItem(
+            DISPOSABLE_LEAK_REPORT_KEY,
+            JSON.stringify({ count: report.leaks.length, details: report.details }),
+          )
+        }
+        // Fire-and-forget cross-process write. ProxyChannel dispatches the
+        // request synchronously via ipcRenderer.send; the main process queues
+        // it before the renderer is torn down, even though we cannot await
+        // here. Skipped in production (tracker === null).
+        void rendererLeakService.reportLeaks({
+          count: report.leaks.length,
+          details: report.details,
+          capturedAt: Date.now(),
+          source: rendererLeakService.readUnloadReason(),
+        })
+      } else if (isE2E) {
+        sessionStorage.removeItem(DISPOSABLE_LEAK_REPORT_KEY)
+      }
+    })
+  }
 
   // Logger: route renderer logs to the main process for file-based aggregation.
   // Use a stable per-session integer so renderer-<id>.log files are unique.
@@ -511,6 +545,53 @@ async function bootstrapWorkbench(): Promise<void> {
   // (or pane-show); changing it after mount is silently ignored.
   await Promise.all([layoutService.load(), viewsService.load()])
   rootLogger.info('bootstrap services restored')
+
+  // Surface any Disposable leak report left by the previous session. We always
+  // consume (which deletes the file) so a stale report doesn't outlive its
+  // usefulness; production renderer has tracker === null and never writes,
+  // so we skip the consume call entirely there.
+  if (tracker) {
+    void rendererLeakService
+      .consumePendingReport()
+      .then((report) => {
+        if (!report) return
+        const channel =
+          outputService.getChannel('Disposable Leaks') ??
+          outputService.createChannel('Disposable Leaks')
+        channel.appendLine(
+          `[${new Date(report.capturedAt).toISOString()}] source=${report.source} count=${report.count}`,
+        )
+        channel.appendLine(report.details)
+        channel.appendLine('')
+        // 'restart' means the user already saw the modal in the previous session
+        // (RestartEditorAction). Skip the notification to avoid duplicate noise;
+        // the Output channel still has the details for reference.
+        if (report.source === 'restart') return
+        notificationService.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'restart.leakDetected.message',
+            'Detected {count} un-disposed Disposable(s)',
+            { count: report.count },
+          ),
+          sticky: true,
+          actions: [
+            {
+              label: localize('common.details', 'Details'),
+              run: () => {
+                viewsService.openViewContainer('workbench.view.output')
+                layoutService.setVisible(PartId.Panel, true)
+                layoutService.getPart(PartId.Panel)?.focus()
+                outputService.setActiveChannel('Disposable Leaks')
+              },
+            },
+          ],
+        })
+      })
+      .catch((err: unknown) => {
+        rootLogger.warn(`disposableLeak consume failed: ${(err as Error).message}`)
+      })
+  }
 
   // Mount
   const rootEl = document.getElementById('root')

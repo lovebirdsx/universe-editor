@@ -57,6 +57,7 @@ function makeOpts() {
       logFiles: {} as never,
       acpHost: {} as never,
       acpTerminal: {} as never,
+      disposableLeak: {} as never,
     },
     logService,
     e2eEnabled: false,

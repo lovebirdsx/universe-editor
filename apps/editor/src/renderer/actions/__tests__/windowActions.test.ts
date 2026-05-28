@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  DisposableTracker,
   Emitter,
+  IDialogService,
   IHostService,
   ILoggerService,
   InstantiationService,
@@ -11,7 +13,10 @@ import {
   MenuRegistry,
   NullLogger,
   ServiceCollection,
+  toDisposable,
   registerAction2,
+  setDisposableTracker,
+  type IConfirmResult,
   type IDisposable,
   type IHostService as IHostServiceType,
 } from '@universe-editor/platform'
@@ -21,6 +26,30 @@ import {
   RestartEditorAction,
   ToggleDevToolsAction,
 } from '../windowActions.js'
+import {
+  IRendererDisposableLeakService,
+  RendererDisposableLeakService,
+} from '../../services/disposableLeak/DisposableLeakService.js'
+import type { IDisposableLeakService } from '../../../shared/ipc/services.js'
+
+const stubProxy: IDisposableLeakService = {
+  _serviceBrand: undefined,
+  reportLeaks: vi.fn(async () => undefined),
+  consumePendingReport: vi.fn(async () => null),
+}
+
+class FakeDialogService implements IDialogService {
+  declare readonly _serviceBrand: undefined
+  result: IConfirmResult = { confirmed: true, choice: 'primary' }
+  lastDetail: string | undefined
+  async confirm(opts: { detail?: string }): Promise<IConfirmResult> {
+    this.lastDetail = opts.detail
+    return this.result
+  }
+  async prompt(): Promise<string | undefined> {
+    return undefined
+  }
+}
 
 function makeHostStub(): IHostServiceType & {
   closeCalls: number
@@ -140,5 +169,94 @@ describe('windowActions', () => {
     disposables.push(registerAction2(AboutAction))
     const host = makeHostStub()
     expect(() => runCommand(AboutAction.ID, host)).not.toThrow()
+  })
+})
+
+describe('RestartEditorAction leak-detection path', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    setDisposableTracker(null)
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  async function runRestart(
+    host: IHostServiceType,
+    dialog: IDialogService,
+    leak: IRendererDisposableLeakService,
+  ): Promise<void> {
+    const services = new ServiceCollection()
+    services.set(IHostService, host)
+    services.set(IDialogService, dialog)
+    services.set(IRendererDisposableLeakService, leak)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction((accessor) => {
+      const cmd = CommandsRegistry.getCommand(RestartEditorAction.ID)!
+      return cmd.handler(accessor) as unknown as Promise<void>
+    })
+  }
+
+  it('skips confirm and restarts when no tracker is installed (production path)', async () => {
+    disposables.push(registerAction2(RestartEditorAction))
+    const host = makeHostStub()
+    const dialog = new FakeDialogService()
+    const confirm = vi.spyOn(dialog, 'confirm')
+    const leak = new RendererDisposableLeakService(stubProxy)
+
+    await runRestart(host, dialog, leak)
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(host.restart).toHaveBeenCalledTimes(1)
+    expect(leak.readUnloadReason()).toBe('unknown')
+  })
+
+  it('skips confirm when tracker installed but no leaks', async () => {
+    disposables.push(registerAction2(RestartEditorAction))
+    setDisposableTracker(new DisposableTracker())
+    const host = makeHostStub()
+    const dialog = new FakeDialogService()
+    const confirm = vi.spyOn(dialog, 'confirm')
+    const leak = new RendererDisposableLeakService(stubProxy)
+
+    await runRestart(host, dialog, leak)
+
+    expect(confirm).not.toHaveBeenCalled()
+    expect(host.restart).toHaveBeenCalledTimes(1)
+    expect(leak.readUnloadReason()).toBe('restart')
+  })
+
+  it('shows confirm modal with leak details when tracker reports leaks', async () => {
+    disposables.push(registerAction2(RestartEditorAction))
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    disposables.push(toDisposable(() => {}))
+
+    const host = makeHostStub()
+    const dialog = new FakeDialogService()
+    dialog.result = { confirmed: true, choice: 'primary' }
+    const leak = new RendererDisposableLeakService(stubProxy)
+
+    await runRestart(host, dialog, leak)
+
+    expect(dialog.lastDetail).toBeTruthy()
+    expect(host.restart).toHaveBeenCalledTimes(1)
+    expect(leak.readUnloadReason()).toBe('restart')
+  })
+
+  it('does not restart when user cancels the leak confirm', async () => {
+    disposables.push(registerAction2(RestartEditorAction))
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    disposables.push(toDisposable(() => {}))
+
+    const host = makeHostStub()
+    const dialog = new FakeDialogService()
+    dialog.result = { confirmed: false, choice: 'cancel' }
+    const leak = new RendererDisposableLeakService(stubProxy)
+
+    await runRestart(host, dialog, leak)
+
+    expect(host.restart).not.toHaveBeenCalled()
+    expect(leak.readUnloadReason()).toBe('unknown')
   })
 })

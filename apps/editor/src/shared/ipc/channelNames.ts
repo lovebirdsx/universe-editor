@@ -20,6 +20,7 @@ export const ServiceChannels = {
   Window: 'window',
   AcpHost: 'acpHost',
   AcpTerminal: 'acpTerminal',
+  DisposableLeak: 'disposableLeak',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

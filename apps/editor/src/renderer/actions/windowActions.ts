@@ -5,12 +5,17 @@
 
 import {
   Action2,
+  getDisposableTracker,
+  IDialogService,
   IHostService,
   ILoggerService,
   MenuId,
   localize,
+  type DisposableTracker,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
+import { IRendererDisposableLeakService } from '../services/disposableLeak/DisposableLeakService.js'
 
 export class NewWindowAction extends Action2 {
   static readonly ID = 'workbench.action.newWindow'
@@ -61,8 +66,41 @@ export class RestartEditorAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    void accessor.get(IHostService).restart()
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Resolve all services synchronously up front: the accessor is only valid
+    // during invokeFunction's call, not across awaits.
+    const hostService = accessor.get(IHostService)
+    const tracker = getDisposableTracker() as DisposableTracker | null
+    // E2E spec has its own sessionStorage-based leak detection and runs
+    // headless, so a modal would hang the test. Skip the modal in E2E.
+    const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
+    const trackerActive =
+      tracker !== null && !isE2E && typeof tracker.computeLeakingDisposables === 'function'
+    const dialogService = trackerActive ? accessor.get(IDialogService) : null
+    const leakService = trackerActive ? accessor.get(IRendererDisposableLeakService) : null
+
+    // Dev/E2E only: surface any pending Disposable leaks with a modal before
+    // reloading, since beforeunload's console.warn is too easy to miss.
+    // Production has no tracker installed, so this branch is skipped.
+    if (trackerActive && tracker) {
+      const report = tracker.computeLeakingDisposables()
+      if (report) {
+        const choice = await dialogService!.confirm({
+          type: 'warning',
+          message: localize(
+            'restart.leakDetected.message',
+            'Detected {count} un-disposed Disposable(s)',
+            { count: report.leaks.length },
+          ),
+          detail: report.details.slice(0, 2000),
+          primaryButton: localize('restart.leakDetected.restart', 'Restart Anyway'),
+          cancelButton: localize('common.cancel', 'Cancel'),
+        })
+        if (!choice.confirmed) return
+      }
+      leakService!.markUnloadReason('restart')
+    }
+    await hostService.restart()
   }
 }
 

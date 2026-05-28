@@ -17,6 +17,7 @@ import type {
   ILogChannelService,
   ILogFilesService,
   IPingService,
+  IDisposableLeakService,
 } from '../../shared/ipc/services.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
@@ -33,6 +34,7 @@ export interface ApplicationServices {
   readonly logFiles: ILogFilesService
   readonly acpHost: IAcpHostService
   readonly acpTerminal: IAcpTerminalService
+  readonly disposableLeak: IDisposableLeakService
 }
 
 /** Services scoped to a single BrowserWindow. Created per-window by WindowMainService. */

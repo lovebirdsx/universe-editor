@@ -432,6 +432,7 @@ export class AcpSessionService
         this._history,
         this._agentDefaults,
       )
+      this._register(session)
       const captured = session
       const prior = this._sessions.find((s) => s.id === captured.id)
       transaction((tx) => {

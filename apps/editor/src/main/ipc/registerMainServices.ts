@@ -40,6 +40,10 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.AcpHost, ProxyChannel.fromService(app.acpHost))
   server.registerChannel(ServiceChannels.AcpTerminal, ProxyChannel.fromService(app.acpTerminal))
   server.registerChannel(ServiceChannels.Log, ProxyChannel.fromService(window.logChannel))
+  server.registerChannel(
+    ServiceChannels.DisposableLeak,
+    ProxyChannel.fromService(app.disposableLeak),
+  )
 
   const all = combinedDisposable(server, protoDisposable)
   return Object.assign(all, { host: window.host })

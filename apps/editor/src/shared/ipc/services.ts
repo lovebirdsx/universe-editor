@@ -83,3 +83,30 @@ export interface ILogFilesService {
 }
 
 export const ILogFilesService = createDecorator<ILogFilesService>('logFilesService')
+
+// -------- Disposable Leak Report (renderer -> main persistence across sessions) --------
+
+export type DisposableLeakSource = 'restart' | 'close' | 'quit' | 'unknown'
+
+export interface IDisposableLeakReport {
+  readonly count: number
+  readonly details: string
+  readonly capturedAt: number
+  readonly source: DisposableLeakSource
+}
+
+/**
+ * Dev-only service that persists the previous session's Disposable leak report
+ * to disk so the next renderer bootstrap can surface it as a notification.
+ * sessionStorage is insufficient because window close/app quit creates a new
+ * BrowserWindow whose sessionStorage is empty.
+ */
+export interface IDisposableLeakService {
+  readonly _serviceBrand: undefined
+  reportLeaks(report: IDisposableLeakReport): Promise<void>
+  /** Reads the pending report (if any) and deletes the file. */
+  consumePendingReport(): Promise<IDisposableLeakReport | null>
+}
+
+export const IDisposableLeakService =
+  createDecorator<IDisposableLeakService>('disposableLeakService')
