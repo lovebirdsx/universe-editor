@@ -13,6 +13,20 @@ Electron 33 桌面应用，VSCode 范式的 workbench。本目录是项目核心
 
 产物在 `out/{main,preload,renderer}`（electron-vite 约定，勿改）。
 
+## 用户数据目录
+
+main 进程入口（`src/main/index.ts`）在所有 service 实例化前调用 `applyProductIdentity()`（`src/main/productPaths.ts`），按运行模式切换 `app.setName` / `app.setPath('userData', ...)` / `app.setAppUserModelId`：
+
+| 模式 | 判定 | userData 目录（Win） | AppUserModelId |
+|---|---|---|---|
+| 发布版 | `import.meta.env.DEV === false` 且无环境变量 | `%APPDATA%/Universe Editor` | `io.universe.editor` |
+| dev | `import.meta.env.DEV === true` | `%APPDATA%/Universe Editor - Dev` | `io.universe.editor.dev` |
+| E2E | `UNIVERSE_E2E=1` | `%APPDATA%/Universe Editor - E2E` | `io.universe.editor.e2e` |
+
+任何模式都可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或 Electron 原生 `--user-data-dir=<absolute>` CLI 参数覆盖 userData 目录（CLI 优先；productName 仍按 dev/e2e 决定）。E2E fixture 给每个 Playwright worker 分配 tmp 目录即依赖此机制。darwin/linux 走平台标准目录（`~/Library/Application Support` 或 `XDG_CONFIG_HOME || ~/.config`）。
+
+所有 `app.getPath('userData')` 调用点自动跟随，不需要单独传路径。E2E 用专用目录避免污染本地开发数据。
+
 ## renderer 目录归类规则
 
 `src/renderer/` 下五个一级目录承载不同性质的代码，**新文件务必按下表归位**：

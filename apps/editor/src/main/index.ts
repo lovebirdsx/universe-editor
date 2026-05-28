@@ -25,9 +25,17 @@ import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
 import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
 import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
 import { installMainErrorHandlers } from './errors.js'
+import { applyProductIdentity, readEnvFromProcess, resolveProductIdentity } from './productPaths.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+// Switch productName / userData / AppUserModelId based on dev vs release vs E2E.
+// Must run before any `app.getPath('userData')` call (e.g. new LogMainService()).
+applyProductIdentity(
+  app,
+  resolveProductIdentity(readEnvFromProcess({ isDev: import.meta.env.DEV })),
+)
 
 // Dev-only: track Disposable leaks. Report on process exit.
 if (import.meta.env.DEV) {
