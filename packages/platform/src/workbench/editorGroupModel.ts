@@ -14,7 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../base/event.js'
-import { Disposable } from '../base/lifecycle.js'
+import { Disposable, DisposableStore } from '../base/lifecycle.js'
 import { EditorInput } from './editorService.js'
 
 export type EditorGroupModelChangeKind =
@@ -57,6 +57,12 @@ export interface IEditorGroupModel {
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void
   closeEditor(editor: EditorInput): boolean
   closeAllEditors(): void
+  /**
+   * Remove `editor` from this group without disposing it. The caller takes
+   * ownership and is expected to re-attach it to another group (e.g. drag-to-
+   * other-group). Fires the same 'close' model event as `closeEditor`.
+   */
+  detachEditor(editor: EditorInput): boolean
   moveEditor(editor: EditorInput, toIndex: number): void
   setActive(editor: EditorInput): void
   pinEditor(editor: EditorInput): void
@@ -79,6 +85,14 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   private _activeEditor: EditorInput | undefined = undefined
   private _previewEditor: EditorInput | undefined = undefined
   private readonly _mru: EditorInput[] = []
+  /**
+   * Owns the lifetime of editors that belong to this group: each `openEditor`
+   * parents the input here so the leak tracker can root through the model to
+   * its singleton workbench store. `closeEditor` / `closeAllEditors` / preview
+   * replace dispose via this store; `detachEditor` removes without disposing
+   * so the input can be moved to another group.
+   */
+  private readonly _editorStore = this._register(new DisposableStore())
 
   private readonly _onDidChangeModel = this._register(new Emitter<IEditorGroupModelChangeEvent>())
   readonly onDidChangeModel = this._onDidChangeModel.event
@@ -127,6 +141,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       const slotIndex = this._editors.indexOf(oldPreview)
       if (slotIndex !== -1) {
         this._editors.splice(slotIndex, 1, editor)
+        this._editorStore.add(editor)
         const mruIdx = this._mru.indexOf(oldPreview)
         if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
         this._mru.unshift(editor)
@@ -139,7 +154,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
           oldIndex: slotIndex,
           newIndex: slotIndex,
         })
-        oldPreview.dispose()
+        this._editorStore.delete(oldPreview)
         if (activate || wasActive) {
           this._setActiveInternal(editor)
         }
@@ -152,6 +167,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     const insertIndex = options?.index ?? this._editors.length
     const clampedIndex = Math.max(0, Math.min(insertIndex, this._editors.length))
     this._editors.splice(clampedIndex, 0, editor)
+    this._editorStore.add(editor)
     this._mru.unshift(editor)
     if (!pinned) this._previewEditor = editor
 
@@ -184,16 +200,40 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       this._setActiveInternal(next)
     }
 
+    this._editorStore.delete(target)
+    return true
+  }
+
+  detachEditor(editor: EditorInput): boolean {
+    const index = this.indexOf(editor)
+    if (index === -1) return false
+
+    const target = this._editors[index]!
+    this._editors.splice(index, 1)
+    const mruIdx = this._mru.indexOf(target)
+    if (mruIdx !== -1) this._mru.splice(mruIdx, 1)
+    if (this._previewEditor === target) this._previewEditor = undefined
+
+    this._onDidChangeModel.fire({ kind: 'close', editor: target, oldIndex: index })
+
+    if (this._activeEditor === target) {
+      const next = this._mru[0] ?? this._editors[Math.max(0, index - 1)]
+      this._setActiveInternal(next)
+    }
+
+    this._editorStore.deleteAndLeak(target)
     return true
   }
 
   closeAllEditors(): void {
     if (this._editors.length === 0) return
+    const closed = [...this._editors]
     this._editors.length = 0
     this._mru.length = 0
     this._previewEditor = undefined
     this._onDidChangeModel.fire({ kind: 'close', editor: undefined })
     this._setActiveInternal(undefined)
+    for (const editor of closed) this._editorStore.delete(editor)
   }
 
   moveEditor(editor: EditorInput, toIndex: number): void {

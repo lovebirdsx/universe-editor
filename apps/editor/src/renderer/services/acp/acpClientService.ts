@@ -23,6 +23,8 @@
 
 import {
   createDecorator,
+  Disposable,
+  DisposableStore,
   ILoggerService,
   IFileService,
   INotificationService,
@@ -142,6 +144,9 @@ interface PoolEntry {
   readonly stderrSub: IDisposable
   readonly hostStream: SdkHostStream
   readonly tracer: AcpProtocolTracer
+  /** Per-entry store rooted under AcpClientService — owns stderrSub + hostStream
+   *  so their internal event subscriptions appear under a singleton parent chain. */
+  readonly entryStore: DisposableStore
   /** sessionId → terminalIds owned by leases tagged with that sessionId. */
   readonly terminalsBySession: Map<string, Set<string>>
   refcount: number
@@ -149,7 +154,7 @@ interface PoolEntry {
   evicted: boolean
 }
 
-export class AcpClientService implements IAcpClientService {
+export class AcpClientService extends Disposable implements IAcpClientService {
   declare readonly _serviceBrand: undefined
 
   private readonly _logger: ILogger
@@ -159,6 +164,7 @@ export class AcpClientService implements IAcpClientService {
    *  concurrent `connect()` calls share the same spawn. On creation failure
    *  the catch handler evicts the entry. */
   private readonly _pool = new Map<string, Promise<PoolEntry>>()
+  private readonly _entriesStore = this._register(new DisposableStore())
   private _sink: IAcpClientNotificationSink | undefined
   private _protocolChannel: IOutputChannel | undefined
 
@@ -174,12 +180,38 @@ export class AcpClientService implements IAcpClientService {
     @ILoggerService loggerService: ILoggerService,
     @IHostService hostService: IHostService,
   ) {
+    super()
     this._logger = loggerService.createLogger({ id: 'acpClient', name: 'ACP Client' })
     this._protocolLogger = loggerService.createLogger({
       id: 'acpProtocol',
       name: 'ACP Protocol',
     })
     this._platform = hostService.platform
+  }
+
+  override dispose(): void {
+    // Fire host.stop best-effort for every resolved entry. _entriesStore (via
+    // super.dispose) tears down all per-entry subscriptions synchronously.
+    for (const entryPromise of [...this._pool.values()]) {
+      entryPromise.then(
+        (entry) => {
+          if (!entry.evicted) {
+            entry.evicted = true
+            void this._host.stop(entry.handle).catch(() => {
+              // best-effort
+            })
+            if (entry.graceTimer !== undefined) {
+              clearTimeout(entry.graceTimer)
+            }
+          }
+        },
+        () => {
+          // spawn failed — already self-evicted
+        },
+      )
+    }
+    this._pool.clear()
+    super.dispose()
   }
 
   setNotificationSink(sink: IAcpClientNotificationSink): void {
@@ -274,9 +306,13 @@ export class AcpClientService implements IAcpClientService {
     this._telemetry.publicLog('acp.spawned', { agentId })
 
     const stderr = this._output.createChannel(`acp/${agentId}/${handle}`)
-    const stderrSub = this._host.onStderr((chunk) => {
-      if (chunk.handle === handle) stderr.append(chunk.data)
-    })
+    const entryStore = new DisposableStore()
+    this._entriesStore.add(entryStore)
+    const stderrSub = entryStore.add(
+      this._host.onStderr((chunk) => {
+        if (chunk.handle === handle) stderr.append(chunk.data)
+      }),
+    )
     const terminalsBySession = new Map<string, Set<string>>()
 
     const clientImpl: Client = {
@@ -357,10 +393,12 @@ export class AcpClientService implements IAcpClientService {
       this._protocolLogger,
       `${agentId}#${handle.slice(-6)}`,
     )
-    const hostStream = createSdkHostStream(this._host, handle, {
-      onStdout: (text) => tracer.traceInboundChunk(text),
-      onStdin: (text) => tracer.traceOutboundChunk(text),
-    })
+    const hostStream = entryStore.add(
+      createSdkHostStream(this._host, handle, {
+        onStdout: (text) => tracer.traceInboundChunk(text),
+        onStdin: (text) => tracer.traceOutboundChunk(text),
+      }),
+    )
     const conn = new ClientSideConnection(() => clientImpl, hostStream.stream)
 
     const entry: PoolEntry = {
@@ -373,6 +411,7 @@ export class AcpClientService implements IAcpClientService {
       stderrSub,
       hostStream,
       tracer,
+      entryStore,
       terminalsBySession,
       refcount: 0,
       graceTimer: undefined,
@@ -473,13 +512,12 @@ export class AcpClientService implements IAcpClientService {
     void this._host.stop(entry.handle).catch(() => {
       // best-effort
     })
-    entry.stderrSub.dispose()
+    this._entriesStore.delete(entry.entryStore)
     try {
       entry.stderr.dispose()
     } catch {
       // OutputChannel.dispose is idempotent.
     }
-    entry.hostStream.dispose()
     entry.tracer.dispose()
     if (entry.terminalsBySession.size > 0) {
       for (const ids of entry.terminalsBySession.values()) {

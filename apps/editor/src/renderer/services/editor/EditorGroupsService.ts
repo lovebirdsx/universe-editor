@@ -262,7 +262,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     const src = this._findGroupContaining(editor)
     if (!src) return
     if (src === target) return
-    src.closeEditor(editor)
+    src.detachEditor(editor)
     ;(target as EditorGroup).openEditor(editor)
     this._logger.info(`moveEditor id=${editor.id} from=${src.id} to=${target.id}`)
   }

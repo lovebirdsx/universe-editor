@@ -11,22 +11,81 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ndJsonStream, type Stream } from '@agentclientprotocol/sdk'
-import type { IDisposable } from '@universe-editor/platform'
+import { Disposable } from '@universe-editor/platform'
 import type {
   AcpExitEvent,
   AcpStdioChunk,
   IAcpHostService,
 } from '../../../shared/ipc/acpHostService.js'
 
-export interface SdkHostStream {
+export interface SdkHostStream extends Disposable {
   readonly stream: Stream
-  /** Detach event listeners. Does NOT stop the underlying agent process. */
-  dispose(): void
 }
 
 export interface SdkHostStreamTap {
   onStdout?(text: string): void
   onStdin?(text: string): void
+}
+
+class SdkHostStreamImpl extends Disposable implements SdkHostStream {
+  readonly stream: Stream
+  private _readableClosed = false
+  private _stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined
+
+  constructor(host: IAcpHostService, handle: string, tap?: SdkHostStreamTap) {
+    super()
+    const encoder = new TextEncoder()
+    const decoder = new TextDecoder()
+
+    this._register(
+      host.onStdout((chunk: AcpStdioChunk) => {
+        if (chunk.handle !== handle || this._readableClosed) return
+        tap?.onStdout?.(chunk.data)
+        this._stdoutController?.enqueue(encoder.encode(chunk.data))
+      }),
+    )
+
+    this._register(
+      host.onExit((evt: AcpExitEvent) => {
+        if (evt.handle !== handle) return
+        this._closeReadable()
+      }),
+    )
+
+    const readable = new ReadableStream<Uint8Array>({
+      start: (controller) => {
+        this._stdoutController = controller
+      },
+      cancel: () => {
+        this._readableClosed = true
+      },
+    })
+
+    const writable = new WritableStream<Uint8Array>({
+      async write(chunk) {
+        const text = decoder.decode(chunk)
+        tap?.onStdin?.(text)
+        await host.writeStdin(handle, text)
+      },
+    })
+
+    this.stream = ndJsonStream(writable, readable)
+  }
+
+  private _closeReadable(): void {
+    if (this._readableClosed) return
+    this._readableClosed = true
+    try {
+      this._stdoutController?.close()
+    } catch {
+      // already closed by cancel/error
+    }
+  }
+
+  override dispose(): void {
+    super.dispose()
+    this._closeReadable()
+  }
 }
 
 /**
@@ -48,64 +107,5 @@ export function createSdkHostStream(
   handle: string,
   tap?: SdkHostStreamTap,
 ): SdkHostStream {
-  const encoder = new TextEncoder()
-  const decoder = new TextDecoder()
-  let stdoutController: ReadableStreamDefaultController<Uint8Array> | undefined
-  let readableClosed = false
-
-  const disposables: IDisposable[] = []
-
-  const closeReadable = (): void => {
-    if (readableClosed) return
-    readableClosed = true
-    try {
-      stdoutController?.close()
-    } catch {
-      // already closed by cancel/error
-    }
-  }
-
-  disposables.push(
-    host.onStdout((chunk: AcpStdioChunk) => {
-      if (chunk.handle !== handle || readableClosed) return
-      tap?.onStdout?.(chunk.data)
-      stdoutController?.enqueue(encoder.encode(chunk.data))
-    }),
-  )
-
-  disposables.push(
-    host.onExit((evt: AcpExitEvent) => {
-      if (evt.handle !== handle) return
-      closeReadable()
-    }),
-  )
-
-  const readable = new ReadableStream<Uint8Array>({
-    start(controller) {
-      stdoutController = controller
-    },
-    cancel() {
-      readableClosed = true
-    },
-  })
-
-  const writable = new WritableStream<Uint8Array>({
-    async write(chunk) {
-      const text = decoder.decode(chunk)
-      tap?.onStdin?.(text)
-      await host.writeStdin(handle, text)
-    },
-  })
-
-  const stream = ndJsonStream(writable, readable)
-
-  return {
-    stream,
-    dispose(): void {
-      for (const d of disposables) {
-        d.dispose()
-      }
-      closeReadable()
-    },
-  }
+  return new SdkHostStreamImpl(host, handle, tap)
 }

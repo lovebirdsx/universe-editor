@@ -129,6 +129,12 @@ export class EditorService extends Disposable implements IEditorService {
           group.pinEditor(existing)
         }
         if (options?.activate !== false) group.setActive(existing)
+        if (input instanceof EditorInput && input !== existing) {
+          // Caller handed us a fresh input for an already-open resource; the
+          // existing one wins, so release the discarded duplicate so the leak
+          // tracker doesn't see it as a dangling owner.
+          input.dispose()
+        }
       } else {
         group.openEditor(
           input instanceof EditorInput ? input : new LegacyEditorInput(input),

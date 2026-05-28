@@ -9,14 +9,12 @@
 import {
   CommandsRegistry,
   Disposable,
+  DisposableStore,
   IWorkbenchContribution,
   IWorkspaceService,
   MenuId,
   MenuRegistry,
-  combinedDisposable,
   localize,
-  toDisposable,
-  type IDisposable,
   type IRecentWorkspace,
 } from '@universe-editor/platform'
 import { ClearRecentWorkspacesAction } from '../actions/workspaceActions.js'
@@ -25,7 +23,7 @@ const RECENT_GROUP = '1_recent'
 const TRAILING_GROUP = '9_clear'
 
 export class WorkspaceRecentMenuContribution extends Disposable implements IWorkbenchContribution {
-  private _dynamic: IDisposable | undefined
+  private readonly _dynamic = this._register(new DisposableStore())
 
   constructor(@IWorkspaceService private readonly workspaceService: IWorkspaceService) {
     super()
@@ -53,24 +51,18 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
 
     this._rebuild(workspaceService.recent)
     this._register(workspaceService.onDidChangeRecent((next) => this._rebuild(next)))
-    this._register(toDisposable(() => this._dynamic?.dispose()))
   }
 
   private _rebuild(recent: readonly IRecentWorkspace[]): void {
-    this._dynamic?.dispose()
-    this._dynamic = undefined
-
-    if (recent.length === 0) return
-
-    const disposables: IDisposable[] = []
+    this._dynamic.clear()
     recent.forEach((entry, index) => {
       const commandId = `workbench.action.openRecent.${index}`
-      disposables.push(
+      this._dynamic.add(
         CommandsRegistry.registerCommand(commandId, () => {
           void this.workspaceService.openFolder(entry.folder)
         }),
       )
-      disposables.push(
+      this._dynamic.add(
         MenuRegistry.addMenuItem(MenuId.MenubarFileOpenRecentMenu, {
           command: commandId,
           title: entry.name,
@@ -79,6 +71,5 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
         }),
       )
     })
-    this._dynamic = combinedDisposable(...disposables)
   }
 }

@@ -1,5 +1,5 @@
 import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
+import { createRoot, type Root } from 'react-dom/client'
 import {
   ServiceCollection,
   InstantiationService,
@@ -131,11 +131,17 @@ installRendererErrorHandlers()
 async function bootstrapWorkbench(): Promise<void> {
   const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
 
+  // Hoisted so the dev/E2E leak-check beforeunload listener can unmount React
+  // before snapshotting — without that, useEffect cleanups (e.g. event
+  // subscriptions in FileEditor) haven't run yet and show up as false leaks.
+  let reactRoot: Root | null = null
+
   // DEV or E2E: track Disposable leaks. DEV warns to console; E2E stores to sessionStorage.
   if (import.meta.env.DEV || isE2E) {
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
     window.addEventListener('beforeunload', () => {
+      reactRoot?.unmount()
       const report = tracker.computeLeakingDisposables()
       if (report) {
         if (import.meta.env.DEV) {
@@ -394,7 +400,7 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IAcpPathPolicy, acpPathPolicy)
   const acpPermissionHandler = instantiation.createInstance(AcpPermissionHandler)
   services.set(IAcpPermissionHandler, acpPermissionHandler)
-  const acpClientService = instantiation.createInstance(AcpClientService)
+  const acpClientService = workbenchStore.add(instantiation.createInstance(AcpClientService))
   services.set(IAcpClientService, acpClientService)
   // History must be available before SessionService so createSession can record
   // to it from the very first call. initialize() is fire-and-forget — early
@@ -513,7 +519,8 @@ async function bootstrapWorkbench(): Promise<void> {
   const { Workbench } = await import('./workbench/Workbench.js')
   const { WorkbenchErrorBoundary } = await import('./workbench/errors/WorkbenchErrorBoundary.js')
 
-  createRoot(rootEl).render(
+  reactRoot = createRoot(rootEl)
+  reactRoot.render(
     <StrictMode>
       <WorkbenchErrorBoundary logger={rootLogger}>
         <Workbench instantiation={instantiation} lifecycle={lifecycle} />

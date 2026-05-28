@@ -13,8 +13,10 @@
 
 import { parse, type ParseError } from 'jsonc-parser'
 import {
+  combinedDisposable,
   createDecorator,
   Disposable,
+  DisposableStore,
   Emitter,
   type Event,
   type IDisposable,
@@ -110,6 +112,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   readonly onDidChange: Event<void> = this._onDidChange.event
 
   private readonly _userEntries = new Map<string, IUserKeybindingEntry>()
+  private readonly _registrationStore = this._register(new DisposableStore())
   private readonly _registrationDisposables = new Map<string, IDisposable>()
   private readonly _defaultSnapshot = new Map<string, string>()
 
@@ -179,7 +182,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   resetKeybinding(command: string): void {
     const d = this._registrationDisposables.get(command)
     if (d) {
-      d.dispose()
+      this._registrationStore.delete(d)
       this._registrationDisposables.delete(command)
     }
     this._userEntries.delete(command)
@@ -194,7 +197,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._suspendWriteBack = true
     try {
       // Drop all previous user-applied registrations.
-      for (const d of this._registrationDisposables.values()) d.dispose()
+      this._registrationStore.clear()
       this._registrationDisposables.clear()
       this._userEntries.clear()
       for (const entry of entries) this._applyEntry(entry)
@@ -208,7 +211,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     // Remove previous user registration for this command first.
     const prev = this._registrationDisposables.get(entry.command)
     if (prev) {
-      prev.dispose()
+      this._registrationStore.delete(prev)
       this._registrationDisposables.delete(entry.command)
     }
 
@@ -235,15 +238,16 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
         })
       })
 
-      this._registrationDisposables.set(entry.command, {
-        dispose: () => disposables.forEach((d) => d.dispose()),
-      })
+      const combined = combinedDisposable(...disposables)
+      this._registrationStore.add(combined)
+      this._registrationDisposables.set(entry.command, combined)
     } else {
       const d = KeybindingsRegistry.registerKeybinding({
         key: entry.key,
         command: entry.command,
         ...(entry.when !== undefined ? { when: entry.when } : {}),
       })
+      this._registrationStore.add(d)
       this._registrationDisposables.set(entry.command, d)
     }
   }
@@ -263,13 +267,5 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     const body = `// User keybindings — migrated from previous storage on first launch.\n${JSON.stringify(fileEntries, null, 2)}\n`
     await this._files.write(UserDataFile.Keybindings, body)
     await this._storage.set(LEGACY_STORAGE_KEY, [])
-  }
-
-  override dispose(): void {
-    for (const d of this._registrationDisposables.values()) {
-      d.dispose()
-    }
-    this._registrationDisposables.clear()
-    super.dispose()
   }
 }

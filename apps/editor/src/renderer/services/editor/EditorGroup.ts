@@ -76,6 +76,9 @@ export class EditorGroup implements IEditorGroup, IGridView {
   closeEditor(editor: EditorInput): boolean {
     return this.model.closeEditor(editor)
   }
+  detachEditor(editor: EditorInput): boolean {
+    return this.model.detachEditor(editor)
+  }
   closeAllEditors(): void {
     this.model.closeAllEditors()
   }

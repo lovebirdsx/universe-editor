@@ -10,13 +10,13 @@
 
 import {
   Disposable,
+  DisposableStore,
   IEditorService,
   IStatusBarService,
   IWorkbenchContribution,
   StatusBarAlignment,
   autorun,
   localize,
-  type IDisposable,
   type IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -39,8 +39,8 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   private _cursorEntry: IStatusBarEntryAccessor | undefined
   private _languageEntry: IStatusBarEntryAccessor | undefined
   private _encodingEntry: IStatusBarEntryAccessor | undefined
-  private _cursorSub: IDisposable | undefined
-  private _registrySub: IDisposable | undefined
+  private readonly _cursorStore = this._register(new DisposableStore())
+  private readonly _registryStore = this._register(new DisposableStore())
 
   constructor(
     @IEditorService editorService: IEditorService,
@@ -98,14 +98,11 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   }
 
   private _bindCursor(input: FileEditorInput): void {
-    this._cursorSub?.dispose()
-    this._cursorSub = undefined
-    this._registrySub?.dispose()
-    this._registrySub = undefined
+    this._cursorStore.clear()
+    this._registryStore.clear()
 
     const attach = () => {
-      this._cursorSub?.dispose()
-      this._cursorSub = undefined
+      this._cursorStore.clear()
       const editor = FileEditorRegistry.get(input)
       if (!editor) {
         this._renderCursor(1, 1)
@@ -113,14 +110,18 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
       }
       const pos = editor.getPosition()
       this._renderCursor(pos?.lineNumber ?? 1, pos?.column ?? 1)
-      this._cursorSub = editor.onDidChangeCursorPosition((e) => {
-        this._renderCursor(e.position.lineNumber, e.position.column)
-      })
+      this._cursorStore.add(
+        editor.onDidChangeCursorPosition((e) => {
+          this._renderCursor(e.position.lineNumber, e.position.column)
+        }),
+      )
     }
     attach()
-    this._registrySub = FileEditorRegistry.onDidChange((changed) => {
-      if (changed === input) attach()
-    })
+    this._registryStore.add(
+      FileEditorRegistry.onDidChange((changed) => {
+        if (changed === input) attach()
+      }),
+    )
   }
 
   private _renderCursor(line: number, column: number): void {
@@ -143,10 +144,8 @@ export class FileEditorStatusContribution extends Disposable implements IWorkben
   }
 
   private _hide(): void {
-    this._cursorSub?.dispose()
-    this._cursorSub = undefined
-    this._registrySub?.dispose()
-    this._registrySub = undefined
+    this._cursorStore.clear()
+    this._registryStore.clear()
     this._cursorEntry?.dispose()
     this._cursorEntry = undefined
     this._languageEntry?.dispose()

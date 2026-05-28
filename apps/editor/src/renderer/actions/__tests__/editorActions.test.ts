@@ -6,6 +6,7 @@ import {
   IContextKeyService,
   IDialogService,
   IEditorGroupsService,
+  IFileService,
   InstantiationService,
   KeybindingsRegistry,
   MenuId,
@@ -456,7 +457,7 @@ describe('FocusActiveEditorGroupAction', () => {
     const svc = new EditorGroupsService()
     const first = svc.activeGroup
     const second = svc.addGroup(first, 3 /* Right */)
-    const input = Object.create(FileEditorInput.prototype) as FileEditorInput
+    const input = new FileEditorInput(URI.file('D:/x.txt'), {} as IFileService)
     first.openEditor(input)
     second.openEditor(input)
     svc.activateGroup(second)
