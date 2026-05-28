@@ -519,6 +519,42 @@ describe('AcpSessionService', () => {
     expect(calls[0]?.title).toBe('Read file')
   })
 
+  it('tool_call_update overrides title and kind when the agent reveals them later', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tc-exec',
+        title: '',
+        status: 'pending',
+      },
+    })
+    let calls = s.toolCalls.get()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.title).toBe('')
+    expect(calls[0]?.kind).toBe('unknown')
+
+    const revealedTitle = 'execute cd /tmp && pnpm typecheck'
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'tc-exec',
+        title: revealedTitle,
+        kind: 'execute',
+        status: 'in_progress',
+      },
+    })
+    calls = s.toolCalls.get()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.title).toBe(revealedTitle)
+    expect(calls[0]?.kind).toBe('execute')
+    expect(calls[0]?.status).toBe('in_progress')
+  })
+
   it('publishes plan entries verbatim', async () => {
     const s = await svc.createSession()
     const conn = client.connected[0]!

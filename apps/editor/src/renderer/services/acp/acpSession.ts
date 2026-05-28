@@ -384,8 +384,8 @@ export class AcpSession extends Disposable implements IAcpSession {
         const diffs = split?.diffs ?? existing?.diffs ?? []
         const next: AcpToolCall = {
           id: update.toolCallId,
-          title: existing?.title ?? update.toolCallId,
-          kind: existing?.kind ?? 'unknown',
+          title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
+          kind: update.kind != null ? update.kind : (existing?.kind ?? 'unknown'),
           status: (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending',
           blocks,
           diffs,
