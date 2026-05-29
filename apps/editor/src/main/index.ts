@@ -2,7 +2,6 @@ import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { existsSync } from 'node:fs'
 import {
   DisposableTracker,
   setDisposableTracker,
@@ -77,7 +76,13 @@ let userDataService: UserDataMainService | null = null
 let acpHostService: AcpHostMainService | null = null
 let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
-const appIconPath = join(__dirname, '../../build/icon.ico')
+// 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
+// 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
+// 所以仅在 dev（运行的是通用 electron.exe）下显式设置。
+const appIconPath =
+  process.platform === 'win32' && !app.isPackaged
+    ? join(__dirname, '../../public/icon.ico')
+    : undefined
 
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
   if (!applicationServices) {
@@ -120,7 +125,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       appServices: applicationServices,
       logService: logMainService,
       e2eEnabled,
-      ...(existsSync(appIconPath) ? { appIconPath } : {}),
+      ...(appIconPath ? { appIconPath } : {}),
       preloadPath: join(__dirname, '../preload/index.cjs'),
       rendererUrl: process.env['ELECTRON_RENDERER_URL'],
       rendererHtml: join(__dirname, '../renderer/index.html'),

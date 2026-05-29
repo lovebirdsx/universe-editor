@@ -360,8 +360,8 @@ describe('AcpSession.timeline', () => {
         entries: [{ content: 'first plan', priority: 'high', status: 'pending' }],
       },
     })
-    // Subsequent agent_message_chunk merges into the existing streaming message
-    // rather than producing a new slot — so the trailing kind is still 'plan'.
+    // Once tool tcB seals the 'hello ' message, a later agent_message_chunk no
+    // longer merges back into it — it opens a fresh card appended at the end.
     conn.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: {
@@ -371,13 +371,65 @@ describe('AcpSession.timeline', () => {
     })
 
     const kinds = s.timeline.get().map((it) => it.kind)
-    expect(kinds).toEqual(['toolCall', 'message', 'toolCall', 'plan'])
-    // The merged streaming message has both chunks.
-    const messageSlot = s.timeline.get()[1]!
-    expect(messageSlot.kind).toBe('message')
-    if (messageSlot.kind !== 'message') throw new Error('unreachable')
-    expect(messageSlot.message.text).toBe('hello world')
-    expect(messageSlot.message.streaming).toBe(true)
+    expect(kinds).toEqual(['toolCall', 'message', 'toolCall', 'plan', 'message'])
+    // The pre-tool message is sealed and keeps only its own chunk.
+    const firstMessage = s.timeline.get()[1]!
+    if (firstMessage.kind !== 'message') throw new Error('unreachable')
+    expect(firstMessage.message.text).toBe('hello ')
+    expect(firstMessage.message.streaming).toBe(false)
+    // The post-tool chunk is its own trailing card, still streaming.
+    const lastMessage = s.timeline.get()[4]!
+    if (lastMessage.kind !== 'message') throw new Error('unreachable')
+    expect(lastMessage.message.text).toBe('world')
+    expect(lastMessage.message.streaming).toBe(true)
+  })
+
+  it('a thought after tool calls opens a fresh card at the end', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'first thought' },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcA',
+        title: 'A',
+        kind: 'read',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcB',
+        title: 'B',
+        kind: 'edit',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_thought_chunk',
+        content: { type: 'text', text: 'second thought' },
+      },
+    })
+
+    const timeline = s.timeline.get()
+    expect(timeline.map((it) => it.kind)).toEqual(['message', 'toolCall', 'toolCall', 'message'])
+    const thoughts = timeline
+      .map((it) => (it.kind === 'message' ? it.message : null))
+      .filter((m): m is NonNullable<typeof m> => m !== null)
+    expect(thoughts.map((m) => m.role)).toEqual(['thought', 'thought'])
+    expect(thoughts.map((m) => m.text)).toEqual(['first thought', 'second thought'])
   })
 
   it('tool_call_update keeps the slot at its original index', async () => {

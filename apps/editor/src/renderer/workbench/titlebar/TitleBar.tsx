@@ -13,7 +13,7 @@ import { MenuBar } from './MenuBar.js'
 import { WindowControls } from './WindowControls.js'
 import styles from './TitleBar.module.css'
 
-const ICON_SRC = './icon.png'
+const ICON_SRC = './icon.ico'
 
 function AppIcon() {
   const [error, setError] = useState(false)

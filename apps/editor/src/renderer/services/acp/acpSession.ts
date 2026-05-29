@@ -375,6 +375,11 @@ export class AcpSession extends Disposable implements IAcpSession {
         this._appendChunk('thought', update.content)
         break
       case 'tool_call': {
+        // A new tool slot is about to land at the end of the timeline. Seal any
+        // still-streaming message first so the next thought/message chunk opens
+        // a fresh card at the end instead of merging back into the message now
+        // buried above this tool.
+        this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
         this._upsertToolCall({
           id: update.toolCallId,
@@ -415,6 +420,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         break
       }
       case 'plan': {
+        // Seal streaming only when the plan slot first appears — plan is a
+        // singleton lane updated in place afterwards, so resealing on every
+        // update could wrongly split a concurrently streaming message.
+        if (!this._timeline.some((it) => it.kind === 'plan')) this._sealStreamingMessages()
         const entries: readonly AcpPlanEntry[] = update.entries.map((e) => ({
           content: e.content,
           ...(e.priority !== undefined ? { priority: e.priority } : {}),
@@ -526,6 +535,21 @@ export class AcpSession extends Disposable implements IAcpSession {
     })
     this._streamingIds.clear()
     return closed
+  }
+
+  /**
+   * A new non-message slot (tool call / first plan) is about to be appended at
+   * the end of the timeline. Seal any message still marked streaming so the next
+   * thought/message chunk opens a fresh card at the end via `_appendChunk`'s new
+   * branch, instead of merging back into the message now buried above the new
+   * slot. Closed messages are re-upserted in place (their `streaming` flag flips)
+   * and the messages observable is refreshed on the shared batched transaction.
+   */
+  private _sealStreamingMessages(): void {
+    const closed = this._closePriorStreaming()
+    if (closed.length === 0) return
+    for (const c of closed) this._upsertMessageInTimeline(c)
+    this.messages.set(this._messages, this._batchedTx())
   }
 
   private _flushStream(): void {
