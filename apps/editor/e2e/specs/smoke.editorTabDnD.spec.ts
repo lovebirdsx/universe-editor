@@ -56,9 +56,9 @@ test.describe('@p1 editor tab drag-and-drop', () => {
     await workbench.page.evaluate(() => {
       const bars = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-tabbar"]')
       const bodies = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-body"]')
-      const source = Array.from(
-        bars[1]?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
-      ).find((t) => (t.textContent ?? '').includes('beta.txt'))
+      const source = Array.from(bars[1]?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []).find(
+        (t) => (t.textContent ?? '').includes('beta.txt'),
+      )
       const target = bodies[0]
       if (!source || !target) throw new Error('drag source/target missing')
 
