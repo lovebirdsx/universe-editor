@@ -70,12 +70,14 @@ function seedWorkspaceFile(userDataDir: string, folder: string, openFile: string
   writeFileSync(join(wsDir, `${hash}.json`), JSON.stringify(payload, null, 2))
 }
 
-/** Seed state.json with the current/recent workspace pointers. */
-function seedGlobalCurrentWorkspace(userDataDir: string, folder: string): void {
+/** Seed state.json so the app restores a single window into `folder`. */
+function seedGlobalSession(userDataDir: string, folder: string): void {
   const folderComponents = fsPathToUriComponents(folder)
   const name = folder.split(/[\\/]/).filter(Boolean).pop() ?? folder
   const payload = {
-    'workbench.currentWorkspace': { folder: folderComponents, name },
+    'workbench.windowsState': [
+      { workspace: { folder: folderComponents, name }, uiState: null, devToolsOpen: false },
+    ],
     'workbench.recentWorkspaces': [{ folder: folderComponents, name, lastOpened: Date.now() }],
   }
   writeFileSync(join(userDataDir, 'state.json'), JSON.stringify(payload, null, 2))
@@ -115,7 +117,7 @@ test.describe('@p1 editor restore', () => {
       const testFile = join(workspaceFolder, 'hello.json')
       writeFileSync(testFile, '{ "restored": true }')
 
-      seedGlobalCurrentWorkspace(userDataDir, workspaceFolder)
+      seedGlobalSession(userDataDir, workspaceFolder)
       seedWorkspaceFile(userDataDir, workspaceFolder, testFile)
 
       const { app, page } = await launchWithState(userDataDir)
@@ -152,7 +154,7 @@ test.describe('@p1 editor restore', () => {
       writeFileSync(fileA, '{}')
 
       // Boot directly into A.
-      seedGlobalCurrentWorkspace(userDataDir, wsA)
+      seedGlobalSession(userDataDir, wsA)
       seedWorkspaceFile(userDataDir, wsA, fileA)
 
       const { app, page } = await launchWithState(userDataDir)

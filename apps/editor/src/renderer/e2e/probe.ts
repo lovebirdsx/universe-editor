@@ -25,6 +25,7 @@ import {
   type ILifecycleService,
   type IOutputService,
   type IStatusBarService,
+  type IWindowsService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
@@ -49,6 +50,7 @@ export interface E2EProbeServices {
   readonly editorResolverService: IEditorResolverService
   readonly statusBarService: IStatusBarService
   readonly workspaceService: IWorkspaceService
+  readonly windowsService: IWindowsService
   readonly layoutService: ILayoutService
   readonly configurationService: IConfigurationService
   readonly acpSessionService: IAcpSessionService
@@ -107,6 +109,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
       })),
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
+    getOpenWindows: async () =>
+      (await services.windowsService.getWindows()).map((w) => {
+        const revived = w.folder ? URI.revive(w.folder) : null
+        return { id: w.id, folder: revived?.fsPath ?? null, name: w.name }
+      }),
+    openFolderInNewWindow: (fsPath) => services.windowsService.openWindow(URI.file(fsPath)),
+    getRecentWorkspacePaths: () => services.workspaceService.recent.map((r) => r.folder.fsPath),
+    removeRecentWorkspace: (fsPath) => services.workspaceService.removeRecent(URI.file(fsPath)),
     getLayoutSizes: () => ({ ...services.layoutService.sizes.get() }),
     setLayoutSize: (key, value) => services.layoutService.setSize(key, value),
     flushLayoutSave: () => services.layoutService.save(),

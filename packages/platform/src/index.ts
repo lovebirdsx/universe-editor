@@ -57,6 +57,9 @@ export * from './ipc/proxyChannel.js'
 // host abstraction (window / OS)
 export * from './host/index.js'
 
+// application-scoped window orchestration (multi-window)
+export * from './window/windowsService.js'
+
 // storage abstraction
 export * from './storage/storageService.js'
 

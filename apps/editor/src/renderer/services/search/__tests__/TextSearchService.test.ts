@@ -92,6 +92,7 @@ class FakeWorkspace implements IWorkspaceServiceType {
   async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}
+  async removeRecent() {}
 }
 
 function addFile(fs: FakeFs, parent: URI, name: string, content: string): URI {

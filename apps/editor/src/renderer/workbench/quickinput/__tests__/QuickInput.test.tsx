@@ -189,7 +189,7 @@ describe('QuickPickPanel keyboard', () => {
     render(<QuickPickPanel state={makeState({ onAccept })} onClose={onClose} />)
     const input = screen.getByTestId('quick-input-field')
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(onAccept).toHaveBeenCalledWith([items[0]])
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: false, alt: false })
     expect(onClose).toHaveBeenCalledOnce()
   })
 
@@ -217,7 +217,7 @@ describe('QuickPickPanel keyboard', () => {
     const input = screen.getByTestId('quick-input-field')
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(onAccept).toHaveBeenCalledWith([items[1]])
+    expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
   })
 
   it('Ctrl+N moves focus to next item and Enter accepts it', () => {
@@ -230,7 +230,7 @@ describe('QuickPickPanel keyboard', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     expect(event.defaultPrevented).toBe(true)
-    expect(onAccept).toHaveBeenCalledWith([items[1]])
+    expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
   })
 
   it('Ctrl+P moves focus to previous item and wraps', () => {
@@ -243,6 +243,60 @@ describe('QuickPickPanel keyboard', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
 
     expect(event.defaultPrevented).toBe(true)
-    expect(onAccept).toHaveBeenCalledWith([items[1]])
+    expect(onAccept).toHaveBeenCalledWith([items[1]], { ctrl: false, alt: false })
+  })
+
+  it('Ctrl+Enter reports ctrl modifier to onAccept', () => {
+    const onAccept = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true })
+    expect(onAccept).toHaveBeenCalledWith([items[0]], { ctrl: true, alt: false })
+  })
+})
+
+describe('QuickPickPanel item removal', () => {
+  it('Delete on the focused item invokes onItemRemove and removes it from the list', () => {
+    const onItemRemove = vi.fn()
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel state={makeState({ onItemRemove, onAccept })} onClose={() => undefined} />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    expect(screen.getByText('Format Document')).toBeTruthy()
+    fireEvent.keyDown(input, { key: 'Delete' })
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+    expect(screen.queryByText('Format Document')).toBeNull()
+    expect(screen.getByText('Go to Line')).toBeTruthy()
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('Delete is a no-op when onItemRemove is not provided', () => {
+    render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'Delete' })
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
+
+  it('renders a remove button per item only when onItemRemove is set', () => {
+    const { rerender } = render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
+    expect(screen.queryAllByTestId('quick-input-item-remove')).toHaveLength(0)
+    rerender(
+      <QuickPickPanel state={makeState({ onItemRemove: vi.fn() })} onClose={() => undefined} />,
+    )
+    expect(screen.getAllByTestId('quick-input-item-remove')).toHaveLength(items.length)
+  })
+
+  it('clicking the remove button removes the item without accepting', () => {
+    const onItemRemove = vi.fn()
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={makeState({ onItemRemove, onAccept })} onClose={onClose} />)
+    const removeButtons = screen.getAllByTestId('quick-input-item-remove')
+    fireEvent.click(removeButtons[0]!)
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(screen.queryByText('Format Document')).toBeNull()
   })
 })

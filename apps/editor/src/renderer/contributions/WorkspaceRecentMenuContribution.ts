@@ -10,10 +10,12 @@ import {
   CommandsRegistry,
   Disposable,
   DisposableStore,
+  IWindowsService,
   IWorkbenchContribution,
   IWorkspaceService,
   MenuId,
   MenuRegistry,
+  URI,
   localize,
   type IRecentWorkspace,
 } from '@universe-editor/platform'
@@ -24,8 +26,12 @@ const TRAILING_GROUP = '9_clear'
 
 export class WorkspaceRecentMenuContribution extends Disposable implements IWorkbenchContribution {
   private readonly _dynamic = this._register(new DisposableStore())
+  private _openFolders = new Set<string>()
 
-  constructor(@IWorkspaceService private readonly workspaceService: IWorkspaceService) {
+  constructor(
+    @IWorkspaceService private readonly workspaceService: IWorkspaceService,
+    @IWindowsService private readonly windowsService: IWindowsService,
+  ) {
     super()
 
     // Static parent submenu attachment (always present).
@@ -51,10 +57,27 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
 
     this._rebuild(workspaceService.recent)
     this._register(workspaceService.onDidChangeRecent((next) => this._rebuild(next)))
+    this._register(windowsService.onDidChangeWindows(() => void this._refreshOpenFolders()))
+    void this._refreshOpenFolders()
+  }
+
+  private async _refreshOpenFolders(): Promise<void> {
+    try {
+      const windows = await this.windowsService.getWindows()
+      this._openFolders = new Set(
+        windows
+          .map((w) => (w.folder ? (URI.revive(w.folder)?.toString() ?? null) : null))
+          .filter((s): s is string => s !== null),
+      )
+    } catch {
+      this._openFolders = new Set()
+    }
+    this._rebuild(this.workspaceService.recent)
   }
 
   private _rebuild(recent: readonly IRecentWorkspace[]): void {
     this._dynamic.clear()
+    const openedSuffix = localize('workspace.recent.openedSuffix', ' (Opened)')
     recent.forEach((entry, index) => {
       const commandId = `workbench.action.openRecent.${index}`
       this._dynamic.add(
@@ -62,10 +85,11 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
           void this.workspaceService.openFolder(entry.folder)
         }),
       )
+      const isOpen = this._openFolders.has(entry.folder.toString())
       this._dynamic.add(
         MenuRegistry.addMenuItem(MenuId.MenubarFileOpenRecentMenu, {
           command: commandId,
-          title: entry.name,
+          title: isOpen ? `${entry.name}${openedSuffix}` : entry.name,
           group: RECENT_GROUP,
           order: index,
         }),

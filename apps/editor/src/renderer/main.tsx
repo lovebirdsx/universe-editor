@@ -26,6 +26,7 @@ import {
   ILayoutService,
   PartId,
   IHostService,
+  IWindowsService,
   IIpcService,
   IStorageService,
   IConfigurationService,
@@ -305,6 +306,10 @@ async function bootstrapWorkbench(): Promise<void> {
     IAcpTerminalService,
     ProxyChannel.toService<IAcpTerminalService>(ipcService.getChannel(ServiceChannels.AcpTerminal)),
   )
+  const windowsService = ProxyChannel.toService<IWindowsService>(
+    ipcService.getChannel(ServiceChannels.Window),
+  )
+  services.set(IWindowsService, windowsService)
   await initializeRendererNls(
     services.get(IUserDataFilesService) as IUserDataFilesService,
     window.navigator.language,
@@ -534,6 +539,7 @@ async function bootstrapWorkbench(): Promise<void> {
     editorResolverService,
     statusBarService,
     workspaceService,
+    windowsService,
     layoutService,
     configurationService,
     acpSessionService,

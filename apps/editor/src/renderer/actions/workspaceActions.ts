@@ -8,10 +8,13 @@ import {
   Action2,
   IProgressService,
   IQuickInputService,
+  IWindowsService,
   IWorkspaceService,
   MenuId,
   ProgressLocation,
+  URI,
   localize,
+  type IKeyMods,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -79,21 +82,53 @@ export class OpenRecentAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const quickInput = accessor.get(IQuickInputService)
     const progress = accessor.get(IProgressService)
+    const windowsService = accessor.get(IWindowsService)
     const recent = workspace.recent
     if (recent.length === 0) return
-    const items: RecentPickItem[] = recent.map((r, index) => ({
-      id: `recent.${index}`,
-      label: r.name,
-      description: r.folder.fsPath,
-      index,
-    }))
+
+    let openFolders = new Set<string>()
+    try {
+      const windows = await windowsService.getWindows()
+      openFolders = new Set(
+        windows
+          .map((w) => (w.folder ? (URI.revive(w.folder)?.toString() ?? null) : null))
+          .filter((s): s is string => s !== null),
+      )
+    } catch {
+      // Best-effort: without open-state we just omit the markers.
+    }
+
+    const openedBadge = localize('workspace.recent.opened', 'Opened')
+    const items: RecentPickItem[] = recent.map((r, index) => {
+      const isOpen = openFolders.has(r.folder.toString())
+      return {
+        id: `recent.${index}`,
+        label: r.name,
+        description: r.folder.fsPath,
+        ...(isOpen ? { keybinding: openedBadge } : {}),
+        index,
+      }
+    })
+
+    const keyMods: IKeyMods = { ctrl: false, alt: false }
     const pick = await quickInput.pick<RecentPickItem>(items, {
       placeholder: localize('quickInput.openRecent.placeholder', 'Open Recent'),
       matchOnDescription: true,
+      keyMods,
+      onItemRemove: (item) => {
+        const entry = recent[(item as RecentPickItem).index]
+        if (entry) void workspace.removeRecent(entry.folder)
+      },
     })
     if (!pick) return
     const target = recent[pick.index]
     if (!target) return
+    // Ctrl held → open in a new window; otherwise open in this window (the main
+    // process focuses an existing window if the folder is already open elsewhere).
+    if (keyMods.ctrl) {
+      await windowsService.openWindow(target.folder)
+      return
+    }
     await progress.withProgress(
       {
         location: ProgressLocation.Window,

@@ -65,21 +65,24 @@ test.describe('@p1 layout persistence', () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-persist-'))
 
     try {
-      // Storage is workspace-scoped: seed current workspace in state.json,
+      // Storage is workspace-scoped: seed the restore session in state.json,
       // then seed workbench.layout in workspaces/<id>.json.
       const workspaceDir = join(userDataDir, 'fixture-workspace')
       mkdirSync(workspaceDir, { recursive: true })
 
       const workspaceUri = URI.file(workspaceDir)
       const workspaceId = workspaceIdFromUri(workspaceUri.toString())
-      const currentWorkspaceState = {
-        'workbench.currentWorkspace': {
-          folder: workspaceUri.toJSON(),
-          name: basename(workspaceDir),
-        },
+      const sessionState = {
+        'workbench.windowsState': [
+          {
+            workspace: { folder: workspaceUri.toJSON(), name: basename(workspaceDir) },
+            uiState: null,
+            devToolsOpen: false,
+          },
+        ],
       }
 
-      writeFileSync(join(userDataDir, 'state.json'), JSON.stringify(currentWorkspaceState, null, 2))
+      writeFileSync(join(userDataDir, 'state.json'), JSON.stringify(sessionState, null, 2))
       mkdirSync(join(userDataDir, 'workspaces'), { recursive: true })
       writeFileSync(
         join(userDataDir, 'workspaces', `${workspaceId}.json`),

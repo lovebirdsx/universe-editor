@@ -14,6 +14,7 @@ import type {
   IQuickInputService,
   IQuickPick,
   IQuickPickItem,
+  IKeyMods,
   IPickOptions,
   IInputOptions,
   QuickPickFilterMode,
@@ -31,7 +32,8 @@ export interface QuickPickState {
   quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
   /** Show an indeterminate progress bar at the top of the panel. */
   busy?: boolean | undefined
-  onAccept?: (items: IQuickPickItem[]) => void
+  onAccept?: (items: IQuickPickItem[], mods?: IKeyMods) => void
+  onItemRemove?: ((item: IQuickPickItem) => void) | undefined
   onInput?: (value: string) => void
   onHide?: () => void
   validateInput?: ((value: string) => string | undefined) | undefined
@@ -158,9 +160,14 @@ export class QuickInputService implements IQuickInputService {
         filterMode: options?.filterMode,
         quickNavigate: options?.quickNavigate,
         busy: options?.busy,
-        onAccept: (selected) => {
+        onItemRemove: options?.onItemRemove,
+        onAccept: (selected, mods) => {
           this._currentOnHide = undefined
           this._setState(null)
+          if (options?.keyMods && mods) {
+            options.keyMods.ctrl = mods.ctrl
+            options.keyMods.alt = mods.alt
+          }
           const item = selected[0] as T | undefined
           if (id && item?.id) {
             const newMru = [item.id, ...mruIds.filter((x) => x !== item.id)].slice(0, 20)

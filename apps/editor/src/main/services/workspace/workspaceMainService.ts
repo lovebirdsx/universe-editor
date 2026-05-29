@@ -1,8 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Main-process workspace state manager. Holds current folder + recent list,
- *  persists recents via IStorageService, and exposes wire methods to the
- *  renderer through ProxyChannel.
+ *  Per-window workspace state manager. Holds this window's current folder,
+ *  coordinates the WORKSPACE storage scope swap, and exposes wire methods to
+ *  the renderer through ProxyChannel. The recent list is shared across windows
+ *  and lives in RecentWorkspacesMainService — this service delegates to it and
+ *  relays its change event.
  *--------------------------------------------------------------------------------------------*/
 
 import { basename } from 'node:path'
@@ -16,10 +18,12 @@ import {
   type IWorkspace,
   type IWorkspaceServiceWire,
   NullLogger,
+  Relay,
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
 import { workspaceIdFromUri } from '../../storage.js'
+import type { RecentWorkspacesMainService } from './recentWorkspacesMainService.js'
 
 export interface IFolderDialog {
   showOpenFolderDialog(): Promise<URI | null>
@@ -35,20 +39,12 @@ export interface IWorkspaceScopedStorage extends IStorageService {
   flush(): Promise<void>
 }
 
-export const RECENT_WORKSPACES_STORAGE_KEY = 'workbench.recentWorkspaces'
-export const CURRENT_WORKSPACE_STORAGE_KEY = 'workbench.currentWorkspace'
-const MAX_RECENT = 20
-
-interface PersistedRecent {
-  readonly folder: UriComponents
-  readonly name: string
-  readonly lastOpened: number
-}
-
-interface PersistedCurrent {
-  readonly folder: UriComponents
-  readonly name: string
-}
+/**
+ * Called by openFolder before swapping this window's workspace. If it returns
+ * true, an existing window already has the requested folder open and has been
+ * focused; openFolder then aborts without changing this window.
+ */
+export type OpenFolderInterceptor = (workspaceId: string) => boolean
 
 function makeWorkspace(folder: URI): IWorkspace {
   return { folder, name: basename(folder.fsPath) || folder.fsPath }
@@ -65,48 +61,37 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
   private readonly _onDidChangeWorkspace = new Emitter<IWorkspace | null>()
   readonly onDidChangeWorkspace: Event<IWorkspace | null> = this._onDidChangeWorkspace.event
 
-  private readonly _onDidChangeRecent = new Emitter<readonly IRecentWorkspace[]>()
-  readonly onDidChangeRecent: Event<readonly IRecentWorkspace[]> = this._onDidChangeRecent.event
+  // Recent list is shared across windows; relay the singleton's event so the
+  // upstream listener is only held while the renderer is actually subscribed.
+  private readonly _recentRelay = new Relay<readonly IRecentWorkspace[]>()
+  readonly onDidChangeRecent: Event<readonly IRecentWorkspace[]> = this._recentRelay.event
 
   private _current: IWorkspace | null = null
-  private _recent: IRecentWorkspace[] = []
   private _hydrated = false
   private _hydratePromise: Promise<void> | null = null
 
   constructor(
     private readonly _storage: IWorkspaceScopedStorage,
+    private readonly _recents: RecentWorkspacesMainService,
     private readonly _folderDialog: IFolderDialog,
     private readonly _logger: ILogger = new NullLogger(),
-  ) {}
+    private readonly _onBeforeOpen?: OpenFolderInterceptor,
+  ) {
+    this._recentRelay.input = _recents.onDidChangeRecent
+  }
+
+  /** Synchronous snapshot of this window's current workspace (main-only). */
+  get current(): IWorkspace | null {
+    return this._current
+  }
 
   private async _hydrate(): Promise<void> {
     if (this._hydrated) return
     if (this._hydratePromise) return this._hydratePromise
     this._hydratePromise = (async () => {
-      const raw = await this._storage.get<PersistedRecent[]>(RECENT_WORKSPACES_STORAGE_KEY)
-      if (Array.isArray(raw)) {
-        this._recent = raw
-          .map((r) => {
-            const folder = URI.revive(r.folder)
-            if (!folder) return null
-            return { folder, name: r.name, lastOpened: r.lastOpened }
-          })
-          .filter((r): r is IRecentWorkspace => r !== null)
-          .sort((a, b) => b.lastOpened - a.lastOpened)
-          .slice(0, MAX_RECENT)
-      }
-      const persistedCurrent = await this._storage.get<PersistedCurrent>(
-        CURRENT_WORKSPACE_STORAGE_KEY,
-      )
-      if (persistedCurrent && persistedCurrent.folder) {
-        const folder = URI.revive(persistedCurrent.folder)
-        if (folder) {
-          this._current = { folder, name: persistedCurrent.name }
-        }
-      }
-      // Bind the WORKSPACE-scope backend to the hydrated current workspace
-      // (or detach if none), so the first WORKSPACE reads after startup hit
-      // the right file.
+      // Bind the WORKSPACE-scope backend to the current workspace (or detach if
+      // none), so the first WORKSPACE reads after startup hit the right file.
+      // `_current` is null unless restoreCurrent() was called before hydration.
       try {
         await this._storage.switchWorkspace(
           this._current ? workspaceIdFromUri(this._current.folder.toString()) : null,
@@ -115,7 +100,7 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
         // best-effort; storage layer logs its own errors
       }
       this._logger.debug(
-        `hydrate workspace current=${this._current?.folder.toString() ?? '<none>'} recent=${this._recent.length}`,
+        `hydrate workspace current=${this._current?.folder.toString() ?? '<none>'}`,
       )
       this._hydrated = true
     })()
@@ -127,9 +112,8 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     return this._current
   }
 
-  async getRecent(): Promise<readonly IRecentWorkspace[]> {
-    await this._hydrate()
-    return this._recent
+  getRecent(): Promise<readonly IRecentWorkspace[]> {
+    return this._recents.getRecent()
   }
 
   async openFolder(folder?: URI | UriComponents): Promise<void> {
@@ -146,15 +130,22 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     }
     await this._hydrate()
     const workspace = makeWorkspace(resolved)
+    const workspaceId = workspaceIdFromUri(workspace.folder.toString())
+    // If the folder is already open in some window, focus it instead of
+    // swapping this window's workspace (VSCode behaviour; also avoids two
+    // windows writing the same workspaces/<id>.json concurrently).
+    if (this._onBeforeOpen?.(workspaceId)) {
+      this._logger.info(`openFolder focused existing window for ${workspace.folder.toString()}`)
+      return
+    }
     // Flush + swap storage scope BEFORE firing onDidChangeWorkspace so
     // subscribers (renderer-side restore contributions) read the new
     // workspace's data, not the previous one's.
     await this._storage.flush()
-    await this._storage.switchWorkspace(workspaceIdFromUri(workspace.folder.toString()))
+    await this._storage.switchWorkspace(workspaceId)
     this._current = workspace
     this._onDidChangeWorkspace.fire(workspace)
-    this._addRecent(workspace)
-    void this._persistCurrent()
+    await this._recents.add(workspace)
     this._logger.info(`openFolder ${workspace.folder.toString()}`)
   }
 
@@ -165,63 +156,32 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     await this._storage.switchWorkspace(null)
     this._current = null
     this._onDidChangeWorkspace.fire(null)
-    void this._persistCurrent()
     this._logger.info(`closeFolder ${previous}`)
   }
 
-  async clearRecent(): Promise<void> {
-    await this._hydrate()
-    this._recent = []
-    this._onDidChangeRecent.fire(this._recent)
-    await this._persist()
-    this._logger.info('clearRecent')
+  clearRecent(): Promise<void> {
+    return this._recents.clear()
   }
 
-  /** Internal restore path used when reviving from storage at startup. */
+  removeRecent(folder: URI | UriComponents): Promise<void> {
+    return this._recents.remove(reviveUri(folder))
+  }
+
+  /**
+   * Restore a workspace into this window at startup (multi-window session
+   * restore). Marks the service hydrated so a later getCurrent() does not
+   * re-run the WORKSPACE-scope swap.
+   */
   async restoreCurrent(workspace: IWorkspace): Promise<void> {
     await this._storage.switchWorkspace(workspaceIdFromUri(workspace.folder.toString()))
     this._current = workspace
+    this._hydrated = true
     this._onDidChangeWorkspace.fire(workspace)
     this._logger.info(`restoreCurrent ${workspace.folder.toString()}`)
   }
 
-  private _addRecent(workspace: IWorkspace): void {
-    const folderStr = workspace.folder.toString()
-    const filtered = this._recent.filter((r) => r.folder.toString() !== folderStr)
-    const entry: IRecentWorkspace = {
-      folder: workspace.folder,
-      name: workspace.name,
-      lastOpened: Date.now(),
-    }
-    this._recent = [entry, ...filtered].slice(0, MAX_RECENT)
-    this._onDidChangeRecent.fire(this._recent)
-    void this._persist()
-    this._logger.debug(`recentWorkspaces count=${this._recent.length}`)
-  }
-
-  private async _persist(): Promise<void> {
-    const serialised: PersistedRecent[] = this._recent.map((r) => ({
-      folder: r.folder.toJSON(),
-      name: r.name,
-      lastOpened: r.lastOpened,
-    }))
-    await this._storage.set(RECENT_WORKSPACES_STORAGE_KEY, serialised)
-  }
-
-  private async _persistCurrent(): Promise<void> {
-    if (this._current === null) {
-      await this._storage.set(CURRENT_WORKSPACE_STORAGE_KEY, null)
-      return
-    }
-    const serialised: PersistedCurrent = {
-      folder: this._current.folder.toJSON(),
-      name: this._current.name,
-    }
-    await this._storage.set(CURRENT_WORKSPACE_STORAGE_KEY, serialised)
-  }
-
   dispose(): void {
     this._onDidChangeWorkspace.dispose()
-    this._onDidChangeRecent.dispose()
+    this._recentRelay.dispose()
   }
 }

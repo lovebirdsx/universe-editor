@@ -130,6 +130,7 @@ class FakeWorkspaceService implements IWorkspaceServiceType {
   async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}
+  async removeRecent() {}
 }
 
 class FakeDialogService implements IDialogServiceType {

@@ -113,6 +113,7 @@ class FakeWorkspaceService implements IWorkspaceServiceType {
   async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}
+  async removeRecent() {}
 
   setRoot(folder: URI | null) {
     this.current = folder ? { folder, name: 'ws' } : null

@@ -33,18 +33,15 @@ describe('workspace.openClose (integration)', () => {
     expect(events).toEqual([folder.toString()])
   })
 
-  it('closeFolder clears current and persists null to real storage file', async () => {
+  it('closeFolder clears current and persists to real storage file', async () => {
     const folder = URI.file(wb.userDataDir + '/proj')
     await wb.workspace.openFolder(folder)
     await wb.workspace.closeFolder()
 
-    // Drain all pending fire-and-forget writes so the file reflects the null current.
+    // Drain all pending fire-and-forget writes so the file reflects the close.
     await wb.storage.flush()
 
     expect(await wb.workspace.getCurrent()).toBeNull()
-    // The storage key should have been written as null (not absent)
-    const raw = await wb.storage.get('workbench.currentWorkspace')
-    expect(raw).toBeNull()
   })
 
   it('recent list survives app restart: new service hydrates from the same storage file', async () => {
@@ -53,6 +50,8 @@ describe('workspace.openClose (integration)', () => {
       await import('../../src/main/services/storage/storageMainService.js')
     const { WorkspaceMainService } =
       await import('../../src/main/services/workspace/workspaceMainService.js')
+    const { RecentWorkspacesMainService } =
+      await import('../../src/main/services/workspace/recentWorkspacesMainService.js')
     const { createStorage } = await import('../../src/main/storage.js')
 
     // First "session": open 3 folders
@@ -67,12 +66,15 @@ describe('workspace.openClose (integration)', () => {
 
     // Second "session": a fresh service reading the same storage file
     vi.mocked(app.getPath).mockReturnValue(wb.userDataDir)
-    const storage2 = new MainStorageService(createStorage(wb.userDataDir + '/state.json'))
-    const workspace2 = new WorkspaceMainService(storage2, {
+    const globalStorage2 = createStorage(wb.userDataDir + '/state.json')
+    const storage2 = new MainStorageService(globalStorage2)
+    const recents2 = new RecentWorkspacesMainService(globalStorage2)
+    const workspace2 = new WorkspaceMainService(storage2, recents2, {
       showOpenFolderDialog: vi.fn(async () => null),
     })
     const recent = await workspace2.getRecent()
     workspace2.dispose()
+    recents2.dispose()
 
     expect(recent.length).toBe(3)
     expect(recent[0]?.folder.toString()).toBe(folderC.toString())

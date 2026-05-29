@@ -93,9 +93,11 @@ function makeWorkspaceStub(): IWorkspaceServiceType {
     onDidChangeWorkspace: new Emitter<IWorkspace | null>().event,
     recent: [] as readonly IRecentWorkspace[],
     onDidChangeRecent: new Emitter<readonly IRecentWorkspace[]>().event,
+    whenReady: Promise.resolve(),
     async openFolder() {},
     async closeFolder() {},
     async clearRecent() {},
+    async removeRecent() {},
   } as IWorkspaceServiceType
 }
 

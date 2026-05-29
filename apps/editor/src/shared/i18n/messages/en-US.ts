@@ -166,4 +166,11 @@ export const EN_US_MESSAGES: MessageMap = {
     'Auto save delay in milliseconds (when autoSave=afterDelay).',
   'settings.readonly': 'Not editable in form view',
   'settings.workbench.colorTheme.description': 'Workbench color theme.',
+  'action.exit.title': 'Exit',
+  'action.openFolderInNewWindow.title': 'Open Folder in New Window…',
+  'action.switchWindow.title': 'Switch Window…',
+  'quickInput.switchWindow.placeholder': 'Select a window to switch to',
+  'window.untitled': 'Untitled (Window {id})',
+  'workspace.recent.opened': 'Opened',
+  'workspace.recent.openedSuffix': ' (Opened)',
 } as const

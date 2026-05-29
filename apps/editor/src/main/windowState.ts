@@ -1,10 +1,9 @@
 import { screen, type BrowserWindow } from 'electron'
-import type { Storage } from './storage.js'
+import type { IDisposable } from '@universe-editor/platform'
 
-const STORAGE_KEY = 'window.state'
 const SAVE_DEBOUNCE_MS = 500
 
-interface IWindowState {
+export interface IWindowState {
   x: number
   y: number
   width: number
@@ -29,11 +28,15 @@ function isVisibleOnDisplays(state: IWindowState): boolean {
   })
 }
 
-export async function loadWindowState(storage: Storage): Promise<IWindowState | undefined> {
-  const raw = await storage.get<IWindowState>(STORAGE_KEY)
+// 校验一份（可能来自持久化、未必可信的）窗口几何：尺寸下限 + 可见性。
+// 最大化/全屏时跳过边界校验，由 displayId 负责恢复到正确显示器。
+export function validateWindowState(raw: unknown): IWindowState | undefined {
   if (!raw || typeof raw !== 'object') return undefined
 
-  const { x, y, width, height, isMaximized, isFullscreen, displayId } = raw
+  const { x, y, width, height, isMaximized, isFullscreen, displayId } = raw as Record<
+    string,
+    unknown
+  >
   if (
     typeof x !== 'number' ||
     typeof y !== 'number' ||
@@ -52,15 +55,36 @@ export async function loadWindowState(storage: Storage): Promise<IWindowState | 
     height,
     isMaximized: !!isMaximized,
     isFullscreen: !!isFullscreen,
-    displayId,
+    displayId: typeof displayId === 'number' ? displayId : 0,
   }
 
-  // 最大化/全屏时跳过边界校验，由 displayId 负责恢复到正确显示器
   if (!state.isMaximized && !state.isFullscreen && !isVisibleOnDisplays(state)) {
     return undefined
   }
 
   return state
+}
+
+function displayIdForBounds(win: BrowserWindow): number {
+  const b = win.getBounds()
+  return screen.getDisplayNearestPoint({
+    x: Math.round(b.x + b.width / 2),
+    y: Math.round(b.y + b.height / 2),
+  }).id
+}
+
+// 实时快照当前窗口几何。始终用 getNormalBounds() 拿还原尺寸，即使当前是最大化状态。
+export function captureWindowState(win: BrowserWindow): IWindowState {
+  const normal = win.getNormalBounds()
+  return {
+    x: normal.x,
+    y: normal.y,
+    width: normal.width,
+    height: normal.height,
+    isMaximized: win.isMaximized(),
+    isFullscreen: win.isFullScreen(),
+    displayId: displayIdForBounds(win),
+  }
 }
 
 // 在 ready-to-show 中调用：把最大化/全屏状态应用到窗口
@@ -89,104 +113,49 @@ export function applyWindowState(win: BrowserWindow, state: IWindowState): void 
   }
 }
 
-export function trackWindowState(win: BrowserWindow, storage: Storage): void {
-  const initial = win.getNormalBounds()
-  let savedState: IWindowState = {
-    x: initial.x,
-    y: initial.y,
-    width: initial.width,
-    height: initial.height,
-    isMaximized: win.isMaximized(),
-    isFullscreen: win.isFullScreen(),
-    displayId: screen.getDisplayNearestPoint({
-      x: Math.round(initial.x + initial.width / 2),
-      y: Math.round(initial.y + initial.height / 2),
-    }).id,
-  }
-
+// 监听窗口几何变化，debounce 后回调 onChange。返回 IDisposable 以解除监听与清理 timer。
+export function trackWindowState(win: BrowserWindow, onChange: () => void): IDisposable {
   let debounceTimer: ReturnType<typeof setTimeout> | null = null
 
+  const scheduleSave = (): void => {
+    if (debounceTimer !== null) clearTimeout(debounceTimer)
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null
+      onChange()
+    }, SAVE_DEBOUNCE_MS)
+  }
+
+  // All listeners ignore their args, so the per-event handler signatures don't
+  // matter — narrow to one literal to satisfy the overloaded on/removeListener.
+  const events = [
+    'resize',
+    'move',
+    'maximize',
+    'unmaximize',
+    'enter-full-screen',
+    'leave-full-screen',
+  ] as const
+  for (const e of events) win.on(e as 'resize', scheduleSave)
+
+  // 关窗前立即落一笔（debounce 可能还没触发）
   const saveNow = (): void => {
     if (debounceTimer !== null) {
       clearTimeout(debounceTimer)
       debounceTimer = null
     }
-    void storage.set(STORAGE_KEY, savedState)
+    onChange()
   }
-
-  const scheduleSave = (): void => {
-    if (debounceTimer !== null) clearTimeout(debounceTimer)
-    debounceTimer = setTimeout(saveNow, SAVE_DEBOUNCE_MS)
-  }
-
-  const getDisplayId = (): number => {
-    const b = win.getBounds()
-    return screen.getDisplayNearestPoint({
-      x: Math.round(b.x + b.width / 2),
-      y: Math.round(b.y + b.height / 2),
-    }).id
-  }
-
-  // 始终用 getNormalBounds() 拿还原尺寸，即使当前是最大化状态也能正确追踪位置
-  const updateBoundsAndDisplay = (): void => {
-    const normal = win.getNormalBounds()
-    savedState = {
-      ...savedState,
-      x: normal.x,
-      y: normal.y,
-      width: normal.width,
-      height: normal.height,
-      displayId: getDisplayId(),
-    }
-  }
-
-  win.on('resize', () => {
-    updateBoundsAndDisplay()
-    scheduleSave()
-  })
-
-  win.on('move', () => {
-    updateBoundsAndDisplay()
-    scheduleSave()
-  })
-
-  win.on('maximize', () => {
-    savedState = { ...savedState, isMaximized: true, displayId: getDisplayId() }
-    scheduleSave()
-  })
-
-  win.on('unmaximize', () => {
-    const normal = win.getNormalBounds()
-    savedState = {
-      ...savedState,
-      isMaximized: false,
-      x: normal.x,
-      y: normal.y,
-      width: normal.width,
-      height: normal.height,
-      displayId: getDisplayId(),
-    }
-    scheduleSave()
-  })
-
-  win.on('enter-full-screen', () => {
-    savedState = { ...savedState, isFullscreen: true, displayId: getDisplayId() }
-    scheduleSave()
-  })
-
-  win.on('leave-full-screen', () => {
-    const normal = win.getNormalBounds()
-    savedState = {
-      ...savedState,
-      isFullscreen: false,
-      x: normal.x,
-      y: normal.y,
-      width: normal.width,
-      height: normal.height,
-      displayId: getDisplayId(),
-    }
-    scheduleSave()
-  })
-
   win.on('close', saveNow)
+
+  return {
+    dispose() {
+      if (debounceTimer !== null) {
+        clearTimeout(debounceTimer)
+        debounceTimer = null
+      }
+      if (win.isDestroyed()) return
+      for (const e of events) win.removeListener(e as 'resize', scheduleSave)
+      win.removeListener('close', saveNow)
+    },
+  }
 }

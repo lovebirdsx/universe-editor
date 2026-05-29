@@ -74,6 +74,7 @@ const stubWorkspaceService: IWorkspaceServiceType = {
   async openFolder() {},
   async closeFolder() {},
   async clearRecent() {},
+  async removeRecent() {},
 } as unknown as IWorkspaceServiceType
 
 function makeWorkspaceService(folder: URI): IWorkspaceServiceType {

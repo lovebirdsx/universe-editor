@@ -51,6 +51,8 @@ export interface IWorkspaceService {
   /** When `folder` is undefined, the main process surfaces an Open Folder dialog. */
   openFolder(folder?: URI): Promise<void>
   closeFolder(): Promise<void>
+  /** Remove a single entry from the recent list (VSCode "Remove from Recently Opened"). */
+  removeRecent(folder: URI): Promise<void>
   clearRecent(): Promise<void>
 }
 
@@ -74,5 +76,6 @@ export interface IWorkspaceServiceWire {
   getRecent(): Promise<readonly IRecentWorkspace[]>
   openFolder(folder?: URI | UriComponents): Promise<void>
   closeFolder(): Promise<void>
+  removeRecent(folder: URI | UriComponents): Promise<void>
   clearRecent(): Promise<void>
 }

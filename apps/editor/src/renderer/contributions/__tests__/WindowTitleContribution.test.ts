@@ -37,6 +37,7 @@ function makeWorkspaceStub(initial: IWorkspace | null = null): IWorkspaceService
       current = null
     },
     async clearRecent() {},
+    async removeRecent() {},
     fireWorkspaceChange(workspace: IWorkspace | null) {
       current = workspace
       wsEmitter.fire(workspace)

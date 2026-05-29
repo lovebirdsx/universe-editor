@@ -29,7 +29,7 @@ function workspaceIdFromFolder(folderFsPath: string): string {
   return createHash('sha1').update(uriString).digest('hex').slice(0, 16)
 }
 
-/** Seed state.json so the app boots into a known workspace. */
+/** Seed state.json so the app restores a single window into `folder`. */
 function seedGlobalState(userDataDir: string, folder: string): void {
   const folderComponents = fsPathToUriComponents(folder)
   const name = folder.split(/[\\/]/).filter(Boolean).pop() ?? folder
@@ -37,7 +37,9 @@ function seedGlobalState(userDataDir: string, folder: string): void {
     join(userDataDir, 'state.json'),
     JSON.stringify(
       {
-        'workbench.currentWorkspace': { folder: folderComponents, name },
+        'workbench.windowsState': [
+          { workspace: { folder: folderComponents, name }, uiState: null, devToolsOpen: false },
+        ],
         'workbench.recentWorkspaces': [{ folder: folderComponents, name, lastOpened: Date.now() }],
       },
       null,

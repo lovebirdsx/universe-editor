@@ -73,6 +73,7 @@ class FakeWorkspaceService implements IWorkspaceService {
   async openFolder(): Promise<void> {}
   async closeFolder(): Promise<void> {}
   async clearRecent(): Promise<void> {}
+  async removeRecent(): Promise<void> {}
 }
 
 function makeFakeWorkspace(path: string): IWorkspace {

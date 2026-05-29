@@ -60,9 +60,12 @@ import {
 import {
   AboutAction,
   CloseWindowAction,
+  ExitAction,
   NewWindowAction,
+  OpenFolderInNewWindowAction,
   OpenUserDataFolderAction,
   RestartEditorAction,
+  SwitchWindowAction,
   ToggleDevToolsAction,
 } from './windowActions.js'
 import {
@@ -227,6 +230,9 @@ registerAction2(RevealInOSExplorerAction)
 registerAction2(NewWindowAction)
 registerAction2(RestartEditorAction)
 registerAction2(CloseWindowAction)
+registerAction2(OpenFolderInNewWindowAction)
+registerAction2(SwitchWindowAction)
+registerAction2(ExitAction)
 registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)
 registerAction2(OpenUserDataFolderAction)

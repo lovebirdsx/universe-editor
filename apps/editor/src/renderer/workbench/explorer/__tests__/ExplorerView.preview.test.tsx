@@ -79,6 +79,7 @@ class FakeWorkspace implements IWorkspaceServiceType {
   async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}
+  async removeRecent() {}
 }
 
 class FakeEditor {

@@ -26,6 +26,7 @@ function makeWire(): IWorkspaceServiceWire {
     openFolder: vi.fn().mockResolvedValue(undefined),
     closeFolder: vi.fn().mockResolvedValue(undefined),
     clearRecent: vi.fn().mockResolvedValue(undefined),
+    removeRecent: vi.fn().mockResolvedValue(undefined),
   }
 }
 

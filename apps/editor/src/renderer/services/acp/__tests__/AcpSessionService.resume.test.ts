@@ -119,6 +119,7 @@ class FakeWorkspaceService implements IWorkspaceService {
   async openFolder() {}
   async closeFolder() {}
   async clearRecent() {}
+  async removeRecent() {}
 }
 
 class StubNotificationService implements INotificationService {

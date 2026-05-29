@@ -38,6 +38,13 @@ export interface E2ELayoutSizes {
   readonly panel: number
 }
 
+export interface E2EOpenWindow {
+  readonly id: number
+  /** Workspace folder fsPath, or null for an empty window. */
+  readonly folder: string | null
+  readonly name: string | null
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -60,6 +67,21 @@ export interface E2EProbe {
   openWorkspace(fsPath: string): Promise<void>
   /** Returns the current workspace folder's fsPath, or undefined if none is open. */
   getCurrentWorkspacePath(): string | undefined
+  /**
+   * Snapshot of all open application windows (id + workspace folder fsPath + name).
+   * Backs Switch Window and the "已打开" markers in Open Recent.
+   */
+  getOpenWindows(): Promise<readonly E2EOpenWindow[]>
+  /**
+   * Open a folder in a NEW window by file-system path, bypassing the native
+   * folder dialog. If the folder is already open in some window, that window is
+   * focused instead (single-writer constraint).
+   */
+  openFolderInNewWindow(fsPath: string): Promise<void>
+  /** fsPaths of the recent-workspaces list, most-recent first. */
+  getRecentWorkspacePaths(): readonly string[]
+  /** Remove a folder from the recent-workspaces list by fsPath. */
+  removeRecentWorkspace(fsPath: string): Promise<void>
   /** Returns current layout sizes (sidebar/secondarySidebar/panel in px). */
   getLayoutSizes(): E2ELayoutSizes
   /** Programmatically set a layout size (triggers debounced persist). */

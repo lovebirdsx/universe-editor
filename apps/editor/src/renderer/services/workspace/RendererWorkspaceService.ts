@@ -119,4 +119,9 @@ export class RendererWorkspaceService extends Disposable implements IWorkspaceSe
     this._logger.info(`clearRecent count=${this._recent.length}`)
     return this._wire.clearRecent()
   }
+
+  removeRecent(folder: URI): Promise<void> {
+    this._logger.info(`removeRecent ${folder.toString()}`)
+    return this._wire.removeRecent(folder)
+  }
 }

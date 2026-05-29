@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
+  IWindowsService,
   IWorkspaceService,
   InstantiationService,
   MenuId,
@@ -15,7 +16,9 @@ import {
   registerAction2,
   isSubmenuEntry,
   type IDisposable,
+  type IOpenWindowInfo,
   type IRecentWorkspace,
+  type IWindowsService as IWindowsServiceType,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -43,6 +46,7 @@ function makeWorkspaceStub(initial: readonly IRecentWorkspace[] = []): Workspace
     },
     onDidChangeRecent: recentEmitter.event,
     openCalls,
+    whenReady: Promise.resolve(),
     setRecent(next) {
       currentRecent = next
       recentEmitter.fire(next)
@@ -57,15 +61,48 @@ function makeWorkspaceStub(initial: readonly IRecentWorkspace[] = []): Workspace
       currentRecent = []
       recentEmitter.fire([])
     },
+    async removeRecent() {
+      // no-op
+    },
   } as WorkspaceStub
 }
 
-function buildContribution(workspace: WorkspaceStub): {
+interface WindowsStub {
+  service: IWindowsServiceType
+  setOpen(next: readonly IOpenWindowInfo[]): void
+}
+
+function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
+  const emitter = new Emitter<void>()
+  let current = open
+  return {
+    service: {
+      _serviceBrand: undefined,
+      onDidChangeWindows: emitter.event,
+      async getWindows() {
+        return current
+      },
+      async focusWindow() {},
+      async openWindow() {},
+      async quit() {},
+    } as IWindowsServiceType,
+    setOpen(next) {
+      current = next
+      emitter.fire()
+    },
+  }
+}
+
+function buildContribution(
+  workspace: WorkspaceStub,
+  windows: IWindowsServiceType = makeWindowsStub().service,
+): {
   contribution: WorkspaceRecentMenuContribution
   dispose: () => void
 } {
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
+  services.set(IWindowsService, windows)
   const inst = new InstantiationService(services)
   const contribution = inst.createInstance(WorkspaceRecentMenuContribution)
   return { contribution, dispose: () => contribution.dispose() }
@@ -139,5 +176,38 @@ describe('WorkspaceRecentMenuContribution', () => {
     expect(MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu)).toHaveLength(2)
     ws.setRecent([])
     expect(MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu)).toHaveLength(1)
+  })
+
+  it('marks recent entries currently open in a window, refreshing on window change', async () => {
+    const ws = makeWorkspaceStub([
+      { folder: URI.file('/tmp/a'), name: 'a', lastOpened: 2 },
+      { folder: URI.file('/tmp/b'), name: 'b', lastOpened: 1 },
+    ])
+    const windows = makeWindowsStub([{ id: 1, folder: URI.file('/tmp/a').toJSON(), name: 'a' }])
+    const { dispose } = buildContribution(ws, windows.service)
+    disposables.push({ dispose })
+    // Let the initial async _refreshOpenFolders() settle.
+    await Promise.resolve()
+    await Promise.resolve()
+
+    const titlesOf = (): (string | undefined)[] =>
+      MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu)
+        .filter((i): i is { command: string; title?: string } => 'command' in i)
+        .map((i) => i.title)
+
+    let titles = titlesOf()
+    expect(titles).toContain('a (Opened)')
+    expect(titles).toContain('b')
+
+    // When /tmp/b also opens, its marker appears too.
+    windows.setOpen([
+      { id: 1, folder: URI.file('/tmp/a').toJSON(), name: 'a' },
+      { id: 2, folder: URI.file('/tmp/b').toJSON(), name: 'b' },
+    ])
+    await Promise.resolve()
+    await Promise.resolve()
+    titles = titlesOf()
+    expect(titles).toContain('a (Opened)')
+    expect(titles).toContain('b (Opened)')
   })
 })

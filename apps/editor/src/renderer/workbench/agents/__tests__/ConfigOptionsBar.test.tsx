@@ -50,6 +50,7 @@ const stubWorkspaceService = {
   async openFolder() {},
   async closeFolder() {},
   async clearRecent() {},
+  async removeRecent() {},
 } as unknown as IWorkspaceServiceType
 
 function renderWithServices(node: React.ReactNode) {

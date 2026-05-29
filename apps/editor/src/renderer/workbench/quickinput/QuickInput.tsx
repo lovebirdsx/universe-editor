@@ -11,7 +11,7 @@ import {
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
-import type { IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
+import type { IKeyMods, IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { FocusScopeOverlay } from '../common/FocusScopeOverlay.js'
 import {
@@ -150,12 +150,14 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const [query, setQuery] = useState(prefix)
   const quickNavigate = state.quickNavigate
   const [focusedIdx, setFocusedIdx] = useState(quickNavigate?.initialSelectionIndex ?? 0)
+  const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set())
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const mruIds = state.mruIds ?? []
   const filterMode = state.filterMode ?? 'fuzzy'
   const matchOnDescription = state.matchOnDescription === true
   const matchOnDetail = state.matchOnDetail === true
+  const onItemRemove = state.onItemRemove
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -171,10 +173,20 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
     () =>
       prefixMissing
         ? []
-        : (state.items ?? []).filter((item) =>
-            itemMatches(item, deferredFilterText, filterMode, matchOnDescription, matchOnDetail),
+        : (state.items ?? []).filter(
+            (item) =>
+              !removedIds.has(item.id) &&
+              itemMatches(item, deferredFilterText, filterMode, matchOnDescription, matchOnDetail),
           ),
-    [prefixMissing, state.items, deferredFilterText, filterMode, matchOnDescription, matchOnDetail],
+    [
+      prefixMissing,
+      state.items,
+      removedIds,
+      deferredFilterText,
+      filterMode,
+      matchOnDescription,
+      matchOnDetail,
+    ],
   )
 
   const sortedFiltered = useMemo(
@@ -210,11 +222,24 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   }, [focusedIdx, sortedFiltered.length, virtualizer])
 
   const accept = useCallback(
-    (items: IQuickPickItem[]) => {
-      state.onAccept?.(items)
+    (items: IQuickPickItem[], mods?: IKeyMods) => {
+      state.onAccept?.(items, mods)
       onClose()
     },
     [state, onClose],
+  )
+
+  const removeItem = useCallback(
+    (item: IQuickPickItem) => {
+      if (!onItemRemove) return
+      onItemRemove(item)
+      setRemovedIds((prev) => {
+        const next = new Set(prev)
+        next.add(item.id)
+        return next
+      })
+    },
+    [onItemRemove],
   )
 
   // Quick navigate mode: release of the modifier accepts the focused item.
@@ -264,13 +289,17 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
     } else if (e.key === 'PageUp') {
       e.preventDefault()
       setFocusedIdx((i) => (len === 0 ? 0 : Math.max(i - PAGE_SIZE, 0)))
+    } else if (e.key === 'Delete' && onItemRemove) {
+      e.preventDefault()
+      const item = sortedFiltered[focusedIdx]
+      if (item) removeItem(item)
     } else if (e.key === 'Enter') {
       // preventDefault stops the native keydown from leaking to whichever element
       // receives focus after the panel closes (typically the Monaco editor), which
       // would otherwise cause an unwanted newline insertion.
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
-      if (item) accept([item])
+      if (item) accept([item], { ctrl: e.ctrlKey, alt: e.altKey })
     }
   }
 
@@ -318,7 +347,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                     className={`${styles['item']} ${idx === focusedIdx ? styles['focused'] : ''}`}
                     role="option"
                     aria-selected={idx === focusedIdx}
-                    onClick={() => accept([item])}
+                    onClick={(e) => accept([item], { ctrl: e.ctrlKey, alt: e.altKey })}
                     onMouseMove={() => setFocusedIdx(idx)}
                   >
                     {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
@@ -328,6 +357,20 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                     )}
                     {item.keybinding && (
                       <span className={styles['itemKeybinding']}>{item.keybinding}</span>
+                    )}
+                    {onItemRemove && (
+                      <span
+                        role="button"
+                        aria-label="Remove from list"
+                        className={styles['itemRemove']}
+                        data-testid="quick-input-item-remove"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          removeItem(item)
+                        }}
+                      >
+                        ✕
+                      </span>
                     )}
                   </button>
                 </div>

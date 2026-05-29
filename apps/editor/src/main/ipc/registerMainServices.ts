@@ -9,7 +9,7 @@ import {
   ChannelServer,
   combinedDisposable,
   type IDisposable,
-  type IHostServiceWire,
+  type IWindowsService,
   ProxyChannel,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
@@ -25,17 +25,19 @@ export function bootstrapWindowIpc(
   win: BrowserWindow,
   app: ApplicationServices,
   window: WindowScopedServices,
-): IDisposable & { host: IHostServiceWire } {
+  windows: IWindowsService,
+): IDisposable {
   const { protocol, disposable: protoDisposable } = createMainProtocolForWindow(win)
   const server = new ChannelServer(protocol)
 
   server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(window.host))
-  server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(app.storage))
+  server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(window.storage))
   server.registerChannel(ServiceChannels.Ping, ProxyChannel.fromService(app.ping))
   server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(app.fileSystem))
   server.registerChannel(ServiceChannels.FileWatcher, ProxyChannel.fromService(app.fileWatcher))
-  server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(app.workspace))
-  server.registerChannel(ServiceChannels.UserData, ProxyChannel.fromService(app.userData))
+  server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(window.workspace))
+  server.registerChannel(ServiceChannels.UserData, ProxyChannel.fromService(window.userData))
+  server.registerChannel(ServiceChannels.Window, ProxyChannel.fromService(windows))
   server.registerChannel(ServiceChannels.LogFiles, ProxyChannel.fromService(app.logFiles))
   server.registerChannel(ServiceChannels.AcpHost, ProxyChannel.fromService(app.acpHost))
   server.registerChannel(ServiceChannels.AcpTerminal, ProxyChannel.fromService(app.acpTerminal))
@@ -45,6 +47,5 @@ export function bootstrapWindowIpc(
     ProxyChannel.fromService(app.disposableLeak),
   )
 
-  const all = combinedDisposable(server, protoDisposable)
-  return Object.assign(all, { host: window.host })
+  return combinedDisposable(server, protoDisposable)
 }

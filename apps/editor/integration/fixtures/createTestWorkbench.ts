@@ -10,12 +10,14 @@ import { MainStorageService } from '../../src/main/services/storage/storageMainS
 import { FileSystemMainService } from '../../src/main/services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from '../../src/main/services/fileWatcher/fileWatcherMainService.js'
 import { WorkspaceMainService } from '../../src/main/services/workspace/workspaceMainService.js'
+import { RecentWorkspacesMainService } from '../../src/main/services/workspace/recentWorkspacesMainService.js'
 import { UserDataMainService } from '../../src/main/services/userData/userDataMainService.js'
 
 export interface TestWorkbench {
   readonly userDataDir: string
   readonly logService: LogMainService
   readonly storage: MainStorageService
+  readonly recentWorkspaces: RecentWorkspacesMainService
   readonly workspace: WorkspaceMainService
   readonly userData: UserDataMainService
   readonly logFiles: LogFilesMainService
@@ -43,9 +45,13 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
 
   const logService = new LogMainService()
   const logFiles = new LogFilesMainService(logService)
-  // Pass an explicit Storage to avoid the module-level singleton in storage.ts
-  const storage = new MainStorageService(createStorage(join(userDataDir, 'state.json')))
-  const workspace = new WorkspaceMainService(storage, noopDialog)
+  // Pass an explicit Storage to avoid the module-level singleton in storage.ts.
+  // The GLOBAL backend is shared between MainStorageService (state.json) and the
+  // recent-workspaces singleton, mirroring production wiring.
+  const globalStorage = createStorage(join(userDataDir, 'state.json'))
+  const storage = new MainStorageService(globalStorage)
+  const recentWorkspaces = new RecentWorkspacesMainService(globalStorage)
+  const workspace = new WorkspaceMainService(storage, recentWorkspaces, noopDialog)
   const userData = new UserDataMainService(workspace)
   const fileSystem = new FileSystemMainService()
   const fileWatcher = new FileWatcherMainService()
@@ -54,6 +60,7 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
     userDataDir,
     logService,
     storage,
+    recentWorkspaces,
     workspace,
     userData,
     logFiles,
@@ -62,6 +69,7 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
     async dispose() {
       userData.dispose()
       workspace.dispose()
+      recentWorkspaces.dispose()
       logService.dispose()
       // Drain any pending fire-and-forget writes before removing the temp dir,
       // otherwise serialized writes that haven't run yet will fail with ENOENT.

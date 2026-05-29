@@ -10,13 +10,10 @@ import {
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
-import { MainStorageService } from './services/storage/storageMainService.js'
 import { MainPingService } from './services/ping/pingMainService.js'
 import { FileSystemMainService } from './services/files/fileSystemMainService.js'
 import { FileWatcherMainService } from './services/fileWatcher/fileWatcherMainService.js'
-import { WorkspaceMainService } from './services/workspace/workspaceMainService.js'
-import { ElectronFolderDialog } from './services/workspace/electronFolderDialog.js'
-import { UserDataMainService } from './services/userData/userDataMainService.js'
+import { RecentWorkspacesMainService } from './services/workspace/recentWorkspacesMainService.js'
 import { LogMainService } from './services/log/logMainService.js'
 import { LogFilesMainService } from './services/log/logFilesMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
@@ -25,6 +22,8 @@ import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainSe
 import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, readEnvFromProcess, resolveProductIdentity } from './productPaths.js'
+import { getDefaultStorage } from './storage.js'
+import { loadSession } from './windowsSession.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -72,7 +71,7 @@ const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 
 // Application-singleton services — shared across all windows.
 let applicationServices: ApplicationServices | null = null
-let userDataService: UserDataMainService | null = null
+let recentWorkspacesService: RecentWorkspacesMainService | null = null
 let acpHostService: AcpHostMainService | null = null
 let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
@@ -87,14 +86,11 @@ const appIconPath =
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
   if (!applicationServices) {
     mainLogger.info('create application services')
-    const storage = new MainStorageService()
-    const workspace = new WorkspaceMainService(
-      storage,
-      new ElectronFolderDialog(),
+    const recentWorkspaces = new RecentWorkspacesMainService(
+      getDefaultStorage(),
       logMainService.createLogger({ id: 'workspace', name: 'Workspace' }),
     )
-    const userData = new UserDataMainService(workspace)
-    userDataService = userData
+    recentWorkspacesService = recentWorkspaces
     const acpHost = new AcpHostMainService(
       logMainService.createLogger({ id: 'acpHost', name: 'ACP Host' }),
     )
@@ -104,7 +100,6 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     )
     acpTerminalService = acpTerminal
     applicationServices = {
-      storage,
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(
         logMainService.createLogger({ id: 'fileSystem', name: 'File System' }),
@@ -112,8 +107,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       fileWatcher: new FileWatcherMainService(
         logMainService.createLogger({ id: 'fileWatcher', name: 'File Watcher' }),
       ),
-      workspace,
-      userData,
+      recentWorkspaces,
       logFiles: new LogFilesMainService(logMainService),
       acpHost,
       acpTerminal,
@@ -149,7 +143,7 @@ void app.whenReady().then(async () => {
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
-  await windows.createWindow()
+  await windows.restoreSession(await loadSession(getDefaultStorage()))
 
   setTimeout(() => {
     void logMainService.cleanupOldLogs(20).catch((err) => {
@@ -160,7 +154,7 @@ void app.whenReady().then(async () => {
   app.on('activate', () => {
     mainLogger.info('app activate')
     if (getOrCreateServices().windows.getWindows().length === 0) {
-      void getOrCreateServices().windows.createWindow()
+      void getOrCreateServices().windows.createWindow({})
     }
   })
 })
@@ -170,12 +164,20 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
+app.on('before-quit', () => {
+  mainLogger.info('before-quit')
+  // Snapshot the open-windows session before windows start closing, so the
+  // per-window close handlers don't shrink the persisted list to empty.
+  windowMainService?.captureSessionForQuit()
+})
+
 app.on('will-quit', () => {
   mainLogger.info('will-quit')
-  userDataService?.dispose()
+  windowMainService?.dispose()
+  recentWorkspacesService?.dispose()
   acpHostService?.dispose()
   acpTerminalService?.dispose()
-  windowMainService?.dispose()
+  void getDefaultStorage().flush()
   consoleInterceptor.dispose()
   logMainService.dispose()
 })

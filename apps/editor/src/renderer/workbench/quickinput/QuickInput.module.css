@@ -107,6 +107,32 @@
   opacity: 0.6;
 }
 
+.itemRemove {
+  margin-left: 12px;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  font-size: 11px;
+  color: var(--color-description-fg, #8a8a92);
+  opacity: 0;
+  cursor: pointer;
+}
+
+.item:hover .itemRemove,
+.item.focused .itemRemove {
+  opacity: 0.8;
+}
+
+.itemRemove:hover {
+  opacity: 1;
+  background: var(--color-list-hover-bg, #3a3a40);
+  color: var(--color-foreground, #c8c8c8);
+}
+
 .empty {
   padding: 12px;
   text-align: center;

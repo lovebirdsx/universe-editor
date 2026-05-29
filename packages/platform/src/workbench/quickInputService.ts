@@ -17,6 +17,17 @@ export interface IQuickPickItem {
 
 export type QuickPickFilterMode = 'fuzzy' | 'word'
 
+/**
+ * Modifier keys held at the moment a quick pick item is accepted. Passed as a
+ * mutable out-param via `IPickOptions.keyMods`: the service writes the live
+ * modifier state into it just before `pick` resolves, so callers can branch
+ * (e.g. Ctrl+Enter → open in new window).
+ */
+export interface IKeyMods {
+  ctrl: boolean
+  alt: boolean
+}
+
 export interface IPickOptions {
   readonly id?: string
   readonly placeholder?: string
@@ -41,6 +52,17 @@ export interface IPickOptions {
     readonly modifier: 'ctrl'
     readonly initialSelectionIndex?: number
   }
+  /**
+   * Mutable out-param. When provided, the service writes the modifier state held
+   * at acceptance time into it right before `pick` resolves.
+   */
+  readonly keyMods?: IKeyMods
+  /**
+   * When provided, each item gains an inline remove affordance (a ✕ button and
+   * the Delete key on the focused item). Invoked without closing the picker;
+   * the item is also removed from the visible list locally.
+   */
+  readonly onItemRemove?: (item: IQuickPickItem) => void
 }
 
 export interface IInputOptions {

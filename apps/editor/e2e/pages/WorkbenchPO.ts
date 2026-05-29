@@ -1,5 +1,5 @@
 import type { Page } from '@playwright/test'
-import type { E2EDisposableLeakReport } from '../../src/shared/e2e/contract.js'
+import type { E2EDisposableLeakReport, E2EOpenWindow } from '../../src/shared/e2e/contract.js'
 import { ActivityBarPO } from './ActivityBarPO.js'
 import { SideBarPO } from './SideBarPO.js'
 import { StatusBarPO } from './StatusBarPO.js'
@@ -66,6 +66,26 @@ export class WorkbenchPO {
   /** Return the current workspace folder's fsPath, or undefined if none. */
   async getCurrentWorkspacePath(): Promise<string | undefined> {
     return this.page.evaluate(() => window.__E2E__!.getCurrentWorkspacePath())
+  }
+
+  /** Snapshot of all open application windows (id + folder fsPath + name). */
+  async getOpenWindows(): Promise<readonly E2EOpenWindow[]> {
+    return this.page.evaluate(() => window.__E2E__!.getOpenWindows())
+  }
+
+  /** Open a folder in a NEW window, bypassing the native folder dialog. */
+  async openFolderInNewWindow(fsPath: string): Promise<void> {
+    await this.page.evaluate((p) => window.__E2E__!.openFolderInNewWindow(p), fsPath)
+  }
+
+  /** fsPaths of the recent-workspaces list, most-recent first. */
+  async getRecentWorkspacePaths(): Promise<readonly string[]> {
+    return this.page.evaluate(() => window.__E2E__!.getRecentWorkspacePaths())
+  }
+
+  /** Remove a folder from the recent-workspaces list by fsPath. */
+  async removeRecentWorkspace(fsPath: string): Promise<void> {
+    await this.page.evaluate((p) => window.__E2E__!.removeRecentWorkspace(p), fsPath)
   }
 
   /** Return the active editor's resource URI string, or undefined if none. */

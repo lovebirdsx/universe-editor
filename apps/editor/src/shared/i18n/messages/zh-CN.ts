@@ -162,4 +162,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '延迟后自动保存的等待时长（毫秒），当 autoSave 设为 afterDelay 时生效。',
   'settings.readonly': '在表单视图中不可编辑',
   'settings.workbench.colorTheme.description': '工作台颜色主题。',
+  'action.exit.title': '退出',
+  'action.openFolderInNewWindow.title': '在新窗口中打开文件夹…',
+  'action.switchWindow.title': '切换窗口…',
+  'quickInput.switchWindow.placeholder': '选择要切换到的窗口',
+  'window.untitled': '未命名（窗口 {id}）',
+  'workspace.recent.opened': '已打开',
+  'workspace.recent.openedSuffix': '（已打开）',
 } as const

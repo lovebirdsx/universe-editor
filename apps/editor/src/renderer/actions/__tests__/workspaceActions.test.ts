@@ -8,6 +8,7 @@ import {
   Emitter,
   IProgressService,
   IQuickInputService,
+  IWindowsService,
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
@@ -17,6 +18,8 @@ import {
   URI,
   registerAction2,
   type IDisposable,
+  type IOpenWindowInfo,
+  type IPickOptions,
   type IProgressOptions,
   type IProgressService as IProgressServiceType,
   type IProgressStep,
@@ -24,6 +27,7 @@ import {
   type IQuickPick,
   type IQuickPickItem,
   type IRecentWorkspace,
+  type IWindowsService as IWindowsServiceType,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -37,6 +41,7 @@ import {
 
 interface WorkspaceStub extends IWorkspaceServiceType {
   readonly openCalls: URI[]
+  readonly removeCalls: URI[]
   readonly clearCalls: number
   readonly closeCalls: number
   setRecent(recent: readonly IRecentWorkspace[]): void
@@ -47,6 +52,7 @@ function makeWorkspaceStub(recent: readonly IRecentWorkspace[] = []): WorkspaceS
   const recentEmitter = new Emitter<readonly IRecentWorkspace[]>()
   let currentRecent = recent
   const openCalls: URI[] = []
+  const removeCalls: URI[] = []
   let clearCalls = 0
   let closeCalls = 0
   return {
@@ -60,6 +66,7 @@ function makeWorkspaceStub(recent: readonly IRecentWorkspace[] = []): WorkspaceS
     },
     onDidChangeRecent: recentEmitter.event,
     openCalls,
+    removeCalls,
     get clearCalls() {
       return clearCalls
     },
@@ -82,10 +89,21 @@ function makeWorkspaceStub(recent: readonly IRecentWorkspace[] = []): WorkspaceS
       currentRecent = []
       recentEmitter.fire([])
     },
+    async removeRecent(folder: URI) {
+      removeCalls.push(folder)
+    },
   } as WorkspaceStub
 }
 
-function makeQuickInputStub(pickResult: IQuickPickItem | undefined): IQuickInputServiceType & {
+interface QuickInputStubConfig {
+  pickResult?: IQuickPickItem | undefined
+  /** Simulate the user holding Ctrl when accepting. */
+  ctrl?: boolean
+  /** Simulate triggering remove on the item at this index before accepting. */
+  removeIndex?: number
+}
+
+function makeQuickInputStub(cfg: QuickInputStubConfig = {}): IQuickInputServiceType & {
   pickCalls: IQuickPickItem[][]
 } {
   const pickCalls: IQuickPickItem[][] = []
@@ -95,14 +113,44 @@ function makeQuickInputStub(pickResult: IQuickPickItem | undefined): IQuickInput
     createQuickPick<T extends IQuickPickItem>(): IQuickPick<T> {
       throw new Error('not used in these tests')
     },
-    async pick<T extends IQuickPickItem>(items: readonly T[]): Promise<T | undefined> {
+    async pick<T extends IQuickPickItem>(
+      items: readonly T[],
+      options?: IPickOptions,
+    ): Promise<T | undefined> {
       pickCalls.push([...items])
-      return pickResult as T | undefined
+      if (cfg.removeIndex !== undefined) {
+        const target = items[cfg.removeIndex]
+        if (target) options?.onItemRemove?.(target)
+      }
+      if (cfg.ctrl && options?.keyMods) options.keyMods.ctrl = true
+      return cfg.pickResult as T | undefined
     },
     async input() {
       return undefined
     },
   } as IQuickInputServiceType & { pickCalls: IQuickPickItem[][] }
+}
+
+interface WindowsStub extends IWindowsServiceType {
+  readonly openWindowCalls: (URI | undefined)[]
+}
+
+function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
+  const emitter = new Emitter<void>()
+  const openWindowCalls: (URI | undefined)[] = []
+  return {
+    _serviceBrand: undefined,
+    onDidChangeWindows: emitter.event,
+    openWindowCalls,
+    async getWindows() {
+      return open
+    },
+    async focusWindow() {},
+    async openWindow(folder?: URI) {
+      openWindowCalls.push(folder)
+    },
+    async quit() {},
+  } as WindowsStub
 }
 
 function makeProgressStub(): IProgressServiceType {
@@ -124,10 +172,12 @@ function runCommand(
   id: string,
   workspace: IWorkspaceServiceType,
   quickInput?: IQuickInputServiceType,
+  windows: IWindowsServiceType = makeWindowsStub(),
 ): Promise<unknown> {
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
   services.set(IProgressService, makeProgressStub())
+  services.set(IWindowsService, windows)
   if (quickInput) services.set(IQuickInputService, quickInput)
   const inst = new InstantiationService(services)
   return new Promise((resolve) => {
@@ -187,7 +237,9 @@ describe('workspaceActions', () => {
       { folder: folderA, name: 'a', lastOpened: 2 },
       { folder: folderB, name: 'b', lastOpened: 1 },
     ])
-    const qi = makeQuickInputStub({ id: 'recent.1', label: 'b', index: 1 } as IQuickPickItem)
+    const qi = makeQuickInputStub({
+      pickResult: { id: 'recent.1', label: 'b', index: 1 } as IQuickPickItem,
+    })
     await runCommand(OpenRecentAction.ID, ws, qi)
     expect(qi.pickCalls).toHaveLength(1)
     expect(qi.pickCalls[0]).toHaveLength(2)
@@ -195,10 +247,58 @@ describe('workspaceActions', () => {
     expect(ws.openCalls[0]?.toString()).toBe(folderB.toString())
   })
 
+  it('OpenRecent.run marks entries already open in a window', async () => {
+    disposables.push(registerAction2(OpenRecentAction))
+    const folderA = URI.file('/tmp/a')
+    const folderB = URI.file('/tmp/b')
+    const ws = makeWorkspaceStub([
+      { folder: folderA, name: 'a', lastOpened: 2 },
+      { folder: folderB, name: 'b', lastOpened: 1 },
+    ])
+    const qi = makeQuickInputStub({})
+    const windows = makeWindowsStub([{ id: 1, folder: folderA.toJSON(), name: 'a' }])
+    await runCommand(OpenRecentAction.ID, ws, qi, windows)
+    const items = qi.pickCalls[0]!
+    expect(items[0]?.keybinding).toBe('Opened')
+    expect(items[1]?.keybinding).toBeUndefined()
+  })
+
+  it('OpenRecent.run with Ctrl held opens the choice in a new window', async () => {
+    disposables.push(registerAction2(OpenRecentAction))
+    const folderA = URI.file('/tmp/a')
+    const ws = makeWorkspaceStub([{ folder: folderA, name: 'a', lastOpened: 1 }])
+    const qi = makeQuickInputStub({
+      pickResult: { id: 'recent.0', label: 'a', index: 0 } as IQuickPickItem,
+      ctrl: true,
+    })
+    const windows = makeWindowsStub()
+    await runCommand(OpenRecentAction.ID, ws, qi, windows)
+    expect(windows.openWindowCalls).toHaveLength(1)
+    expect(windows.openWindowCalls[0]?.toString()).toBe(folderA.toString())
+    // Same-window openFolder must NOT have been called.
+    expect(ws.openCalls).toHaveLength(0)
+  })
+
+  it('OpenRecent.run remove affordance delegates to removeRecent', async () => {
+    disposables.push(registerAction2(OpenRecentAction))
+    const folderA = URI.file('/tmp/a')
+    const folderB = URI.file('/tmp/b')
+    const ws = makeWorkspaceStub([
+      { folder: folderA, name: 'a', lastOpened: 2 },
+      { folder: folderB, name: 'b', lastOpened: 1 },
+    ])
+    // Remove the second entry, then cancel (no pickResult).
+    const qi = makeQuickInputStub({ removeIndex: 1 })
+    await runCommand(OpenRecentAction.ID, ws, qi)
+    expect(ws.removeCalls).toHaveLength(1)
+    expect(ws.removeCalls[0]?.toString()).toBe(folderB.toString())
+    expect(ws.openCalls).toHaveLength(0)
+  })
+
   it('OpenRecent.run with empty recent list is a no-op', async () => {
     disposables.push(registerAction2(OpenRecentAction))
     const ws = makeWorkspaceStub([])
-    const qi = makeQuickInputStub(undefined)
+    const qi = makeQuickInputStub({})
     await runCommand(OpenRecentAction.ID, ws, qi)
     expect(qi.pickCalls).toHaveLength(0)
     expect(ws.openCalls).toHaveLength(0)

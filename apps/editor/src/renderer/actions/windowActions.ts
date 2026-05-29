@@ -9,9 +9,13 @@ import {
   IDialogService,
   IHostService,
   ILoggerService,
+  IQuickInputService,
+  IWindowsService,
   MenuId,
+  URI,
   localize,
   type DisposableTracker,
+  type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
@@ -50,6 +54,79 @@ export class CloseWindowAction extends Action2 {
 
   override run(accessor: ServicesAccessor): void {
     void accessor.get(IHostService).closeWindow()
+  }
+}
+
+export class OpenFolderInNewWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.files.openFolderInNewWindow'
+  constructor() {
+    super({
+      id: OpenFolderInNewWindowAction.ID,
+      title: localize('action.openFolderInNewWindow.title', 'Open Folder in New Window…'),
+      category: localize('command.category.file', 'File'),
+      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 4 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void accessor.get(IWindowsService).openWindow()
+  }
+}
+
+interface WindowPickItem extends IQuickPickItem {
+  readonly windowId: number
+}
+
+export class SwitchWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.switchWindow'
+  constructor() {
+    super({
+      id: SwitchWindowAction.ID,
+      title: localize('action.switchWindow.title', 'Switch Window…'),
+      category: localize('command.category.file', 'File'),
+      menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 2 },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const windowsService = accessor.get(IWindowsService)
+    const quickInput = accessor.get(IQuickInputService)
+    const windows = await windowsService.getWindows()
+    if (windows.length === 0) return
+    const items: WindowPickItem[] = windows.map((w) => {
+      const folder = w.folder ? URI.revive(w.folder) : null
+      return {
+        id: `window.${w.id}`,
+        label: w.name ?? localize('window.untitled', 'Untitled (Window {id})', { id: w.id }),
+        ...(folder ? { description: folder.fsPath } : {}),
+        windowId: w.id,
+      }
+    })
+    const pick = await quickInput.pick<WindowPickItem>(items, {
+      placeholder: localize('quickInput.switchWindow.placeholder', 'Select a window to switch to'),
+      matchOnDescription: true,
+    })
+    if (!pick) return
+    await windowsService.focusWindow(pick.windowId)
+  }
+}
+
+export class ExitAction extends Action2 {
+  static readonly ID = 'workbench.action.quit'
+  constructor() {
+    super({
+      id: ExitAction.ID,
+      title: localize('action.exit.title', 'Exit'),
+      category: localize('command.category.file', 'File'),
+      menu: { id: MenuId.MenubarFileMenu, group: 'z_exit', order: 1 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    void accessor.get(IWindowsService).quit()
   }
 }
 
