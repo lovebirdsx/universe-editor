@@ -21,6 +21,7 @@ import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
 import { WorkspaceRecentMenuContribution } from './WorkspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from './WorkspaceRestoreContribution.js'
 import { WorkspaceExplorerRevealContribution } from './WorkspaceExplorerRevealContribution.js'
+import { WindowTitleContribution } from './WindowTitleContribution.js'
 import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
@@ -143,6 +144,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workspaceExplorerReveal',
   WorkspaceExplorerRevealContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Keep the native window title in sync with the current workspace folder so
+// Alt+Tab / the taskbar identifies each window by its workspace path.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.windowTitle',
+  WindowTitleContribution,
   WorkbenchPhase.AfterRestore,
 )
 
