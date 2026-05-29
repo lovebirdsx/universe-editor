@@ -27,6 +27,7 @@ import type {
   AcpPlanEntry,
   AcpSessionStatus,
   AcpToolCall,
+  AcpUsage,
   IAcpSession,
   TimelineItem,
 } from '../../../services/acp/acpSessionService.js'
@@ -119,6 +120,7 @@ interface FakeSessionOptions {
   readonly id?: string
   readonly status?: AcpSessionStatus
   readonly commands?: readonly AvailableCommand[]
+  readonly usage?: AcpUsage
 }
 
 interface FakeSession extends IAcpSession {
@@ -151,6 +153,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     plan,
     timeline,
     status: statusObs,
+    usage: observableValue<AcpUsage | undefined>('test.usage', opts.usage),
     pendingPermission: permission,
     configOptions,
     availableCommands: commandsObs,

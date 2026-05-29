@@ -442,6 +442,34 @@ describe('AcpSessionService — session/update fan-out', () => {
     })
   })
 
+  it('applies usage_update into the usage observable', async () => {
+    const s = await svc.createSession()
+    expect(s.usage.get()).toBeUndefined()
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 1234,
+        size: 200000,
+        cost: { amount: 0.0123, currency: 'USD' },
+      },
+    })
+    expect(s.usage.get()).toEqual({
+      used: 1234,
+      size: 200000,
+      cost: { amount: 0.0123, currency: 'USD' },
+    })
+  })
+
+  it('applies usage_update without cost', async () => {
+    const s = await svc.createSession()
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'usage_update', used: 10, size: 100 },
+    })
+    expect(s.usage.get()).toEqual({ used: 10, size: 100 })
+  })
+
   it('applies config_option_update verbatim and replaces prior values', async () => {
     const s = await svc.createSession()
     client.connected[0]!.sink.onSessionUpdate({

@@ -41,6 +41,7 @@ import {
 import { MentionPopover } from './MentionPopover.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
+import { SendButton } from './SendButton.js'
 import styles from './agents.module.css'
 
 export function PromptInput({
@@ -301,25 +302,13 @@ export function PromptInput({
       </div>
       <div className={styles['promptActions']}>
         <ConfigOptionsBar session={session} />
-        {running ? (
-          <button
-            type="button"
-            className={styles['cancelButton']}
-            onClick={() => void session.cancelTurn()}
-            data-testid="acp-prompt-cancel"
-          >
-            {localize('acp.prompt.cancel', 'Cancel')}
-          </button>
-        ) : (
-          <button
-            type="submit"
-            className={styles['sendButton']}
-            disabled={!text.trim()}
-            data-testid="acp-prompt-send"
-          >
-            {localize('acp.prompt.send', 'Send')}
-          </button>
-        )}
+        <SendButton
+          session={session}
+          running={running}
+          disabled={!text.trim()}
+          onSend={() => submit()}
+          onCancel={() => void session.cancelTurn()}
+        />
       </div>
     </form>
   )

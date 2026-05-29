@@ -626,24 +626,50 @@
   gap: 4px;
 }
 
-.sendButton,
-.cancelButton {
-  padding: 4px 10px;
-  font-size: 12px;
-  background: var(--color-button-bg, #0e639c);
-  color: #fff;
+.sendButtonCircle {
+  position: relative;
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  padding: 0;
   border: 0;
-  border-radius: 3px;
+  background: transparent;
+  color: var(--color-button-bg, #0e639c);
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.sendButton:disabled {
+.sendButtonCircle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
 
-.cancelButton {
-  background: var(--color-badge-error, #a1260d);
+.sendButtonRing {
+  position: absolute;
+  inset: 0;
+}
+
+.sendButtonSpin {
+  position: absolute;
+  inset: 0;
+  animation: acpSendSpin 1s linear infinite;
+}
+
+@keyframes acpSendSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sendButtonIcon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-button-bg, #0e639c);
+  pointer-events: none;
 }
 
 .sessionList {

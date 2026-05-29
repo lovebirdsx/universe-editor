@@ -30,6 +30,7 @@ import type {
   AcpPlanEntry,
   AcpSessionStatus,
   AcpToolCall,
+  AcpUsage,
   IAcpSession,
   TimelineItem,
 } from '../../../services/acp/acpSessionService.js'
@@ -80,6 +81,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     plan: observableValue<readonly AcpPlanEntry[]>('p', []),
     timeline: observableValue<readonly TimelineItem[]>('tl', []),
     status: observableValue<AcpSessionStatus>('s', 'idle'),
+    usage: observableValue<AcpUsage | undefined>('u', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('pp', undefined),
     configOptions: configObs,
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),

@@ -111,6 +111,16 @@ export interface AcpPendingPermission {
 
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
+/** Context-window usage reported by the agent via `usage_update`. */
+export interface AcpUsage {
+  /** Tokens currently in context. */
+  readonly used: number
+  /** Total context window size in tokens. */
+  readonly size: number
+  /** Cumulative session cost, if the agent reports it. */
+  readonly cost?: { readonly amount: number; readonly currency: string }
+}
+
 /** Bag of normalized initial session state captured from `session/new`. */
 export interface IAcpSessionInitState {
   readonly configOptions?: readonly SessionConfigOption[]
@@ -135,6 +145,8 @@ export interface IAcpSession {
    */
   readonly timeline: IObservable<readonly TimelineItem[]>
   readonly status: IObservable<AcpSessionStatus>
+  /** Latest context-window usage reported by the agent, or undefined if never reported. */
+  readonly usage: IObservable<AcpUsage | undefined>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
   /** Configuration options the agent has advertised for this session. */
   readonly configOptions: IObservable<readonly SessionConfigOption[]>
@@ -172,6 +184,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
   readonly timeline: ISettableObservable<readonly TimelineItem[]>
   readonly status: ISettableObservable<AcpSessionStatus>
+  readonly usage: ISettableObservable<AcpUsage | undefined>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
 
@@ -209,6 +222,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.plan = observableValue<readonly AcpPlanEntry[]>(`acp.session.plan.${id}`, [])
     this.timeline = observableValue<readonly TimelineItem[]>(`acp.session.timeline.${id}`, [])
     this.status = observableValue<AcpSessionStatus>(`acp.session.status.${id}`, 'idle')
+    this.usage = observableValue<AcpUsage | undefined>(`acp.session.usage.${id}`, undefined)
     this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
       `acp.session.pendingPermission.${id}`,
       undefined,
@@ -439,8 +453,22 @@ export class AcpSession extends Disposable implements IAcpSession {
         }
         break
       }
+      case 'usage_update': {
+        const tx = this._batchedTx()
+        this.usage.set(
+          {
+            used: update.used,
+            size: update.size,
+            ...(update.cost != null
+              ? { cost: { amount: update.cost.amount, currency: update.cost.currency } }
+              : {}),
+          },
+          tx,
+        )
+        break
+      }
       default:
-        // usage_update etc. — ignored for now.
+        // unhandled SessionUpdate variants — ignored for now.
         break
     }
   }

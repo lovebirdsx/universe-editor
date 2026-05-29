@@ -72,6 +72,7 @@ export {
   type AcpPlanEntry,
   type AcpPendingPermission,
   type AcpSessionStatus,
+  type AcpUsage,
   type IAcpSession,
   type IAcpSessionInitState,
   type TimelineItem,
