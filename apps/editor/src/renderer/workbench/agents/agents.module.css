@@ -501,7 +501,40 @@
   font-weight: 600;
 }
 
-.toolCallStatus {
+.toolCallStatusIcon {
+  flex: none;
+  color: var(--color-message-role-fg, #888);
+}
+.toolCallStatusIcon_pending {
+  color: var(--color-message-role-fg, #888);
+}
+.toolCallStatusIcon_in_progress {
+  color: var(--color-badge-progress, #4fa6e2);
+}
+.toolCallStatusIcon_completed {
+  color: var(--color-badge-success, #2c7d32);
+}
+.toolCallStatusIcon_failed {
+  color: var(--color-badge-error, #f14c4c);
+}
+
+.toolCallHeaderButton {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toolCallChevron {
+  flex: none;
   font-size: 10px;
   color: var(--color-message-role-fg, #888);
 }
@@ -509,6 +542,80 @@
 .toolCallBody {
   margin: 4px 0 0;
   font-size: 11px;
+}
+
+.terminalOutput {
+  position: relative;
+  overflow: hidden;
+  --acp-ansi-black: #3b3b3b;
+  --acp-ansi-red: #cd3131;
+  --acp-ansi-green: #0dbc79;
+  --acp-ansi-yellow: #e5e510;
+  --acp-ansi-blue: #2472c8;
+  --acp-ansi-magenta: #bc3fbc;
+  --acp-ansi-cyan: #11a8cd;
+  --acp-ansi-white: #e5e5e5;
+  --acp-ansi-bright-black: #666666;
+  --acp-ansi-bright-red: #f14c4c;
+  --acp-ansi-bright-green: #23d18b;
+  --acp-ansi-bright-yellow: #f5f543;
+  --acp-ansi-bright-blue: #3b8eea;
+  --acp-ansi-bright-magenta: #d670d6;
+  --acp-ansi-bright-cyan: #29b8db;
+  --acp-ansi-bright-white: #ffffff;
+}
+
+.terminalOutput[data-collapsed='true'] {
+  max-height: 240px;
+}
+
+.terminalOutput[data-collapsed='true'][data-overflow='true']::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 28px;
+  background: linear-gradient(to bottom, transparent, var(--color-message-bg, #1f1f1f));
+  pointer-events: none;
+}
+
+.terminalOutputPre {
+  margin: 0;
+  padding: 4px 6px;
+  background: var(--color-message-bg, #1f1f1f);
+  border-radius: 3px;
+  font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminalOutputToggle {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 2px;
+  padding: 2px 6px;
+  background: transparent;
+  border: 0;
+  color: var(--color-message-role-fg, #888);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.terminalOutputToggle:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.terminalOutputToggle:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
 }
 
 .toolCallDiffs {

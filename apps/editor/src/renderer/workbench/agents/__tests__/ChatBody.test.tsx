@@ -45,7 +45,7 @@ afterEach(() => {
 const focusedClass = styles['timelineSlotFocused'] as string
 
 function makeMessage(id: string, text: string): AcpMessage {
-  return { id, role: 'assistant', text, blocks: [{ type: 'text', text }], streaming: false }
+  return { id, role: 'agent', text, blocks: [{ type: 'text', text }], streaming: false }
 }
 
 function makeSession(id: string, items: readonly TimelineItem[]): IAcpSession {
