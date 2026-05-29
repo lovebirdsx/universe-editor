@@ -3,7 +3,7 @@
  *  ToolCallCard / ToolCallList — renders the tool-call lane below the chat log.
  *
  *  Body rendering branches on `call.kind`:
- *   - `read`    → whole body collapsed by default; click the header to expand.
+ *   - `read` / `search` → whole body collapsed by default; click header to expand.
  *   - `execute` → command output rendered as an ANSI-coloured terminal with a
  *                 height cap + expand toggle.
  *   - other     → inline diff previews + markdown blocks (default behaviour).
@@ -45,7 +45,7 @@ export function ToolCallCard({
   dataTimelineKey?: string
 }) {
   const editorService = useService(IEditorService)
-  const collapsible = call.kind === 'read'
+  const collapsible = call.kind === 'read' || call.kind === 'search'
   const [expanded, setExpanded] = useState(false)
 
   const openDiff = (diff: AcpToolCallDiff): void => {

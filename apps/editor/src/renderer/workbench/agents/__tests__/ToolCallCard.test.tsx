@@ -57,6 +57,13 @@ describe('ToolCallCard', () => {
     expect(screen.getByTestId('acp-markdown')).toBeTruthy()
   })
 
+  it('collapses a search card by default and expands on click', () => {
+    renderCard(makeCall({ kind: 'search', blocks: [{ type: 'text', text: 'search results' }] }))
+    expect(screen.queryByTestId('acp-markdown')).toBeNull()
+    fireEvent.click(screen.getByTestId('acp-toolcall-read-toggle'))
+    expect(screen.getByTestId('acp-markdown')).toBeTruthy()
+  })
+
   it('renders execute output as ANSI terminal output', () => {
     renderCard(makeCall({ kind: 'execute', text: '\x1b[32mok\x1b[0m' }))
     const out = screen.getByTestId('acp-terminal-output')
