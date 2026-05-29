@@ -95,9 +95,30 @@ describe('AcpHostMainService', () => {
     svc.onStderr((c) => stderrChunks.push(c))
 
     const { handle } = await svc.start({ command: 'agent', args: [] })
-    proc.emitData('stderr', 'oops')
+    proc.stderr.emit('data', Buffer.from('oops', 'utf8'))
 
     expect(stderrChunks).toEqual([{ handle, data: 'oops' }])
+  })
+
+  it('decodes valid UTF-8 stderr and falls back to the OEM code page for non-UTF-8 bytes', async () => {
+    const proc = new FakeProc()
+    svc = makeService(fakeSpawnerWith([proc]))
+
+    const stderrChunks: AcpStdioChunk[] = []
+    svc.onStderr((c) => stderrChunks.push(c))
+
+    await svc.start({ command: 'agent', args: [] })
+
+    // Valid UTF-8 (incl. multibyte) round-trips untouched.
+    proc.stderr.emit('data', Buffer.from('hello 世界', 'utf8'))
+    // GBK bytes for "你" (0xC4 0xE3) are invalid UTF-8 — must NOT mojibake into
+    // the replacement character; the gb18030 fallback decodes them instead.
+    const gbkBytes = Buffer.from([0xc4, 0xe3])
+    proc.stderr.emit('data', gbkBytes)
+
+    expect(stderrChunks[0]?.data).toBe('hello 世界')
+    expect(stderrChunks[1]?.data).not.toContain('�')
+    expect(stderrChunks[1]?.data).toBe(new TextDecoder('gb18030').decode(gbkBytes))
   })
 
   it('events from one handle do not leak to listeners filtering on another', async () => {

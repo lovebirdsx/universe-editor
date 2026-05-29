@@ -82,6 +82,25 @@ const ENV_DENYLIST: readonly string[] = [
   'NODE_OPTIONS',
 ]
 
+/**
+ * Diagnostic-stream (stderr) decoder. stdout carries the UTF-8 JSON-RPC wire and
+ * is decoded as UTF-8; stderr, however, can come from the `cmd.exe` shell shim
+ * on Windows, which emits messages in the console's OEM code page (e.g. GBK/936
+ * on zh-CN) — decoding those as UTF-8 produces mojibake. We try strict UTF-8
+ * first (covers the agent's own Node stderr) and fall back to gb18030, which
+ * round-trips any byte sequence and is a superset of the GBK family.
+ */
+const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true })
+const OEM_FALLBACK = makeFallbackDecoder()
+
+function makeFallbackDecoder(): InstanceType<typeof TextDecoder> {
+  try {
+    return new TextDecoder('gb18030')
+  } catch {
+    return new TextDecoder('utf-8')
+  }
+}
+
 function sanitizeEnv(
   base: NodeJS.ProcessEnv,
   overrides: Readonly<Record<string, string>> | undefined,
@@ -146,12 +165,12 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     this._procs.set(handle, entry)
 
     proc.stdout.setEncoding('utf8')
-    proc.stderr.setEncoding('utf8')
     proc.stdout.on('data', (data: string) => {
       this._onStdout.fire({ handle, data })
     })
-    proc.stderr.on('data', (data: string) => {
-      this._onStderr.fire({ handle, data })
+    // stderr stays raw so we can pick the right code page (see _decodeDiag).
+    proc.stderr.on('data', (data: Buffer) => {
+      this._onStderr.fire({ handle, data: this._decodeDiag(data) })
     })
     proc.on('error', (err) => {
       this._logger.warn(`proc error handle=${handle}: ${err.message}`)
@@ -167,7 +186,12 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     proc.on('exit', (code, signal) => {
       if (entry.exited) return
       entry.exited = true
-      this._logger.info(`exit handle=${handle} code=${code} signal=${signal}`)
+      const msg = `exit handle=${handle} code=${code} signal=${signal}`
+      if (code === 0 || code === null) {
+        this._logger.info(msg)
+      } else {
+        this._logger.warn(msg)
+      }
       this._onExit.fire({ handle, code, signal })
       this._procs.delete(handle)
     })
@@ -216,6 +240,15 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     } catch (err) {
       this._logger.warn(`probe failed for ${command}: ${(err as Error).message}`)
       return false
+    }
+  }
+
+  /** Decode a raw stderr chunk: strict UTF-8 first, gb18030 fallback on failure. */
+  private _decodeDiag(buf: Buffer): string {
+    try {
+      return UTF8_STRICT.decode(buf)
+    } catch {
+      return OEM_FALLBACK.decode(buf)
     }
   }
 

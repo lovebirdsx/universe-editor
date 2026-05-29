@@ -59,7 +59,7 @@ import {
   type WriteTextFileRequest,
   type WriteTextFileResponse,
 } from '@agentclientprotocol/sdk'
-import { IAcpHostService } from '../../../shared/ipc/acpHostService.js'
+import { IAcpHostService, type AcpExitEvent } from '../../../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../../../shared/ipc/acpTerminalService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
@@ -122,6 +122,9 @@ export const IAcpClientService = createDecorator<IAcpClientService>('acpClientSe
 
 /** Grace period after the last lease is released before the agent process is stopped. */
 const POOL_GRACE_MS = 30_000
+
+/** Bounded tail of agent stderr retained per entry, surfaced on initialize failure. */
+const STDERR_TAIL_LIMIT = 8_192
 
 const TERMINAL_BUCKET_UNTAGGED = '\0__untagged__'
 
@@ -308,9 +311,21 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     const stderr = this._output.createChannel(`acp/${agentId}/${handle}`)
     const entryStore = new DisposableStore()
     this._entriesStore.add(entryStore)
+    // Keep a bounded tail of the child's stderr + its exit status so an
+    // `initialize` failure ("ACP connection closed") can surface the real
+    // reason the subprocess died, instead of just the generic EOF error.
+    let stderrTail = ''
+    let lastExit: AcpExitEvent | undefined
     const stderrSub = entryStore.add(
       this._host.onStderr((chunk) => {
-        if (chunk.handle === handle) stderr.append(chunk.data)
+        if (chunk.handle !== handle) return
+        stderr.append(chunk.data)
+        stderrTail = (stderrTail + chunk.data).slice(-STDERR_TAIL_LIMIT)
+      }),
+    )
+    entryStore.add(
+      this._host.onExit((evt) => {
+        if (evt.handle === handle) lastExit = evt
       }),
     )
     const terminalsBySession = new Map<string, Set<string>>()
@@ -433,7 +448,25 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     )
 
     const initializeResult = conn.initialize(DEFAULT_INIT_PARAMS).catch((err: unknown) => {
-      this._logger.warn(`initialize failed for ${agentId}: ${(err as Error).message}`)
+      const reason = (err as Error).message
+      const exitInfo = lastExit
+        ? ` exit: code=${lastExit.code} signal=${lastExit.signal}${
+            lastExit.error ? ` error=${lastExit.error}` : ''
+          }`
+        : ''
+      const tail = stderrTail.trim()
+      this._logger.warn(
+        `initialize failed for ${agentId}: ${reason}${exitInfo}${
+          tail ? `\n  stderr (tail):\n${tail}` : ''
+        }`,
+      )
+      this._telemetry.publicLogError('acp.initialize_failed', { agentId, error: reason })
+      this._notification.notify({
+        severity: Severity.Error,
+        message: `Agent "${agentId}" failed to start: ${reason}${
+          tail ? `\n${tail.split('\n').slice(-5).join('\n')}` : ''
+        }`,
+      })
       this._evictNow(entry)
       throw err
     })
