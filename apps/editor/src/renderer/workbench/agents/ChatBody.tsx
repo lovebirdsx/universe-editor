@@ -32,6 +32,7 @@ import {
   type IAcpSession,
   type TimelineItem,
 } from '../../services/acp/acpSessionService.js'
+import { hasVisibleMessageContent } from '../../services/acp/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   IAcpChatWidgetService,
@@ -295,6 +296,12 @@ function TimelineSlot({
   switch (item.kind) {
     case 'message': {
       const m = item.message
+      // Drop settled messages that render no visible content (e.g. an agent's
+      // empty/whitespace thought turn-marker). User messages and the streaming
+      // first frame — which shows the caret before its first chunk lands — stay.
+      if (!m.streaming && m.role !== 'user' && !hasVisibleMessageContent(m.blocks)) {
+        return null
+      }
       const showCaret = sessionRunning && m.streaming
       const isUser = m.role === 'user'
       const className =

@@ -486,6 +486,12 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._messages = [...this._messages.slice(0, -1), next]
       this._upsertMessageInTimeline(next)
     } else {
+      // A blank chunk that would open a brand-new message is dropped: agents
+      // emit empty/whitespace thought chunks as turn markers, which would
+      // otherwise surface as an empty THOUGHT card. No streaming slot is closed
+      // or opened — a pure no-op. The merge branch above is untouched, so a
+      // blank chunk inside an active stream still preserves inter-word spacing.
+      if (isBlankContentBlock(block)) return
       // Only the message currently receiving chunks should be marked streaming.
       // Close out any prior streaming slot (e.g. when agent transitions
       // thought → message) before opening a new one.
@@ -609,6 +615,16 @@ export class AcpSession extends Disposable implements IAcpSession {
       tx.finish()
     }
   }
+}
+
+/** A text block whose content is empty or only whitespace carries nothing. */
+export function isBlankContentBlock(block: ContentBlock): boolean {
+  return block.type === 'text' && block.text.trim().length === 0
+}
+
+/** True when at least one block would render visible content. */
+export function hasVisibleMessageContent(blocks: readonly ContentBlock[]): boolean {
+  return blocks.some((b) => (b.type === 'text' ? b.text.trim().length > 0 : true))
 }
 
 export function blocksToText(blocks: readonly ContentBlock[] | undefined): string {

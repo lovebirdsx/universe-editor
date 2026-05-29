@@ -618,4 +618,85 @@ describe('AcpSession.timeline', () => {
       expect(m.streaming).toBe(false)
     }
   })
+
+  it('blank thought chunks never produce a message slot', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    for (const text of ['', '   ', '\n\t']) {
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } },
+      })
+    }
+
+    const messages = s.timeline.get().filter((it) => it.kind === 'message')
+    expect(messages).toHaveLength(0)
+  })
+
+  it('a blank thought followed by an agent message leaves only the agent card', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: '   ' } },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'answer' } },
+    })
+
+    const messages = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? it.message : null))
+      .filter((m): m is NonNullable<typeof m> => m !== null)
+    expect(messages).toHaveLength(1)
+    expect(messages[0]!.role).toBe('agent')
+    expect(messages[0]!.text).toBe('answer')
+  })
+
+  it('a blank chunk inside an active thought stream preserves inter-word spacing', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    for (const text of ['a', '', ' b']) {
+      conn.sink.onSessionUpdate({
+        sessionId: 'agent-1',
+        update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text } },
+      })
+    }
+
+    const thoughts = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? it.message : null))
+      .filter((m): m is NonNullable<typeof m> => m !== null && m.role === 'thought')
+    expect(thoughts).toHaveLength(1)
+    expect(thoughts[0]!.text).toBe('a b')
+  })
+
+  it('a leading blank thought chunk is skipped but later content still opens a card', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: '' } },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_thought_chunk', content: { type: 'text', text: 'real' } },
+    })
+
+    const thoughts = s.timeline
+      .get()
+      .filter((it) => it.kind === 'message')
+      .map((it) => (it.kind === 'message' ? it.message : null))
+      .filter((m): m is NonNullable<typeof m> => m !== null && m.role === 'thought')
+    expect(thoughts).toHaveLength(1)
+    expect(thoughts[0]!.text).toBe('real')
+    expect(thoughts[0]!.streaming).toBe(true)
+  })
 })
