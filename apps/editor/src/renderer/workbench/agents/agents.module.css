@@ -103,6 +103,11 @@
   gap: 8px;
 }
 
+/* Focused programmatically on click to enable Alt+J/K; no keyboard-style ring. */
+.chatBody:focus {
+  outline: none;
+}
+
 .timeline {
   list-style: none;
   margin: 0;

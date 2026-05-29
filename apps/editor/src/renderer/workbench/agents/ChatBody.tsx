@@ -16,7 +16,15 @@
  *  target whichever ChatBody currently holds DOM focus.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState, type MutableRefObject } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type MutableRefObject,
+} from 'react'
 import { localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import {
@@ -29,6 +37,7 @@ import {
   IAcpChatWidgetService,
   type AcpTimelineMoveDirection,
 } from '../../services/acp/acpChatWidgetService.js'
+import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { PlanCard } from './PlanView.js'
@@ -72,7 +81,7 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
 
   return (
     <div ref={containerRef} className={styles['chat']} data-testid="acp-chat">
-      <ChatScroll session={target} handleRef={handleRef} />
+      <ChatScroll key={target.id} session={target} handleRef={handleRef} />
       <PermissionCard session={target} />
       <PromptInput
         session={target}
@@ -94,17 +103,102 @@ function ChatScroll({
   const status = useObservable(session.status)
   const isRunning = status === 'running'
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const stickRef = useRef(true)
-  const [focusedKey, setFocusedKey] = useState<string | null>(null)
+  const saved = AcpChatViewStateCache.load(session.id)
+  const stickRef = useRef(saved?.stuck ?? true)
+  // True while we are re-applying a restored scrollTop as content settles, so
+  // the programmatic scrolls it triggers don't get mistaken for the user
+  // scrolling (which would corrupt `stuck` / overwrite the saved position).
+  const restoringRef = useRef(false)
+  const [focusedKey, setFocusedKey] = useState<string | null>(saved?.focusedKey ?? null)
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
 
+  const persist = useCallback(() => {
+    const el = containerRef.current
+    // Final flush on unmount: by the time React runs this cleanup it has already
+    // torn the scroll container out of the tree — the host ref reads null (and a
+    // detached node would report scrollTop 0). Either way reading the live DOM
+    // here would clobber the position handleScroll already saved. Only trust the
+    // DOM while the container is still connected; otherwise keep the saved value.
+    const prev = AcpChatViewStateCache.load(session.id)
+    const scrollTop = el?.isConnected ? el.scrollTop : (prev?.scrollTop ?? 0)
+    AcpChatViewStateCache.save(session.id, {
+      scrollTop,
+      stuck: stickRef.current,
+      focusedKey: focusedKeyRef.current,
+    })
+  }, [session.id])
+
   const handleScroll = () => {
+    if (restoringRef.current) return
     const el = containerRef.current
     if (!el) return
     const distance = el.scrollHeight - el.clientHeight - el.scrollTop
     stickRef.current = distance <= STICK_THRESHOLD_PX
+    persist()
   }
+
+  const handleClick = (e: ReactMouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-timeline-key]')
+    const key = el?.getAttribute('data-timeline-key')
+    if (!key) return
+    setFocusedKey(key)
+    focusedKeyRef.current = key
+    persist()
+    // Pull keyboard focus into the scroll container so Alt+J/K — gated on the
+    // `acpChatFocused` contextKey, which the widget service drives off focusin —
+    // fire without the user first clicking the input. focusin bubbles up to the
+    // registered ChatBody container. preventScroll keeps the click position put.
+    containerRef.current?.focus({ preventScroll: true })
+  }
+
+  // Restore a non-stuck scroll position saved before this session was unmounted
+  // (tab switch / session switch). Chat content grows asynchronously — code
+  // blocks colorize via Monaco, image data-blocks decode late — so a one-shot
+  // assignment lands clamped against a too-short scrollHeight. Re-apply the
+  // target as the content settles (ResizeObserver) until a short window elapses
+  // or the user takes over. When stuck, fall through to the bottom-pin effect.
+  useLayoutEffect(() => {
+    const el = containerRef.current
+    if (!el || !saved || saved.stuck) return
+    const target = saved.scrollTop
+    restoringRef.current = true
+
+    const apply = (): void => {
+      if (!restoringRef.current) return
+      if (el.scrollTop !== target) el.scrollTop = target
+    }
+    apply()
+
+    const ro = new ResizeObserver(apply)
+    ro.observe(el)
+    const inner = el.firstElementChild
+    if (inner) ro.observe(inner)
+
+    const timerRef: { id?: ReturnType<typeof setTimeout> } = {}
+    const stop = (): void => {
+      if (!restoringRef.current) return
+      restoringRef.current = false
+      ro.disconnect()
+      if (timerRef.id !== undefined) clearTimeout(timerRef.id)
+      el.removeEventListener('wheel', stop)
+      el.removeEventListener('pointerdown', stop)
+      el.removeEventListener('keydown', stop)
+    }
+    el.addEventListener('wheel', stop, { passive: true })
+    el.addEventListener('pointerdown', stop)
+    el.addEventListener('keydown', stop)
+    timerRef.id = setTimeout(stop, 600)
+
+    return stop
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Persist on unmount as a final flush; session.id is stable for this instance
+  // because ChatBody keys ChatScroll by it.
+  useEffect(() => {
+    return () => persist()
+  }, [persist])
 
   // Re-pin on slot count AND on the tail's content size so streaming chunks
   // that grow within an existing slot (i.e. text appended to the last agent
@@ -112,6 +206,7 @@ function ChatScroll({
   const tailSignature = tailContentSignature(timeline)
 
   useEffect(() => {
+    if (restoringRef.current) return
     if (!stickRef.current) return
     const el = containerRef.current
     if (!el) return
@@ -160,7 +255,13 @@ function ChatScroll({
   }, [handleRef])
 
   return (
-    <div ref={containerRef} className={styles['chatBody']} onScroll={handleScroll}>
+    <div
+      ref={containerRef}
+      className={styles['chatBody']}
+      tabIndex={-1}
+      onScroll={handleScroll}
+      onClick={handleClick}
+    >
       <ol className={styles['timeline']} data-testid="acp-timeline">
         {timeline.map((item) => {
           const key = slotKey(item)
