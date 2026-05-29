@@ -335,6 +335,7 @@ export class AcpSessionService
             this._history,
             this._agentDefaults,
           )
+          this._register(session)
           transaction((tx) => {
             this._sessions = [...this._sessions, session]
             this.sessions.set(this._sessions, tx)

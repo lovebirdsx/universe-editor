@@ -285,6 +285,8 @@ interface ConnectedSession {
   readonly agent: StubAgent
   readonly agentConn: AgentSideConnection
   readonly clientConn: ClientSideConnection
+  /** Set to true once the returned IAcpClientConnection.dispose() runs. */
+  disposed: boolean
 }
 
 interface FakeAcpClientOptions {
@@ -332,13 +334,14 @@ class FakeAcpClientService implements IAcpClientService {
     })
     initializeResult.catch(() => {})
 
-    const session: ConnectedSession = { sink, agent, agentConn, clientConn }
+    const session: ConnectedSession = { sink, agent, agentConn, clientConn, disposed: false }
     this.connected.push(session)
     return {
       conn: clientConn,
       initializeResult,
       attachSession: (): void => {},
       dispose: (): void => {
+        session.disposed = true
         // Close both writers to signal end-of-stream — SDK then aborts the
         // ClientSideConnection's signal and resolves `closed`. We swallow
         // double-close errors so dispose() stays idempotent.
@@ -388,6 +391,17 @@ describe('AcpSessionService', () => {
     expect(svc.sessions.get()).toHaveLength(1)
     expect(svc.activeSession.get()?.id).toBe(session.id)
     expect(svc.activeSessionId.get()).toBe(session.id)
+  })
+
+  it('registers createSession sessions so they dispose with the service (no leak)', async () => {
+    await svc.createSession()
+    const conn = client.connected[0]!
+    expect(conn.disposed).toBe(false)
+    svc.dispose()
+    // Disposing the service must cascade to the session's connection. Without
+    // `this._register(session)` in createSession the session is orphaned and
+    // its DisposableStore leaks (reported by DisposableTracker on teardown).
+    expect(conn.disposed).toBe(true)
   })
 
   it('setActive switches the active session', async () => {
