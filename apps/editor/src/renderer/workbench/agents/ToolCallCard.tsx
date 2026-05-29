@@ -9,7 +9,7 @@
  *   - other     → inline diff previews + markdown blocks (default behaviour).
  *--------------------------------------------------------------------------------------------*/
 
-import { useState } from 'react'
+import { memo, useState } from 'react'
 import { IEditorService, URI } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type {
@@ -35,7 +35,7 @@ export function ToolCallList({ session }: { session: IAcpSession }) {
   )
 }
 
-export function ToolCallCard({
+export const ToolCallCard = memo(function ToolCallCard({
   call,
   extraClassName,
   dataTimelineKey,
@@ -127,4 +127,4 @@ export function ToolCallCard({
       {showBody && body}
     </li>
   )
-}
+})

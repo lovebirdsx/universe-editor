@@ -17,6 +17,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -25,7 +26,8 @@ import {
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
 } from 'react'
-import { localize } from '@universe-editor/platform'
+import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
+import { IConfigurationService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -113,6 +115,23 @@ function ChatScroll({
   const [focusedKey, setFocusedKey] = useState<string | null>(saved?.focusedKey ?? null)
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
+
+  // Virtualize only past a threshold so short conversations keep the plain DOM
+  // list (cheaper, and what the tests exercise). The scroll element is the same
+  // chatBody container in both modes, so bottom-pin / restore that drive
+  // `containerRef.scrollTop` need no branching — only keyboard reveal does.
+  const configService = useService(IConfigurationService)
+  const threshold = configService.get<number>('workbench.chat.virtualizationThreshold') ?? 100
+  const virtualize = timeline.length > threshold
+
+  const virtualizer = useVirtualizer<HTMLDivElement, Element>({
+    count: virtualize ? timeline.length : 0,
+    getScrollElement: () => containerRef.current,
+    estimateSize: (i) => estimateRow(timeline[i]),
+    overscan: 8,
+  })
+  const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
+  virtualizerRef.current = virtualizer
 
   const persist = useCallback(() => {
     const el = containerRef.current
@@ -248,7 +267,14 @@ function ChatScroll({
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(nextKey)}"]`,
       )
-      el?.scrollIntoView({ block: 'nearest' })
+      // In virtual mode the target row may be unmounted (outside the overscan
+      // window), so scrollIntoView finds nothing — fall back to the virtualizer,
+      // which scrolls and then mounts it. Mirrors ExplorerView's reveal.
+      if (el) {
+        el.scrollIntoView({ block: 'nearest' })
+      } else {
+        virtualizerRef.current?.scrollToIndex(nextIndex, { align: 'center' })
+      }
     }
     return () => {
       handle.move = noop
@@ -263,25 +289,66 @@ function ChatScroll({
       onScroll={handleScroll}
       onClick={handleClick}
     >
-      <ol className={styles['timeline']} data-testid="acp-timeline">
-        {timeline.map((item) => {
-          const key = slotKey(item)
-          return (
-            <TimelineSlot
-              key={key}
-              slotKey={key}
-              item={item}
-              sessionRunning={isRunning}
-              isFocused={key === focusedKey}
-            />
-          )
-        })}
-      </ol>
+      {virtualize ? (
+        <div
+          className={styles['timelineVirtual']}
+          data-testid="acp-timeline"
+          style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
+        >
+          {virtualizer.getVirtualItems().map((vi) => {
+            const item = timeline[vi.index]
+            if (item === undefined) return null
+            const key = slotKey(item)
+            const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
+            return (
+              <div
+                key={key}
+                ref={virtualizer.measureElement}
+                data-index={vi.index}
+                className={styles['timelineRow']}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  transform: `translateY(${vi.start}px)`,
+                }}
+              >
+                <TimelineSlot
+                  slotKey={key}
+                  item={item}
+                  sessionRunning={slotRunning}
+                  isFocused={key === focusedKey}
+                />
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <ol className={styles['timeline']} data-testid="acp-timeline">
+          {timeline.map((item) => {
+            const key = slotKey(item)
+            // Derive a per-slot running flag: only a streaming message's caret cares
+            // about it, so settled slots get a constant `false` and a session
+            // start/stop no longer invalidates every memoized slot.
+            const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
+            return (
+              <TimelineSlot
+                key={key}
+                slotKey={key}
+                item={item}
+                sessionRunning={slotRunning}
+                isFocused={key === focusedKey}
+              />
+            )
+          })}
+        </ol>
+      )}
     </div>
   )
 }
 
-function TimelineSlot({
+const TimelineSlot = memo(function TimelineSlot({
   slotKey: key,
   item,
   sessionRunning,
@@ -338,7 +405,7 @@ function TimelineSlot({
         </li>
       )
   }
-}
+})
 
 function slotKey(item: TimelineItem): string {
   switch (item.kind) {
@@ -348,6 +415,21 @@ function slotKey(item: TimelineItem): string {
       return `t:${item.id}`
     case 'plan':
       return 'p:plan'
+  }
+}
+
+// Rough first-paint heights per kind; the virtualizer corrects each row via
+// measureElement once it mounts, so these only need to be in the right ballpark
+// to keep the initial scrollbar and bottom-pin sane.
+function estimateRow(item: TimelineItem | undefined): number {
+  if (item === undefined) return 64
+  switch (item.kind) {
+    case 'message':
+      return 64
+    case 'toolCall':
+      return 96
+    case 'plan':
+      return 48
   }
 }
 

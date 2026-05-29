@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import {
   Event,
+  IConfigurationService,
   IFileService,
   InstantiationService,
   IWorkspaceService,
@@ -102,6 +103,11 @@ function makeInstantiation() {
   } as unknown as IAcpChatWidgetService)
   services.set(IFileService, stubFileService)
   services.set(IWorkspaceService, stubWorkspaceService)
+  services.set(IConfigurationService, {
+    _serviceBrand: undefined,
+    get: () => undefined,
+    onDidChangeConfiguration: Event.None,
+  } as unknown as IConfigurationService)
   return new InstantiationService(services)
 }
 

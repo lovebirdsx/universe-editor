@@ -173,6 +173,15 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Number of visible tree items above which virtual scrolling is enabled.',
             ),
           },
+          'workbench.chat.virtualizationThreshold': {
+            type: 'number',
+            default: 100,
+            minimum: 10,
+            description: localize(
+              'settings.workbench.chat.virtualizationThreshold.description',
+              'Number of agent session timeline items above which virtual scrolling is enabled.',
+            ),
+          },
         },
       }),
     )
