@@ -32,8 +32,6 @@ test.describe('@p1 editor tab drag-and-drop', () => {
     })
 
     // Wait for the second group to appear in the DOM before opening beta.txt.
-    // The split command is fire-and-forget; React renders the new group asynchronously,
-    // so dblclick must not fire until group 2 is active.
     const tabBars = workbench.page.locator('[data-testid="editor-group-tabbar"]')
     await expect(tabBars).toHaveCount(2, { timeout: 5000 })
 
@@ -49,9 +47,44 @@ test.describe('@p1 editor tab drag-and-drop', () => {
     const betaTab = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
     await expect(betaTab).toBeVisible({ timeout: 3000 })
 
-    // Drag beta.txt tab to the first group's tab bar.
-    // force:true bypasses actionability checks for narrow tab elements in CI viewports.
-    await betaTab.dragTo(firstTabBar, { force: true })
+    // Dispatch native HTML5 drag events directly: dragstart on the source tab,
+    // then drop onto the *body* (center) of the first group — equivalent to a
+    // tab-bar drop visually but exercises the body drop branch. We intentionally
+    // omit dragenter/dragover: a robust drop handler must not silently no-op
+    // just because internal scratch state happens to be uninitialized (real
+    // browsers always fire them, but a drop event already carries coordinates).
+    await workbench.page.evaluate(() => {
+      const bars = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-tabbar"]')
+      const bodies = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-body"]')
+      const source = Array.from(
+        bars[1]?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
+      ).find((t) => (t.textContent ?? '').includes('beta.txt'))
+      const target = bodies[0]
+      if (!source || !target) throw new Error('drag source/target missing')
+
+      const dt = new DataTransfer()
+      const fire = (el: HTMLElement, type: string, clientX: number, clientY: number) => {
+        const ev = new DragEvent(type, {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          clientX,
+          clientY,
+          dataTransfer: dt,
+        })
+        el.dispatchEvent(ev)
+      }
+      const sRect = source.getBoundingClientRect()
+      const tRect = target.getBoundingClientRect()
+      const sx = sRect.left + sRect.width / 2
+      const sy = sRect.top + sRect.height / 2
+      const tx = tRect.left + tRect.width / 2
+      const ty = tRect.top + tRect.height / 2
+
+      fire(source, 'dragstart', sx, sy)
+      fire(target, 'drop', tx, ty)
+      fire(source, 'dragend', tx, ty)
+    })
 
     // Now both files should be in the first group.
     const betaTabInSecond = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })

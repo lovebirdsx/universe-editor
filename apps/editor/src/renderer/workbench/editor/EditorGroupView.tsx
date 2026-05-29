@@ -296,6 +296,7 @@ export function EditorGroupView({
   }
 
   const handleBodyDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    bodyDropPosRef.current = { x: e.clientX, y: e.clientY }
     bodyDropProps.onDrop(e)
   }
 
