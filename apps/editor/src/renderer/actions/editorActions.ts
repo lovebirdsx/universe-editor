@@ -814,3 +814,26 @@ export class ToggleMinimapAction extends Action2 {
     config.update('editor.minimap.enabled', !current, ConfigurationTarget.User)
   }
 }
+
+// ---------------------------------------------------------------------------
+// Word wrap
+// ---------------------------------------------------------------------------
+
+export class ToggleWordWrapAction extends Action2 {
+  static readonly ID = 'editor.action.toggleWordWrap'
+  constructor() {
+    super({
+      id: ToggleWordWrapAction.ID,
+      title: localize('action.toggleWordWrap.title', 'Toggle Word Wrap'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'alt+z' },
+      menu: { id: MenuId.MenubarViewMenu, group: '3_editor', order: 2 },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const config = accessor.get(IConfigurationService)
+    const current = config.get<boolean>('editor.wordWrap') ?? false
+    config.update('editor.wordWrap', !current, ConfigurationTarget.User)
+  }
+}

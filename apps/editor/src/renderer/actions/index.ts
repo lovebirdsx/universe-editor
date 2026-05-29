@@ -46,6 +46,7 @@ import {
   SplitEditorRightAction,
   SplitEditorUpAction,
   ToggleMinimapAction,
+  ToggleWordWrapAction,
 } from './editorActions.js'
 import { OpenSettingsAction } from './preferencesActions.js'
 import {
@@ -137,6 +138,7 @@ registerAction2(ShowExplorerAction)
 
 // Editor — view
 registerAction2(ToggleMinimapAction)
+registerAction2(ToggleWordWrapAction)
 
 // Editor — close
 registerAction2(CloseActiveEditorAction)
