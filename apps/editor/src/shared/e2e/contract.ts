@@ -151,6 +151,17 @@ export interface E2EProbe {
   getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */
   getAcpToolCalls(): ReadonlyArray<{ id: string; title: string; status: string; text: string }>
+  /**
+   * Snapshot of the active session's pending `AskUserQuestion` carousel, or
+   * undefined when none is awaiting an answer.
+   */
+  getAcpPendingQuestion():
+    | { toolCallId: string; questions: ReadonlyArray<{ question: string; header: string }> }
+    | undefined
+  /** Answer the active session's pending AskUserQuestion (keyed by question text). */
+  resolveAcpQuestion(answers: Record<string, string>): void
+  /** Dismiss the active session's pending AskUserQuestion. */
+  cancelAcpQuestion(): void
   // -- Output probe --------------------------------------------------------
   /** Name of the currently active output channel, or undefined if none. */
   getActiveOutputChannelName(): string | undefined

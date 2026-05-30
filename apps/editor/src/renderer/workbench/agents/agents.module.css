@@ -1028,6 +1028,137 @@
   background: var(--color-badge-error, #a1260d);
 }
 
+.questionCard {
+  border-top: 1px solid var(--color-border, #333);
+  background: var(--color-message-bg, #2a2a2a);
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 50vh;
+  overflow-y: auto;
+}
+
+.questionBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.questionHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.questionChip {
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--color-badge-bg, #333);
+  color: var(--color-message-role-fg, #aaa);
+  flex: 0 0 auto;
+}
+
+.questionText {
+  font-weight: 600;
+}
+
+.questionSplit {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.questionSplit .questionOptions {
+  flex: 1 1 50%;
+  min-width: 0;
+}
+
+.questionOptions {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.questionOption {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.questionOptionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.questionOptionLabel {
+  font-weight: 500;
+}
+
+.questionOptionDesc {
+  font-size: 11px;
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.questionFreeform {
+  margin: 4px 0 0 22px;
+  width: calc(100% - 22px);
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 3px;
+  background: var(--color-input-bg, #1e1e1e);
+  color: inherit;
+}
+
+.questionPreview {
+  flex: 1 1 50%;
+  min-width: 0;
+  max-height: 160px;
+  overflow: auto;
+  margin: 0;
+  padding: 6px 8px;
+  font-family: var(--font-monospace, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--color-input-bg, #1e1e1e);
+  border: 1px solid var(--color-border, #333);
+  border-radius: 3px;
+}
+
+.questionNotes {
+  width: 100%;
+  font-size: 12px;
+  padding: 3px 6px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 3px;
+  background: var(--color-input-bg, #1e1e1e);
+  color: inherit;
+  resize: vertical;
+}
+
+.questionActions {
+  display: flex;
+  gap: 6px;
+}
+
+.questionActions button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .configBar {
   display: flex;
   align-items: center;

@@ -75,6 +75,11 @@ import {
 } from '../../../shared/ipc/claudeBinaryService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
+import {
+  ASK_USER_QUESTION_METHOD,
+  type AskUserQuestionRequest,
+  type AskUserQuestionResult,
+} from './acpSession.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
 import { AcpProtocolTracer } from './acpProtocolTracer.js'
 import { IOutputService } from '@universe-editor/platform'
@@ -86,6 +91,12 @@ export interface IAcpClientNotificationSink {
    * (inline-in-chat card today) and the autoApprove short-circuit.
    */
   onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse>
+  /**
+   * Peer-initiated `AskUserQuestion` (carried over the ACP `extMethod` channel).
+   * The sink presents a question carousel and resolves with the user's answers
+   * (or `{ cancelled: true }`).
+   */
+  onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult>
 }
 
 export interface IAcpClientConnection {
@@ -145,6 +156,7 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
   clientCapabilities: {
     fs: { readTextFile: true, writeTextFile: true },
     terminal: true,
+    _meta: { 'universe-editor/ask_user_question': true },
   },
 }
 
@@ -391,6 +403,16 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
     const clientImpl: Client = {
       requestPermission: (params) => sink.onRequestPermission(params),
+      extMethod: async (
+        method: string,
+        params: Record<string, unknown>,
+      ): Promise<Record<string, unknown>> => {
+        if (method === ASK_USER_QUESTION_METHOD) {
+          const result = await sink.onAskUserQuestion(params as unknown as AskUserQuestionRequest)
+          return result as unknown as Record<string, unknown>
+        }
+        throw RequestError.methodNotFound(method)
+      },
       sessionUpdate: async (params) => {
         sink.onSessionUpdate(params)
       },

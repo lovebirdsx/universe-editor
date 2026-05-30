@@ -109,6 +109,56 @@ export interface AcpPendingPermission {
   cancel(): void
 }
 
+/**
+ * ACP extension method carrying the `AskUserQuestion` round-trip. The built-in
+ * agent (vendor/claude-agent-acp) sends questions over this method and expects
+ * the user's answers back. The string is shared verbatim with the agent fork's
+ * `interactive.ts` — keep both in sync.
+ */
+export const ASK_USER_QUESTION_METHOD = 'universe-editor/ask_user_question'
+
+/** One selectable option of an {@link AskUserQuestion}. */
+export interface AskUserQuestionOption {
+  readonly label: string
+  readonly description?: string
+  /** Rich preview shown side-by-side when this option is focused. */
+  readonly preview?: string
+}
+
+/** A single question in an `AskUserQuestion` tool call. */
+export interface AskUserQuestion {
+  readonly question: string
+  readonly header: string
+  readonly options: readonly AskUserQuestionOption[]
+  readonly multiSelect?: boolean
+}
+
+/** Params the agent sends over {@link ASK_USER_QUESTION_METHOD}. */
+export interface AskUserQuestionRequest {
+  readonly sessionId: string
+  readonly toolCallId: string
+  readonly questions: readonly AskUserQuestion[]
+}
+
+/**
+ * Response the client returns to the agent. `answers` is keyed by question
+ * text with comma-joined selected labels (matching the SDK's AskUserQuestion
+ * output contract); `cancelled` short-circuits to a tool denial.
+ */
+export interface AskUserQuestionResult {
+  readonly cancelled?: boolean
+  readonly answers?: Record<string, string>
+  readonly annotations?: Record<string, { preview?: string; notes?: string }>
+}
+
+/** A pending question carousel awaiting the user's answers. */
+export interface AcpPendingQuestion {
+  readonly toolCallId: string
+  readonly questions: readonly AskUserQuestion[]
+  resolve(result: AskUserQuestionResult): void
+  cancel(): void
+}
+
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
 /** Context-window usage reported by the agent via `usage_update`. */
@@ -148,12 +198,16 @@ export interface IAcpSession {
   /** Latest context-window usage reported by the agent, or undefined if never reported. */
   readonly usage: IObservable<AcpUsage | undefined>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
+  /** Active `AskUserQuestion` carousel awaiting the user's answers, if any. */
+  readonly pendingQuestion: IObservable<AcpPendingQuestion | undefined>
   /** Configuration options the agent has advertised for this session. */
   readonly configOptions: IObservable<readonly SessionConfigOption[]>
   /** Latest agent-advertised slash commands (may be empty). */
   readonly availableCommands: IObservable<readonly AvailableCommand[]>
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void
+  /** Internal — call site is the AskUserQuestion sink. */
+  presentQuestion(q: AcpPendingQuestion): void
   /**
    * Send a prompt. If `mentions` are provided, any `@<name>` in the text
    * whose `<name>` matches a recorded mention is rewritten into a
@@ -186,6 +240,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly status: ISettableObservable<AcpSessionStatus>
   readonly usage: ISettableObservable<AcpUsage | undefined>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
+  readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
 
   private readonly _configOptions: ConfigOptionStateMachine
@@ -225,6 +280,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.usage = observableValue<AcpUsage | undefined>(`acp.session.usage.${id}`, undefined)
     this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
       `acp.session.pendingPermission.${id}`,
+      undefined,
+    )
+    this.pendingQuestion = observableValue<AcpPendingQuestion | undefined>(
+      `acp.session.pendingQuestion.${id}`,
       undefined,
     )
     this.availableCommands = observableValue<readonly AvailableCommand[]>(
@@ -272,16 +331,35 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   presentPermission(p: AcpPendingPermission): void {
     // Replace any prior pending request — only one card at a time per session.
-    this._cancelPending()
+    this._cancelPendingPermission()
     this.pendingPermission.set(p, undefined)
   }
 
-  private _cancelPending(): void {
+  presentQuestion(q: AcpPendingQuestion): void {
+    // Replace any prior pending question — only one carousel at a time.
+    this._cancelPendingQuestion()
+    this.pendingQuestion.set(q, undefined)
+  }
+
+  private _cancelPendingPermission(): void {
     const cur = this.pendingPermission.get()
     if (cur) {
       this.pendingPermission.set(undefined, undefined)
       cur.cancel()
     }
+  }
+
+  private _cancelPendingQuestion(): void {
+    const cur = this.pendingQuestion.get()
+    if (cur) {
+      this.pendingQuestion.set(undefined, undefined)
+      cur.cancel()
+    }
+  }
+
+  private _cancelPending(): void {
+    this._cancelPendingPermission()
+    this._cancelPendingQuestion()
   }
 
   async sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void> {

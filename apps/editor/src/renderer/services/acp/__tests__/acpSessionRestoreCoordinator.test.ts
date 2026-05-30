@@ -300,6 +300,7 @@ class FakeAcpClientService implements IAcpClientService {
     const sink: IAcpClientNotificationSink = this._sink ?? {
       onSessionUpdate: () => {},
       onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }) as never,
+      onAskUserQuestion: async () => ({ cancelled: true }),
     }
     this.connectCalls.push({ agentId, cwd: options?.cwd })
     if (this.rejectAgents.has(agentId)) {

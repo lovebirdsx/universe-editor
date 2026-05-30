@@ -259,6 +259,7 @@ function makeService(): Harness {
   const sink: IAcpClientNotificationSink = {
     onSessionUpdate: vi.fn(),
     onRequestPermission: vi.fn(),
+    onAskUserQuestion: vi.fn(),
   }
   const svc = new AcpClientService(
     transport.host,

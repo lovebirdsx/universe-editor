@@ -189,6 +189,25 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         text: t.text,
       }))
     },
+    getAcpPendingQuestion: () => {
+      const s = services.acpSessionService.activeSession.get()
+      const q = s?.pendingQuestion.get()
+      if (!q) return undefined
+      return {
+        toolCallId: q.toolCallId,
+        questions: q.questions.map((qq) => ({ question: qq.question, header: qq.header })),
+      }
+    },
+    resolveAcpQuestion: (answers) => {
+      const s = services.acpSessionService.activeSession.get()
+      const q = s?.pendingQuestion.get()
+      if (!q) throw new Error('[E2E] no pending ACP question')
+      q.resolve({ answers })
+    },
+    cancelAcpQuestion: () => {
+      const s = services.acpSessionService.activeSession.get()
+      s?.pendingQuestion.get()?.cancel()
+    },
     getActiveOutputChannelName: () => services.outputService.activeChannelName.get(),
     getOutputChannelNames: () => services.outputService.channelNames.get(),
     createOutputChannel: (name: string) => {

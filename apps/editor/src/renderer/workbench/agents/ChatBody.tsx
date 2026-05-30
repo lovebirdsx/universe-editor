@@ -43,6 +43,7 @@ import {
 import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
+import { QuestionCard } from './QuestionCard.js'
 import { PlanCard } from './PlanView.js'
 import { PromptInput } from './PromptInput.js'
 import { ToolCallCard } from './ToolCallCard.js'
@@ -86,6 +87,7 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
     <div ref={containerRef} className={styles['chat']} data-testid="acp-chat">
       <ChatScroll key={target.id} session={target} handleRef={handleRef} />
       <PermissionCard session={target} />
+      <QuestionCard session={target} />
       <PromptInput
         session={target}
         handleRef={handleRef}

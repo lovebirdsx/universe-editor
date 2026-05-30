@@ -1,0 +1,213 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  QuestionCard — renders the active session's pending `AskUserQuestion`
+ *  carousel inline above the prompt input. Supports multiple questions, single
+ *  / multi-select, per-option descriptions, side-by-side preview, free-form
+ *  "Other" input and per-question notes. Multi-session friendly: a card on one
+ *  session never blocks another.
+ *--------------------------------------------------------------------------------------------*/
+
+import { useState } from 'react'
+import { useObservable } from '../useService.js'
+import type {
+  AskUserQuestion,
+  AskUserQuestionResult,
+  IAcpSession,
+} from '../../services/acp/acpSessionService.js'
+import styles from './agents.module.css'
+
+interface QuestionDraft {
+  /** Selected option labels (single-select keeps at most one). */
+  readonly selected: Set<string>
+  /** Whether the free-form "Other" choice is active. */
+  readonly otherChecked: boolean
+  readonly otherText: string
+  readonly notes: string
+  /** Label whose preview is currently shown in the side panel. */
+  readonly previewLabel: string | null
+}
+
+function emptyDraft(): QuestionDraft {
+  return { selected: new Set(), otherChecked: false, otherText: '', notes: '', previewLabel: null }
+}
+
+function isAnswered(q: AskUserQuestion, d: QuestionDraft): boolean {
+  if (d.otherChecked) return d.otherText.trim().length > 0
+  return d.selected.size > 0
+}
+
+/** Comma-joined answer string for one question (selected labels + free-form text). */
+function answerOf(d: QuestionDraft): string {
+  const parts = [...d.selected]
+  if (d.otherChecked && d.otherText.trim().length > 0) parts.push(d.otherText.trim())
+  return parts.join(', ')
+}
+
+export function QuestionCard({ session }: { session: IAcpSession }) {
+  const pending = useObservable(session.pendingQuestion)
+  const key = pending?.toolCallId ?? ''
+  const questions = pending?.questions ?? []
+
+  // Reset the drafts whenever a new question carousel arrives. Setting state
+  // during render of the same component (keyed by toolCallId) is the canonical
+  // "reset state on prop change" pattern — no effect needed.
+  const [stateKey, setStateKey] = useState(key)
+  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => questions.map(() => emptyDraft()))
+  if (key !== stateKey) {
+    setStateKey(key)
+    setDrafts(questions.map(() => emptyDraft()))
+  }
+
+  if (!pending) return null
+
+  const patch = (qi: number, next: Partial<QuestionDraft>): void => {
+    setDrafts((prev) => prev.map((d, i) => (i === qi ? { ...d, ...next } : d)))
+  }
+
+  const toggleOption = (qi: number, q: AskUserQuestion, label: string): void => {
+    const d = drafts[qi] ?? emptyDraft()
+    if (q.multiSelect) {
+      const selected = new Set(d.selected)
+      if (selected.has(label)) selected.delete(label)
+      else selected.add(label)
+      patch(qi, { selected, previewLabel: label })
+    } else {
+      patch(qi, { selected: new Set([label]), otherChecked: false, previewLabel: label })
+    }
+  }
+
+  const allAnswered = questions.every((q, i) => isAnswered(q, drafts[i] ?? emptyDraft()))
+
+  const submit = (): void => {
+    const answers: Record<string, string> = {}
+    const annotations: Record<string, { preview?: string; notes?: string }> = {}
+    questions.forEach((q, i) => {
+      const d = drafts[i] ?? emptyDraft()
+      const value = answerOf(d)
+      if (value.length > 0) answers[q.question] = value
+      const ann: { preview?: string; notes?: string } = {}
+      const previewOpt = q.options.find((o) => d.selected.has(o.label) && o.preview)
+      if (previewOpt?.preview) ann.preview = previewOpt.preview
+      if (d.notes.trim().length > 0) ann.notes = d.notes.trim()
+      if (ann.preview || ann.notes) annotations[q.question] = ann
+    })
+    const result: AskUserQuestionResult =
+      Object.keys(annotations).length > 0 ? { answers, annotations } : { answers }
+    pending.resolve(result)
+  }
+
+  return (
+    <section className={styles['questionCard']} data-testid="acp-question-card">
+      {questions.map((q, qi) => {
+        const d = drafts[qi] ?? emptyDraft()
+        const hasPreview = q.options.some((o) => o.preview)
+        const previewText =
+          (d.previewLabel != null
+            ? q.options.find((o) => o.label === d.previewLabel)?.preview
+            : undefined) ?? ''
+        return (
+          <div className={styles['questionBlock']} key={qi} data-testid={`acp-question-${qi}`}>
+            <header className={styles['questionHeader']}>
+              {q.header && <span className={styles['questionChip']}>{q.header}</span>}
+              <span className={styles['questionText']}>{q.question}</span>
+            </header>
+            <div className={hasPreview ? styles['questionSplit'] : undefined}>
+              <ul className={styles['questionOptions']}>
+                {q.options.map((o) => {
+                  const checked = d.selected.has(o.label)
+                  return (
+                    <li key={o.label}>
+                      <label
+                        className={styles['questionOption']}
+                        onMouseEnter={
+                          hasPreview ? () => patch(qi, { previewLabel: o.label }) : undefined
+                        }
+                      >
+                        <input
+                          type={q.multiSelect ? 'checkbox' : 'radio'}
+                          name={`acp-q-${qi}`}
+                          checked={checked}
+                          onChange={() => toggleOption(qi, q, o.label)}
+                          data-testid={`acp-question-${qi}-option-${o.label}`}
+                        />
+                        <span className={styles['questionOptionBody']}>
+                          <span className={styles['questionOptionLabel']}>{o.label}</span>
+                          {o.description && (
+                            <span className={styles['questionOptionDesc']}>{o.description}</span>
+                          )}
+                        </span>
+                      </label>
+                    </li>
+                  )
+                })}
+                <li>
+                  <label className={styles['questionOption']}>
+                    <input
+                      type={q.multiSelect ? 'checkbox' : 'radio'}
+                      name={`acp-q-${qi}`}
+                      checked={d.otherChecked}
+                      onChange={() =>
+                        patch(qi, {
+                          otherChecked: !d.otherChecked,
+                          ...(q.multiSelect ? {} : { selected: new Set() }),
+                        })
+                      }
+                    />
+                    <span className={styles['questionOptionBody']}>
+                      <span className={styles['questionOptionLabel']}>Other…</span>
+                    </span>
+                  </label>
+                  {d.otherChecked && (
+                    <input
+                      type="text"
+                      className={styles['questionFreeform']}
+                      value={d.otherText}
+                      placeholder="Type your answer"
+                      onChange={(e) => patch(qi, { otherText: e.target.value })}
+                      data-testid={`acp-question-${qi}-other`}
+                    />
+                  )}
+                </li>
+              </ul>
+              {hasPreview && (
+                <pre
+                  className={styles['questionPreview']}
+                  data-testid={`acp-question-${qi}-preview`}
+                >
+                  {previewText}
+                </pre>
+              )}
+            </div>
+            <textarea
+              className={styles['questionNotes']}
+              value={d.notes}
+              placeholder="Notes (optional)"
+              rows={1}
+              onChange={(e) => patch(qi, { notes: e.target.value })}
+              data-testid={`acp-question-${qi}-notes`}
+            />
+          </div>
+        )
+      })}
+      <div className={styles['questionActions']}>
+        <button
+          type="button"
+          className={styles['permissionAllow']}
+          disabled={!allAnswered}
+          onClick={submit}
+          data-testid="acp-question-submit"
+        >
+          Submit
+        </button>
+        <button
+          type="button"
+          className={styles['permissionDeny']}
+          onClick={() => pending.cancel()}
+          data-testid="acp-question-dismiss"
+        >
+          Dismiss
+        </button>
+      </div>
+    </section>
+  )
+}

@@ -53,6 +53,9 @@ import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import {
   AcpSession,
   type AcpPendingPermission,
+  type AcpPendingQuestion,
+  type AskUserQuestionRequest,
+  type AskUserQuestionResult,
   type IAcpSession,
   type IAcpSessionInitState,
 } from './acpSession.js'
@@ -72,6 +75,11 @@ export {
   type AcpToolCallStatus,
   type AcpPlanEntry,
   type AcpPendingPermission,
+  type AcpPendingQuestion,
+  type AskUserQuestion,
+  type AskUserQuestionOption,
+  type AskUserQuestionRequest,
+  type AskUserQuestionResult,
   type AcpSessionStatus,
   type AcpUsage,
   type IAcpSession,
@@ -616,6 +624,41 @@ export class AcpSessionService
         },
       }
       session.presentPermission(pending)
+    })
+  }
+
+  async onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult> {
+    const session = this._sessions.find((s) => s.id === params.sessionId)
+    if (!session) {
+      this._logger.warn(`ask_user_question for unknown session ${params.sessionId}`)
+      return { cancelled: true }
+    }
+    this._telemetry.publicLog('acp.ask_user_question', {
+      sessionId: params.sessionId,
+      count: params.questions.length,
+    })
+    return await new Promise<AskUserQuestionResult>((resolve) => {
+      const settle = (result: AskUserQuestionResult): void => {
+        if (session.pendingQuestion.get() === pending) {
+          session.pendingQuestion.set(undefined, undefined)
+        }
+        resolve(result)
+      }
+      const pending: AcpPendingQuestion = {
+        toolCallId: params.toolCallId,
+        questions: params.questions,
+        resolve: (result) => {
+          this._telemetry.publicLog('acp.ask_user_question_resolved', {
+            answered: Object.keys(result.answers ?? {}).length,
+          })
+          settle(result)
+        },
+        cancel: () => {
+          this._telemetry.publicLog('acp.ask_user_question_cancelled', {})
+          settle({ cancelled: true })
+        },
+      }
+      session.presentQuestion(pending)
     })
   }
 
