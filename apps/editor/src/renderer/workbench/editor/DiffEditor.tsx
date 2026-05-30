@@ -15,6 +15,7 @@ import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { diffModelUri } from './diffModelUri.js'
 import styles from './DiffEditor.module.css'
 
 function getEditorFontSize(configService: IConfigurationService): number {
@@ -97,12 +98,12 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const originalModel = monacoNs.editor.createModel(
       diffInput.originalContent,
       language,
-      monacoNs.Uri.parse(`diff-original:${diffInput.originalUri.toString()}`),
+      monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'original').toString()),
     )
     const modifiedModel = monacoNs.editor.createModel(
       diffInput.modifiedContent,
       language,
-      monacoNs.Uri.parse(`diff-modified:${diffInput.originalUri.toString()}`),
+      monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'modified').toString()),
     )
     diffEditorRef.current.setModel({ original: originalModel, modified: modifiedModel })
 
