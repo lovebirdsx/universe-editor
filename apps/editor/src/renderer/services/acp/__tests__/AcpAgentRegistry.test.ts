@@ -38,8 +38,8 @@ describe('AcpAgentRegistry', () => {
     const list = registry.list()
     const claude = list.find((a) => a.id === 'claude-code')
     expect(claude).toBeDefined()
-    expect(claude?.command).toBe('npx')
-    expect(claude?.args).toContain('@agentclientprotocol/claude-agent-acp')
+    // Bundled fork launched via Electron-as-node — no npx, no PATH command.
+    expect(claude?.runAsNode).toBe(true)
   })
 
   it('defaultAgentId falls back to claude-code when no config is set', () => {
@@ -150,14 +150,47 @@ describe('AcpAgentRegistry', () => {
     expect(spec.cwd).toBeUndefined()
   })
 
-  it('health returns { available: true } when the host probe finds the command', async () => {
-    const { registry } = makeRegistry(async () => true)
+  it('resolve passes runAsNode through for the built-in claude-code preset', () => {
+    const { registry } = makeRegistry()
+    const spec = registry.resolve('claude-code')
+    expect(spec.runAsNode).toBe(true)
+  })
+
+  it('resolve omits runAsNode for user-defined PATH agents', () => {
+    const { registry, config } = makeRegistry()
+    config.update(
+      'acp.agents',
+      [{ id: 'plain', name: 'Plain', command: '/bin/plain', args: [] }],
+      ConfigurationTarget.Memory,
+    )
+    expect(registry.resolve('plain').runAsNode).toBeUndefined()
+  })
+
+  it('health returns { available: true } without probing for runAsNode built-ins', async () => {
+    const probe = vi.fn(async () => false)
+    const { registry } = makeRegistry(probe)
     await expect(registry.health('claude-code')).resolves.toEqual({ available: true })
+    expect(probe).not.toHaveBeenCalled()
+  })
+
+  it('health returns { available: true } when the host probe finds the command', async () => {
+    const { registry, config } = makeRegistry(async () => true)
+    config.update(
+      'acp.agents',
+      [{ id: 'pathy', name: 'Pathy', command: '/bin/pathy', args: [] }],
+      ConfigurationTarget.Memory,
+    )
+    await expect(registry.health('pathy')).resolves.toEqual({ available: true })
   })
 
   it('health returns { available: false } when the command is not in PATH', async () => {
-    const { registry } = makeRegistry(async () => false)
-    await expect(registry.health('claude-code')).resolves.toEqual({ available: false })
+    const { registry, config } = makeRegistry(async () => false)
+    config.update(
+      'acp.agents',
+      [{ id: 'pathy', name: 'Pathy', command: '/bin/pathy', args: [] }],
+      ConfigurationTarget.Memory,
+    )
+    await expect(registry.health('pathy')).resolves.toEqual({ available: false })
   })
 
   it('health returns { available: false } for an unknown agent id without probing', async () => {

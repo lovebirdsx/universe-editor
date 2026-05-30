@@ -9,6 +9,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
+import { app } from 'electron'
 import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
 import type {
   AcpExitEvent,
@@ -28,8 +29,21 @@ export type AcpSpawner = (
   options: {
     cwd?: string
     env?: NodeJS.ProcessEnv
+    /**
+     * Route the call through the platform shell. Defaults to win32 (so `.cmd`
+     * shims like `npx` resolve). The `runAsNode` launch sets this `false`:
+     * `process.execPath` is a real binary and its path may contain spaces, so a
+     * shell wrapper would mis-quote it.
+     */
+    shell?: boolean
   },
 ) => ChildProcessWithoutNullStreams
+
+/**
+ * Resolves the bundled Claude agent entry file for the `runAsNode` launch.
+ * Injectable for tests; the default branches on whether the app is packaged.
+ */
+export type NodeEntryResolver = () => string
 
 /**
  * Lookup abstraction for `probe()` — injectable so tests don't shell out. The
@@ -46,8 +60,22 @@ const defaultSpawner: AcpSpawner = (command, args, options) =>
     // On Windows, common agent entry points (`npx`, `pnpm`, `yarn`) ship as
     // `.cmd` shims that `spawn` cannot exec directly without a shell. Setting
     // `shell` routes the call through cmd.exe so PATHEXT resolution kicks in.
-    shell: process.platform === 'win32',
+    // Callers may force it off (e.g. `runAsNode`, which spawns a real binary).
+    shell: options.shell ?? process.platform === 'win32',
   })
+
+/**
+ * Bundled Claude agent entry, relative to `app.getAppPath()` in the dev tree
+ * (`apps/editor` → repo root → `vendor/`).
+ */
+const BUNDLED_CLAUDE_ENTRY_DEV = '../../vendor/claude-agent-acp/dist/index.js'
+/** Bundled Claude agent entry under `resourcesPath` in a packaged build. */
+const BUNDLED_CLAUDE_ENTRY_PACKAGED = 'claude-agent-acp/dist/index.js'
+
+const defaultResolveNodeEntry: NodeEntryResolver = () =>
+  app.isPackaged
+    ? path.join(process.resourcesPath, BUNDLED_CLAUDE_ENTRY_PACKAGED)
+    : path.resolve(app.getAppPath(), BUNDLED_CLAUDE_ENTRY_DEV)
 
 const defaultLookup: AcpCommandLookup = (command) =>
   new Promise<boolean>((resolve) => {
@@ -137,6 +165,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     private readonly _logger: ILogger,
     private readonly _spawn: AcpSpawner = defaultSpawner,
     private readonly _lookup: AcpCommandLookup = defaultLookup,
+    private readonly _resolveNodeEntry: NodeEntryResolver = defaultResolveNodeEntry,
   ) {
     super()
   }
@@ -149,14 +178,28 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       )
     }
     const env = sanitizeEnv(process.env, spec.env)
-    const options: { cwd?: string; env?: NodeJS.ProcessEnv } = { env }
+    const options: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = { env }
     if (spec.cwd !== undefined) options.cwd = spec.cwd
+
+    let command = spec.command
+    let args: readonly string[] = spec.args
+    if (spec.runAsNode) {
+      // Run the bundled agent through Electron's own Node runtime — no system
+      // `node`/`npx` required. `ELECTRON_RUN_AS_NODE` is re-added here (the
+      // denylist strips it from inherited/override env) because the agent
+      // re-spawns itself via `process.execPath` and the child must inherit it.
+      command = process.execPath
+      args = [this._resolveNodeEntry(), ...spec.args]
+      env.ELECTRON_RUN_AS_NODE = '1'
+      options.shell = false
+    }
+
     let proc: ChildProcessWithoutNullStreams
     try {
-      proc = this._spawn(spec.command, spec.args, options)
+      proc = this._spawn(command, args, options)
     } catch (err) {
       this._logger.warn(
-        `spawn failed handle=${handle} command=${spec.command}: ${(err as Error).message}`,
+        `spawn failed handle=${handle} command=${command}: ${(err as Error).message}`,
       )
       return Promise.reject(err as Error)
     }

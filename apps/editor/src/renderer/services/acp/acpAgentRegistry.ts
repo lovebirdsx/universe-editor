@@ -16,6 +16,12 @@ export interface IAcpAgentDescriptor {
   readonly args: readonly string[]
   readonly env?: Readonly<Record<string, string>>
   readonly cwd?: string
+  /**
+   * Launch the bundled agent via Electron's own Node runtime (see
+   * `AcpLaunchSpec.runAsNode`). Built-in presets only — never sourced from user
+   * `acp.agents` config.
+   */
+  readonly runAsNode?: boolean
 }
 
 export interface IAcpAgentHealth {
@@ -48,8 +54,12 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
   {
     id: 'claude-code',
     name: 'Claude Code',
-    command: 'npx',
-    args: ['-y', '@agentclientprotocol/claude-agent-acp'],
+    // Launched through Electron's own Node runtime against the bundled fork
+    // (see AcpLaunchSpec.runAsNode); `command`/`args` are advisory — main owns
+    // the entry-file resolution. No system node/npx required.
+    command: 'claude-agent-acp',
+    args: [],
+    runAsNode: true,
   },
 ]
 
@@ -87,6 +97,7 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
       command: d.command,
       args: d.args,
       ...(d.env ? { env: d.env } : {}),
+      ...(d.runAsNode ? { runAsNode: true } : {}),
       ...(cwdOverride !== undefined
         ? { cwd: cwdOverride }
         : d.cwd !== undefined
@@ -106,6 +117,11 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
       descriptor = this.get(agentId)
     } catch {
       return { available: false }
+    }
+    // Bundled (runAsNode) agents ship inside the app — there is no PATH command
+    // to probe. A missing entry surfaces as a spawn error on start instead.
+    if (descriptor.runAsNode) {
+      return { available: true }
     }
     let probe = this._probeCache.get(descriptor.command)
     if (!probe) {

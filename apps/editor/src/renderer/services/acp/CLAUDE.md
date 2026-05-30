@@ -82,6 +82,8 @@ IAcpHostService.onStdout(chunk: string)
 
 `acpAgentRegistry.ts` 的 `BUILTIN_AGENTS` 数组加项。用户自定义走 `acp.agents` 配置，merge 时按 `id` 同键覆盖。`resolve(agentId, cwd?)` 返回的 LaunchSpec 自动应用 env denylist（`ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS` 必剥）。
 
+内置 `claude-code` 用我们自维护的 fork（git submodule `vendor/claude-agent-acp`），通过 `runAsNode: true` 启动：main 端 `acpHostMainService` 把它解析成 `process.execPath` + `ELECTRON_RUN_AS_NODE=1` 跑打包进来的 `dist/index.js`（dev 在仓库 `vendor/`，prod 在 `resourcesPath`），**不依赖系统 node/npx**。`runAsNode` 是可信标志，**只允许内置预设**设置——`_readUserAgents` 不读它，用户配置无法注入。这类 agent 的 `health()` 不走 PATH 探测，直接 `available: true`（产物随包）。改 fork 后记得 `pnpm agent:build`。
+
 ## 套路 ACP-B：处理一个新的 SessionUpdate 类型
 
 1. `acpSession.ts` 的 `AcpSession.applyUpdate()` switch 加 case
@@ -157,7 +159,7 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 5. **Cancel 双步缺一不可**：(a) `conn.cancel({ sessionId })` 发 notification 给 agent；(b) 本地 `AbortController.abort()` 让 `Promise.race([conn.prompt, abortPromise])` 立刻 reject。少 (b) 会卡死本地 UI 等 agent 回应；少 (a) agent 不知道。
 6. **Terminal ownership 闭包**：`connect()` 里 `const ownedTerminals = new Set<string>()`，五个 terminal 方法都闭包它。**跨连接访问抛 `RequestError.invalidParams('Unknown terminal …')`**；连接关闭遍历 `release(id)` 兜底回收。
 7. **stderr 独立通道**：`IAcpHostService.onStderr` **绝不**喂给 SDK ndJsonStream——单独 `OutputChannel`，便于诊断。
-8. **env denylist**：spawn 子进程前剥 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`，否则继承 Electron 的 fork 上下文，agent 会怪异崩溃。main + renderer 两端都要做。
+8. **env denylist**：spawn 子进程前剥 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`，否则继承 Electron 的 fork 上下文，agent 会怪异崩溃。main + renderer 两端都要做。**例外**：内置 `runAsNode` agent（见套路 ACP-A）由 `acpHostMainService` 在 denylist 剥离**之后有意补回** `ELECTRON_RUN_AS_NODE=1`——因为它本就用 Electron-as-node 启动，且 fork 会用 `process.execPath` 重启自己、子进程必须继承该变量。这只对可信内置路径开启，用户 `spec.env` 注入的该变量仍被拒。
 9. **16ms 防抖事务**：`applyUpdate` 内 messages / toolCalls / plan 共用一个 `transaction()`，单次 observer 通知。新增更新类别也要进同一事务，否则会产生抖动。
 
 ## 参考路径

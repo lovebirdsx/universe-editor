@@ -1,0 +1,4 @@
+[submodule "vendor/claude-agent-acp"]
+	path = vendor/claude-agent-acp
+	url = git@github.com:lovebirdsx/claude-agent-acp.git
+	branch = main

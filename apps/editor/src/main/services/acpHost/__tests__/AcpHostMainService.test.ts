@@ -13,6 +13,13 @@ import {
 } from '../acpHostMainService.js'
 import type { AcpExitEvent, AcpStdioChunk } from '../../../../shared/ipc/acpHostService.js'
 
+// The service imports `app` from electron for the default runAsNode entry
+// resolver; stub it so the module loads in the node test env. The runAsNode
+// test injects its own resolver, so these values are never exercised.
+vi.mock('electron', () => ({
+  app: { isPackaged: false, getAppPath: () => '/fake/app' },
+}))
+
 class FakeStdStream extends EventEmitter {
   setEncoding = vi.fn()
 }
@@ -313,6 +320,25 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     expect(call[2].env?.NODE_OPTIONS).toBeUndefined()
     expect(call[2].env?.ELECTRON_RUN_AS_NODE).toBeUndefined()
     expect(call[2].env?.SAFE).toBe('ok')
+  })
+
+  it('runAsNode launches the bundled entry via Electron-as-node', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    const entry = '/bundled/claude-agent-acp/dist/index.js'
+    svc = new AcpHostMainService(new NullLogger(), spawner, undefined, () => entry)
+
+    await svc.start({ command: 'claude-agent-acp', args: ['--flag'], runAsNode: true })
+
+    const call = spawner.mock.calls[0]!
+    expect(call[0]).toBe(process.execPath)
+    expect(call[1]).toEqual([entry, '--flag'])
+    // Re-added on the runAsNode path so the agent's self re-spawn inherits it.
+    expect(call[2].env?.ELECTRON_RUN_AS_NODE).toBe('1')
+    // execPath is a real binary — must not be routed through a shell.
+    expect(call[2].shell).toBe(false)
   })
 })
 

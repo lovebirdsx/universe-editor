@@ -17,6 +17,18 @@ export interface AcpLaunchSpec {
   readonly env?: Readonly<Record<string, string>>
   /** Working directory. Defaults to the current workspace folder or HOME. */
   readonly cwd?: string
+  /**
+   * Launch the bundled Claude agent through Electron's own Node runtime
+   * (`process.execPath` + `ELECTRON_RUN_AS_NODE=1`) instead of resolving
+   * `command` against PATH. Main owns the entry-file resolution (dev tree vs
+   * packaged `resourcesPath`), so `command`/`args` here are advisory only.
+   *
+   * Trusted flag: it intentionally re-adds `ELECTRON_RUN_AS_NODE` (which the env
+   * denylist normally strips) because the agent re-spawns itself via
+   * `process.execPath`. Only the built-in registry preset may set it — it is
+   * never honored from user `acp.agents` config.
+   */
+  readonly runAsNode?: boolean
 }
 
 export interface AcpStdioChunk {
