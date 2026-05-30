@@ -1,0 +1,48 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Wire contract for resolving the native Claude binary the bundled ACP agent
+ *  spawns. The agent ships as a single esbuild file with no node_modules, so the
+ *  ~226MB native binary is never packaged: it is downloaded on demand into
+ *  userData, reused from a system install, or pointed at a custom path. The
+ *  resolved absolute path is handed to the agent via CLAUDE_CODE_EXECUTABLE.
+ *--------------------------------------------------------------------------------------------*/
+
+import { createDecorator } from '@universe-editor/platform'
+import type { Event } from '@universe-editor/platform'
+
+export type ClaudeBinarySource = 'download' | 'system' | 'custom'
+
+export interface IClaudeBinaryResolveOptions {
+  /** How to obtain the binary. Defaults to 'download' when omitted by callers. */
+  readonly source: ClaudeBinarySource
+  /** Absolute path to a user-provided binary; required when source is 'custom'. */
+  readonly customPath?: string
+}
+
+export interface IClaudeBinaryProgress {
+  /** Bytes downloaded so far. */
+  readonly received: number
+  /** Total bytes per Content-Length, or 0 when the server didn't report it. */
+  readonly total: number
+}
+
+export interface IClaudeBinaryResult {
+  /** Absolute path to a ready-to-spawn Claude binary. */
+  readonly path: string
+}
+
+/**
+ * Resolves the native Claude binary, downloading it on first use when needed.
+ * `resolve` is idempotent and de-dupes concurrent calls for the same options;
+ * a cached binary returns immediately without re-downloading.
+ */
+export interface IClaudeBinaryService {
+  readonly _serviceBrand: undefined
+
+  /** Fires while a download is in flight so the UI can show progress. */
+  readonly onDidChangeProgress: Event<IClaudeBinaryProgress>
+
+  resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult>
+}
+
+export const IClaudeBinaryService = createDecorator<IClaudeBinaryService>('claudeBinaryService')

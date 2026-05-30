@@ -20,6 +20,7 @@ export const ServiceChannels = {
   Window: 'window',
   AcpHost: 'acpHost',
   AcpTerminal: 'acpTerminal',
+  ClaudeBinary: 'claudeBinary',
   DisposableLeak: 'disposableLeak',
 } as const
 

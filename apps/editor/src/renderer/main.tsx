@@ -64,6 +64,7 @@ import {
 } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
+import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -305,6 +306,12 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(
     IAcpTerminalService,
     ProxyChannel.toService<IAcpTerminalService>(ipcService.getChannel(ServiceChannels.AcpTerminal)),
+  )
+  services.set(
+    IClaudeBinaryService,
+    ProxyChannel.toService<IClaudeBinaryService>(
+      ipcService.getChannel(ServiceChannels.ClaudeBinary),
+    ),
   )
   const windowsService = ProxyChannel.toService<IWindowsService>(
     ipcService.getChannel(ServiceChannels.Window),

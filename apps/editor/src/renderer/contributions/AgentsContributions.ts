@@ -52,6 +52,23 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Default agent used by "New Agent Session".',
             ),
           },
+          'acp.claude.source': {
+            type: 'string',
+            enum: ['download', 'system', 'custom'],
+            default: 'download',
+            description: localize(
+              'settings.acp.claude.source',
+              'How to obtain the native Claude binary for the built-in agent: "download" fetches it on first use into the user data folder, "system" reuses a `claude` install found on PATH, "custom" uses the path in `acp.claude.executablePath`.',
+            ),
+          },
+          'acp.claude.executablePath': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.acp.claude.executablePath',
+              'Absolute path to a Claude executable. Used only when `acp.claude.source` is "custom".',
+            ),
+          },
           'acp.permissions.autoApprove': {
             type: 'array',
             default: [],

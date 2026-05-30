@@ -88,6 +88,7 @@ function makeOpts() {
       logFiles: {} as never,
       acpHost: {} as never,
       acpTerminal: {} as never,
+      claudeBinary: {} as never,
       disposableLeak: {} as never,
     },
     logService,

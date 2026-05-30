@@ -17,6 +17,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import type {
+  IConfigurationService,
   IFileService,
   IHostService,
   ILogger,
@@ -27,11 +28,13 @@ import type {
   IObservable,
   IOutputChannel,
   IOutputService,
+  IProgressService,
 } from '@universe-editor/platform'
 import { AcpClientService } from '../acpClientService.js'
 import type { IAcpClientNotificationSink } from '../acpClientService.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
+import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
 import type {
   AcpExitEvent,
   AcpStdioChunk,
@@ -266,6 +269,15 @@ function makeService(): Harness {
     notifications,
     new NoopTelemetryService(),
     terminals,
+    {
+      onDidChangeProgress: new Emitter<never>().event,
+      resolve: () => Promise.resolve({ path: '/x' }),
+    } as unknown as IClaudeBinaryService,
+    { get: () => undefined } as unknown as IConfigurationService,
+    {
+      withProgress: (_o: unknown, task: (p: { report: () => void }) => unknown) =>
+        task({ report: () => {} }),
+    } as unknown as IProgressService,
     new StubLoggerService(),
     { platform: 'linux' } as IHostService,
   )

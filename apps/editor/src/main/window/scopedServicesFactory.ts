@@ -21,6 +21,7 @@ import type {
 } from '../../shared/ipc/services.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
+import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 
@@ -33,6 +34,7 @@ export interface ApplicationServices {
   readonly logFiles: ILogFilesService
   readonly acpHost: IAcpHostService
   readonly acpTerminal: IAcpTerminalService
+  readonly claudeBinary: IClaudeBinaryService
   readonly disposableLeak: IDisposableLeakService
 }
 

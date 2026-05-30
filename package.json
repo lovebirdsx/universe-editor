@@ -13,7 +13,7 @@
     "check": "turbo run lint typecheck test",
     "check:full": "turbo run lint typecheck test build",
     "dev": "pnpm --filter @universe-editor/editor dev",
-    "agent:build": "npm --prefix vendor/claude-agent-acp ci && npm --prefix vendor/claude-agent-acp run build && npm --prefix vendor/claude-agent-acp prune --omit=dev",
+    "agent:build": "npm --prefix vendor/claude-agent-acp ci && npm --prefix vendor/claude-agent-acp run build",
     "clean": "turbo run clean",
     "changeset": "changeset",
     "version-packages": "changeset version",

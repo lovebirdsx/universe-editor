@@ -26,10 +26,13 @@ import {
   Disposable,
   DisposableStore,
   ILoggerService,
+  IConfigurationService,
   IFileService,
   INotificationService,
+  IProgressService,
   ITelemetryService,
   IHostService,
+  ProgressLocation,
   Severity,
   URI,
   normalizeFsPath,
@@ -59,8 +62,17 @@ import {
   type WriteTextFileRequest,
   type WriteTextFileResponse,
 } from '@agentclientprotocol/sdk'
-import { IAcpHostService, type AcpExitEvent } from '../../../shared/ipc/acpHostService.js'
+import {
+  IAcpHostService,
+  type AcpExitEvent,
+  type AcpLaunchSpec,
+} from '../../../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../../../shared/ipc/acpTerminalService.js'
+import {
+  IClaudeBinaryService,
+  type ClaudeBinarySource,
+  type IClaudeBinaryResolveOptions,
+} from '../../../shared/ipc/claudeBinaryService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
 import { createSdkHostStream, type SdkHostStream } from './sdkHostStream.js'
@@ -180,6 +192,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @INotificationService private readonly _notification: INotificationService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpTerminalService private readonly _terminals: IAcpTerminalService,
+    @IClaudeBinaryService private readonly _claudeBinary: IClaudeBinaryService,
+    @IConfigurationService private readonly _config: IConfigurationService,
+    @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
     @IHostService hostService: IHostService,
   ) {
@@ -288,11 +303,55 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     return `${agentId} ${ci ? norm.toLowerCase() : norm}`
   }
 
+  /**
+   * For the built-in Claude agent (runAsNode), the ~226MB native binary is not
+   * shipped — resolve it (download on first use / system install / custom path)
+   * and inject its absolute path via CLAUDE_CODE_EXECUTABLE. Shows a progress
+   * notification while a download is in flight. Non-runAsNode agents pass
+   * through untouched.
+   */
+  private async _ensureClaudeBinary(spec: AcpLaunchSpec): Promise<AcpLaunchSpec> {
+    if (!spec.runAsNode) return spec
+    const source = (this._config.get<string>('acp.claude.source') ??
+      'download') as ClaudeBinarySource
+    const customPath = this._config.get<string>('acp.claude.executablePath') ?? ''
+    const opts: IClaudeBinaryResolveOptions =
+      source === 'custom' ? { source, customPath } : { source }
+
+    const result = await this._progress.withProgress(
+      { location: ProgressLocation.Notification, title: 'Preparing Claude…', source: 'acp' },
+      async (progress) => {
+        let lastPct = 0
+        const sub = this._claudeBinary.onDidChangeProgress(({ received, total }) => {
+          if (total > 0) {
+            const pct = Math.min(100, Math.floor((received / total) * 100))
+            progress.report({
+              message: `Downloading Claude binary… ${pct}%`,
+              increment: pct - lastPct,
+            })
+            lastPct = pct
+          } else {
+            progress.report({
+              message: `Downloading Claude binary… ${Math.floor(received / 1048576)} MB`,
+            })
+          }
+        })
+        try {
+          return await this._claudeBinary.resolve(opts)
+        } finally {
+          sub.dispose()
+        }
+      },
+    )
+    return { ...spec, env: { ...spec.env, CLAUDE_CODE_EXECUTABLE: result.path } }
+  }
+
   private async _createEntry(agentId: string, key: string, cwd: string): Promise<PoolEntry> {
     const sink = this._sink!
-    const spec = this._registry.resolve(agentId, cwd || undefined)
+    let spec = this._registry.resolve(agentId, cwd || undefined)
     let handle: string
     try {
+      spec = await this._ensureClaudeBinary(spec)
       handle = (await this._host.start(spec)).handle
     } catch (err) {
       this._telemetry.publicLogError('acp.spawn_failed', {

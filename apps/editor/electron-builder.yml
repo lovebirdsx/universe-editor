@@ -8,14 +8,12 @@ files:
   - package.json
 extraResources:
   # Bundled Claude ACP agent (git submodule at repo `vendor/`). Run
-  # `pnpm agent:build` first so dist + production node_modules exist.
-  # Placed outside the asar so the main process can spawn it directly.
+  # `pnpm agent:build` first so `dist/` (esbuild single-file bundle +
+  # claude-binary.json version metadata) exists. The native claude binary is
+  # NOT shipped — it is fetched on demand into userData (or a system install is
+  # reused), so only the small JS bundle goes in `resources/`.
   - from: ../../vendor/claude-agent-acp/dist
     to: claude-agent-acp/dist
-  - from: ../../vendor/claude-agent-acp/node_modules
-    to: claude-agent-acp/node_modules
-  - from: ../../vendor/claude-agent-acp/package.json
-    to: claude-agent-acp/package.json
 win:
   icon: public/icon.ico
   target:

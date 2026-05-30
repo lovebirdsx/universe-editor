@@ -19,6 +19,7 @@ import { LogFilesMainService } from './services/log/logFilesMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
 import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
+import { ClaudeBinaryMainService } from './services/claudeBinary/claudeBinaryMainService.js'
 import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, readEnvFromProcess, resolveProductIdentity } from './productPaths.js'
@@ -75,6 +76,7 @@ let recentWorkspacesService: RecentWorkspacesMainService | null = null
 let acpHostService: AcpHostMainService | null = null
 let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
+let claudeBinaryService: ClaudeBinaryMainService | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置。
@@ -99,6 +101,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       logMainService.createLogger({ id: 'acpTerminal', name: 'ACP Terminal' }),
     )
     acpTerminalService = acpTerminal
+    claudeBinaryService = new ClaudeBinaryMainService(
+      logMainService.createLogger({ id: 'claudeBinary', name: 'Claude Binary' }),
+    )
     applicationServices = {
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(
@@ -111,6 +116,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       logFiles: new LogFilesMainService(logMainService),
       acpHost,
       acpTerminal,
+      claudeBinary: claudeBinaryService,
       disposableLeak: new DisposableLeakMainService(),
     }
   }
@@ -177,6 +183,7 @@ app.on('will-quit', () => {
   recentWorkspacesService?.dispose()
   acpHostService?.dispose()
   acpTerminalService?.dispose()
+  claudeBinaryService?.dispose()
   void getDefaultStorage().flush()
   consoleInterceptor.dispose()
   logMainService.dispose()
