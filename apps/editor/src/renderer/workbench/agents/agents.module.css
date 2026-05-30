@@ -488,16 +488,6 @@
   font-size: 12px;
 }
 
-.toolCallCard[data-status='in_progress'] {
-  border-color: var(--color-badge-progress, #0e639c);
-}
-.toolCallCard[data-status='completed'] {
-  border-color: var(--color-badge-success, #2c7d32);
-}
-.toolCallCard[data-status='failed'] {
-  border-color: var(--color-badge-error, #a1260d);
-}
-
 .toolCallHeader {
   display: flex;
   align-items: center;
@@ -667,12 +657,14 @@
 }
 
 .inlineDiffOpen {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid var(--color-border, #555);
   border-radius: 3px;
   background: transparent;
   color: inherit;
-  padding: 1px 6px;
-  font-size: 11px;
+  padding: 2px 4px;
   cursor: pointer;
 }
 

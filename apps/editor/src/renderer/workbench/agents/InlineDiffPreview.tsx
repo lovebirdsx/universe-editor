@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useState } from 'react'
+import { ArrowLeftRight } from 'lucide-react'
 import { computeLineDiff, type DiffLine } from './lineDiff.js'
 import styles from './agents.module.css'
 
@@ -35,9 +36,10 @@ export function InlineDiffPreview({ path, oldText, newText, onOpen }: InlineDiff
           type="button"
           className={styles['inlineDiffOpen']}
           onClick={onOpen}
+          title="查看完整修改"
           data-testid="acp-inline-diff-open"
         >
-          查看完整修改
+          <ArrowLeftRight size={14} aria-hidden />
         </button>
       </div>
       <pre className={styles['inlineDiffBody']}>
