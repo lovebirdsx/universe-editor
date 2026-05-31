@@ -14,6 +14,7 @@
 import {
   createDecorator,
   Disposable,
+  DisposableStore,
   IContextKeyService,
   toDisposable,
   type IContextKey,
@@ -57,6 +58,11 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private _lastFocusedWidget: AcpChatWidget | undefined
   private readonly _key: IContextKey<boolean>
 
+  // Roots every registration's cleanup under this (singleton-rooted) service so
+  // the leak detector doesn't report a still-mounted ChatBody's registration
+  // when `beforeunload` fires before React flushes the useEffect cleanup.
+  private readonly _registrations = this._register(new DisposableStore())
+
   constructor(@IContextKeyService contextKeyService: IContextKeyService) {
     super()
     this._key = contextKeyService.createKey<boolean>('acpChatFocused', false)
@@ -91,7 +97,11 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     if (active instanceof Node && widget.container.contains(active)) {
       this._setFocused(widget, true)
     }
-    return toDisposable(() => this._unregister(widget))
+    const sub = toDisposable(() => {
+      this._registrations.deleteAndLeak(sub)
+      this._unregister(widget)
+    })
+    return this._registrations.add(sub)
   }
 
   private _unregister(widget: AcpChatWidget): void {
@@ -126,12 +136,5 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       }
     }
     this._key.set(any)
-  }
-
-  override dispose(): void {
-    for (const widget of [...this._entries.keys()]) {
-      this._unregister(widget)
-    }
-    super.dispose()
   }
 }

@@ -8,7 +8,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ContextKeyService } from '@universe-editor/platform'
+import {
+  ContextKeyService,
+  DisposableTracker,
+  setDisposableTracker,
+} from '@universe-editor/platform'
 import { AcpChatWidgetService, type AcpChatWidget } from '../acpChatWidgetService.js'
 
 function makeWidget(label: string): {
@@ -171,5 +175,25 @@ describe('AcpChatWidgetService', () => {
     // ensure no callbacks fire.
     expect(a.moveSpy).not.toHaveBeenCalled()
     expect(a.focusSpy).not.toHaveBeenCalled()
+  })
+
+  // Regression: a registration the caller never disposes (ChatBody's React
+  // useEffect cleanup racing `beforeunload → reactRoot.unmount()`) must still be
+  // released when the singleton-rooted service is disposed — otherwise the
+  // returned disposable stays an un-rooted leak the DisposableTracker reports.
+  it('does not leak a registration when only the service is disposed', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const localCks = new ContextKeyService()
+      const localSvc = new AcpChatWidgetService(localCks)
+      const a = makeWidget('leak')
+      localSvc.register(a.widget) // caller drops the returned disposable on purpose
+      localSvc.dispose()
+      localCks.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      setDisposableTracker(null)
+    }
   })
 })
