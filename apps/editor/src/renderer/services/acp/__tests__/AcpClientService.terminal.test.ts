@@ -53,6 +53,7 @@ interface InMemoryAcpHostHarness extends IDisposable {
   readonly handle: string
   inject(data: string): void
   written(): readonly string[]
+  starts(): number
   exit(code: number | null, signal: string | null): void
 }
 
@@ -62,12 +63,16 @@ function createInMemoryAcpHost(): InMemoryAcpHostHarness {
   const onExit = new Emitter<AcpExitEvent>()
   const handle = 'mem-' + Math.random().toString(36).slice(2, 10)
   const writes: string[] = []
+  let startCount = 0
   const host: IAcpHostService = {
     _serviceBrand: undefined,
     onStdout: onStdout.event,
     onStderr: onStderr.event,
     onExit: onExit.event,
-    start: () => Promise.resolve({ handle }),
+    start: () => {
+      startCount++
+      return Promise.resolve({ handle })
+    },
     writeStdin: (_h, data) => {
       writes.push(data)
       return Promise.resolve()
@@ -83,6 +88,9 @@ function createInMemoryAcpHost(): InMemoryAcpHostHarness {
     },
     written() {
       return writes
+    },
+    starts() {
+      return startCount
     },
     exit(code, signal) {
       onExit.fire({ handle, code, signal })
@@ -250,7 +258,7 @@ interface Harness {
   ): Promise<{ result?: unknown; error?: { code: number; message: string } }>
 }
 
-function makeService(): Harness {
+function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number } = {}): Harness {
   const transport = createInMemoryAcpHost()
   const terminals = makeFakeTerminalService()
   const notifications = new StubNotificationService()
@@ -274,7 +282,9 @@ function makeService(): Harness {
       onDidChangeProgress: new Emitter<never>().event,
       resolve: () => Promise.resolve({ path: '/x' }),
     } as unknown as IClaudeBinaryService,
-    { get: () => undefined } as unknown as IConfigurationService,
+    {
+      get: (key: string) => (key === 'acp.startupTimeoutMs' ? opts.startupTimeoutMs : undefined),
+    } as unknown as IConfigurationService,
     {
       withProgress: (_o: unknown, task: (p: { report: () => void }) => unknown) =>
         task({ report: () => {} }),
@@ -284,31 +294,34 @@ function makeService(): Harness {
   )
   svc.setNotificationSink(sink)
   // Connect now awaits initializeResult — auto-respond to the SDK's
-  // initialize request so connect() can return.
-  let initialized = false
-  void (async () => {
-    for (let i = 0; i < 500 && !initialized; i++) {
-      const writes = transport.written()
-      const init = writes.find((w) => w.includes('"method":"initialize"'))
-      if (init) {
-        try {
-          const req = JSON.parse(init.trim()) as { id: number }
-          transport.inject(
-            JSON.stringify({
-              jsonrpc: '2.0',
-              id: req.id,
-              result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
-            }) + '\n',
-          )
-          initialized = true
-        } catch {
-          // try again
+  // initialize request so connect() can return. Tests covering a hung handshake
+  // opt out via `autoInitialize: false`.
+  if (opts.autoInitialize ?? true) {
+    let initialized = false
+    void (async () => {
+      for (let i = 0; i < 500 && !initialized; i++) {
+        const writes = transport.written()
+        const init = writes.find((w) => w.includes('"method":"initialize"'))
+        if (init) {
+          try {
+            const req = JSON.parse(init.trim()) as { id: number }
+            transport.inject(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id: req.id,
+                result: { protocolVersion: 1, agentCapabilities: {}, authMethods: [] },
+              }) + '\n',
+            )
+            initialized = true
+          } catch {
+            // try again
+          }
+          return
         }
-        return
+        await new Promise((r) => setTimeout(r, 1))
       }
-      await new Promise((r) => setTimeout(r, 1))
-    }
-  })()
+    })()
+  }
   let nextId = 100
   return {
     svc,
@@ -610,5 +623,31 @@ describe('AcpClientService — connection exit reaps owned terminals', () => {
     } finally {
       conn.dispose()
     }
+  })
+})
+
+describe('AcpClientService — connect handshake timeout', () => {
+  let h: Harness
+  afterEach(() => {
+    h.transport.dispose()
+  })
+
+  it('rejects and evicts the pool entry when initialize never responds', async () => {
+    // No auto-initialize responder + a tiny startup timeout: the spawned process
+    // boots but the ACP handshake never completes. connect() must reject (rather
+    // than hang forever, which is what wedged resumeSession into an endless
+    // "Resuming agent session…" spinner) and tear the entry down.
+    h = makeService({ autoInitialize: false, startupTimeoutMs: 20 })
+    await expect(h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })).rejects.toThrow(
+      /timed out/,
+    )
+    expect(h.transport.starts()).toBe(1)
+
+    // Entry was evicted → the next connect() re-spawns instead of awaiting the
+    // same dead handshake promise.
+    await expect(h.svc.connect('fake', { cwd: CWD, leaseFor: SESSION_ID })).rejects.toThrow(
+      /timed out/,
+    )
+    expect(h.transport.starts()).toBe(2)
   })
 })

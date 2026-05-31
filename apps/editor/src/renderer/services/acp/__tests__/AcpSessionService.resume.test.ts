@@ -302,6 +302,9 @@ class FakeAcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
   readonly connected: ConnectedSession[] = []
   readonly connectArgs: { agentId: string; cwd: string | undefined }[] = []
+  /** When true, the next connect() rejects — simulates the pool's bounded
+   *  initialize handshake timing out (or any spawn/handshake failure). */
+  failConnect = false
   private _agentSeq = 0
   private _sink: IAcpClientNotificationSink | undefined
 
@@ -339,6 +342,9 @@ class FakeAcpClientService implements IAcpClientService {
     const sink = this._sink
     if (!sink) throw new Error('FakeAcpClientService.connect: sink not installed')
     this.connectArgs.push({ agentId, cwd: options?.cwd })
+    if (this.failConnect) {
+      throw new Error('ACP initialize timed out after 1ms')
+    }
     const agentSessionId = `agent-${++this._agentSeq}`
     const pair = createInMemoryAcpPair()
     const agent = new StubAgent(agentSessionId, this._opts)
@@ -689,6 +695,41 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(svc.activeSession.get()).toBe(resumed)
     expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed'])
     expect(original.messages.get()).toEqual([])
+  })
+
+  it('surfaces a connect/initialize stall as an error and self-heals the dedup cache', async () => {
+    // Repro for the "switch to the 2nd restored session → spins forever, never
+    // errors, switching does nothing" bug. A connect()/initialize handshake that
+    // never settles used to leave `_resumingBySessionId` poisoned: every later
+    // resume returned the same dead promise (no spawn, no error). connect() now
+    // rejects on a bounded handshake, and resumeSession's `finally` must clear
+    // the in-flight entry so a retry genuinely retries.
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession() // connect #1 — succeeds
+    const historyId = built.history.list()[0]!.id
+    await svc.closeSession(original.id)
+
+    built.client.failConnect = true
+    await expect(svc.resumeSession(historyId)).rejects.toThrow(/timed out/)
+    // A second attempt must re-run connect() (cache cleared), not dedupe onto the
+    // already-rejected promise.
+    await expect(svc.resumeSession(historyId)).rejects.toThrow(/timed out/)
+
+    // create + two resume attempts = three connect() calls.
+    expect(built.client.connectArgs.length).toBe(3)
+    expect(svc.sessions.get()).toHaveLength(0)
+    expect(
+      built.notifications.captured.filter((n) => /Failed to resume/.test(n.message)).length,
+    ).toBe(2)
+
+    // Once the underlying stall clears, a fresh resume succeeds — proving the
+    // cache never wedged the session permanently.
+    built.client.failConnect = false
+    const resumed = await svc.resumeSession(historyId)
+    expect(resumed.id).toBe(historyId)
+    expect(svc.getById(historyId)?.id).toBe(historyId)
   })
 })
 

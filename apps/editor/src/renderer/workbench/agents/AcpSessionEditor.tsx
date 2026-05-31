@@ -21,34 +21,43 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   useObservable(service.sessions)
-  // 订阅 history 是为了让水化完成时触发重渲——_resumeSessionInner 在 history hydrate 之前
-  // 可能 throw "Unknown agent session id"，那次失败后用户没有显式动作的话就需要这条路径
-  // 把组件叫醒，让 useEffect 在 phase 转回 idle 后重新尝试 resume。
+  // 订阅 history 是为了让水化完成时触发重渲，让一个尚未 resume 的 session 在 history
+  // 条目到位后能被重新评估。
   useObservable(history.entries)
 
   const acpInput = input instanceof AcpSessionEditorInput ? input : undefined
   const session = acpInput ? service.getById(acpInput.sessionId) : undefined
 
+  if (!acpInput) return null
+
+  if (session) return <ChatBody session={session} autoFocus />
+
+  // EditorGroupView 用 `<Component input={active} />`（无 key）渲染激活编辑器，切换 tab
+  // 会复用同一个 AcpSessionEditor 实例、只换 input prop。若把 resume 的 phase 状态直接
+  // 挂在这里，phase 会跨 input 残留——一旦它停在 'pending'（首个 session resume 后从不
+  // 复位），`phase !== 'idle'` 守卫会永久挡住下一个 session 的 resume，表现为切到第二个
+  // 会话永远转圈、不发 session/load、也不报错。用 sessionId 作 key 让每个会话拥有独立
+  // 的 resume 状态机即可根治。
+  return <AcpSessionResumer key={acpInput.sessionId} sessionId={acpInput.sessionId} />
+}
+
+function AcpSessionResumer({ sessionId }: { sessionId: string }) {
+  const service = useService(IAcpSessionService)
   const [phase, setPhase] = useState<ResumePhase>({ kind: 'idle' })
 
   useEffect(() => {
-    if (!acpInput || session) return
     if (phase.kind !== 'idle') return
     setPhase({ kind: 'pending' })
-    service.resumeSession(acpInput.sessionId).then(
+    service.resumeSession(sessionId).then(
       () => {
-        // 成功路径：service.sessions 的变更会驱动 useObservable 重渲，
-        // 渲染分支自动切到 <ChatBody />，无需在此 setPhase。
+        // 成功路径：service.sessions 的变更驱动父组件 useObservable 重渲，渲染分支自动
+        // 切到 <ChatBody />（本组件随即卸载），无需在此 setPhase。
       },
       (err: unknown) => {
         setPhase({ kind: 'error', message: (err as Error).message })
       },
     )
-  }, [acpInput, service, session, phase.kind])
-
-  if (!acpInput) return null
-
-  if (session) return <ChatBody session={session} autoFocus />
+  }, [service, sessionId, phase.kind])
 
   if (phase.kind === 'error') {
     return (

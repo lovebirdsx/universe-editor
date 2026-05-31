@@ -149,6 +149,44 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
     expect(service.resumeSession).toHaveBeenCalledTimes(1)
   })
 
+  it('resumes the newly-selected session after the editor view switches inputs', async () => {
+    // Repro for "switch to the 2nd restored session → spins forever, never
+    // errors, switching does nothing". EditorGroupView renders the active
+    // editor as `<Component input={active} />` with NO key, so flipping tabs
+    // REUSES the same AcpSessionEditor instance and only swaps the `input`
+    // prop. The component's `phase` state therefore leaks across inputs: once
+    // it is `'pending'` (set on the first input's resume and never reset on
+    // success), the `phase.kind !== 'idle'` guard blocks the second input's
+    // resume forever — no resumeSession call, no session/load, endless spinner.
+    const service = makeService()
+    const inst = new InstantiationService(makeCollection(service))
+    const inputA = inst.createInstance(AcpSessionEditorInput, 'sess-A', 'fake', undefined)
+    const inputB = inst.createInstance(AcpSessionEditorInput, 'sess-B', 'fake', undefined)
+
+    let rerender!: (ui: React.ReactElement) => void
+    await act(async () => {
+      const r = render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={inputA} />
+        </ServicesContext.Provider>,
+      )
+      rerender = r.rerender
+    })
+    expect(service.resumeSession).toHaveBeenCalledWith('sess-A')
+
+    // Flip the same editor view to the other session (like clicking its tab).
+    await act(async () => {
+      rerender(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={inputB} />
+        </ServicesContext.Provider>,
+      )
+    })
+
+    // The newly-selected session MUST get its own resume.
+    expect(service.resumeSession).toHaveBeenCalledWith('sess-B')
+  })
+
   it('renders an error + Retry when resumeSession rejects, and retry re-invokes resumeSession', async () => {
     const service = makeService({
       resumeResult: () => Promise.reject(new Error('boom')),

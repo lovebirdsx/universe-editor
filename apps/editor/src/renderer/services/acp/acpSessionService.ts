@@ -44,7 +44,11 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
-import { IAcpClientService, type IAcpClientNotificationSink } from './acpClientService.js'
+import {
+  IAcpClientService,
+  type IAcpClientConnection,
+  type IAcpClientNotificationSink,
+} from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
@@ -417,10 +421,30 @@ export class AcpSessionService
       throw new Error(`Unknown agent session id: ${sessionId}`)
     }
     const cwd = entry.cwd
-    const conn = await this._client.connect(entry.agentId, {
-      ...(cwd !== undefined ? { cwd } : {}),
-      leaseFor: entry.sessionIdOnAgent,
-    })
+    let conn: IAcpClientConnection
+    try {
+      conn = await this._client.connect(entry.agentId, {
+        ...(cwd !== undefined ? { cwd } : {}),
+        leaseFor: entry.sessionIdOnAgent,
+      })
+    } catch (err) {
+      // connect() now bounds the spawn+initialize handshake, so a stall surfaces
+      // here as a rejection instead of an infinite "Resuming agent session…"
+      // spinner. Mirror the other resume failure paths (notify + telemetry);
+      // resumeSession's `finally` then clears the in-flight dedup entry so the
+      // poisoned promise can no longer make every later Retry/switch a no-op.
+      const msg = (err as Error).message
+      this._logger.warn(`resumeSession connect failed: ${msg}`)
+      this._notification.notify({
+        severity: Severity.Error,
+        message: `Failed to resume agent session: ${msg}`,
+      })
+      this._telemetry.publicLogError('acp.session_resume_failed', {
+        agentId: entry.agentId,
+        error: msg,
+      })
+      throw err
+    }
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const mcpServers = this._readMcpServers()
     let session: AcpSession | undefined

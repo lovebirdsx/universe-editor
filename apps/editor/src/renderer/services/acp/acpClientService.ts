@@ -146,6 +146,17 @@ export const IAcpClientService = createDecorator<IAcpClientService>('acpClientSe
 /** Grace period after the last lease is released before the agent process is stopped. */
 const POOL_GRACE_MS = 30_000
 
+/**
+ * Upper bound on the ACP `initialize` handshake before a pooled entry is torn
+ * down. A hung handshake must not wedge the pool: without this, a `connect()`
+ * awaiting `entry.initializeResult` never returns, so a resume stalls before
+ * `session/load` and spins forever. Overridable via `acp.startupTimeoutMs`.
+ * Note: this bounds only the post-spawn handshake — the (potentially minutes-
+ * long) binary download lives in `_createEntry`/`await entryPromise`, ahead of
+ * this await, and stays intentionally untimed.
+ */
+const DEFAULT_INIT_TIMEOUT_MS = 60_000
+
 /** Bounded tail of agent stderr retained per entry, surfaced on initialize failure. */
 const STDERR_TAIL_LIMIT = 8_192
 
@@ -277,11 +288,17 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       entry.graceTimer = undefined
     }
     entry.refcount++
+    const initTimeoutMs =
+      this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_INIT_TIMEOUT_MS
     try {
-      await entry.initializeResult
+      await withTimeout(entry.initializeResult, initTimeoutMs, 'ACP initialize')
     } catch (err) {
-      // initializeResult rejection already evicted the entry; just unwind.
       entry.refcount--
+      // A *rejected* handshake already self-evicted via _createEntry's catch; a
+      // *hung* one has not. Evict here too (idempotent) so the next connect()
+      // re-spawns instead of awaiting the same dead promise forever — the
+      // root of the "Resuming agent session…" spinner that never settles.
+      this._evictNow(entry)
       throw err
     }
     return this._createLease(entry, options?.leaseFor)
@@ -685,4 +702,14 @@ function sliceLines(content: string, line?: number, limit?: number): string {
   const start = Math.max(0, (line ?? 1) - 1)
   const end = limit !== undefined ? start + limit : lines.length
   return lines.slice(start, end).join('\n')
+}
+
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  })
+  return Promise.race([p, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  })
 }
