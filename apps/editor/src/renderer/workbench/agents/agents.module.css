@@ -823,6 +823,11 @@
 .sendButtonSpin {
   position: absolute;
   inset: 0;
+}
+
+.sendButtonSpinArc {
+  transform-box: fill-box;
+  transform-origin: center;
   animation: acpSendSpin 1s linear infinite;
 }
 
