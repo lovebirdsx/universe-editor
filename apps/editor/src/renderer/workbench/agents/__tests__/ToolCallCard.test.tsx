@@ -8,7 +8,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { IEditorService, InstantiationService, ServiceCollection } from '@universe-editor/platform'
 import type { IEditorService as IEditorServiceType } from '@universe-editor/platform'
-import type { AcpToolCall, AcpToolCallStatus } from '../../../services/acp/acpSessionService.js'
+import type {
+  AcpMessage,
+  AcpToolCall,
+  AcpToolCallStatus,
+} from '../../../services/acp/acpSessionService.js'
 import { ToolCallCard } from '../ToolCallCard.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -30,6 +34,16 @@ function makeCall(overrides: Partial<AcpToolCall>): AcpToolCall {
     blocks: [],
     diffs: [],
     ...overrides,
+  }
+}
+
+function makeChildMessage(text: string): AcpMessage {
+  return {
+    id: `cm-${text}`,
+    role: 'agent',
+    text,
+    blocks: [{ type: 'text', text }],
+    streaming: false,
   }
 }
 
@@ -83,4 +97,38 @@ describe('ToolCallCard', () => {
       expect(screen.getByLabelText(status)).toBeTruthy()
     },
   )
+
+  it('renders a sub-agent timeline (message + nested tool call) inside the parent card', () => {
+    // kind 'other' renders expanded standalone, so the folded children show.
+    renderCard(
+      makeCall({
+        kind: 'other',
+        children: [
+          { kind: 'message', id: 'sm1', message: makeChildMessage('sub thinking') },
+          {
+            kind: 'toolCall',
+            id: 'sc1',
+            call: makeCall({ id: 'sc1', kind: 'read', title: 'Read' }),
+          },
+        ],
+      }),
+    )
+    expect(screen.getByTestId('acp-subagent-timeline')).toBeTruthy()
+    expect(screen.getByTestId('acp-subagent-message')).toBeTruthy()
+    // The nested tool call renders its own card (a second collapsible toggle).
+    expect(screen.getAllByTestId('acp-collapsible-toggle').length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('hides the sub-agent timeline while the parent card is collapsed', () => {
+    renderCard(
+      makeCall({
+        kind: 'read',
+        children: [{ kind: 'message', id: 'sm1', message: makeChildMessage('hidden') }],
+      }),
+    )
+    // read cards start collapsed → nested timeline not mounted.
+    expect(screen.queryByTestId('acp-subagent-timeline')).toBeNull()
+    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+    expect(screen.getByTestId('acp-subagent-timeline')).toBeTruthy()
+  })
 })

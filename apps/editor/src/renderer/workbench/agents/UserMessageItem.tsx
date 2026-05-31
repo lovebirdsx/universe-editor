@@ -3,10 +3,6 @@
  *  UserMessageItem — renders a user message with a fixed max-height so a long
  *  prompt (pasted log, multi-block code) cannot dominate the timeline. When
  *  content exceeds the limit a chevron toggle reveals / hides the rest.
- *
- *  Pairs with the sticky CSS rule on the wrapping <li> in ChatBody so the
- *  message stays pinned to the top of the scroll viewport as the agent
- *  response below scrolls past.
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useRef, useState } from 'react'

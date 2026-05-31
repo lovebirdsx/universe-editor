@@ -49,7 +49,8 @@ import { CollapsibleSlot } from './CollapsibleSlot.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { QuestionCard } from './QuestionCard.js'
-import { PlanCard } from './PlanView.js'
+import { StickyPlanBar } from './StickyPlanBar.js'
+import { StickyUserMessageBar } from './StickyUserMessageBar.js'
 import { PromptInput } from './PromptInput.js'
 import { ToolCallCard } from './ToolCallCard.js'
 import { roleIcon } from './timelineIcons.js'
@@ -110,6 +111,8 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
 
   return (
     <div ref={containerRef} className={styles['chat']} data-testid="acp-chat">
+      <StickyUserMessageBar key={`user:${target.id}`} session={target} />
+      <StickyPlanBar key={`plan:${target.id}`} session={target} />
       <ChatScroll key={target.id} session={target} handleRef={handleRef} />
       <PermissionCard session={target} />
       <QuestionCard session={target} />
@@ -466,8 +469,7 @@ const TimelineSlot = memo(function TimelineSlot({
       }
       const showCaret = sessionRunning && m.streaming && !collapsed
       const isUser = m.role === 'user'
-      const className =
-        styles['messageItem'] + (isUser ? ` ${styles['stickyUserMessage']}` : '') + focusedClass
+      const className = styles['messageItem'] + focusedClass
       return (
         <CollapsibleSlot
           icon={roleIcon(m.role)}
@@ -501,18 +503,6 @@ const TimelineSlot = memo(function TimelineSlot({
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
         />
       )
-    case 'plan':
-      return (
-        <PlanCard
-          entries={item.entries}
-          collapsed={collapsed}
-          onToggle={() => onToggleCollapse(key)}
-          rootProps={{
-            className: `${styles['planCard']} ${styles['timelinePlan']}${focusedClass}`,
-            'data-timeline-key': key,
-          }}
-        />
-      )
   }
 })
 
@@ -522,8 +512,6 @@ function slotKey(item: TimelineItem): string {
       return `m:${item.id}`
     case 'toolCall':
       return `t:${item.id}`
-    case 'plan':
-      return 'p:plan'
   }
 }
 
@@ -537,9 +525,13 @@ function defaultCollapsed(item: TimelineItem, mode: CollapseMode): boolean {
     case 'message':
       return item.message.role === 'thought'
     case 'toolCall':
-      return item.call.kind === 'read' || item.call.kind === 'search'
-    case 'plan':
-      return false
+      // Sub-agent parent cards (Task tool) fold by default so the nested
+      // timeline stays out of the way until the user opens it.
+      return (
+        item.call.kind === 'read' ||
+        item.call.kind === 'search' ||
+        (item.call.children?.length ?? 0) > 0
+      )
   }
 }
 
@@ -578,8 +570,6 @@ function estimateRow(item: TimelineItem | undefined): number {
       return 64
     case 'toolCall':
       return 96
-    case 'plan':
-      return 36 + item.entries.length * 22
   }
 }
 
@@ -590,11 +580,13 @@ function tailContentSignature(timeline: readonly TimelineItem[]): number {
     case 'message':
       return last.message.text.length
     case 'toolCall':
-      return last.call.text.length + last.call.status.length
-    case 'plan':
-      return last.entries.reduce(
-        (n, e) => n + (e.status === 'completed' ? 2 : e.status === 'in_progress' ? 1 : 0),
-        last.entries.length,
+      return (
+        last.call.text.length +
+        last.call.status.length +
+        (last.call.children?.reduce(
+          (n, c) => n + (c.kind === 'message' ? c.message.text.length : c.call.text.length),
+          0,
+        ) ?? 0)
       )
   }
 }

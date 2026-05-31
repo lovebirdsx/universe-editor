@@ -78,6 +78,7 @@ export {
   type AcpToolCall,
   type AcpToolCallDiff,
   type AcpToolCallStatus,
+  type AcpChildItem,
   type AcpPlanEntry,
   type AcpPlanEntryStatus,
   type AcpPendingPermission,

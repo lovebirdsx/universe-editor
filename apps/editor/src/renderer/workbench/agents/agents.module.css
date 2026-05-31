@@ -239,12 +239,6 @@
   background: var(--color-message-user-bg, #2a3550);
 }
 
-.stickyUserMessage {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-}
-
 .userMessageBody {
   position: relative;
   overflow: hidden;
@@ -597,6 +591,22 @@
 .toolCallBody {
   margin: 4px 0 0;
   font-size: 11px;
+}
+
+/* Sub-agent timeline folded inside a parent Task card. */
+.toolCallChildren {
+  list-style: none;
+  margin: 6px 0 0;
+  padding-left: 8px;
+  border-left: 2px solid var(--color-border, #333);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.subMessage {
+  font-size: 11px;
+  opacity: 0.92;
 }
 
 .terminalOutput {
@@ -954,6 +964,24 @@
 .sessionLoadingMessage {
   margin: 0;
   font-size: 12px;
+}
+
+.stickyUserBar {
+  flex: 0 0 auto;
+  list-style: none;
+  margin: 0;
+  padding: 2px 12px;
+  max-height: 30vh;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+.stickyPlanBar {
+  flex: 0 0 auto;
+  list-style: none;
+  margin: 0;
+  padding: 0px 12px;
+  border-bottom: 1px solid var(--color-border, #333);
 }
 
 .planCard {

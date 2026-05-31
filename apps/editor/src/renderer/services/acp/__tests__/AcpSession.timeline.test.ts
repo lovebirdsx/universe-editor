@@ -323,7 +323,7 @@ describe('AcpSession.timeline', () => {
     svc.dispose()
   })
 
-  it('interleaves message / tool_call / plan slots in arrival order', async () => {
+  it('interleaves message / tool_call slots in arrival order; plan stays off the timeline', async () => {
     const s = await svc.createSession()
     const conn = client.connected[0]!
 
@@ -371,15 +371,17 @@ describe('AcpSession.timeline', () => {
       },
     })
 
+    // Plan is rendered as a sticky bar, not a timeline slot.
     const kinds = s.timeline.get().map((it) => it.kind)
-    expect(kinds).toEqual(['toolCall', 'message', 'toolCall', 'plan', 'message'])
+    expect(kinds).toEqual(['toolCall', 'message', 'toolCall', 'message'])
+    expect(s.plan.get().map((e) => e.content)).toEqual(['first plan'])
     // The pre-tool message is sealed and keeps only its own chunk.
     const firstMessage = s.timeline.get()[1]!
     if (firstMessage.kind !== 'message') throw new Error('unreachable')
     expect(firstMessage.message.text).toBe('hello ')
     expect(firstMessage.message.streaming).toBe(false)
     // The post-tool chunk is its own trailing card, still streaming.
-    const lastMessage = s.timeline.get()[4]!
+    const lastMessage = s.timeline.get()[3]!
     if (lastMessage.kind !== 'message') throw new Error('unreachable')
     expect(lastMessage.message.text).toBe('world')
     expect(lastMessage.message.streaming).toBe(true)
@@ -473,7 +475,7 @@ describe('AcpSession.timeline', () => {
     expect(first.call.status).toBe('completed')
   })
 
-  it('plan slot is anchored at first appearance and replaced in place on update', async () => {
+  it('plan updates land on the plan observable, not the timeline', async () => {
     const s = await svc.createSession()
     const conn = client.connected[0]!
 
@@ -505,11 +507,10 @@ describe('AcpSession.timeline', () => {
       },
     })
 
+    // Only the tool call is on the timeline; plan replaced in place on its own observable.
     const timeline = s.timeline.get()
-    expect(timeline.map((it) => it.kind)).toEqual(['plan', 'toolCall'])
-    const planSlot = timeline[0]!
-    if (planSlot.kind !== 'plan') throw new Error('expected plan')
-    expect(planSlot.entries.map((e) => e.content)).toEqual(['v2-a', 'v2-b'])
+    expect(timeline.map((it) => it.kind)).toEqual(['toolCall'])
+    expect(s.plan.get().map((e) => e.content)).toEqual(['v2-a', 'v2-b'])
   })
 
   it('marks a streaming message as streaming:true mid-turn and false after the turn ends', async () => {
@@ -751,5 +752,186 @@ describe('AcpSession.timeline', () => {
     expect(thoughts).toHaveLength(1)
     expect(thoughts[0]!.text).toBe('real')
     expect(thoughts[0]!.streaming).toBe(true)
+  })
+
+  it('routes sub-agent updates into the parent tool call children', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcParent',
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'sub thinking ' },
+        _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'more' },
+        _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcChild',
+        title: 'Read',
+        kind: 'read',
+        status: 'completed',
+        _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+      },
+    })
+
+    // Only the parent is on the top-level timeline; children fold inside it.
+    const timeline = s.timeline.get()
+    expect(timeline.map((it) => it.kind)).toEqual(['toolCall'])
+    const parent = timeline[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(parent.id).toBe('tcParent')
+    const children = parent.call.children ?? []
+    expect(children.map((c) => c.kind)).toEqual(['message', 'toolCall'])
+    const childMsg = children[0]!
+    if (childMsg.kind !== 'message') throw new Error('expected message')
+    // Consecutive child chunks merge into one message.
+    expect(childMsg.message.text).toBe('sub thinking more')
+    const childTool = children[1]!
+    if (childTool.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(childTool.id).toBe('tcChild')
+    // The child tool call never leaks into the top-level toolCalls observable.
+    expect(s.toolCalls.get().map((t) => t.id)).toEqual(['tcParent'])
+  })
+
+  it('breaks the child message merge when a child tool call interleaves', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    const child = <T extends object>(u: T) => ({
+      ...u,
+      _meta: { claudeCode: { parentToolUseId: 'tcP' } },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcP',
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'a' } }),
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child({
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcInner',
+        title: 'Read',
+        kind: 'read',
+        status: 'completed',
+      }),
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: child({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'b' } }),
+    })
+
+    const parent = s.timeline.get()[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    const children = parent.call.children ?? []
+    // The tool call between the two chunks opens a fresh trailing message.
+    expect(children.map((c) => c.kind)).toEqual(['message', 'toolCall', 'message'])
+    const first = children[0]!
+    const last = children[2]!
+    if (first.kind !== 'message' || last.kind !== 'message') throw new Error('expected messages')
+    expect(first.message.text).toBe('a')
+    expect(last.message.text).toBe('b')
+  })
+
+  it('merges sub-agent children that arrive before their parent tool call', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    // Child message arrives first (out-of-order); parent lands afterwards.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'early child' },
+        _meta: { claudeCode: { parentToolUseId: 'tcLate' } },
+      },
+    })
+    expect(s.timeline.get()).toHaveLength(0)
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcLate',
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+      },
+    })
+
+    const parent = s.timeline.get()[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    const children = parent.call.children ?? []
+    expect(children).toHaveLength(1)
+    const c = children[0]!
+    if (c.kind !== 'message') throw new Error('expected message')
+    expect(c.message.text).toBe('early child')
+  })
+
+  it('keeps sub-agent children across a parent tool_call_update', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcP',
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'agent_message_chunk',
+        content: { type: 'text', text: 'child output' },
+        _meta: { claudeCode: { parentToolUseId: 'tcP' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'tcP', status: 'completed' },
+    })
+
+    const parent = s.timeline.get()[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(parent.call.status).toBe('completed')
+    const children = parent.call.children ?? []
+    expect(children).toHaveLength(1)
+    const c = children[0]!
+    if (c.kind !== 'message') throw new Error('expected message')
+    expect(c.message.text).toBe('child output')
   })
 })

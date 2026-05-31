@@ -70,7 +70,24 @@ export interface AcpToolCall {
   readonly blocks: readonly ContentBlock[]
   /** Structured diff entries extracted from ToolCallContent.diff. */
   readonly diffs: readonly AcpToolCallDiff[]
+  /**
+   * Sub-agent timeline: message / tool_call updates the agent tagged with this
+   * call's id via `_meta.claudeCode.parentToolUseId` (e.g. a Task tool spawning
+   * a subagent). Nested one level deep — the UI folds these inside the parent
+   * card so the subagent's chatter stays out of the main timeline.
+   */
+  readonly children?: readonly AcpChildItem[]
 }
+
+/**
+ * One slot inside a parent tool call's {@link AcpToolCall.children}. Structurally
+ * identical to {@link TimelineItem} but named separately to make the nesting
+ * explicit. Only one level of nesting is supported — a child tool call's own
+ * `children` is never populated.
+ */
+export type AcpChildItem =
+  | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
+  | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
 
 export type AcpPlanEntryStatus = 'pending' | 'in_progress' | 'completed'
 
@@ -82,22 +99,20 @@ export interface AcpPlanEntry {
 
 /**
  * A single slot on the unified chat timeline. The UI renders one ordered list
- * of these so message / tool_call / plan cards interleave by arrival order,
- * matching Copilot-style agent chat layout.
+ * of these so message / tool_call cards interleave by arrival order, matching
+ * Copilot-style agent chat layout. Plan is *not* a timeline slot — it lives on
+ * the dedicated `plan` observable and is rendered as a sticky bar above the
+ * scroll, so it stays pinned instead of being pushed out of view by later items.
  *
  * Slot identity rules:
  * - `kind: 'message'` reuses the underlying `message.id` so React keys are
  *   stable across chunk merges.
  * - `kind: 'toolCall'` reuses the agent-issued `toolCallId` so `tool_call_update`
  *   replaces the existing slot in place.
- * - `kind: 'plan'` is a singleton lane — the literal `'plan'` id anchors the
- *   slot at first appearance and subsequent plan events replace `entries` in
- *   place rather than appending a new slot.
  */
 export type TimelineItem =
   | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
   | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
-  | { readonly kind: 'plan'; readonly id: 'plan'; readonly entries: readonly AcpPlanEntry[] }
 
 export interface AcpPendingPermission {
   readonly toolCallId: string
@@ -263,6 +278,17 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _flushTimer: ReturnType<typeof setTimeout> | undefined
 
   private readonly _streamingIds = new Set<string>()
+
+  /** True once the first `plan` update has been seen (drives one-time seal). */
+  private _planSeen = false
+
+  /**
+   * Child items (sub-agent message / tool calls) that arrived before their
+   * parent tool call landed on the timeline. Keyed by parentToolUseId; merged
+   * into the parent's `children` when it appears. Defensive against out-of-order
+   * delivery — agents normally emit the parent tool_call first.
+   */
+  private readonly _orphanChildren = new Map<string, readonly AcpChildItem[]>()
 
   constructor(
     readonly id: string,
@@ -445,32 +471,37 @@ export class AcpSession extends Disposable implements IAcpSession {
   // -- ingestion ----------------------------------------------------------
 
   applyUpdate(update: SessionUpdate): void {
+    const parentId = readParentToolUseId(update)
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
-        this._appendChunk('user', update.content)
+        this._appendChunk('user', update.content, parentId)
         break
       case 'agent_message_chunk':
-        this._appendChunk('agent', update.content)
+        this._appendChunk('agent', update.content, parentId)
         break
       case 'agent_thought_chunk':
-        this._appendChunk('thought', update.content)
+        this._appendChunk('thought', update.content, parentId)
         break
       case 'tool_call': {
-        // A new tool slot is about to land at the end of the timeline. Seal any
-        // still-streaming message first so the next thought/message chunk opens
-        // a fresh card at the end instead of merging back into the message now
-        // buried above this tool.
-        this._sealStreamingMessages()
+        // A new top-level tool slot is about to land at the end of the timeline.
+        // Seal any still-streaming message first so the next thought/message
+        // chunk opens a fresh card at the end instead of merging back into the
+        // message now buried above this tool. Child tool calls live inside a
+        // parent card and never touch the top-level streaming chain.
+        if (parentId == null) this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
-        this._upsertToolCall({
-          id: update.toolCallId,
-          title: update.title,
-          kind: update.kind ?? 'unknown',
-          status: (update.status as AcpToolCallStatus | undefined) ?? 'pending',
-          blocks,
-          diffs,
-          text: blocksToText(blocks),
-        })
+        this._upsertToolCall(
+          {
+            id: update.toolCallId,
+            title: update.title,
+            kind: update.kind ?? 'unknown',
+            status: (update.status as AcpToolCallStatus | undefined) ?? 'pending',
+            blocks,
+            diffs,
+            text: blocksToText(blocks),
+          },
+          parentId,
+        )
         this._telemetry.publicLog('acp.tool_call_started', {
           sessionId: this.id,
           kind: update.kind ?? 'unknown',
@@ -478,7 +509,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         break
       }
       case 'tool_call_update': {
-        const existing = this._toolCalls.find((t) => t.id === update.toolCallId)
+        const existing =
+          parentId != null
+            ? this._findChildToolCall(parentId, update.toolCallId)
+            : this._toolCalls.find((t) => t.id === update.toolCallId)
         const split = update.content != null ? splitToolCallContent(update.content) : undefined
         const blocks = split?.blocks ?? existing?.blocks ?? []
         const diffs = split?.diffs ?? existing?.diffs ?? []
@@ -491,7 +525,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           diffs,
           text: blocksToText(blocks),
         }
-        this._upsertToolCall(next)
+        this._upsertToolCall(next, parentId)
         if (update.status === 'failed') {
           this._telemetry.publicLogError('acp.tool_call_failed', {
             sessionId: this.id,
@@ -501,19 +535,19 @@ export class AcpSession extends Disposable implements IAcpSession {
         break
       }
       case 'plan': {
-        // Seal streaming only when the plan slot first appears — plan is a
-        // singleton lane updated in place afterwards, so resealing on every
-        // update could wrongly split a concurrently streaming message.
-        if (!this._timeline.some((it) => it.kind === 'plan')) this._sealStreamingMessages()
+        // Seal streaming only when the plan first appears. Plan no longer enters
+        // the timeline (it renders as a sticky bar off the scroll), so we track
+        // first appearance with a flag instead of scanning the timeline.
+        if (!this._planSeen) {
+          this._planSeen = true
+          this._sealStreamingMessages()
+        }
         const entries: readonly AcpPlanEntry[] = update.entries.map((e) => ({
           content: e.content,
           status: e.status,
           ...(e.priority !== undefined ? { priority: e.priority } : {}),
         }))
-        this._upsertPlanInTimeline(entries)
-        const tx = this._batchedTx()
-        this.plan.set(entries, tx)
-        this.timeline.set(this._timeline, tx)
+        this.plan.set(entries, this._batchedTx())
         break
       }
       case 'available_commands_update':
@@ -568,7 +602,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     return this._configOptions.setConfigOption(configId, value)
   }
 
-  private _appendChunk(role: AcpMessageRole, block: ContentBlock): void {
+  private _appendChunk(role: AcpMessageRole, block: ContentBlock, parentId?: string): void {
+    if (parentId != null) {
+      this._appendChildChunk(role, block, parentId)
+      return
+    }
     const last = this._messages[this._messages.length - 1]
     let next: AcpMessage
     if (last && last.role === role && this._isStreaming(last.id)) {
@@ -655,7 +693,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.timeline.set(this._timeline, undefined)
   }
 
-  private _upsertToolCall(call: AcpToolCall): void {
+  private _upsertToolCall(call: AcpToolCall, parentId?: string): void {
+    if (parentId != null) {
+      this._upsertChildOfParent(parentId, { kind: 'toolCall', id: call.id, call })
+      return
+    }
     const idx = this._toolCalls.findIndex((t) => t.id === call.id)
     if (idx === -1) {
       this._toolCalls = [...this._toolCalls, call]
@@ -666,6 +708,77 @@ export class AcpSession extends Disposable implements IAcpSession {
     const tx = this._batchedTx()
     this.toolCalls.set(this._toolCalls, tx)
     this.timeline.set(this._timeline, tx)
+  }
+
+  // -- sub-agent (child) routing ------------------------------------------
+
+  /** Append a streaming sub-agent message chunk under its parent tool call. */
+  private _appendChildChunk(role: AcpMessageRole, block: ContentBlock, parentId: string): void {
+    const children = this._childrenOf(parentId)
+    const last = children[children.length - 1]
+    let next: readonly AcpChildItem[]
+    if (last && last.kind === 'message' && last.message.role === role) {
+      // Merge into the trailing child message. No streaming-flag bookkeeping:
+      // an interleaved child tool call makes `last` a toolCall, which naturally
+      // breaks the merge and opens a fresh message — same for a role switch.
+      const blocks = mergeStreamingBlock(last.message.blocks, block)
+      const message: AcpMessage = {
+        ...last.message,
+        blocks,
+        text: blocksToText(blocks),
+      }
+      next = [...children.slice(0, -1), { kind: 'message', id: message.id, message }]
+    } else {
+      if (isBlankContentBlock(block)) return
+      const id = `m${++this._msgCounter}`
+      const blocks: readonly ContentBlock[] = [block]
+      // Child messages never show a streaming caret (folded by default), so they
+      // stay out of `_streamingIds` and the top-level seal/flush machinery.
+      const message: AcpMessage = { id, role, blocks, text: blocksToText(blocks), streaming: false }
+      next = [...children, { kind: 'message', id, message }]
+    }
+    this._setChildren(parentId, next)
+    this.timeline.set(this._timeline, this._batchedTx())
+  }
+
+  /** Upsert one child slot (message / toolCall) into its parent's children. */
+  private _upsertChildOfParent(parentId: string, child: AcpChildItem): void {
+    const children = this._childrenOf(parentId)
+    const idx = children.findIndex((c) => c.kind === child.kind && c.id === child.id)
+    const next =
+      idx === -1
+        ? [...children, child]
+        : [...children.slice(0, idx), child, ...children.slice(idx + 1)]
+    this._setChildren(parentId, next)
+    this.timeline.set(this._timeline, this._batchedTx())
+  }
+
+  private _childrenOf(parentId: string): readonly AcpChildItem[] {
+    const slot = this._timeline.find((it) => it.kind === 'toolCall' && it.id === parentId)
+    if (slot && slot.kind === 'toolCall') return slot.call.children ?? []
+    return this._orphanChildren.get(parentId) ?? []
+  }
+
+  private _findChildToolCall(parentId: string, id: string): AcpToolCall | undefined {
+    const child = this._childrenOf(parentId).find((c) => c.kind === 'toolCall' && c.id === id)
+    return child && child.kind === 'toolCall' ? child.call : undefined
+  }
+
+  /** Write a parent's children back to its timeline slot, or stash as orphan. */
+  private _setChildren(parentId: string, children: readonly AcpChildItem[]): void {
+    const idx = this._timeline.findIndex((it) => it.kind === 'toolCall' && it.id === parentId)
+    if (idx === -1) {
+      this._orphanChildren.set(parentId, children)
+      return
+    }
+    const slot = this._timeline[idx]
+    if (slot === undefined || slot.kind !== 'toolCall') return
+    const call: AcpToolCall = { ...slot.call, children }
+    this._timeline = [
+      ...this._timeline.slice(0, idx),
+      { kind: 'toolCall', id: call.id, call },
+      ...this._timeline.slice(idx + 1),
+    ]
   }
 
   private _upsertMessageInTimeline(message: AcpMessage): void {
@@ -680,17 +793,17 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _upsertToolCallInTimeline(call: AcpToolCall): void {
     const idx = this._timeline.findIndex((it) => it.kind === 'toolCall' && it.id === call.id)
-    const slot: TimelineItem = { kind: 'toolCall', id: call.id, call }
-    if (idx === -1) {
-      this._timeline = [...this._timeline, slot]
-    } else {
-      this._timeline = [...this._timeline.slice(0, idx), slot, ...this._timeline.slice(idx + 1)]
-    }
-  }
-
-  private _upsertPlanInTimeline(entries: readonly AcpPlanEntry[]): void {
-    const idx = this._timeline.findIndex((it) => it.kind === 'plan')
-    const slot: TimelineItem = { kind: 'plan', id: 'plan', entries }
+    // Preserve any sub-agent children already attached to this slot (tool_call_update
+    // rebuilds the call from the wire without children) and absorb orphans that
+    // arrived before this parent first landed.
+    const existing = idx !== -1 ? this._timeline[idx] : undefined
+    const existingChildren =
+      existing && existing.kind === 'toolCall' ? (existing.call.children ?? []) : []
+    const orphans = this._orphanChildren.get(call.id)
+    if (orphans) this._orphanChildren.delete(call.id)
+    const children = [...existingChildren, ...(orphans ?? [])]
+    const merged: AcpToolCall = children.length > 0 ? { ...call, children } : call
+    const slot: TimelineItem = { kind: 'toolCall', id: call.id, call: merged }
     if (idx === -1) {
       this._timeline = [...this._timeline, slot]
     } else {
@@ -726,6 +839,17 @@ export class AcpSession extends Disposable implements IAcpSession {
 /** A text block whose content is empty or only whitespace carries nothing. */
 export function isBlankContentBlock(block: ContentBlock): boolean {
   return block.type === 'text' && block.text.trim().length === 0
+}
+
+/**
+ * Read the vendor-specific sub-agent attribution our agent fork stamps onto each
+ * SessionUpdate (`_meta.claudeCode.parentToolUseId`). Returns the id of the
+ * parent tool call when this update belongs to a sub-agent, else undefined.
+ */
+function readParentToolUseId(update: SessionUpdate): string | undefined {
+  const meta = (update as { _meta?: { claudeCode?: { parentToolUseId?: unknown } } | null })._meta
+  const pid = meta?.claudeCode?.parentToolUseId
+  return typeof pid === 'string' && pid.length > 0 ? pid : undefined
 }
 
 /** True when at least one block would render visible content. */

@@ -13,6 +13,7 @@ import { memo, useState } from 'react'
 import { IEditorService, URI } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import type {
+  AcpMessage,
   AcpToolCall,
   AcpToolCallDiff,
   IAcpSession,
@@ -108,6 +109,22 @@ export const ToolCallCard = memo(function ToolCallCard({
     </>
   )
 
+  // Sub-agent timeline (Task tool): the spawned agent's messages / tool calls,
+  // folded inside this card. CollapsibleSlot only mounts the body when expanded,
+  // so this stays hidden until the user opens the card.
+  const children = call.children ?? []
+  const childTimeline = children.length > 0 && (
+    <ul className={styles['toolCallChildren']} data-testid="acp-subagent-timeline">
+      {children.map((c) =>
+        c.kind === 'message' ? (
+          <SubMessage key={c.id} message={c.message} />
+        ) : (
+          <ToolCallCard key={c.id} call={c.call} />
+        ),
+      )}
+    </ul>
+  )
+
   return (
     <CollapsibleSlot
       as="li"
@@ -126,6 +143,20 @@ export const ToolCallCard = memo(function ToolCallCard({
       }}
     >
       {body}
+      {childTimeline}
     </CollapsibleSlot>
   )
 })
+
+/** A single sub-agent message rendered inside a parent tool call's child timeline. */
+function SubMessage({ message }: { message: AcpMessage }) {
+  return (
+    <li
+      className={styles['subMessage']}
+      data-role={message.role}
+      data-testid="acp-subagent-message"
+    >
+      <MessageContent blocks={message.blocks} />
+    </li>
+  )
+}
