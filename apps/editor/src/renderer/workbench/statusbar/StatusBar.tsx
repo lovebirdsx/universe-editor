@@ -1,12 +1,13 @@
 import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
-import { Bell, Loader2, RefreshCw, type LucideIcon } from 'lucide-react'
+import { Bell, Loader2, RefreshCw, Sparkles, type LucideIcon } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import styles from './StatusBar.module.css'
 
 const ICON_MAP: Record<string, LucideIcon> = {
   bell: Bell,
+  sparkle: Sparkles,
 }
 
 function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {

@@ -10,7 +10,6 @@ import {
   Disposable,
   EditorRegistry,
   IEditorGroupsService,
-  IEditorService,
   ILayoutService,
   IStatusBarService,
   IViewsService,
@@ -139,48 +138,17 @@ export class AgentsEditorProviderContribution extends Disposable implements IWor
 }
 
 export class AgentsStatusBarContribution extends Disposable implements IWorkbenchContribution {
-  constructor(
-    @IAcpSessionService sessions: IAcpSessionService,
-    @IStatusBarService statusBar: IStatusBarService,
-    @IEditorService _editor: IEditorService,
-  ) {
+  constructor(@IStatusBarService statusBar: IStatusBarService) {
     super()
     const entry = statusBar.addEntry({
-      text: 'Agents',
+      text: '',
       icon: 'sparkle',
-      tooltip: localize('acp.statusbar.tooltip', 'ACP agent sessions'),
+      tooltip: localize('acp.statusbar.tooltip', 'Agents'),
       alignment: StatusBarAlignment.Right,
       priority: 50,
-      command: 'workbench.action.agent.newSession',
+      command: 'workbench.action.agent.openView',
     })
     this._register({ dispose: () => entry.dispose() })
-
-    this._register(
-      autorun((r) => {
-        const active = sessions.activeSession.read(r)
-        const total = sessions.sessions.read(r).length
-        if (!active) {
-          entry.update({
-            text: total > 0 ? `Agents (${total})` : 'Agents',
-            icon: 'sparkle',
-            tooltip: localize('acp.statusbar.tooltip', 'ACP agent sessions'),
-            alignment: StatusBarAlignment.Right,
-            priority: 50,
-            command: 'workbench.action.agent.newSession',
-          })
-        } else {
-          const status = active.status.read(r)
-          entry.update({
-            text: `${active.title} · ${status}`,
-            icon: 'sparkle',
-            tooltip: active.title,
-            alignment: StatusBarAlignment.Right,
-            priority: 50,
-            command: 'workbench.action.agent.openInEditor',
-          })
-        }
-      }),
-    )
   }
 }
 

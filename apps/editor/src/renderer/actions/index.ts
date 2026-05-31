@@ -122,6 +122,7 @@ import {
   FocusPreviousAcpTimelineItemAction,
   NewAgentSessionAction,
   OpenAgentInEditorAction,
+  OpenAgentViewAction,
   RefreshAgentSessionsAction,
   ResumeAgentSessionAction,
   ScrollAcpTimelinePageDownAction,
@@ -278,6 +279,7 @@ registerAction2(OpenInTerminalAction)
 registerAction2(NewAgentSessionAction)
 registerAction2(CancelAgentTurnAction)
 registerAction2(OpenAgentInEditorAction)
+registerAction2(OpenAgentViewAction)
 registerAction2(ToggleAgentChatLocationAction)
 registerAction2(FocusAgentInputAction)
 registerAction2(SelectAgentAction)

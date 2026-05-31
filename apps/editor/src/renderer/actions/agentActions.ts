@@ -103,6 +103,23 @@ export class OpenAgentInEditorAction extends Action2 {
   }
 }
 
+export class OpenAgentViewAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openView'
+  constructor() {
+    super({
+      id: OpenAgentViewAction.ID,
+      title: localize('action.agent.openView', 'Open Agents View'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor
+      .get(ILayoutService)
+      .focusView('workbench.view.agents.main', { source: 'command' })
+  }
+}
+
 export class ToggleAgentChatLocationAction extends Action2 {
   static readonly ID = 'workbench.action.agent.toggleChatLocation'
   constructor() {
