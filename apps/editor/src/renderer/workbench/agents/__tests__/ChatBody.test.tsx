@@ -41,6 +41,21 @@ import { ChatBody } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import styles from '../agents.module.css'
 
+// All cases here stay below the virtualization threshold, so the virtualizer's
+// return value is never used. The real @tanstack/react-virtual, however, attaches
+// a scroll listener to the chatBody container and — on the fireEvent.scroll in the
+// persistence cases — schedules an isScrollingResetDelay setTimeout that it never
+// cancels on unmount. On slower CI that timer fires after happy-dom is torn down,
+// crashing in React with "window is not defined". Stub it out entirely.
+vi.mock('@tanstack/react-virtual', () => ({
+  useVirtualizer: () => ({
+    getTotalSize: () => 0,
+    getVirtualItems: () => [],
+    scrollToIndex: () => {},
+    measureElement: () => {},
+  }),
+}))
+
 afterEach(() => {
   cleanup()
   AcpChatViewStateCache._resetForTests()
