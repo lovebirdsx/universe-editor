@@ -4,10 +4,10 @@ import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/acpSession.js'
 import styles from './agents.module.css'
 
-const SIZE = 30
+const SIZE = 26
 const CENTER = SIZE / 2
-const RADIUS = 12
-const STROKE = 2.5
+const STROKE = 2
+const RADIUS = SIZE / 2 - STROKE / 2 - 1
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
 
 function clamp01(n: number): number {
