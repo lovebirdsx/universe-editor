@@ -50,6 +50,7 @@ import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
+import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
 import {
   AcpSession,
   type AcpPendingPermission,
@@ -518,6 +519,7 @@ export class AcpSessionService
     this._sessions = this._sessions.filter((x) => x.id !== sessionId)
     this.sessions.set(this._sessions, undefined)
     AcpChatViewStateCache.clear(sessionId)
+    AcpPromptDraftCache.clear(sessionId)
     if (this.activeSessionId.get() === sessionId) {
       const next = this._sessions[0]
       this.activeSessionId.set(next?.id, undefined)

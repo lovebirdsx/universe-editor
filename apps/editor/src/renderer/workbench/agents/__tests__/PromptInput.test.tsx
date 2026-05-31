@@ -34,6 +34,7 @@ import type {
 } from '../../../services/acp/acpSessionService.js'
 import type { AvailableCommand, SessionConfigOption } from '@agentclientprotocol/sdk'
 import { invalidateMentionFileCache } from '../../../services/acp/mentionFileSearch.js'
+import { AcpPromptDraftCache } from '../../../services/acp/acpPromptDraftCache.js'
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
@@ -41,6 +42,7 @@ import { ServicesContext } from '../../useService.js'
 afterEach(() => {
   cleanup()
   invalidateMentionFileCache()
+  AcpPromptDraftCache._resetForTests()
 })
 
 const stubFileService: IFileServiceType = {
@@ -524,5 +526,67 @@ describe('PromptInput — focus handoff', () => {
     expect(document.activeElement).not.toBe(ta)
     rerender(<PromptInput session={session} />)
     expect(document.activeElement).not.toBe(ta)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Draft persistence — each session keeps its own unsent text via
+// AcpPromptDraftCache. ChatBody keys PromptInput by session id, so switching
+// sessions remounts the component; the draft is restored from the cache.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — draft persistence', () => {
+  it('keeps each session draft isolated in the cache', () => {
+    renderWithServices(<PromptInput session={makeSession({ id: 's1' })} />)
+    fireEvent.change(getTextarea(), { target: { value: 'draft for one' } })
+    expect(AcpPromptDraftCache.load('s1')?.text).toBe('draft for one')
+    expect(AcpPromptDraftCache.load('s2')).toBeUndefined()
+  })
+
+  it('restores the draft when the same session remounts', () => {
+    const session = makeSession({ id: 's1' })
+    renderWithServices(<PromptInput session={session} />)
+    fireEvent.change(getTextarea(), { target: { value: 'unfinished thought' } })
+    cleanup() // simulate switching away (PromptInput unmounts)
+    renderWithServices(<PromptInput session={session} />)
+    expect(getTextarea().value).toBe('unfinished thought')
+  })
+
+  it('restores recorded mentions so a remounted draft still sends resource_links', async () => {
+    const session = makeSession({ id: 's1' })
+    const opts = {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileService: makeFileService(['/repo/src/main.ts']),
+    }
+    renderWithServices(<PromptInput session={session} />, opts)
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    typeAt(ta, '@main')
+    fireEvent.keyDown(ta, { key: 'Enter' }) // accept mention → records it
+    expect(ta.value).toContain('@src/main.ts')
+
+    cleanup() // switch away: PromptInput unmounts, draft + mention cached
+    renderWithServices(<PromptInput session={session} />, opts)
+    const restored = getTextarea()
+    expect(restored.value).toContain('@src/main.ts')
+    fireEvent.keyDown(restored, { key: 'Enter' }) // submit the restored draft
+    expect(session.sendPrompt).toHaveBeenCalledTimes(1)
+    const [, mentions] = session.sendPrompt.mock.calls[0]!
+    expect(mentions).toEqual([
+      { uri: URI.file('/repo/src/main.ts').toString(), name: 'src/main.ts' },
+    ])
+  })
+
+  it('clears the draft after the prompt is sent', () => {
+    const session = makeSession({ id: 's1' })
+    renderWithServices(<PromptInput session={session} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'send me' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledWith('send me', [])
+    expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
   })
 })

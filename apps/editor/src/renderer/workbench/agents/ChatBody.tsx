@@ -114,6 +114,7 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
       <PermissionCard session={target} />
       <QuestionCard session={target} />
       <PromptInput
+        key={`prompt:${target.id}`}
         session={target}
         handleRef={handleRef}
         {...(autoFocus !== undefined ? { autoFocus } : {})}

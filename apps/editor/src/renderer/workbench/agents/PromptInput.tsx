@@ -11,7 +11,10 @@
  *  mention list to `sendPrompt`; the service serializes any `@<name>` that
  *  matches a recorded mention into a `resource_link` AcpContentBlock and
  *  leaves the rest as text. If the user edits/deletes the literal `@<name>`
- *  before sending, the link silently disappears — by design.
+ *  before sending, the link silently disappears — by design. Both the text
+ *  and the recorded mentions are persisted per session via AcpPromptDraftCache,
+ *  so switching tabs / sessions and coming back restores the draft with its
+ *  mentions intact.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -42,6 +45,7 @@ import { MentionPopover } from './MentionPopover.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
+import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import styles from './agents.module.css'
 
 export function PromptInput({
@@ -53,7 +57,7 @@ export function PromptInput({
   autoFocus?: boolean
   handleRef?: MutableRefObject<WidgetHandle>
 }) {
-  const [text, setText] = useState('')
+  const [text, setText] = useState(() => AcpPromptDraftCache.load(session.id)?.text ?? '')
   const [caret, setCaret] = useState(0)
   const [slashIndex, setSlashIndex] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
@@ -62,7 +66,9 @@ export function PromptInput({
   // user starts a fresh command/mention.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [mentionDismissed, setMentionDismissed] = useState(false)
-  const [mentions, setMentions] = useState<readonly PromptMention[]>([])
+  const [mentions, setMentions] = useState<readonly PromptMention[]>(
+    () => AcpPromptDraftCache.load(session.id)?.mentions ?? [],
+  )
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -106,6 +112,14 @@ export function PromptInput({
   useEffect(() => {
     if (autoFocus) textareaRef.current?.focus()
   }, [autoFocus])
+
+  // Persist the unsent draft (text + recorded mentions) per session so
+  // switching tabs / sessions and coming back restores it (see
+  // AcpPromptDraftCache).
+  useEffect(() => {
+    if (text) AcpPromptDraftCache.save(session.id, { text, mentions })
+    else AcpPromptDraftCache.clear(session.id)
+  }, [text, mentions, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text), [text])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
@@ -176,6 +190,7 @@ export function PromptInput({
     const value = text
     const recorded = mentions
     setText('')
+    AcpPromptDraftCache.clear(session.id)
     setMentions([])
     setSlashDismissed(false)
     setMentionDismissed(false)
