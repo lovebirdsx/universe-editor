@@ -22,9 +22,12 @@ import {
 
 export type AcpTimelineMoveDirection = 'next' | 'prev'
 
+export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown'
+
 export interface AcpChatWidget {
   readonly container: HTMLElement
   moveTimeline(direction: AcpTimelineMoveDirection): void
+  scrollTimeline(target: AcpTimelineScrollTarget): void
   focusInput(): void
 }
 

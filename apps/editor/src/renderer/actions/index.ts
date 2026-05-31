@@ -124,6 +124,10 @@ import {
   OpenAgentInEditorAction,
   RefreshAgentSessionsAction,
   ResumeAgentSessionAction,
+  ScrollAcpTimelinePageDownAction,
+  ScrollAcpTimelinePageUpAction,
+  ScrollAcpTimelineToBottomAction,
+  ScrollAcpTimelineToTopAction,
   SelectAgentAction,
   SelectAgentModeAction,
   SelectAgentModelAction,
@@ -283,3 +287,7 @@ registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
 registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
+registerAction2(ScrollAcpTimelineToTopAction)
+registerAction2(ScrollAcpTimelineToBottomAction)
+registerAction2(ScrollAcpTimelinePageUpAction)
+registerAction2(ScrollAcpTimelinePageDownAction)

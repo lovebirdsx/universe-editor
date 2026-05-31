@@ -39,6 +39,7 @@ import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   IAcpChatWidgetService,
   type AcpTimelineMoveDirection,
+  type AcpTimelineScrollTarget,
 } from '../../services/acp/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
 import { MessageContent } from './MessageContent.js'
@@ -54,6 +55,7 @@ const STICK_THRESHOLD_PX = 32
 
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
+  scrollTimeline: (target: AcpTimelineScrollTarget) => void
   focus: () => void
 }
 
@@ -66,7 +68,7 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
   const active = useObservable(service.activeSession)
   const target = session ?? active
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const handleRef = useRef<WidgetHandle>({ move: noop, focus: noop })
+  const handleRef = useRef<WidgetHandle>({ move: noop, scrollTimeline: noop, focus: noop })
 
   useEffect(() => {
     const container = containerRef.current
@@ -74,6 +76,7 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
     const sub = widgetService.register({
       container,
       moveTimeline: (d) => handleRef.current.move(d),
+      scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
     })
     return () => sub.dispose()
@@ -278,8 +281,29 @@ function ChatScroll({
         virtualizerRef.current?.scrollToIndex(nextIndex, { align: 'center' })
       }
     }
+    handle.scrollTimeline = (target) => {
+      const el = containerRef.current
+      if (!el) return
+      // Setting scrollTop dispatches onScroll → handleScroll recomputes
+      // stickRef and persists, so stick state stays correct without manual work.
+      switch (target) {
+        case 'top':
+          el.scrollTop = 0
+          break
+        case 'bottom':
+          el.scrollTop = el.scrollHeight
+          break
+        case 'pageUp':
+          el.scrollTop -= el.clientHeight
+          break
+        case 'pageDown':
+          el.scrollTop += el.clientHeight
+          break
+      }
+    }
     return () => {
       handle.move = noop
+      handle.scrollTimeline = noop
     }
   }, [handleRef])
 

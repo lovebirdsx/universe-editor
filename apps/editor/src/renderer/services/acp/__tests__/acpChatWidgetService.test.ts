@@ -28,6 +28,7 @@ function makeWidget(label: string): {
   const widget: AcpChatWidget = {
     container,
     moveTimeline: moveSpy,
+    scrollTimeline: vi.fn(),
     focusInput: focusSpy,
   }
   return { container, child, widget, moveSpy, focusSpy }
@@ -143,6 +144,7 @@ describe('AcpChatWidgetService', () => {
     const widget: AcpChatWidget = {
       container,
       moveTimeline: vi.fn(),
+      scrollTimeline: vi.fn(),
       focusInput: vi.fn(),
     }
     svc.register(widget)

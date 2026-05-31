@@ -503,3 +503,77 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
     accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('prev')
   }
 }
+
+export class ScrollAcpTimelineToTopAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelineToTop'
+  constructor() {
+    super({
+      id: ScrollAcpTimelineToTopAction.ID,
+      title: localize('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'alt+a', when: 'acpChatFocused' },
+        { primary: 'alt+home', when: 'acpChatFocused' },
+      ],
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('top')
+  }
+}
+
+export class ScrollAcpTimelineToBottomAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelineToBottom'
+  constructor() {
+    super({
+      id: ScrollAcpTimelineToBottomAction.ID,
+      title: localize('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'alt+e', when: 'acpChatFocused' },
+        { primary: 'alt+end', when: 'acpChatFocused' },
+      ],
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('bottom')
+  }
+}
+
+export class ScrollAcpTimelinePageUpAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelinePageUp'
+  constructor() {
+    super({
+      id: ScrollAcpTimelinePageUpAction.ID,
+      title: localize('action.agent.scrollTimelinePageUp', 'Scroll Timeline Page Up'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+pageup', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('pageUp')
+  }
+}
+
+export class ScrollAcpTimelinePageDownAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelinePageDown'
+  constructor() {
+    super({
+      id: ScrollAcpTimelinePageDownAction.ID,
+      title: localize('action.agent.scrollTimelinePageDown', 'Scroll Timeline Page Down'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+pagedown', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('pageDown')
+  }
+}
