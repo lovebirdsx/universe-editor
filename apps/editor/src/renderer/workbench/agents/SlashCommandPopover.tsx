@@ -9,6 +9,7 @@
 import { useEffect, useRef } from 'react'
 import { localize } from '@universe-editor/platform'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
+import { fuzzyMatchField, scoreFuzzyMatch } from '../../services/fuzzyMatch/fuzzyMatch.js'
 import styles from './agents.module.css'
 
 export interface SlashCommandPopoverProps {
@@ -20,25 +21,30 @@ export interface SlashCommandPopoverProps {
 
 /**
  * Build the visible suggestion list. The caller passes the raw `query` (text
- * after the leading `/`), and we fuzzy-prefix-match each command's name and
- * description. The returned list preserves the order the agent advertised
- * (mature agents tend to put the common commands first).
+ * after the leading `/`). We rank by relevance with the same subsequence
+ * matcher Go to File uses: a name match (exact/prefix > substring >
+ * subsequence) always ranks above a description-only match, and ties keep the
+ * order the agent advertised (mature agents put common commands first).
  */
 export function filterCommands(
   commands: readonly AvailableCommand[],
   query: string,
 ): readonly AvailableCommand[] {
   if (!query) return commands
-  const q = query.toLowerCase()
-  return commands.filter((c) => {
-    const name = c.name.toLowerCase()
-    // Allow matching with or without a leading `/`.
-    return (
-      name.includes(q) ||
-      name.replace(/^\//, '').startsWith(q) ||
-      c.description.toLowerCase().includes(q)
-    )
-  })
+  // Allow matching with or without a leading `/`.
+  const q = query.replace(/^\//, '')
+  const scored = commands
+    .map((command, index) => ({ command, index, score: scoreCommand(command, q) }))
+    .filter((s) => s.score >= 0)
+  scored.sort((a, b) => b.score - a.score || a.index - b.index)
+  return scored.map((s) => s.command)
+}
+
+function scoreCommand(command: AvailableCommand, query: string): number {
+  const nameScore = scoreFuzzyMatch(command.name.replace(/^\//, ''), query)
+  // Name matches outrank any description-only match by a wide margin.
+  if (nameScore >= 0) return 10_000 + nameScore
+  return fuzzyMatchField(command.description, query) ? 0 : -1
 }
 
 export function SlashCommandPopover({

@@ -30,9 +30,10 @@ describe('filterCommands', () => {
   })
 
   it('matches against name with leading slash typed in', () => {
-    // Pick a query that's selective enough to single out one command — the
-    // single letter 'h' would also fuzzy-match descriptions like "Show diff".
-    const r = filterCommands(COMMANDS, 'hel')
+    // The user may type the leading `/` themselves; it's stripped before
+    // matching. `help` is selective enough that the subsequence matcher
+    // singles out `/help` without catching any description.
+    const r = filterCommands(COMMANDS, '/help')
     expect(r.map((c) => c.name)).toEqual(['/help'])
   })
 
@@ -43,6 +44,17 @@ describe('filterCommands', () => {
 
   it('returns empty for no matches', () => {
     expect(filterCommands(COMMANDS, 'zzzzz')).toEqual([])
+  })
+
+  it('ranks an exact name match first, above description-only matches', () => {
+    const cmds: readonly AvailableCommand[] = [
+      { name: '/update-config', description: 'compose a project config' },
+      { name: '/compact', description: 'Summarize the conversation' },
+    ]
+    // `/update-config` only matches `compact` via a loose description
+    // subsequence; the exact name match must still win.
+    const r = filterCommands(cmds, 'compact')
+    expect(r[0]?.name).toBe('/compact')
   })
 })
 

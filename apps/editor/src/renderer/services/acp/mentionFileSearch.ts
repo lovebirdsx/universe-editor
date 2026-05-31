@@ -12,6 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type IFileService } from '@universe-editor/platform'
+import { fuzzyMatchField } from '../fuzzyMatch/fuzzyMatch.js'
 
 export interface MentionFileEntry {
   /** Absolute file:// URI (the value stored on the AcpContentBlock.resource_link). */
@@ -98,20 +99,9 @@ export function filterMentionFiles(
     if (name.startsWith(q)) score = 1000 - name.length
     else if (name.includes(q)) score = 500 - name.length
     else if (rel.includes(q)) score = 200 - rel.length
-    else if (subsequence(rel, q)) score = 50
+    else if (fuzzyMatchField(entry.relPath, query)) score = 50
     if (score >= 0) scored.push({ entry, score })
   }
   scored.sort((a, b) => b.score - a.score || a.entry.relPath.localeCompare(b.entry.relPath))
   return scored.slice(0, limit).map((s) => s.entry)
-}
-
-function subsequence(haystack: string, needle: string): boolean {
-  let i = 0
-  for (const ch of haystack) {
-    if (ch === needle[i]) {
-      i++
-      if (i === needle.length) return true
-    }
-  }
-  return i === needle.length
 }
