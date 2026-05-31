@@ -1,6 +1,9 @@
 import type { MessageMap } from '@universe-editor/platform'
 
 export const EN_US_MESSAGES: MessageMap = {
+  'acp.confirmClose.close': 'Close',
+  'acp.confirmClose.detail': 'Closing it will stop the running agent.',
+  'acp.confirmClose.message': 'Session "{title}" is still running.',
   'app.name': 'Universe Editor',
   'app.description': 'A VSCode-paradigm game content editor.',
   'command.category.editor': 'Editor',

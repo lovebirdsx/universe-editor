@@ -8,6 +8,7 @@ import { Emitter, Event } from '../base/event.js'
 import { Disposable, IDisposable, toDisposable } from '../base/lifecycle.js'
 import { createDecorator } from '../di/instantiation.js'
 import type { ServicesAccessor } from '../di/instantiation.js'
+import type { IDialogService } from '../dialog/dialogService.js'
 import { URI } from '../base/uri.js'
 
 // -------- IEditorInput (legacy structural type, kept for backwards compatibility) --------
@@ -86,6 +87,13 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
    * `isDirty` returns to `false`. Optional, mirrors `save`.
    */
   revert?(): Promise<void>
+
+  /**
+   * Optional gate run before the editor is closed. Return `false` to abort the
+   * close (user cancelled). Inputs without in-memory dirty state (e.g. agent
+   * sessions) use this instead of `isDirty` to confirm destructive closes.
+   */
+  confirmClose?(dialogService: IDialogService): Promise<boolean>
 
   /**
    * Returns a JSON-serialisable snapshot of this input for persistence.

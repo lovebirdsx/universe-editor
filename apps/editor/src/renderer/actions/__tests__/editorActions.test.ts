@@ -184,7 +184,7 @@ describe('Built-in editor Action2s', () => {
     expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['b', 'c'])
   })
 
-  it('CloseUnmodifiedEditors keeps dirty editors and closes the rest', () => {
+  it('CloseUnmodifiedEditors keeps dirty editors and closes the rest', async () => {
     const svc = new EditorGroupsService()
     const a = new TestEditor('a')
     const b = new TestEditor('b')
@@ -193,7 +193,7 @@ describe('Built-in editor Action2s', () => {
     svc.activeGroup.openEditor(b)
     svc.activeGroup.openEditor(c)
     b.isDirty = true
-    exec(CloseUnmodifiedEditorsAction, svc)
+    await exec(CloseUnmodifiedEditorsAction, svc)
     expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['b'])
   })
 

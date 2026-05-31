@@ -178,13 +178,12 @@ export class CloseUnmodifiedEditorsAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor, arg?: unknown): void {
+  override async run(accessor: ServicesAccessor, arg?: unknown): Promise<void> {
     const target = resolveTargetEditor(accessor, arg)
     if (!target) return
     const { group } = target
-    for (const e of [...group.editors]) {
-      if (!e.isDirty) group.closeEditor(e)
-    }
+    const unmodified = group.editors.filter((e) => !e.isDirty)
+    await closeEditorsWithConfirm(unmodified, group, accessor.get(IDialogService))
   }
 }
 

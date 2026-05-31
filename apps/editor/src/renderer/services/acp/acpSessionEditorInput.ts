@@ -9,7 +9,9 @@ import {
   autorun,
   EditorInput,
   IInstantiationService,
+  localize,
   URI,
+  type IDialogService,
   type IDisposable,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -79,6 +81,22 @@ export class AcpSessionEditorInput extends EditorInput {
 
   override getName(): string {
     return this._lastTitle
+  }
+
+  override async confirmClose(dialogService: IDialogService): Promise<boolean> {
+    const session = this._sessions.getById(this.sessionId)
+    const status = session?.status.get()
+    if (status !== 'running' && status !== 'connecting') return true
+    const result = await dialogService.confirm({
+      message: localize('acp.confirmClose.message', 'Session "{title}" is still running.', {
+        title: session?.title ?? this.getName(),
+      }),
+      detail: localize('acp.confirmClose.detail', 'Closing it will stop the running agent.'),
+      primaryButton: localize('acp.confirmClose.close', 'Close'),
+      cancelButton: localize('dialog.default.cancel', 'Cancel'),
+      type: 'warning',
+    })
+    return result.confirmed
   }
 
   private _computeTitle(): string {

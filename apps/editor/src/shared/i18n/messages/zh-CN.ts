@@ -1,6 +1,9 @@
 import type { MessageMap } from '@universe-editor/platform'
 
 export const ZH_CN_MESSAGES: MessageMap = {
+  'acp.confirmClose.close': '关闭',
+  'acp.confirmClose.detail': '关闭将停止正在运行的 agent。',
+  'acp.confirmClose.message': '会话 "{title}" 仍在运行。',
   'app.name': 'Universe Editor',
   'app.description': '一个遵循 VSCode 范式的游戏内容编辑器。',
   'command.category.editor': '编辑器',

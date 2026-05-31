@@ -15,6 +15,13 @@ export async function closeEditorWithConfirm(
   group: IEditorGroup,
   dialogService: IDialogService,
 ): Promise<boolean> {
+  if (input.confirmClose) {
+    const ok = await input.confirmClose(dialogService)
+    if (!ok) return false
+    group.closeEditor(input)
+    return true
+  }
+
   if (!input.isDirty) {
     group.closeEditor(input)
     return true
