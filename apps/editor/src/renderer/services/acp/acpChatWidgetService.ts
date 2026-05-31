@@ -29,6 +29,10 @@ export interface AcpChatWidget {
   moveTimeline(direction: AcpTimelineMoveDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
   focusInput(): void
+  /** Toggle the collapsed state of the currently focused timeline item. */
+  toggleCollapse(): void
+  /** Cycle the whole timeline: by-kind default → all collapsed → all expanded. */
+  cycleCollapseMode(): void
 }
 
 export interface IAcpChatWidgetService {

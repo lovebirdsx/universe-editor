@@ -30,6 +30,8 @@ function makeWidget(label: string): {
     moveTimeline: moveSpy,
     scrollTimeline: vi.fn(),
     focusInput: focusSpy,
+    toggleCollapse: vi.fn(),
+    cycleCollapseMode: vi.fn(),
   }
   return { container, child, widget, moveSpy, focusSpy }
 }
@@ -146,6 +148,8 @@ describe('AcpChatWidgetService', () => {
       moveTimeline: vi.fn(),
       scrollTimeline: vi.fn(),
       focusInput: vi.fn(),
+      toggleCollapse: vi.fn(),
+      cycleCollapseMode: vi.fn(),
     }
     svc.register(widget)
     expect(cks.get('acpChatFocused')).toBe(true)

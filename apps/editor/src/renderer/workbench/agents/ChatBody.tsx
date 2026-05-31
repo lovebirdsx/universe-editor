@@ -41,13 +41,18 @@ import {
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
 } from '../../services/acp/acpChatWidgetService.js'
-import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
+import {
+  AcpChatViewStateCache,
+  type CollapseMode,
+} from '../../services/acp/acpChatViewStateCache.js'
+import { CollapsibleSlot } from './CollapsibleSlot.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { QuestionCard } from './QuestionCard.js'
 import { PlanCard } from './PlanView.js'
 import { PromptInput } from './PromptInput.js'
 import { ToolCallCard } from './ToolCallCard.js'
+import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import styles from './agents.module.css'
 
@@ -57,9 +62,24 @@ export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
   scrollTimeline: (target: AcpTimelineScrollTarget) => void
   focus: () => void
+  toggleCollapse: () => void
+  cycleCollapseMode: () => void
+}
+
+interface CollapseState {
+  mode: CollapseMode
+  overrides: ReadonlyMap<string, boolean>
 }
 
 const noop = (): void => {}
+
+const NOOP_HANDLE: WidgetHandle = {
+  move: noop,
+  scrollTimeline: noop,
+  focus: noop,
+  toggleCollapse: noop,
+  cycleCollapseMode: noop,
+}
 
 export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
   const service = useService(IAcpSessionService)
@@ -68,7 +88,7 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
   const active = useObservable(service.activeSession)
   const target = session ?? active
   const containerRef = useRef<HTMLDivElement | null>(null)
-  const handleRef = useRef<WidgetHandle>({ move: noop, scrollTimeline: noop, focus: noop })
+  const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
 
   useEffect(() => {
     const container = containerRef.current
@@ -78,6 +98,8 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
       moveTimeline: (d) => handleRef.current.move(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
+      toggleCollapse: () => handleRef.current.toggleCollapse(),
+      cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
     })
     return () => sub.dispose()
   }, [widgetService, target?.id])
@@ -121,6 +143,13 @@ function ChatScroll({
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
 
+  const [collapse, setCollapse] = useState<CollapseState>(() => ({
+    mode: saved?.collapse?.mode ?? 'default',
+    overrides: new Map(saved?.collapse?.overrides ?? []),
+  }))
+  const collapseRef = useRef(collapse)
+  collapseRef.current = collapse
+
   // Virtualize only past a threshold so short conversations keep the plain DOM
   // list (cheaper, and what the tests exercise). The scroll element is the same
   // chatBody container in both modes, so bottom-pin / restore that drive
@@ -151,8 +180,17 @@ function ChatScroll({
       scrollTop,
       stuck: stickRef.current,
       focusedKey: focusedKeyRef.current,
+      collapse: {
+        mode: collapseRef.current.mode,
+        overrides: [...collapseRef.current.overrides],
+      },
     })
   }, [session.id])
+
+  // Persist whenever the collapse state changes (Alt+F / Ctrl+Alt+F / chevron).
+  useEffect(() => {
+    persist()
+  }, [collapse, persist])
 
   const handleScroll = () => {
     if (restoringRef.current) return
@@ -244,6 +282,19 @@ function ChatScroll({
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
 
+  // Stable across renders (reads refs only) so passing it to the memoized
+  // TimelineSlot does not bust memo. Toggles the per-item collapse override.
+  const handleToggleCollapse = useCallback((key: string) => {
+    const item = timelineRef.current.find((it) => slotKey(it) === key)
+    if (!item) return
+    const current = resolveCollapsed(key, item, collapseRef.current)
+    setCollapse((s) => {
+      const overrides = new Map(s.overrides)
+      overrides.set(key, !current)
+      return { mode: s.mode, overrides }
+    })
+  }, [])
+
   useEffect(() => {
     const handle = handleRef.current
     handle.move = (direction) => {
@@ -301,11 +352,20 @@ function ChatScroll({
           break
       }
     }
+    handle.toggleCollapse = () => {
+      const key = focusedKeyRef.current
+      if (key !== null) handleToggleCollapse(key)
+    }
+    handle.cycleCollapseMode = () => {
+      setCollapse((s) => ({ mode: nextCollapseMode(s.mode), overrides: new Map() }))
+    }
     return () => {
       handle.move = noop
       handle.scrollTimeline = noop
+      handle.toggleCollapse = noop
+      handle.cycleCollapseMode = noop
     }
-  }, [handleRef])
+  }, [handleRef, handleToggleCollapse])
 
   return (
     <div
@@ -345,6 +405,8 @@ function ChatScroll({
                   item={item}
                   sessionRunning={slotRunning}
                   isFocused={key === focusedKey}
+                  collapsed={resolveCollapsed(key, item, collapse)}
+                  onToggleCollapse={handleToggleCollapse}
                 />
               </div>
             )
@@ -365,6 +427,8 @@ function ChatScroll({
                 item={item}
                 sessionRunning={slotRunning}
                 isFocused={key === focusedKey}
+                collapsed={resolveCollapsed(key, item, collapse)}
+                onToggleCollapse={handleToggleCollapse}
               />
             )
           })}
@@ -379,11 +443,15 @@ const TimelineSlot = memo(function TimelineSlot({
   item,
   sessionRunning,
   isFocused,
+  collapsed,
+  onToggleCollapse,
 }: {
   slotKey: string
   item: TimelineItem
   sessionRunning: boolean
   isFocused: boolean
+  collapsed: boolean
+  onToggleCollapse: (key: string) => void
 }) {
   const focusedClass = isFocused ? ` ${styles['timelineSlotFocused']}` : ''
   switch (item.kind) {
@@ -395,25 +463,31 @@ const TimelineSlot = memo(function TimelineSlot({
       if (!m.streaming && m.role !== 'user' && !hasVisibleMessageContent(m.blocks)) {
         return null
       }
-      const showCaret = sessionRunning && m.streaming
+      const showCaret = sessionRunning && m.streaming && !collapsed
       const isUser = m.role === 'user'
       const className =
         styles['messageItem'] + (isUser ? ` ${styles['stickyUserMessage']}` : '') + focusedClass
       return (
-        <li
-          className={className}
-          data-role={m.role}
-          data-testid={`acp-message-${m.role}`}
-          data-timeline-key={key}
+        <CollapsibleSlot
+          icon={roleIcon(m.role)}
+          kindLabel={m.role}
+          summary={firstLineSummary(m.text)}
+          collapsed={collapsed}
+          onToggle={() => onToggleCollapse(key)}
+          rootProps={{
+            className,
+            'data-role': m.role,
+            'data-testid': `acp-message-${m.role}`,
+            'data-timeline-key': key,
+          }}
         >
-          <span className={styles['messageRole']}>{m.role}</span>
           {isUser ? <UserMessageItem blocks={m.blocks} /> : <MessageContent blocks={m.blocks} />}
           {showCaret && (
             <span className={styles['streamingCaret']} aria-hidden="true" data-testid="acp-caret">
               ▍
             </span>
           )}
-        </li>
+        </CollapsibleSlot>
       )
     }
     case 'toolCall':
@@ -421,14 +495,22 @@ const TimelineSlot = memo(function TimelineSlot({
         <ToolCallCard
           call={item.call}
           dataTimelineKey={key}
+          collapsed={collapsed}
+          onToggleCollapse={() => onToggleCollapse(key)}
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
         />
       )
     case 'plan':
       return (
-        <li className={styles['timelinePlan'] + focusedClass} data-timeline-key={key}>
-          <PlanCard entries={item.entries} />
-        </li>
+        <PlanCard
+          entries={item.entries}
+          collapsed={collapsed}
+          onToggle={() => onToggleCollapse(key)}
+          rootProps={{
+            className: `${styles['planCard']} ${styles['timelinePlan']}${focusedClass}`,
+            'data-timeline-key': key,
+          }}
+        />
       )
   }
 })
@@ -442,6 +524,47 @@ function slotKey(item: TimelineItem): string {
     case 'plan':
       return 'p:plan'
   }
+}
+
+// Per-kind default collapse under the `default` mode — mirrors the prior
+// behaviour: thought messages and read/search tool calls start collapsed, the
+// rest start expanded.
+function defaultCollapsed(item: TimelineItem, mode: CollapseMode): boolean {
+  if (mode === 'collapsed') return true
+  if (mode === 'expanded') return false
+  switch (item.kind) {
+    case 'message':
+      return item.message.role === 'thought'
+    case 'toolCall':
+      return item.call.kind === 'read' || item.call.kind === 'search'
+    case 'plan':
+      return false
+  }
+}
+
+// An explicit per-item override wins; otherwise fall back to the mode default.
+function resolveCollapsed(key: string, item: TimelineItem, state: CollapseState): boolean {
+  const override = state.overrides.get(key)
+  return override !== undefined ? override : defaultCollapsed(item, state.mode)
+}
+
+function nextCollapseMode(mode: CollapseMode): CollapseMode {
+  switch (mode) {
+    case 'default':
+      return 'collapsed'
+    case 'collapsed':
+      return 'expanded'
+    case 'expanded':
+      return 'default'
+  }
+}
+
+// First non-empty line of a message, trimmed and clamped, for the collapsed
+// single-line summary.
+function firstLineSummary(text: string): string {
+  const firstLine = text.split('\n', 1)[0]?.trim() ?? ''
+  const MAX = 120
+  return firstLine.length > MAX ? `${firstLine.slice(0, MAX)}…` : firstLine
 }
 
 // Rough first-paint heights per kind; the virtualizer corrects each row via

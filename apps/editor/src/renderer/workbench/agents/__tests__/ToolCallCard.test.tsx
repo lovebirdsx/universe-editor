@@ -53,14 +53,14 @@ describe('ToolCallCard', () => {
   it('collapses a read card by default and expands on click', () => {
     renderCard(makeCall({ kind: 'read', blocks: [{ type: 'text', text: 'file contents here' }] }))
     expect(screen.queryByTestId('acp-markdown')).toBeNull()
-    fireEvent.click(screen.getByTestId('acp-toolcall-read-toggle'))
+    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
     expect(screen.getByTestId('acp-markdown')).toBeTruthy()
   })
 
   it('collapses a search card by default and expands on click', () => {
     renderCard(makeCall({ kind: 'search', blocks: [{ type: 'text', text: 'search results' }] }))
     expect(screen.queryByTestId('acp-markdown')).toBeNull()
-    fireEvent.click(screen.getByTestId('acp-toolcall-read-toggle'))
+    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
     expect(screen.getByTestId('acp-markdown')).toBeTruthy()
   })
 

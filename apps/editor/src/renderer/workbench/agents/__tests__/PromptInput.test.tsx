@@ -488,7 +488,13 @@ describe('PromptInput — @-mention popover', () => {
 describe('PromptInput — focus handoff', () => {
   it('exposes focus() on the widget handle to focus the textarea', () => {
     const handleRef: { current: WidgetHandle } = {
-      current: { move: () => {}, scrollTimeline: () => {}, focus: () => {} },
+      current: {
+        move: () => {},
+        scrollTimeline: () => {},
+        focus: () => {},
+        toggleCollapse: () => {},
+        cycleCollapseMode: () => {},
+      },
     }
     renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
     const ta = getTextarea()

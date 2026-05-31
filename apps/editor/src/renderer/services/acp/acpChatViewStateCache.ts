@@ -7,10 +7,20 @@
  *  resetting to the bottom.
  *--------------------------------------------------------------------------------------------*/
 
+export type CollapseMode = 'default' | 'collapsed' | 'expanded'
+
+export interface AcpChatCollapseState {
+  /** Baseline cycled by Ctrl+Alt+F. */
+  mode: CollapseMode
+  /** Per-item explicit overrides (Alt+F / chevron click); serialized Map. */
+  overrides: ReadonlyArray<readonly [string, boolean]>
+}
+
 export interface AcpChatViewState {
   scrollTop: number
   stuck: boolean
   focusedKey: string | null
+  collapse?: AcpChatCollapseState
 }
 
 class AcpChatViewStateCacheImpl {

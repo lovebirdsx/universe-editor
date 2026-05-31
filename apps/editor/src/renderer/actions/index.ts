@@ -132,6 +132,8 @@ import {
   SelectAgentModeAction,
   SelectAgentModelAction,
   SelectAgentThoughtLevelAction,
+  ToggleAcpTimelineItemCollapseAction,
+  CycleAcpTimelineCollapseAction,
   ToggleAgentChatLocationAction,
 } from './agentActions.js'
 
@@ -291,3 +293,5 @@ registerAction2(ScrollAcpTimelineToTopAction)
 registerAction2(ScrollAcpTimelineToBottomAction)
 registerAction2(ScrollAcpTimelinePageUpAction)
 registerAction2(ScrollAcpTimelinePageDownAction)
+registerAction2(ToggleAcpTimelineItemCollapseAction)
+registerAction2(CycleAcpTimelineCollapseAction)

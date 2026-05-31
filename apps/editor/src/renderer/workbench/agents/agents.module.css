@@ -142,6 +142,65 @@
   outline-offset: -1px;
 }
 
+/* Shared shell for every collapsible Timeline Item (message / tool-call / plan).
+   The consumer's root class supplies background / border / radius; the header
+   and body supply padding so collapsed cards collapse to a single header row. */
+.collapsibleSlot {
+  display: flex;
+  flex-direction: column;
+}
+
+.collapsibleHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 8px;
+  margin: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slotIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-message-role-fg, #888);
+}
+
+.slotTitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.slotSummary {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-message-role-fg, #aaa);
+  font-size: 11px;
+}
+
+.slotChevron {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-message-role-fg, #888);
+}
+
+.slotBody {
+  padding: 0 8px 6px;
+}
+
 .streamingCaret {
   display: inline-block;
   width: 0.55em;
@@ -171,8 +230,7 @@
 .messageItem {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: 6px 8px;
+  gap: 0;
   border-radius: 4px;
   background: var(--color-message-bg, #2a2a2a);
 }
@@ -484,7 +542,6 @@
 .toolCallCard {
   border: 1px solid var(--color-border, #333);
   border-radius: 4px;
-  padding: 4px 8px;
   font-size: 12px;
 }
 
@@ -492,14 +549,6 @@
   display: flex;
   align-items: center;
   gap: 8px;
-}
-
-.toolCallKind {
-  font-size: 10px;
-  text-transform: uppercase;
-  padding: 1px 4px;
-  border-radius: 2px;
-  background: var(--color-badge-bg, #333);
 }
 
 .toolCallTitle {
@@ -945,7 +994,7 @@
 .planList {
   list-style: decimal inside;
   margin: 0;
-  padding: 0 12px 8px;
+  padding: 2px 0 0 4px;
   display: flex;
   flex-direction: column;
   gap: 2px;

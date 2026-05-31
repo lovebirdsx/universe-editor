@@ -31,7 +31,10 @@ import type {
 } from '../../../services/acp/acpSessionService.js'
 import { IAcpSessionService } from '../../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../../services/acp/acpAgentRegistry.js'
-import { IAcpChatWidgetService } from '../../../services/acp/acpChatWidgetService.js'
+import {
+  IAcpChatWidgetService,
+  type AcpChatWidget,
+} from '../../../services/acp/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../../services/acp/acpChatViewStateCache.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ChatBody } from '../ChatBody.js'
@@ -88,7 +91,7 @@ const stubWorkspaceService = {
   onDidChangeRecent: Event.None,
 } as unknown as IWorkspaceServiceType
 
-function makeInstantiation() {
+function makeInstantiation(onRegister?: (w: AcpChatWidget) => void) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, {
     _serviceBrand: undefined,
@@ -101,7 +104,10 @@ function makeInstantiation() {
   services.set(IAcpChatWidgetService, {
     _serviceBrand: undefined,
     lastFocusedWidget: undefined,
-    register: () => ({ dispose() {} }),
+    register: (w: AcpChatWidget) => {
+      onRegister?.(w)
+      return { dispose() {} }
+    },
   } as unknown as IAcpChatWidgetService)
   services.set(IFileService, stubFileService)
   services.set(IWorkspaceService, stubWorkspaceService)
@@ -255,5 +261,97 @@ describe('ChatBody — scroll position persistence', () => {
 
     expect(AcpChatViewStateCache.load('s1')?.scrollTop).toBe(150)
     expect(AcpChatViewStateCache.load('s1')?.stuck).toBe(false)
+  })
+})
+
+describe('ChatBody — collapse', () => {
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
+  ]
+
+  function renderChatWithWidget(session: IAcpSession) {
+    const widgetRef: { current?: AcpChatWidget } = {}
+    const inst = makeInstantiation((w) => {
+      widgetRef.current = w
+    })
+    const result = render(
+      <ServicesContext.Provider value={inst}>
+        <ChatBody session={session} />
+      </ServicesContext.Provider>,
+    )
+    return { ...result, widgetRef }
+  }
+
+  function ariaExpanded(container: HTMLElement, key: string): string | null {
+    return slotEl(container, key).querySelector('button')!.getAttribute('aria-expanded')
+  }
+
+  it('agent messages start expanded; thought messages start collapsed', () => {
+    const thought: AcpMessage = {
+      id: 'c',
+      role: 'thought',
+      text: 'pondering',
+      blocks: [{ type: 'text', text: 'pondering' }],
+      streaming: false,
+    }
+    const { container } = renderChat(
+      makeSession('s1', [
+        { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+        { kind: 'message', id: 'c', message: thought },
+      ]),
+    )
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
+    expect(ariaExpanded(container, 'm:c')).toBe('false')
+  })
+
+  it('toggleCollapse flips the focused item', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+    expect(ariaExpanded(container, 'm:b')).toBe('true')
+    act(() => {
+      widgetRef.current!.toggleCollapse()
+    })
+    expect(ariaExpanded(container, 'm:b')).toBe('false')
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
+  })
+
+  it('cycleCollapseMode cycles default → all collapsed → all expanded', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // collapsed
+    })
+    expect(ariaExpanded(container, 'm:a')).toBe('false')
+    expect(ariaExpanded(container, 'm:b')).toBe('false')
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // expanded
+    })
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
+    expect(ariaExpanded(container, 'm:b')).toBe('true')
+    act(() => {
+      widgetRef.current!.cycleCollapseMode() // back to default
+    })
+    expect(ariaExpanded(container, 'm:a')).toBe('true')
+  })
+
+  it('restores the collapse state after an unmount → remount cycle', () => {
+    const first = renderChatWithWidget(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(slotEl(first.container, 'm:b'))
+    })
+    act(() => {
+      first.widgetRef.current!.toggleCollapse()
+    })
+    expect(ariaExpanded(first.container, 'm:b')).toBe('false')
+    first.unmount()
+
+    expect(AcpChatViewStateCache.load('s1')?.collapse?.overrides).toContainEqual(['m:b', true])
+
+    const second = renderChat(makeSession('s1', items))
+    expect(ariaExpanded(second.container, 'm:b')).toBe('false')
+    expect(ariaExpanded(second.container, 'm:a')).toBe('true')
   })
 })

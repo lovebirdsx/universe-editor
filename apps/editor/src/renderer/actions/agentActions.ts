@@ -577,3 +577,37 @@ export class ScrollAcpTimelinePageDownAction extends Action2 {
     accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('pageDown')
   }
 }
+
+export class ToggleAcpTimelineItemCollapseAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.toggleTimelineItemCollapse'
+  constructor() {
+    super({
+      id: ToggleAcpTimelineItemCollapseAction.ID,
+      title: localize('action.agent.toggleTimelineItemCollapse', 'Toggle Timeline Item Collapse'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+f', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.toggleCollapse()
+  }
+}
+
+export class CycleAcpTimelineCollapseAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.cycleTimelineCollapse'
+  constructor() {
+    super({
+      id: CycleAcpTimelineCollapseAction.ID,
+      title: localize('action.agent.cycleTimelineCollapse', 'Cycle Timeline Collapse (All)'),
+      category: CATEGORY,
+      keybinding: { primary: 'ctrl+alt+f', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.cycleCollapseMode()
+  }
+}

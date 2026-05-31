@@ -18,9 +18,11 @@ import type {
   IAcpSession,
 } from '../../services/acp/acpSessionService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { CollapsibleSlot } from './CollapsibleSlot.js'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallStatusIcon } from './ToolCallOutput.js'
+import { toolKindIcon } from './timelineIcons.js'
 import styles from './agents.module.css'
 
 export function ToolCallList({ session }: { session: IAcpSession }) {
@@ -39,14 +41,26 @@ export const ToolCallCard = memo(function ToolCallCard({
   call,
   extraClassName,
   dataTimelineKey,
+  collapsed: collapsedProp,
+  onToggleCollapse,
 }: {
   call: AcpToolCall
   extraClassName?: string
   dataTimelineKey?: string
+  collapsed?: boolean
+  onToggleCollapse?: () => void
 }) {
   const editorService = useService(IEditorService)
-  const collapsible = call.kind === 'read' || call.kind === 'search'
-  const [expanded, setExpanded] = useState(false)
+  // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
+  // state when used standalone (ToolCallList). read/search start collapsed.
+  const controlled = collapsedProp !== undefined
+  const [internalCollapsed, setInternalCollapsed] = useState(
+    () => call.kind === 'read' || call.kind === 'search',
+  )
+  const collapsed = controlled ? collapsedProp : internalCollapsed
+  const onToggle = controlled
+    ? (onToggleCollapse ?? (() => {}))
+    : () => setInternalCollapsed((v) => !v)
 
   const openDiff = (diff: AcpToolCallDiff): void => {
     const uri = diff.path.includes('://') ? URI.parse(diff.path) : URI.file(diff.path)
@@ -57,7 +71,6 @@ export const ToolCallCard = memo(function ToolCallCard({
     ? `${styles['toolCallCard']} ${extraClassName}`
     : styles['toolCallCard']
 
-  const showBody = !collapsible || expanded
   const hasDiffs = call.diffs.length > 0
   const isExecute = call.kind === 'execute'
 
@@ -96,35 +109,23 @@ export const ToolCallCard = memo(function ToolCallCard({
   )
 
   return (
-    <li
-      className={className}
-      data-status={call.status}
-      data-kind={call.kind}
-      {...(dataTimelineKey !== undefined ? { 'data-timeline-key': dataTimelineKey } : {})}
+    <CollapsibleSlot
+      as="li"
+      icon={toolKindIcon(call.kind)}
+      kindLabel={call.kind}
+      title={<span className={styles['toolCallTitle']}>{call.title}</span>}
+      summary={<span className={styles['toolCallTitle']}>{call.title}</span>}
+      statusIcon={<ToolCallStatusIcon status={call.status} />}
+      collapsed={collapsed}
+      onToggle={onToggle}
+      rootProps={{
+        className,
+        'data-status': call.status,
+        'data-kind': call.kind,
+        ...(dataTimelineKey !== undefined ? { 'data-timeline-key': dataTimelineKey } : {}),
+      }}
     >
-      {collapsible ? (
-        <button
-          type="button"
-          className={styles['toolCallHeaderButton']}
-          aria-expanded={expanded}
-          onClick={() => setExpanded((v) => !v)}
-          data-testid="acp-toolcall-read-toggle"
-        >
-          <span className={styles['toolCallChevron']} aria-hidden="true">
-            {expanded ? '▾' : '▸'}
-          </span>
-          <span className={styles['toolCallKind']}>{call.kind}</span>
-          <span className={styles['toolCallTitle']}>{call.title}</span>
-          <ToolCallStatusIcon status={call.status} />
-        </button>
-      ) : (
-        <header className={styles['toolCallHeader']}>
-          <span className={styles['toolCallKind']}>{call.kind}</span>
-          <span className={styles['toolCallTitle']}>{call.title}</span>
-          <ToolCallStatusIcon status={call.status} />
-        </header>
-      )}
-      {showBody && body}
-    </li>
+      {body}
+    </CollapsibleSlot>
   )
 })
