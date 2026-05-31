@@ -586,9 +586,26 @@ describe('AcpSessionService', () => {
     })
     const plan = s.plan.get()
     expect(plan).toEqual([
-      { content: 'step one', priority: 'high' },
-      { content: 'step two', priority: 'medium' },
+      { content: 'step one', priority: 'high', status: 'pending' },
+      { content: 'step two', priority: 'medium', status: 'pending' },
     ])
+  })
+
+  it('preserves per-entry status across plan snapshots', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'plan',
+        entries: [
+          { content: 'a', priority: 'medium', status: 'completed' },
+          { content: 'b', priority: 'medium', status: 'in_progress' },
+          { content: 'c', priority: 'medium', status: 'pending' },
+        ],
+      },
+    })
+    expect(s.plan.get().map((e) => e.status)).toEqual(['completed', 'in_progress', 'pending'])
   })
 
   it('closeSession removes the session and falls back to the next active one', async () => {

@@ -996,26 +996,75 @@
   color: var(--color-message-role-fg, #888);
 }
 
+.planSummaryActive {
+  font-size: 12px;
+  color: var(--color-message-role-fg, #aaa);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
 .planList {
-  list-style: decimal inside;
+  list-style: none;
   margin: 0;
-  padding: 2px 0 0 4px;
+  padding: 2px 0 0 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 
 .planEntry {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
   font-size: 12px;
   line-height: 1.4;
 }
 
-.planEntry[data-priority='high'] {
+.planEntryIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  margin-top: 1px;
+  color: var(--color-message-role-fg, #888);
+}
+
+.planEntryText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.planEntry[data-status='pending'] .planEntryIcon {
+  color: var(--color-message-role-fg, #888);
+}
+
+.planEntry[data-status='in_progress'] .planEntryIcon {
+  color: var(--color-badge-progress, #4fa6e2);
+}
+
+.planEntry[data-status='in_progress'] .planEntryText {
+  font-weight: 600;
+  color: var(--color-message-fg, #ddd);
+}
+
+.planEntry[data-status='completed'] {
+  opacity: 0.6;
+}
+
+.planEntry[data-status='completed'] .planEntryIcon {
+  color: var(--color-badge-success, #2c7d32);
+}
+
+.planEntry[data-status='completed'] .planEntryText {
+  text-decoration: line-through;
+}
+
+.planEntry[data-priority='high'] .planEntryText {
   color: var(--color-warning-fg, #d7ba7d);
   font-weight: 500;
 }
 
-.planEntry[data-priority='critical'] {
+.planEntry[data-priority='critical'] .planEntryText {
   color: var(--color-error-fg, #f48771);
   font-weight: 600;
 }

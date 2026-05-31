@@ -79,6 +79,7 @@ export {
   type AcpToolCallDiff,
   type AcpToolCallStatus,
   type AcpPlanEntry,
+  type AcpPlanEntryStatus,
   type AcpPendingPermission,
   type AcpPendingQuestion,
   type AskUserQuestion,

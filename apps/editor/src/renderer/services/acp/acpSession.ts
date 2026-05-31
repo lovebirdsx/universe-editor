@@ -72,8 +72,11 @@ export interface AcpToolCall {
   readonly diffs: readonly AcpToolCallDiff[]
 }
 
+export type AcpPlanEntryStatus = 'pending' | 'in_progress' | 'completed'
+
 export interface AcpPlanEntry {
   readonly content: string
+  readonly status: AcpPlanEntryStatus
   readonly priority?: string
 }
 
@@ -504,6 +507,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         if (!this._timeline.some((it) => it.kind === 'plan')) this._sealStreamingMessages()
         const entries: readonly AcpPlanEntry[] = update.entries.map((e) => ({
           content: e.content,
+          status: e.status,
           ...(e.priority !== undefined ? { priority: e.priority } : {}),
         }))
         this._upsertPlanInTimeline(entries)

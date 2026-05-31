@@ -9,12 +9,15 @@ import type { ReactNode } from 'react'
 import {
   Bot,
   Brain,
+  CheckCircle2,
+  Circle,
   CircleHelp,
   FilePen,
   FileText,
   FolderInput,
   Globe,
   ListChecks,
+  Loader2,
   Repeat,
   Search,
   Terminal,
@@ -22,7 +25,7 @@ import {
   User,
   Wrench,
 } from 'lucide-react'
-import type { AcpMessageRole } from '../../services/acp/acpSessionService.js'
+import type { AcpMessageRole, AcpPlanEntryStatus } from '../../services/acp/acpSessionService.js'
 
 const ICON_SIZE = 14
 
@@ -66,4 +69,17 @@ export function toolKindIcon(kind: string): ReactNode {
 
 export function planIcon(): ReactNode {
   return <ListChecks size={ICON_SIZE} />
+}
+
+// Per-entry status glyph for the plan checklist. Returns a bare lucide element
+// (no styles import) — PlanView adds the spin className for in_progress.
+export function planEntryStatusIcon(status: AcpPlanEntryStatus): ReactNode {
+  switch (status) {
+    case 'completed':
+      return <CheckCircle2 size={ICON_SIZE} />
+    case 'in_progress':
+      return <Loader2 size={ICON_SIZE} />
+    case 'pending':
+      return <Circle size={ICON_SIZE} />
+  }
 }

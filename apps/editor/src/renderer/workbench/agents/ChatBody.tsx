@@ -579,7 +579,7 @@ function estimateRow(item: TimelineItem | undefined): number {
     case 'toolCall':
       return 96
     case 'plan':
-      return 48
+      return 36 + item.entries.length * 22
   }
 }
 
@@ -592,7 +592,10 @@ function tailContentSignature(timeline: readonly TimelineItem[]): number {
     case 'toolCall':
       return last.call.text.length + last.call.status.length
     case 'plan':
-      return last.entries.length
+      return last.entries.reduce(
+        (n, e) => n + (e.status === 'completed' ? 2 : e.status === 'in_progress' ? 1 : 0),
+        last.entries.length,
+      )
   }
 }
 
