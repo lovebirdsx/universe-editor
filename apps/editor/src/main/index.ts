@@ -79,10 +79,10 @@ let windowMainService: WindowMainService | null = null
 let claudeBinaryService: ClaudeBinaryMainService | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
-// 所以仅在 dev（运行的是通用 electron.exe）下显式设置。
+// 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
 const appIconPath =
   process.platform === 'win32' && !app.isPackaged
-    ? join(__dirname, '../../public/icon.ico')
+    ? join(__dirname, '../../public/icon-dev.ico')
     : undefined
 
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
