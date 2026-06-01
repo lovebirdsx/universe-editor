@@ -39,11 +39,13 @@ import {
 } from '@universe-editor/platform'
 import {
   type LoadSessionRequest,
+  type McpServer,
   type NewSessionRequest,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
+import { filterMcpServersByCapabilities, normalizeMcpServers } from './acpMcpServers.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -312,11 +314,16 @@ export class AcpSessionService
         const mcpServers = this._readMcpServers()
         try {
           progress.report({ message: 'Negotiating ACP protocol…' })
-          await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
+          const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
           progress.report({ message: 'Creating session…' })
+          const { kept, dropped } = filterMcpServersByCapabilities(
+            mcpServers,
+            initResult.agentCapabilities?.mcpCapabilities,
+          )
+          this._warnDroppedMcpServers(agentName, dropped)
           const newParams: NewSessionRequest = {
             cwd: cwd ?? '',
-            mcpServers: mcpServers as NewSessionRequest['mcpServers'],
+            mcpServers: kept,
           }
           const result = await withTimeout(
             conn.conn.newSession(newParams),
@@ -482,10 +489,15 @@ export class AcpSessionService
       registered = true
       prior?.dispose()
 
+      const { kept, dropped } = filterMcpServersByCapabilities(
+        mcpServers,
+        initResult.agentCapabilities?.mcpCapabilities,
+      )
+      this._warnDroppedMcpServers(this._registry.get(entry.agentId).name, dropped)
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
-        mcpServers: mcpServers as LoadSessionRequest['mcpServers'],
+        mcpServers: kept,
       }
       const loadResult = await withTimeout(
         conn.conn.loadSession(loadParams),
@@ -690,9 +702,27 @@ export class AcpSessionService
     })
   }
 
-  private _readMcpServers(): readonly unknown[] {
-    const raw = this._config.get<unknown>('acp.mcpServers')
-    return Array.isArray(raw) ? raw : []
+  private _readMcpServers(): McpServer[] {
+    return normalizeMcpServers(this._config.get<unknown>('acp.mcpServers'), (m) =>
+      this._logger.warn(`mcpServers: ${m}`),
+    )
+  }
+
+  private _warnDroppedMcpServers(
+    agentName: string,
+    dropped: ReadonlyArray<{ name: string; transport: 'http' | 'sse' }>,
+  ): void {
+    if (dropped.length === 0) return
+    for (const d of dropped) {
+      this._logger.warn(
+        `mcpServers: "${d.name}" uses ${d.transport} transport which ${agentName} does not support, skipped`,
+      )
+    }
+    const names = dropped.map((d) => `"${d.name}"`).join(', ')
+    this._notification.notify({
+      severity: Severity.Warning,
+      message: `${agentName} does not support the configured MCP transport for ${names}; these servers were skipped.`,
+    })
   }
 }
 

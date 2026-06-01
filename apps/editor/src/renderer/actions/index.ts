@@ -121,6 +121,7 @@ import {
   FocusNextAcpTimelineItemAction,
   FocusPreviousAcpTimelineItemAction,
   NewAgentSessionAction,
+  OpenAcpMcpSettingsAction,
   OpenAgentInEditorAction,
   OpenAgentViewAction,
   RefreshAgentSessionsAction,
@@ -283,6 +284,7 @@ registerAction2(OpenAgentViewAction)
 registerAction2(ToggleAgentChatLocationAction)
 registerAction2(FocusAgentInputAction)
 registerAction2(SelectAgentAction)
+registerAction2(OpenAcpMcpSettingsAction)
 registerAction2(SelectAgentModelAction)
 registerAction2(SelectAgentModeAction)
 registerAction2(SelectAgentThoughtLevelAction)

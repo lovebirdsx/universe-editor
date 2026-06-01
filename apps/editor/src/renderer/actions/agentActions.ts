@@ -6,6 +6,7 @@
 
 import {
   Action2,
+  ICommandService,
   IDialogService,
   IEditorService,
   IInstantiationService,
@@ -189,6 +190,23 @@ export class SelectAgentAction extends Action2 {
     // Update the default agent at runtime (Memory layer). User can persist via Settings UI.
     const sessions = accessor.get(IAcpSessionService)
     await sessions.createSession(picked.id)
+  }
+}
+
+export class OpenAcpMcpSettingsAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openMcpSettings'
+  constructor() {
+    super({
+      id: OpenAcpMcpSettingsAction.ID,
+      title: localize('action.agent.openMcpSettings', 'Open MCP Settings'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Settings UI can't deep-link to a single key yet; opening the editor lands
+    // the user on the searchable settings list where `acp.mcpServers` lives.
+    await accessor.get(ICommandService).executeCommand('workbench.action.openSettings')
   }
 }
 

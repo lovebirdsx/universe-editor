@@ -52,6 +52,7 @@ import {
   type InitializeResponse,
   type LoadSessionRequest,
   type LoadSessionResponse,
+  type McpCapabilities,
   type NewSessionRequest,
   type NewSessionResponse,
   type PromptRequest,
@@ -221,6 +222,10 @@ interface StubAgentOptions {
   promptHangs?: boolean
   /** When true, initialize() never resolves — used to exercise startup timeout. */
   initializeHangs?: boolean
+  /** Advertised MCP transports; omitted means the agent supports none (stdio only). */
+  mcpCapabilities?: McpCapabilities
+  /** When true, advertise loadSession so resumeSession can proceed. */
+  loadSession?: boolean
 }
 
 class StubAgent implements Agent {
@@ -241,7 +246,11 @@ class StubAgent implements Agent {
     if (this._opts.initializeHangs) return new Promise<never>(() => {})
     return Promise.resolve({
       protocolVersion: 1,
-      agentCapabilities: { loadSession: false, promptCapabilities: {} },
+      agentCapabilities: {
+        loadSession: this._opts.loadSession ?? false,
+        promptCapabilities: {},
+        ...(this._opts.mcpCapabilities ? { mcpCapabilities: this._opts.mcpCapabilities } : {}),
+      },
       authMethods: [],
     } as unknown as InitializeResponse)
   }
@@ -824,6 +833,57 @@ describe('AcpSessionService — startup timeout', () => {
       FAKE_HOST,
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)
+    svc.dispose()
+  })
+})
+
+describe('AcpSessionService — mcpServers capability gating', () => {
+  function makeService(client: FakeAcpClientService, config: ConfigurationService) {
+    return new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      new StubNotificationService(),
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubProgressService(),
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      FAKE_HOST,
+    )
+  }
+
+  it('forwards normalized stdio servers and drops http when the agent lacks the capability', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      fs: { command: 'node', args: ['srv.js'], env: { TOKEN: 'x' } },
+      docs: { type: 'http', url: 'https://docs', headers: { Auth: 'k' } },
+    })
+    const svc = makeService(client, config)
+    await svc.createSession()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers).toEqual([
+      { name: 'fs', command: 'node', args: ['srv.js'], env: [{ name: 'TOKEN', value: 'x' }] },
+    ])
+    svc.dispose()
+  })
+
+  it('keeps http servers when the agent advertises mcpCapabilities.http', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { mcpCapabilities: { http: true } } })
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', {
+      docs: { type: 'http', url: 'https://docs', headers: {} },
+    })
+    const svc = makeService(client, config)
+    await svc.createSession()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params.mcpServers).toEqual([
+      { type: 'http', name: 'docs', url: 'https://docs', headers: [] },
+    ])
     svc.dispose()
   })
 })

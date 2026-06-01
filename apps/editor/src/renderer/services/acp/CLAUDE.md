@@ -18,6 +18,7 @@ Agent Client Protocol（ACP）客户端层。基于 `@agentclientprotocol/sdk` v
 | `acpClientService.ts` | 进程启动 + SDK `ClientSideConnection` 装配 + fs/terminal/permission 网关 |
 | `acpAgentRegistry.ts` | 内置 agent 预设 + 用户 `acp.agents` 配置合并 + PATH 探测 |
 | `acpPathPolicy.ts` | 沙盒纯函数：cwd 相对性 + 敏感前缀拒绝（`.ssh` / `.aws` / `.env`） |
+| `acpMcpServers.ts` | 纯函数：`acp.mcpServers` 配置（Record/旧数组）→ ACP wire `McpServer[]` 规范化 + 按 agent `mcpCapabilities` 门控 http/sse |
 | `acpPermissionHandler.ts` | `acp.permissions.autoApprove` 自动批准 + Memory 层持久化 |
 | `persistedStateBase.ts` | 双桶持久化基类（WORKSPACE + GLOBAL fallback），共享 `_reload` / `_writeNow` / debounce 框架 |
 | `acpSessionHistory.ts` | 会话元数据落盘（继承 `PersistedStateBase`，`MAX_ENTRIES=100`） |
@@ -112,6 +113,17 @@ IAcpHostService.onStdout(chunk: string)
 
 新加双桶持久化服务时直接继承 `PersistedStateBase<TState>`，实现五个抽象钩子（`_emptyState` / `_serialize` / `_deserialize` / `_onStateReplaced`、可选 `_mergeOnLoad`），框架负责 cold-start 时序、workspace-swap 重读、100ms 防抖写、`dispose` 时同步 flush。
 
+## 套路 ACP-F：MCP servers（配置 → 透传）
+
+用户配置 `acp.mcpServers`（schema 注册在 `contributions/AgentsContributions.ts`，type `object`、default `{}`），在 `createSession`/`resumeSession` 里经两步纯函数（`acpMcpServers.ts`）后透传给 `newSession`/`loadSession`：
+
+1. `normalizeMcpServers(raw, onWarn)`：把 **Record 风格**（key=server name，贴近 Claude `.mcp.json`，`env`/`headers` 用 Record）或**旧数组格式**统一成 ACP wire `McpServer[]`。坏条目 **跳过 + warn 不抛错**（对齐 `acpAgentRegistry._readUserAgents`）。
+2. `filterMcpServersByCapabilities(servers, caps)`：读 `initializeResult.agentCapabilities?.mcpCapabilities`，agent 不通告的 http/sse 进 `dropped`；stdio 是基线 **恒留**。`AcpSessionService._warnDroppedMcpServers` 把 dropped 逐条 logger.warn + 一次汇总 `INotificationService` 告警。
+
+agent 端（`vendor/claude-agent-acp`）把 wire 的 `env`/`headers` 数组 `Object.fromEntries` 还原成 Record 再喂给 Claude Agent SDK——MCP 连接/工具发现全由 SDK 管，client 只做"配置→wire→门控"。命令入口：`Agents: Open MCP Settings`（`agentActions.ts` 的 `OpenAcpMcpSettingsAction`）。
+
+**未做（按需扩展）**：读项目根 `.mcp.json`、实验性 `type:'acp'` transport、MCP 状态/工具可观测 UI（ACP 无标准状态推送，MCP 工具以普通 `tool_call` 出现）。
+
 ## 测试模式
 
 | 文件 | 焦点 |
@@ -124,6 +136,7 @@ IAcpHostService.onStdout(chunk: string)
 | `AcpClientService.terminal.test.ts` | terminal 所有权 + 跨连接拒绝 + 连接退出回收 |
 | `AcpAgentRegistry.test.ts` | 预设合并 / PATH 探测 |
 | `acpPathPolicy.test.ts` | 沙盒边界（各 OS 路径标准化） |
+| `acpMcpServers.test.ts` | MCP 配置规范化（Record/数组、stdio 无 type、坏条目跳过、`type:'acp'` 跳过）+ 能力门控 |
 | `acpSessionHistory.test.ts` | 持久化 / schemaVersion 迁移 / MAX_ENTRIES 溢出 |
 | `sdkHostStream.test.ts` | UTF-8 重编码 / stream lifecycle |
 | `inMemoryAcpPair.test.ts` | 测试 harness 本身 |
@@ -161,9 +174,10 @@ E2E 在 `apps/editor/e2e/`，目前 ACP 未在 `@p0` 冒烟里。
 7. **stderr 独立通道**：`IAcpHostService.onStderr` **绝不**喂给 SDK ndJsonStream——单独 `OutputChannel`，便于诊断。
 8. **env denylist**：spawn 子进程前剥 `ELECTRON_RUN_AS_NODE` / `NODE_OPTIONS`，否则继承 Electron 的 fork 上下文，agent 会怪异崩溃。main + renderer 两端都要做。**例外**：内置 `runAsNode` agent（见套路 ACP-A）由 `acpHostMainService` 在 denylist 剥离**之后有意补回** `ELECTRON_RUN_AS_NODE=1`——因为它本就用 Electron-as-node 启动，且 fork 会用 `process.execPath` 重启自己、子进程必须继承该变量。这只对可信内置路径开启，用户 `spec.env` 注入的该变量仍被拒。
 9. **16ms 防抖事务**：`applyUpdate` 内 messages / toolCalls / plan 共用一个 `transaction()`，单次 observer 通知。新增更新类别也要进同一事务，否则会产生抖动。
+10. **stdio MCP 条目绝不能带 `type` 字段**：agent 端用 `!('type' in server)` 判定 stdio，带了 `type`（哪怕 `'stdio'`）会**两个分支都不匹配被静默丢弃**。`normalizeMcpServers` 的 stdio 分支输出 `{ name, command, args, env }`，刻意不写 type。http/sse 反而**必须**带 `type`。env/headers 是 `Array<{name,value}>`（不是 Record），由 normalize 负责把用户的 Record 转成数组。
 
 ## 参考路径
 
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`
 - SDK 入口：`@agentclientprotocol/sdk` 导出 `ClientSideConnection / AgentSideConnection / RequestError / ndJsonStream` + 全部 schema 类型
-- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId`
+- 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers`
