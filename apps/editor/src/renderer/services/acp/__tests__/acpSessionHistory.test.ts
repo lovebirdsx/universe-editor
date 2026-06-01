@@ -513,6 +513,120 @@ describe('AcpSessionHistoryService — setHistoryConfigOption', () => {
   })
 })
 
+describe('AcpSessionHistoryService — setHistoryUsage', () => {
+  let svc: AcpSessionHistoryService
+  let storage: FakeStorage
+  beforeEach(() => {
+    const made = makeService()
+    svc = made.svc
+    storage = made.storage
+  })
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('sets a usage snapshot on an entry with none', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryUsage(e.id, { used: 1200, size: 100_000 })
+    expect(svc.get(e.id)?.usage).toEqual({ used: 1200, size: 100_000 })
+  })
+
+  it('stores the optional cost field', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryUsage(e.id, {
+      used: 500,
+      size: 100_000,
+      cost: { amount: 0.025, currency: 'USD' },
+    })
+    expect(svc.get(e.id)?.usage).toEqual({
+      used: 500,
+      size: 100_000,
+      cost: { amount: 0.025, currency: 'USD' },
+    })
+  })
+
+  it('is a no-op for unknown ids', async () => {
+    await svc.initialize()
+    svc.setHistoryUsage('nope', { used: 1, size: 2 })
+    expect(svc.list()).toEqual([])
+  })
+
+  it('skips the write when the snapshot is unchanged', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryUsage(e.id, { used: 10, size: 100 })
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    // Identical snapshot again — no new write.
+    svc.setHistoryUsage(e.id, { used: 10, size: 100 })
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+  })
+
+  it('preserves a usage snapshot when add() re-inserts the same session', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't1' })
+    svc.setHistoryUsage(first.id, { used: 42, size: 100 })
+    // Re-add without usage — must preserve the snapshot (resumeSession path).
+    const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
+    expect(second.usage).toEqual({ used: 42, size: 100 })
+  })
+
+  it('round-trips a usage snapshot through persistence', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 'with-usage',
+          agentId: 'a',
+          sessionIdOnAgent: 'with-usage',
+          title: 'has usage',
+          createdAt: 1,
+          lastUsedAt: 1,
+          usage: { used: 7, size: 200, cost: { amount: 1.5, currency: 'USD' } },
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.get('with-usage')?.usage).toEqual({
+      used: 7,
+      size: 200,
+      cost: { amount: 1.5, currency: 'USD' },
+    })
+  })
+
+  it('drops entries whose usage shape is malformed during hydration', async () => {
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 'bad',
+          agentId: 'a',
+          sessionIdOnAgent: 'bad',
+          title: 't',
+          createdAt: 1,
+          lastUsedAt: 1,
+          usage: { used: 'x', size: 2 },
+        },
+        {
+          id: 'good',
+          agentId: 'a',
+          sessionIdOnAgent: 'good',
+          title: 't2',
+          createdAt: 1,
+          lastUsedAt: 2,
+        },
+      ],
+    })
+    await svc.initialize()
+    expect(svc.list().map((e) => e.id)).toEqual(['good'])
+  })
+})
+
 describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
   let svc: AcpSessionHistoryService
   let storage: FakeStorage

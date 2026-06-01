@@ -590,6 +590,52 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(resumed.configOptions.get()).toEqual([])
   })
 
+  it('seeds the usage arc from the persisted snapshot on resume', async () => {
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    // Mirror a usage snapshot onto history as a live session would, then close.
+    built.history.setHistoryUsage(historyId, {
+      used: 4321,
+      size: 100_000,
+      cost: { amount: 0.5, currency: 'USD' },
+    })
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    // session/load replay emits no usage_update — the arc must come from the snapshot.
+    expect(resumed.usage.get()).toEqual({
+      used: 4321,
+      size: 100_000,
+      cost: { amount: 0.5, currency: 'USD' },
+    })
+  })
+
+  it('a live usage_update overrides the seeded snapshot after resume', async () => {
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          sessionId: 'agent-1',
+          update: { sessionUpdate: 'usage_update', used: 9000, size: 100_000 },
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    built.history.setHistoryUsage(historyId, { used: 1, size: 100_000 })
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    // The seed sets used:1 in the constructor; a live usage_update streamed
+    // during replay must win (applyUpdate sets unconditionally).
+    expect(resumed.usage.get()?.used).toBe(9000)
+  })
+
   it('routes session/update notifications streamed DURING session/load to the resumed session', async () => {
     const built = buildService({
       loadSessionUpdates: [

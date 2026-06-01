@@ -192,6 +192,8 @@ export interface AcpUsage {
 /** Bag of normalized initial session state captured from `session/new`. */
 export interface IAcpSessionInitState {
   readonly configOptions?: readonly SessionConfigOption[]
+  /** Usage snapshot to seed the arc on resume (restored from history). */
+  readonly usage?: AcpUsage
 }
 
 export interface IAcpSession {
@@ -363,6 +365,11 @@ export class AcpSession extends Disposable implements IAcpSession {
   applyInitState(state: IAcpSessionInitState): void {
     if (state.configOptions) {
       this._configOptions.applyInitState(state.configOptions)
+    }
+    // Seed the usage arc from a restored snapshot, but never clobber a live
+    // value already reported in this session.
+    if (state.usage !== undefined && this.usage.get() === undefined) {
+      this.usage.set(state.usage, undefined)
     }
   }
 
@@ -592,16 +599,17 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
       case 'usage_update': {
         const tx = this._batchedTx()
-        this.usage.set(
-          {
-            used: update.used,
-            size: update.size,
-            ...(update.cost != null
-              ? { cost: { amount: update.cost.amount, currency: update.cost.currency } }
-              : {}),
-          },
-          tx,
-        )
+        const next: AcpUsage = {
+          used: update.used,
+          size: update.size,
+          ...(update.cost != null
+            ? { cost: { amount: update.cost.amount, currency: update.cost.currency } }
+            : {}),
+        }
+        this.usage.set(next, tx)
+        // Mirror onto history so the arc survives resume — `session/load`
+        // replay does not re-emit usage_update. Debounced + deduped downstream.
+        this._history?.setHistoryUsage(this.id, next)
         break
       }
       default:

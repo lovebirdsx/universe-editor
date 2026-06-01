@@ -55,6 +55,17 @@ export interface AcpSessionHistoryEntry {
    * keeps the state on the agent side; we mirror it here per-session.
    */
   readonly configOptions?: Readonly<Record<string, string>>
+  /**
+   * Latest context-window usage snapshot the agent reported via `usage_update`.
+   * Mirrored here so the usage arc can be restored on resume — `session/load`
+   * replay does not re-emit `usage_update`, so without this snapshot the arc
+   * stays blank until the user sends another prompt.
+   */
+  readonly usage?: {
+    readonly used: number
+    readonly size: number
+    readonly cost?: { readonly amount: number; readonly currency: string }
+  }
 }
 
 export interface IAcpSessionHistoryService {
@@ -78,6 +89,12 @@ export interface IAcpSessionHistoryService {
    * selections so they survive editor restart.
    */
   setHistoryConfigOption(sessionId: string, configId: string, value: string): void
+  /**
+   * Mirror the latest usage snapshot onto a history entry. No-op if id is
+   * unknown or the snapshot is unchanged. Called by `AcpSession.applyUpdate`
+   * on every `usage_update` so the arc can be restored after resume.
+   */
+  setHistoryUsage(sessionId: string, usage: AcpSessionHistoryEntry['usage']): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -203,6 +220,10 @@ export class AcpSessionHistoryService
     const carriedConfigOptions =
       entry.configOptions ??
       (existingIdx >= 0 ? this._state[existingIdx]!.configOptions : undefined)
+    // Likewise preserve any prior usage snapshot — re-adding the same session
+    // (e.g. on resume) must not blow away the restored arc.
+    const carriedUsage =
+      entry.usage ?? (existingIdx >= 0 ? this._state[existingIdx]!.usage : undefined)
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -212,6 +233,7 @@ export class AcpSessionHistoryService
       createdAt,
       lastUsedAt: now,
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
+      ...(carriedUsage !== undefined ? { usage: carriedUsage } : {}),
     }
     if (existingIdx >= 0) {
       this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
@@ -258,6 +280,18 @@ export class AcpSessionHistoryService
     if (prevOpts[configId] === value) return
     const nextOpts: Readonly<Record<string, string>> = { ...prevOpts, [configId]: value }
     const next: AcpSessionHistoryEntry = { ...cur, configOptions: nextOpts }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryUsage(sessionId: string, usage: AcpSessionHistoryEntry['usage']): void {
+    if (usage === undefined) return
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (sameUsage(cur.usage, usage)) return
+    const next: AcpSessionHistoryEntry = { ...cur, usage }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -457,7 +491,33 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['cwd'] === undefined || typeof o['cwd'] === 'string') &&
     typeof o['createdAt'] === 'number' &&
     typeof o['lastUsedAt'] === 'number' &&
-    (o['configOptions'] === undefined || isStringRecord(o['configOptions']))
+    (o['configOptions'] === undefined || isStringRecord(o['configOptions'])) &&
+    (o['usage'] === undefined || isValidUsage(o['usage']))
+  )
+}
+
+function isValidUsage(v: unknown): v is NonNullable<AcpSessionHistoryEntry['usage']> {
+  if (typeof v !== 'object' || v === null) return false
+  const o = v as Record<string, unknown>
+  if (typeof o['used'] !== 'number' || typeof o['size'] !== 'number') return false
+  const cost = o['cost']
+  if (cost === undefined) return true
+  if (typeof cost !== 'object' || cost === null) return false
+  const c = cost as Record<string, unknown>
+  return typeof c['amount'] === 'number' && typeof c['currency'] === 'string'
+}
+
+function sameUsage(
+  a: AcpSessionHistoryEntry['usage'],
+  b: AcpSessionHistoryEntry['usage'],
+): boolean {
+  if (a === b) return true
+  if (a === undefined || b === undefined) return false
+  return (
+    a.used === b.used &&
+    a.size === b.size &&
+    a.cost?.amount === b.cost?.amount &&
+    a.cost?.currency === b.cost?.currency
   )
 }
 

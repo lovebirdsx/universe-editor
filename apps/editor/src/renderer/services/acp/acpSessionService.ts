@@ -466,7 +466,7 @@ export class AcpSessionService
         title,
         conn,
         this._telemetry,
-        undefined,
+        entry.usage ? { usage: entry.usage } : undefined,
         this._history,
         this._agentDefaults,
       )
