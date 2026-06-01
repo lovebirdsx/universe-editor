@@ -37,7 +37,7 @@
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",
     "allotment": "catalog:",
-    "electron-updater": "catalog:",
+    "electron-updater": "^6.3.0",
     "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",
     "monaco-editor": "catalog:",

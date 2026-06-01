@@ -69,4 +69,6 @@ catalog:
   electron: ^33.0.0
   electron-vite: ^5.0.0
   electron-builder: ^25.0.0
+  # 注:electron-updater 在 apps/editor/package.json 里必须写显式版本(^6.3.0),不能用 catalog:。
+  # electron-builder 打包时直接 semver.coerce 读源 package.json 的版本字符串,无法解析 "catalog:"。
   electron-updater: ^6.3.0
