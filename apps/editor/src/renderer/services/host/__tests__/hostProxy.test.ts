@@ -63,6 +63,9 @@ class FakeHost implements IHostServiceWire {
   openWithDefaultApp(_path: string): Promise<string> {
     return Promise.resolve('')
   }
+  openInVSCode(_fsPath: string): Promise<string> {
+    return Promise.resolve('')
+  }
   openUserDataFolder(): Promise<void> {
     return Promise.resolve()
   }
