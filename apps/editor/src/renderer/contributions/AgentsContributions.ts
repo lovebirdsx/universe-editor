@@ -120,6 +120,16 @@ export class AgentsViewContainerContribution extends Disposable implements IWork
         order: 1,
       }),
     )
+
+    this._register(
+      ViewRegistry.registerView({
+        id: 'workbench.view.agents.mcp',
+        name: localize('view.agents.mcp', 'MCP Servers'),
+        containerId: 'workbench.view.agents',
+        componentKey: 'agents.mcp',
+        order: 2,
+      }),
+    )
   }
 }
 
@@ -138,18 +148,39 @@ export class AgentsEditorProviderContribution extends Disposable implements IWor
 }
 
 export class AgentsStatusBarContribution extends Disposable implements IWorkbenchContribution {
-  constructor(@IStatusBarService statusBar: IStatusBarService) {
+  constructor(
+    @IStatusBarService statusBar: IStatusBarService,
+    @IAcpSessionService sessions: IAcpSessionService,
+  ) {
     super()
-    const entry = statusBar.addEntry({
+    const baseTooltip = localize('acp.statusbar.tooltip', 'Agents')
+    const base: Parameters<IStatusBarService['addEntry']>[0] = {
       text: '',
       icon: 'sparkle',
-      tooltip: localize('acp.statusbar.tooltip', 'Agents'),
+      tooltip: baseTooltip,
       alignment: StatusBarAlignment.Right,
       priority: 50,
       command: 'workbench.action.agent.openView',
-    })
+    }
+    const entry = statusBar.addEntry(base)
     this._register({ dispose: () => entry.dispose() })
+    this._register(
+      autorun((r) => {
+        const active = sessions.activeSession.read(r)
+        const servers = active ? active.mcpServers.read(r) : []
+        entry.update({ ...base, tooltip: mcpTooltip(baseTooltip, servers) })
+      }),
+    )
   }
+}
+
+/** Single-line MCP status summary appended to the Agents status-bar tooltip. */
+function mcpTooltip(base: string, servers: readonly { status: string }[]): string {
+  if (servers.length === 0) return base
+  const connected = servers.filter((s) => s.status === 'connected').length
+  const summary = `MCP ${connected}/${servers.length} connected`
+  const failed = servers.filter((s) => s.status !== 'connected' && s.status !== 'pending').length
+  return failed > 0 ? `${base} · ${summary}, ${failed} failed` : `${base} · ${summary}`
 }
 
 /**

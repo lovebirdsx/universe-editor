@@ -125,13 +125,24 @@ export const ToolCallCard = memo(function ToolCallCard({
     </ul>
   )
 
+  const titleNode = (
+    <span className={styles['toolCallTitle']}>
+      {call.title}
+      {call.mcpServer !== undefined && (
+        <span className={styles['mcpBadge']} title={`MCP server: ${call.mcpServer}`}>
+          MCP · {call.mcpServer}
+        </span>
+      )}
+    </span>
+  )
+
   return (
     <CollapsibleSlot
       as="li"
       icon={toolKindIcon(call.kind)}
       kindLabel={call.kind}
-      title={<span className={styles['toolCallTitle']}>{call.title}</span>}
-      summary={<span className={styles['toolCallTitle']}>{call.title}</span>}
+      title={titleNode}
+      summary={titleNode}
       statusIcon={<ToolCallStatusIcon status={call.status} />}
       collapsed={collapsed}
       onToggle={onToggle}

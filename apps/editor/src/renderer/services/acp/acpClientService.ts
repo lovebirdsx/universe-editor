@@ -97,6 +97,13 @@ export interface IAcpClientNotificationSink {
    * (or `{ cancelled: true }`).
    */
   onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult>
+  /**
+   * Peer-initiated `extNotification` — an out-of-spec one-way notification. The
+   * built-in agent uses `_claude/sdkMessage` to forward raw Claude SDK messages
+   * (e.g. the system-init MCP server snapshot). Optional: unknown methods are
+   * ignored by the sink.
+   */
+  onExtNotification?(method: string, params: Record<string, unknown>): void
 }
 
 export interface IAcpClientConnection {
@@ -429,6 +436,9 @@ export class AcpClientService extends Disposable implements IAcpClientService {
           return result as unknown as Record<string, unknown>
         }
         throw RequestError.methodNotFound(method)
+      },
+      extNotification: async (method: string, params: Record<string, unknown>): Promise<void> => {
+        sink.onExtNotification?.(method, params)
       },
       sessionUpdate: async (params) => {
         sink.onSessionUpdate(params)

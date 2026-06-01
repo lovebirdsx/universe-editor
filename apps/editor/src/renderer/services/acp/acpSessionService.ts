@@ -45,7 +45,11 @@ import {
   type RequestPermissionResponse,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
-import { filterMcpServersByCapabilities, normalizeMcpServers } from './acpMcpServers.js'
+import {
+  filterMcpServersByCapabilities,
+  mcpServerTransport,
+  normalizeMcpServers,
+} from './acpMcpServers.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -148,6 +152,19 @@ export interface IAcpSessionService {
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
+
+/** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
+const SDK_MESSAGE_EXT_METHOD = '_claude/sdkMessage'
+
+/**
+ * `_meta` passed on session/new + session/load that asks the agent fork to
+ * forward only the Claude SDK system-init message (which carries the MCP server
+ * connection snapshot) via `extNotification(_claude/sdkMessage)`. Filtering to
+ * `init` keeps the rest of the raw SDK stream off the wire.
+ */
+const EMIT_INIT_SDK_MESSAGE_META = {
+  claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
+}
 
 export class AcpSessionService
   extends Disposable
@@ -324,6 +341,7 @@ export class AcpSessionService
           const newParams: NewSessionRequest = {
             cwd: cwd ?? '',
             mcpServers: kept,
+            _meta: EMIT_INIT_SDK_MESSAGE_META,
           }
           const result = await withTimeout(
             conn.conn.newSession(newParams),
@@ -335,9 +353,11 @@ export class AcpSessionService
           const hh = String(now.getHours()).padStart(2, '0')
           const mm = String(now.getMinutes()).padStart(2, '0')
           const title = `${agentName} ${hh}:${mm}`
-          const initState: IAcpSessionInitState = result.configOptions
-            ? { configOptions: result.configOptions }
-            : {}
+          const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
+          const initState: IAcpSessionInitState = {
+            ...(result.configOptions ? { configOptions: result.configOptions } : {}),
+            ...(mcpSeed.length > 0 ? { mcpServers: mcpSeed } : {}),
+          }
           // Record the session in persistent history BEFORE constructing AcpSession
           // so the session has its history entry from the first sendPrompt onwards.
           // history.add returns synchronously; the storage write is debounced.
@@ -494,10 +514,13 @@ export class AcpSessionService
         initResult.agentCapabilities?.mcpCapabilities,
       )
       this._warnDroppedMcpServers(this._registry.get(entry.agentId).name, dropped)
+      const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
+      if (mcpSeed.length > 0) session.applyInitState({ mcpServers: mcpSeed })
       const loadParams: LoadSessionRequest = {
         sessionId: entry.sessionIdOnAgent,
         cwd: cwd ?? '',
         mcpServers: kept,
+        _meta: EMIT_INIT_SDK_MESSAGE_META,
       }
       const loadResult = await withTimeout(
         conn.conn.loadSession(loadParams),
@@ -619,6 +642,25 @@ export class AcpSessionService
     const session = this._sessions.find((s) => s.id === params.sessionId)
     if (!session) return
     session.applyUpdate(params.update)
+  }
+
+  onExtNotification(method: string, params: Record<string, unknown>): void {
+    if (method !== SDK_MESSAGE_EXT_METHOD) return
+    const sessionId = params['sessionId']
+    const message = params['message']
+    if (typeof sessionId !== 'string' || message == null || typeof message !== 'object') return
+    const m = message as { type?: unknown; subtype?: unknown; mcp_servers?: unknown }
+    if (m.type !== 'system' || m.subtype !== 'init' || !Array.isArray(m.mcp_servers)) return
+    const session = this._sessions.find((s) => s.id === sessionId)
+    if (!session) return
+    const servers = m.mcp_servers
+      .filter((s): s is { name: string; status: string } => {
+        if (s == null || typeof s !== 'object') return false
+        const o = s as { name?: unknown; status?: unknown }
+        return typeof o.name === 'string' && typeof o.status === 'string'
+      })
+      .map((s) => ({ name: s.name, status: s.status }))
+    session.applyMcpServerSnapshot(servers)
   }
 
   async onRequestPermission(params: RequestPermissionRequest): Promise<RequestPermissionResponse> {

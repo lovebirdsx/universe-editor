@@ -88,6 +88,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     pendingQuestion: observableValue<AcpPendingQuestion | undefined>('pq', undefined),
     configOptions: configObs,
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),
+    mcpServers: observableValue('mcp', []),
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,

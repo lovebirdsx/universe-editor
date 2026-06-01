@@ -3,7 +3,50 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { filterMcpServersByCapabilities, normalizeMcpServers } from '../acpMcpServers.js'
+import {
+  filterMcpServersByCapabilities,
+  mcpServerTransport,
+  normalizeMcpServers,
+  parseMcpToolName,
+} from '../acpMcpServers.js'
+
+describe('parseMcpToolName', () => {
+  it('parses mcp__<server>__<tool>', () => {
+    expect(parseMcpToolName('mcp__sqlite__query')).toEqual({ server: 'sqlite', tool: 'query' })
+  })
+
+  it('keeps __ inside the tool segment', () => {
+    expect(parseMcpToolName('mcp__fs__read_file__raw')).toEqual({
+      server: 'fs',
+      tool: 'read_file__raw',
+    })
+  })
+
+  it('returns undefined for non-MCP tool names', () => {
+    expect(parseMcpToolName('Bash')).toBeUndefined()
+    expect(parseMcpToolName('Read')).toBeUndefined()
+  })
+
+  it('returns undefined for malformed names', () => {
+    expect(parseMcpToolName('mcp__')).toBeUndefined()
+    expect(parseMcpToolName('mcp__server')).toBeUndefined()
+    expect(parseMcpToolName('mcp__server__')).toBeUndefined()
+    expect(parseMcpToolName('mcp____tool')).toBeUndefined()
+  })
+})
+
+describe('mcpServerTransport', () => {
+  it('reports stdio for entries without a type field', () => {
+    expect(mcpServerTransport({ name: 'fs', command: 'node', args: [], env: [] })).toBe('stdio')
+  })
+
+  it('reports http/sse from the type field', () => {
+    expect(mcpServerTransport({ type: 'http', name: 'd', url: 'http://x', headers: [] })).toBe(
+      'http',
+    )
+    expect(mcpServerTransport({ type: 'sse', name: 'd', url: 'http://x', headers: [] })).toBe('sse')
+  })
+})
 
 describe('normalizeMcpServers — Record form', () => {
   it('normalizes a stdio entry without a type field', () => {

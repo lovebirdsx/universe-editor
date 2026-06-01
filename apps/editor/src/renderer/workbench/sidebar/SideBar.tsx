@@ -13,6 +13,7 @@ import { ViewPane } from './ViewPane.js'
 import { ExplorerView } from '../explorer/ExplorerView.js'
 import { SearchView } from '../search/SearchView.js'
 import { AgentsView } from '../agents/AgentsView.js'
+import { McpServersView } from '../agents/McpServersView.js'
 import styles from './SideBar.module.css'
 
 /** Registry of React components keyed by IViewDescriptor.componentKey. */
@@ -20,6 +21,7 @@ export const viewComponentMap = new Map<string, ComponentType>()
 viewComponentMap.set('explorer.tree', ExplorerView)
 viewComponentMap.set('search.results', SearchView)
 viewComponentMap.set('agents.main', AgentsView)
+viewComponentMap.set('agents.mcp', McpServersView)
 
 export function SideBar({ part }: { part?: IPart | undefined } = {}) {
   const viewsService = useService(IViewsService)

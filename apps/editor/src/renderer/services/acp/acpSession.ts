@@ -27,6 +27,7 @@ import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
+import { parseMcpToolName, type McpTransport } from './acpMcpServers.js'
 
 // ---------------------------------------------------------------------------
 // Public view model
@@ -77,6 +78,12 @@ export interface AcpToolCall {
    * card so the subagent's chatter stays out of the main timeline.
    */
   readonly children?: readonly AcpChildItem[]
+  /**
+   * Source MCP server name when this tool call is an MCP tool. Derived from the
+   * agent fork's `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Absent
+   * for built-in tools. Drives the "MCP · <server>" attribution badge.
+   */
+  readonly mcpServer?: string
 }
 
 /**
@@ -95,6 +102,19 @@ export interface AcpPlanEntry {
   readonly content: string
   readonly status: AcpPlanEntryStatus
   readonly priority?: string
+}
+
+/**
+ * Observable view of one configured/connected MCP server. `status` is the raw
+ * string from the Claude SDK system-init snapshot (e.g. `connected` / `failed`
+ * / `needs-auth` / `pending`). `transport` is seeded from the `acp.mcpServers`
+ * config; servers that only appear in the init snapshot (agent-provided) have
+ * no known transport.
+ */
+export interface AcpMcpServerStatus {
+  readonly name: string
+  readonly status: string
+  readonly transport?: McpTransport
 }
 
 /**
@@ -194,6 +214,12 @@ export interface IAcpSessionInitState {
   readonly configOptions?: readonly SessionConfigOption[]
   /** Usage snapshot to seed the arc on resume (restored from history). */
   readonly usage?: AcpUsage
+  /**
+   * MCP servers forwarded on session/new, seeded into `mcpServers` with a
+   * `pending` status before the SDK init snapshot arrives. Carries the known
+   * transport from config.
+   */
+  readonly mcpServers?: ReadonlyArray<{ readonly name: string; readonly transport: McpTransport }>
 }
 
 export interface IAcpSession {
@@ -224,6 +250,12 @@ export interface IAcpSession {
   readonly configOptions: IObservable<readonly SessionConfigOption[]>
   /** Latest agent-advertised slash commands (may be empty). */
   readonly availableCommands: IObservable<readonly AvailableCommand[]>
+  /**
+   * Configured + connected MCP servers with their latest connection status.
+   * Seeded from config on session/new, then refreshed from the Claude SDK
+   * system-init snapshot. Empty when no MCP servers are involved.
+   */
+  readonly mcpServers: IObservable<readonly AcpMcpServerStatus[]>
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void
   /** Internal — call site is the AskUserQuestion sink. */
@@ -262,6 +294,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
+  readonly mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
 
   private readonly _configOptions: ConfigOptionStateMachine
 
@@ -329,6 +362,10 @@ export class AcpSession extends Disposable implements IAcpSession {
       `acp.session.availableCommands.${id}`,
       [],
     )
+    this.mcpServers = observableValue<readonly AcpMcpServerStatus[]>(
+      `acp.session.mcpServers.${id}`,
+      [],
+    )
     this._configOptions = new ConfigOptionStateMachine({
       conn: _conn,
       telemetry: _telemetry,
@@ -371,6 +408,43 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (state.usage !== undefined && this.usage.get() === undefined) {
       this.usage.set(state.usage, undefined)
     }
+    // Seed the MCP server list from config (status `pending`) so the panel shows
+    // configured servers before the SDK init snapshot arrives. Don't clobber a
+    // snapshot already applied.
+    if (state.mcpServers && state.mcpServers.length > 0 && this.mcpServers.get().length === 0) {
+      this.mcpServers.set(
+        state.mcpServers.map((s) => ({ name: s.name, status: 'pending', transport: s.transport })),
+        undefined,
+      )
+    }
+  }
+
+  /**
+   * Refresh connection status from the Claude SDK system-init snapshot
+   * (`mcp_servers: { name, status }[]`). Merges onto the config-seeded list,
+   * preserving the known transport; servers present only in the snapshot are
+   * appended with no transport.
+   */
+  applyMcpServerSnapshot(servers: ReadonlyArray<{ name: string; status: string }>): void {
+    const prev = this.mcpServers.get()
+    const byName = new Map(prev.map((s) => [s.name, s]))
+    const next: AcpMcpServerStatus[] = []
+    const seen = new Set<string>()
+    for (const s of servers) {
+      seen.add(s.name)
+      const existing = byName.get(s.name)
+      next.push(
+        existing?.transport !== undefined
+          ? { name: s.name, status: s.status, transport: existing.transport }
+          : { name: s.name, status: s.status },
+      )
+    }
+    // Keep config-seeded servers the snapshot didn't mention (e.g. dropped by
+    // capability gating, or an agent that doesn't report them).
+    for (const s of prev) {
+      if (!seen.has(s.name)) next.push(s)
+    }
+    this.mcpServers.set(next, undefined)
   }
 
   presentPermission(p: AcpPendingPermission): void {
@@ -508,6 +582,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const effectiveParent = this._resolveParent(update.toolCallId, parentId)
         if (effectiveParent == null) this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
+        const mcpServer = readMcpServer(update)
         this._upsertToolCall(
           {
             id: update.toolCallId,
@@ -517,6 +592,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             blocks,
             diffs,
             text: blocksToText(blocks),
+            ...(mcpServer !== undefined ? { mcpServer } : {}),
           },
           effectiveParent,
         )
@@ -535,6 +611,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const split = update.content != null ? splitToolCallContent(update.content) : undefined
         const blocks = split?.blocks ?? existing?.blocks ?? []
         const diffs = split?.diffs ?? existing?.diffs ?? []
+        const mcpServer = readMcpServer(update) ?? existing?.mcpServer
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
@@ -543,6 +620,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           blocks,
           diffs,
           text: blocksToText(blocks),
+          ...(mcpServer !== undefined ? { mcpServer } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
         if (update.status === 'failed') {
@@ -885,6 +963,18 @@ function readParentToolUseId(update: SessionUpdate): string | undefined {
   const meta = (update as { _meta?: { claudeCode?: { parentToolUseId?: unknown } } | null })._meta
   const pid = meta?.claudeCode?.parentToolUseId
   return typeof pid === 'string' && pid.length > 0 ? pid : undefined
+}
+
+/**
+ * Resolve the source MCP server for a tool_call(_update) from the agent fork's
+ * `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Returns undefined for
+ * built-in tools or malformed names.
+ */
+function readMcpServer(update: SessionUpdate): string | undefined {
+  const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
+  const toolName = meta?.claudeCode?.toolName
+  if (typeof toolName !== 'string' || toolName.length === 0) return undefined
+  return parseMcpToolName(toolName)?.server
 }
 
 /** True when at least one block would render visible content. */

@@ -30,6 +30,7 @@ export interface E2EStatusBarEntry {
   readonly text: string
   readonly alignment: 'left' | 'right'
   readonly icon?: string
+  readonly tooltip?: string
 }
 
 export interface E2ELayoutSizes {
@@ -150,7 +151,19 @@ export interface E2EProbe {
   /** Snapshot of the active session's messages (role + text). */
   getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */
-  getAcpToolCalls(): ReadonlyArray<{ id: string; title: string; status: string; text: string }>
+  getAcpToolCalls(): ReadonlyArray<{
+    id: string
+    title: string
+    status: string
+    text: string
+    mcpServer?: string
+  }>
+  /**
+   * Snapshot of the active session's MCP servers (name, connection status, and
+   * transport when known). Backs the MCP Servers view and the Agents status-bar
+   * tooltip. Empty when no session is active or no MCP servers are involved.
+   */
+  getAcpMcpServers(): ReadonlyArray<{ name: string; status: string; transport?: string }>
   /**
    * Snapshot of the active session's pending `AskUserQuestion` carousel, or
    * undefined when none is awaiting an answer.

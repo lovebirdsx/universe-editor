@@ -1515,3 +1515,108 @@
   outline: 1px solid var(--color-badge-progress, #4fa6e2);
   outline-offset: 1px;
 }
+
+.mcpView {
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  gap: 2px;
+}
+
+.mcpList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mcpRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.mcpRow:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.mcpStatusDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-message-role-fg, #888);
+}
+
+.mcpRow[data-status='connected'] .mcpStatusDot {
+  background: var(--color-badge-success, #2c7d32);
+}
+
+.mcpRow[data-status='pending'] .mcpStatusDot {
+  background: var(--color-badge-progress, #4fa6e2);
+}
+
+.mcpRow[data-status='failed'] .mcpStatusDot,
+.mcpRow[data-status='error'] .mcpStatusDot {
+  background: var(--color-badge-error, #f14c4c);
+}
+
+.mcpRow[data-status='needs-auth'] .mcpStatusDot,
+.mcpRow[data-status='needs_auth'] .mcpStatusDot {
+  background: var(--color-badge-warning, #d7ba7d);
+}
+
+.mcpRowMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.mcpName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 600;
+}
+
+.mcpMeta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: var(--color-message-role-fg, #888);
+}
+
+.mcpTransport {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.mcpCount {
+  font-variant-numeric: tabular-nums;
+}
+
+.mcpStatusLabel {
+  flex: none;
+  font-size: 10px;
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.mcpBadge {
+  flex: none;
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: var(--color-badge-bg, #333);
+  color: var(--color-message-role-fg, #aaa);
+  font-weight: 600;
+}

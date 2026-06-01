@@ -127,6 +127,31 @@ export function normalizeMcpServers(raw: unknown, onWarn?: WarnFn): McpServer[] 
   return []
 }
 
+export type McpTransport = 'stdio' | 'http' | 'sse'
+
+/** Transport of a wire `McpServer` (stdio entries carry no `type` field). */
+export function mcpServerTransport(server: McpServer): McpTransport {
+  if (!('type' in server)) return 'stdio'
+  return server.type === 'http' ? 'http' : server.type === 'sse' ? 'sse' : 'stdio'
+}
+
+/**
+ * Parse a Claude SDK tool name of the form `mcp__<server>__<tool>` into its
+ * parts. Returns `undefined` for non-MCP tools or malformed names so callers
+ * degrade safely (no attribution badge). The server segment itself never
+ * contains `__`; the tool segment may, so we only split on the first two.
+ */
+export function parseMcpToolName(toolName: string): { server: string; tool: string } | undefined {
+  if (!toolName.startsWith('mcp__')) return undefined
+  const rest = toolName.slice('mcp__'.length)
+  const sep = rest.indexOf('__')
+  if (sep <= 0) return undefined
+  const server = rest.slice(0, sep)
+  const tool = rest.slice(sep + 2)
+  if (!server || !tool) return undefined
+  return { server, tool }
+}
+
 /**
  * Drop servers whose transport the agent does not advertise. stdio is the
  * baseline transport and is always kept; only http/sse are gated by

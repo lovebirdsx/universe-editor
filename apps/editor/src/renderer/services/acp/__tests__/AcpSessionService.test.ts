@@ -886,4 +886,70 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     ])
     svc.dispose()
   })
+
+  it('asks the agent to emit only the SDK system-init message via session/new _meta', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    await svc.createSession()
+    const params = client.connected[0]!.agent.newSessionCalls[0]!
+    expect(params._meta).toEqual({
+      claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
+    })
+    svc.dispose()
+  })
+
+  it('seeds mcpServers from config and refreshes status from the init snapshot', async () => {
+    const client = new FakeAcpClientService()
+    const config = new ConfigurationService()
+    await config.update('acp.mcpServers', { fs: { command: 'node', args: [] } })
+    const svc = makeService(client, config)
+    const session = await svc.createSession()
+    expect(session.mcpServers.get()).toEqual([
+      { name: 'fs', status: 'pending', transport: 'stdio' },
+    ])
+    svc.onExtNotification('_claude/sdkMessage', {
+      sessionId: session.id,
+      message: {
+        type: 'system',
+        subtype: 'init',
+        mcp_servers: [{ name: 'fs', status: 'connected' }],
+      },
+    })
+    expect(session.mcpServers.get()).toEqual([
+      { name: 'fs', status: 'connected', transport: 'stdio' },
+    ])
+    svc.dispose()
+  })
+
+  it('ignores non-init / malformed extNotification payloads', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    svc.onExtNotification('_claude/sdkMessage', {
+      sessionId: session.id,
+      message: { type: 'result' },
+    })
+    svc.onExtNotification('_other/method', { sessionId: session.id })
+    expect(session.mcpServers.get()).toEqual([])
+    svc.dispose()
+  })
+
+  it('attributes MCP tool calls to their server from _meta.claudeCode.toolName', async () => {
+    const client = new FakeAcpClientService()
+    const svc = makeService(client, new ConfigurationService())
+    const session = await svc.createSession()
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: session.id,
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 't1',
+        title: 'query',
+        kind: 'other',
+        status: 'pending',
+        _meta: { claudeCode: { toolName: 'mcp__sqlite__query' } },
+      },
+    })
+    expect(session.toolCalls.get()[0]?.mcpServer).toBe('sqlite')
+    svc.dispose()
+  })
 })

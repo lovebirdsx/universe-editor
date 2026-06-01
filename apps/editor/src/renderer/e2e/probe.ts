@@ -106,6 +106,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         text: entry.text,
         alignment: entry.alignment === StatusBarAlignment.Right ? 'right' : 'left',
         ...(entry.icon !== undefined && { icon: entry.icon }),
+        ...(entry.tooltip !== undefined && { tooltip: entry.tooltip }),
       })),
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
@@ -187,6 +188,16 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         title: t.title,
         status: t.status,
         text: t.text,
+        ...(t.mcpServer !== undefined && { mcpServer: t.mcpServer }),
+      }))
+    },
+    getAcpMcpServers: () => {
+      const s = services.acpSessionService.activeSession.get()
+      if (!s) return []
+      return s.mcpServers.get().map((m) => ({
+        name: m.name,
+        status: m.status,
+        ...(m.transport !== undefined && { transport: m.transport }),
       }))
     },
     getAcpPendingQuestion: () => {

@@ -162,6 +162,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     pendingQuestion: observableValue<AcpPendingQuestion | undefined>('test.question', undefined),
     configOptions,
     availableCommands: commandsObs,
+    mcpServers: observableValue('test.mcpServers', []),
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: sendPrompt as never,
