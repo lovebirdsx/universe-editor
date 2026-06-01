@@ -47,6 +47,7 @@ export function bootstrapWindowIpc(
     ServiceChannels.DisposableLeak,
     ProxyChannel.fromService(app.disposableLeak),
   )
+  server.registerChannel(ServiceChannels.Update, ProxyChannel.fromService(app.update))
 
   return combinedDisposable(server, protoDisposable)
 }

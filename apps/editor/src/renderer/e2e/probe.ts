@@ -29,6 +29,7 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import {
@@ -39,6 +40,7 @@ import {
   type E2ELifecyclePhase,
   type E2EProbe,
   type E2EStatusBarEntry,
+  type E2EUpdateState,
 } from '../../shared/e2e/contract.js'
 
 export interface E2EProbeServices {
@@ -55,6 +57,7 @@ export interface E2EProbeServices {
   readonly configurationService: IConfigurationService
   readonly acpSessionService: IAcpSessionService
   readonly outputService: IOutputService
+  readonly updateService: IUpdateService
 }
 
 class DummyEditorInput extends EditorInput {
@@ -108,6 +111,16 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
         ...(entry.icon !== undefined && { icon: entry.icon }),
         ...(entry.tooltip !== undefined && { tooltip: entry.tooltip }),
       })),
+    getUpdateState: async (): Promise<E2EUpdateState> => {
+      const s = await services.updateService.getState()
+      return {
+        status: s.status,
+        currentVersion: s.currentVersion,
+        ...(s.version !== undefined && { version: s.version }),
+        ...(s.percent !== undefined && { percent: s.percent }),
+        ...(s.error !== undefined && { error: s.error }),
+      }
+    },
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
     getOpenWindows: async () =>

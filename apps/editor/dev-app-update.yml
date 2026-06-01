@@ -1,0 +1,7 @@
+# 仅供本地联调自动更新流程（dev / 未打包构建）。electron-updater 在
+# app.isPackaged === false 且 forceDevUpdateConfig 时读取本文件。把 url 指向一个
+# 本地静态服务器（托管一个版本号更高的 release/ 产物 + latest.yml），即可验证
+# 检查 → 提示 → 下载 → 重启安装 的完整链路。打包版改用 electron-builder.yml 的 publish。
+provider: generic
+url: http://localhost:8788/
+channel: latest

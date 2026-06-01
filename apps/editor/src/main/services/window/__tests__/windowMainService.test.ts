@@ -90,6 +90,7 @@ function makeOpts() {
       acpTerminal: {} as never,
       claudeBinary: {} as never,
       disposableLeak: {} as never,
+      update: {} as never,
     },
     logService,
     e2eEnabled: false,

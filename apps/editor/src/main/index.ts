@@ -1,4 +1,4 @@
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -21,6 +21,7 @@ import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
 import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './services/claudeBinary/claudeBinaryMainService.js'
 import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
+import { UpdateMainService } from './services/update/updateMainService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, readEnvFromProcess, resolveProductIdentity } from './productPaths.js'
 import { getDefaultStorage } from './storage.js'
@@ -70,6 +71,25 @@ const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 
 const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
 
+// Single-instance lock: a second launch focuses the existing window instead of
+// starting a rival process. Required for the auto-update restart-to-install flow
+// (quitAndInstall relaunches the app). E2E spawns many isolated instances (each
+// with its own userData dir), so it opts out.
+const hasSingleInstanceLock = e2eEnabled || app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.focus()
+    } else {
+      void getOrCreateServices().windows.createWindow({})
+    }
+  })
+}
+
 // Application-singleton services — shared across all windows.
 let applicationServices: ApplicationServices | null = null
 let recentWorkspacesService: RecentWorkspacesMainService | null = null
@@ -77,6 +97,7 @@ let acpHostService: AcpHostMainService | null = null
 let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
 let claudeBinaryService: ClaudeBinaryMainService | null = null
+let updateService: UpdateMainService | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
@@ -104,6 +125,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     claudeBinaryService = new ClaudeBinaryMainService(
       logMainService.createLogger({ id: 'claudeBinary', name: 'Claude Binary' }),
     )
+    updateService = new UpdateMainService(
+      logMainService.createLogger({ id: 'update', name: 'Update' }),
+    )
     applicationServices = {
       ping: new MainPingService(),
       fileSystem: new FileSystemMainService(
@@ -118,6 +142,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       acpTerminal,
       claudeBinary: claudeBinaryService,
       disposableLeak: new DisposableLeakMainService(),
+      update: updateService,
     }
   }
   if (!windowMainService) {
@@ -146,6 +171,7 @@ async function loadMainSettingsText(): Promise<string> {
 }
 
 void app.whenReady().then(async () => {
+  if (!hasSingleInstanceLock) return
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
@@ -184,6 +210,7 @@ app.on('will-quit', () => {
   acpHostService?.dispose()
   acpTerminalService?.dispose()
   claudeBinaryService?.dispose()
+  updateService?.dispose()
   void getDefaultStorage().flush()
   consoleInterceptor.dispose()
   logMainService.dispose()

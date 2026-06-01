@@ -69,3 +69,4 @@ catalog:
   electron: ^33.0.0
   electron-vite: ^5.0.0
   electron-builder: ^25.0.0
+  electron-updater: ^6.3.0

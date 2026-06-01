@@ -17,7 +17,9 @@
     "clean": "turbo run clean",
     "changeset": "changeset",
     "version-packages": "changeset version",
-    "publish-packages": "changeset publish"
+    "publish-packages": "changeset publish",
+    "release:upload": "node scripts/release/upload.mjs",
+    "server:serve": "node scripts/server/server.mjs --root apps/editor/release --port 8788 --base /"
   },
   "devDependencies": {
     "@universe-editor/config-eslint": "workspace:*",

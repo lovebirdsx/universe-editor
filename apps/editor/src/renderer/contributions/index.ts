@@ -28,6 +28,7 @@ import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 import { NotificationStatusContribution } from './NotificationStatusContribution.js'
+import { UpdateContribution } from './UpdateContribution.js'
 import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 import { LogLevelContribution } from './LogLevelContribution.js'
@@ -174,6 +175,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.notificationStatus',
   NotificationStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Auto-update: status-bar entry + prompt notifications, driven by the main-side
+// update state machine. AfterRestore so the status bar + notifications are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.update',
+  UpdateContribution,
   WorkbenchPhase.AfterRestore,
 )
 

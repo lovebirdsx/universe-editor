@@ -17,8 +17,9 @@ describe('ApplicationServices type', () => {
       acpTerminal: {} as ApplicationServices['acpTerminal'],
       claudeBinary: {} as ApplicationServices['claudeBinary'],
       disposableLeak: {} as ApplicationServices['disposableLeak'],
+      update: {} as ApplicationServices['update'],
     }
-    expect(Object.keys(svc)).toHaveLength(9)
+    expect(Object.keys(svc)).toHaveLength(10)
   })
 })
 

@@ -1,6 +1,6 @@
 {
   "name": "@universe-editor/editor",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "VSCode-style desktop game content editor.",
   "author": "Universe Editor Contributors",
@@ -37,6 +37,7 @@
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",
     "allotment": "catalog:",
+    "electron-updater": "catalog:",
     "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",
     "monaco-editor": "catalog:",

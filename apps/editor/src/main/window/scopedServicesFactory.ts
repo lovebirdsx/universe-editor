@@ -19,6 +19,7 @@ import type {
   IPingService,
   IDisposableLeakService,
 } from '../../shared/ipc/services.js'
+import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -36,6 +37,7 @@ export interface ApplicationServices {
   readonly acpTerminal: IAcpTerminalService
   readonly claudeBinary: IClaudeBinaryService
   readonly disposableLeak: IDisposableLeakService
+  readonly update: IUpdateService
 }
 
 /**

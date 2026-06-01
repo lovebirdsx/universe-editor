@@ -212,33 +212,29 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
 
     this._register(
       ConfigurationRegistry.registerConfiguration({
-        id: 'logging',
-        title: localize('settings.logging', 'Logging'),
+        id: 'update',
+        title: localize('settings.update', 'Update'),
         properties: {
-          'logging.level': {
+          'update.mode': {
             type: 'string',
-            default: 'info',
-            enum: ['off', 'trace', 'debug', 'info', 'warning', 'error'],
-            description: localize(
-              'settings.logging.level.description',
-              'Default log level applied at startup.',
-            ),
-          },
-          'logging.timestampFormat': {
-            type: 'string',
-            default: 'HH:mm:ss',
-            enum: ['HH:mm:ss', 'HH:mm:ss.SSS', 'ISO'],
+            default: 'start',
+            enum: ['start', 'manual'],
             enumItemLabels: {
-              'HH:mm:ss': localize('settings.enum.timestampHHmmss', 'Time (09:11:25)'),
-              'HH:mm:ss.SSS': localize(
-                'settings.enum.timestampHHmmssSSS',
-                'Time with ms (09:11:25.123)',
-              ),
-              ISO: localize('settings.enum.timestampISO', 'ISO 8601 UTC'),
+              start: localize('settings.enum.update.start', 'Check on Startup'),
+              manual: localize('settings.enum.update.manual', 'Manual'),
             },
             description: localize(
-              'settings.logging.timestampFormat.description',
-              'Timestamp format used in log output.',
+              'settings.update.mode.description',
+              'Controls whether the editor checks for updates automatically.',
+            ),
+          },
+          'update.checkIntervalMinutes': {
+            type: 'number',
+            default: 1440,
+            minimum: 0,
+            description: localize(
+              'settings.update.checkIntervalMinutes.description',
+              'How often (in minutes) to check for updates while running. 0 disables periodic checks.',
             ),
           },
         },

@@ -3,6 +3,12 @@ productName: Universe Editor
 directories:
   output: release
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
+# 内网自建静态服务器分发更新。把 release/ 下的 latest.yml + .exe + .blockmap
+# 同步到该 url 指向的目录即可；autoUpdater 启动时 GET `${url}/latest.yml` 比对版本。
+publish:
+  provider: generic
+  url: http://CHANGE-ME.internal/universe-editor/
+  channel: latest
 files:
   - out/**/*
   - package.json

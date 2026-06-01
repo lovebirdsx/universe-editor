@@ -65,6 +65,7 @@ import {
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
+import { IUpdateService } from '../shared/ipc/updateService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -313,6 +314,10 @@ async function bootstrapWorkbench(): Promise<void> {
       ipcService.getChannel(ServiceChannels.ClaudeBinary),
     ),
   )
+  const updateService = ProxyChannel.toService<IUpdateService>(
+    ipcService.getChannel(ServiceChannels.Update),
+  )
+  services.set(IUpdateService, updateService)
   const windowsService = ProxyChannel.toService<IWindowsService>(
     ipcService.getChannel(ServiceChannels.Window),
   )
@@ -551,6 +556,7 @@ async function bootstrapWorkbench(): Promise<void> {
     configurationService,
     acpSessionService,
     outputService,
+    updateService,
   })
 
   // Load persisted layout and view state before mounting React so Allotment starts with the

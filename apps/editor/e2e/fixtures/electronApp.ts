@@ -31,9 +31,11 @@ export const test = base.extend<E2EFixtures>({
   electronApp: async ({}, use) => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-'))
     // Pin UI language for deterministic assertions across CI/dev machines.
+    // Disable auto-update checks by default so the update state machine stays
+    // idle unless a spec opts in (smoke.update drives it explicitly).
     writeFileSync(
       join(userDataDir, 'settings.json'),
-      JSON.stringify({ 'workbench.language': 'en-US' }, null, 2),
+      JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
       'utf8',
     )
     const app = await electron.launch({

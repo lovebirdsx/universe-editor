@@ -1,5 +1,9 @@
 import type { Page } from '@playwright/test'
-import type { E2EDisposableLeakReport, E2EOpenWindow } from '../../src/shared/e2e/contract.js'
+import type {
+  E2EDisposableLeakReport,
+  E2EOpenWindow,
+  E2EUpdateState,
+} from '../../src/shared/e2e/contract.js'
 import { ActivityBarPO } from './ActivityBarPO.js'
 import { SideBarPO } from './SideBarPO.js'
 import { StatusBarPO } from './StatusBarPO.js'
@@ -96,6 +100,11 @@ export class WorkbenchPO {
   /** Return the number of editor groups currently open. */
   async getEditorGroupCount(): Promise<number> {
     return this.page.evaluate(() => window.__E2E__!.getEditorGroupCount())
+  }
+
+  /** Current auto-update state (status machine + versions). */
+  async getUpdateState(): Promise<E2EUpdateState> {
+    return this.page.evaluate(() => window.__E2E__!.getUpdateState())
   }
 
   /**

@@ -33,6 +33,14 @@ export interface E2EStatusBarEntry {
   readonly tooltip?: string
 }
 
+export interface E2EUpdateState {
+  readonly status: string
+  readonly currentVersion: string
+  readonly version?: string
+  readonly percent?: number
+  readonly error?: string
+}
+
 export interface E2ELayoutSizes {
   readonly sidebar: number
   readonly secondarySidebar: number
@@ -61,6 +69,8 @@ export interface E2EProbe {
   getActiveEditorUri(): string | undefined
   /** Snapshot of currently visible status bar entries. */
   getStatusBarEntries(): E2EStatusBarEntry[]
+  /** Current auto-update state (status machine + versions). */
+  getUpdateState(): Promise<E2EUpdateState>
   /**
    * Opens a workspace by file-system path, bypassing the native folder dialog.
    * Use this in E2E tests instead of triggering the real dialog.

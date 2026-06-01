@@ -105,6 +105,11 @@ import {
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
 import {
+  CheckForUpdatesAction,
+  DownloadUpdateAction,
+  InstallUpdateAction,
+} from './updateActions.js'
+import {
   ClearOutputAction,
   OpenActiveLogFileAction,
   OpenLogFileAction,
@@ -274,6 +279,11 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// Update
+registerAction2(CheckForUpdatesAction)
+registerAction2(DownloadUpdateAction)
+registerAction2(InstallUpdateAction)
 
 // Terminal
 registerAction2(OpenInTerminalAction)
