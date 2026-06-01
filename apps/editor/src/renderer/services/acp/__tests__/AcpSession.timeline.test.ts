@@ -934,4 +934,54 @@ describe('AcpSession.timeline', () => {
     if (c.kind !== 'message') throw new Error('expected message')
     expect(c.message.text).toBe('child output')
   })
+
+  it('re-attaches a child tool_call_update that drops parentToolUseId (PostToolUse hook)', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcParent',
+        title: 'Task',
+        kind: 'other',
+        status: 'in_progress',
+      },
+    })
+    // Child tool call lands inside the parent, still pending.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'tcChild',
+        title: 'Edit',
+        kind: 'edit',
+        status: 'pending',
+        _meta: { claudeCode: { parentToolUseId: 'tcParent' } },
+      },
+    })
+    // PostToolUse hook completes it but omits parentToolUseId (the bug trigger).
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'tool_call_update', toolCallId: 'tcChild', status: 'completed' },
+    })
+
+    // No orphan top-level slot — only the parent is on the timeline.
+    const timeline = s.timeline.get()
+    expect(timeline.map((it) => it.id)).toEqual(['tcParent'])
+    expect(s.toolCalls.get().map((t) => t.id)).toEqual(['tcParent'])
+
+    const parent = timeline[0]!
+    if (parent.kind !== 'toolCall') throw new Error('expected toolCall')
+    const children = parent.call.children ?? []
+    expect(children).toHaveLength(1)
+    const childTool = children[0]!
+    if (childTool.kind !== 'toolCall') throw new Error('expected toolCall')
+    expect(childTool.id).toBe('tcChild')
+    // The hook update re-attached and flipped status; title/kind survive too.
+    expect(childTool.call.status).toBe('completed')
+    expect(childTool.call.kind).toBe('edit')
+    expect(childTool.call.title).toBe('Edit')
+  })
 })

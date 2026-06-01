@@ -290,6 +290,14 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private readonly _orphanChildren = new Map<string, readonly AcpChildItem[]>()
 
+  /**
+   * Remembers each tool call's parent on first sighting. Later updates that drop
+   * `parentToolUseId` (notably the PostToolUse hook's `tool_call_update`) fall
+   * back to this so they re-attach to the parent card instead of spawning an
+   * orphan top-level slot that stays "pending" forever.
+   */
+  private readonly _toolCallParent = new Map<string, string>()
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -462,6 +470,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._messages = []
     this._toolCalls = []
     this._timeline = []
+    this._orphanChildren.clear()
+    this._toolCallParent.clear()
     this.messages.set(this._messages, undefined)
     this.toolCalls.set(this._toolCalls, undefined)
     this.timeline.set(this._timeline, undefined)
@@ -488,7 +498,8 @@ export class AcpSession extends Disposable implements IAcpSession {
         // chunk opens a fresh card at the end instead of merging back into the
         // message now buried above this tool. Child tool calls live inside a
         // parent card and never touch the top-level streaming chain.
-        if (parentId == null) this._sealStreamingMessages()
+        const effectiveParent = this._resolveParent(update.toolCallId, parentId)
+        if (effectiveParent == null) this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
         this._upsertToolCall(
           {
@@ -500,7 +511,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             diffs,
             text: blocksToText(blocks),
           },
-          parentId,
+          effectiveParent,
         )
         this._telemetry.publicLog('acp.tool_call_started', {
           sessionId: this.id,
@@ -509,9 +520,10 @@ export class AcpSession extends Disposable implements IAcpSession {
         break
       }
       case 'tool_call_update': {
+        const effectiveParent = this._resolveParent(update.toolCallId, parentId)
         const existing =
-          parentId != null
-            ? this._findChildToolCall(parentId, update.toolCallId)
+          effectiveParent != null
+            ? this._findChildToolCall(effectiveParent, update.toolCallId)
             : this._toolCalls.find((t) => t.id === update.toolCallId)
         const split = update.content != null ? splitToolCallContent(update.content) : undefined
         const blocks = split?.blocks ?? existing?.blocks ?? []
@@ -525,7 +537,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           diffs,
           text: blocksToText(blocks),
         }
-        this._upsertToolCall(next, parentId)
+        this._upsertToolCall(next, effectiveParent)
         if (update.status === 'failed') {
           this._telemetry.publicLogError('acp.tool_call_failed', {
             sessionId: this.id,
@@ -711,6 +723,21 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   // -- sub-agent (child) routing ------------------------------------------
+
+  /**
+   * Resolve a tool call's parent, remembering it on first sighting. Updates that
+   * carry `parentToolUseId` set the mapping; ones that drop it (e.g. the
+   * PostToolUse hook's `tool_call_update`) fall back to the remembered parent so
+   * they re-attach to the parent card instead of becoming an orphan top-level
+   * slot stuck at "pending".
+   */
+  private _resolveParent(toolCallId: string, parentId: string | undefined): string | undefined {
+    if (parentId != null) {
+      this._toolCallParent.set(toolCallId, parentId)
+      return parentId
+    }
+    return this._toolCallParent.get(toolCallId)
+  }
 
   /** Append a streaming sub-agent message chunk under its parent tool call. */
   private _appendChildChunk(role: AcpMessageRole, block: ContentBlock, parentId: string): void {
