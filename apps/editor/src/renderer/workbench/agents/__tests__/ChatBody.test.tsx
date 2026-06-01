@@ -48,13 +48,11 @@ import styles from '../agents.module.css'
 // cancels on unmount. On slower CI that timer fires after happy-dom is torn down,
 // crashing in React with "window is not defined". Stub it out entirely.
 vi.mock('@tanstack/react-virtual', () => ({
-  measureElement: () => 0,
   useVirtualizer: () => ({
     getTotalSize: () => 0,
     getVirtualItems: () => [],
     scrollToIndex: () => {},
     measureElement: () => {},
-    indexFromElement: () => 0,
   }),
 }))
 
