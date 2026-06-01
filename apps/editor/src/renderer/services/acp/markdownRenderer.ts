@@ -11,6 +11,7 @@
  *    - unordered     `- ` / `* ` / `+ `
  *    - ordered       `1. ` (any positive integer + `.`)
  *    - hr            `---` / `***` / `___`
+ *    - table         GFM pipe table (`| a | b |` + `| --- | :-: |` row)
  *    - paragraph     anything else (joined runs of non-blank lines)
  *
  *  Supported inline tokens:
@@ -37,7 +38,15 @@ export type MdNode =
       readonly items: readonly (readonly MdInline[])[]
     }
   | { readonly type: 'blockquote'; readonly children: readonly MdInline[] }
+  | {
+      readonly type: 'table'
+      readonly align: readonly (TableAlign | null)[]
+      readonly header: readonly (readonly MdInline[])[]
+      readonly rows: readonly (readonly (readonly MdInline[])[])[]
+    }
   | { readonly type: 'hr' }
+
+export type TableAlign = 'left' | 'center' | 'right'
 
 export type MdInline =
   | { readonly type: 'text'; readonly text: string }
@@ -129,6 +138,25 @@ export function parseMarkdown(input: string): readonly MdNode[] {
       continue
     }
 
+    // GFM pipe table — a header row containing a `|`, immediately followed by
+    // a delimiter row (`| --- | :-: |`). Data rows are the following lines that
+    // still contain a `|`; a blank line (or a non-pipe line) ends the table.
+    if (line.includes('|') && isTableDelimiterRow(lines[i + 1] ?? '')) {
+      const align = parseTableDelimiter(lines[i + 1] ?? '')
+      const cols = align.length
+      const header = splitTableRow(line, cols)
+      i += 2
+      const rows: MdInline[][][] = []
+      while (i < lines.length) {
+        const cur = lines[i] ?? ''
+        if (cur.trim() === '' || !cur.includes('|')) break
+        rows.push(splitTableRow(cur, cols))
+        i++
+      }
+      out.push({ type: 'table', align, header, rows })
+      continue
+    }
+
     // Paragraph — accumulate non-blank, non-block-start lines.
     const para: string[] = [line]
     i++
@@ -141,6 +169,8 @@ export function parseMarkdown(input: string): readonly MdNode[] {
       if (/^\s*[-*+]\s+/.test(cur)) break
       if (/^\s*\d+\.\s+/.test(cur)) break
       if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(cur)) break
+      // A table starting on the next line (header + delimiter) ends the paragraph.
+      if (cur.includes('|') && isTableDelimiterRow(lines[i + 1] ?? '')) break
       para.push(cur)
       i++
     }
@@ -341,6 +371,70 @@ function findItalicClose(text: string, start: number, delim: string): number {
 /** Allow only http(s) and file URLs. */
 export function isSafeHref(href: string): boolean {
   return /^(?:https?:|file:)/i.test(href)
+}
+
+// ---------------------------------------------------------------------------
+// GFM tables
+// ---------------------------------------------------------------------------
+
+const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+/** True when a line is a GFM table delimiter row (`| --- | :-: | ---: |`). */
+function isTableDelimiterRow(line: string): boolean {
+  return line.includes('-') && TABLE_DELIMITER_RE.test(line)
+}
+
+/** Parse a delimiter row into per-column alignments. */
+function parseTableDelimiter(line: string): (TableAlign | null)[] {
+  return splitPipes(line).map((cell) => {
+    const c = cell.trim()
+    const left = c.startsWith(':')
+    const right = c.endsWith(':')
+    if (left && right) return 'center'
+    if (right) return 'right'
+    if (left) return 'left'
+    return null
+  })
+}
+
+/**
+ * Split a table row into exactly {@link cols} cells of parsed inline content.
+ * Extra cells are dropped and missing cells padded with empty content, matching
+ * GFM's column-count normalization against the header.
+ */
+function splitTableRow(line: string, cols: number): MdInline[][] {
+  const cells = splitPipes(line).map((cell) => [...parseInline(cell.trim())])
+  while (cells.length < cols) cells.push([])
+  cells.length = cols
+  return cells
+}
+
+/**
+ * Split a pipe-delimited row into raw cell strings. Strips one optional leading
+ * and trailing `|`, then splits on unescaped `|` (so `\|` stays a literal pipe).
+ */
+function splitPipes(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1)
+  const cells: string[] = []
+  let buf = ''
+  for (let i = 0; i < s.length; i++) {
+    const ch = s[i]!
+    if (ch === '\\' && i + 1 < s.length) {
+      buf += s[i + 1] === '|' ? '|' : ch + s[i + 1]
+      i++
+      continue
+    }
+    if (ch === '|') {
+      cells.push(buf)
+      buf = ''
+      continue
+    }
+    buf += ch
+  }
+  cells.push(buf)
+  return cells
 }
 
 const BARE_URL_RE = /^(https?:\/\/[^\s<>()]+[^\s<>().,;:!?])/i

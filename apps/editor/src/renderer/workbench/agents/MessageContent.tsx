@@ -18,7 +18,12 @@
 import { Fragment, useMemo, type ReactNode } from 'react'
 import { IEditorResolverService, URI } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
-import { parseMarkdown, type MdInline, type MdNode } from '../../services/acp/markdownRenderer.js'
+import {
+  parseMarkdown,
+  type MdInline,
+  type MdNode,
+  type TableAlign,
+} from '../../services/acp/markdownRenderer.js'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
 import { useService } from '../useService.js'
 import { CodeBlock } from './CodeBlock.js'
@@ -147,9 +152,38 @@ function Block({ node }: { node: MdNode }): ReactNode {
       )
     case 'blockquote':
       return <blockquote>{renderInline(node.children)}</blockquote>
+    case 'table':
+      return (
+        <table>
+          <thead>
+            <tr>
+              {node.header.map((cell, c) => (
+                <th key={c} style={alignStyle(node.align[c])}>
+                  {renderInline(cell)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {node.rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, c) => (
+                  <td key={c} style={alignStyle(node.align[c])}>
+                    {renderInline(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )
     case 'hr':
       return <hr />
   }
+}
+
+function alignStyle(align: TableAlign | null | undefined): React.CSSProperties | undefined {
+  return align ? { textAlign: align } : undefined
 }
 
 function renderInline(nodes: readonly MdInline[]): ReactNode {

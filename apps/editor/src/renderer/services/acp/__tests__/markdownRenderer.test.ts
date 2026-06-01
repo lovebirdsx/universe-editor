@@ -125,6 +125,69 @@ describe('parseMarkdown — block layer', () => {
   })
 })
 
+describe('parseMarkdown — GFM tables', () => {
+  it('parses a basic pipe table with header and data rows', () => {
+    expect(parseMarkdown('| A | B |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |')).toEqual<
+      readonly MdNode[]
+    >([
+      {
+        type: 'table',
+        align: [null, null],
+        header: [[text('A')], [text('B')]],
+        rows: [
+          [[text('1')], [text('2')]],
+          [[text('3')], [text('4')]],
+        ],
+      },
+    ])
+  })
+
+  it('parses column alignment from the delimiter row', () => {
+    const nodes = parseMarkdown('| L | C | R | D |\n| :-- | :-: | --: | --- |\n| a | b | c | d |')
+    expect(nodes[0]?.type).toBe('table')
+    expect(nodes[0]).toMatchObject({ align: ['left', 'center', 'right', null] })
+  })
+
+  it('parses inline syntax inside cells', () => {
+    const nodes = parseMarkdown('| H |\n| --- |\n| **bold** |')
+    expect(nodes[0]).toMatchObject({
+      type: 'table',
+      rows: [[[{ type: 'bold', children: [text('bold')] }]]],
+    })
+  })
+
+  it('treats an escaped pipe as a literal cell character', () => {
+    const nodes = parseMarkdown('| A | B |\n| --- | --- |\n| x \\| y | z |')
+    expect(nodes[0]).toMatchObject({
+      type: 'table',
+      rows: [[[text('x | y')], [text('z')]]],
+    })
+  })
+
+  it('normalizes ragged rows against the header column count', () => {
+    const nodes = parseMarkdown('| A | B |\n| --- | --- |\n| only |\n| 1 | 2 | 3 |')
+    expect(nodes[0]).toMatchObject({
+      type: 'table',
+      rows: [
+        [[text('only')], []],
+        [[text('1')], [text('2')]],
+      ],
+    })
+  })
+
+  it('ends the preceding paragraph when a table starts', () => {
+    const nodes = parseMarkdown('intro text\n| A | B |\n| --- | --- |\n| 1 | 2 |')
+    expect(nodes[0]).toEqual<MdNode>({ type: 'paragraph', children: [text('intro text')] })
+    expect(nodes[1]?.type).toBe('table')
+  })
+
+  it('does not treat pipe text without a delimiter row as a table', () => {
+    expect(parseMarkdown('a | b | c')).toEqual<readonly MdNode[]>([
+      { type: 'paragraph', children: [text('a | b | c')] },
+    ])
+  })
+})
+
 describe('parseInline — inline layer', () => {
   it('returns plain text untouched', () => {
     expect(parseInline('hello')).toEqual<readonly MdInline[]>([text('hello')])
