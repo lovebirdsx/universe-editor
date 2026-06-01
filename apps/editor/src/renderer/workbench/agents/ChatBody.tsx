@@ -41,10 +41,7 @@ import {
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
 } from '../../services/acp/acpChatWidgetService.js'
-import {
-  AcpChatViewStateCache,
-  type CollapseMode,
-} from '../../services/acp/acpChatViewStateCache.js'
+import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
 import { CollapsibleSlot } from './CollapsibleSlot.js'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
@@ -55,6 +52,9 @@ import { PromptInput } from './PromptInput.js'
 import { ToolCallCard } from './ToolCallCard.js'
 import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
+import { StickyScrollOverlay } from './StickyScrollOverlay.js'
+import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
+import { nextCollapseMode, resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
@@ -65,11 +65,6 @@ export interface WidgetHandle {
   focus: () => void
   toggleCollapse: () => void
   cycleCollapseMode: () => void
-}
-
-interface CollapseState {
-  mode: CollapseMode
-  overrides: ReadonlyMap<string, boolean>
 }
 
 const noop = (): void => {}
@@ -159,7 +154,7 @@ function ChatScroll({
   // chatBody container in both modes, so bottom-pin / restore that drive
   // `containerRef.scrollTop` need no branching — only keyboard reveal does.
   const configService = useService(IConfigurationService)
-  const threshold = configService.get<number>('workbench.chat.virtualizationThreshold') ?? 100
+  const threshold = configService.get<number>('workbench.chat.virtualizationThreshold')!
   const virtualize = timeline.length > threshold
 
   // Keep the timeline reachable from the keyboard handle without re-binding it on
@@ -328,7 +323,7 @@ function ChatScroll({
   // Stable across renders (reads refs only) so passing it to the memoized
   // TimelineSlot does not bust memo. Toggles the per-item collapse override.
   const handleToggleCollapse = useCallback((key: string) => {
-    const item = timelineRef.current.find((it) => slotKey(it) === key)
+    const item = findByStickyKey(timelineRef.current, key)
     if (!item) return
     const current = resolveCollapsed(key, item, collapseRef.current)
     setCollapse((s) => {
@@ -336,6 +331,27 @@ function ChatScroll({
       overrides.set(key, !current)
       return { mode: s.mode, overrides }
     })
+  }, [])
+
+  // Jump back to a (possibly nested) card's top from its pinned sticky header.
+  // Reads the live DOM rect so it works in both render modes; falls back to the
+  // virtualizer when the top-level ancestor row is unmounted.
+  const handleStickyJump = useCallback((key: string) => {
+    const container = containerRef.current
+    if (!container) return
+    // A user-driven jump: end any in-flight restore and drop bottom-stick so the
+    // scroll lands (and stays) where we put it.
+    restoringRef.current = false
+    stickRef.current = false
+    const node = container.querySelector<HTMLElement>(`[data-sticky-key="${cssEscape(key)}"]`)
+    if (node) {
+      const top = node.getBoundingClientRect().top - container.getBoundingClientRect().top
+      container.scrollTop = Math.max(0, container.scrollTop + top)
+      return
+    }
+    const topKey = key.split('/')[0]
+    const idx = timelineRef.current.findIndex((it) => slotKey(it) === topKey)
+    if (idx >= 0) virtualizerRef.current?.scrollToIndex(idx, { align: 'start' })
   }, [])
 
   useEffect(() => {
@@ -418,6 +434,14 @@ function ChatScroll({
       onScroll={handleScroll}
       onClick={handleClick}
     >
+      <StickyScrollOverlay
+        containerRef={containerRef}
+        timeline={timeline}
+        collapse={collapse}
+        onToggleCollapse={handleToggleCollapse}
+        onJumpTo={handleStickyJump}
+        revision={`${virtualize}:${timeline.length}:${tailSignature}`}
+      />
       {virtualize ? (
         <div
           className={styles['timelineVirtual']}
@@ -449,6 +473,7 @@ function ChatScroll({
                   sessionRunning={slotRunning}
                   isFocused={key === focusedKey}
                   collapsed={resolveCollapsed(key, item, collapse)}
+                  collapse={collapse}
                   onToggleCollapse={handleToggleCollapse}
                 />
               </div>
@@ -471,6 +496,7 @@ function ChatScroll({
                 sessionRunning={slotRunning}
                 isFocused={key === focusedKey}
                 collapsed={resolveCollapsed(key, item, collapse)}
+                collapse={collapse}
                 onToggleCollapse={handleToggleCollapse}
               />
             )
@@ -487,6 +513,7 @@ const TimelineSlot = memo(function TimelineSlot({
   sessionRunning,
   isFocused,
   collapsed,
+  collapse,
   onToggleCollapse,
 }: {
   slotKey: string
@@ -494,6 +521,7 @@ const TimelineSlot = memo(function TimelineSlot({
   sessionRunning: boolean
   isFocused: boolean
   collapsed: boolean
+  collapse: CollapseState
   onToggleCollapse: (key: string) => void
 }) {
   const focusedClass = isFocused ? ` ${styles['timelineSlotFocused']}` : ''
@@ -521,6 +549,8 @@ const TimelineSlot = memo(function TimelineSlot({
             'data-role': m.role,
             'data-testid': `acp-message-${m.role}`,
             'data-timeline-key': key,
+            'data-sticky-key': key,
+            'data-sticky-depth': '0',
           }}
         >
           {isUser ? <UserMessageItem blocks={m.blocks} /> : <MessageContent blocks={m.blocks} />}
@@ -537,8 +567,11 @@ const TimelineSlot = memo(function TimelineSlot({
         <ToolCallCard
           call={item.call}
           dataTimelineKey={key}
+          dataStickyKey={key}
+          dataStickyDepth={0}
           collapsed={collapsed}
           onToggleCollapse={() => onToggleCollapse(key)}
+          subtreeCollapse={{ stickyKey: key, depth: 0, collapse, toggle: onToggleCollapse }}
           {...(isFocused ? { extraClassName: styles['timelineSlotFocused'] ?? '' } : {})}
         />
       )
@@ -546,49 +579,7 @@ const TimelineSlot = memo(function TimelineSlot({
 })
 
 function slotKey(item: TimelineItem): string {
-  switch (item.kind) {
-    case 'message':
-      return `m:${item.id}`
-    case 'toolCall':
-      return `t:${item.id}`
-  }
-}
-
-// Per-kind default collapse under the `default` mode — mirrors the prior
-// behaviour: thought messages and read/search tool calls start collapsed, the
-// rest start expanded.
-function defaultCollapsed(item: TimelineItem, mode: CollapseMode): boolean {
-  if (mode === 'collapsed') return true
-  if (mode === 'expanded') return false
-  switch (item.kind) {
-    case 'message':
-      return item.message.role === 'thought'
-    case 'toolCall':
-      // Sub-agent parent cards (Task tool) fold by default so the nested
-      // timeline stays out of the way until the user opens it.
-      return (
-        item.call.kind === 'read' ||
-        item.call.kind === 'search' ||
-        (item.call.children?.length ?? 0) > 0
-      )
-  }
-}
-
-// An explicit per-item override wins; otherwise fall back to the mode default.
-function resolveCollapsed(key: string, item: TimelineItem, state: CollapseState): boolean {
-  const override = state.overrides.get(key)
-  return override !== undefined ? override : defaultCollapsed(item, state.mode)
-}
-
-function nextCollapseMode(mode: CollapseMode): CollapseMode {
-  switch (mode) {
-    case 'default':
-      return 'collapsed'
-    case 'collapsed':
-      return 'expanded'
-    case 'expanded':
-      return 'default'
-  }
+  return itemSlotKey(item)
 }
 
 // First non-empty line of a message, trimmed and clamped, for the collapsed

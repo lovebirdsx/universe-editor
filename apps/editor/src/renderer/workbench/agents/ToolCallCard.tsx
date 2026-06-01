@@ -24,7 +24,23 @@ import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallStatusIcon } from './ToolCallOutput.js'
 import { toolKindIcon } from './timelineIcons.js'
+import { buildStickyKey } from './stickyScroll.js'
+import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
+
+/**
+ * Threads the unified collapse store into a controlled tool-call subtree so the
+ * sticky overlay (and Alt+F) can fold nested sub-agent cards via composite keys.
+ * Absent for the standalone {@link ToolCallList}, which keeps self-managed state.
+ */
+export interface SubtreeCollapse {
+  /** This card's own (composite) sticky key. */
+  readonly stickyKey: string
+  /** This card's own nesting depth. */
+  readonly depth: number
+  readonly collapse: CollapseState
+  readonly toggle: (key: string) => void
+}
 
 export function ToolCallList({ session }: { session: IAcpSession }) {
   const calls = useObservable(session.toolCalls)
@@ -42,14 +58,20 @@ export const ToolCallCard = memo(function ToolCallCard({
   call,
   extraClassName,
   dataTimelineKey,
+  dataStickyKey,
+  dataStickyDepth,
   collapsed: collapsedProp,
   onToggleCollapse,
+  subtreeCollapse,
 }: {
   call: AcpToolCall
   extraClassName?: string
   dataTimelineKey?: string
+  dataStickyKey?: string
+  dataStickyDepth?: number
   collapsed?: boolean
   onToggleCollapse?: () => void
+  subtreeCollapse?: SubtreeCollapse
 }) {
   const editorService = useService(IEditorService)
   // Controlled by the timeline (Alt+F / Ctrl+Alt+F); falls back to self-managed
@@ -115,13 +137,28 @@ export const ToolCallCard = memo(function ToolCallCard({
   const children = call.children ?? []
   const childTimeline = children.length > 0 && (
     <ul className={styles['toolCallChildren']} data-testid="acp-subagent-timeline">
-      {children.map((c) =>
-        c.kind === 'message' ? (
-          <SubMessage key={c.id} message={c.message} />
-        ) : (
-          <ToolCallCard key={c.id} call={c.call} />
-        ),
-      )}
+      {children.map((c) => {
+        if (c.kind === 'message') return <SubMessage key={c.id} message={c.message} />
+        if (!subtreeCollapse) return <ToolCallCard key={c.id} call={c.call} />
+        const childKey = buildStickyKey(subtreeCollapse.stickyKey, c)
+        const childDepth = subtreeCollapse.depth + 1
+        return (
+          <ToolCallCard
+            key={c.id}
+            call={c.call}
+            collapsed={resolveCollapsed(childKey, c, subtreeCollapse.collapse)}
+            onToggleCollapse={() => subtreeCollapse.toggle(childKey)}
+            subtreeCollapse={{
+              stickyKey: childKey,
+              depth: childDepth,
+              collapse: subtreeCollapse.collapse,
+              toggle: subtreeCollapse.toggle,
+            }}
+            dataStickyKey={childKey}
+            dataStickyDepth={childDepth}
+          />
+        )
+      })}
     </ul>
   )
 
@@ -151,6 +188,8 @@ export const ToolCallCard = memo(function ToolCallCard({
         'data-status': call.status,
         'data-kind': call.kind,
         ...(dataTimelineKey !== undefined ? { 'data-timeline-key': dataTimelineKey } : {}),
+        ...(dataStickyKey !== undefined ? { 'data-sticky-key': dataStickyKey } : {}),
+        ...(dataStickyDepth !== undefined ? { 'data-sticky-depth': String(dataStickyDepth) } : {}),
       }}
     >
       {body}

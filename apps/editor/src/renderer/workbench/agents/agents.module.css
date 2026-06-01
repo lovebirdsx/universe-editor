@@ -201,6 +201,96 @@
   padding: 0 8px 6px;
 }
 
+/* Sticky-scroll overlay: pinned card headers above the chat scroll. The shell is
+   the first flex child of .chatBody with zero height, so it never shifts content;
+   the negative margin cancels .chatBody's 8px flex gap below it. Sticky respects
+   the container's 8px padding-top, so a negative top halves the gap to the fixed
+   bar above (8px → 4px) without disturbing the content layout. */
+.stickyOverlay {
+  position: sticky;
+  top: -8px;
+  z-index: 5;
+  height: 0;
+  margin-bottom: -8px;
+  pointer-events: none;
+}
+
+.stickyStack {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+}
+
+.stickyHeaderWrap {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  pointer-events: none;
+}
+
+.stickyCard {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  background: var(--color-message-bg, #2a2a2a);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+  pointer-events: auto;
+}
+
+.stickyIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-message-role-fg, #888);
+}
+
+.stickyTitleBtn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.stickyTitleText {
+  flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.stickyChevronBtn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  margin: 0;
+  background: none;
+  border: 0;
+  color: var(--color-message-role-fg, #888);
+  cursor: pointer;
+}
+
+.stickyChevronBtn:hover {
+  color: var(--color-foreground, #ddd);
+}
+
 .streamingCaret {
   display: inline-block;
   width: 0.55em;
