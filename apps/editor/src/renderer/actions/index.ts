@@ -73,6 +73,7 @@ import {
   CloseFolderAction,
   OpenFolderAction,
   OpenRecentAction,
+  OpenWorkspaceInVSCodeAction,
 } from './workspaceActions.js'
 import { SaveFileAction, SaveFileAsAction } from './fileSaveActions.js'
 import { NewFileAction, NewFolderAction, NewUntitledFileAction } from './fileCreateActions.js'
@@ -216,6 +217,7 @@ registerAction2(OpenFolderAction)
 registerAction2(OpenRecentAction)
 registerAction2(ClearRecentWorkspacesAction)
 registerAction2(CloseFolderAction)
+registerAction2(OpenWorkspaceInVSCodeAction)
 
 // Files
 registerAction2(SaveFileAction)

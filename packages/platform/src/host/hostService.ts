@@ -79,6 +79,13 @@ export interface IHostService {
   openUserDataFolder(): Promise<void>
 
   /**
+   * Launch VS Code (`code` on PATH) with `fsPath` as the folder/file to open.
+   * Returns an error string on failure (e.g. `code` not found), or empty string
+   * on success.
+   */
+  openInVSCode(fsPath: string): Promise<string>
+
+  /**
    * Open the OS external terminal with `cwd` as its working directory.
    * On Windows, `kind` selects the terminal binary (defaults to 'wt' if omitted).
    * On macOS / Linux, `kind` is ignored — the system default terminal is used.

@@ -6,12 +6,15 @@
 
 import {
   Action2,
+  IHostService,
+  INotificationService,
   IProgressService,
   IQuickInputService,
   IWindowsService,
   IWorkspaceService,
   MenuId,
   ProgressLocation,
+  Severity,
   URI,
   localize,
   type IKeyMods,
@@ -59,6 +62,36 @@ export class CloseFolderAction extends Action2 {
 
   override run(accessor: ServicesAccessor): void {
     void accessor.get(IWorkspaceService).closeFolder()
+  }
+}
+
+export class OpenWorkspaceInVSCodeAction extends Action2 {
+  static readonly ID = 'workbench.action.openWorkspaceInVSCode'
+  constructor() {
+    super({
+      id: OpenWorkspaceInVSCodeAction.ID,
+      title: localize('action.openWorkspaceInVSCode.title', 'Open Workspace in VS Code'),
+      category: localize('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+alt+e' },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const workspace = accessor.get(IWorkspaceService)
+    const host = accessor.get(IHostService)
+    const cwd = workspace.current?.folder.fsPath ?? null
+    if (!cwd) return
+    const error = await host.openInVSCode(cwd)
+    if (error) {
+      accessor.get(INotificationService).notify({
+        severity: Severity.Error,
+        message: localize(
+          'action.openWorkspaceInVSCode.failed',
+          'Failed to open VS Code. Make sure the `code` command is on your PATH.',
+        ),
+      })
+    }
   }
 }
 

@@ -141,6 +141,28 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     if (error) throw new Error(error)
   }
 
+  openInVSCode(fsPath: string): Promise<string> {
+    // `code` is a shell launcher (code.cmd on Windows), so go through the shell
+    // to resolve it from PATH. Detach so VS Code outlives the spawning child.
+    return new Promise<string>((resolve) => {
+      const child = spawn('code', [fsPath], {
+        shell: true,
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      })
+      child.on('error', (err) => {
+        this._logger.error(`openInVSCode failed ${fsPath}`, err)
+        resolve(err.message)
+      })
+      child.on('spawn', () => {
+        child.unref()
+        this._logger.info(`openInVSCode ${fsPath}`)
+        resolve('')
+      })
+    })
+  }
+
   openTerminal(cwd: string, kind: ExternalTerminalKind = 'powershell'): Promise<void> {
     try {
       if (process.platform === 'win32') {
