@@ -23,19 +23,48 @@ import { ClaudeBinaryMainService } from './services/claudeBinary/claudeBinaryMai
 import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './services/update/updateMainService.js'
 import { installMainErrorHandlers } from './errors.js'
-import { applyProductIdentity, readEnvFromProcess, resolveProductIdentity } from './productPaths.js'
+import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
+import { EnvironmentMainService } from './environment/environmentMainService.js'
 import { getDefaultStorage } from './storage.js'
 import { loadSession } from './windowsSession.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
+// Single entry point for CLI args / env vars / deployment config. Must be built
+// before any app.getPath('userData') call (e.g. new LogMainService()). The file
+// source is appended later (resolveFileConfig), once userData is resolved.
+const environmentService = new EnvironmentMainService({
+  argv: process.argv,
+  env: process.env,
+  isDev: import.meta.env.DEV,
+})
+
+// Resolve product identity once (pure): reused for the --version/--help banner
+// and for applyProductIdentity below.
+const productIdentity = resolveProductIdentity(environmentService.toResolveEnv())
+
+// CLI commands that print and exit. Handle before any setup (console interceptor,
+// single-instance lock) so output reaches the real stdout and a second launch with
+// --help/--version isn't forwarded to a running instance.
+if (environmentService.shouldPrintVersion) {
+  process.stdout.write(
+    environmentService.formatVersion(productIdentity.productName, app.getVersion(), [
+      `Electron ${process.versions.electron}`,
+      `Node ${process.versions.node}`,
+    ]) + '\n',
+  )
+  app.exit(0)
+} else if (environmentService.shouldPrintHelp) {
+  process.stdout.write(
+    environmentService.formatHelp(productIdentity.productName, app.getVersion()) + '\n',
+  )
+  app.exit(0)
+}
+
 // Switch productName / userData / AppUserModelId based on dev vs release vs E2E.
 // Must run before any `app.getPath('userData')` call (e.g. new LogMainService()).
-applyProductIdentity(
-  app,
-  resolveProductIdentity(readEnvFromProcess({ isDev: import.meta.env.DEV })),
-)
+applyProductIdentity(app, productIdentity)
 
 // Dev-only: track Disposable leaks. Report on process exit.
 if (import.meta.env.DEV) {
@@ -54,7 +83,7 @@ if (import.meta.env.DEV) {
 // Dev-only: enable Chromium remote debugging port so VS Code's Chrome debugger
 // can attach to the renderer process. Activated via VSCODE_RENDERER_DEBUG=1
 // (set by the VS Code task in .vscode/tasks.json). Must be called before app.whenReady().
-if (import.meta.env.DEV && process.env['VSCODE_RENDERER_DEBUG'] === '1') {
+if (import.meta.env.DEV && environmentService.rendererDebug) {
   app.commandLine.appendSwitch('remote-debugging-port', '9222')
 }
 
@@ -69,7 +98,7 @@ installMainErrorHandlers(mainLogger)
 const consoleLogger = logMainService.createLogger({ id: 'console', name: 'Console' })
 const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 
-const e2eEnabled = process.env['UNIVERSE_E2E'] === '1'
+const e2eEnabled = environmentService.isE2E
 
 // Single-instance lock: a second launch focuses the existing window instead of
 // starting a rival process. Required for the auto-update restart-to-install flow
@@ -125,8 +154,12 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     claudeBinaryService = new ClaudeBinaryMainService(
       logMainService.createLogger({ id: 'claudeBinary', name: 'Claude Binary' }),
     )
+    // Phase two: userData is resolved, so the deployment config file can now be
+    // layered in (lowest priority) before services that read it are constructed.
+    environmentService.resolveFileConfig(app.getPath('userData'))
     updateService = new UpdateMainService(
       logMainService.createLogger({ id: 'update', name: 'Update' }),
+      environmentService,
     )
     applicationServices = {
       ping: new MainPingService(),
@@ -150,9 +183,10 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       appServices: applicationServices,
       logService: logMainService,
       e2eEnabled,
+      rendererDebug: environmentService.rendererDebug,
       ...(appIconPath ? { appIconPath } : {}),
       preloadPath: join(__dirname, '../preload/index.cjs'),
-      rendererUrl: process.env['ELECTRON_RENDERER_URL'],
+      rendererUrl: environmentService.rendererUrl,
       rendererHtml: join(__dirname, '../renderer/index.html'),
     })
   }

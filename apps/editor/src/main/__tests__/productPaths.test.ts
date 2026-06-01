@@ -1,11 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { win32 as pathWin32 } from 'node:path'
-import {
-  applyProductIdentity,
-  parseUserDataDirArg,
-  resolveProductIdentity,
-  type ResolveEnv,
-} from '../productPaths.js'
+import { applyProductIdentity, resolveProductIdentity, type ResolveEnv } from '../productPaths.js'
 
 const winBase: ResolveEnv = {
   isDev: false,
@@ -108,28 +103,6 @@ describe('applyProductIdentity', () => {
     } else {
       expect(app.setAppUserModelId).not.toHaveBeenCalled()
     }
-  })
-})
-
-describe('parseUserDataDirArg', () => {
-  it('returns undefined when flag is absent', () => {
-    expect(parseUserDataDirArg(['node', 'main.js', '--enable-e2e-probe'])).toBeUndefined()
-  })
-
-  it('parses --user-data-dir=<path>', () => {
-    expect(parseUserDataDirArg(['node', 'main.js', '--user-data-dir=C:\\tmp\\ue'])).toBe(
-      'C:\\tmp\\ue',
-    )
-  })
-
-  it('parses space-separated --user-data-dir <path>', () => {
-    expect(parseUserDataDirArg(['node', 'main.js', '--user-data-dir', '/tmp/ue', '--foo'])).toBe(
-      '/tmp/ue',
-    )
-  })
-
-  it('ignores --user-data-dir when followed by another flag', () => {
-    expect(parseUserDataDirArg(['node', 'main.js', '--user-data-dir', '--foo'])).toBeUndefined()
   })
 })
 

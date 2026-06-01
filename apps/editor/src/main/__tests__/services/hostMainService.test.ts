@@ -159,10 +159,9 @@ describe('MainHostService', () => {
   })
 
   it('restart reloads the current window in dev mode', async () => {
-    vi.stubEnv('ELECTRON_RENDERER_URL', 'http://127.0.0.1:5173')
     const win = makeFakeWin()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const service = new MainHostService(win as any)
+    const service = new MainHostService(win as any, undefined, undefined, true)
     await service.restart()
     expect(win.calls).toEqual(['reload'])
     expect(relaunch).not.toHaveBeenCalled()

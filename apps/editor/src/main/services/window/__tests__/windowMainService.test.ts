@@ -94,6 +94,7 @@ function makeOpts() {
     },
     logService,
     e2eEnabled: false,
+    rendererDebug: false,
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',
     rendererHtml: '/renderer/index.html',

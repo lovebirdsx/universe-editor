@@ -49,6 +49,13 @@ export * from './contribution/contribution.js'
 export * from './configuration/configurationRegistry.js'
 export * from './configuration/configurationService.js'
 export * from './configuration/jsonSchemaRegistry.js'
+// multi-source configuration resolution (cli / env / file)
+export * from './configuration/sources/configSource.js'
+export * from './configuration/sources/cliConfigSource.js'
+export * from './configuration/sources/envConfigSource.js'
+export * from './configuration/sources/fileConfigSource.js'
+export * from './configuration/sources/configValidators.js'
+export * from './configuration/sources/cliHelp.js'
 
 // IPC abstraction layer
 export * from './ipc/ipc.js'

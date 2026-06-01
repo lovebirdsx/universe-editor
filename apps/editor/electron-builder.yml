@@ -5,6 +5,8 @@ directories:
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 # 内网自建静态服务器分发更新。把 release/ 下的 latest.yml + .exe + .blockmap
 # 同步到该 url 指向的目录即可；autoUpdater 启动时 GET `${url}/latest.yml` 比对版本。
+# 此处仅为打包默认；发布版可在运行时覆盖 feed（不必重新打包）：
+#   --update-url=<url> / 环境变量 UNIVERSE_UPDATE_URL / <userData>/update-config.json 的 updateUrl 字段。
 publish:
   provider: generic
   url: http://CHANGE-ME.internal/universe-editor/

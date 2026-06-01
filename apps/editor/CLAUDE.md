@@ -25,6 +25,12 @@ main 进程入口（`src/main/index.ts`）在所有 service 实例化前调用 `
 
 任何模式都可用 `UNIVERSE_USER_DATA_DIR=<absolute>` 或 Electron 原生 `--user-data-dir=<absolute>` CLI 参数覆盖 userData 目录（CLI 优先；productName 仍按 dev/e2e 决定）。E2E fixture 给每个 Playwright worker 分配 tmp 目录即依赖此机制。darwin/linux 走平台标准目录（`~/Library/Application Support` 或 `XDG_CONFIG_HOME || ~/.config`）。
 
+CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `EnvironmentMainService`（`src/main/environment/`），它在 `index.ts` 最顶部构造（早于任何 `app.getPath('userData')`），基于 platform 的 `ConfigResolver` + cli/env/file 可插拔来源（机制见 `packages/platform/src/configuration/sources/`），优先级 `cli > env > file > default`。声明表在 `environment/configItems.ts`。新增"既能命令行又能环境变量配"的启动期配置时加一条声明项，不要再散落 `process.env[...]`。
+
+**`--help` / `--version`**：在 `index.ts` 构造完 `environmentService` 后、任何初始化（console 拦截器、单实例锁）之前命中即 `app.exit(0)`，输出走真实 stdout（GUI 打包版双击启动无控制台时不可见，dev/重定向场景可见）。`--help` 文本由 `environment/configItems.ts` 的 `CLI_OPTIONS` 自动生成；让某个 flag 出现在帮助里，给它的 `ConfigItem` 补 `description`（可选 `cliAlias` 短选项、`args` 值占位符）即可，无需改渲染代码。
+
+**自动更新服务器（发布版可配置）**：feed url 打包默认在 `electron-builder.yml` 的 `publish.url`；发布版（`app.isPackaged`）可在运行时覆盖而不必重新打包——`--update-url=<url>` / `UNIVERSE_UPDATE_URL` / `<userData>/update-config.json` 的 `updateUrl` 字段（仅覆盖 url，channel 仍打包默认）。dev/E2E 不应用 override，仍走 `dev-app-update.yml`。
+
 所有 `app.getPath('userData')` 调用点自动跟随，不需要单独传路径。E2E 用专用目录避免污染本地开发数据。
 
 ## renderer 目录归类规则

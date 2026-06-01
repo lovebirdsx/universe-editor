@@ -33,6 +33,8 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     private readonly _win: BrowserWindow,
     private readonly _createNewWindow: () => void = () => {},
     private readonly _logger: ILogger = new NullLogger(),
+    /** Reload the window instead of relaunching the app on restart (dev/E2E). */
+    private readonly _reloadOnRestart: boolean = false,
   ) {
     _win.on('maximize', this._onMaximize)
     _win.on('unmaximize', this._onUnmaximize)
@@ -69,7 +71,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     // In dev mode (Vite dev server) or E2E mode, reload the current window.
     // In E2E mode, relaunch would start a new process that Playwright can't follow,
     // and sessionStorage wouldn't survive across process boundaries.
-    if (process.env['ELECTRON_RENDERER_URL'] || process.env['UNIVERSE_E2E']) {
+    if (this._reloadOnRestart) {
       this._win.reload()
       this._logger.info(`restart reloadWindow id=${this._win.id}`)
       return Promise.resolve()

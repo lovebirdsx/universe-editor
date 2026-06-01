@@ -18,6 +18,7 @@ src/
   contribution/ ContributionsRegistry + WorkbenchPhase
   lifecycle/    LifecycleService + LifecyclePhase
   configuration/ ConfigurationRegistry + ConfigurationService（settings schema）
+                 sources/ 多来源解析：cli / env / file 可插拔来源 + ConfigResolver（优先级取值）+ cliHelp（--help/--version 文本生成）
   ipc/          ChannelServer / ChannelClient / ProxyChannel
   host/         IHostService（窗口操作、打开外部链接等）
   storage/      IStorageService（key-value 持久化）

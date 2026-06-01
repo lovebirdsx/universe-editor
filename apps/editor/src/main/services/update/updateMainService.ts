@@ -9,7 +9,7 @@
 import { app } from 'electron'
 // electron-updater is CommonJS; default-import then destructure (electron-vite convention).
 import electronUpdater from 'electron-updater'
-import { Emitter, Event, type ILogger } from '@universe-editor/platform'
+import { Emitter, Event, isHttpUrl, type ILogger } from '@universe-editor/platform'
 import type {
   IUpdateService,
   UpdateState,
@@ -20,6 +20,11 @@ const { autoUpdater } = electronUpdater
 
 type StateExtra = Omit<Partial<UpdateState>, 'status' | 'currentVersion'>
 
+/** Minimal view of EnvironmentMainService needed here; keeps the unit test light. */
+export interface IUpdateEnvironment {
+  readonly updateUrl: string | undefined
+}
+
 export class UpdateMainService implements IUpdateService {
   declare readonly _serviceBrand: undefined
 
@@ -29,13 +34,24 @@ export class UpdateMainService implements IUpdateService {
   private readonly _currentVersion = app.getVersion()
   private _state: UpdateState = { status: 'idle', currentVersion: this._currentVersion }
 
-  constructor(private readonly _logger: ILogger) {
+  constructor(
+    private readonly _logger: ILogger,
+    environment: IUpdateEnvironment,
+  ) {
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = true
     // Allow exercising the flow against a local feed (dev-app-update.yml) when
     // running an unpackaged build during development.
     if (!app.isPackaged) {
       autoUpdater.forceDevUpdateConfig = true
+    } else {
+      // Packaged builds can retarget the feed at runtime (CLI / env / userData
+      // config file) without repackaging. Dev/E2E keep dev-app-update.yml.
+      const feedUrl = environment.updateUrl
+      if (feedUrl && isHttpUrl(feedUrl)) {
+        autoUpdater.setFeedURL({ provider: 'generic', url: feedUrl })
+        this._logger.info(`update feed override: ${feedUrl}`)
+      }
     }
     autoUpdater.logger = {
       info: (m) => this._logger.info(String(m)),

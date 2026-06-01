@@ -79,6 +79,8 @@ export interface WindowMainServiceOptions {
   readonly appServices: ApplicationServices
   readonly logService: LogMainService
   readonly e2eEnabled: boolean
+  /** Delay renderer load so VS Code's Chrome debugger can attach (dev only). */
+  readonly rendererDebug: boolean
   /** Absolute path to app icon (.ico on Windows). */
   readonly appIconPath?: string
   /** Absolute path to the preload script. */
@@ -106,6 +108,7 @@ export class WindowMainService implements IWindowMainService {
   async createWindow(opts?: ICreateWindowOptions): Promise<number> {
     const {
       e2eEnabled,
+      rendererDebug,
       appIconPath,
       preloadPath,
       rendererUrl,
@@ -179,6 +182,7 @@ export class WindowMainService implements IWindowMainService {
           void this.createWindow({})
         },
         logService.createLogger({ id: 'host', name: 'Host' }),
+        rendererUrl !== undefined || e2eEnabled,
       ),
     )
     const logChannel = new MainLogChannelService(logService)
@@ -225,7 +229,7 @@ export class WindowMainService implements IWindowMainService {
     })
 
     if (rendererUrl) {
-      if (process.env['VSCODE_RENDERER_DEBUG'] === '1') {
+      if (rendererDebug) {
         // Give VS Code's Chrome debugger time to attach to the BrowserWindow at about:blank
         // before the renderer URL loads. Without this delay, main.tsx executes before the
         // debugger can register breakpoints, making startup breakpoints unreachable.
