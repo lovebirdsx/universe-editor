@@ -26,7 +26,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
 } from 'react'
-import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
+import { measureElement, useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import { IConfigurationService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import {
@@ -161,11 +161,47 @@ function ChatScroll({
   const configService = useService(IConfigurationService)
   const threshold = configService.get<number>('workbench.chat.virtualizationThreshold') ?? 100
   const virtualize = timeline.length > threshold
+  const virtualizeRef = useRef(virtualize)
+  virtualizeRef.current = virtualize
+
+  // Keep the timeline reachable from virtualizer callbacks (measureElement runs
+  // async off a ResizeObserver, so its captured closure can lag a frame) and
+  // from the keyboard handle without re-binding it on every render.
+  const timelineRef = useRef(timeline)
+  timelineRef.current = timeline
+
+  // Adaptive per-kind row-height estimate. Chat rows are far taller and far more
+  // variable than a fixed 64/96px guess, so the virtualizer's total size used to
+  // balloon as off-screen rows mounted and measured for real — the scrollbar
+  // "growing" on the way down. Feeding back the running mean of measured rows
+  // keeps the estimate for not-yet-measured rows close to reality, so the total
+  // size (and the scrollbar) stays stable.
+  const avgRef = useRef({ message: 64, toolCall: 96 })
 
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
     count: virtualize ? timeline.length : 0,
     getScrollElement: () => containerRef.current,
-    estimateSize: (i) => estimateRow(timeline[i]),
+    estimateSize: (i) => {
+      const item = timeline[i]
+      if (item === undefined) return 64
+      return item.kind === 'message' ? avgRef.current.message : avgRef.current.toolCall
+    },
+    // Stable per-row identity so measured heights are cached by slot key, not by
+    // index — appending / re-slicing the tail during streaming no longer shifts
+    // every cached measurement onto the wrong row.
+    getItemKey: (i) => {
+      const item = timeline[i]
+      return item ? slotKey(item) : i
+    },
+    measureElement: (el, entry, instance) => {
+      const size = measureElement(el, entry, instance)
+      const item = timelineRef.current[instance.indexFromElement(el)]
+      if (item) {
+        const k = item.kind === 'message' ? 'message' : 'toolCall'
+        avgRef.current[k] = avgRef.current[k] * 0.8 + size * 0.2
+      }
+      return size
+    },
     overscan: 8,
   })
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
@@ -219,6 +255,36 @@ function ChatScroll({
     containerRef.current?.focus({ preventScroll: true })
   }
 
+  // Pin to the very bottom. A single `scrollTop = scrollHeight` (or one
+  // scrollToIndex) lands short in virtual mode: the tail rows are still
+  // estimate-sized when we jump, then mount and measure taller, so the real
+  // bottom moves further down than where we landed — the cause of "Alt+E needs
+  // several presses to reach the end". Re-issue the jump across a few frames
+  // until the remaining distance settles within the stick threshold.
+  const bottomRafRef = useRef<ReturnType<typeof requestAnimationFrame> | undefined>(undefined)
+  const scrollToBottomStable = useCallback(() => {
+    const el = containerRef.current
+    if (!el) return
+    if (bottomRafRef.current !== undefined) cancelAnimationFrame(bottomRafRef.current)
+    let tries = 0
+    const step = (): void => {
+      bottomRafRef.current = undefined
+      if (!el.isConnected) return
+      const v = virtualizerRef.current
+      const list = timelineRef.current
+      if (virtualizeRef.current && v && list.length > 0) {
+        v.scrollToIndex(list.length - 1, { align: 'end' })
+      } else {
+        el.scrollTop = el.scrollHeight
+      }
+      const distance = el.scrollHeight - el.clientHeight - el.scrollTop
+      if (distance > STICK_THRESHOLD_PX && tries++ < 10) {
+        bottomRafRef.current = requestAnimationFrame(step)
+      }
+    }
+    step()
+  }, [])
+
   // Restore a non-stuck scroll position saved before this session was unmounted
   // (tab switch / session switch). Chat content grows asynchronously — code
   // blocks colorize via Monaco, image data-blocks decode late — so a one-shot
@@ -264,7 +330,10 @@ function ChatScroll({
   // Persist on unmount as a final flush; session.id is stable for this instance
   // because ChatBody keys ChatScroll by it.
   useEffect(() => {
-    return () => persist()
+    return () => {
+      if (bottomRafRef.current !== undefined) cancelAnimationFrame(bottomRafRef.current)
+      persist()
+    }
   }, [persist])
 
   // Re-pin on slot count AND on the tail's content size so streaming chunks
@@ -275,16 +344,8 @@ function ChatScroll({
   useEffect(() => {
     if (restoringRef.current) return
     if (!stickRef.current) return
-    const el = containerRef.current
-    if (!el) return
-    el.scrollTop = el.scrollHeight
-  }, [timeline.length, tailSignature])
-
-  // Keep the timeline available to handle.move without re-binding the handle
-  // on every render. Capturing timeline in the assignment would not be wrong,
-  // but we'd re-allocate the closure on every render — the ref read is cheap.
-  const timelineRef = useRef(timeline)
-  timelineRef.current = timeline
+    scrollToBottomStable()
+  }, [timeline.length, tailSignature, scrollToBottomStable])
 
   // Stable across renders (reads refs only) so passing it to the memoized
   // TimelineSlot does not bust memo. Toggles the per-item collapse override.
@@ -346,7 +407,7 @@ function ChatScroll({
           el.scrollTop = 0
           break
         case 'bottom':
-          el.scrollTop = el.scrollHeight
+          scrollToBottomStable()
           break
         case 'pageUp':
           el.scrollTop -= el.clientHeight
@@ -369,7 +430,7 @@ function ChatScroll({
       handle.toggleCollapse = noop
       handle.cycleCollapseMode = noop
     }
-  }, [handleRef, handleToggleCollapse])
+  }, [handleRef, handleToggleCollapse, scrollToBottomStable])
 
   return (
     <div
@@ -558,19 +619,6 @@ function firstLineSummary(text: string): string {
   const firstLine = text.split('\n', 1)[0]?.trim() ?? ''
   const MAX = 120
   return firstLine.length > MAX ? `${firstLine.slice(0, MAX)}…` : firstLine
-}
-
-// Rough first-paint heights per kind; the virtualizer corrects each row via
-// measureElement once it mounts, so these only need to be in the right ballpark
-// to keep the initial scrollbar and bottom-pin sane.
-function estimateRow(item: TimelineItem | undefined): number {
-  if (item === undefined) return 64
-  switch (item.kind) {
-    case 'message':
-      return 64
-    case 'toolCall':
-      return 96
-  }
 }
 
 function tailContentSignature(timeline: readonly TimelineItem[]): number {
