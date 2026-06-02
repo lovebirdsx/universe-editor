@@ -1,4 +1,17 @@
 {
+  "files.exclude": {
+    "apps/**/out":true,
+    "apps/**/release":true,
+    "**/.turbo": true,
+    "**/node_modules": true,
+    "**/test-results": true,
+    "**/dist": true,
+    "**/.git": true,
+    "**/.svn": true,
+    "**/.hg": true,
+    "**/.DS_Store": true,
+    "**/Thumbs.db": true
+  },
   "files.eol": "\n",
   "jestrunner.enableTestExplorer": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
