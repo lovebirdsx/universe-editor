@@ -4,6 +4,7 @@ import { resolve } from 'node:path'
 import { readFileSync } from 'node:fs'
 import type { Plugin } from 'vite'
 import { monacoNlsPlugin } from './build/plugins/monacoNlsPlugin'
+import { monacoUnicodeHighlighterPlugin } from './build/plugins/monacoUnicodeHighlighterPlugin'
 import { mainHmrPlugin } from './build/plugins/mainHmrPlugin'
 import {
   NLS_FILE_SUFFIX,
@@ -72,7 +73,7 @@ export default defineConfig({
     root: resolve(__dirname, 'src/renderer'),
     publicDir: resolve(__dirname, 'public'),
     cacheDir: resolve(__dirname, 'node_modules/.vite-editor'),
-    plugins: [monacoNlsPlugin(), react(), jsToTsResolvePlugin()],
+    plugins: [monacoNlsPlugin(), monacoUnicodeHighlighterPlugin(), react(), jsToTsResolvePlugin()],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,

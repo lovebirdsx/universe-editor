@@ -123,6 +123,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       insertSpaces: true,
       readOnly: fileInput.isReadonly,
       unicodeHighlight: {
+        nonBasicASCII: false,
         allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
       },
     })

@@ -65,6 +65,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       renderSideBySide: true,
       scrollBeyondLastLine: false,
       unicodeHighlight: {
+        nonBasicASCII: false,
         allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
       },
     })

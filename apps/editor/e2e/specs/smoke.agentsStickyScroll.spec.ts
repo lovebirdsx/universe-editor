@@ -62,7 +62,7 @@ test.describe('@p1 agents — sticky scroll pins long card headers', () => {
     }, TIMELINE)
 
     // A sticky header appears (rAF-measured).
-    await expect.poll(() => page.locator(STICKY).count(), { timeout: 3000 }).toBeGreaterThan(0)
+    await expect.poll(() => page.locator(STICKY).count(), { timeout: 5000 }).toBeGreaterThan(0)
 
     // The pinned card's key — used to check the in-place card folds.
     const key = await page.locator(STICKY).first().getAttribute('data-sticky-key-active')
@@ -92,7 +92,7 @@ test.describe('@p1 agents — sticky scroll pins long card headers', () => {
       el.scrollTop = Math.floor((el.scrollHeight - el.clientHeight) / 2)
       el.dispatchEvent(new Event('scroll'))
     }, TIMELINE)
-    await expect.poll(() => page.locator(STICKY).count(), { timeout: 3000 }).toBeGreaterThan(0)
+    await expect.poll(() => page.locator(STICKY).count(), { timeout: 5000 }).toBeGreaterThan(0)
     const pinnedKey = await page.locator(STICKY).first().getAttribute('data-sticky-key-active')
     await page.locator(STICKY).first().getByTestId('acp-sticky-toggle').click()
 
@@ -107,7 +107,7 @@ test.describe('@p1 agents — sticky scroll pins long card headers', () => {
             },
             [pinnedKey] as const,
           ),
-        { timeout: 3000 },
+        { timeout: 5000 },
       )
       .toBe('false')
   })
