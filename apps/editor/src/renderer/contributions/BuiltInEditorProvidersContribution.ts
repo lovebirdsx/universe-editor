@@ -19,6 +19,7 @@ import { Disposable, EditorRegistry, type IWorkbenchContribution } from '@univer
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
+import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
@@ -68,6 +69,13 @@ export class BuiltInEditorProvidersContribution
       EditorRegistry.registerEditorProvider({
         typeId: DiffEditorInput.TYPE_ID,
         componentKey: 'diff',
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: MarkdownPreviewInput.TYPE_ID,
+        componentKey: 'markdown.preview',
+        deserialize: (data) => MarkdownPreviewInput.deserialize(data),
       }),
     )
   }

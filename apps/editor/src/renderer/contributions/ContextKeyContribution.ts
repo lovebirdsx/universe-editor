@@ -4,6 +4,7 @@
  *   - isWindows / isMac / isLinux  (platform identity)
  *   - activityBarVisible / sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
+ *   - activeEditorLanguageId                                     (active file language id)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
@@ -29,6 +30,7 @@ import {
   LifecyclePhase,
   PartId,
 } from '@universe-editor/platform'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 
 export class ContextKeyContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -68,6 +70,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // -- editor state keys
     const activeEditorId = contextKeyService.createKey<string>('activeEditorId', undefined)
     const hasActiveEditor = contextKeyService.createKey<boolean>('hasActiveEditor', false)
+    const activeEditorLanguageId = contextKeyService.createKey<string>('activeEditorLanguageId', '')
     this._register(
       autorun((reader) => {
         const editor = editorService.activeEditor.read(reader)
@@ -78,6 +81,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
           activeEditorId.reset()
           hasActiveEditor.set(false)
         }
+        activeEditorLanguageId.set(editor instanceof FileEditorInput ? editor.language : '')
       }),
     )
 

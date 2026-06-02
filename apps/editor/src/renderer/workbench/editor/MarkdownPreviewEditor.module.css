@@ -1,0 +1,21 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  MarkdownPreviewEditor styles — a scrollable reading pane with comfortable
+ *  spacing. Font size lives here; MarkdownView sizes its elements in `em`.
+ *--------------------------------------------------------------------------------------------*/
+
+.previewRoot {
+  height: 100%;
+  overflow: auto;
+  background: var(--color-editor-bg, #1e1e1e);
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.previewBody {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 24px 32px;
+  font-size: 14px;
+  line-height: 1.6;
+  gap: 8px;
+}

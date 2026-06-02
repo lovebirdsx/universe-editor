@@ -104,6 +104,7 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
+import { OpenMarkdownPreviewAction, OpenMarkdownPreviewToSideAction } from './markdownActions.js'
 import {
   CheckForUpdatesAction,
   DownloadUpdateAction,
@@ -279,6 +280,10 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// Markdown
+registerAction2(OpenMarkdownPreviewAction)
+registerAction2(OpenMarkdownPreviewToSideAction)
 
 // Update
 registerAction2(CheckForUpdatesAction)

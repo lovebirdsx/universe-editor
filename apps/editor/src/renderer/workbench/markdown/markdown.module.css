@@ -1,0 +1,104 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Shared markdown rendering styles (see MarkdownView). Sizes use `em` so the
+ *  same markup scales with whatever font-size the host container sets.
+ *--------------------------------------------------------------------------------------------*/
+
+.markdown {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.markdown p {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  margin: 0.4em 0 0.2em;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.markdown h1 {
+  font-size: 1.5em;
+}
+.markdown h2 {
+  font-size: 1.3em;
+}
+.markdown h3 {
+  font-size: 1.15em;
+}
+.markdown h4,
+.markdown h5,
+.markdown h6 {
+  font-size: 1.05em;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0.2em 0;
+  padding-left: 1.6em;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.markdown blockquote {
+  margin: 0.2em 0;
+  padding: 0.2em 0.7em;
+  border-left: 2px solid var(--color-message-thought-accent, #7a7aa3);
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.markdown hr {
+  margin: 0.6em 0;
+  border: 0;
+  border-top: 1px solid var(--color-border, #333);
+}
+
+.markdown table {
+  display: block;
+  overflow-x: auto;
+  margin: 0.4em 0;
+  border-collapse: collapse;
+}
+
+.markdown th,
+.markdown td {
+  border: 1px solid var(--color-border, #333);
+  padding: 0.2em 0.7em;
+  text-align: left;
+}
+
+.markdown th {
+  font-weight: 600;
+  background: var(--color-input-bg, #2d2d2d);
+}
+
+.inlineCode {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 1px 4px;
+  background: var(--color-input-bg, #2d2d2d);
+  border: 1px solid var(--color-border, #444);
+  border-radius: 3px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.mdLink {
+  color: var(--color-badge-progress, #4fa6e2);
+  text-decoration: none;
+}
+
+.mdLink:hover {
+  text-decoration: underline;
+}
