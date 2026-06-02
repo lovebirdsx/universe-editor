@@ -23,6 +23,15 @@ import {
 } from '../services/releaseNotes/releaseNotes.js'
 
 const LAST_VERSION_KEY = 'app.releaseNotes.lastVersion'
+const EXISTING_INSTALL_MARKER_KEYS = [
+  'welcome.agentOnboarding.seen',
+  'workbench.windowsState',
+  'workbench.recentWorkspaces',
+  'workbench.userSettings',
+  'acp.chatLocation',
+  'acp.agentDefaults',
+  'acp.sessionHistory',
+]
 
 export class ReleaseNotesContribution extends Disposable implements IWorkbenchContribution {
   /** Resolves once the upgrade check has run — awaited by tests. */
@@ -40,14 +49,20 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
   private async _showIfUpgraded(): Promise<void> {
     const { currentVersion, notes } = await this._releaseNotes.getReleaseNotes()
     const lastVersion = await this._storage.get<string>(LAST_VERSION_KEY, StorageScope.GLOBAL)
+    let fromVersion = lastVersion
 
-    if (!lastVersion) {
-      await this._storage.set(LAST_VERSION_KEY, currentVersion, StorageScope.GLOBAL)
-      return
+    if (!fromVersion) {
+      if (await this._hasExistingInstallMarker()) {
+        fromVersion = findPreviousReleaseVersion(notes, currentVersion)
+      }
+      if (!fromVersion) {
+        await this._storage.set(LAST_VERSION_KEY, currentVersion, StorageScope.GLOBAL)
+        return
+      }
     }
-    if (compareVersions(currentVersion, lastVersion) <= 0) return
+    if (compareVersions(currentVersion, fromVersion) <= 0) return
 
-    const range = selectNotesInRange(notes, lastVersion, currentVersion)
+    const range = selectNotesInRange(notes, fromVersion, currentVersion)
     if (range.length > 0) {
       const input = new ReleaseNotesInput(
         renderReleaseNotesMarkdown(range),
@@ -58,4 +73,24 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
     }
     await this._storage.set(LAST_VERSION_KEY, currentVersion, StorageScope.GLOBAL)
   }
+
+  private async _hasExistingInstallMarker(): Promise<boolean> {
+    for (const key of EXISTING_INSTALL_MARKER_KEYS) {
+      const value = await this._storage.get<unknown>(key, StorageScope.GLOBAL)
+      if (value !== undefined) return true
+    }
+    return false
+  }
+}
+
+function findPreviousReleaseVersion(
+  notes: readonly { readonly version: string }[],
+  currentVersion: string,
+): string | undefined {
+  let previous: string | undefined
+  for (const note of notes) {
+    if (compareVersions(note.version, currentVersion) >= 0) continue
+    if (!previous || compareVersions(note.version, previous) > 0) previous = note.version
+  }
+  return previous
 }

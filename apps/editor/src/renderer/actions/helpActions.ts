@@ -59,6 +59,7 @@ export class ShowReleaseNotesAction extends Action2 {
       id: ShowReleaseNotesAction.ID,
       title: localize('releaseNotes.show', 'Show Release Notes'),
       category: localize('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 3 },
       f1: true,
     })
   }

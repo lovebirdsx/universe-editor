@@ -16,6 +16,9 @@ import { ReleaseNotesContribution } from '../ReleaseNotesContribution.js'
 import { ReleaseNotesInput } from '../../services/editor/ReleaseNotesInput.js'
 import type { IReleaseNote, IReleaseNotesService } from '../../../shared/ipc/releaseNotesService.js'
 
+const LAST_VERSION_KEY = 'app.releaseNotes.lastVersion'
+const EXISTING_INSTALL_MARKER_KEY = 'workbench.windowsState'
+
 const NOTES: IReleaseNote[] = [
   {
     version: '0.1.3',
@@ -41,24 +44,27 @@ function fakeReleaseNotes(currentVersion: string, notes = NOTES): IReleaseNotesS
   }
 }
 
-function fakeStorage(initial?: string): {
+function fakeStorage(initial?: string | Record<string, unknown>): {
   service: IStorageService
-  read: () => string | undefined
+  read: (key?: string) => unknown
 } {
-  let value = initial
+  const store =
+    typeof initial === 'string'
+      ? new Map<string, unknown>([[LAST_VERSION_KEY, initial]])
+      : new Map<string, unknown>(Object.entries(initial ?? {}))
   const service = {
     _serviceBrand: undefined,
-    async get<T>(_key: string, _scope: StorageScope): Promise<T | undefined> {
-      return value as unknown as T | undefined
+    async get<T>(key: string, _scope: StorageScope): Promise<T | undefined> {
+      return store.get(key) as T | undefined
     },
-    async set(_key: string, v: unknown): Promise<void> {
-      value = v as string
+    async set(key: string, v: unknown): Promise<void> {
+      store.set(key, v)
     },
-    async remove(): Promise<void> {
-      value = undefined
+    async remove(key: string): Promise<void> {
+      store.delete(key)
     },
   } as unknown as IStorageService
-  return { service, read: () => value }
+  return { service, read: (key = LAST_VERSION_KEY) => store.get(key) }
 }
 
 function fakeGroups(): { service: IEditorGroupsService; opened: IEditorInput[] } {
@@ -84,6 +90,24 @@ describe('ReleaseNotesContribution', () => {
     )
     await contrib.whenReady
     expect(groups.opened).toHaveLength(0)
+    expect(storage.read()).toBe('0.1.3')
+  })
+
+  it('opens the current what’s-new tab for an existing install missing the version marker', async () => {
+    const storage = fakeStorage({ [EXISTING_INSTALL_MARKER_KEY]: [{ id: 1 }] })
+    const groups = fakeGroups()
+    const contrib = new ReleaseNotesContribution(
+      fakeReleaseNotes('0.1.3'),
+      storage.service,
+      groups.service,
+    )
+    await contrib.whenReady
+    expect(groups.opened).toHaveLength(1)
+    const input = groups.opened[0]
+    expect(input).toBeInstanceOf(ReleaseNotesInput)
+    const md = (input as ReleaseNotesInput).markdown
+    expect(md).toContain('## 0.1.3')
+    expect(md).not.toContain('## 0.1.2')
     expect(storage.read()).toBe('0.1.3')
   })
 
