@@ -61,7 +61,20 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
     args: [],
     runAsNode: true,
   },
+  {
+    id: 'codex',
+    name: 'Codex (OpenAI)',
+    // The codex-acp adapter binary is not on PATH — it is downloaded on demand
+    // by ICodexBinaryService and its absolute path is injected as the spawn
+    // `command` in AcpClientService._ensureCodexBinary. `command` here is a
+    // placeholder used only for logging / the system-source PATH lookup.
+    command: 'codex-acp',
+    args: [],
+  },
 ]
+
+/** Built-in agents whose binary is fetched on demand rather than found on PATH. */
+const MANAGED_BINARY_AGENT_IDS: ReadonlySet<string> = new Set(['codex'])
 
 export class AcpAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -120,7 +133,10 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
     }
     // Bundled (runAsNode) agents ship inside the app — there is no PATH command
     // to probe. A missing entry surfaces as a spawn error on start instead.
-    if (descriptor.runAsNode) {
+    // Managed-binary agents (codex) resolve their binary on demand at start, so
+    // PATH probing is likewise meaningless — report available and let a download
+    // / resolve failure surface on start.
+    if (descriptor.runAsNode || MANAGED_BINARY_AGENT_IDS.has(descriptor.id)) {
       return { available: true }
     }
     let probe = this._probeCache.get(descriptor.command)

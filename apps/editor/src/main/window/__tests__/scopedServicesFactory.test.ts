@@ -16,10 +16,11 @@ describe('ApplicationServices type', () => {
       acpHost: {} as ApplicationServices['acpHost'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
       claudeBinary: {} as ApplicationServices['claudeBinary'],
+      codexBinary: {} as ApplicationServices['codexBinary'],
       disposableLeak: {} as ApplicationServices['disposableLeak'],
       update: {} as ApplicationServices['update'],
     }
-    expect(Object.keys(svc)).toHaveLength(10)
+    expect(Object.keys(svc)).toHaveLength(11)
   })
 })
 

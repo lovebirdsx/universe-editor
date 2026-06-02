@@ -163,8 +163,12 @@ export class SelectAgentAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
+    // Resolve every service up-front: the accessor is only valid during this
+    // synchronous frame, so reaching for it after an `await` (the health probe
+    // or the quick pick below) throws "service accessor is only valid …".
     const registry = accessor.get(IAcpAgentRegistry)
     const quickInput = accessor.get(IQuickInputService)
+    const sessions = accessor.get(IAcpSessionService)
     const agents = registry.list()
     const healths = await Promise.all(agents.map((a) => registry.health(a.id)))
     const items: IQuickPickItem[] = agents.map((d, i) => {
@@ -188,7 +192,6 @@ export class SelectAgentAction extends Action2 {
     })
     if (!picked) return
     // Update the default agent at runtime (Memory layer). User can persist via Settings UI.
-    const sessions = accessor.get(IAcpSessionService)
     await sessions.createSession(picked.id)
   }
 }

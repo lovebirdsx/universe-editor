@@ -47,6 +47,20 @@ describe('AcpAgentRegistry', () => {
     expect(registry.defaultAgentId()).toBe('claude-code')
   })
 
+  it('exposes the built-in codex preset (binary fetched on demand, not runAsNode)', () => {
+    const { registry } = makeRegistry()
+    const codex = registry.list().find((a) => a.id === 'codex')
+    expect(codex).toBeDefined()
+    expect(codex?.runAsNode).toBeUndefined()
+  })
+
+  it('health reports codex available without a PATH probe (managed binary)', async () => {
+    // probeImpl returns false for everything; codex must still be available
+    // because its binary is resolved on demand at start, not found on PATH.
+    const { registry } = makeRegistry(() => Promise.resolve(false))
+    await expect(registry.health('codex')).resolves.toEqual({ available: true })
+  })
+
   it('defaultAgentId honors acp.defaultAgentId from configuration', () => {
     const { registry, config } = makeRegistry()
     config.update('acp.defaultAgentId', 'my-agent', ConfigurationTarget.Memory)

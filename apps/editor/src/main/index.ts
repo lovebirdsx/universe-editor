@@ -20,6 +20,7 @@ import { WindowMainService } from './services/window/windowMainService.js'
 import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
 import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './services/claudeBinary/claudeBinaryMainService.js'
+import { CodexBinaryMainService } from './services/codexBinary/codexBinaryMainService.js'
 import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './services/update/updateMainService.js'
 import { installMainErrorHandlers } from './errors.js'
@@ -126,6 +127,7 @@ let acpHostService: AcpHostMainService | null = null
 let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
 let claudeBinaryService: ClaudeBinaryMainService | null = null
+let codexBinaryService: CodexBinaryMainService | null = null
 let updateService: UpdateMainService | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
@@ -154,6 +156,9 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     claudeBinaryService = new ClaudeBinaryMainService(
       logMainService.createLogger({ id: 'claudeBinary', name: 'Claude Binary' }),
     )
+    codexBinaryService = new CodexBinaryMainService(
+      logMainService.createLogger({ id: 'codexBinary', name: 'Codex Binary' }),
+    )
     // Phase two: userData is resolved, so the deployment config file can now be
     // layered in (lowest priority) before services that read it are constructed.
     environmentService.resolveFileConfig(app.getPath('userData'))
@@ -174,6 +179,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       acpHost,
       acpTerminal,
       claudeBinary: claudeBinaryService,
+      codexBinary: codexBinaryService,
       disposableLeak: new DisposableLeakMainService(),
       update: updateService,
     }
@@ -244,6 +250,7 @@ app.on('will-quit', () => {
   acpHostService?.dispose()
   acpTerminalService?.dispose()
   claudeBinaryService?.dispose()
+  codexBinaryService?.dispose()
   updateService?.dispose()
   void getDefaultStorage().flush()
   consoleInterceptor.dispose()

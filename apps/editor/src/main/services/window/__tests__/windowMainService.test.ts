@@ -89,6 +89,7 @@ function makeOpts() {
       acpHost: {} as never,
       acpTerminal: {} as never,
       claudeBinary: {} as never,
+      codexBinary: {} as never,
       disposableLeak: {} as never,
       update: {} as never,
     },

@@ -23,6 +23,7 @@ import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
+import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 
@@ -36,6 +37,7 @@ export interface ApplicationServices {
   readonly acpHost: IAcpHostService
   readonly acpTerminal: IAcpTerminalService
   readonly claudeBinary: IClaudeBinaryService
+  readonly codexBinary: ICodexBinaryService
   readonly disposableLeak: IDisposableLeakService
   readonly update: IUpdateService
 }

@@ -35,6 +35,7 @@ import type { IAcpClientNotificationSink } from '../acpClientService.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
+import type { ICodexBinaryService } from '../../../../shared/ipc/codexBinaryService.js'
 import type {
   AcpExitEvent,
   AcpStdioChunk,
@@ -282,6 +283,10 @@ function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number
       onDidChangeProgress: new Emitter<never>().event,
       resolve: () => Promise.resolve({ path: '/x' }),
     } as unknown as IClaudeBinaryService,
+    {
+      onDidChangeProgress: new Emitter<never>().event,
+      resolve: () => Promise.resolve({ path: '/x' }),
+    } as unknown as ICodexBinaryService,
     {
       get: (key: string) => (key === 'acp.startupTimeoutMs' ? opts.startupTimeoutMs : undefined),
     } as unknown as IConfigurationService,

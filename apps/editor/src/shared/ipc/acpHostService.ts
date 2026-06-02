@@ -29,6 +29,14 @@ export interface AcpLaunchSpec {
    * never honored from user `acp.agents` config.
    */
   readonly runAsNode?: boolean
+  /**
+   * Force the platform-shell wrapper on or off. Defaults to win32 (so `.cmd`
+   * shims like `npx` resolve). Set `false` when `command` is an absolute path to
+   * a real binary that may contain spaces (e.g. the downloaded codex-acp under
+   * `%APPDATA%/Universe Editor/...`), which a shell wrapper would mis-quote.
+   * Ignored when `runAsNode` is set (that path always forces shell off).
+   */
+  readonly shell?: boolean
 }
 
 export interface AcpStdioChunk {

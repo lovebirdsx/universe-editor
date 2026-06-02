@@ -180,6 +180,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     const env = sanitizeEnv(process.env, spec.env)
     const options: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = { env }
     if (spec.cwd !== undefined) options.cwd = spec.cwd
+    if (spec.shell !== undefined) options.shell = spec.shell
 
     let command = spec.command
     let args: readonly string[] = spec.args

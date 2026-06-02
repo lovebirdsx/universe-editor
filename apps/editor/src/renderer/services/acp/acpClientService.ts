@@ -73,6 +73,11 @@ import {
   type ClaudeBinarySource,
   type IClaudeBinaryResolveOptions,
 } from '../../../shared/ipc/claudeBinaryService.js'
+import {
+  ICodexBinaryService,
+  type CodexBinarySource,
+  type ICodexBinaryResolveOptions,
+} from '../../../shared/ipc/codexBinaryService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPathPolicy } from './acpPathPolicy.js'
 import {
@@ -223,6 +228,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpTerminalService private readonly _terminals: IAcpTerminalService,
     @IClaudeBinaryService private readonly _claudeBinary: IClaudeBinaryService,
+    @ICodexBinaryService private readonly _codexBinary: ICodexBinaryService,
     @IConfigurationService private readonly _config: IConfigurationService,
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
@@ -382,12 +388,64 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     return { ...spec, env: { ...spec.env, CLAUDE_CODE_EXECUTABLE: result.path } }
   }
 
+  /**
+   * For the built-in Codex agent, the codex-acp adapter binary is not shipped —
+   * resolve it (download on first use / system install / custom path) and use
+   * its absolute path as the spawn `command`. The downloaded binary lives under
+   * a userData path that contains spaces, so `shell` is forced off to stop the
+   * platform shell from mis-quoting it. Auth is taken from `acp.codex.apiKey`
+   * when set, otherwise the child inherits a real OPENAI_API_KEY / CODEX_API_KEY
+   * from the environment. Non-codex agents pass through untouched.
+   */
+  private async _ensureCodexBinary(spec: AcpLaunchSpec, agentId: string): Promise<AcpLaunchSpec> {
+    if (agentId !== 'codex') return spec
+    const source = (this._config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource
+    const customPath = this._config.get<string>('acp.codex.executablePath') ?? ''
+    const opts: ICodexBinaryResolveOptions =
+      source === 'custom' ? { source, customPath } : { source }
+
+    const result = await this._progress.withProgress(
+      { location: ProgressLocation.Notification, title: 'Preparing Codex…', source: 'acp' },
+      async (progress) => {
+        let lastPct = 0
+        const sub = this._codexBinary.onDidChangeProgress(({ received, total }) => {
+          if (total > 0) {
+            const pct = Math.min(100, Math.floor((received / total) * 100))
+            progress.report({
+              message: `Downloading codex-acp… ${pct}%`,
+              increment: pct - lastPct,
+            })
+            lastPct = pct
+          } else {
+            progress.report({
+              message: `Downloading codex-acp… ${Math.floor(received / 1048576)} MB`,
+            })
+          }
+        })
+        try {
+          return await this._codexBinary.resolve(opts)
+        } finally {
+          sub.dispose()
+        }
+      },
+    )
+
+    const apiKey = (this._config.get<string>('acp.codex.apiKey') ?? '').trim()
+    return {
+      ...spec,
+      command: result.path,
+      shell: false,
+      ...(apiKey ? { env: { ...spec.env, OPENAI_API_KEY: apiKey } } : {}),
+    }
+  }
+
   private async _createEntry(agentId: string, key: string, cwd: string): Promise<PoolEntry> {
     const sink = this._sink!
     let spec = this._registry.resolve(agentId, cwd || undefined)
     let handle: string
     try {
       spec = await this._ensureClaudeBinary(spec)
+      spec = await this._ensureCodexBinary(spec, agentId)
       handle = (await this._host.start(spec)).handle
     } catch (err) {
       this._telemetry.publicLogError('acp.spawn_failed', {

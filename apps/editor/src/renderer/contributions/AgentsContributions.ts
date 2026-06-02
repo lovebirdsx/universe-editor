@@ -68,6 +68,31 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Absolute path to a Claude executable. Used only when `acp.claude.source` is "custom".',
             ),
           },
+          'acp.codex.source': {
+            type: 'string',
+            enum: ['download', 'system', 'custom'],
+            default: 'download',
+            description: localize(
+              'settings.acp.codex.source',
+              'How to obtain the codex-acp adapter binary for the built-in Codex agent: "download" fetches it on first use into the user data folder, "system" reuses a `codex-acp` install found on PATH, "custom" uses the path in `acp.codex.executablePath`.',
+            ),
+          },
+          'acp.codex.executablePath': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.acp.codex.executablePath',
+              'Absolute path to a codex-acp executable. Used only when `acp.codex.source` is "custom".',
+            ),
+          },
+          'acp.codex.apiKey': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.acp.codex.apiKey',
+              'OpenAI API key passed to Codex as OPENAI_API_KEY. Stored in plain text — prefer setting a real OPENAI_API_KEY / CODEX_API_KEY environment variable, which the agent inherits automatically when this is left empty.',
+            ),
+          },
           'acp.permissions.autoApprove': {
             type: 'array',
             default: [],

@@ -68,6 +68,7 @@ import type {
 } from '../../../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../../../shared/ipc/acpTerminalService.js'
 import type { IClaudeBinaryService } from '../../../../shared/ipc/claudeBinaryService.js'
+import type { ICodexBinaryService } from '../../../../shared/ipc/codexBinaryService.js'
 import { AcpClientService } from '../acpClientService.js'
 import { AcpPathPolicy } from '../acpPathPolicy.js'
 import { AcpSessionService } from '../acpSessionService.js'
@@ -397,6 +398,10 @@ function build(storage: FakeStorage): Built {
     onDidChangeProgress: new Emitter<never>().event,
     resolve: () => Promise.resolve({ path: '/x' }),
   } as unknown as IClaudeBinaryService
+  const codexBinary = {
+    onDidChangeProgress: new Emitter<never>().event,
+    resolve: () => Promise.resolve({ path: '/x' }),
+  } as unknown as ICodexBinaryService
   const client = new AcpClientService(
     bridge.host,
     new FakeAgentRegistry(),
@@ -407,6 +412,7 @@ function build(storage: FakeStorage): Built {
     telemetry,
     terminals,
     claudeBinary,
+    codexBinary,
     config,
     new StubProgressService(),
     new StubLoggerService(),
