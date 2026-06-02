@@ -102,6 +102,18 @@ export interface IHostService {
 
   /** Bring the window to the foreground (restoring it from minimized if needed). */
   focusWindow(): Promise<void>
+
+  /** Application and runtime version info, for the About dialog. */
+  getVersionInfo(): Promise<IVersionInfo>
+}
+
+export interface IVersionInfo {
+  readonly productName: string
+  readonly version: string
+  readonly electron: string
+  readonly node: string
+  readonly chromium: string
+  readonly v8: string
 }
 
 export interface ISystemNotificationOptions {

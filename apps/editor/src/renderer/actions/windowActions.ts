@@ -8,7 +8,6 @@ import {
   getDisposableTracker,
   IDialogService,
   IHostService,
-  ILoggerService,
   IQuickInputService,
   IWindowsService,
   MenuId,
@@ -228,10 +227,27 @@ export class AboutAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    accessor
-      .get(ILoggerService)
-      .createLogger({ id: 'action', name: 'Action' })
-      .info(localize('app.description', 'A VSCode-paradigm game content editor.'))
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const hostService = accessor.get(IHostService)
+    const dialogService = accessor.get(IDialogService)
+    const info = await hostService.getVersionInfo()
+    const detail = localize(
+      'about.detail',
+      'Version: {version}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
+      {
+        version: info.version,
+        electron: info.electron,
+        chromium: info.chromium,
+        node: info.node,
+        v8: info.v8,
+      },
+    )
+    await dialogService.confirm({
+      type: 'info',
+      message: `${info.productName}\n${localize('app.description', 'A VSCode-paradigm game content editor.')}`,
+      detail,
+      primaryButton: localize('common.ok', 'OK'),
+      copyButton: localize('common.copy', 'Copy'),
+    })
   }
 }

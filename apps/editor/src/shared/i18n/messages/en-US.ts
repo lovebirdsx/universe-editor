@@ -6,6 +6,8 @@ export const EN_US_MESSAGES: MessageMap = {
   'acp.confirmClose.message': 'Session "{title}" is still running.',
   'app.name': 'Universe Editor',
   'app.description': 'A VSCode-paradigm game content editor.',
+  'about.detail':
+    'Version: {version}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
   'command.category.editor': 'Editor',
   'command.category.file': 'File',
   'command.category.help': 'Help',
@@ -14,6 +16,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'command.category.view': 'View',
   'common.cancel': 'Cancel',
   'common.close': 'Close',
+  'common.copy': 'Copy',
   'common.delete': 'Delete',
   'common.details': 'Details',
   'common.name': 'Name',

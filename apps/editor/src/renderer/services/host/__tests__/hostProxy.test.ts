@@ -51,6 +51,23 @@ class FakeHost implements IHostServiceWire {
   toggleDevTools(): Promise<void> {
     return this.devTools()
   }
+  getVersionInfo(): Promise<{
+    productName: string
+    version: string
+    electron: string
+    node: string
+    chromium: string
+    v8: string
+  }> {
+    return Promise.resolve({
+      productName: 'Universe Editor',
+      version: '1.2.3',
+      electron: '33.0.0',
+      node: '20.0.0',
+      chromium: '128.0.0',
+      v8: '12.0.0',
+    })
+  }
   showOpenFileDialog(): Promise<null> {
     return Promise.resolve(null)
   }

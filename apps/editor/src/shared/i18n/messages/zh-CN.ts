@@ -6,6 +6,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.confirmClose.message': '会话 "{title}" 仍在运行。',
   'app.name': 'Universe Editor',
   'app.description': '一个遵循 VSCode 范式的游戏内容编辑器。',
+  'about.detail':
+    '版本: {version}\nElectron: {electron}\nChromium: {chromium}\nNode: {node}\nV8: {v8}',
   'command.category.editor': '编辑器',
   'command.category.file': '文件',
   'command.category.help': '帮助',
@@ -14,6 +16,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'command.category.view': '视图',
   'common.cancel': '取消',
   'common.close': '关闭',
+  'common.copy': '复制',
   'common.delete': '删除',
   'common.details': '详情',
   'common.name': '名称',

@@ -67,6 +67,14 @@ function makeHostStub(): IHostServiceType & {
     closeWindow: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     restart: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
     toggleDevTools: vi.fn().mockResolvedValue(undefined) as unknown as () => Promise<void>,
+    getVersionInfo: vi.fn().mockResolvedValue({
+      productName: 'Universe Editor',
+      version: '1.2.3',
+      electron: '33.0.0',
+      node: '20.0.0',
+      chromium: '128.0.0',
+      v8: '12.0.0',
+    }) as unknown as () => Promise<unknown>,
     closeCalls: 0,
     restartCalls: 0,
     devToolsCalls: 0,
@@ -165,10 +173,21 @@ describe('windowActions', () => {
     expect(entry?.group).toBe('z_about')
   })
 
-  it('About.run is callable without throwing', () => {
+  it('About.run shows a dialog with version details', async () => {
     disposables.push(registerAction2(AboutAction))
     const host = makeHostStub()
-    expect(() => runCommand(AboutAction.ID, host)).not.toThrow()
+    const dialog = new FakeDialogService()
+    const confirm = vi.spyOn(dialog, 'confirm')
+    const services = new ServiceCollection()
+    services.set(IHostService, host)
+    services.set(IDialogService, dialog)
+    const inst = new InstantiationService(services)
+    await inst.invokeFunction((accessor) => {
+      const cmd = CommandsRegistry.getCommand(AboutAction.ID)!
+      return cmd.handler(accessor) as unknown as Promise<void>
+    })
+    expect(confirm).toHaveBeenCalledTimes(1)
+    expect(dialog.lastDetail).toContain('1.2.3')
   })
 })
 

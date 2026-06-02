@@ -12,6 +12,8 @@ export interface IConfirmOptions {
   readonly cancelButton?: string
   /** Optional middle button — enables the three-button "Save / Don't Save / Cancel" shape. */
   readonly secondaryButton?: string
+  /** When set, renders an extra button that copies `detail` to the clipboard without closing the dialog. */
+  readonly copyButton?: string
   readonly type?: 'info' | 'warning' | 'error'
 }
 

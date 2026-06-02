@@ -19,6 +19,7 @@ import {
   type IShowSaveFileOptions,
   type ISystemNotificationOptions,
   type ISystemNotificationResult,
+  type IVersionInfo,
   type UriComponents,
 } from '@universe-editor/platform'
 
@@ -276,6 +277,17 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     }
     this._logger.debug(`focusWindow id=${this._win.id}`)
     return Promise.resolve()
+  }
+
+  getVersionInfo(): Promise<IVersionInfo> {
+    return Promise.resolve({
+      productName: app.getName(),
+      version: app.getVersion(),
+      electron: process.versions.electron,
+      node: process.versions.node,
+      chromium: process.versions.chrome,
+      v8: process.versions.v8,
+    })
   }
 
   private _requestAttention(): void {

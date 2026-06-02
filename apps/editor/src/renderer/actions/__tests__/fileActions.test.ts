@@ -167,6 +167,16 @@ class FakeHostService implements IHostServiceType {
   async closeWindow() {}
   async restart() {}
   async toggleDevTools() {}
+  async getVersionInfo() {
+    return {
+      productName: 'Universe Editor',
+      version: '1.2.3',
+      electron: '33.0.0',
+      node: '20.0.0',
+      chromium: '128.0.0',
+      v8: '12.0.0',
+    }
+  }
   async showOpenFileDialog(opts?: IShowOpenFileOptions) {
     this.openCalls.push(opts ?? {})
     return this.openResult

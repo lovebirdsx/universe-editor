@@ -80,6 +80,15 @@ function ConfirmDialog({
           >
             {primary}
           </button>
+          {opts.copyButton ? (
+            <button
+              type="button"
+              className={styles['btn']}
+              onClick={() => void navigator.clipboard.writeText(opts.detail ?? '')}
+            >
+              {opts.copyButton}
+            </button>
+          ) : null}
           {secondary ? (
             <button
               type="button"
