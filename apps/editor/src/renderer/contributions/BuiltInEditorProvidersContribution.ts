@@ -21,6 +21,7 @@ import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
@@ -77,6 +78,13 @@ export class BuiltInEditorProvidersContribution
         typeId: MarkdownPreviewInput.TYPE_ID,
         componentKey: 'markdown.preview',
         deserialize: (data) => MarkdownPreviewInput.deserialize(data),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: ReleaseNotesInput.TYPE_ID,
+        componentKey: 'releaseNotes',
+        deserialize: (data) => ReleaseNotesInput.deserialize(data),
       }),
     )
     this._register(

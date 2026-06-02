@@ -19,8 +19,9 @@ describe('ApplicationServices type', () => {
       codexBinary: {} as ApplicationServices['codexBinary'],
       disposableLeak: {} as ApplicationServices['disposableLeak'],
       update: {} as ApplicationServices['update'],
+      releaseNotes: {} as ApplicationServices['releaseNotes'],
     }
-    expect(Object.keys(svc)).toHaveLength(11)
+    expect(Object.keys(svc)).toHaveLength(12)
   })
 })
 

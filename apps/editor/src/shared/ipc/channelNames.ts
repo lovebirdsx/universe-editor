@@ -24,6 +24,7 @@ export const ServiceChannels = {
   CodexBinary: 'codexBinary',
   DisposableLeak: 'disposableLeak',
   Update: 'update',
+  ReleaseNotes: 'releaseNotes',
   Lifecycle: 'lifecycle',
 } as const
 

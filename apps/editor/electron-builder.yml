@@ -22,6 +22,10 @@ extraResources:
   # reused), so only the small JS bundle goes in `resources/`.
   - from: ../../vendor/claude-agent-acp/dist
     to: claude-agent-acp/dist
+  # Release notes generated from git history (pnpm release:notes). Read by the
+  # main-process ReleaseNotesMainService and shown after an upgrade.
+  - from: resources/release-notes.json
+    to: release-notes.json
 win:
   icon: public/icon.ico
   target:

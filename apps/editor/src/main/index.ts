@@ -25,6 +25,7 @@ import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
+import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
@@ -173,6 +174,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       codexBinary: accessor.get(ICodexBinaryService),
       disposableLeak: accessor.get(IDisposableLeakService),
       update: accessor.get(IUpdateService),
+      releaseNotes: accessor.get(IReleaseNotesService),
     }))
   }
   if (!windowMainService) {

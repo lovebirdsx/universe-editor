@@ -24,6 +24,7 @@ import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
+import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 
 export function registerProxyChannelServices(
   services: ServiceCollection,
@@ -79,6 +80,10 @@ export function registerProxyChannelServices(
   services.set(
     IUpdateService,
     ProxyChannel.toService<IUpdateService>(ipc.getChannel(ServiceChannels.Update)),
+  )
+  services.set(
+    IReleaseNotesService,
+    ProxyChannel.toService<IReleaseNotesService>(ipc.getChannel(ServiceChannels.ReleaseNotes)),
   )
   services.set(
     IWindowsService,

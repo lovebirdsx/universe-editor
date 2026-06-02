@@ -111,6 +111,7 @@ import {
   DownloadUpdateAction,
   InstallUpdateAction,
 } from './updateActions.js'
+import { ShowReleaseNotesAction } from './helpActions.js'
 import {
   ClearOutputAction,
   OpenActiveLogFileAction,
@@ -292,6 +293,7 @@ registerAction2(OpenMarkdownPreviewToSideAction)
 registerAction2(CheckForUpdatesAction)
 registerAction2(DownloadUpdateAction)
 registerAction2(InstallUpdateAction)
+registerAction2(ShowReleaseNotesAction)
 
 // Terminal
 registerAction2(OpenInTerminalAction)

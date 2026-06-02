@@ -25,6 +25,7 @@ import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
+import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
 import { FileWatcherMainService } from './fileWatcher/fileWatcherMainService.js'
@@ -39,6 +40,7 @@ import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.
 import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
 import { DisposableLeakMainService } from './disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './update/updateMainService.js'
+import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
 // @-injected services with non-branded static params (spawner stubs, Storage,
@@ -85,3 +87,8 @@ registerSingleton(
   new SyncDescriptor<IDisposableLeakService>(DisposableLeakMainService, [], false),
 )
 registerSingleton(IUpdateService, new SyncDescriptor<IUpdateService>(UpdateMainService, [], false))
+registerSingleton(
+  IReleaseNotesService,
+  // 1 leading static param (resolvePath) before @ILoggerService.
+  new SyncDescriptor<IReleaseNotesService>(ReleaseNotesMainService, [undefined], false),
+)

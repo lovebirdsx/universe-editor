@@ -92,6 +92,7 @@ function makeOpts() {
       codexBinary: {} as never,
       disposableLeak: {} as never,
       update: {} as never,
+      releaseNotes: {} as never,
     },
     logService,
     e2eEnabled: false,

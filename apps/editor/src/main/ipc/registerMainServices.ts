@@ -60,6 +60,7 @@ export function bootstrapWindowIpc(
     ProxyChannel.fromService(app.disposableLeak),
   )
   server.registerChannel(ServiceChannels.Update, ProxyChannel.fromService(app.update))
+  server.registerChannel(ServiceChannels.ReleaseNotes, ProxyChannel.fromService(app.releaseNotes))
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
     client.getChannel(ServiceChannels.Lifecycle),

@@ -20,6 +20,7 @@ import type {
   IDisposableLeakService,
 } from '../../shared/ipc/services.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
+import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -40,6 +41,7 @@ export interface ApplicationServices {
   readonly codexBinary: ICodexBinaryService
   readonly disposableLeak: IDisposableLeakService
   readonly update: IUpdateService
+  readonly releaseNotes: IReleaseNotesService
 }
 
 /**

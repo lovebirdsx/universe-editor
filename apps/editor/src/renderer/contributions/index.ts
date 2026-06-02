@@ -32,6 +32,7 @@ import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 import { NotificationStatusContribution } from './NotificationStatusContribution.js'
 import { UpdateContribution } from './UpdateContribution.js'
+import { ReleaseNotesContribution } from './ReleaseNotesContribution.js'
 import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 import { EditMenuContribution } from './EditMenuContribution.js'
@@ -218,6 +219,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.update',
   UpdateContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Show "what's new" after an upgrade. AfterRestore so the editor area is mounted
+// and activeGroup can host the tab.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.releaseNotes',
+  ReleaseNotesContribution,
   WorkbenchPhase.AfterRestore,
 )
 

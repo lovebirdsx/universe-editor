@@ -114,18 +114,34 @@ publish:
 
 ---
 
-## 三、发布一个新版本（三步）
+## 三、发布一个新版本
 
 ```bash
 # 1) bump 版本（apps/editor/package.json 的 version，遵循 semver）
-#    例如 0.1.0 → 0.1.1
+#    例如 0.1.1 → 0.1.2
 
-# 2) 打包，产物落到 apps/editor/release/
+# 2) 提交并打 tag（tag 是版本说明的区间锚点，名字必须是 vX.Y.Z）
+git commit -am "chore(release): 0.1.2"
+git tag v0.1.2
+
+# 3) 生成版本说明（读 git tag + 提交，写 apps/editor/resources/release-notes.json）
+pnpm release:notes
+git commit -am "docs(release): 0.1.2 release notes"   # 把生成结果提交入库
+
+# 4) 打包，产物落到 apps/editor/release/
 pnpm --filter @universe-editor/editor package:win
 
-# 3) 上传到内网服务器（在 PowerShell 或 cmd 中运行）
+# 5) 上传到内网服务器（在 PowerShell 或 cmd 中运行）
 pnpm release:upload --host <服务器IP> --user deploy --dir /srv/universe-editor
 ```
+
+> **版本说明从哪来**：`release:notes` 遍历所有 `vX.Y.Z` tag，对每个 tag 与其前驱之间的提交
+> 按 `<type>(<scope>): <summary>` 解析（见 `docs/development/git-commit-msg-rule.md`），
+> 默认只收录 `feat`/`fix`/`perf`/`security`，其它类型加 `!` 标记才收录。生成的 JSON 通过
+> `electron-builder.yml` 的 `extraResources` 打进安装包；客户端升级后自动弹出「上次看到的版本 →
+> 当前版本」区间内所有版本的更新（命令面板 **Show Release Notes** 可随时回看）。
+>
+> 当前仓库尚无历史 tag —— 第一个打出的 tag 其区间会退化为「仓库起始 → 该 tag」。
 
 > ⚠️ **Windows 用 PowerShell / cmd 运行上传命令，不要用 Git Bash。** Git Bash（MSYS）会把
 > `--dir /srv/universe-editor` 这类以 `/` 开头的远程路径自动改写成本地 Windows 路径
