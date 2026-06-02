@@ -9,7 +9,7 @@ artifactName: '${productName}-${version}-${os}-${arch}.${ext}'
 #   --update-url=<url> / 环境变量 UNIVERSE_UPDATE_URL / <userData>/update-config.json 的 updateUrl 字段。
 publish:
   provider: generic
-  url: http://CHANGE-ME.internal/universe-editor/
+  url: http://iloop.aki.kuro.com:9999/universe-editor/
   channel: latest
 files:
   - out/**/*

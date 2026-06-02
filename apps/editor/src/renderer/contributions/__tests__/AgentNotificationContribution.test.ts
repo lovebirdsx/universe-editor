@@ -43,7 +43,7 @@ function planEntry(status: AcpPlanEntry['status']): AcpPlanEntry {
   return { content: 'step', status } as AcpPlanEntry
 }
 
-function setup(opts?: { enabled?: boolean; clicked?: boolean }) {
+function setup(opts?: { enabled?: boolean; clicked?: boolean; workspaceName?: string }) {
   const enabled = opts?.enabled ?? true
   const sessionsObs = observableValue<readonly IAcpSession[]>('sessions', [])
   const notify = vi.fn(
@@ -69,8 +69,18 @@ function setup(opts?: { enabled?: boolean; clicked?: boolean }) {
   const config = { get: () => enabled } as never
   const views = { openViewContainer } as never
   const layout = { getVisible: () => true, toggleVisible: vi.fn(), focusView } as never
+  const workspace = {
+    current: opts?.workspaceName !== undefined ? { name: opts.workspaceName } : null,
+  } as never
 
-  const contribution = new AgentNotificationContribution(sessions, host, config, views, layout)
+  const contribution = new AgentNotificationContribution(
+    sessions,
+    host,
+    config,
+    views,
+    layout,
+    workspace,
+  )
 
   return {
     contribution,
@@ -148,7 +158,7 @@ describe('AgentNotificationContribution', () => {
     expect(t.notify).not.toHaveBeenCalled()
   })
 
-  it('on click: focuses window, activates the session, and opens the Agents view', async () => {
+  it('on click: activates the session and opens the Agents view', async () => {
     const t = setup({ clicked: true })
     const s = makeSession('a')
     t.addSession(s)
@@ -157,10 +167,21 @@ describe('AgentNotificationContribution', () => {
     // Let the notify promise resolve and the click handler run.
     await Promise.resolve()
     await Promise.resolve()
-    expect(t.focusWindow).toHaveBeenCalled()
+    // Window focus happens main-side inside the click handler, not here.
     expect(t.setActive).toHaveBeenCalledWith('a')
     expect(t.openViewContainer).toHaveBeenCalledWith('workbench.view.agents')
     expect(t.focusView).toHaveBeenCalledWith('workbench.view.agents.main', { source: 'command' })
+  })
+
+  it('includes the workspace folder name on a second body line when a folder is open', () => {
+    const t = setup({ workspaceName: 'universe-editor4' })
+    const s = makeSession('a', 'fix the login spinner')
+    t.addSession(s)
+    s.status.set('running', undefined)
+    s.status.set('idle', undefined)
+    expect(t.notify.mock.calls[0]![0]).toMatchObject({
+      body: 'fix the login spinner\nuniverse-editor4',
+    })
   })
 
   it('stops watching a session once it leaves the list', () => {

@@ -13,6 +13,7 @@ import {
   ILayoutService,
   IViewsService,
   IWorkbenchContribution,
+  IWorkspaceService,
   PartId,
   autorun,
   localize,
@@ -20,6 +21,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSessionService.js'
+import { truncateTitle } from '../services/acp/sessionTitleFormat.js'
 import type { AcpPlanEntry } from '../services/acp/acpSession.js'
 
 const AGENTS_CONTAINER_ID = 'workbench.view.agents'
@@ -40,6 +42,7 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     @IConfigurationService private readonly _config: IConfigurationService,
     @IViewsService private readonly _views: IViewsService,
     @ILayoutService private readonly _layout: ILayoutService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
 
@@ -119,8 +122,11 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
 
   private _fire(kind: NotifyKind, session: IAcpSession): void {
     if (!this._enabled()) return
-    const { title, body } = messageFor(kind, session.title)
-    void this._notifyAndMaybeFocus(session.id, title, body)
+    const title = titleFor(kind)
+    const lines = [truncateTitle(session.title)]
+    const workspaceName = this._workspace.current?.name
+    if (workspaceName !== undefined && workspaceName.length > 0) lines.push(workspaceName)
+    void this._notifyAndMaybeFocus(session.id, title, lines.join('\n'))
   }
 
   private async _notifyAndMaybeFocus(
@@ -130,7 +136,6 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
   ): Promise<void> {
     const res = await this._host.notify({ title, body })
     if (!res.clicked) return
-    await this._host.focusWindow()
     this._sessions.setActive(sessionId)
     if (!this._layout.getVisible(PartId.SecondarySideBar)) {
       this._layout.toggleVisible(PartId.SecondarySideBar)
@@ -140,27 +145,15 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
   }
 }
 
-function messageFor(kind: NotifyKind, sessionTitle: string): { title: string; body: string } {
+function titleFor(kind: NotifyKind): string {
   switch (kind) {
     case 'permission':
-      return {
-        title: localize('acp.notify.permission.title', 'Agent needs your permission'),
-        body: sessionTitle,
-      }
+      return localize('acp.notify.permission.title', 'Agent needs your permission')
     case 'question':
-      return {
-        title: localize('acp.notify.question.title', 'Agent has a question'),
-        body: sessionTitle,
-      }
+      return localize('acp.notify.question.title', 'Agent has a question')
     case 'completed':
-      return {
-        title: localize('acp.notify.completed.title', 'Agent finished its task'),
-        body: sessionTitle,
-      }
+      return localize('acp.notify.completed.title', 'Agent finished its task')
     case 'errored':
-      return {
-        title: localize('acp.notify.errored.title', 'Agent run failed'),
-        body: sessionTitle,
-      }
+      return localize('acp.notify.errored.title', 'Agent run failed')
   }
 }

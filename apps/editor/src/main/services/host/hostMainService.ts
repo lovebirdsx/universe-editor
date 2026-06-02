@@ -240,7 +240,13 @@ export class MainHostService implements IHostServiceWire, IDisposable {
         settled = true
         resolve({ shown: true, clicked })
       }
-      notification.on('click', () => settle(true))
+      notification.on('click', () => {
+        // Focus synchronously inside the click handler so the window comes
+        // forward within the OS-granted input grace window — a renderer
+        // round-trip would step outside it and Windows would refuse foreground.
+        this.focusWindow()
+        settle(true)
+      })
       notification.on('close', () => settle(false))
       notification.on('failed', () => {
         if (settled) return
@@ -255,8 +261,19 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     if (this._win.isDestroyed()) return Promise.resolve()
     this._clearAttention()
     if (this._win.isMinimized()) this._win.restore()
-    this._win.show()
-    this._win.focus()
+    if (process.platform === 'win32') {
+      // Toggle always-on-top to defeat Windows' SetForegroundWindow lock —
+      // a plain focus() is silently ignored when another process owns the
+      // foreground, leaving the window flashing in the taskbar instead.
+      this._win.setAlwaysOnTop(true)
+      this._win.show()
+      this._win.focus()
+      this._win.moveTop()
+      this._win.setAlwaysOnTop(false)
+    } else {
+      this._win.show()
+      this._win.focus()
+    }
     this._logger.debug(`focusWindow id=${this._win.id}`)
     return Promise.resolve()
   }

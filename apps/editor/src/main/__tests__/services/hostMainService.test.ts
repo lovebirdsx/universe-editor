@@ -72,6 +72,8 @@ interface FakeWin {
   restore(): void
   show(): void
   focus(): void
+  moveTop(): void
+  setAlwaysOnTop(flag: boolean): void
   flashFrame(flag: boolean): void
   readonly id: number
   readonly webContents: { toggleDevTools(): void }
@@ -127,6 +129,12 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     focus() {
       focused = true
       calls.push('focus')
+    },
+    moveTop() {
+      calls.push('moveTop')
+    },
+    setAlwaysOnTop(flag) {
+      calls.push(`setAlwaysOnTop:${flag}`)
     },
     flashFrame(flag) {
       calls.push(`flashFrame:${flag}`)
