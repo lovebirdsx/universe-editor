@@ -14,6 +14,7 @@ import { WelcomeEditor } from './WelcomeEditor.js'
 import { FileEditor } from './FileEditor.js'
 import { DiffEditor } from './DiffEditor.js'
 import { MarkdownPreviewEditor } from './MarkdownPreviewEditor.js'
+import { DocEditor } from './DocEditor.js'
 import { AcpSessionEditor } from '../agents/AcpSessionEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
@@ -29,6 +30,7 @@ editorComponentMap.set('keybindings', KeybindingsEditor as ComponentType<{ input
 editorComponentMap.set('file', FileEditor)
 editorComponentMap.set('diff', DiffEditor)
 editorComponentMap.set('markdown.preview', MarkdownPreviewEditor)
+editorComponentMap.set('doc', DocEditor)
 editorComponentMap.set('agents.session', AcpSessionEditor)
 
 export function EditorArea({ part }: { part?: IPart | undefined } = {}) {

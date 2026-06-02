@@ -7,17 +7,20 @@
 import { useSyncExternalStore } from 'react'
 import {
   IEditorInput,
+  IEditorService,
   IWorkspaceService,
   localize,
   markAsSingleton,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
+import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import styles from './EditorArea.module.css'
 
 const RECENT_LIMIT = 5
 
 export function WelcomeEditor(_props: { input: IEditorInput }) {
   const workspace = useService(IWorkspaceService)
+  const editorService = useService(IEditorService)
   const recent = useSyncExternalStore(
     (onChange) => {
       const d = markAsSingleton(workspace.onDidChangeRecent(() => onChange()))
@@ -45,6 +48,29 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
           <span>{localize('welcome.splitEditor', 'Split Editor')}</span>
         </li>
       </ul>
+      <section className={styles['welcome-docs']}>
+        <h2>{localize('welcome.gettingStarted', 'Getting Started')}</h2>
+        <ul>
+          <li>
+            <button
+              type="button"
+              className={styles['welcome-doc-item']}
+              onClick={() => editorService.openEditor(new DocEditorInput('editor-guide'))}
+            >
+              {localize('welcome.editorGuide', 'Editor Guide')}
+            </button>
+          </li>
+          <li>
+            <button
+              type="button"
+              className={styles['welcome-doc-item']}
+              onClick={() => editorService.openEditor(new DocEditorInput('agent-guide'))}
+            >
+              {localize('welcome.agentGuide', 'Agent Guide')}
+            </button>
+          </li>
+        </ul>
+      </section>
       {visible.length > 0 && (
         <section className={styles['welcome-recent']}>
           <h2>{localize('welcome.recent', 'Recent')}</h2>

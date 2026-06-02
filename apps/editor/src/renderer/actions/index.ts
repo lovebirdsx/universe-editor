@@ -104,6 +104,7 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
+import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
 import { OpenMarkdownPreviewAction, OpenMarkdownPreviewToSideAction } from './markdownActions.js'
 import {
   CheckForUpdatesAction,
@@ -251,6 +252,8 @@ registerAction2(SwitchWindowAction)
 registerAction2(ExitAction)
 registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)
+registerAction2(OpenEditorGuideAction)
+registerAction2(OpenAgentGuideAction)
 registerAction2(OpenUserDataFolderAction)
 registerAction2(ShowLogsAction)
 registerAction2(RefreshLogOutputAction)

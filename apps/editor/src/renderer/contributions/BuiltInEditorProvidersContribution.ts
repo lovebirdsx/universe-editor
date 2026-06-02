@@ -17,6 +17,7 @@
 
 import { Disposable, EditorRegistry, type IWorkbenchContribution } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
@@ -76,6 +77,13 @@ export class BuiltInEditorProvidersContribution
         typeId: MarkdownPreviewInput.TYPE_ID,
         componentKey: 'markdown.preview',
         deserialize: (data) => MarkdownPreviewInput.deserialize(data),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: DocEditorInput.TYPE_ID,
+        componentKey: 'doc',
+        deserialize: (data) => DocEditorInput.deserialize(data),
       }),
     )
   }
