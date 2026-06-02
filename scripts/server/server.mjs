@@ -64,6 +64,8 @@ if (!Number.isInteger(config.port) || config.port <= 0 || config.port > 65535) {
 const MIME = {
   '.yml': 'text/yaml; charset=utf-8',
   '.yaml': 'text/yaml; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
   '.exe': 'application/octet-stream',
   '.blockmap': 'application/octet-stream',
 }
@@ -73,9 +75,11 @@ function contentType(file) {
 }
 
 // latest.yml 是清单，必须禁缓存，否则客户端读到旧版本号检测不到更新。
+// 下载页 index.html 与 release-notes.json 同理：发布时会变，且版本信息本就来自
+// 禁缓存的 latest.yml，统一禁缓存避免浏览器展示旧内容。
 function cacheHeaders(file, headers) {
   const ext = extname(file).toLowerCase()
-  if (ext === '.yml' || ext === '.yaml') {
+  if (ext === '.yml' || ext === '.yaml' || ext === '.html' || ext === '.json') {
     headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
     headers['Pragma'] = 'no-cache'
     headers['Expires'] = '0'
@@ -182,7 +186,7 @@ async function handle(req, res) {
   }
 
   const rel = pathname.slice(config.base.length)
-  const target = join(config.root, normalize(rel))
+  let target = join(config.root, normalize(rel))
 
   // 路径穿越防护：归一化后必须仍在 root 内。
   if (target !== config.root && !target.startsWith(config.root + sep)) {
@@ -196,7 +200,16 @@ async function handle(req, res) {
     return send(req, res, 404, 'Not Found')
   }
   if (info.isDirectory()) {
-    return send(req, res, 404, 'Not Found') // autoindex off
+    // 目录请求回退到 index.html（下载页）；不存在则维持 autoindex off 的 404。
+    const indexFile = join(target, 'index.html')
+    try {
+      const indexInfo = await stat(indexFile)
+      if (!indexInfo.isFile()) return send(req, res, 404, 'Not Found')
+      target = indexFile
+      info = indexInfo
+    } catch {
+      return send(req, res, 404, 'Not Found')
+    }
   }
 
   const size = info.size

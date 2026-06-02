@@ -21,7 +21,7 @@
     "release": "node scripts/release/release.mjs",
     "release:upload": "node scripts/release/upload.mjs",
     "release:notes": "node scripts/release/changelog.mjs",
-    "test:release": "node --test \"scripts/release/__tests__/**/*.test.mjs\"",
+    "test:release": "node --test \"scripts/**/__tests__/**/*.test.mjs\"",
     "server:serve": "node scripts/server/server.mjs --root apps/editor/release --port 8788 --base /"
   },
   "devDependencies": {
