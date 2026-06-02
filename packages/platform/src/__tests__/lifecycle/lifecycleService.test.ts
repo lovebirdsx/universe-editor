@@ -3,7 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { LifecyclePhase, LifecycleService, runWhenPhase } from '../../lifecycle/lifecycleService.js'
+import {
+  LifecyclePhase,
+  LifecycleService,
+  ShutdownReason,
+  runWhenPhase,
+} from '../../lifecycle/lifecycleService.js'
 
 describe('LifecycleService', () => {
   it('starts at Starting phase', () => {
@@ -61,8 +66,44 @@ describe('LifecycleService', () => {
     svc.onBeforeShutdown(() => {
       fired = true
     })
-    await svc.shutdown()
+    await svc.shutdown(ShutdownReason.Quit)
     expect(fired).toBe(true)
+  })
+
+  it('passes the shutdown reason to onBeforeShutdown listeners', async () => {
+    const svc = new LifecycleService()
+    let seen: ShutdownReason | undefined
+    svc.onBeforeShutdown((e) => {
+      seen = e.reason
+    })
+    await svc.shutdown(ShutdownReason.SwitchWorkspace)
+    expect(seen).toBe(ShutdownReason.SwitchWorkspace)
+  })
+
+  it('shutdown() returns whether it was vetoed', async () => {
+    const svc = new LifecycleService()
+    svc.onBeforeShutdown((e) => e.veto(true, 'test'))
+    expect(await svc.shutdown(ShutdownReason.Quit)).toBe(true)
+
+    const svc2 = new LifecycleService()
+    expect(await svc2.shutdown(ShutdownReason.Quit)).toBe(false)
+  })
+
+  it('confirmBeforeShutdown does not fire onWillShutdown', async () => {
+    const svc = new LifecycleService()
+    let willShutdownFired = false
+    svc.onWillShutdown(() => {
+      willShutdownFired = true
+    })
+    const vetoed = await svc.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)
+    expect(vetoed).toBe(false)
+    expect(willShutdownFired).toBe(false)
+  })
+
+  it('confirmBeforeShutdown returns true when vetoed', async () => {
+    const svc = new LifecycleService()
+    svc.onBeforeShutdown((e) => e.veto(true, 'busy'))
+    expect(await svc.confirmBeforeShutdown(ShutdownReason.CloseWindow)).toBe(true)
   })
 
   it('veto(true) prevents shutdown', async () => {
@@ -74,7 +115,7 @@ describe('LifecycleService', () => {
       willShutdownFired = true
     })
 
-    await svc.shutdown()
+    await svc.shutdown(ShutdownReason.Quit)
     expect(willShutdownFired).toBe(false)
   })
 
@@ -87,7 +128,7 @@ describe('LifecycleService', () => {
       willShutdownFired = true
     })
 
-    await svc.shutdown()
+    await svc.shutdown(ShutdownReason.Quit)
     expect(willShutdownFired).toBe(true)
   })
 
@@ -100,7 +141,7 @@ describe('LifecycleService', () => {
       willShutdownFired = true
     })
 
-    await svc.shutdown()
+    await svc.shutdown(ShutdownReason.Quit)
     expect(willShutdownFired).toBe(false)
   })
 
@@ -120,7 +161,7 @@ describe('LifecycleService', () => {
       )
     })
 
-    await svc.shutdown()
+    await svc.shutdown(ShutdownReason.Quit)
     expect(joinDone).toBe(true)
   })
 })

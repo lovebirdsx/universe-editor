@@ -6,12 +6,14 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
+  ILifecycleService,
   IProgressService,
   IQuickInputService,
   IWindowsService,
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
+  LifecycleService,
   MenuId,
   MenuRegistry,
   ServiceCollection,
@@ -178,6 +180,7 @@ function runCommand(
   services.set(IWorkspaceService, workspace)
   services.set(IProgressService, makeProgressStub())
   services.set(IWindowsService, windows)
+  services.set(ILifecycleService, new LifecycleService())
   if (quickInput) services.set(IQuickInputService, quickInput)
   const inst = new InstantiationService(services)
   return new Promise((resolve) => {

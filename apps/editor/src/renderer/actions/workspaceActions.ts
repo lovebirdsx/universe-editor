@@ -7,6 +7,7 @@
 import {
   Action2,
   IHostService,
+  ILifecycleService,
   INotificationService,
   IProgressService,
   IQuickInputService,
@@ -15,6 +16,7 @@ import {
   MenuId,
   ProgressLocation,
   Severity,
+  ShutdownReason,
   URI,
   localize,
   type IKeyMods,
@@ -35,10 +37,12 @@ export class OpenFolderAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const lifecycle = accessor.get(ILifecycleService)
     const workspace = accessor.get(IWorkspaceService)
     const progress = accessor.get(IProgressService)
-    void progress.withProgress(
+    if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
+    await progress.withProgress(
       {
         location: ProgressLocation.Window,
         title: localize('progress.openFolder', 'Opening folder…'),
@@ -60,8 +64,11 @@ export class CloseFolderAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    void accessor.get(IWorkspaceService).closeFolder()
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const lifecycle = accessor.get(ILifecycleService)
+    const workspace = accessor.get(IWorkspaceService)
+    if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
+    await workspace.closeFolder()
   }
 }
 
@@ -112,6 +119,7 @@ export class OpenRecentAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
+    const lifecycle = accessor.get(ILifecycleService)
     const workspace = accessor.get(IWorkspaceService)
     const quickInput = accessor.get(IQuickInputService)
     const progress = accessor.get(IProgressService)
@@ -162,6 +170,8 @@ export class OpenRecentAction extends Action2 {
       await windowsService.openWindow(target.folder)
       return
     }
+    // Same-window switch: confirm before interrupting any running session.
+    if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
     await progress.withProgress(
       {
         location: ProgressLocation.Window,

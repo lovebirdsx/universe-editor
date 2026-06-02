@@ -48,6 +48,7 @@ import {
 } from './AgentsContributions.js'
 import { AgentNotificationContribution } from './AgentNotificationContribution.js'
 import { FirstRunAgentOnboardingContribution } from './FirstRunAgentOnboardingContribution.js'
+import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -302,6 +303,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsSessionEditorLifecycle',
   AgentsSessionEditorLifecycleContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Guard running ACP sessions on quit / close / reload / switch-workspace: prompt
+// before interrupting them. AfterRestore so the session service + dialog are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.sessionShutdownParticipant',
+  SessionShutdownParticipant,
   WorkbenchPhase.AfterRestore,
 )
 

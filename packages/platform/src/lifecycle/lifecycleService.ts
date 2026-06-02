@@ -19,7 +19,26 @@ export const enum LifecyclePhase {
   Eventually = 4,
 }
 
+/**
+ * Why the shutdown sequence was initiated. Participants inspect this to decide
+ * whether (and how) to veto — e.g. a running-session guard wants to prompt on
+ * Quit / CloseWindow / SwitchWorkspace alike, but can tune the dialog copy.
+ */
+export const enum ShutdownReason {
+  /** The whole application is quitting. */
+  Quit = 1,
+  /** A single window is being closed. */
+  CloseWindow,
+  /** The window is reloading (e.g. Restart Editor in dev). */
+  Reload,
+  /** The workspace folder is being switched/closed in place. */
+  SwitchWorkspace,
+}
+
 export interface BeforeShutdownEvent {
+  /** Why shutdown was initiated. */
+  readonly reason: ShutdownReason
+
   /**
    * Call this to veto the shutdown.
    * @param reason A human-readable string describing why shutdown is being vetoed.
@@ -54,10 +73,19 @@ export interface ILifecycleService extends IDisposable {
   readonly onWillShutdown: Event<WillShutdownEvent>
 
   /**
+   * Runs only the veto phase: fires onBeforeShutdown and awaits all vetos.
+   * Does NOT fire onWillShutdown. Used for in-place transitions (e.g. switching
+   * workspace) that need confirmation but are not a real shutdown.
+   * @returns whether the shutdown was vetoed.
+   */
+  confirmBeforeShutdown(reason: ShutdownReason): Promise<boolean>
+
+  /**
    * Initiates the shutdown sequence (fires onBeforeShutdown, then onWillShutdown).
    * Resolves when all async join() operations have completed (or timeout).
+   * @returns whether the shutdown was vetoed (true → shutdown was cancelled).
    */
-  shutdown(): Promise<void>
+  shutdown(reason: ShutdownReason): Promise<boolean>
 }
 
 export const ILifecycleService = createDecorator<ILifecycleService>('lifecycleService')
@@ -132,17 +160,16 @@ export class LifecycleService extends Disposable implements ILifecycleService {
     return barrier.promise
   }
 
-  async shutdown(): Promise<void> {
-    // --- Before shutdown (veto phase) ---
+  async confirmBeforeShutdown(reason: ShutdownReason): Promise<boolean> {
     const vetos: { value: boolean | Promise<boolean>; reason: string }[] = []
     this._onBeforeShutdown.fire({
+      reason,
       veto(value, reason) {
         vetos.push({ value, reason })
       },
     })
 
-    // Resolve all vetos
-    for (const { value, reason } of vetos) {
+    for (const { value, reason: vetoReason } of vetos) {
       let result: boolean
       if (typeof value === 'boolean') {
         result = value
@@ -154,10 +181,18 @@ export class LifecycleService extends Disposable implements ILifecycleService {
         }
       }
       if (result) {
-        // Shutdown vetoed
-        console.info(`[LifecycleService] Shutdown vetoed by: ${reason}`)
-        return
+        console.info(`[LifecycleService] Shutdown vetoed by: ${vetoReason}`)
+        return true
       }
+    }
+    return false
+  }
+
+  async shutdown(reason: ShutdownReason): Promise<boolean> {
+    // --- Before shutdown (veto phase) ---
+    const vetoed = await this.confirmBeforeShutdown(reason)
+    if (vetoed) {
+      return true
     }
 
     // --- Will shutdown (join phase) ---
@@ -171,6 +206,7 @@ export class LifecycleService extends Disposable implements ILifecycleService {
     if (joins.length > 0) {
       await Promise.allSettled(joins.map((j) => j.promise))
     }
+    return false
   }
 }
 

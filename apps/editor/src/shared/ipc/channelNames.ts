@@ -24,6 +24,7 @@ export const ServiceChannels = {
   CodexBinary: 'codexBinary',
   DisposableLeak: 'disposableLeak',
   Update: 'update',
+  Lifecycle: 'lifecycle',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

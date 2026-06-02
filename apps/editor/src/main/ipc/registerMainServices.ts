@@ -6,6 +6,7 @@
 
 import { type BrowserWindow } from 'electron'
 import {
+  ChannelClient,
   ChannelServer,
   combinedDisposable,
   type IDisposable,
@@ -13,22 +14,32 @@ import {
   ProxyChannel,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
+import { type IRendererLifecycleService } from '../../shared/ipc/lifecycleService.js'
 import { createMainProtocolForWindow } from './electronProtocol.js'
 import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
 
+export interface WindowIpcBootstrap {
+  readonly disposable: IDisposable
+  /** Reverse proxy: lets main invoke the renderer's lifecycle veto chain. */
+  readonly rendererLifecycle: IRendererLifecycleService
+}
+
 /**
  * Bind a ChannelServer to a window's protocol and register the application-singleton
- * services alongside the per-window services. The returned disposable tears down
- * the server + protocol; call it on window close.
+ * services alongside the per-window services. Also opens a reverse ChannelClient on
+ * the same (full-duplex) protocol so main can call renderer-implemented channels.
+ * The returned disposable tears down the server + client + protocol; call it on
+ * window close.
  */
 export function bootstrapWindowIpc(
   win: BrowserWindow,
   app: ApplicationServices,
   window: WindowScopedServices,
   windows: IWindowsService,
-): IDisposable {
+): WindowIpcBootstrap {
   const { protocol, disposable: protoDisposable } = createMainProtocolForWindow(win)
   const server = new ChannelServer(protocol)
+  const client = new ChannelClient(protocol)
 
   server.registerChannel(ServiceChannels.Host, ProxyChannel.fromService(window.host))
   server.registerChannel(ServiceChannels.Storage, ProxyChannel.fromService(window.storage))
@@ -50,5 +61,12 @@ export function bootstrapWindowIpc(
   )
   server.registerChannel(ServiceChannels.Update, ProxyChannel.fromService(app.update))
 
-  return combinedDisposable(server, protoDisposable)
+  const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
+    client.getChannel(ServiceChannels.Lifecycle),
+  )
+
+  return {
+    disposable: combinedDisposable(server, client, protoDisposable),
+    rendererLifecycle,
+  }
 }

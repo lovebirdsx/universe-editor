@@ -97,6 +97,7 @@ import {
   IRendererDisposableLeakService,
   RendererDisposableLeakService,
 } from './services/disposableLeak/DisposableLeakService.js'
+import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import './workbench.css'
 import './services/index.js'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
@@ -162,6 +163,15 @@ async function bootstrapWorkbench(): Promise<void> {
   // IPC must be available before any service that proxies main-side channels.
   const ipcService = workbenchStore.add(createRendererIpcService())
   services.set(IIpcService, ipcService)
+
+  // Reverse channel: the main process invokes this before closing a window /
+  // quitting so the renderer can run its lifecycle veto chain (e.g. confirm
+  // before interrupting running sessions). The IpcService is full-duplex, so
+  // registerChannel works without any extra wiring.
+  ipcService.registerChannel(
+    ServiceChannels.Lifecycle,
+    ProxyChannel.fromService(new RendererLifecycleService(lifecycle)),
+  )
 
   // Disposable leak reporting (dev/E2E only): cross-process service that
   // persists this session's leaks for the next bootstrap to surface. Created

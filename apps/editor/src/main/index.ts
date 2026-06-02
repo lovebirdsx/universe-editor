@@ -227,11 +227,28 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-app.on('before-quit', () => {
-  mainLogger.info('before-quit')
-  // Snapshot the open-windows session before windows start closing, so the
-  // per-window close handlers don't shrink the persisted list to empty.
-  windowMainService?.captureSessionForQuit()
+app.on('before-quit', (e) => {
+  // Already cleared (or no windows yet): let the quit proceed and snapshot the
+  // open-windows session before windows start closing, so the per-window close
+  // handlers don't shrink the persisted list to empty.
+  if (windowMainService?.isQuitConfirmed() || !windowMainService) {
+    mainLogger.info('before-quit proceed')
+    windowMainService?.captureSessionForQuit()
+    return
+  }
+  // First pass: ask every window's renderer before committing to the quit, so
+  // running sessions can be guarded. Veto cancels the quit entirely.
+  mainLogger.info('before-quit confirm')
+  e.preventDefault()
+  void (async () => {
+    const ok = await windowMainService.confirmQuit()
+    if (!ok) {
+      mainLogger.info('quit vetoed by renderer')
+      return
+    }
+    windowMainService.captureSessionForQuit()
+    app.quit()
+  })()
 })
 
 app.on('will-quit', () => {

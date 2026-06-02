@@ -13,6 +13,7 @@ import {
   DisposableStore,
   Emitter,
   localize,
+  ShutdownReason,
   URI,
   type Event,
   type IOpenWindowInfo,
@@ -20,6 +21,7 @@ import {
 } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
 import { bootstrapWindowIpc } from '../../ipc/registerMainServices.js'
+import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 import { MainHostService } from '../host/hostMainService.js'
 import { MainWindowsService } from './windowsMainService.js'
 import { MainLogChannelService } from '../log/mainLogChannelService.js'
@@ -66,6 +68,8 @@ export interface IWindowMainService {
   getOpenWindowInfos(): IOpenWindowInfo[]
   openWindowForFolder(folder?: URI): Promise<void>
   captureSessionForQuit(): void
+  confirmQuit(): Promise<boolean>
+  isQuitConfirmed(): boolean
   dispose(): void
 }
 
@@ -73,6 +77,7 @@ interface WindowEntry {
   readonly win: BrowserWindow
   readonly workspace: WorkspaceMainService
   readonly disposables: DisposableStore
+  readonly rendererLifecycle: IRendererLifecycleService
 }
 
 export interface WindowMainServiceOptions {
@@ -96,6 +101,12 @@ const SESSION_PERSIST_DEBOUNCE_MS = 300
 export class WindowMainService implements IWindowMainService {
   private readonly _windows = new Map<number, WindowEntry>()
   private _quitting = false
+  /** Set once a quit has been confirmed (renderer cleared, or a restart path
+   *  already confirmed) so before-quit doesn't prompt a second time. */
+  private _quitConfirmed = false
+  /** Window ids cleared to close — set after a confirmed close/quit so the
+   *  close handler bypasses the renderer veto round-trip on the second pass. */
+  private readonly _allowClose = new Set<number>()
   private _sessionPersistTimer: ReturnType<typeof setTimeout> | null = null
 
   private readonly _onDidChangeWindows = new Emitter<void>()
@@ -183,6 +194,10 @@ export class WindowMainService implements IWindowMainService {
         },
         logService.createLogger({ id: 'host', name: 'Host' }),
         rendererUrl !== undefined || e2eEnabled,
+        {
+          getRendererLifecycle: () => this._windows.get(win.id)?.rendererLifecycle,
+          onConfirmedQuit: () => this.markQuitConfirmed(),
+        },
       ),
     )
     const logChannel = new MainLogChannelService(logService)
@@ -194,7 +209,8 @@ export class WindowMainService implements IWindowMainService {
       userData,
     }
 
-    disposables.add(bootstrapWindowIpc(win, appServices, windowServices, this._windowsService))
+    const ipc = bootstrapWindowIpc(win, appServices, windowServices, this._windowsService)
+    disposables.add(ipc.disposable)
 
     // Persist the session whenever this window's workspace or geometry changes.
     disposables.add(
@@ -206,19 +222,34 @@ export class WindowMainService implements IWindowMainService {
     disposables.add(trackWindowState(win, () => this._scheduleSessionPersist()))
     disposables.add(observeDevToolsState(win, () => this._scheduleSessionPersist()))
 
-    const entry: WindowEntry = { win, workspace, disposables }
+    const entry: WindowEntry = {
+      win,
+      workspace,
+      disposables,
+      rendererLifecycle: ipc.rendererLifecycle,
+    }
     this._windows.set(win.id, entry)
     logger.info(`createWindow created id=${win.id}`)
     this._scheduleSessionPersist()
     this._onDidChangeWindows.fire()
 
-    // Flush pending workspace writes before tearing the window down, otherwise
-    // debounced persistence (e.g. editor-group state) can be lost on close.
-    win.on('close', () => {
-      void windowStorage.flush().finally(() => disposables.dispose())
+    // Closing a window: unless already cleared (single close confirmed, or quit
+    // confirmed upstream in before-quit), ask the renderer first so running
+    // sessions can be guarded. The renderer being unreachable must never wedge
+    // the close — default to proceeding.
+    win.on('close', (e) => {
+      if (this._allowClose.has(win.id)) {
+        // Cleared: flush pending workspace writes before teardown, otherwise
+        // debounced persistence (e.g. editor-group state) can be lost on close.
+        void windowStorage.flush().finally(() => disposables.dispose())
+        return
+      }
+      e.preventDefault()
+      void this._confirmAndClose(entry)
     })
     win.on('closed', () => {
       this._windows.delete(win.id)
+      this._allowClose.delete(win.id)
       logger.info(`closed id=${win.id}`)
       this._onDidChangeWindows.fire()
       // Persist the remaining windows when the user closes one of several. When
@@ -338,6 +369,51 @@ export class WindowMainService implements IWindowMainService {
   captureSessionForQuit(): void {
     this._quitting = true
     if (this._windows.size > 0) void this._persistSessionNow()
+  }
+
+  /**
+   * Ask the renderer whether the app may quit. Polls every window's lifecycle
+   * veto chain; a single veto aborts the quit. On success, marks every window
+   * as cleared so their close handlers bypass the per-window confirm.
+   */
+  async confirmQuit(): Promise<boolean> {
+    for (const { win, rendererLifecycle } of this._windows.values()) {
+      if (win.isDestroyed()) continue
+      if (!(await this._canProceed(rendererLifecycle, ShutdownReason.Quit))) return false
+    }
+    this.markQuitConfirmed()
+    return true
+  }
+
+  isQuitConfirmed(): boolean {
+    return this._quitConfirmed
+  }
+
+  /** Commit to quitting: skip further before-quit prompts and let every window's
+   *  close handler bypass the per-window confirm. */
+  markQuitConfirmed(): void {
+    this._quitConfirmed = true
+    for (const id of this._windows.keys()) this._allowClose.add(id)
+  }
+
+  /** Run the renderer veto round-trip for a single window close, then close. */
+  private async _confirmAndClose(entry: WindowEntry): Promise<void> {
+    const proceed = await this._canProceed(entry.rendererLifecycle, ShutdownReason.CloseWindow)
+    if (!proceed) return
+    this._allowClose.add(entry.win.id)
+    if (!entry.win.isDestroyed()) entry.win.close()
+  }
+
+  /** Ask the renderer; treat an unreachable renderer / error as "proceed". */
+  private async _canProceed(
+    rendererLifecycle: IRendererLifecycleService,
+    reason: ShutdownReason,
+  ): Promise<boolean> {
+    try {
+      return await rendererLifecycle.confirmShutdown(reason)
+    } catch {
+      return true
+    }
   }
 
   /**

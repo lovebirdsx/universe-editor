@@ -9,6 +9,7 @@ import { app, dialog, shell, nativeImage, Notification, type BrowserWindow } fro
 import {
   Emitter,
   NullLogger,
+  ShutdownReason,
   URI,
   type Event,
   type ExternalTerminalKind,
@@ -22,6 +23,14 @@ import {
   type IVersionInfo,
   type UriComponents,
 } from '@universe-editor/platform'
+import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
+
+/** Hooks letting restart consult the renderer veto chain and skip a redundant
+ *  before-quit confirm once the relaunch path is committed. */
+export interface RestartHooks {
+  getRendererLifecycle?: () => IRendererLifecycleService | undefined
+  onConfirmedQuit?: () => void
+}
 
 export class MainHostService implements IHostServiceWire, IDisposable {
   declare readonly _serviceBrand: undefined
@@ -38,6 +47,7 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     private readonly _logger: ILogger = new NullLogger(),
     /** Reload the window instead of relaunching the app on restart (dev/E2E). */
     private readonly _reloadOnRestart: boolean = false,
+    private readonly _restartHooks?: RestartHooks,
   ) {
     _win.on('maximize', this._onMaximize)
     _win.on('unmaximize', this._onUnmaximize)
@@ -70,20 +80,37 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     return Promise.resolve()
   }
 
-  restart(): Promise<void> {
+  async restart(): Promise<void> {
+    // Confirm with the renderer first so running sessions can be guarded — both
+    // the reload path (which never reaches before-quit) and the relaunch path.
+    const rendererLifecycle = this._restartHooks?.getRendererLifecycle?.()
+    if (rendererLifecycle) {
+      let canProceed = true
+      try {
+        canProceed = await rendererLifecycle.confirmShutdown(ShutdownReason.Reload)
+      } catch {
+        canProceed = true
+      }
+      if (!canProceed) {
+        this._logger.info(`restart vetoed by renderer id=${this._win.id}`)
+        return
+      }
+    }
+
     // In dev mode (Vite dev server) or E2E mode, reload the current window.
     // In E2E mode, relaunch would start a new process that Playwright can't follow,
     // and sessionStorage wouldn't survive across process boundaries.
     if (this._reloadOnRestart) {
       this._win.reload()
       this._logger.info(`restart reloadWindow id=${this._win.id}`)
-      return Promise.resolve()
+      return
     }
 
     this._logger.info('restart relaunchApp')
+    // Already confirmed above; mark the quit so before-quit doesn't re-prompt.
+    this._restartHooks?.onConfirmedQuit?.()
     app.relaunch()
     app.quit()
-    return Promise.resolve()
   }
 
   toggleDevTools(): Promise<void> {
