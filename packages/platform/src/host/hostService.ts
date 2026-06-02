@@ -91,6 +91,31 @@ export interface IHostService {
    * On macOS / Linux, `kind` is ignored — the system default terminal is used.
    */
   openTerminal(cwd: string, kind?: ExternalTerminalKind): Promise<void>
+
+  /**
+   * Show an OS-level desktop notification. By default it is suppressed while the
+   * window is focused (`onlyWhenBlurred`), so callers can fire it unconditionally
+   * and rely on the host to avoid interrupting an active user. The returned
+   * promise settles when the user clicks the notification or it is dismissed.
+   */
+  notify(opts: ISystemNotificationOptions): Promise<ISystemNotificationResult>
+
+  /** Bring the window to the foreground (restoring it from minimized if needed). */
+  focusWindow(): Promise<void>
+}
+
+export interface ISystemNotificationOptions {
+  readonly title: string
+  readonly body: string
+  /** Only show while the window is blurred (default true). */
+  readonly onlyWhenBlurred?: boolean
+}
+
+export interface ISystemNotificationResult {
+  /** Whether the notification was actually shown (false if gated by focus / unsupported). */
+  readonly shown: boolean
+  /** Whether the user clicked the notification body. */
+  readonly clicked: boolean
 }
 
 export interface IShowOpenFileOptions {

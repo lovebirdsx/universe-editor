@@ -116,6 +116,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'MCP servers forwarded to the agent on session/new, keyed by server name. stdio: `{ "fs": { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "."], "env": {} } }`. http/sse: `{ "docs": { "type": "http", "url": "https://…", "headers": {} } }`. Transports the agent does not support (http/sse) are skipped with a warning; env/header values are stored in plain text — keep secrets in real environment variables.',
             ),
           },
+          'acp.notifications.enabled': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.acp.notifications.enabled',
+              'Show an OS desktop notification when an agent needs attention (permission request, question, task completed, or error) while the editor window is not focused. Clicking the notification focuses the window and jumps to that session.',
+            ),
+          },
         },
       }),
     )

@@ -45,6 +45,7 @@ import {
   AgentsStatusBarContribution,
   AgentsViewContainerContribution,
 } from './AgentsContributions.js'
+import { AgentNotificationContribution } from './AgentNotificationContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -291,6 +292,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsSessionEditorLifecycle',
   AgentsSessionEditorLifecycleContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// OS-level desktop notifications when an Agent session needs attention while the
+// window is blurred. AfterRestore so the host service + Agents UI are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentNotification',
+  AgentNotificationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

@@ -5,7 +5,7 @@
 
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { app, dialog, shell, type BrowserWindow } from 'electron'
+import { app, dialog, shell, Notification, type BrowserWindow } from 'electron'
 import {
   Emitter,
   NullLogger,
@@ -17,6 +17,8 @@ import {
   type IHostServiceWire,
   type IShowOpenFileOptions,
   type IShowSaveFileOptions,
+  type ISystemNotificationOptions,
+  type ISystemNotificationResult,
   type UriComponents,
 } from '@universe-editor/platform'
 
@@ -214,6 +216,65 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       throw err
     }
     return Promise.resolve()
+  }
+
+  notify(opts: ISystemNotificationOptions): Promise<ISystemNotificationResult> {
+    const gated = opts.onlyWhenBlurred !== false
+    if (gated && !this._win.isDestroyed() && this._win.isFocused()) {
+      this._logger.debug(`notify skipped (window focused) title=${opts.title}`)
+      return Promise.resolve({ shown: false, clicked: false })
+    }
+    if (!Notification.isSupported()) {
+      this._logger.debug('notify skipped (notifications unsupported)')
+      return Promise.resolve({ shown: false, clicked: false })
+    }
+
+    const notification = new Notification({ title: opts.title, body: opts.body })
+    this._requestAttention()
+    this._logger.info(`notify shown title=${opts.title}`)
+
+    return new Promise<ISystemNotificationResult>((resolve) => {
+      let settled = false
+      const settle = (clicked: boolean): void => {
+        if (settled) return
+        settled = true
+        resolve({ shown: true, clicked })
+      }
+      notification.on('click', () => settle(true))
+      notification.on('close', () => settle(false))
+      notification.on('failed', () => {
+        if (settled) return
+        settled = true
+        resolve({ shown: false, clicked: false })
+      })
+      notification.show()
+    })
+  }
+
+  focusWindow(): Promise<void> {
+    if (this._win.isDestroyed()) return Promise.resolve()
+    this._clearAttention()
+    if (this._win.isMinimized()) this._win.restore()
+    this._win.show()
+    this._win.focus()
+    this._logger.debug(`focusWindow id=${this._win.id}`)
+    return Promise.resolve()
+  }
+
+  private _requestAttention(): void {
+    if (this._win.isDestroyed()) return
+    if (process.platform === 'darwin') {
+      app.dock?.bounce('informational')
+    } else {
+      this._win.flashFrame(true)
+    }
+  }
+
+  private _clearAttention(): void {
+    if (this._win.isDestroyed()) return
+    if (process.platform !== 'darwin') {
+      this._win.flashFrame(false)
+    }
   }
 
   dispose(): void {

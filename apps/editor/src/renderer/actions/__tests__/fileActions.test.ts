@@ -185,6 +185,10 @@ class FakeHostService implements IHostServiceType {
   async openUserDataFolder() {}
   async openNewWindow() {}
   async openTerminal() {}
+  async notify() {
+    return { shown: false, clicked: false }
+  }
+  async focusWindow() {}
 }
 
 class FakeCommandService implements ICommandServiceType {

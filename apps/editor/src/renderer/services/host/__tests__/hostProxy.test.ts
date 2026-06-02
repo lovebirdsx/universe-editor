@@ -75,6 +75,12 @@ class FakeHost implements IHostServiceWire {
   openTerminal(): Promise<void> {
     return Promise.resolve()
   }
+  notify(): Promise<{ shown: boolean; clicked: boolean }> {
+    return Promise.resolve({ shown: false, clicked: false })
+  }
+  focusWindow(): Promise<void> {
+    return Promise.resolve()
+  }
   fire(v: boolean): void {
     this._emitter.fire(v)
   }

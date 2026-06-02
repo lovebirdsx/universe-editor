@@ -4,15 +4,43 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { relaunch, quit, showSaveDialog, showOpenDialog } = vi.hoisted(() => ({
+const { relaunch, quit, showSaveDialog, showOpenDialog, notificationState } = vi.hoisted(() => ({
   relaunch: vi.fn(),
   quit: vi.fn(),
   showSaveDialog: vi.fn(),
   showOpenDialog: vi.fn(),
+  notificationState: {
+    supported: true,
+    instances: [] as Array<{
+      opts: { title: string; body: string }
+      emit(event: 'click' | 'close' | 'failed'): void
+      shown: boolean
+    }>,
+  },
 }))
 
 vi.mock('electron', async () => {
   const actual = await vi.importActual<typeof import('electron')>('electron')
+  class NotificationMock {
+    static isSupported(): boolean {
+      return notificationState.supported
+    }
+    private readonly _handlers: Record<string, Array<() => void>> = {}
+    shown = false
+    constructor(readonly opts: { title: string; body: string }) {
+      notificationState.instances.push(this)
+    }
+    on(event: string, handler: () => void): this {
+      ;(this._handlers[event] ??= []).push(handler)
+      return this
+    }
+    show(): void {
+      this.shown = true
+    }
+    emit(event: 'click' | 'close' | 'failed'): void {
+      this._handlers[event]?.forEach((h) => h())
+    }
+  }
   return {
     ...actual,
     app: {
@@ -23,6 +51,7 @@ vi.mock('electron', async () => {
       showSaveDialog,
       showOpenDialog,
     },
+    Notification: NotificationMock,
   }
 })
 
@@ -38,20 +67,32 @@ interface FakeWin {
   on(event: string, handler: () => void): void
   removeListener(event: string, handler: () => void): void
   isDestroyed(): boolean
+  isFocused(): boolean
+  isMinimized(): boolean
+  restore(): void
+  show(): void
+  focus(): void
+  flashFrame(flag: boolean): void
+  readonly id: number
   readonly webContents: { toggleDevTools(): void }
   __fire(event: 'maximize' | 'unmaximize'): void
+  __setFocused(focused: boolean): void
 }
 
 function makeFakeWin(): FakeWin & { calls: string[] } {
   const calls: string[] = []
   const listeners: Record<string, (() => void)[]> = { maximize: [], unmaximize: [] }
   let maximized = false
+  let focused = false
+  let minimized = false
   const fake: FakeWin & { calls: string[] } = {
     calls,
+    id: 1,
     isMaximized() {
       return maximized
     },
     minimize() {
+      minimized = true
       calls.push('minimize')
     },
     maximize() {
@@ -69,6 +110,26 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     },
     reload() {
       calls.push('reload')
+    },
+    isFocused() {
+      return focused
+    },
+    isMinimized() {
+      return minimized
+    },
+    restore() {
+      minimized = false
+      calls.push('restore')
+    },
+    show() {
+      calls.push('show')
+    },
+    focus() {
+      focused = true
+      calls.push('focus')
+    },
+    flashFrame(flag) {
+      calls.push(`flashFrame:${flag}`)
     },
     webContents: {
       toggleDevTools() {
@@ -91,6 +152,9 @@ function makeFakeWin(): FakeWin & { calls: string[] } {
     __fire(event) {
       listeners[event]?.forEach((h) => h())
     },
+    __setFocused(value) {
+      focused = value
+    },
   }
   return fake
 }
@@ -101,6 +165,8 @@ describe('MainHostService', () => {
     quit.mockReset()
     showSaveDialog.mockReset()
     showOpenDialog.mockReset()
+    notificationState.supported = true
+    notificationState.instances.length = 0
     vi.unstubAllEnvs()
   })
 
@@ -226,5 +292,82 @@ describe('MainHostService', () => {
     const { normalize } = await import('node:path')
     expect(opts.defaultPath).toBe(normalize('F:/test/test/'))
     service.dispose()
+  })
+
+  describe('notify', () => {
+    it('is suppressed while the window is focused (default gating)', async () => {
+      const win = makeFakeWin()
+      win.__setFocused(true)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      const result = await service.notify({ title: 'Done', body: 'finished' })
+      expect(result).toEqual({ shown: false, clicked: false })
+      expect(notificationState.instances).toHaveLength(0)
+      service.dispose()
+    })
+
+    it('shows when blurred and resolves clicked:true on click', async () => {
+      const win = makeFakeWin()
+      win.__setFocused(false)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      const pending = service.notify({ title: 'Permission', body: 'needs you' })
+      expect(notificationState.instances).toHaveLength(1)
+      const notif = notificationState.instances[0]!
+      expect(notif.opts).toEqual({ title: 'Permission', body: 'needs you' })
+      notif.emit('click')
+      await expect(pending).resolves.toEqual({ shown: true, clicked: true })
+      service.dispose()
+    })
+
+    it('resolves clicked:false when dismissed', async () => {
+      const win = makeFakeWin()
+      win.__setFocused(false)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      const pending = service.notify({ title: 'Q', body: 'asks you' })
+      notificationState.instances[0]!.emit('close')
+      await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+      service.dispose()
+    })
+
+    it('still shows when focused if onlyWhenBlurred is false', async () => {
+      const win = makeFakeWin()
+      win.__setFocused(true)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      const pending = service.notify({ title: 'X', body: 'y', onlyWhenBlurred: false })
+      expect(notificationState.instances).toHaveLength(1)
+      notificationState.instances[0]!.emit('close')
+      await expect(pending).resolves.toEqual({ shown: true, clicked: false })
+      service.dispose()
+    })
+
+    it('degrades gracefully when notifications are unsupported', async () => {
+      notificationState.supported = false
+      const win = makeFakeWin()
+      win.__setFocused(false)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      const result = await service.notify({ title: 'X', body: 'y' })
+      expect(result).toEqual({ shown: false, clicked: false })
+      expect(notificationState.instances).toHaveLength(0)
+      service.dispose()
+    })
+  })
+
+  describe('focusWindow', () => {
+    it('restores a minimized window and brings it to the foreground', async () => {
+      const win = makeFakeWin()
+      win.minimize()
+      win.calls.length = 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const service = new MainHostService(win as any)
+      await service.focusWindow()
+      expect(win.calls).toContain('restore')
+      expect(win.calls).toContain('show')
+      expect(win.calls).toContain('focus')
+      service.dispose()
+    })
   })
 })
