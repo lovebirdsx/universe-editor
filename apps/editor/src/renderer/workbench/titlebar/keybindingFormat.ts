@@ -5,6 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { KeybindingsRegistry } from '@universe-editor/platform'
+import { getMonacoDefaultKeybinding } from '../editor/monaco/monacoActionsBridge.js'
 
 export function formatKey(key: string): string {
   return key
@@ -33,5 +34,10 @@ export function resolveShortcut(command: string): string | undefined {
     if (kb.chords) return formatChord(kb.chords)
     if (kb.key !== undefined) return formatKey(kb.key)
   }
+  // Monaco-owned commands (undo/redo/clipboard/selectAll) don't register their
+  // defaults with KeybindingsRegistry; fall back to the bridge's side-table.
+  const monacoDefault = getMonacoDefaultKeybinding(command)
+  if (monacoDefault?.chords) return formatChord(monacoDefault.chords)
+  if (monacoDefault?.key !== undefined) return formatKey(monacoDefault.key)
   return undefined
 }

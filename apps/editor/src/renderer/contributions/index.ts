@@ -34,6 +34,7 @@ import { NotificationStatusContribution } from './NotificationStatusContribution
 import { UpdateContribution } from './UpdateContribution.js'
 import { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 import { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
+import { EditMenuContribution } from './EditMenuContribution.js'
 import { LogLevelContribution } from './LogLevelContribution.js'
 import { LogTailContribution } from './LogTailContribution.js'
 import { AggregatedLogChannelContribution } from './AggregatedLogChannelContribution.js'
@@ -232,6 +233,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerMenu',
   ExplorerMenuContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Edit menu (Undo/Redo/Cut/Copy/Paste/Select All/Find/Replace). BlockStartup so
+// the menubar structure is in place before the title bar first renders.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.editMenu',
+  EditMenuContribution,
   WorkbenchPhase.BlockStartup,
 )
 

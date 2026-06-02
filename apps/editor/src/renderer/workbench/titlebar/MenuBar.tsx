@@ -81,10 +81,11 @@ interface MenuGroupProps {
   menuId: MenuId
   isOpen: boolean
   onToggle: () => void
+  onHover: () => void
   onClose: () => void
 }
 
-function MenuGroup({ label, menuId, isOpen, onToggle, onClose }: MenuGroupProps) {
+function MenuGroup({ label, menuId, isOpen, onToggle, onHover, onClose }: MenuGroupProps) {
   const sections = useMenuItems(menuId)
   const commandService = useService(ICommandService)
 
@@ -101,6 +102,7 @@ function MenuGroup({ label, menuId, isOpen, onToggle, onClose }: MenuGroupProps)
       <div
         className={`${styles['menu-label']} ${isOpen ? styles['open'] : ''}`}
         onClick={onToggle}
+        onMouseEnter={onHover}
         role="menuitem"
         aria-haspopup="true"
         aria-expanded={isOpen}
@@ -150,6 +152,11 @@ export function MenuBar() {
     setOpenMenu((prev) => (prev === label ? null : label))
   }, [])
   const handleClose = useCallback(() => setOpenMenu(null), [])
+  // Once any menu is open, hovering a sibling top-level menu switches to it
+  // (standard menubar behavior). Hovering with nothing open does not expand.
+  const handleHover = useCallback((label: string) => {
+    setOpenMenu((prev) => (prev !== null && prev !== label ? label : prev))
+  }, [])
 
   return (
     <nav
@@ -164,6 +171,7 @@ export function MenuBar() {
           menuId={entry.menuId}
           isOpen={openMenu === entry.label}
           onToggle={() => handleToggle(entry.label)}
+          onHover={() => handleHover(entry.label)}
           onClose={handleClose}
         />
       ))}

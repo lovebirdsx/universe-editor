@@ -93,6 +93,27 @@ function firstPrimaryOf(kbOpts: IMonacoEditorAction['_kbOpts']): number | undefi
   return undefined
 }
 
+// Modifier bit Monaco packs into a keybinding for Ctrl/Cmd (see
+// monacoKeybindingDecoder). KeyCode values for letters are lifted from the same
+// decoder's KEYCODE_TO_TOKEN table (z=56, y=55, a=31).
+const CTRL = 0x0800
+
+// Core editor commands Monaco registers outside the EditorAction registry, so
+// the loop above never sees them. Mirror them by hand so undo/redo/select-all
+// show up in our CommandsRegistry (Edit menu, Keyboard Shortcuts editor). Their
+// default keys go into the side-table only, leaving Monaco's own dispatch in
+// charge of the actual key handling.
+const CORE_COMMANDS: readonly CoreCommand[] = [
+  { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: CTRL | 56 },
+  { id: 'redo', label: 'Redo', nlsKey: 'redo', primary: CTRL | 55 },
+  {
+    id: 'editor.action.selectAll',
+    label: 'Select All',
+    nlsKey: 'editor.action.selectAll',
+    primary: CTRL | 31,
+  },
+]
+
 /**
  * Main entrypoint. Calls into monaco's internal modules — must run AFTER
  * `import('monaco-editor')` has resolved.
@@ -101,7 +122,7 @@ export async function bridgeAllMonacoActions(): Promise<IDisposable> {
   const mod = (await import('monaco-editor/esm/vs/editor/browser/editorExtensions.js')) as {
     EditorExtensionsRegistry: IMonacoEditorExtensionsRegistry
   }
-  return markAsSingleton(bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, []))
+  return markAsSingleton(bridgeMonacoActionsForTests(mod.EditorExtensionsRegistry, CORE_COMMANDS))
 }
 
 /**
