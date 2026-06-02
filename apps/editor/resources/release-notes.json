@@ -1,1 +1,45 @@
-[]
+[
+  {
+    "version": "0.1.4",
+    "date": "2026-06-02",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "编辑器进行关闭，切换工作区等操作时，如果有session在运行，会提示",
+          "Session标题显示对应厂商的图标",
+          "首次启动，加强Agent功能的表达",
+          "菜单栏弹出体验优化，避免换行，Edit菜单功能完善"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复文件夹展开项数过多时，项之间间距被压缩"
+        ]
+      }
+    ]
+  },
+  {
+    "version": "0.1.3",
+    "date": "2026-06-02",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "加入storage，提升layout管理"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "关闭 editor group 后焦点丢失的回归缺陷"
+        ]
+      }
+    ]
+  }
+]
