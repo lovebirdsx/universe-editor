@@ -12,6 +12,19 @@
     "**/.DS_Store": true,
     "**/Thumbs.db": true
   },
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/dist/**": true,
+    "**/.turbo/**": true,
+    "**/release/**": true,
+    "**/out/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/dist": true,
+    "**/.turbo": true
+  },
+  "js/ts.tsserver.maxMemory": 4096,
   "files.eol": "\n",
   "jestrunner.enableTestExplorer": true,
   "editor.defaultFormatter": "esbenp.prettier-vscode",
