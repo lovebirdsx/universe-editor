@@ -47,6 +47,20 @@ test.describe('@p1 editor tab drag-and-drop', () => {
     const betaTab = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
     await expect(betaTab).toBeVisible({ timeout: 3000 })
 
+    // Wait until the first group's body has a real layout box before dropping on
+    // its center. On headless CI the freshly-split group can briefly report a
+    // zero-area rect, which would otherwise make the center drop misfire.
+    const firstBody = workbench.page.locator('[data-testid="editor-group-body"]').nth(0)
+    await expect
+      .poll(
+        async () => {
+          const box = await firstBody.boundingBox()
+          return box ? Math.min(box.width, box.height) : 0
+        },
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(0)
+
     // Dispatch native HTML5 drag events directly: dragstart on the source tab,
     // then drop onto the *body* (center) of the first group — equivalent to a
     // tab-bar drop visually but exercises the body drop branch. We intentionally

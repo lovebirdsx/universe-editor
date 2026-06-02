@@ -67,8 +67,14 @@ export function detectBodyDropZone(
   clientX: number,
   clientY: number,
 ): BodyDropZone {
+  // A zero-area body (layout not settled yet — observed transiently on headless
+  // CI right after a split) can't be subdivided into edge bands; treat any drop
+  // on it as a plain center drop rather than producing NaN distances that would
+  // misfire as a 'bottom' edge split.
+  if (!(rect.width > 0) || !(rect.height > 0)) return 'center'
   const dx = (clientX - rect.left) / rect.width
   const dy = (clientY - rect.top) / rect.height
+  if (!Number.isFinite(dx) || !Number.isFinite(dy)) return 'center'
   const distLeft = dx
   const distRight = 1 - dx
   const distTop = dy

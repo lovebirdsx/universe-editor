@@ -138,6 +138,14 @@ describe('detectBodyDropZone', () => {
   it('returns "bottom" near the bottom edge', () => {
     expect(detectBodyDropZone(rect, 50, 95)).toBe('bottom')
   })
+  it('returns "center" for a degenerate (zero-area) rect instead of NaN-driven edge', () => {
+    // Observed transiently on headless CI right after a split: the body has not
+    // been laid out yet and getBoundingClientRect reports 0 width/height. A
+    // center drop must move the editor, not split into a new group.
+    expect(detectBodyDropZone({ left: 0, top: 0, width: 0, height: 0 }, 0, 0)).toBe('center')
+    expect(detectBodyDropZone({ left: 10, top: 20, width: 0, height: 100 }, 10, 70)).toBe('center')
+    expect(detectBodyDropZone({ left: 10, top: 20, width: 100, height: 0 }, 60, 20)).toBe('center')
+  })
 })
 
 describe('EditorGroupView body drop', () => {
