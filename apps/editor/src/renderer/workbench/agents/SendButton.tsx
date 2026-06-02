@@ -9,8 +9,6 @@ const CENTER = SIZE / 2
 const STROKE = 2
 const RADIUS = SIZE / 2 - STROKE / 2 - 1
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS
-const SPIN_RADIUS = Math.max(RADIUS - 1, 1)
-const SPIN_CIRCUMFERENCE = 2 * Math.PI * SPIN_RADIUS
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 0
@@ -124,12 +122,12 @@ export function SendButton({
             className={styles['sendButtonSpinArc']}
             cx={CENTER}
             cy={CENTER}
-            r={SPIN_RADIUS}
+            r={RADIUS}
             fill="none"
             stroke="var(--color-button-bg, #0e639c)"
             strokeWidth={STROKE}
             strokeLinecap="butt"
-            strokeDasharray={`${SPIN_CIRCUMFERENCE * 0.25} ${SPIN_CIRCUMFERENCE * 0.75}`}
+            strokeDasharray={`${CIRCUMFERENCE * 0.25} ${CIRCUMFERENCE * 0.75}`}
           />
         </svg>
       ) : null}
