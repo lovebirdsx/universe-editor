@@ -38,6 +38,7 @@
   display: flex;
   align-items: center;
   height: 22px;
+  flex-shrink: 0;
   padding-right: 8px;
   cursor: pointer;
   white-space: nowrap;
