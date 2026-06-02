@@ -134,13 +134,13 @@ describe('WindowTitleContribution', () => {
     const { session, statusObs } = makeSessionStub('s1', '修复登录Bug', 'running')
 
     acp.activeSession.set(session, undefined)
-    expect(document.title).toBe('myProject — 🟢 修复登录Bug')
+    expect(document.title).toBe('myProject — ● 修复登录Bug')
 
     statusObs.set('idle', undefined)
-    expect(document.title).toBe('myProject — ⚪ 修复登录Bug')
+    expect(document.title).toBe('myProject — ○ 修复登录Bug')
 
     statusObs.set('errored', undefined)
-    expect(document.title).toBe('myProject — 🔴 修复登录Bug')
+    expect(document.title).toBe('myProject — ✕ 修复登录Bug')
 
     contribution.dispose()
   })
