@@ -157,7 +157,7 @@ export class SelectAgentAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentAction.ID,
-      title: localize('action.agent.selectAgent', 'Select Default Agent…'),
+      title: localize('action.agent.selectAgent', 'Choose Agent…'),
       category: CATEGORY,
       f1: true,
     })

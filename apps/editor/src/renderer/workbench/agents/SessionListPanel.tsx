@@ -50,8 +50,8 @@ export function SessionListPanel() {
           className={styles['toolbarButton']}
           onClick={() => void commands.executeCommand('workbench.action.agent.selectAgent')}
           data-testid="acp-select-agent"
-          title={localize('acp.selectAgent', 'Switch agent…')}
-          aria-label={localize('acp.selectAgent', 'Switch agent…')}
+          title={localize('acp.selectAgent', 'Choose agent…')}
+          aria-label={localize('acp.selectAgent', 'Choose agent…')}
         >
           <span aria-hidden="true">
             <Bot size={14} strokeWidth={1.75} />
