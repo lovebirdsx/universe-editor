@@ -54,8 +54,17 @@ export class ElectronProtocol implements IMessagePassingProtocol {
 
   send(data: Uint8Array): void {
     if (this._disposed || this._webContents.isDestroyed()) return
-    // Electron's structured clone serializes Buffer well; wrap to avoid losing typed-array identity.
-    this._webContents.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
+    try {
+      // Electron's structured clone serializes Buffer well; wrap to avoid losing typed-array identity.
+      this._webContents.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
+    } catch {
+      // The render frame can be disposed during reload/navigation while the
+      // WebContents object is still alive (isDestroyed() stays false and the
+      // 'destroyed' event never fires). Socket-driven sends then race against
+      // the dead frame and Electron throws "Render frame was disposed before
+      // WebFrameMain could be accessed". The message is bound for a frame that
+      // no longer exists, so dropping it is correct.
+    }
   }
 
   disconnect(): void {
