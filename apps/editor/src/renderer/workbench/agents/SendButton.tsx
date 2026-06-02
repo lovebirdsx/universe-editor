@@ -1,4 +1,4 @@
-import { ArrowUp, Square } from 'lucide-react'
+import { ArrowUp } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { useObservable } from '../useService.js'
 import type { IAcpSession } from '../../services/acp/acpSession.js'
@@ -18,23 +18,22 @@ function clamp01(n: number): number {
 }
 
 /**
- * Circular Send / Stop control. The outer ring renders the session's
- * context-window usage as a progress arc; the center holds a send icon while
- * idle and a stop square while the turn is running (with a spinning overlay
- * arc to signal activity). Hovering shows usage details via the native title.
+ * Circular Send control. The outer ring renders the session's context-window
+ * usage as a progress arc; the center holds a send icon. While a turn is running
+ * a spinning overlay arc signals activity — but the button stays a send button
+ * so the user can dispatch a steering message mid-turn. Interrupting the turn is
+ * handled separately by the StopButton / Esc.
  */
 export function SendButton({
   session,
   running,
   disabled,
   onSend,
-  onCancel,
 }: {
   session: IAcpSession
   running: boolean
   disabled: boolean
   onSend: () => void
-  onCancel: () => void
 }) {
   const usage = useObservable(session.usage)
   const hasUsage = usage !== undefined && usage.size > 0
@@ -45,7 +44,7 @@ export function SendButton({
   const parts: string[] = []
   parts.push(
     running
-      ? localize('acp.send.running', 'Running · click to stop')
+      ? localize('acp.send.running', 'Running · send to steer')
       : localize('acp.send.idle', 'Send (Enter)'),
   )
   if (hasUsage) {
@@ -69,9 +68,9 @@ export function SendButton({
   }
   const title = parts.join('\n')
 
-  // Idle + empty input is the only non-interactive state. Running is always
-  // clickable so the user can stop the turn.
-  const inert = !running && disabled
+  // Empty input is the only non-interactive state — the button always sends,
+  // even while a turn is running (mid-turn steering).
+  const inert = disabled
 
   return (
     <button
@@ -80,8 +79,8 @@ export function SendButton({
       disabled={inert}
       title={title}
       aria-label={title}
-      onClick={() => (running ? onCancel() : inert ? undefined : onSend())}
-      data-testid={running ? 'acp-prompt-cancel' : 'acp-prompt-send'}
+      onClick={() => (inert ? undefined : onSend())}
+      data-testid="acp-prompt-send"
     >
       <svg
         className={styles['sendButtonRing']}
@@ -135,7 +134,7 @@ export function SendButton({
         </svg>
       ) : null}
       <span className={styles['sendButtonIcon']} aria-hidden="true">
-        {running ? <Square size={11} fill="currentColor" /> : <ArrowUp size={16} />}
+        <ArrowUp size={16} />
       </span>
     </button>
   )

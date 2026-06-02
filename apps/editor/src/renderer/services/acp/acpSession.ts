@@ -303,8 +303,10 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _timeline: TimelineItem[] = []
   private _msgCounter = 0
 
-  /** Abort controller for the in-flight `session/prompt`. */
-  private _activeAbort: AbortController | undefined
+  /** Abort controllers for all in-flight `session/prompt` calls (concurrent steering). */
+  private readonly _inFlight = new Set<AbortController>()
+  /** Latches 'errored' once all in-flight settle if any of them failed. */
+  private _sawError = false
 
   // 16ms batching: collapse bursts of session/update chunks into one
   // observer notification per frame. Underlying values still update
@@ -382,7 +384,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._commitBatchedTx()
       this.status.set('closed', undefined)
       this._cancelPending()
-      this._activeAbort?.abort()
+      this._abortAllInFlight()
     }
     if (this._conn.conn.signal.aborted) {
       onClose()
@@ -487,7 +489,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
     this._appendMessage('user', text)
-    this.status.set('running', undefined)
     const prompt = composePromptBlocks(text, mentions ?? [])
     const params: PromptRequest = {
       sessionId: this.id,
@@ -496,7 +497,10 @@ export class AcpSession extends Disposable implements IAcpSession {
       prompt: prompt.length > 0 ? [...prompt] : [{ type: 'text', text }],
     }
     const abort = new AbortController()
-    this._activeAbort = abort
+    this._inFlight.add(abort)
+    // Status is derived from the in-flight set — never set directly per prompt,
+    // so N concurrent steering prompts stay 'running' until the last settles.
+    this._recomputeStatus()
     this._telemetry.publicLog('acp.prompt_sent', { sessionId: this.id })
     const abortPromise = new Promise<never>((_, reject) => {
       const onAbort = (): void => reject(new AcpAbortError())
@@ -505,16 +509,13 @@ export class AcpSession extends Disposable implements IAcpSession {
     })
     try {
       await Promise.race([this._conn.conn.prompt(params), abortPromise])
-      this._flushStream()
-      this.status.set('idle', undefined)
     } catch (err) {
-      this._flushStream()
       if (err instanceof AcpAbortError) {
-        this.status.set('idle', undefined)
-        this._appendMessage('agent', '[cancelled]')
+        // '[cancelled]' is appended once by cancelTurn — appending here would
+        // duplicate it when several concurrent prompts abort together.
         this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: this.id })
       } else {
-        this.status.set('errored', undefined)
+        this._sawError = true
         this._appendMessage('agent', `[error] ${(err as Error).message}`)
         this._telemetry.publicLogError('acp.prompt_failed', {
           sessionId: this.id,
@@ -522,17 +523,41 @@ export class AcpSession extends Disposable implements IAcpSession {
         })
       }
     } finally {
-      if (this._activeAbort === abort) this._activeAbort = undefined
+      this._inFlight.delete(abort)
+      // Only flush once the last in-flight prompt settles — flushing mid-turn
+      // would clear the streaming caret while another prompt is still emitting
+      // chunks, splitting its output into a fresh card.
+      if (this._inFlight.size === 0) this._flushStream()
+      this._recomputeStatus()
     }
   }
 
   async cancelTurn(): Promise<void> {
+    const had = this._inFlight.size > 0
     try {
       await this._conn.conn.cancel({ sessionId: this.id })
     } catch {
       // swallow — cancel is best-effort
     }
-    this._activeAbort?.abort()
+    // Snapshot before aborting: abort() synchronously triggers each prompt's
+    // finally, which deletes from the live set.
+    for (const a of [...this._inFlight]) a.abort()
+    if (had) this._appendMessage('agent', '[cancelled]')
+  }
+
+  private _recomputeStatus(): void {
+    if (this.status.get() === 'closed') return // closed is terminal
+    if (this._inFlight.size > 0) {
+      this.status.set('running', undefined)
+      return
+    }
+    this.status.set(this._sawError ? 'errored' : 'idle', undefined)
+    this._sawError = false
+  }
+
+  private _abortAllInFlight(): void {
+    for (const a of [...this._inFlight]) a.abort()
+    this._inFlight.clear()
   }
 
   private _maybeDeriveTitleFromPrompt(text: string): void {
@@ -546,7 +571,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   async close(): Promise<void> {
     this._commitBatchedTx()
     this.status.set('closed', undefined)
-    this._activeAbort?.abort()
+    this._abortAllInFlight()
     this._cancelPending()
     this._messages = []
     this._toolCalls = []

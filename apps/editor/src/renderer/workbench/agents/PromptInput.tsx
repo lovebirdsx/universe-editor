@@ -45,6 +45,7 @@ import { MentionPopover } from './MentionPopover.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
+import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import styles from './agents.module.css'
 
@@ -186,7 +187,7 @@ export function PromptInput({
 
   const submit = (e?: FormEvent | KeyboardEvent): void => {
     e?.preventDefault()
-    if (!text.trim() || running) return
+    if (!text.trim()) return
     const value = text
     const recorded = mentions
     setText('')
@@ -255,6 +256,15 @@ export function PromptInput({
         return
       }
     }
+    // Esc interrupts the running turn — but only when neither popover is open
+    // (those branches above consume Esc and return first to close themselves).
+    if (e.key === 'Escape') {
+      if (running) {
+        e.preventDefault()
+        void session.cancelTurn()
+      }
+      return
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit(e)
@@ -317,12 +327,12 @@ export function PromptInput({
       </div>
       <div className={styles['promptActions']}>
         <ConfigOptionsBar session={session} />
+        {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton
           session={session}
           running={running}
           disabled={!text.trim()}
           onSend={() => submit()}
-          onCancel={() => void session.cancelTurn()}
         />
       </div>
     </form>

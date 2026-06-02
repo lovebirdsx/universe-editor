@@ -220,6 +220,12 @@ function makeAgentDefaults(): AcpAgentDefaultsService {
 interface StubAgentOptions {
   /** When true, prompt() never resolves — used to exercise cancelTurn. */
   promptHangs?: boolean
+  /**
+   * When true, each prompt() returns a deferred whose resolve/reject is pushed
+   * to `promptDeferreds` — lets tests orchestrate the settle order of several
+   * concurrent (steering) prompts.
+   */
+  promptControl?: boolean
   /** When true, initialize() never resolves — used to exercise startup timeout. */
   initializeHangs?: boolean
   /** Advertised MCP transports; omitted means the agent supports none (stdio only). */
@@ -235,6 +241,11 @@ class StubAgent implements Agent {
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
+  /** Deferred controls for promptControl mode, one per in-flight prompt(). */
+  readonly promptDeferreds: Array<{
+    resolve: () => void
+    reject: (err: Error) => void
+  }> = []
 
   constructor(
     private readonly _agentSessionId: string,
@@ -263,6 +274,14 @@ class StubAgent implements Agent {
   prompt(params: PromptRequest): Promise<PromptResponse> {
     this.promptCalls.push(params)
     if (this._opts.promptHangs) return new Promise<never>(() => {})
+    if (this._opts.promptControl) {
+      return new Promise<PromptResponse>((resolve, reject) => {
+        this.promptDeferreds.push({
+          resolve: () => resolve({ stopReason: 'end_turn' } as unknown as PromptResponse),
+          reject,
+        })
+      })
+    }
     return Promise.resolve({ stopReason: 'end_turn' } as unknown as PromptResponse)
   }
 
@@ -679,6 +698,112 @@ describe('AcpSessionService', () => {
     expect(s.status.get()).toBe('idle')
     const msgs = s.messages.get()
     expect(msgs.at(-1)?.text).toBe('[cancelled]')
+  })
+
+  describe('concurrent steering prompts', () => {
+    const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 10))
+
+    function rebuildControlled(): void {
+      svc.dispose()
+      client = new FakeAcpClientService({ stubOptions: { promptControl: true } })
+      svc = new AcpSessionService(
+        client,
+        new FakeAgentRegistry(),
+        new FakeWorkspaceService(),
+        new ConfigurationService(),
+        notifications,
+        new NoopTelemetryService(),
+        permission,
+        new StubProgressService(),
+        new StubLoggerService(),
+        makeHistory(),
+        new FakeStorage(),
+        makeAgentDefaults(),
+        FAKE_HOST,
+      )
+    }
+
+    it('stays running until the last of several concurrent prompts settles', async () => {
+      rebuildControlled()
+      const s = await svc.createSession()
+      const conn = client.connected[0]!
+      const p1 = s.sendPrompt('one')
+      const p2 = s.sendPrompt('two')
+      await tick()
+      expect(conn.agent.promptCalls).toHaveLength(2)
+      expect(s.status.get()).toBe('running')
+
+      conn.agent.promptDeferreds[0]!.resolve()
+      await tick()
+      expect(s.status.get()).toBe('running') // one still in-flight
+
+      conn.agent.promptDeferreds[1]!.resolve()
+      await Promise.all([p1, p2])
+      expect(s.status.get()).toBe('idle')
+    })
+
+    it('lands on errored with a single [error] when one of two prompts fails', async () => {
+      rebuildControlled()
+      const s = await svc.createSession()
+      const conn = client.connected[0]!
+      const p1 = s.sendPrompt('one')
+      const p2 = s.sendPrompt('two')
+      await tick()
+      conn.agent.promptDeferreds[0]!.reject(new Error('boom'))
+      conn.agent.promptDeferreds[1]!.resolve()
+      await Promise.all([p1, p2])
+      expect(s.status.get()).toBe('errored')
+      const errors = s.messages.get().filter((m) => m.text?.startsWith('[error]'))
+      expect(errors).toHaveLength(1)
+    })
+
+    it('cancelTurn interrupts all in-flight prompts with a single notification and message', async () => {
+      rebuildControlled()
+      const s = await svc.createSession()
+      const conn = client.connected[0]!
+      const p1 = s.sendPrompt('one')
+      const p2 = s.sendPrompt('two')
+      await tick()
+      expect(s.status.get()).toBe('running')
+
+      await s.cancelTurn()
+      await Promise.all([p1, p2])
+      expect(conn.agent.cancelCalls).toHaveLength(1)
+      const cancels = s.messages.get().filter((m) => m.text === '[cancelled]')
+      expect(cancels).toHaveLength(1)
+      expect(s.status.get()).toBe('idle')
+    })
+
+    it('recovers from errored to running to idle when a new prompt is sent', async () => {
+      rebuildControlled()
+      const s = await svc.createSession()
+      const conn = client.connected[0]!
+      const p1 = s.sendPrompt('one')
+      await tick()
+      conn.agent.promptDeferreds[0]!.reject(new Error('boom'))
+      await p1
+      expect(s.status.get()).toBe('errored')
+
+      const p2 = s.sendPrompt('two')
+      await tick()
+      expect(s.status.get()).toBe('running')
+      conn.agent.promptDeferreds[1]!.resolve()
+      await p2
+      expect(s.status.get()).toBe('idle')
+    })
+
+    it('shows a steering message on the timeline immediately while a turn runs', async () => {
+      rebuildControlled()
+      const s = await svc.createSession()
+      void s.sendPrompt('first')
+      await tick()
+      expect(s.status.get()).toBe('running')
+      // The steering prompt's user message lands synchronously, before its
+      // prompt() ever resolves.
+      void s.sendPrompt('steer me')
+      const users = s.messages.get().filter((m) => m.role === 'user')
+      expect(users.map((m) => m.text)).toEqual(['first', 'steer me'])
+    })
   })
 
   it('auto-approves a permission request when the kind is on the allow list', async () => {

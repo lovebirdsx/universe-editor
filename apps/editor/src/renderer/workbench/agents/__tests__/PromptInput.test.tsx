@@ -350,13 +350,42 @@ describe('PromptInput — submit and cancel', () => {
     expect(btn.disabled).toBe(true)
   })
 
-  it('switches to the Cancel button while the session is running', () => {
+  it('shows the Stop button alongside Send while the session is running', () => {
     const session = makeSession({ status: 'running' })
     renderWithServices(<PromptInput session={session} />)
-    expect(screen.queryByTestId('acp-prompt-send')).toBeNull()
+    // Send stays available so the user can dispatch a steering message.
+    expect(screen.getByTestId('acp-prompt-send')).toBeTruthy()
     const cancel = screen.getByTestId('acp-prompt-cancel')
     fireEvent.click(cancel)
     expect(session.cancelTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows sending a new prompt while the session is running (mid-turn steering)', () => {
+    const session = makeSession({ status: 'running' })
+    renderWithServices(<PromptInput session={session} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'steer left' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledWith('steer left', [])
+    expect(ta.value).toBe('')
+  })
+
+  it('Escape interrupts the running turn when no popover is open', () => {
+    const session = makeSession({ status: 'running' })
+    renderWithServices(<PromptInput session={session} />)
+    fireEvent.keyDown(getTextarea(), { key: 'Escape' })
+    expect(session.cancelTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('Escape only closes the slash popover and does not cancel while running', () => {
+    const session = makeSession({ status: 'running', commands: COMMANDS })
+    renderWithServices(<PromptInput session={session} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '/d' } })
+    expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+    fireEvent.keyDown(ta, { key: 'Escape' })
+    expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
+    expect(session.cancelTurn).not.toHaveBeenCalled()
   })
 
   it('re-renders when commands arrive after mount', () => {
