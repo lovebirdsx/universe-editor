@@ -980,6 +980,127 @@
   align-items: flex-start;
 }
 
+.emptySessionHint {
+  align-self: center;
+  width: min(100%, 560px);
+  margin: auto;
+  padding: 18px 0;
+  color: var(--color-sidebar-fg, #888);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.emptyHintHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.emptyHintTitle {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-editor-fg, #d4d4d4);
+}
+
+.emptyHintText {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.emptyHintSection {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.emptyHintSectionTitle {
+  color: var(--color-message-role-fg, #aaa);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.emptyHintActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.emptyHintButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 26px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-editor-fg, #d4d4d4);
+  font: inherit;
+  cursor: pointer;
+}
+
+.emptyHintButton:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.emptyHintButton:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
+}
+
+.emptyHintIcon {
+  flex: none;
+  color: var(--color-message-role-fg, #aaa);
+}
+
+.emptyHintGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
+  gap: 6px 10px;
+}
+
+.emptyHintItem {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.emptyHintKeys {
+  flex: 0 0 78px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.emptyHintKey {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 20px;
+  padding: 1px 5px;
+  border: 1px solid var(--color-border, #333);
+  border-bottom-color: var(--color-input-border, #555);
+  border-radius: 3px;
+  background: var(--color-message-bg, #2a2a2a);
+  color: var(--color-editor-fg, #d4d4d4);
+  font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.emptyHintLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .sessionLoading {
   padding: 16px;
   color: var(--color-sidebar-fg, #888);

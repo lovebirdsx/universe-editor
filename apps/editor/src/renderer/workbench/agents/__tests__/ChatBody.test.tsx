@@ -9,6 +9,7 @@ import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import {
   Event,
   IConfigurationService,
+  ICommandService,
   IFileService,
   InstantiationService,
   IWorkspaceService,
@@ -106,7 +107,10 @@ const stubWorkspaceService = {
   onDidChangeRecent: Event.None,
 } as unknown as IWorkspaceServiceType
 
-function makeInstantiation(onRegister?: (w: AcpChatWidget) => void) {
+function makeInstantiation(
+  onRegister?: (w: AcpChatWidget) => void,
+  onCommand?: (id: string) => void,
+) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, {
     _serviceBrand: undefined,
@@ -131,6 +135,13 @@ function makeInstantiation(onRegister?: (w: AcpChatWidget) => void) {
     get: () => undefined,
     onDidChangeConfiguration: Event.None,
   } as unknown as IConfigurationService)
+  services.set(ICommandService, {
+    _serviceBrand: undefined,
+    executeCommand: (id: string) => {
+      onCommand?.(id)
+      return Promise.resolve(undefined)
+    },
+  } as unknown as ICommandService)
   return new InstantiationService(services)
 }
 
@@ -208,6 +219,68 @@ describe('ChatBody — click to focus a timeline item', () => {
 function scrollEl(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.parentElement!
 }
+
+describe('ChatBody — empty session hint', () => {
+  it('shows session, prompt, and keyboard hints before the first visible item', () => {
+    const { container } = renderChat(makeSession('s1', []))
+    expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).not.toBeNull()
+
+    const text = container.textContent ?? ''
+    expect(text).toContain('New session')
+    expect(text).toContain('Resume previous')
+    expect(text).toContain('Choose agent')
+    expect(text).toContain('Commands')
+    expect(text).toContain('Mention files')
+    expect(text).toContain('Ctrl+Alt+I')
+    expect(text).toContain('Alt+J/K')
+    expect(text).toContain('Alt+A/E')
+    expect(text).toContain('Ctrl+Alt+F')
+  })
+
+  it('hides the hint once a visible user message exists', () => {
+    const user: AcpMessage = {
+      id: 'u1',
+      role: 'user',
+      text: 'hello',
+      blocks: [{ type: 'text', text: 'hello' }],
+      streaming: false,
+    }
+    const { container } = renderChat(
+      makeSession('s1', [{ kind: 'message', id: 'u1', message: user }]),
+    )
+    expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).toBeNull()
+    expect(container.querySelector('[data-testid="acp-timeline"]')).not.toBeNull()
+  })
+
+  it('keeps the hint for settled agent messages with no visible content', () => {
+    const hidden = makeMessage('empty-agent', '   ')
+    const { container } = renderChat(
+      makeSession('s1', [{ kind: 'message', id: hidden.id, message: hidden }]),
+    )
+    expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="acp-timeline"]')).toBeNull()
+  })
+
+  it('runs the existing session action commands from the hint', () => {
+    const commands: string[] = []
+    const inst = makeInstantiation(undefined, (id) => commands.push(id))
+    const { getByText } = render(
+      <ServicesContext.Provider value={inst}>
+        <ChatBody session={makeSession('s1', [])} />
+      </ServicesContext.Provider>,
+    )
+
+    fireEvent.click(getByText('New session'))
+    fireEvent.click(getByText('Resume previous'))
+    fireEvent.click(getByText('Choose agent'))
+
+    expect(commands).toEqual([
+      'workbench.action.agent.newSession',
+      'workbench.action.agent.resumeSession',
+      'workbench.action.agent.selectAgent',
+    ])
+  })
+})
 
 describe('ChatBody — scroll position persistence', () => {
   const items: readonly TimelineItem[] = [

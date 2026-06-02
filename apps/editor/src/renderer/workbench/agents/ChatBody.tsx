@@ -27,8 +27,9 @@ import {
   type MutableRefObject,
 } from 'react'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
+import { Bot, History, Plus } from 'lucide-react'
 import { IConfigurationService, localize } from '@universe-editor/platform'
-import { useObservable, useService } from '../useService.js'
+import { useExecuteCommand, useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
   type IAcpSession,
@@ -162,6 +163,8 @@ function ChatScroll({
   // the closure each render).
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
+
+  const hasTimelineContent = hasRenderableTimelineContent(timeline)
 
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
     count: virtualize ? timeline.length : 0,
@@ -442,7 +445,9 @@ function ChatScroll({
         onJumpTo={handleStickyJump}
         revision={`${virtualize}:${timeline.length}:${tailSignature}`}
       />
-      {virtualize ? (
+      {!hasTimelineContent ? (
+        <EmptySessionHint />
+      ) : virtualize ? (
         <div
           className={styles['timelineVirtual']}
           data-testid="acp-timeline"
@@ -503,6 +508,108 @@ function ChatScroll({
           })}
         </ol>
       )}
+    </div>
+  )
+}
+
+function EmptySessionHint() {
+  const executeCommand = useExecuteCommand()
+
+  const run = (commandId: string): void => {
+    void executeCommand(commandId)
+  }
+
+  return (
+    <section className={styles['emptySessionHint']} data-testid="acp-empty-session-hint">
+      <div className={styles['emptyHintHeader']}>
+        <h2 className={styles['emptyHintTitle']}>
+          {localize('acp.emptySession.title', 'This session is empty')}
+        </h2>
+        <p className={styles['emptyHintText']}>
+          {localize(
+            'acp.emptySession.text',
+            'Ask below, or use session actions to switch context.',
+          )}
+        </p>
+      </div>
+      <div className={styles['emptyHintSection']}>
+        <div className={styles['emptyHintSectionTitle']}>
+          {localize('acp.emptySession.start', 'Start')}
+        </div>
+        <div className={styles['emptyHintActions']}>
+          <button
+            type="button"
+            className={styles['emptyHintButton']}
+            onClick={() => run('workbench.action.agent.newSession')}
+          >
+            <Plus size={14} strokeWidth={1.75} className={styles['emptyHintIcon']} />
+            <span>{localize('acp.emptySession.newSession', 'New session')}</span>
+          </button>
+          <button
+            type="button"
+            className={styles['emptyHintButton']}
+            onClick={() => run('workbench.action.agent.resumeSession')}
+          >
+            <History size={14} strokeWidth={1.75} className={styles['emptyHintIcon']} />
+            <span>{localize('acp.emptySession.resumeSession', 'Resume previous')}</span>
+          </button>
+          <button
+            type="button"
+            className={styles['emptyHintButton']}
+            onClick={() => run('workbench.action.agent.selectAgent')}
+          >
+            <Bot size={14} strokeWidth={1.75} className={styles['emptyHintIcon']} />
+            <span>{localize('acp.emptySession.chooseAgent', 'Choose agent')}</span>
+          </button>
+        </div>
+      </div>
+      <div className={styles['emptyHintSection']}>
+        <div className={styles['emptyHintSectionTitle']}>
+          {localize('acp.emptySession.prompt', 'Prompt')}
+        </div>
+        <div className={styles['emptyHintGrid']}>
+          <HintItem keys={['/']} label={localize('acp.emptySession.commands', 'Commands')} />
+          <HintItem keys={['@']} label={localize('acp.emptySession.mentions', 'Mention files')} />
+        </div>
+      </div>
+      <div className={styles['emptyHintSection']}>
+        <div className={styles['emptyHintSectionTitle']}>
+          {localize('acp.emptySession.keyboard', 'Keyboard')}
+        </div>
+        <div className={styles['emptyHintGrid']}>
+          <HintItem
+            keys={['Ctrl+Alt+I']}
+            label={localize('acp.emptySession.focusInput', 'Focus input')}
+          />
+          <HintItem
+            keys={['Alt+J/K']}
+            label={localize('acp.emptySession.nextPrevious', 'Next / previous item')}
+          />
+          <HintItem
+            keys={['Alt+A/E']}
+            label={localize('acp.emptySession.topBottom', 'Top / bottom')}
+          />
+          <HintItem
+            keys={['Ctrl+Alt+F']}
+            label={localize('acp.emptySession.collapse', 'Cycle collapse')}
+          />
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function HintItem({ keys, label }: { keys: readonly string[]; label: string }) {
+  return (
+    <div className={styles['emptyHintItem']}>
+      <span className={styles['emptyHintKeys']}>
+        {keys.map((key) => (
+          <kbd key={key} className={styles['emptyHintKey']}>
+            {key}
+          </kbd>
+        ))}
+      </span>
+      <span className={styles['emptyHintLabel']}>{label}</span>
     </div>
   )
 }
@@ -626,6 +733,14 @@ function tailContentSignature(timeline: readonly TimelineItem[]): number {
         ) ?? 0)
       )
   }
+}
+
+function hasRenderableTimelineContent(timeline: readonly TimelineItem[]): boolean {
+  return timeline.some((item) => {
+    if (item.kind === 'toolCall') return true
+    const message = item.message
+    return message.streaming || message.role === 'user' || hasVisibleMessageContent(message.blocks)
+  })
 }
 
 // Escape a string for use inside a CSS attribute selector. Timeline keys are
