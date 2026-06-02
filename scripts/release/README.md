@@ -156,10 +156,15 @@ pnpm release:upload --host <IP> --user <user> --dir <远程目录> [选项]
 | `--dir`  | `UE_RELEASE_DIR`  | （必填） | 服务器上的发布目录（如 `/srv/universe-editor`） |
 | `--port` | `UE_RELEASE_PORT` | `22` | SSH 端口 |
 | `--key`  | `UE_RELEASE_KEY`  | — | SSH 私钥路径（用密钥登录时） |
+| `--remote-os` | `UE_RELEASE_OS` | 自动 | 远端系统 `linux`/`windows`，默认按 `--dir` 形态自动判断 |
 | `--dry-run` | — | — | 只打印将执行的命令，不实际上传 |
-| `--no-mkdir` | — | — | 跳过远程 `mkdir -p`（目录已存在且账号无创建权限时用） |
+| `--no-mkdir` | — | — | 跳过远程建目录（目录已存在且账号无创建权限时用） |
 
 脚本依赖系统自带的 `ssh` / `scp`（Windows 10+、Ubuntu 均内置 OpenSSH），无第三方 npm 依赖。
+
+> **目标为 Windows 服务器时**：`--dir` 直接写 `D:\universe-editor`（无需尾斜杠，带了也会自动去掉）。
+> 脚本检测到盘符/反斜杠会自动用 `cmd /c if not exist … md …` 建目录（兼容远端 cmd 与 PowerShell），
+> 且“目录已存在”只告警不中断。判断有误时可用 `--remote-os windows|linux` 显式覆盖。
 
 **上传顺序**：先传 `.exe` / `.blockmap`，最后才传 `latest.yml` —— 保证客户端读到清单时安装包已就位，避免拉到半包。
 

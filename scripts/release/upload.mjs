@@ -50,6 +50,7 @@ const config = {
   dir: args.dir ?? process.env.UE_RELEASE_DIR,
   port: args.port ?? process.env.UE_RELEASE_PORT ?? '22',
   key: args.key ?? process.env.UE_RELEASE_KEY,
+  remoteOs: args['remote-os'] ?? process.env.UE_RELEASE_OS,
   dryRun: args.dryRun ?? false,
   mkdir: args.mkdir ?? true,
 }
@@ -59,17 +60,31 @@ function die(msg) {
   process.exit(1)
 }
 
+function warn(msg) {
+  console.warn(`\x1b[33m⚠ ${msg}\x1b[0m`)
+}
+
 if (!config.host) die('缺少 --host（或 UE_RELEASE_HOST）')
 if (!config.user) die('缺少 --user（或 UE_RELEASE_USER）')
 if (!config.dir) die('缺少 --dir（或 UE_RELEASE_DIR），即服务器上的目标目录')
-if (!existsSync(releaseDir)) die(`找不到产物目录: ${releaseDir}\n  先跑 pnpm --filter @universe-editor/editor package:win`)
+if (!existsSync(releaseDir))
+  die(`找不到产物目录: ${releaseDir}\n  先跑 pnpm --filter @universe-editor/editor package:win`)
+
+// 去掉尾部分隔符，避免拼出 D:\universe-editor\/ 这种脏路径。
+config.dir = config.dir.replace(/[\\/]+$/, '')
+
+// 远端是 Windows 还是类 Unix：决定 mkdir 用什么命令。盘符开头或含反斜杠即判为 Windows。
+const isWindowsTarget =
+  config.remoteOs === 'windows' ||
+  (config.remoteOs !== 'linux' && (/^[A-Za-z]:[\\/]/.test(config.dir) || config.dir.includes('\\')))
 
 // 收集要上传的文件。latest.yml 排最后。
 const entries = readdirSync(releaseDir)
 const payloads = entries.filter((f) => f.endsWith('.exe') || f.endsWith('.blockmap'))
 const manifests = entries.filter((f) => f === 'latest.yml')
 
-if (manifests.length === 0) die('release/ 下没有 latest.yml；确认 electron-builder.yml 已配 publish 且打包成功')
+if (manifests.length === 0)
+  die('release/ 下没有 latest.yml；确认 electron-builder.yml 已配 publish 且打包成功')
 if (payloads.length === 0) die('release/ 下没有 .exe / .blockmap 产物')
 
 // 从 latest.yml 读出版本号，仅用于日志展示。
@@ -89,15 +104,21 @@ if (config.key) {
   scpBase.push('-i', config.key)
 }
 
-function run(cmd, cmdArgs) {
+function run(cmd, cmdArgs, opts = {}) {
   const printable = `${cmd} ${cmdArgs.map((a) => (a.includes(' ') ? `"${a}"` : a)).join(' ')}`
   if (config.dryRun) {
     console.log(`  [dry-run] ${printable}`)
     return
   }
   const res = spawnSync(cmd, cmdArgs, { stdio: 'inherit' })
-  if (res.error) die(`执行失败: ${printable}\n  ${res.error.message}`)
-  if (res.status !== 0) die(`命令返回非零退出码 (${res.status}): ${printable}`)
+  if (res.error) {
+    if (opts.warnOnly) return warn(`执行失败: ${printable}\n  ${res.error.message}`)
+    die(`执行失败: ${printable}\n  ${res.error.message}`)
+  }
+  if (res.status !== 0) {
+    if (opts.warnOnly) return warn(`命令返回非零退出码 (${res.status}): ${printable}`)
+    die(`命令返回非零退出码 (${res.status}): ${printable}`)
+  }
 }
 
 console.log(`\n📦 Universe Editor ${version} → ${remote}:${config.dir}`)
@@ -106,7 +127,12 @@ if (config.dryRun) console.log('   (dry-run，不实际上传)\n')
 else console.log('')
 
 if (config.mkdir) {
-  run('ssh', [...sshBase, remote, `mkdir -p '${config.dir}'`])
+  // Windows 远端用 cmd /c 包裹：无论默认 shell 是 cmd 还是 PowerShell 都能跑，if not exist 保证幂等。
+  // mkdir 失败仅告警不退出，避免“目录已存在”等无害情形阻断上传。
+  const mkdirCmd = isWindowsTarget
+    ? `cmd /c if not exist "${config.dir}" md "${config.dir}"`
+    : `mkdir -p '${config.dir}'`
+  run('ssh', [...sshBase, remote, mkdirCmd], { warnOnly: true })
 }
 
 // 先 payload 后 manifest：scp 目标为目录时用源文件名落地，文件名空格无需转义。
@@ -115,4 +141,6 @@ for (const file of [...payloads, ...manifests]) {
   run('scp', [...scpBase, join(releaseDir, file), `${remote}:${config.dir}/`])
 }
 
-console.log(`\n\x1b[32m✓ 完成。客户端将在下次检查时从 ${config.dir}/latest.yml 发现 ${version}\x1b[0m\n`)
+console.log(
+  `\n\x1b[32m✓ 完成。客户端将在下次检查时从 ${config.dir}/latest.yml 发现 ${version}\x1b[0m\n`,
+)
