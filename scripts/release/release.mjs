@@ -84,10 +84,12 @@ function log(message = '') {
   console.log(message)
 }
 
-function commandName(command) {
-  if (process.platform !== 'win32') return command
-  if (command === 'pnpm') return 'pnpm.cmd'
+export function commandName(command) {
   return command
+}
+
+export function shouldUseShell(command) {
+  return process.platform === 'win32' && command === 'pnpm'
 }
 
 function printableCommand(command, args) {
@@ -102,7 +104,11 @@ function run(command, args, options) {
     log(`  [dry-run] ${printable}`)
     return
   }
-  const result = spawnSync(commandName(command), args, { cwd, stdio: 'inherit' })
+  const result = spawnSync(commandName(command), args, {
+    cwd,
+    stdio: 'inherit',
+    shell: shouldUseShell(command),
+  })
   if (result.error) die(`执行失败: ${printable}\n  ${result.error.message}`)
   if (result.status !== 0) die(`命令返回非零退出码 (${result.status}): ${printable}`)
 }

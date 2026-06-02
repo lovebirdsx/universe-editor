@@ -7,9 +7,11 @@ import assert from 'node:assert/strict'
 import {
   buildReport,
   bumpVersion,
+  commandName,
   compareVersions,
   parseArgs,
   readLatestYmlVersion,
+  shouldUseShell,
 } from '../release.mjs'
 
 test('parseArgs reads release mode and upload options', () => {
@@ -57,6 +59,13 @@ test('compareVersions compares numeric segments', () => {
 test('readLatestYmlVersion extracts manifest version', () => {
   assert.equal(readLatestYmlVersion('version: 0.1.5\npath: app.exe\n'), '0.1.5')
   assert.equal(readLatestYmlVersion('path: app.exe\n'), '')
+})
+
+test('pnpm runs through the shell on Windows', () => {
+  assert.equal(commandName('git'), 'git')
+  assert.equal(commandName('pnpm'), 'pnpm')
+  assert.equal(shouldUseShell('git'), false)
+  assert.equal(shouldUseShell('pnpm'), process.platform === 'win32')
 })
 
 test('buildReport includes commits and artifact hashes', () => {
