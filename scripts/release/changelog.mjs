@@ -4,10 +4,11 @@
  *  Generate apps/editor/resources/release-notes.json from git history.
  *
  *  Each git tag `vX.Y.Z` is one released version; commits in `<prevTag>..<tag>`
- *  are collected and grouped by Conventional-Commit type. Only user-facing types
- *  (feat/fix/perf/security) are included by default; any other type may opt in by
- *  marking the commit breaking with `!` (e.g. `refactor(core)!: …`). See
- *  docs/development/git-commit-msg-rule.md.
+ *  are collected and grouped by Conventional-Commit type. Pass
+ *  `--pending-version X.Y.Z` before creating the tag to prepend notes for the
+ *  unreleased `<latestTag>..HEAD` range. Only user-facing types (feat/fix/perf/security)
+ *  are included by default; any other type may opt in by marking the commit
+ *  breaking with `!` (e.g. `refactor(core)!: …`). See docs/development/git-commit-msg-rule.md.
  *
  *  Zero deps — Node built-ins + system git only (matches upload.mjs).
  *--------------------------------------------------------------------------------------------*/
@@ -83,19 +84,56 @@ function tagDate(tag) {
   return git(['log', '-1', '--format=%cs', tag])
 }
 
-export function generateNotes() {
+function today() {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function parseArgs(argv) {
+  const out = {}
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]
+    if (a === '--pending-version') {
+      const next = argv[i + 1]
+      if (!next || next.startsWith('--')) throw new Error('缺少 --pending-version 的版本号')
+      out.pendingVersion = next
+      i++
+    }
+  }
+  return out
+}
+
+export function generateNotes(options = {}) {
+  const { pendingVersion } = options
   const tags = listTags()
   const notes = tags.map((tag, i) => ({
     version: tag.replace(/^v/, ''),
     date: tagDate(tag),
     groups: buildGroups(commitSubjects(i > 0 ? tags[i - 1] : '', tag)),
   }))
+  if (pendingVersion) {
+    const pendingTag = `v${pendingVersion}`
+    if (!tags.includes(pendingTag)) {
+      const lastTag = tags.at(-1) ?? ''
+      notes.push({
+        version: pendingVersion,
+        date: today(),
+        groups: buildGroups(commitSubjects(lastTag, 'HEAD')),
+      })
+    }
+  }
   notes.reverse() // newest first
   return notes
 }
 
 function main() {
-  const notes = generateNotes()
+  let args
+  try {
+    args = parseArgs(process.argv.slice(2))
+  } catch (error) {
+    console.error(`release-notes: ${error.message}`)
+    process.exit(1)
+  }
+  const notes = generateNotes(args)
   mkdirSync(dirname(OUT_FILE), { recursive: true })
   writeFileSync(OUT_FILE, JSON.stringify(notes, null, 2) + '\n', 'utf8')
   const total = notes.reduce(

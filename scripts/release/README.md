@@ -117,31 +117,52 @@ publish:
 ## 三、发布一个新版本
 
 ```bash
-# 1) bump 版本（apps/editor/package.json 的 version，遵循 semver）
-#    例如 0.1.1 → 0.1.2
+# 环境变量也可以改用命令参数 --host/--user/--dir 传入。
+$env:UE_RELEASE_HOST = '<服务器IP>'
+$env:UE_RELEASE_USER = 'deploy'
+$env:UE_RELEASE_DIR = '/srv/universe-editor'
 
-# 2) 提交并打 tag（tag 是版本说明的区间锚点，名字必须是 vX.Y.Z）
-git commit -am "chore(release): 0.1.2"
-git tag v0.1.2
+# 从当前 apps/editor/package.json 版本号自动 patch bump。
+pnpm release -- --bump patch
 
-# 3) 生成版本说明（读 git tag + 提交，写 apps/editor/resources/release-notes.json）
-pnpm release:notes
-git commit -am "docs(release): 0.1.2 release notes"   # 把生成结果提交入库
-
-# 4) 打包，产物落到 apps/editor/release/
-pnpm --filter @universe-editor/editor package:win
-
-# 5) 上传到内网服务器（在 PowerShell 或 cmd 中运行）
-pnpm release:upload --host <服务器IP> --user deploy --dir /srv/universe-editor
+# 或显式指定目标版本。
+pnpm release -- --version 0.1.5
 ```
+
+`pnpm release` 会按顺序执行：
+
+1. 预检：工作区干净、在 `main`、与 upstream 同步、目标 tag 不冲突、上传配置存在。
+2. 更新 `apps/editor/package.json` 的版本号。
+3. 在 tag 创建前生成 `apps/editor/resources/release-notes.json`。
+4. 提交版本与 release notes：`chore(release): X.Y.Z`。
+5. 运行 `pnpm check` 与 `pnpm test:release`。
+6. 清理并重新生成 `apps/editor/release/` 安装包产物。
+7. 校验 `latest.yml` 的版本与目标版本一致，并生成 `release-report-vX.Y.Z.md`。
+8. 创建 annotated tag：`vX.Y.Z`。
+9. push `main` 与 tag。
+10. 上传 `.exe` / `.blockmap`，最后上传 `latest.yml`。
+
+常用选项：
+
+| 参数                         | 说明                                                  |
+| ---------------------------- | ----------------------------------------------------- |
+| `--bump patch\|minor\|major` | 基于当前 `apps/editor/package.json` 自动计算目标版本  |
+| `--version X.Y.Z`            | 显式指定目标版本                                      |
+| `--dry-run`                  | 只打印将执行的步骤，不写文件、不打包、不 push、不上传 |
+| `--no-push`                  | 本地生成 commit、tag、产物，但不推送                  |
+| `--no-upload`                | push 代码和 tag，但不上传到更新服务器                 |
+| `--resume`                   | 继续一个已生成 release commit 的发布流程              |
+| `--upload-only`              | 重新打包并上传当前版本，适合上传失败后重试            |
+| `--skip-check`               | 跳过 `pnpm check` 与 `pnpm test:release`              |
+| `--e2e`                      | 额外运行 `pnpm e2e`                                   |
+| `--package-script <script>`  | 覆盖默认打包脚本，默认 `package:win:installer`        |
 
 > **版本说明从哪来**：`release:notes` 遍历所有 `vX.Y.Z` tag，对每个 tag 与其前驱之间的提交
 > 按 `<type>(<scope>): <summary>` 解析（见 `docs/development/git-commit-msg-rule.md`），
-> 默认只收录 `feat`/`fix`/`perf`/`security`，其它类型加 `!` 标记才收录。生成的 JSON 通过
+> 默认只收录 `feat`/`fix`/`perf`/`security`，其它类型加 `!` 标记才收录。`pnpm release`
+> 会在创建 tag 前用 `--pending-version` 生成当前目标版本的说明；生成的 JSON 通过
 > `electron-builder.yml` 的 `extraResources` 打进安装包；客户端升级后自动弹出「上次看到的版本 →
 > 当前版本」区间内所有版本的更新（命令面板 **Show Release Notes** 可随时回看）。
->
-> 当前仓库尚无历史 tag —— 第一个打出的 tag 其区间会退化为「仓库起始 → 该 tag」。
 
 > ⚠️ **Windows 用 PowerShell / cmd 运行上传命令，不要用 Git Bash。** Git Bash（MSYS）会把
 > `--dir /srv/universe-editor` 这类以 `/` 开头的远程路径自动改写成本地 Windows 路径
@@ -165,16 +186,16 @@ node scripts/release/upload.mjs --host <IP> --user <user> --dir <远程目录> [
 pnpm release:upload --host <IP> --user <user> --dir <远程目录> [选项]
 ```
 
-| 参数 | 环境变量 | 默认 | 说明 |
-|---|---|---|---|
-| `--host` | `UE_RELEASE_HOST` | （必填） | 服务器 IP / 域名 |
-| `--user` | `UE_RELEASE_USER` | （必填） | SSH 登录账号 |
-| `--dir`  | `UE_RELEASE_DIR`  | （必填） | 服务器上的发布目录（如 `/srv/universe-editor`） |
-| `--port` | `UE_RELEASE_PORT` | `22` | SSH 端口 |
-| `--key`  | `UE_RELEASE_KEY`  | — | SSH 私钥路径（用密钥登录时） |
-| `--remote-os` | `UE_RELEASE_OS` | 自动 | 远端系统 `linux`/`windows`，默认按 `--dir` 形态自动判断 |
-| `--dry-run` | — | — | 只打印将执行的命令，不实际上传 |
-| `--no-mkdir` | — | — | 跳过远程建目录（目录已存在且账号无创建权限时用） |
+| 参数          | 环境变量          | 默认     | 说明                                                    |
+| ------------- | ----------------- | -------- | ------------------------------------------------------- |
+| `--host`      | `UE_RELEASE_HOST` | （必填） | 服务器 IP / 域名                                        |
+| `--user`      | `UE_RELEASE_USER` | （必填） | SSH 登录账号                                            |
+| `--dir`       | `UE_RELEASE_DIR`  | （必填） | 服务器上的发布目录（如 `/srv/universe-editor`）         |
+| `--port`      | `UE_RELEASE_PORT` | `22`     | SSH 端口                                                |
+| `--key`       | `UE_RELEASE_KEY`  | —        | SSH 私钥路径（用密钥登录时）                            |
+| `--remote-os` | `UE_RELEASE_OS`   | 自动     | 远端系统 `linux`/`windows`，默认按 `--dir` 形态自动判断 |
+| `--dry-run`   | —                 | —        | 只打印将执行的命令，不实际上传                          |
+| `--no-mkdir`  | —                 | —        | 跳过远程建目录（目录已存在且账号无创建权限时用）        |
 
 脚本依赖系统自带的 `ssh` / `scp`（Windows 10+、Ubuntu 均内置 OpenSSH），无第三方 npm 依赖。
 
