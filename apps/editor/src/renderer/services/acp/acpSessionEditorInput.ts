@@ -17,13 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService } from './acpSessionService.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
-
-const MAX_TITLE_LEN = 24
-
-function truncateTitle(s: string): string {
-  if (s.length <= MAX_TITLE_LEN) return s
-  return `${s.slice(0, MAX_TITLE_LEN - 1)}…`
-}
+import { resolveLiveSessionTitle, truncateSessionTitle } from './acpSessionTitle.js'
 
 export class AcpSessionEditorInput extends EditorInput {
   static readonly TYPE_ID = 'acp.session'
@@ -48,7 +42,7 @@ export class AcpSessionEditorInput extends EditorInput {
     this._resource = URI.from({ scheme: 'universe', path: `/acp/session/${sessionId}` })
     this._lastTitle =
       initialTitle !== undefined && initialTitle.length > 0
-        ? truncateTitle(initialTitle)
+        ? truncateSessionTitle(initialTitle)
         : this._computeTitle()
     // Watch live session title + history entry title so renames + resumed
     // sessions update the tab label without manual refresh. The autorun fires
@@ -58,11 +52,9 @@ export class AcpSessionEditorInput extends EditorInput {
       this._history.entries.read(r)
       // history.title 优先于 live.title——后者是构造时锁定的死字符串，rename 后并不会更新。
       // 没拿到 title 时不要回落到 sessionId 覆盖构造期写入的 initialTitle / _computeTitle 结果。
-      const fromHistory = this._history.get(this.sessionId)?.title
-      const fromLive = this._sessions.getById(this.sessionId)?.title
-      const title = fromHistory ?? fromLive
+      const title = resolveLiveSessionTitle(this._history, this._sessions, this.sessionId)
       if (title === undefined) return
-      const truncated = truncateTitle(title)
+      const truncated = truncateSessionTitle(title)
       if (truncated !== this._lastTitle) {
         this._lastTitle = truncated
         this._onDidChangeLabel.fire()
@@ -100,10 +92,9 @@ export class AcpSessionEditorInput extends EditorInput {
   }
 
   private _computeTitle(): string {
-    const fromHistory = this._history.get(this.sessionId)?.title
-    const fromLive = this._sessions.getById(this.sessionId)?.title
-    const raw = fromHistory ?? fromLive ?? this.sessionId
-    return truncateTitle(raw)
+    const raw =
+      resolveLiveSessionTitle(this._history, this._sessions, this.sessionId) ?? this.sessionId
+    return truncateSessionTitle(raw)
   }
 
   override serialize(): string {
