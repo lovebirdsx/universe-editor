@@ -14,7 +14,7 @@ import type {
   LogAppendEvent,
   LogFileDescriptor,
 } from '../../../shared/ipc/services.js'
-import { SESSION_DIR_RE, type LogMainService } from './logMainService.js'
+import { ILogMainService, SESSION_DIR_RE, type LogMainService } from './logMainService.js'
 import { humanizeChannelId } from '../../../shared/log/logLabels.js'
 
 const DEFAULT_MAX_BYTES = 1024 * 1024
@@ -44,7 +44,7 @@ export class LogFilesMainService implements ILogFilesService {
 
   readonly onDidAppendEntry: Event<LogAppendEvent>
 
-  constructor(private readonly _logService: LogMainService) {
+  constructor(@ILogMainService private readonly _logService: LogMainService) {
     this.onDidAppendEntry = _logService.onDidAppendEntry
   }
 

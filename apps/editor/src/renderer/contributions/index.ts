@@ -14,6 +14,9 @@ import { BuiltInViewContainersContribution } from './BuiltInViewContainersContri
 import { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
 import { ContextKeyContribution } from './ContextKeyContribution.js'
 import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
+import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
+import { ConfigInitContribution } from './ConfigInitContribution.js'
+import { AcpInitContribution } from './AcpInitContribution.js'
 import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
 import { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
@@ -56,6 +59,34 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.focusContextKey',
   FocusContextKeyContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Instantiate the six workbench Parts (they self-register with the
+// LayoutService on construction) and bridge the FocusTracker to each Part.
+// BlockStartup so getPart()/getParts() resolve before any React paint.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workbenchParts',
+  WorkbenchPartsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Kick off file-backed settings.json / keybindings.json loads. BlockStartup so
+// the User config + keybinding layers are in flight before UI paint; both loads
+// are async fire-and-forget and refresh subscribers via change events.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.configInit',
+  ConfigInitContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Hydrate ACP persisted state (session history / per-agent defaults / chat
+// location). BlockStartup so hydration is in flight before session restore
+// (AfterRestore) and before any createSession; all initialize() calls are
+// fire-and-forget.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.acpInit',
+  AcpInitContribution,
   WorkbenchPhase.BlockStartup,
 )
 

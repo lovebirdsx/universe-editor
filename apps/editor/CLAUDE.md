@@ -57,7 +57,7 @@ CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `Environm
 3. 创建 `InstantiationService`（同时自注册为 `IInstantiationService`）
 4. 纯 renderer 服务直 `new`，依赖其他服务的走 `instantiation.createInstance(...)`
 5. `import './contributions/index.js'`（副作用：注册到 `ContributionsRegistry`）
-6. `new ContributionService(lifecycle, instantiation)`——按 `WorkbenchPhase` 实例化贡献
+6. `instantiation.createInstance(ContributionService)`——按 `WorkbenchPhase` 实例化贡献
 7. `lifecycle.setPhase(LifecyclePhase.Ready)` → 触发 `BlockRestore`
 8. `createRoot(...).render(<Workbench />)`
 
@@ -142,11 +142,11 @@ export interface IMyService {
 export const IMyService = createDecorator<IMyService>('myService')
 ```
 
-**3. main 端实现**：`src/main/services/myService/myMainService.ts` 写 `class MyMainService implements IMyService`。然后在 `src/main/ipc/registerMainServices.ts` 里：
+**3. main 端实现**：`src/main/services/myService/myMainService.ts` 写 `class MyMainService implements IMyService`；需要 logger 时用可选 `@ILoggerService` 注入 + `createNamedLogger`（DI 物化时注入真 logger，单测手动 `new` 省略即回退 `NullLogger`，零改动）。application 单例走 root 容器：在 `src/main/services/main-services.ts` 加 `registerSingleton(IMyService, new SyncDescriptor(MyMainService, [], false))`（容器物化 + `will-quit` 统一 dispose），并把 `myService` 加进 `ApplicationServices`（`window/scopedServicesFactory.ts`）和 `getOrCreateServices()`（`index.ts`）里的 `invokeFunction` 组装表。然后在 `src/main/ipc/registerMainServices.ts` 里：
 ```ts
-server.registerChannel(ServiceChannels.MyService, ProxyChannel.fromService(shared.myService))
+server.registerChannel(ServiceChannels.MyService, ProxyChannel.fromService(app.myService))
 ```
-并在 `SharedMainServices` 与 `getSharedServices()`（`src/main/index.ts`）里挂上实例。
+> 依赖运行时 `BrowserWindow` 的 per-window 服务仍由 `windowMainService.createWindow()` 手动构造，不走 root 容器。
 
 **4. renderer 端绑定**：`src/renderer/main.tsx`：
 ```ts

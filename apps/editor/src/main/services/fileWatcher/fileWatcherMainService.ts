@@ -9,12 +9,13 @@
 import { promises as fs, type FSWatcher, watch } from 'node:fs'
 import { join as pathJoin, sep as pathSep } from 'node:path'
 import {
+  createNamedLogger,
   Emitter,
   type Event,
   type IDisposable,
   type IFileChangeEvent,
   type IFileWatcherService,
-  NullLogger,
+  ILoggerService,
   URI,
   type ILogger,
   type UriComponents,
@@ -48,7 +49,11 @@ function reviveUri(value: UriComponents): URI {
 export class FileWatcherMainService implements IFileWatcherService, IDisposable {
   declare readonly _serviceBrand: undefined
 
-  constructor(private readonly _logger: ILogger = new NullLogger()) {}
+  private readonly _logger: ILogger
+
+  constructor(@ILoggerService loggerService?: ILoggerService) {
+    this._logger = createNamedLogger(loggerService, { id: 'fileWatcher', name: 'File Watcher' })
+  }
 
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]> = this._onDidChangeFiles.event

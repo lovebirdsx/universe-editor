@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import {
   ServiceCollection,
   InstantiationService,
+  getSingletonServiceDescriptors,
   LifecycleService,
   LifecyclePhase,
   ILifecycleService,
@@ -13,22 +14,16 @@ import {
   IEditorResolverService,
   IEditorService,
   IEditorGroupsService,
-  IFileService,
-  IFileWatcherService,
   IFocusableRegistry,
   IFocusStackService,
   IHistoryService,
   IStatusBarService,
-  ITextSearchService,
   IViewsService,
-  IQuickInputService,
   IOutputService,
   ILayoutService,
   PartId,
-  IHostService,
   IWindowsService,
   IIpcService,
-  IStorageService,
   IConfigurationService,
   IUserDataFilesService,
   IWorkspaceService,
@@ -39,7 +34,6 @@ import {
   IContributionService,
   ILoggerService,
   INotificationService,
-  IProgressService,
   ITelemetryService,
   NoopTelemetryService,
   Severity,
@@ -48,7 +42,6 @@ import {
   DisposableTracker,
   localize,
   markAsSingleton,
-  MutableDisposable,
   setDisposableTracker,
   setErrorTelemetryHook,
   setUnexpectedErrorHandler,
@@ -56,20 +49,12 @@ import {
   installConsoleInterceptor,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
-import {
-  IDisposableLeakService,
-  ILogChannelService,
-  ILogFilesService,
-  IPingService,
-} from '../shared/ipc/services.js'
-import { IAcpHostService } from '../shared/ipc/acpHostService.js'
-import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
-import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
-import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
+import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
+import { registerProxyChannelServices } from './ipc/registerProxyServices.js'
 import { installRendererErrorHandlers } from './errors.js'
 import { RendererLoggerService } from './services/log/rendererLoggerService.js'
 import { CommandService } from './services/command/CommandService.js'
@@ -77,12 +62,10 @@ import { EditorService } from './services/editor/EditorService.js'
 import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
 import { StatusBarService } from './services/statusbar/StatusBarService.js'
 import { ViewsService } from './services/views/ViewsService.js'
-import { QuickInputService } from './services/quickInput/QuickInputService.js'
 import { OutputService } from './services/output/OutputService.js'
 import { LayoutService } from './services/layout/LayoutService.js'
 import { RendererDialogService } from './services/dialog/RendererDialogService.js'
 import { NotificationService } from './services/notification/NotificationService.js'
-import { ProgressService } from './services/progress/ProgressService.js'
 import { RendererFocusTrackerService } from './services/focus/RendererFocusTrackerService.js'
 import { FocusableRegistry } from './services/focus/FocusableRegistry.js'
 import {
@@ -91,18 +74,11 @@ import {
 } from './services/focus/ViewContainerMemoryService.js'
 import { FocusStackService } from './services/focus/FocusStackService.js'
 import { HistoryService } from './services/history/HistoryService.js'
-import { UserSettingsSync } from './services/configuration/UserSettingsSync.js'
-import {
-  UserKeybindingsService,
-  IUserKeybindingsService,
-} from './services/keybindings/UserKeybindingsService.js'
 import { RendererWorkspaceService } from './services/workspace/RendererWorkspaceService.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from './services/explorer/ExplorerTreeService.js'
-import { TextSearchService } from './services/search/TextSearchService.js'
-import { ALL_PART_CTORS } from './workbench/parts/index.js'
 import { setMonacoLoaderLogger } from './workbench/editor/monaco/MonacoLoader.js'
 import {
   IRecentFilesService,
@@ -113,29 +89,16 @@ import {
   RecentEditorsService,
 } from './services/editor/RecentEditorsService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
-import { AcpAgentRegistry, IAcpAgentRegistry } from './services/acp/acpAgentRegistry.js'
-import { AcpPermissionHandler, IAcpPermissionHandler } from './services/acp/acpPermissionHandler.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
-import {
-  AcpSessionHistoryService,
-  IAcpSessionHistoryService,
-} from './services/acp/acpSessionHistory.js'
-import {
-  AcpAgentDefaultsService,
-  IAcpAgentDefaultsService,
-} from './services/acp/acpAgentDefaultsService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
 import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
-import {
-  AcpChatLocationService,
-  IAcpChatLocationService,
-} from './services/acp/acpChatLocationService.js'
 import {
   IRendererDisposableLeakService,
   RendererDisposableLeakService,
 } from './services/disposableLeak/DisposableLeakService.js'
 import './workbench.css'
+import './services/index.js'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
 
 // Install global error handlers before any async work.
@@ -268,65 +231,10 @@ async function bootstrapWorkbench(): Promise<void> {
     rootLogger.error(msg)
   })
 
-  // Cross-process services: bind interface directly to a ProxyChannel-derived
-  // proxy. No renderer wrapper class — adding a new service is one line.
+  // Cross-process services: each is a ProxyChannel-derived proxy bound to a
+  // main-side channel. The full table lives in registerProxyServices.ts.
   const platform = normalizePlatform(window.ipc?.platform)
-  services.set(
-    IHostService,
-    ProxyChannel.toService<IHostService>(ipcService.getChannel(ServiceChannels.Host), {
-      properties: new Map<string, unknown>([['platform', platform]]),
-    }),
-  )
-  services.set(
-    IStorageService,
-    ProxyChannel.toService<IStorageService>(ipcService.getChannel(ServiceChannels.Storage)),
-  )
-  services.set(
-    IPingService,
-    ProxyChannel.toService<IPingService>(ipcService.getChannel(ServiceChannels.Ping)),
-  )
-  services.set(
-    IFileService,
-    ProxyChannel.toService<IFileService>(ipcService.getChannel(ServiceChannels.FileSystem)),
-  )
-  services.set(
-    IFileWatcherService,
-    ProxyChannel.toService<IFileWatcherService>(ipcService.getChannel(ServiceChannels.FileWatcher)),
-  )
-  services.set(
-    IUserDataFilesService,
-    ProxyChannel.toService<IUserDataFilesService>(ipcService.getChannel(ServiceChannels.UserData)),
-  )
-  services.set(
-    ILogFilesService,
-    ProxyChannel.toService<ILogFilesService>(ipcService.getChannel(ServiceChannels.LogFiles)),
-  )
-  services.set(
-    IAcpHostService,
-    ProxyChannel.toService<IAcpHostService>(ipcService.getChannel(ServiceChannels.AcpHost)),
-  )
-  services.set(
-    IAcpTerminalService,
-    ProxyChannel.toService<IAcpTerminalService>(ipcService.getChannel(ServiceChannels.AcpTerminal)),
-  )
-  services.set(
-    IClaudeBinaryService,
-    ProxyChannel.toService<IClaudeBinaryService>(
-      ipcService.getChannel(ServiceChannels.ClaudeBinary),
-    ),
-  )
-  services.set(
-    ICodexBinaryService,
-    ProxyChannel.toService<ICodexBinaryService>(ipcService.getChannel(ServiceChannels.CodexBinary)),
-  )
-  const updateService = ProxyChannel.toService<IUpdateService>(
-    ipcService.getChannel(ServiceChannels.Update),
-  )
-  services.set(IUpdateService, updateService)
-  const windowsService = ProxyChannel.toService<IWindowsService>(
-    ipcService.getChannel(ServiceChannels.Window),
-  )
-  services.set(IWindowsService, windowsService)
+  registerProxyChannelServices(services, ipcService, platform)
   await initializeRendererNls(
     services.get(IUserDataFilesService) as IUserDataFilesService,
     window.navigator.language,
@@ -348,8 +256,17 @@ async function bootstrapWorkbench(): Promise<void> {
   const configurationService = workbenchStore.add(new ConfigurationService())
   services.set(IConfigurationService, configurationService)
 
-  // Create the DI container (registers itself as IInstantiationService)
-  const instantiation = new InstantiationService(services)
+  // Feed all declaratively-registered singletons into the collection. The
+  // `has` guard lets explicitly-set instances win, so this coexists with the
+  // remaining manual wiring during the incremental migration to registerSingleton.
+  for (const [id, descriptor] of getSingletonServiceDescriptors()) {
+    if (!services.has(id)) services.set(id, descriptor)
+  }
+
+  // Create the DI container (registers itself as IInstantiationService). Added to
+  // workbenchStore so the container — and every service it materializes — is
+  // disposed on unload (the kernel marks materialized services as singletons).
+  const instantiation = workbenchStore.add(new InstantiationService(services))
 
   // Renderer-only service implementations (pure local state, no IPC).
   const editorGroupsService = workbenchStore.add(
@@ -387,8 +304,6 @@ async function bootstrapWorkbench(): Promise<void> {
   // Services with @IStorageService dependencies go through DI.
   const viewsService = workbenchStore.add(instantiation.createInstance(ViewsService))
   services.set(IViewsService, viewsService)
-  const quickInputService = instantiation.createInstance(QuickInputService)
-  services.set(IQuickInputService, quickInputService)
   const layoutService = workbenchStore.add(instantiation.createInstance(LayoutService))
   services.set(ILayoutService, layoutService)
 
@@ -420,9 +335,6 @@ async function bootstrapWorkbench(): Promise<void> {
   // <NotificationsCenter /> are mounted as portals by Workbench.
   const notificationService = workbenchStore.add(instantiation.createInstance(NotificationService))
   services.set(INotificationService, notificationService)
-  // IProgressService — depends on StatusBar + Notification (both already set).
-  const progressService = workbenchStore.add(instantiation.createInstance(ProgressService))
-  services.set(IProgressService, progressService)
   // Route unhandled errors to the sticky Error toast so they're visible to users.
   setUnexpectedErrorHandler((e) => {
     const msg = e instanceof Error ? (e.stack ?? e.message) : String(e)
@@ -439,41 +351,19 @@ async function bootstrapWorkbench(): Promise<void> {
   const explorerTreeService = workbenchStore.add(instantiation.createInstance(ExplorerTreeService))
   services.set(IExplorerTreeService, explorerTreeService)
 
-  // Workspace-wide text search. Reads via IFileService + IWorkspaceService.
-  const textSearchService = instantiation.createInstance(TextSearchService)
-  services.set(ITextSearchService, textSearchService)
-
-  // ACP (Agent Client Protocol) services. AgentRegistry depends only on
-  // IConfigurationService; ClientService brings together host + permission
-  // + IFileService + IOutputService; SessionService owns Session state and
-  // drives the connection.
-  const acpAgentRegistry = instantiation.createInstance(AcpAgentRegistry)
-  services.set(IAcpAgentRegistry, acpAgentRegistry)
+  // ACP (Agent Client Protocol) services. PathPolicy needs static platform/home
+  // args; ClientService brings together host + permission + IFileService +
+  // IOutputService; SessionService owns Session state and drives the connection.
   const acpPathPolicy = new AcpPathPolicy({
     platform,
     home: typeof window.ipc?.home === 'string' ? window.ipc.home : '',
   })
   services.set(IAcpPathPolicy, acpPathPolicy)
-  const acpPermissionHandler = instantiation.createInstance(AcpPermissionHandler)
-  services.set(IAcpPermissionHandler, acpPermissionHandler)
   const acpClientService = workbenchStore.add(instantiation.createInstance(AcpClientService))
   services.set(IAcpClientService, acpClientService)
-  // History must be available before SessionService so createSession can record
-  // to it from the very first call. initialize() is fire-and-forget — early
-  // adds are merged in once hydration completes.
-  const acpSessionHistoryService = workbenchStore.add(
-    instantiation.createInstance(AcpSessionHistoryService),
-  )
-  services.set(IAcpSessionHistoryService, acpSessionHistoryService)
-  void acpSessionHistoryService.initialize()
-  // Per-agent MODEL/MODE defaults — separate storage key from history so users
-  // clearing one don't blow away the other. Must be available before
-  // SessionService so createSession can apply saved defaults on first use.
-  const acpAgentDefaultsService = workbenchStore.add(
-    instantiation.createInstance(AcpAgentDefaultsService),
-  )
-  services.set(IAcpAgentDefaultsService, acpAgentDefaultsService)
-  void acpAgentDefaultsService.initialize()
+  // History + agent-defaults are registerSingleton services injected by
+  // AcpSessionService (materialized here); AcpInitContribution drives their
+  // initialize() on the lifecycle timeline.
   const acpSessionService = workbenchStore.add(instantiation.createInstance(AcpSessionService))
   services.set(IAcpSessionService, acpSessionService)
 
@@ -484,59 +374,15 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(AcpChatWidgetService),
   )
   services.set(IAcpChatWidgetService, acpChatWidgetService)
-  const acpChatLocationService = workbenchStore.add(
-    instantiation.createInstance(AcpChatLocationService),
-  )
-  services.set(IAcpChatLocationService, acpChatLocationService)
-  void acpChatLocationService.initialize()
 
-  // Kick off async load of user settings from storage. Once it resolves,
-  // ConfigurationService fires onDidChangeConfiguration so any subscribers
-  // (Settings editor, theme contributions) refresh — no need to await here.
-  const userSettingsSync = workbenchStore.add(instantiation.createInstance(UserSettingsSync))
-  void userSettingsSync.initialize()
-
-  // User keybinding overrides. Must be created after all actions are registered
-  // (they run at module-load time via side-effect imports) so the default
-  // snapshot in the constructor captures all built-in keybindings.
+  // Register all built-in contributions + actions (side-effect import) so the
+  // ContributionService below can instantiate them by phase. UserSettingsSync +
+  // UserKeybindings loads are driven by ConfigInitContribution (BlockStartup).
   await import('./contributions/index.js')
-  const userKeybindingsService = workbenchStore.add(
-    instantiation.createInstance(UserKeybindingsService),
-  )
-  services.set(IUserKeybindingsService, userKeybindingsService)
-  void userKeybindingsService.initialize()
-
-  // Instantiate the six workbench Parts. Each Part auto-registers with the
-  // LayoutService on construction; React lookups (`getPart`) resolve them.
-  for (const Ctor of ALL_PART_CTORS) {
-    workbenchStore.add(instantiation.createInstance(Ctor))
-  }
-
-  // Bridge FocusTracker → per-Part onDidFocus/onDidBlur. We use trackElement on
-  // each Part's container as it mounts; unmount clears the tracker disposable.
-  // MutableDisposable + workbenchStore: parent chain reaches a singleton root, so
-  // the leak detector won't report the tracker subscription when beforeunload
-  // fires before React unmounts.
-  for (const part of layoutService.getParts()) {
-    const trackerSub = workbenchStore.add(new MutableDisposable())
-    const attach = () => {
-      const container = part.getContainer() as unknown as HTMLElement | undefined
-      if (!container) {
-        trackerSub.clear()
-        return
-      }
-      trackerSub.value = focusTracker.trackElement(container, (focused) => {
-        ;(part as unknown as { _notifyFocusChange(f: boolean): void })._notifyFocusChange(focused)
-      })
-    }
-    workbenchStore.add(part.onDidMount(attach))
-    workbenchStore.add(part.onDidUnmount(() => trackerSub.clear()))
-    if (part.mountState === 'mounted') attach()
-  }
 
   // ContributionService wires lifecycle → built-in contributions auto-instantiate.
   // The side-effect import at the top of this file populated the registry.
-  const contributionService = workbenchStore.add(new ContributionService(lifecycle, instantiation))
+  const contributionService = workbenchStore.add(instantiation.createInstance(ContributionService))
   services.set(IContributionService, contributionService)
 
   // Create default output channel
@@ -556,12 +402,12 @@ async function bootstrapWorkbench(): Promise<void> {
     editorResolverService,
     statusBarService,
     workspaceService,
-    windowsService,
+    windowsService: services.get(IWindowsService) as IWindowsService,
     layoutService,
     configurationService,
     acpSessionService,
     outputService,
-    updateService,
+    updateService: services.get(IUpdateService) as IUpdateService,
   })
 
   // Load persisted layout and view state before mounting React so Allotment starts with the

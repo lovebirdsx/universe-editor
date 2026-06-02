@@ -4,8 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Disposable, IDisposable } from '../base/lifecycle.js'
-import { createDecorator, ServicesAccessor } from '../di/instantiation.js'
-import { InstantiationService } from '../di/instantiationService.js'
+import { createDecorator, IInstantiationService, ServicesAccessor } from '../di/instantiation.js'
 import { ILifecycleService, LifecyclePhase } from '../lifecycle/lifecycleService.js'
 
 /**
@@ -116,7 +115,7 @@ export class ContributionService extends Disposable implements IContributionServ
 
   constructor(
     @ILifecycleService private readonly _lifecycle: ILifecycleService,
-    private readonly _instantiationService: InstantiationService,
+    @IInstantiationService private readonly _instantiationService: IInstantiationService,
   ) {
     super()
     // Schedule each phase when the lifecycle advances

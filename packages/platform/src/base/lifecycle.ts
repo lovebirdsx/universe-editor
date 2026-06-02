@@ -56,7 +56,7 @@ function trackDisposable<T extends IDisposable>(x: T): T {
   return x
 }
 
-function setParentOfDisposable(child: IDisposable, parent: IDisposable | null): void {
+export function setParentOfDisposable(child: IDisposable, parent: IDisposable | null): void {
   disposableTracker?.setParent(child, parent)
 }
 

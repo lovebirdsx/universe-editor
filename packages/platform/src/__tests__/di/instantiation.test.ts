@@ -2,7 +2,7 @@
  *  Tests for packages/platform/src/di/
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   createDecorator,
   IInstantiationService,
@@ -166,6 +166,63 @@ describe('InstantiationService', () => {
     di.invokeFunction((a) => a.get(ILogService))
     di.dispose()
     expect(disposed).toBe(true)
+  })
+
+  it('SyncDescriptor pads leading static params before injected deps (no console.trace)', () => {
+    // Mirrors main-process services (AcpHostMainService etc.): leading static
+    // params with defaults, followed by an @-injected service.
+    class MixedService {
+      declare _serviceBrand: undefined
+      constructor(
+        readonly stub: string = 'default-stub',
+        @ILogService readonly log?: ILogService,
+      ) {}
+    }
+    const IMixed = createDecorator<MixedService>('mixed-aligned-test')
+    const traceSpy = vi.spyOn(console, 'trace').mockImplementation(() => {})
+    try {
+      const log = new LogService()
+      const services = new ServiceCollection(
+        [ILogService, log],
+        // One placeholder for the leading static slot so its count matches the
+        // injected param's position (index 1) — no firstServiceArgPos mismatch.
+        [IMixed, new SyncDescriptor(MixedService, [undefined], false)],
+      )
+      const di = new InstantiationService(services)
+      const svc = di.invokeFunction((a) => a.get(IMixed))
+      expect(svc.stub).toBe('default-stub') // undefined placeholder → default kicked in
+      expect(svc.log).toBe(log) // injected at the trailing position
+      expect(traceSpy).not.toHaveBeenCalled()
+    } finally {
+      traceSpy.mockRestore()
+    }
+  })
+
+  it('SyncDescriptor with missing static placeholders still resolves but warns', () => {
+    class MixedService2 {
+      declare _serviceBrand: undefined
+      constructor(
+        readonly stub: string = 'default-stub',
+        @ILogService readonly log?: ILogService,
+      ) {}
+    }
+    const IMixed2 = createDecorator<MixedService2>('mixed-misaligned-test')
+    const traceSpy = vi.spyOn(console, 'trace').mockImplementation(() => {})
+    try {
+      const log = new LogService()
+      const services = new ServiceCollection(
+        [ILogService, log],
+        // Empty staticArguments → count (0) !== injected position (1): the kernel
+        // logs a console.trace and pads itself, but resolution still succeeds.
+        [IMixed2, new SyncDescriptor(MixedService2, [], false)],
+      )
+      const di = new InstantiationService(services)
+      const svc = di.invokeFunction((a) => a.get(IMixed2))
+      expect(svc.log).toBe(log)
+      expect(traceSpy).toHaveBeenCalled()
+    } finally {
+      traceSpy.mockRestore()
+    }
   })
 
   it('throws when accessing service accessor after invocation completes', () => {

@@ -20,10 +20,12 @@ import {
   Emitter,
   type Event,
   type IDisposable,
+  InstantiationType,
   IStorageService,
   IUserDataFilesService,
   KeybindingsRegistry,
   type IKeybindingItem,
+  registerSingleton,
   UserDataFile,
 } from '@universe-editor/platform'
 import { formatKey, formatChord } from '../../workbench/titlebar/keybindingFormat.js'
@@ -269,3 +271,5 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     await this._storage.set(LEGACY_STORAGE_KEY, [])
   }
 }
+
+registerSingleton(IUserKeybindingsService, UserKeybindingsService, InstantiationType.Delayed)

@@ -21,6 +21,7 @@ import {
   type ILogger,
   type ILoggerService,
   type ILogChannel,
+  createDecorator,
 } from '@universe-editor/platform'
 
 export interface LogAppendEvent {
@@ -179,6 +180,10 @@ class FileLogger extends AbstractLogger {
  * per process launch (mirroring VS Code's behavior) so the Output panel never
  * surfaces logs from a previous run.
  */
+// Exposes the full LogMainService API (session dirs, channel registry, tail) to
+// LogFilesMainService — broader than ILoggerService, so it gets its own id.
+export const ILogMainService = createDecorator<LogMainService>('logMainService')
+
 export class LogMainService implements ILoggerService {
   declare readonly _serviceBrand: undefined
 

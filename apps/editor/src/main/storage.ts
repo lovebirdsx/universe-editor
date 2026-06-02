@@ -2,6 +2,7 @@ import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { dirname, join } from 'node:path'
+import { createDecorator } from '@universe-editor/platform'
 
 export interface Storage {
   get<T = unknown>(key: string): Promise<T | undefined>
@@ -10,6 +11,10 @@ export interface Storage {
   /** Wait for all pending writes to complete. */
   flush(): Promise<void>
 }
+
+// Application-singleton state.json backend, registered as a preset instance in the
+// main DI container so services like RecentWorkspaces can inject it.
+export const IMainStorageService = createDecorator<Storage>('mainStorageService')
 
 export function createStorage(filePath: string): Storage {
   let cache: Record<string, unknown> | null = null

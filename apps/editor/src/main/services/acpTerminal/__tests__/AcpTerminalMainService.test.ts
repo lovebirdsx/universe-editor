@@ -4,7 +4,6 @@
 
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { NullLogger } from '@universe-editor/platform'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import { AcpTerminalMainService, type AcpTerminalSpawner } from '../acpTerminalMainService.js'
 
@@ -51,7 +50,7 @@ function spawnerWith(procs: FakeProc[]): AcpTerminalSpawner {
 }
 
 function makeService(spawner: AcpTerminalSpawner): AcpTerminalMainService {
-  return new AcpTerminalMainService(new NullLogger(), spawner)
+  return new AcpTerminalMainService(spawner)
 }
 
 describe('AcpTerminalMainService — basics', () => {
@@ -257,7 +256,7 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
       ((_cmd, _args, _opts) =>
         proc as unknown as ChildProcessWithoutNullStreams) as AcpTerminalSpawner,
     )
-    svc = new AcpTerminalMainService(new NullLogger(), spawner)
+    svc = new AcpTerminalMainService(spawner)
     await svc.create({
       command: 'cmd',
       args: ['--flag'],
@@ -283,7 +282,7 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
     process.env.ELECTRON_RUN_AS_NODE = '1'
     process.env.NODE_OPTIONS = '--inspect=9229'
     try {
-      svc = new AcpTerminalMainService(new NullLogger(), spawner)
+      svc = new AcpTerminalMainService(spawner)
       await svc.create({ command: 'cmd', args: [] })
       const call = spawner.mock.calls[0]!
       expect(call[2].env?.ELECTRON_RUN_AS_NODE).toBeUndefined()
@@ -302,7 +301,7 @@ describe('AcpTerminalMainService — env / cwd / spawn errors', () => {
       ((_cmd, _args, _opts) =>
         proc as unknown as ChildProcessWithoutNullStreams) as AcpTerminalSpawner,
     )
-    svc = new AcpTerminalMainService(new NullLogger(), spawner)
+    svc = new AcpTerminalMainService(spawner)
     await svc.create({
       command: 'cmd',
       args: [],

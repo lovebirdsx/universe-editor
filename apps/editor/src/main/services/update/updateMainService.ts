@@ -9,7 +9,15 @@
 import { app } from 'electron'
 // electron-updater is CommonJS; default-import then destructure (electron-vite convention).
 import electronUpdater from 'electron-updater'
-import { Emitter, Event, isHttpUrl, type ILogger } from '@universe-editor/platform'
+import {
+  createNamedLogger,
+  Emitter,
+  Event,
+  isHttpUrl,
+  type ILogger,
+  ILoggerService,
+} from '@universe-editor/platform'
+import { IEnvironmentMainService } from '../../environment/environmentMainService.js'
 import type {
   IUpdateService,
   UpdateState,
@@ -34,10 +42,13 @@ export class UpdateMainService implements IUpdateService {
   private readonly _currentVersion = app.getVersion()
   private _state: UpdateState = { status: 'idle', currentVersion: this._currentVersion }
 
+  private readonly _logger: ILogger
+
   constructor(
-    private readonly _logger: ILogger,
-    environment: IUpdateEnvironment,
+    @IEnvironmentMainService environment: IUpdateEnvironment,
+    @ILoggerService loggerService?: ILoggerService,
   ) {
+    this._logger = createNamedLogger(loggerService, { id: 'update', name: 'Update' })
     autoUpdater.autoDownload = false
     autoUpdater.autoInstallOnAppQuit = true
     // Allow exercising the flow against a local feed (dev-app-update.yml) when

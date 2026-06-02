@@ -23,8 +23,10 @@ import {
   ILoggerService,
   ITelemetryService,
   IWorkspaceService,
+  InstantiationType,
   arePathsEqual,
   observableValue,
+  registerSingleton,
   type HostPlatform,
   type IObservable,
   type ISettableObservable,
@@ -534,3 +536,5 @@ function parseIsoTimestamp(value: string | null | undefined): number | undefined
   const ts = Date.parse(value)
   return Number.isFinite(ts) ? ts : undefined
 }
+
+registerSingleton(IAcpSessionHistoryService, AcpSessionHistoryService, InstantiationType.Delayed)

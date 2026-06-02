@@ -6,12 +6,14 @@
 import {
   Emitter,
   IContextKeyService,
+  IQuickInputService,
   IStorageService,
+  InstantiationType,
+  registerSingleton,
   type Event,
   type IContextKey,
 } from '@universe-editor/platform'
 import type {
-  IQuickInputService,
   IQuickPick,
   IQuickPickItem,
   IKeyMods,
@@ -204,3 +206,5 @@ export class QuickInputService implements IQuickInputService {
     })
   }
 }
+
+registerSingleton(IQuickInputService, QuickInputService, InstantiationType.Delayed)

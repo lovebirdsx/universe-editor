@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import {
   CliConfigSource,
   ConfigResolver,
+  createDecorator,
   EnvConfigSource,
   FileConfigSource,
   buildHelpMessage,
@@ -45,6 +46,11 @@ export interface EnvironmentMainServiceOptions {
   /** Defaults to os.homedir(); injectable for tests. */
   homeDir?: string
 }
+
+// Preset instance in the main DI container (constructed before the container,
+// because it resolves the userData path that the container's logger depends on).
+export const IEnvironmentMainService =
+  createDecorator<EnvironmentMainService>('environmentMainService')
 
 export class EnvironmentMainService {
   private readonly _resolver: ConfigResolver

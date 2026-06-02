@@ -5,7 +5,12 @@
  *  configuration. User entries with the same id override built-ins.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator, IConfigurationService } from '@universe-editor/platform'
+import {
+  createDecorator,
+  IConfigurationService,
+  InstantiationType,
+  registerSingleton,
+} from '@universe-editor/platform'
 import type { AcpLaunchSpec } from '../../../shared/ipc/acpHostService.js'
 import { IAcpHostService } from '../../../shared/ipc/acpHostService.js'
 
@@ -182,3 +187,5 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
     return out
   }
 }
+
+registerSingleton(IAcpAgentRegistry, AcpAgentRegistry, InstantiationType.Delayed)

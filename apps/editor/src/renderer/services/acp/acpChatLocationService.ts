@@ -23,10 +23,12 @@ import {
   IEditorService,
   IInstantiationService,
   ILoggerService,
+  InstantiationType,
   IStorageService,
   ITelemetryService,
   StorageScope,
   observableValue,
+  registerSingleton,
   type IContextKey,
   type ILogger,
   type IObservable,
@@ -226,3 +228,5 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     // autorun's idempotent openEditor.
   }
 }
+
+registerSingleton(IAcpChatLocationService, AcpChatLocationService, InstantiationType.Delayed)

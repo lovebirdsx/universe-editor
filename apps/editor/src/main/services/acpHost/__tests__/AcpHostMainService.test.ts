@@ -4,7 +4,6 @@
 
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { NullLogger } from '@universe-editor/platform'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import {
   AcpHostMainService,
@@ -65,7 +64,7 @@ function fakeSpawnerWith(procs: FakeProc[]): AcpSpawner {
 }
 
 function makeService(spawner: AcpSpawner): AcpHostMainService {
-  return new AcpHostMainService(new NullLogger(), spawner)
+  return new AcpHostMainService(spawner)
 }
 
 describe('AcpHostMainService', () => {
@@ -253,7 +252,7 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     const spawner = vi.fn(
       ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
     )
-    svc = new AcpHostMainService(new NullLogger(), spawner)
+    svc = new AcpHostMainService(spawner)
     await svc.start({
       command: 'agent',
       args: ['--flag'],
@@ -275,7 +274,7 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     const spawner = vi.fn(
       ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
     )
-    svc = new AcpHostMainService(new NullLogger(), spawner)
+    svc = new AcpHostMainService(spawner)
     await expect(svc.start({ command: 'agent', args: [], cwd: 'relative/path' })).rejects.toThrow(
       /absolute path/,
     )
@@ -292,7 +291,7 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     process.env.ELECTRON_RUN_AS_NODE = '1'
     process.env.NODE_OPTIONS = '--inspect=9229'
     try {
-      svc = new AcpHostMainService(new NullLogger(), spawner)
+      svc = new AcpHostMainService(spawner)
       await svc.start({ command: 'agent', args: [] })
       const call = spawner.mock.calls[0]!
       expect(call[2].env?.ELECTRON_RUN_AS_NODE).toBeUndefined()
@@ -310,7 +309,7 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     const spawner = vi.fn(
       ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
     )
-    svc = new AcpHostMainService(new NullLogger(), spawner)
+    svc = new AcpHostMainService(spawner)
     await svc.start({
       command: 'agent',
       args: [],
@@ -328,7 +327,7 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
       ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
     )
     const entry = '/bundled/claude-agent-acp/dist/index.js'
-    svc = new AcpHostMainService(new NullLogger(), spawner, undefined, () => entry)
+    svc = new AcpHostMainService(spawner, undefined, () => entry)
 
     await svc.start({ command: 'claude-agent-acp', args: ['--flag'], runAsNode: true })
 
@@ -350,19 +349,19 @@ describe('AcpHostMainService — probe', () => {
 
   it('returns true when the lookup hook reports the command is on PATH', async () => {
     const lookup = vi.fn(async () => true) as AcpCommandLookup
-    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    svc = new AcpHostMainService(undefined, lookup)
     await expect(svc.probe('agent')).resolves.toBe(true)
   })
 
   it('returns false when the lookup hook reports the command is missing', async () => {
     const lookup = vi.fn(async () => false) as AcpCommandLookup
-    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    svc = new AcpHostMainService(undefined, lookup)
     await expect(svc.probe('missing')).resolves.toBe(false)
   })
 
   it('returns false for empty command without invoking the lookup', async () => {
     const lookup = vi.fn(async () => true) as AcpCommandLookup
-    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    svc = new AcpHostMainService(undefined, lookup)
     await expect(svc.probe('')).resolves.toBe(false)
     expect(lookup).not.toHaveBeenCalled()
   })
@@ -371,7 +370,7 @@ describe('AcpHostMainService — probe', () => {
     const lookup = vi.fn(async () => {
       throw new Error('boom')
     }) as AcpCommandLookup
-    svc = new AcpHostMainService(new NullLogger(), undefined, lookup)
+    svc = new AcpHostMainService(undefined, lookup)
     await expect(svc.probe('weird')).resolves.toBe(false)
   })
 })

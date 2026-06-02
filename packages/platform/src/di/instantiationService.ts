@@ -12,6 +12,7 @@ import {
   IDisposable,
   dispose,
   isDisposable,
+  markAsSingleton,
   toDisposable,
 } from '../base/lifecycle.js'
 import { LinkedList } from '../base/linkedList.js'
@@ -322,6 +323,11 @@ export class InstantiationService implements IInstantiationService {
     if (!supportsDelayedInstantiation) {
       // eager instantiation
       const result = this._createInstance<T>(ctor, args)
+      // The container owns this instance via `disposeBucket`; exclude it from
+      // leak reports the same way an explicit root DisposableStore would.
+      if (isDisposable(result)) {
+        markAsSingleton(result)
+      }
       disposeBucket.add(result)
       return result
     }
@@ -356,9 +362,19 @@ export class InstantiationService implements IInstantiationService {
         }
       }
       earlyListeners.clear()
+      if (isDisposable(result)) {
+        markAsSingleton(result)
+      }
       disposeBucket.add(result)
       return result
     })
+    // The idle scheduler is itself a Disposable (its runWhenIdle handle). Mark it
+    // as a singleton so leak detection ignores the pending callback, and add it to
+    // the bucket so disposing the container cancels a still-pending idle.
+    if (isDisposable(idle)) {
+      markAsSingleton(idle)
+      disposeBucket.add(idle)
+    }
 
     return new Proxy(Object.create(null), {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

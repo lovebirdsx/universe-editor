@@ -13,13 +13,15 @@ import {
   Severity,
   StatusBarAlignment,
   observableValue,
+  IProgressService,
+  InstantiationType,
+  registerSingleton,
 } from '@universe-editor/platform'
 import type {
   CancellationToken,
   IObservable,
   IProgress,
   IProgressOptions,
-  IProgressService,
   IProgressStep,
   IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
@@ -263,3 +265,5 @@ export class ProgressService extends Disposable implements IProgressService {
     ]
   }
 }
+
+registerSingleton(IProgressService, ProgressService, InstantiationType.Delayed)

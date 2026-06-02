@@ -7,17 +7,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  createDecorator,
+  createNamedLogger,
   Emitter,
   type Event,
   type IDisposable,
   type ILogger,
+  ILoggerService,
   type IRecentWorkspace,
   type IWorkspace,
-  NullLogger,
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
-import type { Storage } from '../../storage.js'
+import { IMainStorageService, type Storage } from '../../storage.js'
 
 export const RECENT_WORKSPACES_STORAGE_KEY = 'workbench.recentWorkspaces'
 const MAX_RECENT = 20
@@ -28,6 +30,9 @@ interface PersistedRecent {
   readonly lastOpened: number
 }
 
+export const IRecentWorkspacesService =
+  createDecorator<RecentWorkspacesMainService>('recentWorkspacesService')
+
 export class RecentWorkspacesMainService implements IDisposable {
   private readonly _onDidChangeRecent = new Emitter<readonly IRecentWorkspace[]>()
   readonly onDidChangeRecent: Event<readonly IRecentWorkspace[]> = this._onDidChangeRecent.event
@@ -35,11 +40,14 @@ export class RecentWorkspacesMainService implements IDisposable {
   private _recent: IRecentWorkspace[] = []
   private _hydrated = false
   private _hydratePromise: Promise<void> | null = null
+  private readonly _logger: ILogger
 
   constructor(
-    private readonly _storage: Storage,
-    private readonly _logger: ILogger = new NullLogger(),
-  ) {}
+    @IMainStorageService private readonly _storage: Storage,
+    @ILoggerService loggerService?: ILoggerService,
+  ) {
+    this._logger = createNamedLogger(loggerService, { id: 'workspace', name: 'Workspace' })
+  }
 
   private async _hydrate(): Promise<void> {
     if (this._hydrated) return

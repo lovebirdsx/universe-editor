@@ -7,12 +7,13 @@
 import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
+  createNamedLogger,
   FileSystemError,
-  NullLogger,
   type IDirectoryEntry,
   type IFileService,
   type IFileStat,
   type ILogger,
+  ILoggerService,
   URI,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -50,7 +51,11 @@ function mapError(err: unknown, fallbackMessage: string): FileSystemError {
 export class FileSystemMainService implements IFileService {
   declare readonly _serviceBrand: undefined
 
-  constructor(private readonly _logger: ILogger = new NullLogger()) {}
+  private readonly _logger: ILogger
+
+  constructor(@ILoggerService loggerService?: ILoggerService) {
+    this._logger = createNamedLogger(loggerService, { id: 'fileSystem', name: 'File System' })
+  }
 
   async readFile(resource: RawUri): Promise<Uint8Array> {
     const uri = ensureFile(reviveUri(resource))

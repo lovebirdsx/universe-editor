@@ -22,7 +22,13 @@ import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { app } from 'electron'
 import { extract as tarExtract } from 'tar'
-import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
+import {
+  createNamedLogger,
+  Disposable,
+  Emitter,
+  type ILogger,
+  ILoggerService,
+} from '@universe-editor/platform'
 import type {
   ICodexBinaryProgress,
   ICodexBinaryResolveOptions,
@@ -77,8 +83,11 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
   /** De-dupes concurrent resolves and caches the resolved path per options. */
   private readonly _inflight = new Map<string, Promise<ICodexBinaryResult>>()
 
-  constructor(private readonly _logger: ILogger) {
+  private readonly _logger: ILogger
+
+  constructor(@ILoggerService loggerService?: ILoggerService) {
     super()
+    this._logger = createNamedLogger(loggerService, { id: 'codexBinary', name: 'Codex Binary' })
   }
 
   resolve(opts: ICodexBinaryResolveOptions): Promise<ICodexBinaryResult> {

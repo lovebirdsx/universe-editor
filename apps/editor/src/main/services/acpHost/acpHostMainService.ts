@@ -10,7 +10,13 @@ import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { app } from 'electron'
-import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
+import {
+  createNamedLogger,
+  Disposable,
+  Emitter,
+  type ILogger,
+  ILoggerService,
+} from '@universe-editor/platform'
 import type {
   AcpExitEvent,
   AcpLaunchSpec,
@@ -161,13 +167,16 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
 
   private readonly _procs = new Map<string, ProcEntry>()
 
+  private readonly _logger: ILogger
+
   constructor(
-    private readonly _logger: ILogger,
     private readonly _spawn: AcpSpawner = defaultSpawner,
     private readonly _lookup: AcpCommandLookup = defaultLookup,
     private readonly _resolveNodeEntry: NodeEntryResolver = defaultResolveNodeEntry,
+    @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
+    this._logger = createNamedLogger(loggerService, { id: 'acpHost', name: 'ACP Host' })
   }
 
   start(spec: AcpLaunchSpec): Promise<AcpStartResult> {

@@ -22,7 +22,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
-import { Disposable, type ILogger } from '@universe-editor/platform'
+import {
+  createNamedLogger,
+  Disposable,
+  type ILogger,
+  ILoggerService,
+} from '@universe-editor/platform'
 import type {
   CreateTerminalResponse,
   EnvVariable,
@@ -122,11 +127,14 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
 
   private readonly _entries = new Map<string, TerminalEntry>()
 
+  private readonly _logger: ILogger
+
   constructor(
-    private readonly _logger: ILogger,
     private readonly _spawn: AcpTerminalSpawner = defaultSpawner,
+    @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
+    this._logger = createNamedLogger(loggerService, { id: 'acpTerminal', name: 'ACP Terminal' })
   }
 
   create(spec: AcpTerminalCreateSpec): Promise<CreateTerminalResponse> {

@@ -11,9 +11,12 @@
 import {
   IFileService,
   ILoggerService,
+  ITextSearchService,
   IWorkspaceService,
+  InstantiationType,
   URI,
   createNamedLogger,
+  registerSingleton,
   type IFileMatch,
   type IFileService as IFileServiceType,
   type ILogger,
@@ -21,7 +24,6 @@ import {
   type ITextSearchOptions,
   type ITextSearchProgress,
   type ITextSearchQuery,
-  type ITextSearchService,
   type IWorkspaceService as IWorkspaceServiceType,
   type SearchLimitHit,
 } from '@universe-editor/platform'
@@ -235,3 +237,5 @@ function progressOf(
     ? { filesScanned, filesMatched, totalMatches, limitHit }
     : { filesScanned, filesMatched, totalMatches }
 }
+
+registerSingleton(ITextSearchService, TextSearchService, InstantiationType.Delayed)

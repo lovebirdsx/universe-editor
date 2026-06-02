@@ -5,7 +5,7 @@
  *  Source: https://github.com/microsoft/vscode/blob/main/src/vs/base/common/async.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { IDisposable, toDisposable } from './lifecycle.js'
+import { IDisposable, setParentOfDisposable, toDisposable } from './lifecycle.js'
 
 export interface IdleDeadline {
   readonly didTimeout: boolean
@@ -78,6 +78,10 @@ export class AbstractIdleValue<T> implements IDisposable {
       }
     }
     this._handle = runWhenIdle(target, () => this._executor())
+    // The idle handle is an internal detail of this value; parent it here so leak
+    // detection roots it under this object (and excludes it when this value is
+    // marked as a singleton, e.g. lazy DI service materialization).
+    setParentOfDisposable(this._handle, this)
   }
 
   dispose(): void {

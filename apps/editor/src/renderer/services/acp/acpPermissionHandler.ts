@@ -15,6 +15,8 @@ import {
   ConfigurationTarget,
   createDecorator,
   IConfigurationService,
+  InstantiationType,
+  registerSingleton,
 } from '@universe-editor/platform'
 import type { RequestPermissionRequest, RequestPermissionResponse } from '@agentclientprotocol/sdk'
 
@@ -61,3 +63,5 @@ export class AcpPermissionHandler implements IAcpPermissionHandler {
     return new Set(raw.filter((s): s is string => typeof s === 'string'))
   }
 }
+
+registerSingleton(IAcpPermissionHandler, AcpPermissionHandler, InstantiationType.Delayed)

@@ -7,28 +7,35 @@ import {
   setDisposableTracker,
   installConsoleInterceptor,
   getOriginalConsole,
+  InstantiationService,
+  ServiceCollection,
+  getSingletonServiceDescriptors,
+  ILoggerService,
+  IFileService,
+  IFileWatcherService,
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
-import { MainPingService } from './services/ping/pingMainService.js'
-import { FileSystemMainService } from './services/files/fileSystemMainService.js'
-import { FileWatcherMainService } from './services/fileWatcher/fileWatcherMainService.js'
-import { RecentWorkspacesMainService } from './services/workspace/recentWorkspacesMainService.js'
-import { LogMainService } from './services/log/logMainService.js'
-import { LogFilesMainService } from './services/log/logFilesMainService.js'
+import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
-import { AcpHostMainService } from './services/acpHost/acpHostMainService.js'
-import { AcpTerminalMainService } from './services/acpTerminal/acpTerminalMainService.js'
-import { ClaudeBinaryMainService } from './services/claudeBinary/claudeBinaryMainService.js'
-import { CodexBinaryMainService } from './services/codexBinary/codexBinaryMainService.js'
-import { DisposableLeakMainService } from './services/disposableLeak/disposableLeakMainService.js'
-import { UpdateMainService } from './services/update/updateMainService.js'
+import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
+import { IDisposableLeakService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
+import { IAcpHostService } from '../shared/ipc/acpHostService.js'
+import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
+import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
+import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
+import { IUpdateService } from '../shared/ipc/updateService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
-import { EnvironmentMainService } from './environment/environmentMainService.js'
-import { getDefaultStorage } from './storage.js'
+import {
+  EnvironmentMainService,
+  IEnvironmentMainService,
+} from './environment/environmentMainService.js'
+import { getDefaultStorage, IMainStorageService } from './storage.js'
 import { loadSession } from './windowsSession.js'
 import type { ApplicationServices } from './window/scopedServicesFactory.js'
+// Side-effect: registers all application-singleton main services with registerSingleton.
+import './services/main-services.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
@@ -120,15 +127,11 @@ if (!hasSingleInstanceLock) {
   })
 }
 
-// Application-singleton services — shared across all windows.
+// Application-singleton services — shared across all windows, owned by the root
+// DI container. The container disposes every materialized service on will-quit.
+let rootInstantiation: InstantiationService | null = null
 let applicationServices: ApplicationServices | null = null
-let recentWorkspacesService: RecentWorkspacesMainService | null = null
-let acpHostService: AcpHostMainService | null = null
-let acpTerminalService: AcpTerminalMainService | null = null
 let windowMainService: WindowMainService | null = null
-let claudeBinaryService: ClaudeBinaryMainService | null = null
-let codexBinaryService: CodexBinaryMainService | null = null
-let updateService: UpdateMainService | null = null
 // 打包后的 Windows 任务栏 / Alt+Tab 图标来自可执行文件内嵌图标（electron-builder `win.icon`）。
 // 给 BrowserWindow.icon 传 asar 内路径会用一个加载失败的空图标把它覆盖成默认 Electron 图标，
 // 所以仅在 dev（运行的是通用 electron.exe）下显式设置，并使用专属的 dev 图标以区分发布版。
@@ -140,49 +143,37 @@ const appIconPath =
 function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainService } {
   if (!applicationServices) {
     mainLogger.info('create application services')
-    const recentWorkspaces = new RecentWorkspacesMainService(
-      getDefaultStorage(),
-      logMainService.createLogger({ id: 'workspace', name: 'Workspace' }),
-    )
-    recentWorkspacesService = recentWorkspaces
-    const acpHost = new AcpHostMainService(
-      logMainService.createLogger({ id: 'acpHost', name: 'ACP Host' }),
-    )
-    acpHostService = acpHost
-    const acpTerminal = new AcpTerminalMainService(
-      logMainService.createLogger({ id: 'acpTerminal', name: 'ACP Terminal' }),
-    )
-    acpTerminalService = acpTerminal
-    claudeBinaryService = new ClaudeBinaryMainService(
-      logMainService.createLogger({ id: 'claudeBinary', name: 'Claude Binary' }),
-    )
-    codexBinaryService = new CodexBinaryMainService(
-      logMainService.createLogger({ id: 'codexBinary', name: 'Codex Binary' }),
-    )
     // Phase two: userData is resolved, so the deployment config file can now be
     // layered in (lowest priority) before services that read it are constructed.
     environmentService.resolveFileConfig(app.getPath('userData'))
-    updateService = new UpdateMainService(
-      logMainService.createLogger({ id: 'update', name: 'Update' }),
-      environmentService,
-    )
-    applicationServices = {
-      ping: new MainPingService(),
-      fileSystem: new FileSystemMainService(
-        logMainService.createLogger({ id: 'fileSystem', name: 'File System' }),
-      ),
-      fileWatcher: new FileWatcherMainService(
-        logMainService.createLogger({ id: 'fileWatcher', name: 'File Watcher' }),
-      ),
-      recentWorkspaces,
-      logFiles: new LogFilesMainService(logMainService),
-      acpHost,
-      acpTerminal,
-      claudeBinary: claudeBinaryService,
-      codexBinary: codexBinaryService,
-      disposableLeak: new DisposableLeakMainService(),
-      update: updateService,
+
+    // Root DI container. Preset instances (constructed before the container,
+    // because they resolve userData / log paths) + the declaratively-registered
+    // singletons feed the collection; the container then materializes services on
+    // demand, injecting @ILoggerService etc.
+    const collection = new ServiceCollection()
+    collection.set(ILoggerService, logMainService)
+    collection.set(ILogMainService, logMainService)
+    collection.set(IEnvironmentMainService, environmentService)
+    collection.set(IMainStorageService, getDefaultStorage())
+    for (const [id, descriptor] of getSingletonServiceDescriptors()) {
+      if (!collection.has(id)) collection.set(id, descriptor)
     }
+    rootInstantiation = new InstantiationService(collection)
+
+    applicationServices = rootInstantiation.invokeFunction((accessor) => ({
+      ping: accessor.get(IPingService),
+      fileSystem: accessor.get(IFileService),
+      fileWatcher: accessor.get(IFileWatcherService),
+      recentWorkspaces: accessor.get(IRecentWorkspacesService),
+      logFiles: accessor.get(ILogFilesService),
+      acpHost: accessor.get(IAcpHostService),
+      acpTerminal: accessor.get(IAcpTerminalService),
+      claudeBinary: accessor.get(IClaudeBinaryService),
+      codexBinary: accessor.get(ICodexBinaryService),
+      disposableLeak: accessor.get(IDisposableLeakService),
+      update: accessor.get(IUpdateService),
+    }))
   }
   if (!windowMainService) {
     windowMainService = new WindowMainService({
@@ -246,12 +237,9 @@ app.on('before-quit', () => {
 app.on('will-quit', () => {
   mainLogger.info('will-quit')
   windowMainService?.dispose()
-  recentWorkspacesService?.dispose()
-  acpHostService?.dispose()
-  acpTerminalService?.dispose()
-  claudeBinaryService?.dispose()
-  codexBinaryService?.dispose()
-  updateService?.dispose()
+  // Disposes every materialized application service (acpHost kills child
+  // processes, recentWorkspaces flushes its writes, update tears down, etc.).
+  rootInstantiation?.dispose()
   void getDefaultStorage().flush()
   consoleInterceptor.dispose()
   logMainService.dispose()

@@ -22,6 +22,7 @@ export * from './di/descriptors.js'
 export * from './di/serviceCollection.js'
 export * from './di/graph.js'
 export * from './di/instantiationService.js'
+export * from './di/extensions.js'
 
 // logging
 export * from './log/log.js'

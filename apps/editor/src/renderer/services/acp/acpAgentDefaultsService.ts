@@ -22,7 +22,9 @@ import {
   ILoggerService,
   ITelemetryService,
   IWorkspaceService,
+  InstantiationType,
   observableValue,
+  registerSingleton,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
@@ -166,3 +168,5 @@ function isNestedStringRecord(
   }
   return true
 }
+
+registerSingleton(IAcpAgentDefaultsService, AcpAgentDefaultsService, InstantiationType.Delayed)
