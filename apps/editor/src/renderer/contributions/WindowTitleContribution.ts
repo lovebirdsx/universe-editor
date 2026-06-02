@@ -4,11 +4,11 @@
  *  current workspace folder *and* the active ACP session so Alt+Tab / the
  *  taskbar shows, at a glance, which workspace each window belongs to and what
  *  session it is running. With an active session the title reads
- *  "<folder> — <symbol> <session title>" (e.g. "universe-editor3 — 🟢 修复登录Bug");
+ *  "<folder> — <symbol> <session title>" (e.g. "universe-editor3 — ● 修复登录Bug");
  *  with none it falls back to "<folder name> - <parent directory>". Electron
  *  mirrors `document.title` onto the native window title, surfaced even with
- *  `frame: false`. The status symbol maps AcpSessionStatus to a colored dot:
- *  🟢 running · ⚪ idle · 🟡 connecting · 🔴 errored (closed → no session segment).
+ *  `frame: false`. The status symbol maps AcpSessionStatus to a geometric shape:
+ *  ● running · ○ idle · ◌ connecting · ✕ errored (closed → no session segment).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -30,10 +30,10 @@ import {
 } from '../services/acp/acpSessionTitle.js'
 
 const STATUS_SYMBOL: Record<AcpSessionStatus, string> = {
-  running: '🟢',
-  idle: '⚪',
-  connecting: '🟡',
-  errored: '🔴',
+  running: '●',
+  idle: '○',
+  connecting: '◌',
+  errored: '✕',
   closed: '',
 }
 

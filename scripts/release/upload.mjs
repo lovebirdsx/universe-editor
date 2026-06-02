@@ -135,6 +135,28 @@ if (config.mkdir) {
   run('ssh', [...sshBase, remote, mkdirCmd], { warnOnly: true })
 }
 
+// 上传前预检：用临时探针文件确认目标目录可写。否则要等 scp 半路 Permission denied
+// 才暴露权限问题，错误信息既晚又不直观（目录通常是 root 建的，user 进得去写不了）。
+if (!config.dryRun) {
+  const probe = isWindowsTarget ? `${config.dir}\\.ue-write-probe` : `${config.dir}/.ue-write-probe`
+  const probeCmd = isWindowsTarget
+    ? `cmd /c type nul > "${probe}" && del "${probe}"`
+    : `touch '${probe}' && rm -f '${probe}'`
+  const res = spawnSync('ssh', [...sshBase, remote, probeCmd], { encoding: 'utf8' })
+  if (res.error) die(`无法连接 ${remote}：${res.error.message}`)
+  if (res.status !== 0) {
+    const detail = (res.stderr || '').trim()
+    die(
+      `目标目录不可写：${config.user} 对 ${config.dir} 没有写权限。\n` +
+        (detail ? `  服务器返回: ${detail}\n` : '') +
+        `  在服务器上用 root/sudo 执行其一后重试：\n` +
+        `    sudo chown -R ${config.user} ${config.dir}\n` +
+        `    sudo chmod -R 0775 ${config.dir}\n` +
+        `  或改用 ${config.user} 有写权限的目录（--dir）。`,
+    )
+  }
+}
+
 // 先 payload 后 manifest：scp 目标为目录时用源文件名落地，文件名空格无需转义。
 for (const file of [...payloads, ...manifests]) {
   console.log(`⬆️  ${file}`)
