@@ -15,6 +15,7 @@ import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
 import { ChatBody } from './ChatBody.js'
 import { SessionsPopover } from './SessionsPopover.js'
+import { AgentIcon } from './agentIcon.js'
 import styles from './agents.module.css'
 
 export function ChatPanel() {
@@ -50,7 +51,16 @@ export function ChatPanel() {
           </button>
         </div>
         <span className={styles['chatToolbarTitle']} data-testid="acp-chat-title">
-          {active?.title ?? localize('acp.empty.short', 'No session')}
+          {active && (
+            <AgentIcon
+              agentId={active.agentId}
+              size={14}
+              className={styles['chatTitleAgentIcon']}
+            />
+          )}
+          <span className={styles['chatTitleText']}>
+            {active?.title ?? localize('acp.empty.short', 'No session')}
+          </span>
         </span>
         <button
           type="button"

@@ -85,6 +85,12 @@
   white-space: nowrap;
 }
 
+.itemIcon {
+  flex-shrink: 0;
+  margin-right: 6px;
+  opacity: 0.85;
+}
+
 .itemDesc {
   font-size: 11px;
   color: var(--color-description-fg, #8a8a92);

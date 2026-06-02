@@ -22,6 +22,10 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSessionService.js'
 import { truncateTitle } from '../services/acp/sessionTitleFormat.js'
+import {
+  getAgentNotificationIcon,
+  primeAgentNotificationIcon,
+} from '../services/acp/agentNotificationIcon.js'
 import type { AcpPlanEntry } from '../services/acp/acpSession.js'
 
 const AGENTS_CONTAINER_ID = 'workbench.view.agents'
@@ -77,6 +81,9 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
   }
 
   private _watchSession(session: IAcpSession): IDisposable {
+    // Warm the notification icon so it's ready synchronously when an edge fires.
+    primeAgentNotificationIcon(session.agentId)
+
     let prevStatus = session.status.get()
     let permissionLatched = session.pendingPermission.get() !== undefined
     let questionLatched = session.pendingQuestion.get() !== undefined
@@ -126,15 +133,17 @@ export class AgentNotificationContribution extends Disposable implements IWorkbe
     const lines = [truncateTitle(session.title)]
     const workspaceName = this._workspace.current?.name
     if (workspaceName !== undefined && workspaceName.length > 0) lines.push(workspaceName)
-    void this._notifyAndMaybeFocus(session.id, title, lines.join('\n'))
+    void this._notifyAndMaybeFocus(session.id, session.agentId, title, lines.join('\n'))
   }
 
   private async _notifyAndMaybeFocus(
     sessionId: string,
+    agentId: string | undefined,
     title: string,
     body: string,
   ): Promise<void> {
-    const res = await this._host.notify({ title, body })
+    const icon = getAgentNotificationIcon(agentId)
+    const res = await this._host.notify({ title, body, ...(icon ? { icon } : {}) })
     if (!res.clicked) return
     this._sessions.setActive(sessionId)
     if (!this._layout.getVisible(PartId.SecondarySideBar)) {

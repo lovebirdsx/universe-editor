@@ -16,6 +16,7 @@ import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/acpSessionHistory.js'
+import { AgentIcon } from './agentIcon.js'
 import styles from './agents.module.css'
 
 function relativeTime(timestamp: number): string {
@@ -84,7 +85,14 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
             }}
           >
             <div className={styles['sessionRowTitle']}>
-              <span className={styles['sessionRowLabel']}>{entry.title}</span>
+              <span className={styles['sessionRowLabelLine']}>
+                <AgentIcon
+                  agentId={entry.agentId}
+                  size={14}
+                  className={styles['sessionRowAgentIcon']}
+                />
+                <span className={styles['sessionRowLabel']}>{entry.title}</span>
+              </span>
               <span className={styles['sessionRowMeta']}>{relativeTime(entry.lastUsedAt)}</span>
             </div>
             <button

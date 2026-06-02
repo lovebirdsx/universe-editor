@@ -104,6 +104,13 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   serialize?(): unknown
 
   /**
+   * Optional string icon id for the tab. When undefined the tab falls back to a
+   * resource-derived file icon. Resolved to a concrete icon component by the
+   * renderer, keeping the platform layer free of any icon-library dependency.
+   */
+  getIconId?(): string | undefined
+
+  /**
    * Equality by stable identity. Two inputs match when they share the same
    * resource URI, or when their `id`s are equal. Subclasses can override
    * for richer semantics (e.g. side-by-side editors).

@@ -5,7 +5,7 @@
 
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { app, dialog, shell, Notification, type BrowserWindow } from 'electron'
+import { app, dialog, shell, nativeImage, Notification, type BrowserWindow } from 'electron'
 import {
   Emitter,
   NullLogger,
@@ -230,7 +230,12 @@ export class MainHostService implements IHostServiceWire, IDisposable {
       return Promise.resolve({ shown: false, clicked: false })
     }
 
-    const notification = new Notification({ title: opts.title, body: opts.body })
+    const icon = opts.icon !== undefined ? nativeImage.createFromDataURL(opts.icon) : undefined
+    const notification = new Notification({
+      title: opts.title,
+      body: opts.body,
+      ...(icon && !icon.isEmpty() ? { icon } : {}),
+    })
     this._requestAttention()
     this._logger.info(`notify shown title=${opts.title}`)
 

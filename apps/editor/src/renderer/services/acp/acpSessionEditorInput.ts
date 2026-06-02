@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService } from './acpSessionService.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
+import { agentIconId } from './acpAgentRegistry.js'
 import { resolveLiveSessionTitle, truncateSessionTitle } from './acpSessionTitle.js'
 
 export class AcpSessionEditorInput extends EditorInput {
@@ -73,6 +74,10 @@ export class AcpSessionEditorInput extends EditorInput {
 
   override getName(): string {
     return this._lastTitle
+  }
+
+  override getIconId(): string {
+    return agentIconId(this.agentId)
   }
 
   override async confirmClose(dialogService: IDialogService): Promise<boolean> {

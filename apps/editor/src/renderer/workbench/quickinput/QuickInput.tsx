@@ -14,6 +14,7 @@ import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
 import type { IKeyMods, IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { FocusScopeOverlay } from '../common/FocusScopeOverlay.js'
+import { resolveAgentIcon } from '../agents/agentIcon.js'
 import {
   QuickInputService,
   type QuickPickState,
@@ -258,6 +259,11 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                     onMouseMove={() => setFocusedIdx(idx)}
                   >
                     {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
+                    {item.iconId &&
+                      (() => {
+                        const Icon = resolveAgentIcon(item.iconId)
+                        return <Icon size={14} className={styles['itemIcon']} />
+                      })()}
                     <span className={styles['itemLabel']}>{item.label}</span>
                     {item.description && (
                       <span className={styles['itemDesc']}>{item.description}</span>

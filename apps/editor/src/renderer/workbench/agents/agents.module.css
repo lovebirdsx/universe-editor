@@ -36,13 +36,25 @@
 
 .chatToolbarTitle {
   flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
   font-size: 11px;
   font-weight: 600;
   color: var(--color-message-role-fg, #aaa);
+  min-width: 0;
+  padding: 0 4px;
+}
+
+.chatTitleAgentIcon {
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+
+.chatTitleText {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding: 0 4px;
 }
 
 .toolbarButton {
@@ -914,6 +926,18 @@
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+}
+
+.sessionRowLabelLine {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.sessionRowAgentIcon {
+  flex-shrink: 0;
+  opacity: 0.85;
 }
 
 .sessionRowLabel {

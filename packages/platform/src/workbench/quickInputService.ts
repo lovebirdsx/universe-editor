@@ -13,6 +13,11 @@ export interface IQuickPickItem {
   readonly description?: string
   readonly detail?: string
   readonly keybinding?: string
+  /**
+   * Optional string icon id rendered before the label. Resolved to a concrete
+   * icon component by the renderer, keeping the platform layer icon-library free.
+   */
+  readonly iconId?: string
 }
 
 export type QuickPickFilterMode = 'fuzzy' | 'word'

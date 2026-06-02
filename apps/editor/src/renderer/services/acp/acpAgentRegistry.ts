@@ -22,11 +22,37 @@ export interface IAcpAgentDescriptor {
   readonly env?: Readonly<Record<string, string>>
   readonly cwd?: string
   /**
+   * Icon identifier resolved to a logo by the renderer (`workbench/agents/agentIcon`).
+   * Built-in: `'claude'` / `'openai'`. User agents may set it; unknown ids fall
+   * back to a generic bot icon.
+   */
+  readonly icon?: string
+  /**
    * Launch the bundled agent via Electron's own Node runtime (see
    * `AcpLaunchSpec.runAsNode`). Built-in presets only — never sourced from user
    * `acp.agents` config.
    */
   readonly runAsNode?: boolean
+}
+
+/** Generic fallback icon id for unknown / iconless agents. */
+export const DEFAULT_AGENT_ICON_ID = 'bot'
+
+/**
+ * Resolve an agent's icon id without touching React — used by EditorInput / quick
+ * pick where a string identifier is enough. `descriptorIcon` (when known) wins;
+ * otherwise the built-in default mapping; otherwise the generic bot fallback.
+ */
+export function agentIconId(agentId: string | undefined, descriptorIcon?: string): string {
+  if (descriptorIcon !== undefined && descriptorIcon.length > 0) return descriptorIcon
+  switch (agentId) {
+    case 'claude-code':
+      return 'claude'
+    case 'codex':
+      return 'openai'
+    default:
+      return DEFAULT_AGENT_ICON_ID
+  }
 }
 
 export interface IAcpAgentHealth {
@@ -64,6 +90,7 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
     // the entry-file resolution. No system node/npx required.
     command: 'claude-agent-acp',
     args: [],
+    icon: 'claude',
     runAsNode: true,
   },
   {
@@ -75,6 +102,7 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
     // placeholder used only for logging / the system-source PATH lookup.
     command: 'codex-acp',
     args: [],
+    icon: 'openai',
   },
 ]
 
@@ -175,6 +203,7 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
             ) as Record<string, string>)
           : undefined
       const cwd = typeof e['cwd'] === 'string' ? e['cwd'] : undefined
+      const icon = typeof e['icon'] === 'string' ? e['icon'] : undefined
       out.push({
         id,
         name,
@@ -182,6 +211,7 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
         args,
         ...(env ? { env } : {}),
         ...(cwd !== undefined ? { cwd } : {}),
+        ...(icon !== undefined ? { icon } : {}),
       })
     }
     return out

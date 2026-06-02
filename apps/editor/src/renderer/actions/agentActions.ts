@@ -21,7 +21,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSessionService.js'
-import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
+import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
@@ -411,6 +411,7 @@ export class ResumeAgentSessionAction extends Action2 {
       id: e.id,
       label: e.title,
       description: e.agentId,
+      iconId: agentIconId(e.agentId),
       detail: e.cwd
         ? localize('agent.history.detail', '{time} · {cwd}', {
             time: relativeTime(e.lastUsedAt),

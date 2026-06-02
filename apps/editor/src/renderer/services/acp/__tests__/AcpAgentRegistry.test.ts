@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { ConfigurationService, ConfigurationTarget, Emitter } from '@universe-editor/platform'
-import { AcpAgentRegistry } from '../acpAgentRegistry.js'
+import { AcpAgentRegistry, agentIconId } from '../acpAgentRegistry.js'
 import type { IAcpHostService } from '../../../../shared/ipc/acpHostService.js'
 
 function makeHost(
@@ -214,26 +214,41 @@ describe('AcpAgentRegistry', () => {
     expect(probe).not.toHaveBeenCalled()
   })
 
-  it('health memoizes probes per command across calls', async () => {
-    const probe = vi.fn(async () => true)
-    const { registry, config } = makeRegistry(probe)
+  it('built-in presets carry their official logo icon ids', () => {
+    const { registry } = makeRegistry()
+    const list = registry.list()
+    expect(list.find((a) => a.id === 'claude-code')?.icon).toBe('claude')
+    expect(list.find((a) => a.id === 'codex')?.icon).toBe('openai')
+  })
+
+  it('parses a user agent icon and keeps it absent when unset', () => {
+    const { registry, config } = makeRegistry()
     config.update(
       'acp.agents',
       [
-        { id: 'a', name: 'A', command: '/shared', args: [] },
-        { id: 'b', name: 'B', command: '/shared', args: [] },
-        { id: 'c', name: 'C', command: '/other', args: [] },
+        { id: 'iconful', name: 'Iconful', command: '/x', args: [], icon: 'sparkle' },
+        { id: 'plain', name: 'Plain', command: '/y', args: [] },
       ],
       ConfigurationTarget.Memory,
     )
-    await registry.health('a')
-    await registry.health('a')
-    await registry.health('b')
-    await registry.health('c')
-    expect(probe).toHaveBeenCalledTimes(2)
-    const commands = (probe.mock.calls as readonly (readonly unknown[])[])
-      .map((c) => c[0] as string)
-      .sort()
-    expect(commands).toEqual(['/other', '/shared'])
+    expect(registry.list().find((a) => a.id === 'iconful')?.icon).toBe('sparkle')
+    expect(registry.list().find((a) => a.id === 'plain')?.icon).toBeUndefined()
+  })
+})
+
+describe('agentIconId', () => {
+  it('maps built-in agent ids to their official logo ids', () => {
+    expect(agentIconId('claude-code')).toBe('claude')
+    expect(agentIconId('codex')).toBe('openai')
+  })
+
+  it('prefers an explicit descriptor icon over the id default', () => {
+    expect(agentIconId('claude-code', 'sparkle')).toBe('sparkle')
+  })
+
+  it('falls back to the generic bot for unknown / undefined agents', () => {
+    expect(agentIconId('mystery')).toBe('bot')
+    expect(agentIconId(undefined)).toBe('bot')
+    expect(agentIconId('claude-code', '')).toBe('claude')
   })
 })

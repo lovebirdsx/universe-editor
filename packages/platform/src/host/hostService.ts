@@ -121,6 +121,8 @@ export interface ISystemNotificationOptions {
   readonly body: string
   /** Only show while the window is blurred (default true). */
   readonly onlyWhenBlurred?: boolean
+  /** Optional PNG data URL rendered as the notification icon. */
+  readonly icon?: string
 }
 
 export interface ISystemNotificationResult {

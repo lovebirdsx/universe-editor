@@ -39,6 +39,7 @@ import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
 import { FileIcon } from '../files/fileIconTheme.js'
+import { resolveAgentIcon } from '../agents/agentIcon.js'
 import styles from './EditorArea.module.css'
 
 export interface EditorGroupViewProps {
@@ -147,7 +148,9 @@ function EditorTab({
   showDropIndicator: boolean
 }) {
   const resource = input.resource
-  const showsFileIcon = resource && (resource.scheme === 'file' || resource.scheme === 'untitled')
+  const iconId = input.getIconId?.()
+  const showsFileIcon =
+    !iconId && resource && (resource.scheme === 'file' || resource.scheme === 'untitled')
   const languageId =
     'language' in input && typeof input.language === 'string' ? input.language : undefined
 
@@ -178,15 +181,21 @@ function EditorTab({
       {...dragHandleProps}
     >
       {input.isDirty && <span className={styles['dirtyDot']} title="Unsaved changes" />}
-      {showsFileIcon && resource && (
-        <FileIcon
-          resource={resource}
-          isDirectory={false}
-          languageId={languageId}
-          className={styles['tabIcon']}
-          size={14}
-        />
-      )}
+      {iconId
+        ? (() => {
+            const Icon = resolveAgentIcon(iconId)
+            return <Icon size={14} className={styles['tabIcon']} />
+          })()
+        : showsFileIcon &&
+          resource && (
+            <FileIcon
+              resource={resource}
+              isDirectory={false}
+              languageId={languageId}
+              className={styles['tabIcon']}
+              size={14}
+            />
+          )}
       <span className={styles['tabLabel']}>{input.label}</span>
       <button
         className={styles['closeBtn']}
