@@ -7,6 +7,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Sparkles,
   SquareTerminal,
   Trash2,
   type LucideIcon,
@@ -26,6 +27,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'settings-gear': Settings,
   output: SquareTerminal,
   outline: ListTree,
+  sparkle: Sparkles,
   'trash-2': Trash2,
   refresh: RefreshCw,
 }

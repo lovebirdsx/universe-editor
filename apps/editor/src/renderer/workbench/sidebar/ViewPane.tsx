@@ -1,18 +1,17 @@
-import { useState, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import styles from './ViewPane.module.css'
 
 interface ViewPaneProps {
   title: string
   children: ReactNode
-  initiallyOpen?: boolean
+  open: boolean
+  onToggle: () => void
 }
 
-export function ViewPane({ title, children, initiallyOpen = true }: ViewPaneProps) {
-  const [open, setOpen] = useState(initiallyOpen)
-
+export function ViewPane({ title, children, open, onToggle }: ViewPaneProps) {
   return (
     <section className={styles['viewPane']}>
-      <button className={styles['header']} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+      <button className={styles['header']} onClick={onToggle} aria-expanded={open}>
         <span className={`${styles['chevron']} ${open ? styles['open'] : ''}`}>›</span>
         {title}
       </button>

@@ -9,7 +9,7 @@ import {
 import type { IPart } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
-import { ViewPane } from './ViewPane.js'
+import { ViewPaneContainer } from './ViewPaneContainer.js'
 import { ExplorerView } from '../explorer/ExplorerView.js'
 import { SearchView } from '../search/SearchView.js'
 import { AgentsView } from '../agents/AgentsView.js'
@@ -53,20 +53,11 @@ export function SideBar({ part }: { part?: IPart | undefined } = {}) {
     >
       <div className={styles['header']}>{activeContainer.label}</div>
       <div className={styles['views']}>
-        {views.length === 0 ? (
-          <p className={styles['empty']}>{localize('sidebar.empty', 'No views registered.')}</p>
-        ) : (
-          views.map((v) => {
-            const Component = viewComponentMap.get(v.componentKey)
-            return (
-              <ViewPane key={v.id} title={v.name}>
-                <div data-view-id={v.id} className={styles['viewBody']}>
-                  {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
-                </div>
-              </ViewPane>
-            )
-          })
-        )}
+        <ViewPaneContainer
+          views={views}
+          componentMap={viewComponentMap}
+          emptyMessage={localize('sidebar.empty', 'No views registered.')}
+        />
       </div>
     </aside>
   )

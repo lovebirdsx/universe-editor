@@ -9,7 +9,7 @@ import type { IPart } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { ViewContainerHeader } from '../viewContainerHeader/ViewContainerHeader.js'
-import { ViewPane } from './ViewPane.js'
+import { ViewPaneContainer } from './ViewPaneContainer.js'
 import { viewComponentMap } from './SideBar.js'
 import styles from './SideBar.module.css'
 
@@ -29,20 +29,7 @@ export function SecondarySideBar({ part }: { part?: IPart | undefined } = {}) {
         partId={PartId.SecondarySideBar}
       />
       <div className={styles['views']}>
-        {views.length === 0 ? (
-          <p className={styles['empty']}>No views registered.</p>
-        ) : (
-          views.map((v) => {
-            const Component = viewComponentMap.get(v.componentKey)
-            return (
-              <ViewPane key={v.id} title={v.name}>
-                <div data-view-id={v.id} className={styles['viewBody']}>
-                  {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
-                </div>
-              </ViewPane>
-            )
-          })
-        )}
+        <ViewPaneContainer views={views} componentMap={viewComponentMap} />
       </div>
     </aside>
   )
