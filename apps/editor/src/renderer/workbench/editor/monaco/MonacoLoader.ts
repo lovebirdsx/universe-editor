@@ -23,11 +23,12 @@ type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas
 let _extraSchemas: JsonSchemas = []
 
 const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'schemas'> = {
-  validate: true,
+  validate: false,
   allowComments: true,
-  trailingCommas: 'warning',
-  schemaValidation: 'error',
-  schemaRequest: 'warning',
+  trailingCommas: 'ignore',
+  schemaValidation: 'ignore',
+  schemaRequest: 'ignore',
+  comments: 'ignore',
 }
 
 function pushJsonDiagnostics(): void {
@@ -36,6 +37,37 @@ function pushJsonDiagnostics(): void {
     ...BASE_JSON_DIAGNOSTICS,
     schemas: _extraSchemas,
   })
+}
+
+function disableLanguageDiagnostics(): void {
+  if (!_monaco) return
+
+  const { jsonDefaults } = _monaco.languages.json
+  jsonDefaults.setModeConfiguration({ ...jsonDefaults.modeConfiguration, diagnostics: false })
+  pushJsonDiagnostics()
+
+  const tsDiagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions = {
+    noSemanticValidation: true,
+    noSyntaxValidation: true,
+    noSuggestionDiagnostics: true,
+    onlyVisible: false,
+  }
+  const { javascriptDefaults, typescriptDefaults } = _monaco.languages.typescript
+  for (const defaults of [typescriptDefaults, javascriptDefaults]) {
+    defaults.setDiagnosticsOptions(tsDiagnosticsOptions)
+    defaults.setModeConfiguration({ ...defaults.modeConfiguration, diagnostics: false })
+  }
+
+  const { cssDefaults, lessDefaults, scssDefaults } = _monaco.languages.css
+  for (const defaults of [cssDefaults, lessDefaults, scssDefaults]) {
+    defaults.setOptions({ ...defaults.options, validate: false })
+    defaults.setModeConfiguration({ ...defaults.modeConfiguration, diagnostics: false })
+  }
+
+  const { handlebarDefaults, htmlDefaults, razorDefaults } = _monaco.languages.html
+  for (const defaults of [htmlDefaults, handlebarDefaults, razorDefaults]) {
+    defaults.setModeConfiguration({ ...defaults.modeConfiguration, diagnostics: false })
+  }
 }
 
 async function loadMonaco(): Promise<typeof monaco> {
@@ -58,7 +90,7 @@ async function loadMonaco(): Promise<typeof monaco> {
       }
       _monaco = monacoMod
       registerLogLanguage(_monaco)
-      pushJsonDiagnostics()
+      disableLanguageDiagnostics()
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here

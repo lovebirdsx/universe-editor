@@ -68,13 +68,36 @@ export const editor = {
   defineTheme: () => {},
 }
 
+function makeDefaults() {
+  return {
+    diagnosticsOptions: {},
+    modeConfiguration: {},
+    options: {},
+    setDiagnosticsOptions: (_options: unknown) => {},
+    setModeConfiguration: (_options: unknown) => {},
+    setOptions: (_options: unknown) => {},
+  }
+}
+
 export const languages = {
   register: () => {},
   setMonarchTokensProvider: () => ({ dispose: () => {} }),
   json: {
-    jsonDefaults: {
-      setDiagnosticsOptions: (_options: unknown) => {},
-    },
+    jsonDefaults: makeDefaults(),
+  },
+  typescript: {
+    typescriptDefaults: makeDefaults(),
+    javascriptDefaults: makeDefaults(),
+  },
+  css: {
+    cssDefaults: makeDefaults(),
+    lessDefaults: makeDefaults(),
+    scssDefaults: makeDefaults(),
+  },
+  html: {
+    htmlDefaults: makeDefaults(),
+    handlebarDefaults: makeDefaults(),
+    razorDefaults: makeDefaults(),
   },
 }
 
