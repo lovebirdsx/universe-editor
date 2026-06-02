@@ -24,6 +24,7 @@ import {
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/services.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 
 const LOG_READ_MAX_BYTES = 1024 * 1024
 const EMPTY_LOG_CHANNEL = 'Logs'
@@ -55,12 +56,6 @@ function channelNameForLog(descriptor: LogFileDescriptor): string {
 function activeLogChannelName(outputService: IOutputService): string | undefined {
   const ch = outputService.activeChannel
   return ch?.kind === 'log' ? ch.name : undefined
-}
-
-function revealOutputPanel(layoutService: ILayoutService, viewsService: IViewsService): void {
-  viewsService.openViewContainer('workbench.view.output')
-  layoutService.setVisible(PartId.Panel, true)
-  layoutService.getPart(PartId.Panel)?.focus()
 }
 
 async function writeLogToOutput(

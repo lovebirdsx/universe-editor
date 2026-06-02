@@ -7,6 +7,7 @@ import {
   Emitter,
   IOutputService,
   InstantiationService,
+  LogLevel,
   ServiceCollection,
   type IStorageService,
 } from '@universe-editor/platform'
@@ -57,6 +58,15 @@ function makeLogFiles(
     onDidAppendEntry: emitter.event,
     _emitter: emitter,
   }
+}
+
+function fireAppend(
+  logFiles: FakeLogFilesService,
+  channelId: string,
+  chunk: string,
+  maxLevel: LogLevel = LogLevel.Info,
+): void {
+  logFiles._emitter.fire({ channelId, chunk, maxLevel })
 }
 
 function makeStorage(): IStorageService {
@@ -118,9 +128,9 @@ describe('AggregatedLogChannelContribution', () => {
     await flush()
 
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'm1\n' })
-    logFiles._emitter.fire({ channelId: 'console', chunk: 'c1\n' })
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'm2\n' })
+    fireAppend(logFiles, 'main', 'm1\n')
+    fireAppend(logFiles, 'console', 'c1\n')
+    fireAppend(logFiles, 'main', 'm2\n')
 
     expect(all.content.get()).toBe('[Main] m1\n[Console] c1\n[Main] m2\n')
     contribution.dispose()
@@ -131,11 +141,11 @@ describe('AggregatedLogChannelContribution', () => {
     await flush()
 
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'part-' })
+    fireAppend(logFiles, 'main', 'part-')
     expect(all.content.get()).toBe('')
     expect(contribution._getTail('main')).toBe('part-')
 
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'rest\n' })
+    fireAppend(logFiles, 'main', 'rest\n')
     expect(all.content.get()).toBe('[Main] part-rest\n')
     expect(contribution._getTail('main')).toBe('')
 
@@ -147,11 +157,11 @@ describe('AggregatedLogChannelContribution', () => {
     await flush()
 
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'a\nb\nc' })
+    fireAppend(logFiles, 'main', 'a\nb\nc')
     expect(all.content.get()).toBe('[Main] a\n[Main] b\n')
     expect(contribution._getTail('main')).toBe('c')
 
-    logFiles._emitter.fire({ channelId: 'main', chunk: '\n' })
+    fireAppend(logFiles, 'main', '\n')
     expect(all.content.get()).toBe('[Main] a\n[Main] b\n[Main] c\n')
     contribution.dispose()
   })
@@ -161,7 +171,7 @@ describe('AggregatedLogChannelContribution', () => {
     await flush()
 
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'a\npartial' })
+    fireAppend(logFiles, 'main', 'a\npartial')
     expect(contribution._getTail('main')).toBe('partial')
 
     all.clear()
@@ -170,7 +180,7 @@ describe('AggregatedLogChannelContribution', () => {
     expect(contribution._getTail('main')).toBe('')
 
     // After clear, a fresh chunk should not be concatenated onto the dropped tail.
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'fresh\n' })
+    fireAppend(logFiles, 'main', 'fresh\n')
     expect(all.content.get()).toBe('[Main] fresh\n')
 
     contribution.dispose()
@@ -186,11 +196,11 @@ describe('AggregatedLogChannelContribution', () => {
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
     // 'main' and 'console' are in the humanizeChannelId KNOWN_LABELS map so
     // they resolve to 'Main' / 'Console' even without a descriptor.
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'first\n' })
-    logFiles._emitter.fire({ channelId: 'console', chunk: 'hello\n' })
+    fireAppend(logFiles, 'main', 'first\n')
+    fireAppend(logFiles, 'console', 'hello\n')
     expect(all.content.get()).toBe('[Main] first\n[Console] hello\n')
 
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'second\n' })
+    fireAppend(logFiles, 'main', 'second\n')
     expect(all.content.get()).toBe('[Main] first\n[Console] hello\n[Main] second\n')
     contribution.dispose()
   })
@@ -201,7 +211,7 @@ describe('AggregatedLogChannelContribution', () => {
     const all = output.getChannel(AGGREGATED_LOG_CHANNEL_NAME)!
     contribution.dispose()
 
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'after\n' })
+    fireAppend(logFiles, 'main', 'after\n')
     expect(all.content.get()).toBe('')
   })
 })

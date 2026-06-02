@@ -179,7 +179,7 @@ describe('LogMainService', () => {
 
   it('fires onDidAppendEntry after a successful flush with the written chunk', async () => {
     const svc = new LogMainService()
-    const events: Array<{ channelId: string; chunk: string }> = []
+    const events: Array<{ channelId: string; chunk: string; maxLevel: LogLevel }> = []
     svc.onDidAppendEntry((e) => events.push(e))
 
     const logger = svc.createLogger({ id: 'tail', name: 'Tail' })
@@ -192,11 +192,30 @@ describe('LogMainService', () => {
     expect(events[0]?.chunk).toContain('first entry')
     expect(events[0]?.chunk).toContain('[info]')
     expect(events[0]?.chunk.endsWith('\n')).toBe(true)
+    expect(events[0]?.maxLevel).toBe(LogLevel.Info)
+  })
+
+  it('reports the highest log level in each append event', async () => {
+    const svc = new LogMainService()
+    const events: Array<{ channelId: string; chunk: string; maxLevel: LogLevel }> = []
+    svc.onDidAppendEntry((e) => events.push(e))
+
+    const logger = svc.createLogger({ id: 'levels', name: 'Levels' })
+    logger.warn('warning entry')
+    logger.error('error entry')
+    logger.flush()
+    await new Promise((r) => setTimeout(r, 200))
+
+    expect(events).toHaveLength(1)
+    expect(events[0]?.channelId).toBe('levels')
+    expect(events[0]?.chunk).toContain('[warn] warning entry')
+    expect(events[0]?.chunk).toContain('[error] error entry')
+    expect(events[0]?.maxLevel).toBe(LogLevel.Error)
   })
 
   it('does not fire onDidAppendEntry when no entries are queued', async () => {
     const svc = new LogMainService()
-    const events: Array<{ channelId: string; chunk: string }> = []
+    const events: Array<{ channelId: string; chunk: string; maxLevel: LogLevel }> = []
     svc.onDidAppendEntry((e) => events.push(e))
     const logger = svc.createLogger({ id: 'idle', name: 'Idle' })
     logger.flush()

@@ -22,4 +22,26 @@ test.describe('@p1 output panel', () => {
     await workbench.runCommand('workbench.action.togglePanel')
     await expect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(false)
   })
+
+  test('first error log reveals Output and activates the emitting channel', async ({
+    workbench,
+  }) => {
+    if (await workbench.getContextKey<boolean>('panelVisible')) {
+      await workbench.runCommand('workbench.action.togglePanel')
+      await expect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(false)
+    }
+
+    await workbench.page.evaluate(() => {
+      window.__E2E__!.triggerUnexpectedError('E2E auto reveal error log')
+    })
+
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('panelVisible'), { timeout: 10_000 })
+      .toBe(true)
+    await expect
+      .poll(() => workbench.page.evaluate(() => window.__E2E__!.getActiveOutputChannelName()), {
+        timeout: 10_000,
+      })
+      .toBe('Renderer')
+  })
 })

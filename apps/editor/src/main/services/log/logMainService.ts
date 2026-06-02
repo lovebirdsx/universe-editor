@@ -27,6 +27,7 @@ import {
 export interface LogAppendEvent {
   readonly channelId: string
   readonly chunk: string
+  readonly maxLevel: LogLevel
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -68,8 +69,8 @@ class FileLogger extends AbstractLogger {
   private readonly _logPath: string
   private readonly _sessionDir: string
   private readonly _channelId: string
-  private readonly _onChunk: (channelId: string, chunk: string) => void
-  private _writeQueue: string[] = []
+  private readonly _onChunk: (channelId: string, chunk: string, maxLevel: LogLevel) => void
+  private _writeQueue: Array<{ readonly level: LogLevel; readonly line: string }> = []
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
   private _estimatedSize = 0
   private _timestampFormat: string = LOG_TIMESTAMP_FORMAT_DEFAULT
@@ -78,7 +79,7 @@ class FileLogger extends AbstractLogger {
     sessionDir: string,
     channelId: string,
     level: LogLevel,
-    onChunk: (channelId: string, chunk: string) => void,
+    onChunk: (channelId: string, chunk: string, maxLevel: LogLevel) => void,
   ) {
     super(level)
     this._sessionDir = sessionDir
@@ -105,13 +106,15 @@ class FileLogger extends AbstractLogger {
     const ts = formatLogTimestamp(new Date(timestampMs), this._timestampFormat)
     const label = LOG_LEVEL_LABELS[level] ?? 'log'
     const line = `[${ts}] [${label}] ${message}\n`
-    this._writeQueue.push(line)
+    this._writeQueue.push({ level, line })
     this._estimatedSize += line.length
     if (this._writeQueue.length > MAX_BUFFER_LINES) {
       const dropped = this._writeQueue.length - MAX_BUFFER_LINES + 1
       this._writeQueue.splice(0, dropped)
       const warnTs = formatLogTimestamp(new Date(), this._timestampFormat)
-      this._writeQueue.push(`[${warnTs}] [warn] dropped ${dropped} buffered log entries\n`)
+      const warnLine = `[${warnTs}] [warn] dropped ${dropped} buffered log entries\n`
+      this._writeQueue.push({ level: LogLevel.Warning, line: warnLine })
+      this._estimatedSize += warnLine.length
     }
     this._scheduleFlush()
   }
@@ -134,15 +137,19 @@ class FileLogger extends AbstractLogger {
 
   private async _doFlush(): Promise<void> {
     if (this._writeQueue.length === 0) return
-    const lines = this._writeQueue.splice(0)
-    const content = lines.join('')
+    const entries = this._writeQueue.splice(0)
+    const content = entries.map((entry) => entry.line).join('')
+    const maxLevel = entries.reduce(
+      (highest, entry) => Math.max(highest, entry.level),
+      LogLevel.Off,
+    )
     try {
       await this._ensureSessionDir()
       if (this._estimatedSize > MAX_FILE_SIZE) {
         await this._rotate()
       }
       await fs.appendFile(this._logPath, content, 'utf8')
-      this._onChunk(this._channelId, content)
+      this._onChunk(this._channelId, content, maxLevel)
     } catch (err) {
       // Critical: use the pre-interceptor console so a logging failure cannot
       // recurse through the console interceptor back into this same logger.
@@ -335,7 +342,7 @@ export class LogMainService implements ILoggerService {
     this._onDidAppendEntry.dispose()
   }
 
-  private readonly _fireAppend = (channelId: string, chunk: string): void => {
-    this._onDidAppendEntry.fire({ channelId, chunk })
+  private readonly _fireAppend = (channelId: string, chunk: string, maxLevel: LogLevel): void => {
+    this._onDidAppendEntry.fire({ channelId, chunk, maxLevel })
   }
 }

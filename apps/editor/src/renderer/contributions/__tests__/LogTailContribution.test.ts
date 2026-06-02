@@ -7,6 +7,7 @@ import {
   Emitter,
   IOutputService,
   InstantiationService,
+  LogLevel,
   ServiceCollection,
   type IStorageService,
 } from '@universe-editor/platform'
@@ -52,6 +53,15 @@ function makeLogFiles(
   }
 }
 
+function fireAppend(
+  logFiles: FakeLogFilesService,
+  channelId: string,
+  chunk: string,
+  maxLevel: LogLevel = LogLevel.Info,
+): void {
+  logFiles._emitter.fire({ channelId, chunk, maxLevel })
+}
+
 function instantiate(output: OutputService, logFiles: FakeLogFilesService): LogTailContribution {
   const services = new ServiceCollection()
   services.set(ILogFilesService, logFiles as never)
@@ -94,7 +104,7 @@ describe('LogTailContribution', () => {
 
     const channel = output.createChannel('Main', 'log')
     output.setActiveChannel('Main')
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'hello\n' })
+    fireAppend(logFiles, 'main', 'hello\n')
     await Promise.resolve()
 
     expect(channel.content.get()).toBe('hello\n')
@@ -108,7 +118,7 @@ describe('LogTailContribution', () => {
 
     const channel = output.createChannel('Tasks')
     output.setActiveChannel('Tasks')
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'ignored\n' })
+    fireAppend(logFiles, 'main', 'ignored\n')
     await Promise.resolve()
 
     expect(channel.content.get()).toBe('')
@@ -122,7 +132,7 @@ describe('LogTailContribution', () => {
 
     const channel = output.createChannel('Main', 'log')
     output.setActiveChannel('Main')
-    logFiles._emitter.fire({ channelId: 'externalChange', chunk: 'other\n' })
+    fireAppend(logFiles, 'externalChange', 'other\n')
     await Promise.resolve()
 
     expect(channel.content.get()).toBe('')
@@ -137,9 +147,9 @@ describe('LogTailContribution', () => {
     const channel = output.createChannel('Main', 'log')
     output.setActiveChannel('Main')
     const appendSpy = vi.spyOn(channel, 'append')
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'a\n' })
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'b\n' })
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'c\n' })
+    fireAppend(logFiles, 'main', 'a\n')
+    fireAppend(logFiles, 'main', 'b\n')
+    fireAppend(logFiles, 'main', 'c\n')
     await Promise.resolve()
 
     expect(appendSpy).toHaveBeenCalledTimes(1)
@@ -157,12 +167,12 @@ describe('LogTailContribution', () => {
     const channel = output.createChannel('Main', 'log')
     output.setActiveChannel('Main')
     // First fire: cache miss, refresh queued, this chunk is dropped
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'dropped\n' })
+    fireAppend(logFiles, 'main', 'dropped\n')
     await Promise.resolve()
     await Promise.resolve()
 
     // Second fire: cache should now contain Main → main
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'landed\n' })
+    fireAppend(logFiles, 'main', 'landed\n')
     await Promise.resolve()
     expect(channel.content.get()).toBe('landed\n')
     contribution.dispose()
@@ -175,7 +185,7 @@ describe('LogTailContribution', () => {
     const channel = output.createChannel('Main', 'log')
     output.setActiveChannel('Main')
     contribution.dispose()
-    logFiles._emitter.fire({ channelId: 'main', chunk: 'after-dispose\n' })
+    fireAppend(logFiles, 'main', 'after-dispose\n')
     await Promise.resolve()
     expect(channel.content.get()).toBe('')
   })

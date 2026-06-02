@@ -67,6 +67,7 @@ export interface LogFileDescriptor {
 export interface LogAppendEvent {
   readonly channelId: string
   readonly chunk: string
+  readonly maxLevel: LogLevel
 }
 
 export interface ILogFilesService {

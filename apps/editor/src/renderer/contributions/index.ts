@@ -39,6 +39,7 @@ import { EditMenuContribution } from './EditMenuContribution.js'
 import { LogLevelContribution } from './LogLevelContribution.js'
 import { LogTailContribution } from './LogTailContribution.js'
 import { AggregatedLogChannelContribution } from './AggregatedLogChannelContribution.js'
+import { ErrorLogAutoRevealContribution } from './ErrorLogAutoRevealContribution.js'
 import {
   AgentsConfigurationContribution,
   AgentsEditorProviderContribution,
@@ -268,6 +269,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.logTail',
   LogTailContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// First Error log in a window reveals the Output panel and activates the
+// channel that emitted the error so failures do not stay hidden in the logs.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.errorLogAutoReveal',
+  ErrorLogAutoRevealContribution,
   WorkbenchPhase.AfterRestore,
 )
 
