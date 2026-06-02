@@ -229,6 +229,80 @@
   margin: 0 0 24px;
 }
 
+.agentHero {
+  max-width: 520px;
+  margin: 0 0 32px;
+  padding: 20px 24px;
+  border: 1px solid var(--color-border, #3c3c3c);
+  border-radius: 8px;
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.agentHeroIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border-radius: 10px;
+  margin-bottom: 12px;
+  color: #ffffff;
+  background: var(--color-accent, #0070e0);
+}
+
+.agentHeroTitle {
+  font-size: 18px;
+  font-weight: 600;
+  margin: 0 0 6px;
+  color: var(--color-editor-fg, #cccccc);
+}
+
+.agentHeroDesc {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--color-editor-fg-muted, #888888);
+  margin: 0 0 16px;
+}
+
+.agentActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.agentCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-button-fg, #ffffff);
+  background: var(--color-button-bg, #0e639c);
+}
+
+.agentCta:hover {
+  background: var(--color-button-hover-bg, #1177bb);
+}
+
+.agentSecondary {
+  padding: 8px 12px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--color-accent, #0070e0);
+  background: transparent;
+}
+
+.agentSecondary:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
 .shortcutList {
   list-style: none;
   padding: 0;

@@ -47,6 +47,7 @@ import {
   AgentsViewContainerContribution,
 } from './AgentsContributions.js'
 import { AgentNotificationContribution } from './AgentNotificationContribution.js'
+import { FirstRunAgentOnboardingContribution } from './FirstRunAgentOnboardingContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -309,6 +310,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentNotification',
   AgentNotificationContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// First-run only: reveal the Agents side bar so new users discover the editor's
+// core feature. Self-gates on a GLOBAL storage flag. AfterRestore so layout
+// visibility + view containers are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.firstRunAgentOnboarding',
+  FirstRunAgentOnboardingContribution,
   WorkbenchPhase.AfterRestore,
 )
 

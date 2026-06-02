@@ -38,6 +38,15 @@ export const test = base.extend<E2EFixtures>({
       JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
       'utf8',
     )
+    // Mark the first-run Agent onboarding as already seen so the default layout
+    // stays deterministic (the secondary sidebar stays hidden unless a spec
+    // toggles it). smoke.agentOnboarding launches its own un-seeded instance to
+    // cover the first-run reveal.
+    writeFileSync(
+      join(userDataDir, 'state.json'),
+      JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
+      'utf8',
+    )
     const app = await electron.launch({
       args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
       cwd: APP_ROOT,
