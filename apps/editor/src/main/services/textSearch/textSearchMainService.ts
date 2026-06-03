@@ -35,7 +35,11 @@ const DEFAULT_MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 const PROGRESS_INTERVAL_MS = 100
 const STDERR_LIMIT = 1_000_000
 
-const rgDiskPath = rgPath.replace(/\bnode_modules\.asar\b/, 'node_modules.asar.unpacked')
+export function resolveRipgrepDiskPath(ripgrepPath: string = rgPath): string {
+  return ripgrepPath.replace(/\.asar([\\/])/g, '.asar.unpacked$1')
+}
+
+const rgDiskPath = resolveRipgrepDiskPath()
 
 type RgBytesOrText = { bytes: string } | { text: string }
 

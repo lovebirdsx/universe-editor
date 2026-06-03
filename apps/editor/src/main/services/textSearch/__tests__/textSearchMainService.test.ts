@@ -7,7 +7,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { URI } from '@universe-editor/platform'
-import { TextSearchMainService } from '../textSearchMainService.js'
+import { resolveRipgrepDiskPath, TextSearchMainService } from '../textSearchMainService.js'
 
 const tempRoots: string[] = []
 
@@ -67,6 +67,40 @@ describe('TextSearchMainService', () => {
       svc.dispose()
     }
   }, 15_000)
+
+  it('resolves packaged ripgrep binaries from app.asar.unpacked', () => {
+    expect(
+      resolveRipgrepDiskPath(
+        String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      ),
+    ).toBe(
+      String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+    )
+
+    expect(
+      resolveRipgrepDiskPath(
+        String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\node_modules.asar\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      ),
+    ).toBe(
+      String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\node_modules.asar.unpacked\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+    )
+  })
+
+  it('keeps unpacked or development ripgrep paths stable', () => {
+    expect(
+      resolveRipgrepDiskPath(
+        String.raw`C:\repo\apps\editor\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      ),
+    ).toBe(String.raw`C:\repo\apps\editor\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`)
+
+    expect(
+      resolveRipgrepDiskPath(
+        String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+      ),
+    ).toBe(
+      String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\app.asar.unpacked\node_modules\@vscode\ripgrep-win32-x64\bin\rg.exe`,
+    )
+  })
 
   it('applies configured search excludes in the main process', async () => {
     const root = await makeTempRoot()
