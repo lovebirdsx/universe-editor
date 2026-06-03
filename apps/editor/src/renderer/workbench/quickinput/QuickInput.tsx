@@ -7,11 +7,19 @@ import {
   useMemo,
   useDeferredValue,
   type KeyboardEvent,
+  type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { IQuickInputService, markAsSingleton } from '@universe-editor/platform'
-import type { IKeyMods, IQuickPickItem, QuickPickFilterMode } from '@universe-editor/platform'
+import type {
+  IKeyMods,
+  IQuickItemHighlight,
+  IQuickPickItem,
+  IQuickPickSeparator,
+  QuickPickFilterMode,
+  QuickPickInput,
+} from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { FocusScopeOverlay } from '../common/FocusScopeOverlay.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
@@ -38,6 +46,14 @@ function itemMatches(
   return false
 }
 
+function isSeparator(item: QuickPickInput<IQuickPickItem>): item is IQuickPickSeparator {
+  return 'type' in item && item.type === 'separator'
+}
+
+function isSelectable(item: QuickPickInput<IQuickPickItem> | undefined): item is IQuickPickItem {
+  return item !== undefined && !isSeparator(item)
+}
+
 function compareMru(a: IQuickPickItem, b: IQuickPickItem, mruIds: readonly string[]): number {
   const ai = mruIds.indexOf(a.id)
   const bi = mruIds.indexOf(b.id)
@@ -45,6 +61,113 @@ function compareMru(a: IQuickPickItem, b: IQuickPickItem, mruIds: readonly strin
   if (ai === -1) return 1
   if (bi === -1) return -1
   return ai - bi
+}
+
+function firstSelectableIndex(items: readonly QuickPickInput<IQuickPickItem>[]): number {
+  const idx = items.findIndex((item) => !isSeparator(item))
+  return idx === -1 ? 0 : idx
+}
+
+function normalizeSelectableIndex(
+  items: readonly QuickPickInput<IQuickPickItem>[],
+  index: number,
+): number {
+  if (isSelectable(items[index])) return index
+  return firstSelectableIndex(items)
+}
+
+function nextSelectableIndex(
+  items: readonly QuickPickInput<IQuickPickItem>[],
+  current: number,
+  direction: 1 | -1,
+): number {
+  if (items.length === 0) return 0
+  let next = current
+  for (let i = 0; i < items.length; i++) {
+    next = (next + direction + items.length) % items.length
+    if (isSelectable(items[next])) return next
+  }
+  return normalizeSelectableIndex(items, current)
+}
+
+function pagedSelectableIndex(
+  items: readonly QuickPickInput<IQuickPickItem>[],
+  current: number,
+  direction: 1 | -1,
+  pageSize: number,
+): number {
+  const selectable = items
+    .map((item, index) => (isSeparator(item) ? -1 : index))
+    .filter((index) => index >= 0)
+  if (selectable.length === 0) return 0
+  const normalized = normalizeSelectableIndex(items, current)
+  const selectableOffset = Math.max(0, selectable.indexOf(normalized))
+  const nextOffset =
+    direction > 0
+      ? Math.min(selectableOffset + pageSize, selectable.length - 1)
+      : Math.max(selectableOffset - pageSize, 0)
+  return selectable[nextOffset] ?? normalized
+}
+
+function filterWithSeparators(
+  items: readonly QuickPickInput<IQuickPickItem>[],
+  query: string,
+  mode: QuickPickFilterMode,
+  matchOnDescription: boolean,
+  matchOnDetail: boolean,
+): QuickPickInput<IQuickPickItem>[] {
+  const result: QuickPickInput<IQuickPickItem>[] = []
+  let pendingSeparator: IQuickPickSeparator | undefined
+
+  for (const item of items) {
+    if (isSeparator(item)) {
+      pendingSeparator = item
+      continue
+    }
+    if (!itemMatches(item, query, mode, matchOnDescription, matchOnDetail)) continue
+    if (pendingSeparator) {
+      result.push(pendingSeparator)
+      pendingSeparator = undefined
+    }
+    result.push(item)
+  }
+
+  return result
+}
+
+function renderHighlightedText(
+  text: string,
+  highlights: readonly IQuickItemHighlight[] | undefined,
+) {
+  if (!highlights || highlights.length === 0) return text
+
+  const normalized = highlights
+    .map((highlight) => ({
+      start: Math.max(0, Math.min(text.length, highlight.start)),
+      end: Math.max(0, Math.min(text.length, highlight.end)),
+    }))
+    .filter((highlight) => highlight.start < highlight.end)
+    .sort((a, b) => a.start - b.start)
+
+  if (normalized.length === 0) return text
+
+  const parts: ReactNode[] = []
+  let cursor = 0
+  for (let i = 0; i < normalized.length; i++) {
+    const highlight = normalized[i]!
+    if (highlight.start < cursor) continue
+    if (highlight.start > cursor) {
+      parts.push(text.slice(cursor, highlight.start))
+    }
+    parts.push(
+      <mark key={`h-${i}`} className={styles['highlight']}>
+        {text.slice(highlight.start, highlight.end)}
+      </mark>,
+    )
+    cursor = highlight.end
+  }
+  if (cursor < text.length) parts.push(text.slice(cursor))
+  return parts
 }
 
 function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p'): boolean {
@@ -67,6 +190,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const matchOnDetail = state.matchOnDetail === true
   const onItemRemove = state.onItemRemove
   const filterExternally = state.filterExternally === true
+  const compact = state.presentation === 'compact'
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -78,66 +202,78 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
 
   const deferredFilterText = useDeferredValue(filterText)
 
-  const filtered = useMemo(
-    () =>
-      prefixMissing
-        ? []
-        : filterExternally
-          ? (state.items ?? []).filter((item) => !removedIds.has(item.id))
-          : (state.items ?? []).filter(
-              (item) =>
-                !removedIds.has(item.id) &&
-                itemMatches(
-                  item,
-                  deferredFilterText,
-                  filterMode,
-                  matchOnDescription,
-                  matchOnDetail,
-                ),
-            ),
-    [
-      prefixMissing,
-      filterExternally,
-      state.items,
-      removedIds,
+  const filtered = useMemo(() => {
+    if (prefixMissing) return []
+    const items = (state.items ?? []).filter((item) => !removedIds.has(item.id))
+    if (filterExternally) return items
+    return filterWithSeparators(
+      items,
       deferredFilterText,
       filterMode,
       matchOnDescription,
       matchOnDetail,
-    ],
-  )
+    )
+  }, [
+    prefixMissing,
+    filterExternally,
+    state.items,
+    removedIds,
+    deferredFilterText,
+    filterMode,
+    matchOnDescription,
+    matchOnDetail,
+  ])
 
   const sortedFiltered = useMemo(
-    () =>
-      [...filtered].sort((a, b) => {
+    () => {
+      if (filterExternally || filtered.some(isSeparator)) return filtered
+      return [...filtered].sort((a, b) => {
+        if (isSeparator(a) || isSeparator(b)) return 0
         const mruCompare = compareMru(a, b, mruIds)
         if (mruCompare !== 0) return mruCompare
         if (filterMode === 'word') return a.label.localeCompare(b.label)
         return 0
-      }),
+      })
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filtered, filterMode, mruIds.join(',')],
+    [filtered, filterExternally, filterMode, mruIds.join(',')],
   )
 
-  const ITEM_HEIGHT = 32
+  const ITEM_HEIGHT = compact ? 24 : 32
+  const SEPARATOR_HEIGHT = compact ? 26 : 30
+  const estimateItemSize = (index: number): number => {
+    const item = sortedFiltered[index]
+    return item && isSeparator(item) ? SEPARATOR_HEIGHT : ITEM_HEIGHT
+  }
 
   const virtualizer = useVirtualizer({
     count: sortedFiltered.length,
     getScrollElement: () => listRef.current,
-    estimateSize: () => ITEM_HEIGHT,
+    estimateSize: estimateItemSize,
     overscan: 5,
   })
 
   useEffect(() => {
-    if (quickNavigate) return
-    setFocusedIdx(0)
-  }, [query, quickNavigate])
+    if (quickNavigate) {
+      setFocusedIdx((idx) => normalizeSelectableIndex(sortedFiltered, idx))
+      return
+    }
+    setFocusedIdx(firstSelectableIndex(sortedFiltered))
+  }, [query, quickNavigate, sortedFiltered])
 
   useEffect(() => {
     if (sortedFiltered.length > 0) {
+      if (!isSelectable(sortedFiltered[focusedIdx])) {
+        if (listRef.current) listRef.current.scrollTop = 0
+        return
+      }
+      if (focusedIdx === firstSelectableIndex(sortedFiltered)) {
+        if (listRef.current) listRef.current.scrollTop = 0
+        return
+      }
       virtualizer.scrollToIndex(focusedIdx, { align: 'auto' })
     }
-  }, [focusedIdx, sortedFiltered.length, virtualizer])
+  }, [focusedIdx, sortedFiltered, sortedFiltered.length, virtualizer])
 
   const accept = useCallback(
     (items: IQuickPickItem[], mods?: IKeyMods) => {
@@ -178,7 +314,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
       if (e.key !== modifierKey) return
       const list = sortedFilteredRef.current
       const item = list[focusedIdxRef.current]
-      if (item) acceptRef.current([item])
+      if (isSelectable(item)) acceptRef.current([item])
     }
     document.addEventListener('keyup', onKeyUp, true)
     return () => document.removeEventListener('keyup', onKeyUp, true)
@@ -191,33 +327,33 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
     if (quickNavigate && e.key === 'Tab') {
       e.preventDefault()
       if (len === 0) return
-      if (e.shiftKey) setFocusedIdx((i) => (i - 1 + len) % len)
-      else setFocusedIdx((i) => (i + 1) % len)
+      if (e.shiftKey) setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, -1))
+      else setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, 1))
       return
     }
     if (e.key === 'ArrowDown' || isCtrlNavigationKey(e, 'n')) {
       e.preventDefault()
-      setFocusedIdx((i) => (len === 0 ? 0 : (i + 1) % len))
+      setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, 1))
     } else if (e.key === 'ArrowUp' || isCtrlNavigationKey(e, 'p')) {
       e.preventDefault()
-      setFocusedIdx((i) => (len === 0 ? 0 : (i - 1 + len) % len))
+      setFocusedIdx((i) => nextSelectableIndex(sortedFiltered, i, -1))
     } else if (e.key === 'PageDown') {
       e.preventDefault()
-      setFocusedIdx((i) => (len === 0 ? 0 : Math.min(i + PAGE_SIZE, len - 1)))
+      setFocusedIdx((i) => pagedSelectableIndex(sortedFiltered, i, 1, PAGE_SIZE))
     } else if (e.key === 'PageUp') {
       e.preventDefault()
-      setFocusedIdx((i) => (len === 0 ? 0 : Math.max(i - PAGE_SIZE, 0)))
+      setFocusedIdx((i) => pagedSelectableIndex(sortedFiltered, i, -1, PAGE_SIZE))
     } else if (e.key === 'Delete' && onItemRemove) {
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
-      if (item) removeItem(item)
+      if (isSelectable(item)) removeItem(item)
     } else if (e.key === 'Enter') {
       // preventDefault stops the native keydown from leaking to whichever element
       // receives focus after the panel closes (typically the Monaco editor), which
       // would otherwise cause an unwanted newline insertion.
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
-      if (item) accept([item], { ctrl: e.ctrlKey, alt: e.altKey })
+      if (isSelectable(item)) accept([item], { ctrl: e.ctrlKey, alt: e.altKey })
     }
   }
 
@@ -254,6 +390,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const item = sortedFiltered[virtualRow.index]!
               const idx = virtualRow.index
+              const focused = idx === focusedIdx && isSelectable(item)
               return (
                 <div
                   key={item.id}
@@ -265,41 +402,60 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
                 >
-                  <button
-                    className={`${styles['item']} ${idx === focusedIdx ? styles['focused'] : ''}`}
-                    role="option"
-                    aria-selected={idx === focusedIdx}
-                    onClick={(e) => accept([item], { ctrl: e.ctrlKey, alt: e.altKey })}
-                    onMouseMove={() => setFocusedIdx(idx)}
-                  >
-                    {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
-                    {item.iconId &&
-                      (() => {
-                        const Icon = resolveAgentIcon(item.iconId)
-                        return <Icon size={14} className={styles['itemIcon']} />
-                      })()}
-                    <span className={styles['itemLabel']}>{item.label}</span>
-                    {item.description && (
-                      <span className={styles['itemDesc']}>{item.description}</span>
-                    )}
-                    {item.keybinding && (
-                      <span className={styles['itemKeybinding']}>{item.keybinding}</span>
-                    )}
-                    {onItemRemove && (
-                      <span
-                        role="button"
-                        aria-label="Remove from list"
-                        className={styles['itemRemove']}
-                        data-testid="quick-input-item-remove"
-                        onClick={(e) => {
-                          e.stopPropagation()
-                          removeItem(item)
-                        }}
-                      >
-                        ✕
+                  {isSeparator(item) ? (
+                    <div
+                      className={`${styles['separator']} ${compact ? styles['compactSeparator'] : ''}`}
+                      role="presentation"
+                      data-testid="quick-input-separator"
+                    >
+                      {item.label && <span className={styles['separatorLabel']}>{item.label}</span>}
+                      {item.description && (
+                        <span className={styles['separatorDesc']}>{item.description}</span>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      className={`${styles['item']} ${compact ? styles['compactItem'] : ''} ${
+                        focused ? styles['focused'] : ''
+                      }`}
+                      role="option"
+                      aria-selected={focused}
+                      onClick={(e) => accept([item], { ctrl: e.ctrlKey, alt: e.altKey })}
+                      onMouseMove={() => setFocusedIdx(idx)}
+                    >
+                      {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
+                      {item.iconId &&
+                        (() => {
+                          const Icon = resolveAgentIcon(item.iconId)
+                          return <Icon size={14} className={styles['itemIcon']} />
+                        })()}
+                      <span className={styles['itemLabel']}>
+                        {renderHighlightedText(item.label, item.highlights?.label)}
                       </span>
-                    )}
-                  </button>
+                      {item.description && (
+                        <span className={styles['itemDesc']}>
+                          {renderHighlightedText(item.description, item.highlights?.description)}
+                        </span>
+                      )}
+                      {item.keybinding && (
+                        <span className={styles['itemKeybinding']}>{item.keybinding}</span>
+                      )}
+                      {onItemRemove && (
+                        <span
+                          role="button"
+                          aria-label="Remove from list"
+                          className={styles['itemRemove']}
+                          data-testid="quick-input-item-remove"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            removeItem(item)
+                          }}
+                        >
+                          x
+                        </span>
+                      )}
+                    </button>
+                  )}
                 </div>
               )
             })}

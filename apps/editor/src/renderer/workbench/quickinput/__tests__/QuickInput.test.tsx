@@ -10,17 +10,21 @@ import type { QuickPickState } from '../../../services/quickInput/QuickInputServ
 // happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible items.
 // Mock it so all items are "visible" and existing text assertions continue to work.
 vi.mock('@tanstack/react-virtual', () => ({
-  useVirtualizer: (opts: { count: number; estimateSize: () => number }) => ({
+  useVirtualizer: (opts: { count: number; estimateSize: (index: number) => number }) => ({
     getVirtualItems: () =>
       Array.from({ length: opts.count }, (_, i) => ({
         index: i,
         key: i,
-        start: i * opts.estimateSize(),
-        size: opts.estimateSize(),
+        start: i * opts.estimateSize(i),
+        size: opts.estimateSize(i),
         lane: 0,
-        end: (i + 1) * opts.estimateSize(),
+        end: (i + 1) * opts.estimateSize(i),
       })),
-    getTotalSize: () => opts.count * opts.estimateSize(),
+    getTotalSize: () =>
+      Array.from({ length: opts.count }, (_, i) => opts.estimateSize(i)).reduce(
+        (total, height) => total + height,
+        0,
+      ),
     scrollToIndex: vi.fn(),
   }),
 }))
@@ -179,6 +183,80 @@ describe('QuickPickPanel prefix mode', () => {
       target: { value: 'detail-hit' },
     })
     expect(screen.getByText('Alpha')).toBeTruthy()
+  })
+
+  it('renders separators as group headers and accepts the first selectable item', () => {
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            { type: 'separator', id: 'group.src', label: 'a.ts', description: 'src' },
+            { id: 'match.a', label: 'const needle = true' },
+          ],
+          prefix: undefined,
+          filterExternally: true,
+          onAccept,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(screen.getByTestId('quick-input-separator').textContent).toContain('a.ts')
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([{ id: 'match.a', label: 'const needle = true' }], {
+      ctrl: false,
+      alt: false,
+    })
+  })
+
+  it('keeps only separators that have matching items during internal filtering', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            { type: 'separator', id: 'group.a', label: 'a.ts' },
+            { id: 'match.a', label: 'alpha' },
+            { type: 'separator', id: 'group.b', label: 'b.ts' },
+            { id: 'match.b', label: 'beta' },
+          ],
+          prefix: undefined,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    fireEvent.change(screen.getByTestId('quick-input-field'), { target: { value: 'beta' } })
+
+    expect(screen.queryByText('a.ts')).toBeNull()
+    expect(screen.queryByText('alpha')).toBeNull()
+    expect(screen.getByText('b.ts')).toBeTruthy()
+    expect(screen.getByText('beta')).toBeTruthy()
+  })
+
+  it('renders label highlight ranges', () => {
+    const { container } = render(
+      <QuickPickPanel
+        state={makeState({
+          items: [{ id: 'match', label: 'needle', highlights: { label: [{ start: 1, end: 3 }] } }],
+          prefix: undefined,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(container.querySelector('mark')?.textContent).toBe('ee')
+  })
+
+  it('applies compact presentation to item rows', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, presentation: 'compact' })}
+        onClose={() => undefined}
+      />,
+    )
+
+    expect(screen.getAllByRole('option')[0]?.className).toContain('compactItem')
   })
 })
 

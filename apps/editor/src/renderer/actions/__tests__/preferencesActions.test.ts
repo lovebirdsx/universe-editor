@@ -16,6 +16,7 @@ import {
   registerAction2,
   type IQuickPickItem,
   type IDisposable,
+  type QuickPickInput,
 } from '@universe-editor/platform'
 import {
   ConfigureDisplayLanguageAction,
@@ -197,7 +198,9 @@ describe('ConfigureDisplayLanguageAction', () => {
       createQuickPick: () => {
         throw new Error('not used')
       },
-      async pick<T extends IQuickPickItem>(_items: readonly T[]): Promise<T | undefined> {
+      async pick<T extends IQuickPickItem>(
+        _items: readonly QuickPickInput<T>[],
+      ): Promise<T | undefined> {
         return {
           id: 'zh-CN',
           label: 'Simplified Chinese',

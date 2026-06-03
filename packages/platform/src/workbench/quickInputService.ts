@@ -18,9 +18,31 @@ export interface IQuickPickItem {
    * icon component by the renderer, keeping the platform layer icon-library free.
    */
   readonly iconId?: string
+  readonly highlights?: IQuickPickItemHighlights
 }
 
+export interface IQuickPickSeparator {
+  readonly type: 'separator'
+  readonly id: string
+  readonly label?: string
+  readonly description?: string
+}
+
+export interface IQuickItemHighlight {
+  readonly start: number
+  readonly end: number
+}
+
+export interface IQuickPickItemHighlights {
+  readonly label?: readonly IQuickItemHighlight[]
+  readonly description?: readonly IQuickItemHighlight[]
+  readonly detail?: readonly IQuickItemHighlight[]
+}
+
+export type QuickPickInput<T extends IQuickPickItem = IQuickPickItem> = T | IQuickPickSeparator
+
 export type QuickPickFilterMode = 'fuzzy' | 'word'
+export type QuickPickPresentation = 'default' | 'compact'
 
 /**
  * Modifier keys held at the moment a quick pick item is accepted. Passed as a
@@ -39,6 +61,7 @@ export interface IPickOptions {
   readonly matchOnDescription?: boolean
   readonly matchOnDetail?: boolean
   readonly filterMode?: QuickPickFilterMode
+  readonly presentation?: QuickPickPresentation
   /**
    * Optional prefix string identifying the picker's mode (VSCode-style quick
    * access, e.g. ">" for commands). When set, the input is prefilled with this
@@ -80,9 +103,10 @@ export interface IInputOptions {
 
 export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   placeholder: string | undefined
-  items: readonly T[]
+  items: readonly QuickPickInput<T>[]
   value: string
   filterExternally: boolean
+  presentation: QuickPickPresentation
   /**
    * When true, the picker UI shows an indeterminate progress bar at the top.
    * Used while resolving items asynchronously (search results, dynamic completion, ...).
@@ -104,7 +128,7 @@ export interface IQuickInputService {
 
   /** Convenience: show a quick pick and resolve with the selected item(s). */
   pick<T extends IQuickPickItem>(
-    items: readonly T[],
+    items: readonly QuickPickInput<T>[],
     options?: IPickOptions,
   ): Promise<T | undefined>
 

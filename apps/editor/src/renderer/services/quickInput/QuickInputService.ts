@@ -19,12 +19,14 @@ import type {
   IKeyMods,
   IPickOptions,
   IInputOptions,
+  QuickPickInput,
   QuickPickFilterMode,
+  QuickPickPresentation,
 } from '@universe-editor/platform'
 
 export interface QuickPickState {
   type: 'pick' | 'input'
-  items?: readonly IQuickPickItem[]
+  items?: readonly QuickPickInput<IQuickPickItem>[]
   value?: string | undefined
   mruIds?: readonly string[]
   placeholder?: string | undefined
@@ -32,6 +34,7 @@ export interface QuickPickState {
   matchOnDescription?: boolean | undefined
   matchOnDetail?: boolean | undefined
   filterMode?: QuickPickFilterMode | undefined
+  presentation?: QuickPickPresentation | undefined
   filterExternally?: boolean | undefined
   quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
   /** Show an indeterminate progress bar at the top of the panel. */
@@ -85,11 +88,12 @@ export class QuickInputService implements IQuickInputService {
     const onDidAccept = new Emitter<T[]>()
     const onDidHide = new Emitter<void>()
     const onDidChangeValue = new Emitter<string>()
-    let _items: readonly T[] = []
+    let _items: readonly QuickPickInput<T>[] = []
     let _placeholder: string | undefined
     let _value = ''
     let _busy = false
     let _filterExternally = false
+    let _presentation: QuickPickPresentation = 'default'
     let _visible = false
 
     const pushState = (): void => {
@@ -101,6 +105,7 @@ export class QuickInputService implements IQuickInputService {
         placeholder: _placeholder,
         busy: _busy,
         filterExternally: _filterExternally,
+        presentation: _presentation,
         onAccept: (selected) => onDidAccept.fire(selected as T[]),
         onValueChange: (value) => {
           _value = value
@@ -139,6 +144,13 @@ export class QuickInputService implements IQuickInputService {
         _filterExternally = v
         pushState()
       },
+      get presentation() {
+        return _presentation
+      },
+      set presentation(v) {
+        _presentation = v
+        pushState()
+      },
       get busy() {
         return _busy
       },
@@ -168,7 +180,7 @@ export class QuickInputService implements IQuickInputService {
   }
 
   async pick<T extends IQuickPickItem>(
-    items: readonly T[],
+    items: readonly QuickPickInput<T>[],
     options?: IPickOptions,
   ): Promise<T | undefined> {
     const id = options?.id
@@ -188,6 +200,7 @@ export class QuickInputService implements IQuickInputService {
         matchOnDescription: options?.matchOnDescription,
         matchOnDetail: options?.matchOnDetail,
         filterMode: options?.filterMode,
+        presentation: options?.presentation,
         quickNavigate: options?.quickNavigate,
         busy: options?.busy,
         onItemRemove: options?.onItemRemove,

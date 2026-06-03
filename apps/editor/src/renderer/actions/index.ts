@@ -94,6 +94,7 @@ import {
   FindNextAction,
   FindPreviousAction,
   FindReplaceInFileAction,
+  QuickTextSearchAction,
 } from './searchActions.js'
 import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
@@ -269,6 +270,7 @@ registerAction2(ToggleOutputAction)
 
 // Search
 registerAction2(FindInFilesAction)
+registerAction2(QuickTextSearchAction)
 registerAction2(FindInFileAction)
 registerAction2(FindReplaceInFileAction)
 registerAction2(FindNextAction)

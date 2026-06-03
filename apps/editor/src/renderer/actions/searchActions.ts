@@ -15,6 +15,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { IQuickTextSearchService } from '../services/search/QuickTextSearchService.js'
 
 export class FindInFilesAction extends Action2 {
   static readonly ID = 'workbench.action.findInFiles'
@@ -42,6 +43,23 @@ export class FindInFilesAction extends Action2 {
       return
     }
     await layoutService.focusView('workbench.view.search.results', { source: 'command' })
+  }
+}
+
+export class QuickTextSearchAction extends Action2 {
+  static readonly ID = 'workbench.action.quickTextSearch'
+  constructor() {
+    super({
+      id: QuickTextSearchAction.ID,
+      title: localize('action.quickTextSearch.title', 'Quick Search'),
+      category: localize('command.category.search', 'Search'),
+      keybinding: { primary: 'ctrl+q' },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor.get(IQuickTextSearchService).show()
   }
 }
 

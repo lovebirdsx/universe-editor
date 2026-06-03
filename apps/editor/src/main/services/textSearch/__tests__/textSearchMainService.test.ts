@@ -33,27 +33,40 @@ function baseQuery(root: string, pattern: string) {
 
 describe('TextSearchMainService', () => {
   afterEach(async () => {
-    await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+    await Promise.all(
+      tempRoots
+        .splice(0)
+        .map((root) => rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
+    )
   })
 
   it('searches beyond the old renderer-side 1000-file cap', async () => {
     const root = await makeTempRoot()
     const target = path.join(root, 'file-1005.txt')
 
-    for (let i = 0; i < 1010; i++) {
-      const file = path.join(root, `file-${i}.txt`)
-      await writeFile(file, file === target ? 'needle-from-deep-file\n' : 'ordinary content\n')
+    for (let start = 0; start < 1010; start += 100) {
+      await Promise.all(
+        Array.from({ length: Math.min(100, 1010 - start) }, async (_, offset) => {
+          const i = start + offset
+          const file = path.join(root, `file-${i}.txt`)
+          await writeFile(file, file === target ? 'needle-from-deep-file\n' : 'ordinary content\n')
+        }),
+      )
     }
 
     const svc = new TextSearchMainService()
-    const complete = await svc.search(baseQuery(root, 'needle-from-deep-file'))
+    try {
+      const complete = await svc.search(baseQuery(root, 'needle-from-deep-file'))
 
-    expect(complete.results).toHaveLength(1)
-    expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
-      path.normalize(target),
-    )
-    expect(complete.progress.limitHit).toBeUndefined()
-  })
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(target),
+      )
+      expect(complete.progress.limitHit).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
 
   it('applies configured search excludes in the main process', async () => {
     const root = await makeTempRoot()

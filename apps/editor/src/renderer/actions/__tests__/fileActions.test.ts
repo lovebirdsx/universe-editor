@@ -41,6 +41,8 @@ import {
   type IQuickInputService as IQuickInputServiceType,
   type IQuickPick,
   type IQuickPickItem,
+  type QuickPickInput,
+  type QuickPickPresentation,
   type IPromptOptions,
   type IShowOpenFileOptions,
   type IShowSaveFileOptions,
@@ -275,7 +277,7 @@ class FakeCommandService implements ICommandServiceType {
 
 class FakeQuickInputService implements IQuickInputServiceType {
   declare readonly _serviceBrand: undefined
-  readonly pickCalls: IQuickPickItem[][] = []
+  readonly pickCalls: QuickPickInput<IQuickPickItem>[][] = []
   pickResult: IQuickPickItem | undefined
   quickPick: FakeQuickPick<IQuickPickItem> | undefined
 
@@ -285,7 +287,9 @@ class FakeQuickInputService implements IQuickInputServiceType {
     return pick
   }
 
-  async pick<T extends IQuickPickItem>(items: readonly T[]): Promise<T | undefined> {
+  async pick<T extends IQuickPickItem>(
+    items: readonly QuickPickInput<T>[],
+  ): Promise<T | undefined> {
     this.pickCalls.push([...items])
     return this.pickResult as T | undefined
   }
@@ -305,8 +309,9 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidHide = this._onDidHide.event
   readonly onDidChangeValue = this._onDidChangeValue.event
   placeholder: string | undefined
-  items: readonly T[] = []
+  items: readonly QuickPickInput<T>[] = []
   filterExternally = false
+  presentation: QuickPickPresentation = 'default'
   busy = false
   private _value = ''
 
@@ -649,7 +654,7 @@ describe('fileActions', () => {
       await new Promise((resolve) => setTimeout(resolve, 250))
 
       expect(qp.items.map((item) => item.id)).toContain(target.toString())
-      qp.accept(qp.items.find((item) => item.id === target.toString())!)
+      qp.accept(qp.items.find((item) => item.id === target.toString()) as IQuickPickItem)
       await pending
 
       expect(h.group.opened[0]?.resource?.toString()).toBe(target.toString())

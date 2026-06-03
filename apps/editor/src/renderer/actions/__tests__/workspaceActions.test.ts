@@ -28,6 +28,7 @@ import {
   type IQuickInputService as IQuickInputServiceType,
   type IQuickPick,
   type IQuickPickItem,
+  type QuickPickInput,
   type IRecentWorkspace,
   type IWindowsService as IWindowsServiceType,
   type IWorkspace,
@@ -47,6 +48,14 @@ interface WorkspaceStub extends IWorkspaceServiceType {
   readonly clearCalls: number
   readonly closeCalls: number
   setRecent(recent: readonly IRecentWorkspace[]): void
+}
+
+function asQuickPickItem(
+  item: QuickPickInput<IQuickPickItem> | undefined,
+): IQuickPickItem | undefined {
+  if (!item) return undefined
+  if ('type' in item && item.type === 'separator') return undefined
+  return item as IQuickPickItem
 }
 
 function makeWorkspaceStub(recent: readonly IRecentWorkspace[] = []): WorkspaceStub {
@@ -106,9 +115,9 @@ interface QuickInputStubConfig {
 }
 
 function makeQuickInputStub(cfg: QuickInputStubConfig = {}): IQuickInputServiceType & {
-  pickCalls: IQuickPickItem[][]
+  pickCalls: QuickPickInput<IQuickPickItem>[][]
 } {
-  const pickCalls: IQuickPickItem[][] = []
+  const pickCalls: QuickPickInput<IQuickPickItem>[][] = []
   return {
     _serviceBrand: undefined,
     pickCalls,
@@ -116,12 +125,12 @@ function makeQuickInputStub(cfg: QuickInputStubConfig = {}): IQuickInputServiceT
       throw new Error('not used in these tests')
     },
     async pick<T extends IQuickPickItem>(
-      items: readonly T[],
+      items: readonly QuickPickInput<T>[],
       options?: IPickOptions,
     ): Promise<T | undefined> {
       pickCalls.push([...items])
       if (cfg.removeIndex !== undefined) {
-        const target = items[cfg.removeIndex]
+        const target = asQuickPickItem(items[cfg.removeIndex])
         if (target) options?.onItemRemove?.(target)
       }
       if (cfg.ctrl && options?.keyMods) options.keyMods.ctrl = true
@@ -130,7 +139,7 @@ function makeQuickInputStub(cfg: QuickInputStubConfig = {}): IQuickInputServiceT
     async input() {
       return undefined
     },
-  } as IQuickInputServiceType & { pickCalls: IQuickPickItem[][] }
+  } as IQuickInputServiceType & { pickCalls: QuickPickInput<IQuickPickItem>[][] }
 }
 
 interface WindowsStub extends IWindowsServiceType {
@@ -262,8 +271,8 @@ describe('workspaceActions', () => {
     const windows = makeWindowsStub([{ id: 1, folder: folderA.toJSON(), name: 'a' }])
     await runCommand(OpenRecentAction.ID, ws, qi, windows)
     const items = qi.pickCalls[0]!
-    expect(items[0]?.keybinding).toBe('Opened')
-    expect(items[1]?.keybinding).toBeUndefined()
+    expect(asQuickPickItem(items[0])?.keybinding).toBe('Opened')
+    expect(asQuickPickItem(items[1])?.keybinding).toBeUndefined()
   })
 
   it('OpenRecent.run with Ctrl held opens the choice in a new window', async () => {

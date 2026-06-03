@@ -25,7 +25,9 @@ import {
   FindInFilesAction,
   FindNextAction,
   FindReplaceInFileAction,
+  QuickTextSearchAction,
 } from '../searchActions.js'
+import { IQuickTextSearchService } from '../../services/search/QuickTextSearchService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
@@ -149,6 +151,37 @@ describe('FindInFilesAction', () => {
       source: 'command',
     })
     expect(layout.setVisible).not.toHaveBeenCalled()
+  })
+})
+
+describe('QuickTextSearchAction', () => {
+  const disposables: IDisposable[] = []
+  afterEach(() => {
+    while (disposables.length > 0) {
+      disposables.pop()?.dispose()
+    }
+  })
+
+  it('registers command, Ctrl+Q keybinding, and delegates to quick search service', async () => {
+    const show = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IQuickTextSearchService, { _serviceBrand: undefined, show })
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(QuickTextSearchAction))
+
+    expect(CommandsRegistry.getCommand(QuickTextSearchAction.ID)).toBeDefined()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+q')).toBe(QuickTextSearchAction.ID)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === QuickTextSearchAction.ID,
+      ),
+    ).toBe(true)
+
+    await inst.invokeFunction((accessor) => {
+      return CommandsRegistry.getCommand(QuickTextSearchAction.ID)!.handler(accessor)
+    })
+
+    expect(show).toHaveBeenCalledTimes(1)
   })
 })
 
