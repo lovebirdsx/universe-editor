@@ -16,6 +16,7 @@ export * from './base/uri.js'
 export * from './base/path.js'
 export * from './base/grid.js'
 export * from './base/observable/index.js'
+export * from './base/performance.js'
 
 // dependency injection
 export * from './di/instantiation.js'

@@ -1,0 +1,61 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  StartupPerformanceEditor styles — a scrollable report with timing tables.
+ *--------------------------------------------------------------------------------------------*/
+
+.root {
+  height: 100%;
+  overflow: auto;
+  background: var(--color-editor-bg, #1e1e1e);
+  color: var(--color-editor-fg, #d4d4d4);
+  padding: 24px 32px;
+  font-size: 13px;
+}
+
+.measuring {
+  opacity: 0.7;
+}
+
+.title {
+  font-size: 22px;
+  font-weight: 600;
+  margin: 0 0 12px;
+}
+
+.summary {
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+
+.heading {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 24px 0 8px;
+}
+
+.table {
+  border-collapse: collapse;
+  width: 100%;
+  max-width: 720px;
+}
+
+.table th,
+.table td {
+  text-align: left;
+  padding: 4px 12px;
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+.table th {
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.mono {
+  font-family: var(--font-mono, monospace);
+}

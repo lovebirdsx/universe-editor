@@ -62,6 +62,7 @@ export function bootstrapWindowIpc(
   )
   server.registerChannel(ServiceChannels.Update, ProxyChannel.fromService(app.update))
   server.registerChannel(ServiceChannels.ReleaseNotes, ProxyChannel.fromService(app.releaseNotes))
+  server.registerChannel(ServiceChannels.Performance, ProxyChannel.fromService(app.performance))
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
     client.getChannel(ServiceChannels.Lifecycle),

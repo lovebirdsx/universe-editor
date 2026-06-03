@@ -23,6 +23,7 @@ import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInpu
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
+import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
 
@@ -92,6 +93,13 @@ export class BuiltInEditorProvidersContribution
         typeId: DocEditorInput.TYPE_ID,
         componentKey: 'doc',
         deserialize: (data) => DocEditorInput.deserialize(data),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: StartupPerformanceInput.TYPE_ID,
+        componentKey: 'startupPerformance',
+        deserialize: () => StartupPerformanceInput.deserialize(),
       }),
     )
   }

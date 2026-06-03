@@ -21,8 +21,9 @@ describe('ApplicationServices type', () => {
       disposableLeak: {} as ApplicationServices['disposableLeak'],
       update: {} as ApplicationServices['update'],
       releaseNotes: {} as ApplicationServices['releaseNotes'],
+      performance: {} as ApplicationServices['performance'],
     }
-    expect(Object.keys(svc)).toHaveLength(13)
+    expect(Object.keys(svc)).toHaveLength(14)
   })
 })
 

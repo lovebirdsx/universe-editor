@@ -94,6 +94,7 @@ function makeOpts() {
       disposableLeak: {} as never,
       update: {} as never,
       releaseNotes: {} as never,
+      performance: {} as never,
     },
     logService,
     e2eEnabled: false,

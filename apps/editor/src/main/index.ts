@@ -14,13 +14,20 @@ import {
   IFileSearchService,
   IFileService,
   IFileWatcherService,
+  mark,
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
+import { PerfMarks } from '../shared/perf/marks.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
-import { IDisposableLeakService, ILogFilesService, IPingService } from '../shared/ipc/services.js'
+import {
+  IDisposableLeakService,
+  ILogFilesService,
+  IPingService,
+  IPerformanceMarksService,
+} from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
@@ -40,6 +47,8 @@ import type { ApplicationServices } from './window/scopedServicesFactory.js'
 import './services/main-services.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
+
+mark(PerfMarks.mainDidStart)
 
 // Single entry point for CLI args / env vars / deployment config. Must be built
 // before any app.getPath('userData') call (e.g. new LogMainService()). The file
@@ -177,6 +186,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       disposableLeak: accessor.get(IDisposableLeakService),
       update: accessor.get(IUpdateService),
       releaseNotes: accessor.get(IReleaseNotesService),
+      performance: accessor.get(IPerformanceMarksService),
     }))
   }
   if (!windowMainService) {
@@ -207,9 +217,11 @@ async function loadMainSettingsText(): Promise<string> {
 
 void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
+  mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
+  mark(PerfMarks.mainDidCreateServices)
   await windows.restoreSession(await loadSession(getDefaultStorage()))
 
   setTimeout(() => {

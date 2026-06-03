@@ -17,6 +17,13 @@ import {
   EDITOR_FONT_FAMILY_DEFAULT,
   WORKBENCH_FONT_FAMILY_DEFAULT,
 } from '../services/configuration/fontDefaults.js'
+import {
+  DEFAULT_STARTUP_WARNING_DEVELOPMENT_THRESHOLD_MS,
+  DEFAULT_STARTUP_WARNING_RELEASE_THRESHOLD_MS,
+  STARTUP_WARNING_DEVELOPMENT_THRESHOLD_KEY,
+  STARTUP_WARNING_ENABLED_KEY,
+  STARTUP_WARNING_RELEASE_THRESHOLD_KEY,
+} from '../services/performance/startupPerformanceSettings.js'
 
 export class SettingsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -287,6 +294,41 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.update.checkIntervalMinutes.description',
               'How often (in minutes) to check for updates while running. 0 disables periodic checks.',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'performance',
+        title: localize('settings.performance', 'Performance'),
+        properties: {
+          [STARTUP_WARNING_ENABLED_KEY]: {
+            type: 'boolean',
+            default: import.meta.env.DEV,
+            description: localize(
+              'settings.performance.startupWarning.enabled.description',
+              'Controls whether slow startup warnings are shown in the status bar.',
+            ),
+          },
+          [STARTUP_WARNING_RELEASE_THRESHOLD_KEY]: {
+            type: 'number',
+            default: DEFAULT_STARTUP_WARNING_RELEASE_THRESHOLD_MS,
+            minimum: 0,
+            description: localize(
+              'settings.performance.startupWarning.releaseThresholdMs.description',
+              'Show a startup warning in release builds only when startup exceeds this many milliseconds.',
+            ),
+          },
+          [STARTUP_WARNING_DEVELOPMENT_THRESHOLD_KEY]: {
+            type: 'number',
+            default: DEFAULT_STARTUP_WARNING_DEVELOPMENT_THRESHOLD_MS,
+            minimum: 0,
+            description: localize(
+              'settings.performance.startupWarning.developmentThresholdMs.description',
+              'Show a startup warning in development builds only when startup exceeds this many milliseconds.',
             ),
           },
         },

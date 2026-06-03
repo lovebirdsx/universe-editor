@@ -248,6 +248,35 @@ pnpm --filter @universe-editor/editor e2e -- --grep "@p0"
 
 参考：`apps/editor/e2e/specs/smoke.startup.spec.ts`、`smoke.output.spec.ts`、`smoke.commandPalette.spec.ts`
 
+## 套路 G：加一个性能打点 / 启动耗时检测
+
+仿 VSCode Startup Performance 的三层基建，新增检测点时按层对号入座：
+
+**底层打点工具**（`packages/platform/src/base/performance.ts`）：`mark(name)` / `getMarks()` / `clearMarks()`，跨进程通用，两端 `startTime` 均为 epoch 毫秒可直接合并。
+
+**1. 加打点**：先在 `src/shared/perf/marks.ts` 的 `PerfMarks` 加一个名字常量（`code/<proc>/<event>` 约定），再在打点处 `import { mark } from '@universe-editor/platform'` + `import { PerfMarks } from '<相对>/shared/perf/marks.js'`，调用 `mark(PerfMarks.xxx)`。main 与 renderer 都可打点。
+
+```ts
+// shared/perf/marks.ts
+export const PerfMarks = {
+  // ...
+  rendererDidMount: 'code/renderer/didMount',
+} as const
+// 打点处
+mark(PerfMarks.rendererDidMount)
+```
+
+2. main 端 marks 走 IPC：main 进程的 marks 已通过 IPerformanceMarksService（shared/ipc/services.ts）+ ServiceChannels.Performance 暴露给 renderer。main 端只要 mark()，无需再接线。
+
+3. 聚合 / 计算：renderer 的 ITimerService（src/renderer/services/performance/TimerService.ts）合并两端 marks，getStartupMetrics() 按 MILESTONES 列表算各阶段耗时。加新里程碑只需把它加进 MILESTONES；新增其它 metrics 计算也集中在此服务。
+
+4. 展示：命令 Developer: Startup Performance（actions/performanceActions.ts）打开只读编辑器 StartupPerformanceEditor；状态栏警示入口由 StartupPerformanceStatusContribution 控制，默认关闭。开启 `performance.startupWarning.enabled` 后，发布模式超过 `performance.startupWarning.releaseThresholdMs`（默认 1000ms）显示，dev 模式超过 `performance.startupWarning.developmentThresholdMs`（默认 4000ms）显示。
+
+参考：`packages/platform/src/base/performance.ts`、`src/renderer/services/performance/TimerService.ts`、`src/renderer/contributions/StartupPerformanceStatusContribution.ts`
+
+
+要点：底层 `mark()` 是通用基建，未来加任何性能检测都从「往 `PerfMarks` 加常量 + 打点」起步;跨进程聚合统一走 `ITimerService`。
+
 ## 编辑器输入三件套
 
 - **`FileEditorInput`**：editor input 描述（URI + 元数据），可序列化恢复

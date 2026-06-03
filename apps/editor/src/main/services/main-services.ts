@@ -19,6 +19,7 @@ import { IFileSearchService } from '@universe-editor/platform'
 import {
   IDisposableLeakService,
   ILogFilesService,
+  IPerformanceMarksService,
   IPingService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
@@ -43,6 +44,7 @@ import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
 import { DisposableLeakMainService } from './disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './update/updateMainService.js'
 import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.js'
+import { PerformanceMainService } from './performance/performanceMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
 // @-injected services with non-branded static params (spawner stubs, Storage,
@@ -97,4 +99,8 @@ registerSingleton(
   IReleaseNotesService,
   // 1 leading static param (resolvePath) before @ILoggerService.
   new SyncDescriptor<IReleaseNotesService>(ReleaseNotesMainService, [undefined], false),
+)
+registerSingleton(
+  IPerformanceMarksService,
+  new SyncDescriptor<IPerformanceMarksService>(PerformanceMainService, [], false),
 )

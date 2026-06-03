@@ -26,6 +26,7 @@ export const ServiceChannels = {
   DisposableLeak: 'disposableLeak',
   Update: 'update',
   ReleaseNotes: 'releaseNotes',
+  Performance: 'performance',
   Lifecycle: 'lifecycle',
 } as const
 

@@ -104,6 +104,7 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
+import { ShowStartupPerformanceAction } from './performanceActions.js'
 import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
 import { OpenMarkdownPreviewAction, OpenMarkdownPreviewToSideAction } from './markdownActions.js'
 import {
@@ -284,6 +285,9 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// Developer
+registerAction2(ShowStartupPerformanceAction)
 
 // Markdown
 registerAction2(OpenMarkdownPreviewAction)

@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { ConfigurationRegistry } from '@universe-editor/platform'
 import { SettingsContribution } from '../SettingsContribution.js'
+import {
+  DEFAULT_STARTUP_WARNING_DEVELOPMENT_THRESHOLD_MS,
+  DEFAULT_STARTUP_WARNING_RELEASE_THRESHOLD_MS,
+  STARTUP_WARNING_DEVELOPMENT_THRESHOLD_KEY,
+  STARTUP_WARNING_ENABLED_KEY,
+  STARTUP_WARNING_RELEASE_THRESHOLD_KEY,
+} from '../../services/performance/startupPerformanceSettings.js'
 
 describe('SettingsContribution', () => {
   let contribution: SettingsContribution | undefined
@@ -33,6 +40,18 @@ describe('SettingsContribution', () => {
     )
     expect(ConfigurationRegistry.getDefaultValue('files.autoSave')).toBe('off')
     expect(ConfigurationRegistry.getDefaultValue('files.autoSaveDelay')).toBe(1000)
+    expect(ConfigurationRegistry.getDefaultValue(STARTUP_WARNING_ENABLED_KEY)).toBe(
+      import.meta.env.DEV,
+    )
+    expect(ConfigurationRegistry.getDefaultValue(STARTUP_WARNING_RELEASE_THRESHOLD_KEY)).toBe(
+      DEFAULT_STARTUP_WARNING_RELEASE_THRESHOLD_MS,
+    )
+    expect(ConfigurationRegistry.getDefaultValue(STARTUP_WARNING_DEVELOPMENT_THRESHOLD_KEY)).toBe(
+      DEFAULT_STARTUP_WARNING_DEVELOPMENT_THRESHOLD_MS,
+    )
+    expect(ConfigurationRegistry.getDefaultValue('performance.startupStatusBarThreshold')).toBe(
+      undefined,
+    )
   })
 
   it('dispose unregisters all nodes', () => {

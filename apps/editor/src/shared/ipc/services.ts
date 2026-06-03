@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
-import type { Event, LogLevel } from '@universe-editor/platform'
+import type { Event, LogLevel, PerformanceMark } from '@universe-editor/platform'
 
 // -------- Ping (demo/smoke-test) --------
 
@@ -111,3 +111,18 @@ export interface IDisposableLeakService {
 
 export const IDisposableLeakService =
   createDecorator<IDisposableLeakService>('disposableLeakService')
+
+// -------- Performance Marks (main -> renderer startup timing) --------
+
+/**
+ * Exposes the main process's performance marks to the renderer so the timer
+ * service can merge both processes' marks into a single startup timeline.
+ * Read-only and generic: any future main-side perf instrumentation surfaces here.
+ */
+export interface IPerformanceMarksService {
+  readonly _serviceBrand: undefined
+  getMarks(): Promise<PerformanceMark[]>
+}
+
+export const IPerformanceMarksService =
+  createDecorator<IPerformanceMarksService>('performanceMarksService')

@@ -13,6 +13,7 @@ import {
   DisposableStore,
   Emitter,
   localize,
+  mark,
   ShutdownReason,
   URI,
   type Event,
@@ -20,6 +21,7 @@ import {
   type IWorkspace,
 } from '@universe-editor/platform'
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
+import { PerfMarks } from '../../../shared/perf/marks.js'
 import { bootstrapWindowIpc } from '../../ipc/registerMainServices.js'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 import { MainHostService } from '../host/hostMainService.js'
@@ -134,6 +136,7 @@ export class WindowMainService implements IWindowMainService {
     logger.info(
       `createWindow start e2e=${e2eEnabled} dev=${rendererUrl !== undefined} restoredState=${uiState !== undefined} workspace=${opts?.workspace?.folder.toString() ?? '<none>'}`,
     )
+    mark(PerfMarks.mainWillCreateWindow)
 
     const win = new BrowserWindow({
       width: uiState?.width ?? 1280,
@@ -162,6 +165,7 @@ export class WindowMainService implements IWindowMainService {
       if (uiState) applyWindowState(win, uiState)
       win.show()
       if (opts?.devToolsOpen) win.webContents.openDevTools()
+      mark(PerfMarks.mainDidShowWindow)
       logger.info(`readyToShow id=${win.id}`)
     })
 

@@ -51,6 +51,7 @@ import {
 import { AgentNotificationContribution } from './AgentNotificationContribution.js'
 import { FirstRunAgentOnboardingContribution } from './FirstRunAgentOnboardingContribution.js'
 import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
+import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -364,6 +365,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.history',
   HistoryContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Startup performance: show total startup time in the status bar when it exceeds
+// the configured threshold. AfterRestore so the renderer didMount mark is set and
+// the status bar is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.startupPerformanceStatus',
+  StartupPerformanceStatusContribution,
   WorkbenchPhase.AfterRestore,
 )
 

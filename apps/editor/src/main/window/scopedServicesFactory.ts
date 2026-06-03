@@ -17,6 +17,7 @@ import type {
 import type {
   ILogChannelService,
   ILogFilesService,
+  IPerformanceMarksService,
   IPingService,
   IDisposableLeakService,
 } from '../../shared/ipc/services.js'
@@ -44,6 +45,7 @@ export interface ApplicationServices {
   readonly disposableLeak: IDisposableLeakService
   readonly update: IUpdateService
   readonly releaseNotes: IReleaseNotesService
+  readonly performance: IPerformanceMarksService
 }
 
 /**

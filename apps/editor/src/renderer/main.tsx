@@ -41,6 +41,7 @@ import {
   DisposableStore,
   DisposableTracker,
   localize,
+  mark,
   markAsSingleton,
   setDisposableTracker,
   setErrorTelemetryHook,
@@ -49,6 +50,7 @@ import {
   installConsoleInterceptor,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../shared/ipc/channelNames.js'
+import { PerfMarks } from '../shared/perf/marks.js'
 import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
@@ -107,6 +109,7 @@ setUnexpectedErrorHandler((e) => console.error('[renderer] unexpected error:', e
 installRendererErrorHandlers()
 
 async function bootstrapWorkbench(): Promise<void> {
+  mark(PerfMarks.rendererWillStartBootstrap)
   const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
 
   // Hoisted so the dev/E2E leak-check beforeunload listener can unmount React
@@ -163,6 +166,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // IPC must be available before any service that proxies main-side channels.
   const ipcService = workbenchStore.add(createRendererIpcService())
   services.set(IIpcService, ipcService)
+  mark(PerfMarks.rendererDidCreateIpc)
 
   // Reverse channel: the main process invokes this before closing a window /
   // quitting so the renderer can run its lifecycle veto chain (e.g. confirm
@@ -400,6 +404,7 @@ async function bootstrapWorkbench(): Promise<void> {
   mainChannel.appendLine('[Workbench] Starting up…')
 
   // Advance to Ready before mounting React (triggers BlockRestore contributions)
+  mark(PerfMarks.rendererWillRestore)
   lifecycle.setPhase(LifecyclePhase.Ready)
 
   // E2E probe: only attaches when the app was launched with UNIVERSE_E2E=1.
@@ -425,6 +430,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // (or pane-show); changing it after mount is silently ignored.
   await Promise.all([layoutService.load(), viewsService.load()])
   rootLogger.info('bootstrap services restored')
+  mark(PerfMarks.rendererDidRestoreServices)
 
   // Surface any Disposable leak report left by the previous session. We always
   // consume (which deletes the file) so a stale report doesn't outlive its
@@ -489,6 +495,7 @@ async function bootstrapWorkbench(): Promise<void> {
     </StrictMode>,
   )
   rootLogger.info('bootstrap mounted')
+  mark(PerfMarks.rendererDidMount)
 }
 
 void bootstrapWorkbench()

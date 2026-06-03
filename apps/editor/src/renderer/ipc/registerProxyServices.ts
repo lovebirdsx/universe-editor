@@ -19,7 +19,11 @@ import {
   type IIpcService,
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
-import { ILogFilesService, IPingService } from '../../shared/ipc/services.js'
+import {
+  ILogFilesService,
+  IPerformanceMarksService,
+  IPingService,
+} from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -93,5 +97,9 @@ export function registerProxyChannelServices(
   services.set(
     IWindowsService,
     ProxyChannel.toService<IWindowsService>(ipc.getChannel(ServiceChannels.Window)),
+  )
+  services.set(
+    IPerformanceMarksService,
+    ProxyChannel.toService<IPerformanceMarksService>(ipc.getChannel(ServiceChannels.Performance)),
   )
 }

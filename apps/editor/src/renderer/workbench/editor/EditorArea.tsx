@@ -15,6 +15,7 @@ import { FileEditor } from './FileEditor.js'
 import { DiffEditor } from './DiffEditor.js'
 import { MarkdownPreviewEditor } from './MarkdownPreviewEditor.js'
 import { ReleaseNotesEditor } from './ReleaseNotesEditor.js'
+import { StartupPerformanceEditor } from './StartupPerformanceEditor.js'
 import { DocEditor } from './DocEditor.js'
 import { AcpSessionEditor } from '../agents/AcpSessionEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
@@ -32,6 +33,7 @@ editorComponentMap.set('file', FileEditor)
 editorComponentMap.set('diff', DiffEditor)
 editorComponentMap.set('markdown.preview', MarkdownPreviewEditor)
 editorComponentMap.set('releaseNotes', ReleaseNotesEditor)
+editorComponentMap.set('startupPerformance', StartupPerformanceEditor)
 editorComponentMap.set('doc', DocEditor)
 editorComponentMap.set('agents.session', AcpSessionEditor)
 

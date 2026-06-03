@@ -1,6 +1,13 @@
 import { useCallback, useEffect } from 'react'
-import { IDialogService, ILayoutService, PartId, LifecyclePhase } from '@universe-editor/platform'
+import {
+  IDialogService,
+  ILayoutService,
+  PartId,
+  LifecyclePhase,
+  mark,
+} from '@universe-editor/platform'
 import type { LifecycleService, InstantiationService, LayoutSizes } from '@universe-editor/platform'
+import { PerfMarks } from '../../shared/perf/marks.js'
 import { ServicesContext, useService, useObservable } from './useService.js'
 import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
@@ -88,6 +95,7 @@ function WorkbenchShell() {
 export function Workbench({ instantiation, lifecycle }: WorkbenchProps) {
   useEffect(() => {
     lifecycle.setPhase(LifecyclePhase.Restored)
+    mark(PerfMarks.rendererDidRestoreEditors)
     const id = requestIdleCallback(() => lifecycle.setPhase(LifecyclePhase.Eventually))
     return () => cancelIdleCallback(id)
   }, [lifecycle])
