@@ -38,5 +38,6 @@
     "https://unpkg.com/": true,
     "https://turborepo.com": true
   },
-  "js/ts.tsdk.path": "node_modules/typescript/lib"
+  "js/ts.tsdk.path": "node_modules/typescript/lib",
+  "npm.autoDetect": "off"
 }
