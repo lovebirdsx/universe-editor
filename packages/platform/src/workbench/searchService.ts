@@ -22,7 +22,7 @@ export interface ITextSearchQuery {
   readonly excludes: readonly string[]
   /** Total match cap across the whole search. Default 10000. */
   readonly maxResults?: number
-  /** Hard cap on files scanned. Default 1000. */
+  /** Optional provider-specific cap on files scanned. Unset means no file-count cap. */
   readonly maxFiles?: number
   /** Hard cap on matches recorded per file. Default 1000. */
   readonly maxMatchesPerFile?: number

@@ -84,6 +84,7 @@ function makeOpts() {
       ping: {} as never,
       fileSystem: {} as never,
       fileSearch: {} as never,
+      textSearch: {} as never,
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
       logFiles: {} as never,

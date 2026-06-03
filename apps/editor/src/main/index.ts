@@ -34,6 +34,7 @@ import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
+import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
 import {
@@ -176,6 +177,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       ping: accessor.get(IPingService),
       fileSystem: accessor.get(IFileService),
       fileSearch: accessor.get(IFileSearchService),
+      textSearch: accessor.get(ITextSearchMainService),
       fileWatcher: accessor.get(IFileWatcherService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
       logFiles: accessor.get(ILogFilesService),

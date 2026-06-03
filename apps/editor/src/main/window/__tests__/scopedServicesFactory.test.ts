@@ -11,6 +11,7 @@ describe('ApplicationServices type', () => {
       ping: {} as ApplicationServices['ping'],
       fileSystem: {} as ApplicationServices['fileSystem'],
       fileSearch: {} as ApplicationServices['fileSearch'],
+      textSearch: {} as ApplicationServices['textSearch'],
       fileWatcher: {} as ApplicationServices['fileWatcher'],
       recentWorkspaces: {} as ApplicationServices['recentWorkspaces'],
       logFiles: {} as ApplicationServices['logFiles'],
@@ -48,11 +49,12 @@ describe('service layer separation', () => {
       'ping',
       'fileSystem',
       'fileSearch',
+      'textSearch',
       'fileWatcher',
       'recentWorkspaces',
       'logFiles',
     ]
-    expect(appKeys).toHaveLength(6)
+    expect(appKeys).toHaveLength(7)
   })
 
   it('WindowScopedServices holds the per-window workspace stack', () => {

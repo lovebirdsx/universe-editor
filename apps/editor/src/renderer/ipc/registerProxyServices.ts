@@ -30,6 +30,7 @@ import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
+import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 
 export function registerProxyChannelServices(
   services: ServiceCollection,
@@ -57,6 +58,10 @@ export function registerProxyChannelServices(
   services.set(
     IFileSearchService,
     ProxyChannel.toService<IFileSearchService>(ipc.getChannel(ServiceChannels.FileSearch)),
+  )
+  services.set(
+    ITextSearchMainService,
+    ProxyChannel.toService<ITextSearchMainService>(ipc.getChannel(ServiceChannels.TextSearch)),
   )
   services.set(
     IFileWatcherService,

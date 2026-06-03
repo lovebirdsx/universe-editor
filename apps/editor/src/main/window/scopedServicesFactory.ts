@@ -21,6 +21,7 @@ import type {
   IPingService,
   IDisposableLeakService,
 } from '../../shared/ipc/services.js'
+import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
@@ -35,6 +36,7 @@ export interface ApplicationServices {
   readonly ping: IPingService
   readonly fileSystem: IFileService
   readonly fileSearch: IFileSearchService
+  readonly textSearch: ITextSearchMainService
   readonly fileWatcher: IFileWatcherService
   readonly recentWorkspaces: RecentWorkspacesMainService
   readonly logFiles: ILogFilesService

@@ -20,6 +20,8 @@ npmRebuild: false
 asarUnpack:
   - '**/node_modules/@parcel/watcher/**'
   - '**/node_modules/@parcel/watcher-*/**'
+  - '**/node_modules/@vscode/ripgrep/**'
+  - '**/node_modules/@vscode/ripgrep-*/**'
 extraResources:
   # Bundled Claude ACP agent (git submodule at repo `vendor/`). Run
   # `pnpm agent:build` first so `dist/` (esbuild single-file bundle +

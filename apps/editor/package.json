@@ -40,6 +40,7 @@
     "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",
     "monaco-editor": "catalog:",
+    "@vscode/ripgrep": "catalog:",
     "tar": "catalog:",
     "zod": "catalog:"
   },

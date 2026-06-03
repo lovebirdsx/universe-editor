@@ -47,6 +47,7 @@ catalog:
 
   # Archive extraction (on-demand claude binary download)
   tar: ^7.4.3
+  '@vscode/ripgrep': ^1.18.0
 
   # Node runtime
   '@parcel/watcher': ^2.5.6
