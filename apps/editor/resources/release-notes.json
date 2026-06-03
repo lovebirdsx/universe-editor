@@ -1,5 +1,18 @@
 [
   {
+    "version": "0.1.9",
+    "date": "2026-06-03",
+    "groups": [
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复search功能在发布版无效的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.8",
     "date": "2026-06-03",
     "groups": [
