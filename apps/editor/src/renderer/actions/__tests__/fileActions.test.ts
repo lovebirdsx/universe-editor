@@ -17,10 +17,12 @@ import {
   IFileWatcherService,
   IHostService,
   IInstantiationService,
+  IQuickInputService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
+  makeExcludeMatcher,
   registerAction2,
   type EditorInput,
   type ICommandService as ICommandServiceType,
@@ -33,6 +35,8 @@ import {
   type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type IHostService as IHostServiceType,
+  type IQuickInputService as IQuickInputServiceType,
+  type IQuickPickItem,
   type IPromptOptions,
   type IShowOpenFileOptions,
   type IShowSaveFileOptions,
@@ -43,7 +47,7 @@ import {
 import { SaveFileAction, SaveFileAsAction } from '../fileSaveActions.js'
 import { NewFileAction, NewFolderAction, NewUntitledFileAction } from '../fileCreateActions.js'
 import { DeleteFileAction, RenameFileAction } from '../fileMutateActions.js'
-import { OpenFileAction } from '../fileOpenActions.js'
+import { GoToFileAction, OpenFileAction } from '../fileOpenActions.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
@@ -51,6 +55,10 @@ import {
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../services/exclude/testing/fakeExcludeService.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
+import {
+  IRecentFilesService,
+  type IRecentFile,
+} from '../../services/recentFiles/recentFilesService.js'
 
 // ---------------------------------------------------------------------------
 // Fakes
@@ -99,6 +107,31 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
     async list(resource: URI) {
       return dirs.get(resource.toString()) ?? []
     },
+    async listRecursive(
+      root: URI,
+      options?: { ignore?: readonly string[]; maxFiles?: number; maxDepth?: number },
+    ) {
+      const ignore = new Set(options?.ignore ?? [])
+      const maxFiles = options?.maxFiles ?? Number.MAX_SAFE_INTEGER
+      const maxDepth = options?.maxDepth ?? 30
+      const results: string[] = []
+
+      const scan = async (dir: URI, depth: number): Promise<void> => {
+        if (results.length >= maxFiles || depth > maxDepth) return
+        for (const entry of dirs.get(dir.toString()) ?? []) {
+          if (results.length >= maxFiles) return
+          const child = URI.joinPath(dir, entry.name)
+          if (entry.isDirectory) {
+            if (!ignore.has(entry.name)) await scan(child, depth + 1)
+          } else if (entry.isFile) {
+            results.push(child.fsPath)
+          }
+        }
+      }
+
+      await scan(root, 0)
+      return results
+    },
     async createDirectory(resource: URI) {
       dirs.set(resource.toString(), [])
     },
@@ -115,6 +148,28 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
       }
     },
   } as never
+}
+
+function addDir(fs: ReturnType<typeof makeFs>, parent: URI, name: string): URI {
+  const dir = URI.joinPath(parent, name)
+  fs.dirs.set(dir.toString(), fs.dirs.get(dir.toString()) ?? [])
+  const siblings = fs.dirs.get(parent.toString()) ?? []
+  if (!siblings.some((entry) => entry.name === name)) {
+    siblings.push({ name, isFile: false, isDirectory: true })
+  }
+  fs.dirs.set(parent.toString(), siblings)
+  return dir
+}
+
+function addFile(fs: ReturnType<typeof makeFs>, parent: URI, name: string): URI {
+  const file = URI.joinPath(parent, name)
+  fs.files.add(file.toString())
+  const siblings = fs.dirs.get(parent.toString()) ?? []
+  if (!siblings.some((entry) => entry.name === name)) {
+    siblings.push({ name, isFile: true, isDirectory: false })
+  }
+  fs.dirs.set(parent.toString(), siblings)
+  return file
 }
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
@@ -214,6 +269,44 @@ class FakeCommandService implements ICommandServiceType {
   }
 }
 
+class FakeQuickInputService implements IQuickInputServiceType {
+  declare readonly _serviceBrand: undefined
+  readonly pickCalls: IQuickPickItem[][] = []
+  pickResult: IQuickPickItem | undefined
+
+  createQuickPick(): never {
+    throw new Error('not used')
+  }
+
+  async pick<T extends IQuickPickItem>(items: readonly T[]): Promise<T | undefined> {
+    this.pickCalls.push([...items])
+    return this.pickResult as T | undefined
+  }
+
+  async input(): Promise<string | undefined> {
+    return undefined
+  }
+
+  hide(): void {}
+}
+
+class FakeRecentFilesService implements IRecentFilesService {
+  declare readonly _serviceBrand: undefined
+  readonly addCalls: Array<{ uri: URI; name: string }> = []
+
+  constructor(private readonly _items: readonly IRecentFile[] = []) {}
+
+  add(uri: URI, name: string): void {
+    this.addCalls.push({ uri, name })
+  }
+
+  async getAll(): Promise<readonly IRecentFile[]> {
+    return this._items
+  }
+
+  clear(): void {}
+}
+
 interface FakeGroup extends IEditorGroup {
   readonly opened: EditorInput[]
   readonly closed: EditorInput[]
@@ -225,19 +318,32 @@ function makeGroup(activeEditor?: EditorInput): {
 } {
   const opened: EditorInput[] = []
   const closed: EditorInput[] = []
+  let currentActive = activeEditor
   const group = {
-    activeEditor,
+    get activeEditor() {
+      return currentActive
+    },
+    set activeEditor(value: EditorInput | undefined) {
+      currentActive = value
+    },
     opened,
     closed,
     openEditor(e: EditorInput) {
       opened.push(e)
+    },
+    setActive(e: EditorInput) {
+      currentActive = e
     },
     closeEditor(e: EditorInput) {
       closed.push(e)
       return true
     },
   } as unknown as FakeGroup
-  const service = { activeGroup: group } as unknown as IEditorGroupsServiceType
+  const service = {
+    activeGroup: group,
+    groups: [group],
+    activateGroup() {},
+  } as unknown as IEditorGroupsServiceType
   return { group, service }
 }
 
@@ -255,25 +361,33 @@ interface Harness {
   group: FakeGroup
   groupsService: IEditorGroupsServiceType
   cmd: FakeCommandService
+  quickInput: FakeQuickInputService
+  recentFiles: FakeRecentFilesService
 }
 
-function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Harness {
+function makeHarness(
+  opts: { root?: URI; activeEditor?: EditorInput; exclude?: IExcludeService } = {},
+): Harness {
   const root = opts.root ?? URI.file('/ws')
   const fs = makeFs({ [root.toString()]: [] })
   const ws = new FakeWorkspaceService(root)
   const dialog = new FakeDialogService()
   const host = new FakeHostService()
   const cmd = new FakeCommandService()
+  const quickInput = new FakeQuickInputService()
+  const recentFiles = new FakeRecentFilesService()
   const { group, service: groupsService } = makeGroup(opts.activeEditor)
 
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IFileWatcherService, makeNoopWatcher())
-  services.set(IExcludeService, new FakeExcludeService())
+  services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IWorkspaceService, ws)
   services.set(IDialogService, dialog)
   services.set(IHostService, host)
   services.set(IEditorGroupsService, groupsService)
+  services.set(IQuickInputService, quickInput)
+  services.set(IRecentFilesService, recentFiles)
   services.set(ICommandService, cmd)
   const inst = new InstantiationService(services)
   // ExplorerTreeService needs IWorkspaceService + IFileService.
@@ -282,7 +396,7 @@ function makeHarness(opts: { root?: URI; activeEditor?: EditorInput } = {}): Har
   // Re-set inst's snapshot in case the runner needs it
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
 
-  return { inst, fs, ws, dialog, host, tree, group, groupsService, cmd }
+  return { inst, fs, ws, dialog, host, tree, group, groupsService, cmd, quickInput, recentFiles }
 }
 
 function run(h: Harness, id: string, args?: unknown): Promise<unknown> {
@@ -299,6 +413,7 @@ const disposables: Array<{ dispose(): void }> = []
 beforeEach(() => {
   disposables.push(registerAction2(SaveFileAction))
   disposables.push(registerAction2(SaveFileAsAction))
+  disposables.push(registerAction2(GoToFileAction))
   disposables.push(registerAction2(OpenFileAction))
   disposables.push(registerAction2(NewFileAction))
   disposables.push(registerAction2(NewFolderAction))
@@ -353,6 +468,38 @@ describe('fileActions', () => {
       h.host.openResult = null
       await run(h, OpenFileAction.ID)
       expect(h.group.opened).toHaveLength(0)
+    })
+  })
+
+  describe('GoToFileAction', () => {
+    it('filters quick-open candidates through configured excludes', async () => {
+      const matcher = makeExcludeMatcher({
+        '**/node_modules': true,
+        '**/dist': true,
+        '**/*.generated.ts': true,
+      })!
+      const exclude = {
+        _serviceBrand: undefined,
+        onDidChange: new Emitter<void>().event,
+        currentWatcherGlobs: [],
+        isExcluded: (relPath: string) => matcher(relPath),
+        getDirNameIgnores: () => ['node_modules', 'dist'],
+      } satisfies IExcludeService
+      const root = URI.file('/ws')
+      const h = makeHarness({ root, exclude })
+
+      const src = addDir(h.fs, root, 'src')
+      addFile(h.fs, src, 'main.ts')
+      addFile(h.fs, src, 'schema.generated.ts')
+      const nodeModules = addDir(h.fs, root, 'node_modules')
+      addFile(h.fs, nodeModules, 'pkg.js')
+      const dist = addDir(h.fs, root, 'dist')
+      addFile(h.fs, dist, 'bundle.js')
+
+      await run(h, GoToFileAction.ID)
+
+      const items = h.quickInput.pickCalls[0] ?? []
+      expect(items.map((item) => item.description)).toEqual(['src/main.ts'])
     })
   })
 

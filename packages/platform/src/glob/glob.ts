@@ -90,5 +90,12 @@ export function makeExcludeMatcher(
   globs: Record<string, unknown>,
 ): ((relPath: string) => boolean) | null {
   const active = Object.keys(globs).filter((k) => globs[k] === true)
-  return makeGlobMatcher(active)
+  const patterns = active.flatMap((pattern) => {
+    const normalized = pattern.replace(/\\/g, '/').replace(/\/+$/, '')
+    if (normalized.endsWith('/**')) {
+      return [normalized.slice(0, -3), normalized]
+    }
+    return [normalized, normalized + '/**']
+  })
+  return makeGlobMatcher(patterns)
 }

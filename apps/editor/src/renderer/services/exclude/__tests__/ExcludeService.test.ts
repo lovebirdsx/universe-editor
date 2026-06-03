@@ -62,6 +62,8 @@ describe('ExcludeService', () => {
     config.update('search.exclude', { '**/node_modules': true }, ConfigurationTarget.User)
     expect(svc.isExcluded('.git', 'search')).toBe(true)
     expect(svc.isExcluded('node_modules', 'search')).toBe(true)
+    expect(svc.isExcluded('node_modules/pkg/index.js', 'search')).toBe(true)
+    expect(svc.isExcluded('packages/a/node_modules/pkg/index.js', 'search')).toBe(true)
     // node_modules is search-only, so the files kind (Explorer) does not hide it.
     expect(svc.isExcluded('node_modules', 'files')).toBe(false)
     svc.dispose()
@@ -104,8 +106,8 @@ describe('ExcludeService', () => {
     )
     const dirNames = svc.getDirNameIgnores()
     expect(dirNames).toContain('dist')
-    // Globs with separators or wildcards are not bare dir names.
-    expect(dirNames).not.toContain('**/node_modules')
+    expect(dirNames).toContain('node_modules')
+    // File globs are not prunable directory names.
     expect(dirNames).not.toContain('**/*.log')
     svc.dispose()
   })

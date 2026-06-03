@@ -100,7 +100,18 @@ describe('makeExcludeMatcher', () => {
       '**/.git': true,
     })!
     expect(m('node_modules')).toBe(true)
+    expect(m('node_modules/x/y.js')).toBe(true)
+    expect(m('packages/x/node_modules/pkg.js')).toBe(true)
     expect(m('.git')).toBe(true)
+    expect(m('src/.git/config')).toBe(true)
     expect(m('dist')).toBe(false)
+  })
+
+  it('treats /** exclude patterns as excluding the directory itself too', () => {
+    const m = makeExcludeMatcher({ '**/dist/**': true })!
+    expect(m('dist')).toBe(true)
+    expect(m('dist/bundle.js')).toBe(true)
+    expect(m('packages/a/dist')).toBe(true)
+    expect(m('packages/a/dist/bundle.js')).toBe(true)
   })
 })

@@ -122,7 +122,9 @@ export class ExcludeService extends Disposable implements IExcludeService {
     const nextWatcherGlobs = activeKeys(watcher)
     const watcherChanged = !sameStringSet(nextWatcherGlobs, this._watcherGlobs)
     this._watcherGlobs = nextWatcherGlobs
-    this._dirNameIgnores = activeKeys({ ...files, ...search }).filter(isBareDirName)
+    this._dirNameIgnores = uniqueDefined(
+      activeKeys({ ...files, ...search }).map(extractPrunableDirName),
+    )
 
     if (push && watcherChanged) {
       void this._watcher.setExcludes(this._watcherGlobs).catch((err) => {
@@ -137,9 +139,30 @@ function activeKeys(globs: Record<string, unknown>): string[] {
   return Object.keys(globs).filter((k) => globs[k] === true)
 }
 
-/** A glob like `node_modules` — a single segment with no path separator or wildcard. */
-function isBareDirName(glob: string): boolean {
-  return !/[/\\*?{}]/.test(glob)
+function extractPrunableDirName(glob: string): string | undefined {
+  const normalized = glob.replace(/\\/g, '/').replace(/\/+$/, '')
+  if (isLiteralSegment(normalized)) return normalized
+
+  const prefix = '**/'
+  if (!normalized.startsWith(prefix)) return undefined
+  const rest = normalized.slice(prefix.length)
+  const segment = rest.endsWith('/**') ? rest.slice(0, -3) : rest
+  return isLiteralSegment(segment) ? segment : undefined
+}
+
+function isLiteralSegment(value: string): boolean {
+  return value.length > 0 && !/[/\\*?{}]/.test(value)
+}
+
+function uniqueDefined(values: readonly (string | undefined)[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const value of values) {
+    if (value === undefined || seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+  }
+  return result
 }
 
 function sameStringSet(a: readonly string[], b: readonly string[]): boolean {
