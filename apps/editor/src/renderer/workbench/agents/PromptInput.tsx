@@ -26,7 +26,7 @@ import {
   type KeyboardEvent,
   type MutableRefObject,
 } from 'react'
-import { IFileService, IWorkspaceService, localize } from '@universe-editor/platform'
+import { IFileSearchService, IWorkspaceService, localize } from '@universe-editor/platform'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
@@ -75,7 +75,7 @@ export function PromptInput({
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
-  const fileService = useService(IFileService)
+  const fileSearch = useService(IFileSearchService)
   const workspace = useService(IWorkspaceService)
   const exclude = useService(IExcludeService)
   const workspaceRoot = workspace.current?.folder
@@ -144,14 +144,14 @@ export function PromptInput({
     if (mentionQuery === null || files.length > 0 || filesLoading) return
     if (!workspaceRoot) return
     setFilesLoading(true)
-    loadWorkspaceFiles(workspaceRoot, fileService, {
+    loadWorkspaceFiles(workspaceRoot, fileSearch, {
       dirNames: exclude.getDirNameIgnores(),
-      isExcluded: (rel) => exclude.isExcluded(rel, 'search'),
+      excludeGlobs: exclude.getSearchExcludeGlobs(),
     })
       .then((entries) => setFiles(entries))
       .catch(() => setFiles([]))
       .finally(() => setFilesLoading(false))
-  }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileService, exclude])
+  }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileSearch, exclude])
 
   const mentionMatches = useMemo<readonly MentionFileEntry[]>(
     () => (mentionQuery === null ? [] : filterMentionFiles(files, mentionQuery.query)),

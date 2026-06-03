@@ -11,6 +11,7 @@ import { render, cleanup, act } from '@testing-library/react'
 import {
   Event,
   IConfigurationService,
+  IFileSearchService,
   IFileService,
   InstantiationService,
   IWorkspaceService,
@@ -19,6 +20,7 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import type {
+  IFileSearchService as IFileSearchServiceType,
   IFileService as IFileServiceType,
   IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -110,6 +112,19 @@ const stubFileService = {
   },
 } as unknown as IFileServiceType
 
+const stubFileSearch = {
+  _serviceBrand: undefined,
+  async search() {
+    return {
+      results: [],
+      limitHit: false,
+      filesWalked: 0,
+      directoriesWalked: 0,
+      durationMs: 0,
+    }
+  },
+} as IFileSearchServiceType
+
 const stubWorkspaceService = {
   _serviceBrand: undefined,
   current: null,
@@ -134,6 +149,7 @@ function makeInstantiation(threshold?: number) {
     register: () => ({ dispose() {} }),
   } as unknown as IAcpChatWidgetService)
   services.set(IFileService, stubFileService)
+  services.set(IFileSearchService, stubFileSearch)
   services.set(IWorkspaceService, stubWorkspaceService)
   services.set(IConfigurationService, {
     _serviceBrand: undefined,

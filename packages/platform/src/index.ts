@@ -108,6 +108,7 @@ export * from './workbench/statusbarService.js'
 export * from './workbench/quickInputService.js'
 export * from './workbench/outputService.js'
 export * from './workbench/searchService.js'
+export * from './workbench/fileSearchService.js'
 
 // telemetry
 export * from './telemetry/telemetryService.js'

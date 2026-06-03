@@ -8,6 +8,7 @@
 
 import type {
   IFileService,
+  IFileSearchService,
   IFileWatcherService,
   IStorageService,
   IUserDataFilesService,
@@ -32,6 +33,7 @@ import type { RecentWorkspacesMainService } from '../services/workspace/recentWo
 export interface ApplicationServices {
   readonly ping: IPingService
   readonly fileSystem: IFileService
+  readonly fileSearch: IFileSearchService
   readonly fileWatcher: IFileWatcherService
   readonly recentWorkspaces: RecentWorkspacesMainService
   readonly logFiles: ILogFilesService

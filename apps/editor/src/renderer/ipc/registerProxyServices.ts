@@ -7,6 +7,7 @@
 
 import {
   IFileService,
+  IFileSearchService,
   IFileWatcherService,
   IHostService,
   IStorageService,
@@ -48,6 +49,10 @@ export function registerProxyChannelServices(
   services.set(
     IFileService,
     ProxyChannel.toService<IFileService>(ipc.getChannel(ServiceChannels.FileSystem)),
+  )
+  services.set(
+    IFileSearchService,
+    ProxyChannel.toService<IFileSearchService>(ipc.getChannel(ServiceChannels.FileSearch)),
   )
   services.set(
     IFileWatcherService,

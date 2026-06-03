@@ -11,7 +11,7 @@
  *  after `@` (and the popover detail).
  *--------------------------------------------------------------------------------------------*/
 
-import { URI, type IFileService } from '@universe-editor/platform'
+import { URI, type IFileSearchService } from '@universe-editor/platform'
 import { fuzzyMatchField } from '../fuzzyMatch/fuzzyMatch.js'
 
 export interface MentionFileEntry {
@@ -25,16 +25,17 @@ export interface MentionFileEntry {
 
 /**
  * Exclusion inputs for the workspace walk. `dirNames` prunes big directories
- * during the walk by bare name; `isExcluded` applies the full glob set to each
- * workspace-relative path. Decoupled from DI so this helper stays pure-testable.
+ * during the walk by bare name; `excludeGlobs` applies the full glob set in
+ * the main-process search service. Decoupled from DI so this helper stays
+ * pure-testable.
  */
 export interface MentionFileFilter {
   readonly dirNames: readonly string[]
-  isExcluded(relPath: string): boolean
+  readonly excludeGlobs?: readonly string[]
 }
 
 const FALLBACK_IGNORE_DIRS = ['node_modules', '.git', 'dist', 'out', 'build', '.next', '.turbo']
-const MAX_FILES = 5000
+const MAX_FILES = 100_000
 const CACHE_TTL_MS = 10_000
 
 interface _Cache {
@@ -47,38 +48,37 @@ const _cache = new Map<string, _Cache>()
 /**
  * Walk the workspace under `root` (cached). Returns at most `MAX_FILES`
  * entries with workspace-relative `relPath`. The cache key is the URI string
- * plus the dir-name signature; each entry is normalized to use forward slashes
+ * plus the exclude signature; each entry is normalized to use forward slashes
  * regardless of the host OS so the displayed mention is stable across platforms.
  */
 export async function loadWorkspaceFiles(
   root: URI,
-  fileService: IFileService,
+  fileSearch: IFileSearchService,
   filter?: MentionFileFilter,
 ): Promise<readonly MentionFileEntry[]> {
   const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
-  const key = root.toString() + '|' + dirNames.join(',')
+  const excludeGlobs = filter?.excludeGlobs ?? []
+  const key = root.toString() + '|' + dirNames.join(',') + '|' + excludeGlobs.join(',')
   const now = Date.now()
   const cached = _cache.get(key)
   if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.entries
 
-  const paths = await fileService.listRecursive(root, {
+  const complete = await fileSearch.search({
+    root,
+    pattern: '',
+    matchAll: true,
+    excludes: excludeGlobs,
     ignore: dirNames,
-    maxFiles: MAX_FILES,
+    maxResults: MAX_FILES,
   })
-  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
-  const entries: MentionFileEntry[] = []
-  for (const abs of paths) {
-    const norm = abs.replace(/\\/g, '/')
-    const rel = norm.startsWith(rootPath + '/')
-      ? norm.slice(rootPath.length + 1)
-      : norm.startsWith(rootPath)
-        ? norm.slice(rootPath.length)
-        : norm
-    if (filter && filter.isExcluded(rel)) continue
-    const idx = norm.lastIndexOf('/')
-    const name = idx >= 0 ? norm.slice(idx + 1) : norm
-    entries.push({ uri: URI.file(abs).toString(), relPath: rel, name })
-  }
+  const entries = complete.results.map((match) => {
+    const resource = URI.revive(match.resource) ?? URI.file(match.fsPath)
+    return {
+      uri: resource.toString(),
+      relPath: match.relativePath,
+      name: match.basename,
+    }
+  })
   _cache.set(key, { key, entries, timestamp: now })
   return entries
 }

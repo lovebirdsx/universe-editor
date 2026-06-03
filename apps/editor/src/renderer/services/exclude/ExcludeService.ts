@@ -54,6 +54,9 @@ export interface IExcludeService {
    */
   getDirNameIgnores(): string[]
 
+  /** Active glob patterns for files.exclude ∪ search.exclude. */
+  getSearchExcludeGlobs(): string[]
+
   /** Currently-active `files.watcherExclude` globs, for seeding watch(). */
   readonly currentWatcherGlobs: readonly string[]
 
@@ -71,6 +74,7 @@ export class ExcludeService extends Disposable implements IExcludeService {
   private _filesMatcher: ((rel: string) => boolean) | null = null
   private _searchMatcher: ((rel: string) => boolean) | null = null
   private _watcherGlobs: string[] = []
+  private _searchGlobs: string[] = []
   private _dirNameIgnores: string[] = []
 
   private readonly _onDidChange = this._register(new Emitter<void>())
@@ -106,6 +110,10 @@ export class ExcludeService extends Disposable implements IExcludeService {
     return this._dirNameIgnores
   }
 
+  getSearchExcludeGlobs(): string[] {
+    return this._searchGlobs
+  }
+
   get currentWatcherGlobs(): readonly string[] {
     return this._watcherGlobs
   }
@@ -117,14 +125,14 @@ export class ExcludeService extends Disposable implements IExcludeService {
 
     this._filesMatcher = makeExcludeMatcher(files)
     // Search excludes are additive on top of files excludes (VSCode behaviour).
-    this._searchMatcher = makeExcludeMatcher({ ...files, ...search })
+    const searchRules = { ...files, ...search }
+    this._searchMatcher = makeExcludeMatcher(searchRules)
 
     const nextWatcherGlobs = activeKeys(watcher)
     const watcherChanged = !sameStringSet(nextWatcherGlobs, this._watcherGlobs)
     this._watcherGlobs = nextWatcherGlobs
-    this._dirNameIgnores = uniqueDefined(
-      activeKeys({ ...files, ...search }).map(extractPrunableDirName),
-    )
+    this._searchGlobs = activeKeys(searchRules)
+    this._dirNameIgnores = uniqueDefined(this._searchGlobs.map(extractPrunableDirName))
 
     if (push && watcherChanged) {
       void this._watcher.setExcludes(this._watcherGlobs).catch((err) => {

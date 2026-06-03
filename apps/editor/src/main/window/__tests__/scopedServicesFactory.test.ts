@@ -10,6 +10,7 @@ describe('ApplicationServices type', () => {
     const svc: ApplicationServices = {
       ping: {} as ApplicationServices['ping'],
       fileSystem: {} as ApplicationServices['fileSystem'],
+      fileSearch: {} as ApplicationServices['fileSearch'],
       fileWatcher: {} as ApplicationServices['fileWatcher'],
       recentWorkspaces: {} as ApplicationServices['recentWorkspaces'],
       logFiles: {} as ApplicationServices['logFiles'],
@@ -21,7 +22,7 @@ describe('ApplicationServices type', () => {
       update: {} as ApplicationServices['update'],
       releaseNotes: {} as ApplicationServices['releaseNotes'],
     }
-    expect(Object.keys(svc)).toHaveLength(12)
+    expect(Object.keys(svc)).toHaveLength(13)
   })
 })
 
@@ -45,11 +46,12 @@ describe('service layer separation', () => {
     const appKeys: (keyof ApplicationServices)[] = [
       'ping',
       'fileSystem',
+      'fileSearch',
       'fileWatcher',
       'recentWorkspaces',
       'logFiles',
     ]
-    expect(appKeys).toHaveLength(5)
+    expect(appKeys).toHaveLength(6)
   })
 
   it('WindowScopedServices holds the per-window workspace stack', () => {

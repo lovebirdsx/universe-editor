@@ -83,6 +83,7 @@ function makeOpts() {
     appServices: {
       ping: {} as never,
       fileSystem: {} as never,
+      fileSearch: {} as never,
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
       logFiles: {} as never,

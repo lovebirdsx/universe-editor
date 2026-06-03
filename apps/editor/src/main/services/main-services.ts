@@ -15,6 +15,7 @@
 
 import { registerSingleton, SyncDescriptor } from '@universe-editor/platform'
 import { IFileService, IFileWatcherService } from '@universe-editor/platform'
+import { IFileSearchService } from '@universe-editor/platform'
 import {
   IDisposableLeakService,
   ILogFilesService,
@@ -28,6 +29,7 @@ import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
+import { FileSearchMainService } from './fileSearch/fileSearchMainService.js'
 import { FileWatcherMainService } from './fileWatcher/fileWatcherMainService.js'
 import {
   IRecentWorkspacesService,
@@ -52,6 +54,10 @@ import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.
 // (supportsDelayedInstantiation=false): bootstrap resolves them at once.
 registerSingleton(IPingService, new SyncDescriptor<IPingService>(MainPingService, [], false))
 registerSingleton(IFileService, new SyncDescriptor<IFileService>(FileSystemMainService, [], false))
+registerSingleton(
+  IFileSearchService,
+  new SyncDescriptor<IFileSearchService>(FileSearchMainService, [], false),
+)
 registerSingleton(
   IFileWatcherService,
   new SyncDescriptor<IFileWatcherService>(FileWatcherMainService, [], false),

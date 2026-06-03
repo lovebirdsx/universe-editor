@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { URI, type IFileService } from '@universe-editor/platform'
+import { URI, type IFileSearchService } from '@universe-editor/platform'
 import {
   filterMentionFiles,
   invalidateMentionFileCache,
@@ -15,18 +15,45 @@ import {
 
 afterEach(() => invalidateMentionFileCache())
 
-function fakeFileService(paths: readonly string[]): IFileService {
+function relativePath(root: URI, abs: string): string {
+  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
+  const norm = abs.replace(/\\/g, '/')
+  return norm.startsWith(rootPath + '/')
+    ? norm.slice(rootPath.length + 1)
+    : norm.startsWith(rootPath)
+      ? norm.slice(rootPath.length)
+      : norm
+}
+
+function fakeFileSearch(paths: readonly string[]): IFileSearchService {
   return {
-    async listRecursive() {
-      return [...paths]
+    _serviceBrand: undefined,
+    async search(query) {
+      return {
+        results: paths.map((abs) => {
+          const rel = relativePath(query.root, abs)
+          const name = rel.split('/').pop() ?? rel
+          return {
+            resource: URI.file(abs).toJSON(),
+            fsPath: abs,
+            relativePath: rel,
+            basename: name,
+            score: 0,
+          }
+        }),
+        limitHit: false,
+        filesWalked: paths.length,
+        directoriesWalked: 1,
+        durationMs: 0,
+      }
     },
-  } as unknown as IFileService
+  }
 }
 
 describe('loadWorkspaceFiles', () => {
   it('returns entries with workspace-relative paths', async () => {
     const root = URI.file('/repo')
-    const fs = fakeFileService(['/repo/src/main.ts', '/repo/README.md'])
+    const fs = fakeFileSearch(['/repo/src/main.ts', '/repo/README.md'])
     const entries = await loadWorkspaceFiles(root, fs)
     expect(entries.map((e) => e.relPath).sort()).toEqual(['README.md', 'src/main.ts'])
     expect(entries.find((e) => e.relPath === 'src/main.ts')?.name).toBe('main.ts')
@@ -37,7 +64,7 @@ describe('loadWorkspaceFiles', () => {
 
   it('normalizes Windows-style paths to forward slashes', async () => {
     const root = URI.file('C:/repo')
-    const fs = fakeFileService(['C:\\repo\\src\\main.ts'])
+    const fs = fakeFileSearch(['C:\\repo\\src\\main.ts'])
     const entries = await loadWorkspaceFiles(root, fs)
     expect(entries[0]?.relPath).toBe('src/main.ts')
   })
@@ -46,11 +73,26 @@ describe('loadWorkspaceFiles', () => {
     const root = URI.file('/repo')
     let calls = 0
     const fs = {
-      async listRecursive() {
+      _serviceBrand: undefined,
+      async search() {
         calls++
-        return ['/repo/a.ts']
+        return {
+          results: [
+            {
+              resource: URI.file('/repo/a.ts').toJSON(),
+              fsPath: '/repo/a.ts',
+              relativePath: 'a.ts',
+              basename: 'a.ts',
+              score: 0,
+            },
+          ],
+          limitHit: false,
+          filesWalked: 1,
+          directoriesWalked: 1,
+          durationMs: 0,
+        }
       },
-    } as unknown as IFileService
+    } satisfies IFileSearchService
     await loadWorkspaceFiles(root, fs)
     await loadWorkspaceFiles(root, fs)
     expect(calls).toBe(1)
@@ -60,11 +102,26 @@ describe('loadWorkspaceFiles', () => {
     const root = URI.file('/repo')
     let calls = 0
     const fs = {
-      async listRecursive() {
+      _serviceBrand: undefined,
+      async search() {
         calls++
-        return ['/repo/a.ts']
+        return {
+          results: [
+            {
+              resource: URI.file('/repo/a.ts').toJSON(),
+              fsPath: '/repo/a.ts',
+              relativePath: 'a.ts',
+              basename: 'a.ts',
+              score: 0,
+            },
+          ],
+          limitHit: false,
+          filesWalked: 1,
+          directoriesWalked: 1,
+          durationMs: 0,
+        }
       },
-    } as unknown as IFileService
+    } satisfies IFileSearchService
     await loadWorkspaceFiles(root, fs)
     invalidateMentionFileCache(root)
     await loadWorkspaceFiles(root, fs)

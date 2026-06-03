@@ -11,6 +11,7 @@ import {
   ServiceCollection,
   getSingletonServiceDescriptors,
   ILoggerService,
+  IFileSearchService,
   IFileService,
   IFileWatcherService,
 } from '@universe-editor/platform'
@@ -165,6 +166,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
     applicationServices = rootInstantiation.invokeFunction((accessor) => ({
       ping: accessor.get(IPingService),
       fileSystem: accessor.get(IFileService),
+      fileSearch: accessor.get(IFileSearchService),
       fileWatcher: accessor.get(IFileWatcherService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
       logFiles: accessor.get(ILogFilesService),

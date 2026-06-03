@@ -13,6 +13,7 @@ import {
   ICommandService,
   IDialogService,
   IEditorGroupsService,
+  IFileSearchService,
   IFileService,
   IFileWatcherService,
   IHostService,
@@ -33,9 +34,12 @@ import {
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileService as IFileServiceType,
+  type IFileSearchComplete,
+  type IFileSearchService as IFileSearchServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type IHostService as IHostServiceType,
   type IQuickInputService as IQuickInputServiceType,
+  type IQuickPick,
   type IQuickPickItem,
   type IPromptOptions,
   type IShowOpenFileOptions,
@@ -273,9 +277,12 @@ class FakeQuickInputService implements IQuickInputServiceType {
   declare readonly _serviceBrand: undefined
   readonly pickCalls: IQuickPickItem[][] = []
   pickResult: IQuickPickItem | undefined
+  quickPick: FakeQuickPick<IQuickPickItem> | undefined
 
-  createQuickPick(): never {
-    throw new Error('not used')
+  createQuickPick<T extends IQuickPickItem>(): IQuickPick<T> {
+    const pick = new FakeQuickPick<T>()
+    this.quickPick = pick as unknown as FakeQuickPick<IQuickPickItem>
+    return pick
   }
 
   async pick<T extends IQuickPickItem>(items: readonly T[]): Promise<T | undefined> {
@@ -288,6 +295,105 @@ class FakeQuickInputService implements IQuickInputServiceType {
   }
 
   hide(): void {}
+}
+
+class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
+  private readonly _onDidAccept = new Emitter<T[]>()
+  private readonly _onDidHide = new Emitter<void>()
+  private readonly _onDidChangeValue = new Emitter<string>()
+  readonly onDidAccept = this._onDidAccept.event
+  readonly onDidHide = this._onDidHide.event
+  readonly onDidChangeValue = this._onDidChangeValue.event
+  placeholder: string | undefined
+  items: readonly T[] = []
+  filterExternally = false
+  busy = false
+  private _value = ''
+
+  get value(): string {
+    return this._value
+  }
+
+  set value(value: string) {
+    this._value = value
+    this._onDidChangeValue.fire(value)
+  }
+
+  show(): void {}
+
+  hide(): void {
+    this._onDidHide.fire()
+  }
+
+  accept(item: T): void {
+    this._onDidAccept.fire([item])
+    this.hide()
+  }
+
+  dispose(): void {
+    this._onDidAccept.dispose()
+    this._onDidHide.dispose()
+    this._onDidChangeValue.dispose()
+  }
+}
+
+function fuzzyMatch(text: string, query: string): boolean {
+  const t = text.toLowerCase()
+  const q = query.toLowerCase()
+  let qi = 0
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] === q[qi]) qi++
+  }
+  return qi === q.length
+}
+
+function makeFileSearch(fs: ReturnType<typeof makeFs>): IFileSearchServiceType & {
+  readonly calls: Array<{ pattern: string; maxResults: number | undefined }>
+} {
+  const calls: Array<{ pattern: string; maxResults: number | undefined }> = []
+  return {
+    _serviceBrand: undefined,
+    calls,
+    async search(query): Promise<IFileSearchComplete> {
+      calls.push({ pattern: query.pattern, maxResults: query.maxResults })
+      const rootPath = query.root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
+      const maxResults = query.maxResults ?? Number.MAX_SAFE_INTEGER
+      const excludeMatcher = makeExcludeMatcher(
+        Object.fromEntries((query.excludes ?? []).map((glob) => [glob, true])),
+      )
+      const matches: IFileSearchComplete['results'] = [...fs.files]
+        .map((raw) => URI.parse(raw))
+        .filter((uri) => {
+          const name = uri.fsPath.split(/[/\\]/).at(-1) ?? uri.fsPath
+          const rel = uri.fsPath.replace(/\\/g, '/').startsWith(rootPath + '/')
+            ? uri.fsPath.replace(/\\/g, '/').slice(rootPath.length + 1)
+            : uri.fsPath
+          if (excludeMatcher?.(rel)) return false
+          return fuzzyMatch(name, query.pattern) || fuzzyMatch(rel, query.pattern)
+        })
+        .map((uri, index) => {
+          const norm = uri.fsPath.replace(/\\/g, '/')
+          const relativePath = norm.startsWith(rootPath + '/')
+            ? norm.slice(rootPath.length + 1)
+            : norm
+          const basename = relativePath.split('/').at(-1) ?? relativePath
+          return {
+            resource: uri.toJSON(),
+            fsPath: uri.fsPath,
+            relativePath,
+            basename,
+            score: 1000 - index,
+          }
+        })
+      return {
+        results: matches.slice(0, maxResults),
+        limitHit: matches.length > maxResults,
+        filesWalked: fs.files.size,
+        directoriesWalked: fs.dirs.size,
+        durationMs: 1,
+      }
+    },
+  }
 }
 
 class FakeRecentFilesService implements IRecentFilesService {
@@ -322,6 +428,9 @@ function makeGroup(activeEditor?: EditorInput): {
   const group = {
     get activeEditor() {
       return currentActive
+    },
+    get editors() {
+      return currentActive ? [currentActive, ...opened] : opened
     },
     set activeEditor(value: EditorInput | undefined) {
       currentActive = value
@@ -362,6 +471,7 @@ interface Harness {
   groupsService: IEditorGroupsServiceType
   cmd: FakeCommandService
   quickInput: FakeQuickInputService
+  fileSearch: ReturnType<typeof makeFileSearch>
   recentFiles: FakeRecentFilesService
 }
 
@@ -376,10 +486,12 @@ function makeHarness(
   const cmd = new FakeCommandService()
   const quickInput = new FakeQuickInputService()
   const recentFiles = new FakeRecentFilesService()
+  const fileSearch = makeFileSearch(fs)
   const { group, service: groupsService } = makeGroup(opts.activeEditor)
 
   const services = new ServiceCollection()
   services.set(IFileService, fs)
+  services.set(IFileSearchService, fileSearch)
   services.set(IFileWatcherService, makeNoopWatcher())
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
   services.set(IWorkspaceService, ws)
@@ -396,7 +508,20 @@ function makeHarness(
   // Re-set inst's snapshot in case the runner needs it
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
 
-  return { inst, fs, ws, dialog, host, tree, group, groupsService, cmd, quickInput, recentFiles }
+  return {
+    inst,
+    fs,
+    ws,
+    dialog,
+    host,
+    tree,
+    group,
+    groupsService,
+    cmd,
+    quickInput,
+    fileSearch,
+    recentFiles,
+  }
 }
 
 function run(h: Harness, id: string, args?: unknown): Promise<unknown> {
@@ -484,6 +609,7 @@ describe('fileActions', () => {
         currentWatcherGlobs: [],
         isExcluded: (relPath: string) => matcher(relPath),
         getDirNameIgnores: () => ['node_modules', 'dist'],
+        getSearchExcludeGlobs: () => ['**/node_modules', '**/dist', '**/*.generated.ts'],
       } satisfies IExcludeService
       const root = URI.file('/ws')
       const h = makeHarness({ root, exclude })
@@ -496,10 +622,37 @@ describe('fileActions', () => {
       const dist = addDir(h.fs, root, 'dist')
       addFile(h.fs, dist, 'bundle.js')
 
-      await run(h, GoToFileAction.ID)
+      const pending = run(h, GoToFileAction.ID)
+      await Promise.resolve()
+      const qp = h.quickInput.quickPick!
+      qp.value = 'ts'
+      await new Promise((resolve) => setTimeout(resolve, 250))
+      qp.hide()
+      await pending
 
-      const items = h.quickInput.pickCalls[0] ?? []
-      expect(items.map((item) => item.description)).toEqual(['src/main.ts'])
+      expect(qp.items.map((item) => item.description)).toEqual(['src/main.ts'])
+    })
+
+    it('searches beyond the old 5000-file pre-enumeration cap', async () => {
+      const root = URI.file('/ws')
+      const h = makeHarness({ root })
+      const many = addDir(h.fs, root, 'many')
+      for (let i = 0; i < 5001; i++) {
+        addFile(h.fs, many, `f${i}.ts`)
+      }
+      const target = addFile(h.fs, many, 'ActionDetailView.tsx')
+
+      const pending = run(h, GoToFileAction.ID)
+      await Promise.resolve()
+      const qp = h.quickInput.quickPick!
+      qp.value = 'ActionDetailView.tsx'
+      await new Promise((resolve) => setTimeout(resolve, 250))
+
+      expect(qp.items.map((item) => item.id)).toContain(target.toString())
+      qp.accept(qp.items.find((item) => item.id === target.toString())!)
+      await pending
+
+      expect(h.group.opened[0]?.resource?.toString()).toBe(target.toString())
     })
   })
 

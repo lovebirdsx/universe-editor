@@ -55,7 +55,7 @@ function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p')
 // without booting the full portal + service plumbing.
 export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: () => void }) {
   const prefix = state.prefix ?? ''
-  const [query, setQuery] = useState(prefix)
+  const [query, setQuery] = useState(state.value ?? prefix)
   const quickNavigate = state.quickNavigate
   const [focusedIdx, setFocusedIdx] = useState(quickNavigate?.initialSelectionIndex ?? 0)
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set())
@@ -66,6 +66,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const matchOnDescription = state.matchOnDescription === true
   const matchOnDetail = state.matchOnDetail === true
   const onItemRemove = state.onItemRemove
+  const filterExternally = state.filterExternally === true
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -81,13 +82,22 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
     () =>
       prefixMissing
         ? []
-        : (state.items ?? []).filter(
-            (item) =>
-              !removedIds.has(item.id) &&
-              itemMatches(item, deferredFilterText, filterMode, matchOnDescription, matchOnDetail),
-          ),
+        : filterExternally
+          ? (state.items ?? []).filter((item) => !removedIds.has(item.id))
+          : (state.items ?? []).filter(
+              (item) =>
+                !removedIds.has(item.id) &&
+                itemMatches(
+                  item,
+                  deferredFilterText,
+                  filterMode,
+                  matchOnDescription,
+                  matchOnDetail,
+                ),
+            ),
     [
       prefixMissing,
+      filterExternally,
       state.items,
       removedIds,
       deferredFilterText,
@@ -218,7 +228,11 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
           ref={inputRef}
           className={styles['input']}
           value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          onChange={(e) => {
+            const value = e.target.value
+            setQuery(value)
+            state.onValueChange?.(value)
+          }}
           onKeyDown={handleKey}
           placeholder={state.placeholder ?? 'Type to filter…'}
           aria-label={state.placeholder ?? 'Quick pick input'}

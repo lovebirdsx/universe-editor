@@ -12,6 +12,7 @@ export const ServiceChannels = {
   Storage: 'storage',
   Ping: 'ping',
   FileSystem: 'fileSystem',
+  FileSearch: 'fileSearch',
   FileWatcher: 'fileWatcher',
   Workspace: 'workspace',
   UserData: 'userData',

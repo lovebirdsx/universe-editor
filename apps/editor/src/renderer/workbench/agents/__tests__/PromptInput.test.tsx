@@ -8,7 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import {
   Event,
-  IFileService,
+  IFileSearchService,
   InstantiationService,
   IWorkspaceService,
   observableValue,
@@ -16,7 +16,7 @@ import {
   URI,
 } from '@universe-editor/platform'
 import type {
-  IFileService as IFileServiceType,
+  IFileSearchService as IFileSearchServiceType,
   ISettableObservable,
   IWorkspace,
   IWorkspaceService as IWorkspaceServiceType,
@@ -47,28 +47,18 @@ afterEach(() => {
   AcpPromptDraftCache._resetForTests()
 })
 
-const stubFileService: IFileServiceType = {
+const stubFileSearch: IFileSearchServiceType = {
   _serviceBrand: undefined,
-  async stat() {
-    throw new Error('not implemented')
+  async search() {
+    return {
+      results: [],
+      limitHit: false,
+      filesWalked: 0,
+      directoriesWalked: 0,
+      durationMs: 0,
+    }
   },
-  async exists() {
-    return false
-  },
-  async readFile() {
-    throw new Error('not implemented')
-  },
-  async writeFile() {},
-  async readDirectory() {
-    return []
-  },
-  async createDirectory() {},
-  async delete() {},
-  async rename() {},
-  async listRecursive() {
-    return []
-  },
-} as unknown as IFileServiceType
+} as IFileSearchServiceType
 
 const stubWorkspaceService: IWorkspaceServiceType = {
   _serviceBrand: undefined,
@@ -96,24 +86,46 @@ function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   } as unknown as IWorkspaceServiceType
 }
 
-function makeFileService(paths: readonly string[]): IFileServiceType {
+function makeFileSearch(paths: readonly string[]): IFileSearchServiceType {
   return {
-    ...stubFileService,
-    async listRecursive() {
-      return [...paths]
+    _serviceBrand: undefined,
+    async search(query) {
+      const rootPath = query.root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
+      return {
+        results: paths.map((abs) => {
+          const norm = abs.replace(/\\/g, '/')
+          const rel = norm.startsWith(rootPath + '/')
+            ? norm.slice(rootPath.length + 1)
+            : norm.startsWith(rootPath)
+              ? norm.slice(rootPath.length)
+              : norm
+          const name = rel.split('/').pop() ?? rel
+          return {
+            resource: URI.file(abs).toJSON(),
+            fsPath: abs,
+            relativePath: rel,
+            basename: name,
+            score: 0,
+          }
+        }),
+        limitHit: false,
+        filesWalked: paths.length,
+        directoriesWalked: 1,
+        durationMs: 0,
+      }
     },
-  } as unknown as IFileServiceType
+  }
 }
 
 function renderWithServices(
   node: React.ReactNode,
   opts: {
-    fileService?: IFileServiceType
+    fileSearch?: IFileSearchServiceType
     workspace?: IWorkspaceServiceType
   } = {},
 ) {
   const services = new ServiceCollection()
-  services.set(IFileService, opts.fileService ?? stubFileService)
+  services.set(IFileSearchService, opts.fileSearch ?? stubFileSearch)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
   services.set(IExcludeService, new FakeExcludeService())
   const inst = new InstantiationService(services)
@@ -429,7 +441,7 @@ describe('PromptInput — @-mention popover', () => {
   it('opens the popover and lists workspace files when user types @', async () => {
     renderWithServices(<PromptInput session={makeSession()} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      fileService: makeFileService(FILES),
+      fileSearch: makeFileSearch(FILES),
     })
     const ta = getTextarea()
     typeAt(ta, '@')
@@ -445,7 +457,7 @@ describe('PromptInput — @-mention popover', () => {
   it('filters the file list as the user keeps typing', async () => {
     renderWithServices(<PromptInput session={makeSession()} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      fileService: makeFileService(FILES),
+      fileSearch: makeFileSearch(FILES),
     })
     const ta = getTextarea()
     typeAt(ta, '@')
@@ -461,7 +473,7 @@ describe('PromptInput — @-mention popover', () => {
     const session = makeSession()
     renderWithServices(<PromptInput session={session} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      fileService: makeFileService(FILES),
+      fileSearch: makeFileSearch(FILES),
     })
     const ta = getTextarea()
     typeAt(ta, '@')
@@ -487,7 +499,7 @@ describe('PromptInput — @-mention popover', () => {
   it('Escape dismisses the mention popover without clearing the text', async () => {
     renderWithServices(<PromptInput session={makeSession()} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      fileService: makeFileService(FILES),
+      fileSearch: makeFileSearch(FILES),
     })
     const ta = getTextarea()
     typeAt(ta, '@')
@@ -503,7 +515,7 @@ describe('PromptInput — @-mention popover', () => {
   it('slash popover takes precedence over mention popover while the user is still typing the slash command name', async () => {
     renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      fileService: makeFileService(FILES),
+      fileSearch: makeFileSearch(FILES),
     })
     const ta = getTextarea()
     // `/diff` has no trailing whitespace yet — slash command is still being
@@ -589,7 +601,7 @@ describe('PromptInput — draft persistence', () => {
     const session = makeSession({ id: 's1' })
     const opts = {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      fileService: makeFileService(['/repo/src/main.ts']),
+      fileSearch: makeFileSearch(['/repo/src/main.ts']),
     }
     renderWithServices(<PromptInput session={session} />, opts)
     const ta = getTextarea()

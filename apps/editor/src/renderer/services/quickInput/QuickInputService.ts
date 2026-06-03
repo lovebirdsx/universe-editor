@@ -25,17 +25,20 @@ import type {
 export interface QuickPickState {
   type: 'pick' | 'input'
   items?: readonly IQuickPickItem[]
+  value?: string | undefined
   mruIds?: readonly string[]
   placeholder?: string | undefined
   prefix?: string | undefined
   matchOnDescription?: boolean | undefined
   matchOnDetail?: boolean | undefined
   filterMode?: QuickPickFilterMode | undefined
+  filterExternally?: boolean | undefined
   quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
   /** Show an indeterminate progress bar at the top of the panel. */
   busy?: boolean | undefined
   onAccept?: (items: IQuickPickItem[], mods?: IKeyMods) => void
   onItemRemove?: ((item: IQuickPickItem) => void) | undefined
+  onValueChange?: (value: string) => void
   onInput?: (value: string) => void
   onHide?: () => void
   validateInput?: ((value: string) => string | undefined) | undefined
@@ -81,9 +84,12 @@ export class QuickInputService implements IQuickInputService {
   createQuickPick<T extends IQuickPickItem>(): IQuickPick<T> {
     const onDidAccept = new Emitter<T[]>()
     const onDidHide = new Emitter<void>()
+    const onDidChangeValue = new Emitter<string>()
     let _items: readonly T[] = []
     let _placeholder: string | undefined
+    let _value = ''
     let _busy = false
+    let _filterExternally = false
     let _visible = false
 
     const pushState = (): void => {
@@ -91,9 +97,15 @@ export class QuickInputService implements IQuickInputService {
       this._setState({
         type: 'pick',
         items: _items,
+        value: _value,
         placeholder: _placeholder,
         busy: _busy,
+        filterExternally: _filterExternally,
         onAccept: (selected) => onDidAccept.fire(selected as T[]),
+        onValueChange: (value) => {
+          _value = value
+          onDidChangeValue.fire(value)
+        },
         onHide: () => onDidHide.fire(),
       })
     }
@@ -113,6 +125,20 @@ export class QuickInputService implements IQuickInputService {
         _items = v
         pushState()
       },
+      get value() {
+        return _value
+      },
+      set value(v) {
+        _value = v
+        pushState()
+      },
+      get filterExternally() {
+        return _filterExternally
+      },
+      set filterExternally(v) {
+        _filterExternally = v
+        pushState()
+      },
       get busy() {
         return _busy
       },
@@ -122,6 +148,7 @@ export class QuickInputService implements IQuickInputService {
       },
       onDidAccept: onDidAccept.event,
       onDidHide: onDidHide.event,
+      onDidChangeValue: onDidChangeValue.event,
       show: () => {
         _visible = true
         this._currentOnHide = () => onDidHide.fire()
@@ -134,6 +161,7 @@ export class QuickInputService implements IQuickInputService {
       dispose: () => {
         onDidAccept.dispose()
         onDidHide.dispose()
+        onDidChangeValue.dispose()
       },
     }
     return qp

@@ -81,6 +81,8 @@ export interface IInputOptions {
 export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   placeholder: string | undefined
   items: readonly T[]
+  value: string
+  filterExternally: boolean
   /**
    * When true, the picker UI shows an indeterminate progress bar at the top.
    * Used while resolving items asynchronously (search results, dynamic completion, ...).
@@ -89,6 +91,7 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
 
   readonly onDidAccept: Event<T[]>
   readonly onDidHide: Event<void>
+  readonly onDidChangeValue: Event<string>
 
   show(): void
   hide(): void

@@ -26,6 +26,10 @@ export class FakeExcludeService implements IExcludeService {
     return []
   }
 
+  getSearchExcludeGlobs(): string[] {
+    return []
+  }
+
   fireChange(): void {
     this._onDidChange.fire()
   }

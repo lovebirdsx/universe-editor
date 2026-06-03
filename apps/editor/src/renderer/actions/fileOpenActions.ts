@@ -7,6 +7,7 @@ import {
   Action2,
   IDialogService,
   IEditorGroupsService,
+  IFileSearchService,
   IFileService,
   IHostService,
   IInstantiationService,
@@ -15,6 +16,8 @@ import {
   MenuId,
   URI,
   localize,
+  DisposableStore,
+  type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
@@ -149,43 +152,25 @@ export class OpenWithDefaultAppAction extends Action2 {
   }
 }
 
-const MAX_FILES = 5000
+const GO_TO_FILE_MAX_RESULTS = 512
+const GO_TO_FILE_SEARCH_DELAY_MS = 200
 
-interface _FileCache {
-  uris: URI[]
-  timestamp: number
-}
-const _fileCache = new Map<string, _FileCache>()
-const _CACHE_TTL = 10_000
-
-async function getWorkspaceFiles(
-  root: URI,
-  fileService: IFileService,
-  exclude: IExcludeService,
-): Promise<URI[]> {
-  // First stage: prune big directories during the walk by bare dir name. Keyed
-  // by the dir-name signature so a config change that alters it busts the walk.
-  const dirNames = exclude.getDirNameIgnores()
-  const key = root.toString() + '|' + dirNames.join(',')
-  const cached = _fileCache.get(key)
-  let uris: URI[]
-  if (cached && Date.now() - cached.timestamp < _CACHE_TTL) {
-    uris = cached.uris
-  } else {
-    const paths = await fileService.listRecursive(root, {
-      ignore: dirNames,
-      maxFiles: MAX_FILES,
-    })
-    uris = paths.map((p) => URI.file(p))
-    _fileCache.set(key, { uris, timestamp: Date.now() })
-  }
-  // Second stage: apply the full glob exclude set (files.exclude ∪ search.exclude).
+function workspaceRelativePath(root: URI, uri: URI): string {
   const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
-  return uris.filter((u) => {
-    const norm = u.fsPath.replace(/\\/g, '/')
-    const rel = norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : norm
-    return !exclude.isExcluded(rel, 'search')
-  })
+  const norm = uri.fsPath.replace(/\\/g, '/')
+  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : uri.fsPath
+}
+
+function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
+  const rel = workspaceRelativePath(root, uri)
+  const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? uri.fsPath
+  return { id: uri.toString(), label, description: rel }
+}
+
+function isUriInsideRoot(root: URI, uri: URI): boolean {
+  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
+  const path = uri.fsPath.replace(/\\/g, '/').toLowerCase()
+  return path === rootPath || path.startsWith(rootPath + '/')
 }
 
 export class GoToFileAction extends Action2 {
@@ -204,7 +189,7 @@ export class GoToFileAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const quickInput = accessor.get(IQuickInputService)
     const workspace = accessor.get(IWorkspaceService)
-    const fileService = accessor.get(IFileService)
+    const fileSearch = accessor.get(IFileSearchService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const recentFiles = accessor.get(IRecentFilesService)
@@ -242,47 +227,119 @@ export class GoToFileAction extends Action2 {
       return
     }
 
-    // Workspace open — enumerate all files.
-    const uris = await getWorkspaceFiles(root, fileService, exclude)
-    const rootPath = root.fsPath
     const recent = await recentFiles.getAll()
-    const recentMap = new Map(recent.map((f) => [f.uri.toString(), f.lastOpened]))
+    const recentItems = recent
+      .filter((f) => isUriInsideRoot(root, f.uri))
+      .map((f) => createFilePick(root, f.uri, f.name))
 
-    const items = uris
-      .sort((a, b) => {
-        const aTime = recentMap.get(a.toString()) ?? 0
-        const bTime = recentMap.get(b.toString()) ?? 0
-        if (bTime !== aTime) return bTime - aTime
-        return a.fsPath.localeCompare(b.fsPath)
-      })
-      .map((uri) => {
-        const rel = uri.fsPath.startsWith(rootPath)
-          ? uri.fsPath.slice(rootPath.length).replace(/^[/\\]/, '')
-          : uri.fsPath
-        const name = rel.split(/[/\\]/).at(-1) ?? uri.fsPath
-        return { id: uri.toString(), label: name, description: rel }
-      })
+    const picker = quickInput.createQuickPick<IQuickPickItem>()
+    picker.placeholder = localize('quickInput.goToFile.placeholder', 'Go to File…')
+    picker.filterExternally = true
+    picker.items = recentItems
 
-    const pick = await quickInput.pick(items, {
-      id: 'workbench.quickOpen.goToFile',
-      placeholder: localize('quickInput.goToFile.placeholder', 'Go to File…'),
-      matchOnDescription: true,
-    })
-    if (!pick) return
+    await new Promise<void>((resolve) => {
+      const store = new DisposableStore()
+      let timer: ReturnType<typeof setTimeout> | undefined
+      let requestSeq = 0
+      let accepted = false
+      let didResolve = false
 
-    const uri = URI.parse(pick.id)
-    recentFiles.add(uri, pick.label)
-    for (const group of groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
-          groups.activateGroup(group)
-          group.setActive(editor)
+      const cleanup = (): void => {
+        requestSeq++
+        if (timer !== undefined) {
+          clearTimeout(timer)
+          timer = undefined
+        }
+        store.dispose()
+        picker.dispose()
+      }
+
+      const resolveOnce = (): void => {
+        if (didResolve) return
+        didResolve = true
+        cleanup()
+        resolve()
+      }
+
+      const openPick = async (pick: IQuickPickItem): Promise<void> => {
+        const uri = URI.parse(pick.id)
+        recentFiles.add(uri, pick.label)
+        for (const group of groups.groups) {
+          for (const editor of group.editors) {
+            if (
+              editor instanceof FileEditorInput &&
+              editor.resource.toString() === uri.toString()
+            ) {
+              groups.activateGroup(group)
+              group.setActive(editor)
+              return
+            }
+          }
+        }
+        const input = inst.createInstance(FileEditorInput, uri)
+        groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+      }
+
+      const runSearch = async (value: string): Promise<void> => {
+        const seq = ++requestSeq
+        const pattern = value.trim()
+        if (pattern.length === 0) {
+          picker.busy = false
+          picker.items = recentItems
           return
         }
+
+        picker.busy = true
+        try {
+          const complete = await fileSearch.search({
+            root,
+            pattern,
+            excludes: exclude.getSearchExcludeGlobs(),
+            ignore: exclude.getDirNameIgnores(),
+            maxResults: GO_TO_FILE_MAX_RESULTS,
+            includeExactPathMatches: true,
+          })
+          if (seq !== requestSeq) return
+          picker.items = complete.results.map((match) => ({
+            id: URI.revive(match.resource)!.toString(),
+            label: match.basename,
+            description: match.relativePath,
+          }))
+        } finally {
+          if (seq === requestSeq) picker.busy = false
+        }
       }
-    }
-    const input = inst.createInstance(FileEditorInput, uri)
-    groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+
+      const scheduleSearch = (value: string): void => {
+        if (timer !== undefined) clearTimeout(timer)
+        if (value.trim().length === 0) {
+          void runSearch(value)
+          return
+        }
+        timer = setTimeout(() => {
+          timer = undefined
+          void runSearch(value)
+        }, GO_TO_FILE_SEARCH_DELAY_MS)
+      }
+
+      store.add(picker.onDidChangeValue(scheduleSearch))
+      store.add(
+        picker.onDidAccept((items) => {
+          const pick = items[0]
+          if (!pick) return
+          accepted = true
+          void openPick(pick).finally(resolveOnce)
+        }),
+      )
+      store.add(
+        picker.onDidHide(() => {
+          if (!accepted) resolveOnce()
+        }),
+      )
+
+      picker.show()
+      scheduleSearch('')
+    })
   }
 }
 
