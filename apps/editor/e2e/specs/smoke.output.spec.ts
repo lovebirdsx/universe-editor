@@ -6,8 +6,7 @@ import { test, expect } from '../fixtures/electronApp.js'
 
 test.describe('@p1 output panel', () => {
   test('panel hosts Output tab and toggling round-trips visibility', async ({ workbench }) => {
-    // Ensure panel is visible, regardless of starting state (INITIAL_VISIBLE has it on,
-    // but storage replay could flip it).
+    // Ensure panel is visible, regardless of starting state or storage replay.
     if (!(await workbench.getContextKey<boolean>('panelVisible'))) {
       await workbench.runCommand('workbench.action.togglePanel')
     }
@@ -26,6 +25,8 @@ test.describe('@p1 output panel', () => {
   test('first error log reveals Output and activates the emitting channel', async ({
     workbench,
   }) => {
+    await workbench.waitForRestored()
+
     if (await workbench.getContextKey<boolean>('panelVisible')) {
       await workbench.runCommand('workbench.action.togglePanel')
       await expect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(false)

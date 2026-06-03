@@ -35,7 +35,7 @@ const INITIAL_VISIBLE: Readonly<Record<PartId, boolean>> = {
   [PartId.SideBar]: true,
   [PartId.SecondarySideBar]: false,
   [PartId.EditorArea]: true,
-  [PartId.Panel]: true,
+  [PartId.Panel]: false,
   [PartId.StatusBar]: true,
 }
 

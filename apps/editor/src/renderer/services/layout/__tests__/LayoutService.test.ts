@@ -68,11 +68,11 @@ describe('LayoutService', () => {
     vi.useRealTimers()
   })
 
-  it('defaults all parts to visible', () => {
+  it('defaults primary parts to visible and panel to hidden', () => {
     const svc = newSvc()
     expect(svc.getVisible(PartId.ActivityBar)).toBe(true)
     expect(svc.getVisible(PartId.SideBar)).toBe(true)
-    expect(svc.getVisible(PartId.Panel)).toBe(true)
+    expect(svc.getVisible(PartId.Panel)).toBe(false)
     expect(svc.getVisible(PartId.SecondarySideBar)).toBe(false)
   })
 
@@ -102,16 +102,16 @@ describe('LayoutService', () => {
   it('toggleVisible flips the part', () => {
     const svc = newSvc()
     svc.toggleVisible(PartId.Panel)
-    expect(svc.getVisible(PartId.Panel)).toBe(false)
-    svc.toggleVisible(PartId.Panel)
     expect(svc.getVisible(PartId.Panel)).toBe(true)
+    svc.toggleVisible(PartId.Panel)
+    expect(svc.getVisible(PartId.Panel)).toBe(false)
   })
 
   it('setVisible preserves other parts', () => {
     const svc = newSvc()
     svc.setVisible(PartId.SideBar, false)
     expect(svc.getVisible(PartId.ActivityBar)).toBe(true)
-    expect(svc.getVisible(PartId.Panel)).toBe(true)
+    expect(svc.getVisible(PartId.Panel)).toBe(false)
   })
 
   it('setSize updates observable and ignores no-op writes', () => {
@@ -174,7 +174,7 @@ describe('LayoutService', () => {
   it('setVisible also triggers persist', async () => {
     const storage = makeStorage()
     const svc = newSvc(storage)
-    svc.setVisible(PartId.Panel, false)
+    svc.setVisible(PartId.Panel, true)
     await vi.advanceTimersByTimeAsync(250)
 
     expect(storage.set).toHaveBeenCalledTimes(1)
