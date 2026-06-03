@@ -10,6 +10,7 @@ import {
   IEditorService,
   IInstantiationService,
   ILoggerService,
+  makeGlobMatcher,
   NullLogger,
   URI,
   type EditorInput,
@@ -19,7 +20,6 @@ import {
   type ILogger,
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
-import { makeGlobMatcher } from '../search/glob.js'
 import { FileEditorInput } from './FileEditorInput.js'
 
 export class EditorResolverService implements IEditorResolverService {

@@ -147,6 +147,58 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Auto save delay in milliseconds (when autoSave=afterDelay).',
             ),
           },
+          'files.exclude': {
+            type: 'object',
+            default: {},
+            additionalProperties: { type: 'boolean' },
+            description: localize(
+              'settings.files.exclude.description',
+              'Configure glob patterns for excluding files and folders from the Explorer. Read from .vscode/settings.json too.',
+            ),
+          },
+          'files.watcherExclude': {
+            type: 'object',
+            default: {
+              '**/node_modules/**': true,
+              '**/.git/**': true,
+              '**/dist/**': true,
+              '**/out/**': true,
+              '**/.turbo/**': true,
+              '**/.next/**': true,
+            },
+            additionalProperties: { type: 'boolean' },
+            description: localize(
+              'settings.files.watcherExclude.description',
+              'Configure glob patterns of file paths to exclude from file watching.',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'search',
+        title: localize('settings.search', 'Search'),
+        properties: {
+          'search.exclude': {
+            type: 'object',
+            default: {
+              '**/node_modules': true,
+              '**/dist': true,
+              '**/out': true,
+              '**/.turbo': true,
+              '**/.next': true,
+              '**/.cache': true,
+              '**/bower_components': true,
+              '**/*.code-search': true,
+            },
+            additionalProperties: { type: 'boolean' },
+            description: localize(
+              'settings.search.exclude.description',
+              'Configure glob patterns for excluding files and folders in searches and quick open. Inherits files.exclude.',
+            ),
+          },
         },
       }),
     )

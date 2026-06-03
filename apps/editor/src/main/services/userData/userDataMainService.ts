@@ -54,6 +54,7 @@ interface WatchSlot {
   dir: string
   filename: string
   fullPath: string
+  readOnly: boolean
   watcher: FSWatcher | null
   pendingFlush: NodeJS.Timeout | null
   suppressUntil: number
@@ -74,26 +75,36 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._installSlot(UserDataFile.Settings, join(userData, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(userData, 'keybindings.json'))
 
-    // Project settings track the active workspace.
+    // Project settings track the active workspace. The read-only VSCode layer
+    // (.vscode/settings.json) tracks it in parallel for cross-editor compat.
     this._register(
       this._workspace.onDidChangeWorkspace((ws) => {
         this._teardownSlot(UserDataFile.ProjectSettings)
+        this._teardownSlot(UserDataFile.VSCodeSettings)
         if (ws) {
           const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
           this._installSlot(UserDataFile.ProjectSettings, projectPath)
           this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
+          const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
+          this._installSlot(UserDataFile.VSCodeSettings, vscodePath, true)
+          this._onDidChangeFile.fire(UserDataFile.VSCodeSettings)
         } else {
-          // Workspace closed — let subscribers reset their Project layer.
+          // Workspace closed — let subscribers reset their workspace layers.
           this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
+          this._onDidChangeFile.fire(UserDataFile.VSCodeSettings)
         }
       }),
     )
     // Initial hydration: subscribe via getCurrent() so first-launch with a
-    // restored workspace also installs the project slot.
+    // restored workspace also installs the project slots.
     void this._workspace.getCurrent().then((ws) => {
       if (ws && !this._slots.has(UserDataFile.ProjectSettings)) {
         const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
         this._installSlot(UserDataFile.ProjectSettings, projectPath)
+      }
+      if (ws && !this._slots.has(UserDataFile.VSCodeSettings)) {
+        const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
+        this._installSlot(UserDataFile.VSCodeSettings, vscodePath, true)
       }
     })
   }
@@ -117,6 +128,9 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   async write(file: UserDataFile, content: string): Promise<void> {
+    if (file === UserDataFile.VSCodeSettings) {
+      throw new Error('UserData: VSCode settings are read-only (cannot write)')
+    }
     const slot = this._slots.get(file)
     if (!slot) {
       throw new Error(`UserData: no workspace open (cannot write ${file})`)
@@ -129,6 +143,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     jsonPath: readonly (string | number)[],
     value: unknown,
   ): Promise<boolean> {
+    if (file === UserDataFile.VSCodeSettings) return false
     const slot = this._slots.get(file)
     if (!slot) return false
     let current = await this.read(file)
@@ -150,7 +165,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     return URI.file(slot.fullPath).toJSON()
   }
 
-  private _installSlot(file: UserDataFile, fullPath: string): void {
+  private _installSlot(file: UserDataFile, fullPath: string, readOnly = false): void {
     const absolute = resolvePath(fullPath)
     const dir = dirname(absolute)
     const filename = basename(absolute)
@@ -158,6 +173,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       dir,
       filename,
       fullPath: absolute,
+      readOnly,
       watcher: null,
       pendingFlush: null,
       suppressUntil: 0,
@@ -169,7 +185,14 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   private _startWatcher(file: UserDataFile, slot: WatchSlot): void {
     // Watch the parent dir. fs.watch on a single file disconnects on rename
     // (which is how most editors save), so we always watch one level up.
-    void fs.mkdir(slot.dir, { recursive: true }).then(
+    // Read-only slots (e.g. .vscode/settings.json) must NOT create the dir —
+    // we only watch it when it already exists, otherwise we skip silently.
+    const ensureDir = slot.readOnly
+      ? fs.stat(slot.dir).then((s) => {
+          if (!s.isDirectory()) throw new Error('not a directory')
+        })
+      : fs.mkdir(slot.dir, { recursive: true }).then(() => undefined)
+    void ensureDir.then(
       () => {
         try {
           slot.watcher = watch(slot.dir, { recursive: false }, (_event, eventFilename) => {
@@ -201,7 +224,9 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
         }
       },
       () => {
-        // mkdir failed — skip silently for the same reason.
+        // Directory unavailable (mkdir failed, or read-only dir absent) — skip
+        // silently. The file stays readable; a read-only slot whose dir appears
+        // later is picked up on the next workspace change.
       },
     )
   }

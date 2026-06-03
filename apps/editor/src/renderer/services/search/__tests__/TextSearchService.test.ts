@@ -21,6 +21,8 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { TextSearchService } from '../TextSearchService.js'
+import { IExcludeService } from '../../exclude/ExcludeService.js'
+import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 
 interface FakeFs extends IFileServiceType {
   dirs: Map<string, IDirectoryEntry[]>
@@ -134,10 +136,12 @@ function makeInst(
   fs: IFileServiceType,
   ws: IWorkspaceServiceType,
   logger?: ILogger,
+  exclude: IExcludeService = new FakeExcludeService(),
 ): InstantiationService {
   const services = new ServiceCollection()
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
+  services.set(IExcludeService, exclude)
   if (logger) {
     services.set(ILoggerService, {
       _serviceBrand: undefined,
@@ -212,13 +216,19 @@ describe('TextSearchService', () => {
     )
   })
 
-  it('skips hard-ignored directories (node_modules, .git)', async () => {
+  it('skips directories excluded by the exclude service (node_modules, .git)', async () => {
+    const excludingSvc = makeInst(
+      fs,
+      ws,
+      undefined,
+      new FakeExcludeService(new Set(['node_modules', '.git'])),
+    ).createInstance(TextSearchService)
     const nm = addDir(fs, root, 'node_modules')
     addFile(fs, nm, 'pkg.js', 'foo')
     const git = addDir(fs, root, '.git')
     addFile(fs, git, 'HEAD', 'foo')
     addFile(fs, root, 'real.ts', 'foo')
-    const results = await svc.search({
+    const results = await excludingSvc.search({
       pattern: 'foo',
       isRegex: false,
       matchCase: false,

@@ -36,6 +36,8 @@ import {
 } from '../../../services/explorer/ExplorerTreeService.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorResolverService } from '../../../services/editor/EditorResolverService.js'
+import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
+import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 
 function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceType {
   const dirs = new Map(Object.entries(initial))
@@ -130,6 +132,7 @@ function renderView(folder: URI, fs: IFileServiceType) {
   }
   services.set(IFileService, fs)
   services.set(IFileWatcherService, makeNoopWatcher())
+  services.set(IExcludeService, new FakeExcludeService())
   services.set(IWorkspaceService, ws)
   services.set(IEditorService, editor as unknown as IEditorService)
   services.set(ICommandService, command as unknown as ICommandService)

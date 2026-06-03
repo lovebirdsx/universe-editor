@@ -52,6 +52,7 @@ export class UserSettingsSync extends Disposable {
     await this._migrateLegacyUserSettings()
     await this._reloadUserLayer()
     await this._reloadProjectLayer()
+    await this._reloadVSCodeLayer()
 
     this._register(
       this._files.onDidChangeFile((file) => {
@@ -59,6 +60,8 @@ export class UserSettingsSync extends Disposable {
           void this._reloadUserLayer()
         } else if (file === UserDataFile.ProjectSettings) {
           void this._reloadProjectLayer()
+        } else if (file === UserDataFile.VSCodeSettings) {
+          void this._reloadVSCodeLayer()
         }
       }),
     )
@@ -96,6 +99,22 @@ export class UserSettingsSync extends Disposable {
       this._suspendWriteBack = false
     }
     this._lastProjectSnapshot = { ...data }
+  }
+
+  /**
+   * Load the read-only VSCode-compatible workspace layer
+   * (`<workspace>/.vscode/settings.json`). Never written back — this layer only
+   * mirrors disk, so it has no snapshot tracking.
+   */
+  private async _reloadVSCodeLayer(): Promise<void> {
+    const text = await this._files.read(UserDataFile.VSCodeSettings)
+    const data = parseJsoncObject(text)
+    this._suspendWriteBack = true
+    try {
+      this._config.loadLayer(ConfigurationTarget.VSCodeWorkspace, data)
+    } finally {
+      this._suspendWriteBack = false
+    }
   }
 
   private async _syncLayerToFile(target: ConfigurationTarget, file: UserDataFile): Promise<void> {

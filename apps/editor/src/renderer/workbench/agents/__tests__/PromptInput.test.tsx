@@ -38,6 +38,8 @@ import { AcpPromptDraftCache } from '../../../services/acp/acpPromptDraftCache.j
 import { PromptInput, extractSlashQuery } from '../PromptInput.js'
 import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
+import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
+import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 
 afterEach(() => {
   cleanup()
@@ -113,6 +115,7 @@ function renderWithServices(
   const services = new ServiceCollection()
   services.set(IFileService, opts.fileService ?? stubFileService)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
+  services.set(IExcludeService, new FakeExcludeService())
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>

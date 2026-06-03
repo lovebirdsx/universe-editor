@@ -14,6 +14,12 @@ publish:
 files:
   - out/**/*
   - package.json
+# @parcel/watcher is a prebuilt N-API native module; its .node binaries must be
+# unpacked from the asar so they can be dlopen'd at runtime. No rebuild needed.
+npmRebuild: false
+asarUnpack:
+  - '**/node_modules/@parcel/watcher/**'
+  - '**/node_modules/@parcel/watcher-*/**'
 extraResources:
   # Bundled Claude ACP agent (git submodule at repo `vendor/`). Run
   # `pnpm agent:build` first so `dist/` (esbuild single-file bundle +

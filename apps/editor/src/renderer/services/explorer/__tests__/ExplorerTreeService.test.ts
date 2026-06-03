@@ -24,6 +24,8 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { ExplorerTreeService } from '../ExplorerTreeService.js'
+import { IExcludeService } from '../../exclude/ExcludeService.js'
+import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 
 interface FakeFs extends IFileServiceType {
   dirs: Map<string, IDirectoryEntry[]>
@@ -130,6 +132,7 @@ class FakeWatcher implements IFileWatcherServiceType {
   async watch(folder: UriComponents): Promise<void> {
     this.watched.push(folder)
   }
+  async setExcludes(): Promise<void> {}
   async unwatch(): Promise<void> {
     this.unwatchCalls++
   }
@@ -148,6 +151,7 @@ function makeInst(
   services.set(IFileService, fs)
   services.set(IWorkspaceService, ws)
   services.set(IFileWatcherService, watcher)
+  services.set(IExcludeService, new FakeExcludeService())
   if (logger) {
     services.set(ILoggerService, {
       _serviceBrand: undefined,

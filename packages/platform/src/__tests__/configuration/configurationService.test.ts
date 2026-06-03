@@ -261,3 +261,47 @@ describe('ConfigurationService.getValueOrigin', () => {
     svc.dispose()
   })
 })
+
+describe('ConfigurationService layer precedence (5 layers)', () => {
+  it('VSCodeWorkspace overrides User but is overridden by Project', () => {
+    const svc = new ConfigurationService()
+    svc.update('p.val', 'user', ConfigurationTarget.User)
+    svc.update('p.val', 'vscode', ConfigurationTarget.VSCodeWorkspace)
+    expect(svc.get('p.val')).toBe('vscode')
+
+    svc.update('p.val', 'project', ConfigurationTarget.Project)
+    expect(svc.get('p.val')).toBe('project')
+    expect(svc.getValueOrigin('p.val')).toBe(ConfigurationTarget.Project)
+    svc.dispose()
+  })
+})
+
+describe('ConfigurationService.getMerged', () => {
+  it('returns an empty object when no layer defines the key', () => {
+    const svc = new ConfigurationService()
+    expect(svc.getMerged('files.exclude')).toEqual({})
+    svc.dispose()
+  })
+
+  it('merges object values across layers, higher layers overriding keys', () => {
+    const svc = new ConfigurationService()
+    svc.loadLayer(ConfigurationTarget.User, { 'files.exclude': { '**/a': true } })
+    svc.loadLayer(ConfigurationTarget.VSCodeWorkspace, { 'files.exclude': { '**/b': true } })
+    svc.update('files.exclude', { '**/a': false, '**/c': true }, ConfigurationTarget.Project)
+
+    expect(svc.getMerged('files.exclude')).toEqual({
+      '**/a': false, // Project cancels User's true
+      '**/b': true,
+      '**/c': true,
+    })
+    svc.dispose()
+  })
+
+  it('ignores non-object layer values defensively', () => {
+    const svc = new ConfigurationService()
+    svc.update('files.exclude', 'not-an-object', ConfigurationTarget.User)
+    svc.update('files.exclude', { '**/x': true }, ConfigurationTarget.Project)
+    expect(svc.getMerged('files.exclude')).toEqual({ '**/x': true })
+    svc.dispose()
+  })
+})

@@ -16,6 +16,7 @@ import {
   InstantiationType,
   URI,
   createNamedLogger,
+  makeGlobMatcher,
   registerSingleton,
   type IFileMatch,
   type IFileService as IFileServiceType,
@@ -27,24 +28,14 @@ import {
   type IWorkspaceService as IWorkspaceServiceType,
   type SearchLimitHit,
 } from '@universe-editor/platform'
-import { makeGlobMatcher } from './glob.js'
 import { compileQuery, isBinary, scanText } from './scanText.js'
+import { IExcludeService } from '../exclude/ExcludeService.js'
 
 const DEFAULT_MAX_FILES = 1000
 const DEFAULT_MAX_RESULTS = 10000
 const DEFAULT_MAX_MATCHES_PER_FILE = 1000
 const MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024
 const YIELD_EVERY = 32
-
-const HARD_IGNORE_SEGMENTS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'out',
-  '.turbo',
-  '.next',
-  '.cache',
-])
 
 function relPathOf(root: URI, child: URI): string {
   const rootP = root.path.endsWith('/') ? root.path : root.path + '/'
@@ -62,6 +53,7 @@ export class TextSearchService implements ITextSearchService {
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceServiceType,
     @IFileService private readonly _fileService: IFileServiceType,
+    @IExcludeService private readonly _exclude: IExcludeService,
     @ILoggerService loggerService: ILoggerServiceType,
   ) {
     this._logger = createNamedLogger(loggerService, { id: 'search', name: 'Search' })
@@ -131,10 +123,13 @@ export class TextSearchService implements ITextSearchService {
           this._logger.info(`search aborted files=${filesScanned} matches=${totalMatches}`)
           return results
         }
-        if (HARD_IGNORE_SEGMENTS.has(entry.name)) continue
 
         const child = URI.joinPath(dir, entry.name)
         const relPath = relPathOf(root, child)
+
+        // Configured excludes (files.exclude ∪ search.exclude) apply to both
+        // directories (prune the subtree) and files.
+        if (this._exclude.isExcluded(relPath, 'search')) continue
 
         if (excludeMatcher && excludeMatcher(relPath)) continue
 

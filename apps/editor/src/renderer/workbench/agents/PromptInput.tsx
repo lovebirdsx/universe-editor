@@ -27,6 +27,7 @@ import {
   type MutableRefObject,
 } from 'react'
 import { IFileService, IWorkspaceService, localize } from '@universe-editor/platform'
+import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
 import type { WidgetHandle } from './ChatBody.js'
@@ -76,6 +77,7 @@ export function PromptInput({
 
   const fileService = useService(IFileService)
   const workspace = useService(IWorkspaceService)
+  const exclude = useService(IExcludeService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
@@ -142,11 +144,14 @@ export function PromptInput({
     if (mentionQuery === null || files.length > 0 || filesLoading) return
     if (!workspaceRoot) return
     setFilesLoading(true)
-    loadWorkspaceFiles(workspaceRoot, fileService)
+    loadWorkspaceFiles(workspaceRoot, fileService, {
+      dirNames: exclude.getDirNameIgnores(),
+      isExcluded: (rel) => exclude.isExcluded(rel, 'search'),
+    })
       .then((entries) => setFiles(entries))
       .catch(() => setFiles([]))
       .finally(() => setFilesLoading(false))
-  }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileService])
+  }, [mentionQuery, files.length, filesLoading, workspaceRoot, fileService, exclude])
 
   const mentionMatches = useMemo<readonly MentionFileEntry[]>(
     () => (mentionQuery === null ? [] : filterMentionFiles(files, mentionQuery.query)),

@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // base utilities
+export * from './glob/glob.js'
 export * from './base/errors.js'
 export * from './base/event.js'
 export * from './base/lifecycle.js'

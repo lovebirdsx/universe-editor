@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Emitter, type Event, UserDataFile, type IWorkspace } from '@universe-editor/platform'
+import { Emitter, type Event, URI, UserDataFile, type IWorkspace } from '@universe-editor/platform'
 
 let currentUserData = ''
 
@@ -79,6 +79,48 @@ describe('UserDataMainService', () => {
     const ws = new FakeWorkspace()
     const svc = new UserDataMainService(ws as never)
     expect(await svc.getFileUri(UserDataFile.ProjectSettings)).toBeNull()
+    svc.dispose()
+  })
+
+  it('does not create .vscode dir when reading VSCodeSettings of a workspace without one', async () => {
+    const ws = new FakeWorkspace()
+    const folder = join(tmp, 'project')
+    await fs.mkdir(folder, { recursive: true })
+    const svc = new UserDataMainService(ws as never)
+    ws.fire({ folder: URI.file(folder), name: 'project' })
+    // Give the install/watch microtasks a tick.
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await svc.read(UserDataFile.VSCodeSettings)).toBe('')
+    await expect(fs.stat(join(folder, '.vscode'))).rejects.toMatchObject({ code: 'ENOENT' })
+    svc.dispose()
+  })
+
+  it('reads an existing .vscode/settings.json', async () => {
+    const ws = new FakeWorkspace()
+    const folder = join(tmp, 'project2')
+    await fs.mkdir(join(folder, '.vscode'), { recursive: true })
+    await fs.writeFile(
+      join(folder, '.vscode', 'settings.json'),
+      '{"files.exclude":{"**/x":true}}\n',
+    )
+    const svc = new UserDataMainService(ws as never)
+    ws.fire({ folder: URI.file(folder), name: 'project2' })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await svc.read(UserDataFile.VSCodeSettings)).toContain('files.exclude')
+    svc.dispose()
+  })
+
+  it('write() and setValue() refuse to touch VSCodeSettings (read-only)', async () => {
+    const ws = new FakeWorkspace()
+    const folder = join(tmp, 'project3')
+    await fs.mkdir(join(folder, '.vscode'), { recursive: true })
+    await fs.writeFile(join(folder, '.vscode', 'settings.json'), '{}\n')
+    const svc = new UserDataMainService(ws as never)
+    ws.fire({ folder: URI.file(folder), name: 'project3' })
+    await new Promise((r) => setTimeout(r, 20))
+    await expect(svc.write(UserDataFile.VSCodeSettings, '{"a":1}')).rejects.toThrow()
+    expect(await svc.setValue(UserDataFile.VSCodeSettings, ['a'], 1)).toBe(false)
+    expect(await svc.read(UserDataFile.VSCodeSettings)).toBe('{}\n')
     svc.dispose()
   })
 })

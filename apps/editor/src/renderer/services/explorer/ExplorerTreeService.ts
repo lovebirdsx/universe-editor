@@ -23,7 +23,15 @@ import {
   type ILogger,
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
-import { dedupe, isDescendant, parentOf, sameUri, sameUriList } from './explorerTreeUtils.js'
+import {
+  dedupe,
+  isDescendant,
+  parentOf,
+  relativeTo,
+  sameUri,
+  sameUriList,
+} from './explorerTreeUtils.js'
+import { IExcludeService } from '../exclude/ExcludeService.js'
 
 export interface IExplorerEntry {
   readonly resource: URI
@@ -85,6 +93,7 @@ export class ExplorerTreeService extends Disposable {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IFileService private readonly _fileService: IFileService,
     @IFileWatcherService private readonly _watcher: IFileWatcherService,
+    @IExcludeService private readonly _exclude: IExcludeService,
     @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
@@ -92,6 +101,8 @@ export class ExplorerTreeService extends Disposable {
     this._setRoot(this._workspace.current?.folder ?? null)
     this._register(this._workspace.onDidChangeWorkspace((w) => this._setRoot(w?.folder ?? null)))
     this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))
+    // files.exclude changed → drop cached children so the next render re-filters.
+    this._register(this._exclude.onDidChange(() => this._onExcludeChange()))
   }
 
   get root(): URI | null {
@@ -397,15 +408,35 @@ export class ExplorerTreeService extends Disposable {
       const node = this._ensureNode(root)
       node.expanded = true
       void this._loadChildren(root, node).then(() => this._emitStructure())
-      void this._watcher.watch(root.toJSON()).catch(() => {
-        // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
-        this._logger.warn(`watch failed ${root.toString()}`)
-      })
+      void this._watcher
+        .watch(root.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
+        .catch(() => {
+          // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+          this._logger.warn(`watch failed ${root.toString()}`)
+        })
     } else {
       void this._watcher.unwatch().catch(() => {})
     }
     this._emitStructure()
     this._emitSelection()
+  }
+
+  /**
+   * files.exclude changed: re-read every already-loaded directory so the new
+   * filter is applied (expansion state is preserved), and re-seed the watcher
+   * with the updated watcherExclude globs.
+   */
+  private _onExcludeChange(): void {
+    if (this._root) {
+      void this._watcher.setExcludes(this._exclude.currentWatcherGlobs).catch(() => {})
+    }
+    const loaded: URI[] = []
+    for (const [key, node] of this._nodes) {
+      if (node.children !== null) loaded.push(URI.parse(key))
+    }
+    void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u)))).then(() =>
+      this._emitStructure(),
+    )
   }
 
   private _onWatcherEvents(events: readonly IFileChangeEvent[]): void {
@@ -442,7 +473,12 @@ export class ExplorerTreeService extends Disposable {
     node.error = null
     try {
       const entries = await this._fileService.list(resource)
-      node.children = sortEntries(entries, resource)
+      const sorted = sortEntries(entries, resource)
+      node.children = this._root
+        ? sorted.filter(
+            (e) => !this._exclude.isExcluded(relativeTo(this._root!, e.resource), 'files'),
+          )
+        : sorted
       this._logger.debug(`loadChildren ${resource.toString()} entries=${node.children.length}`)
     } catch (err) {
       node.children = []

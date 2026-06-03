@@ -190,4 +190,45 @@ describe('UserSettingsSync', () => {
     expect(files.setValueCalls).toHaveLength(0)
     config.dispose()
   })
+
+  it('loads .vscode/settings.json into the VSCodeWorkspace layer', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    files.files.set(UserDataFile.VSCodeSettings, '{ "files.exclude": { "**/secret": true } }')
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+    expect(config.getMerged('files.exclude')).toEqual({ '**/secret': true })
+    expect(config.getValueOrigin('files.exclude')).toBe(ConfigurationTarget.VSCodeWorkspace)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('VSCode file change hot-reloads the VSCodeWorkspace layer', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+
+    files.files.set(UserDataFile.VSCodeSettings, '{ "editor.tabSize": 2 }')
+    files.fire(UserDataFile.VSCodeSettings)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(config.get('editor.tabSize')).toBe(2)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('never writes back to the read-only VSCode layer', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+
+    config.update('files.exclude', { '**/z': true }, ConfigurationTarget.VSCodeWorkspace)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(files.setValueCalls.some((c) => c.file === UserDataFile.VSCodeSettings)).toBe(false)
+    sync.dispose()
+    config.dispose()
+  })
 })

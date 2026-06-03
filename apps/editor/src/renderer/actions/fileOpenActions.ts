@@ -21,6 +21,7 @@ import { IRecentFilesService } from '../services/recentFiles/recentFilesService.
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
+import { IExcludeService } from '../services/exclude/ExcludeService.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
@@ -148,7 +149,6 @@ export class OpenWithDefaultAppAction extends Action2 {
   }
 }
 
-const IGNORE_DIRS = new Set(['node_modules', '.git', 'dist', 'out', '.turbo'])
 const MAX_FILES = 5000
 
 interface _FileCache {
@@ -158,17 +158,34 @@ interface _FileCache {
 const _fileCache = new Map<string, _FileCache>()
 const _CACHE_TTL = 10_000
 
-async function getWorkspaceFiles(root: URI, fileService: IFileService): Promise<URI[]> {
-  const key = root.toString()
+async function getWorkspaceFiles(
+  root: URI,
+  fileService: IFileService,
+  exclude: IExcludeService,
+): Promise<URI[]> {
+  // First stage: prune big directories during the walk by bare dir name. Keyed
+  // by the dir-name signature so a config change that alters it busts the walk.
+  const dirNames = exclude.getDirNameIgnores()
+  const key = root.toString() + '|' + dirNames.join(',')
   const cached = _fileCache.get(key)
-  if (cached && Date.now() - cached.timestamp < _CACHE_TTL) return cached.uris
-  const paths = await fileService.listRecursive(root, {
-    ignore: [...IGNORE_DIRS],
-    maxFiles: MAX_FILES,
+  let uris: URI[]
+  if (cached && Date.now() - cached.timestamp < _CACHE_TTL) {
+    uris = cached.uris
+  } else {
+    const paths = await fileService.listRecursive(root, {
+      ignore: dirNames,
+      maxFiles: MAX_FILES,
+    })
+    uris = paths.map((p) => URI.file(p))
+    _fileCache.set(key, { uris, timestamp: Date.now() })
+  }
+  // Second stage: apply the full glob exclude set (files.exclude ∪ search.exclude).
+  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
+  return uris.filter((u) => {
+    const norm = u.fsPath.replace(/\\/g, '/')
+    const rel = norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : norm
+    return !exclude.isExcluded(rel, 'search')
   })
-  const uris = paths.map((p) => URI.file(p))
-  _fileCache.set(key, { uris, timestamp: Date.now() })
-  return uris
 }
 
 export class GoToFileAction extends Action2 {
@@ -191,6 +208,7 @@ export class GoToFileAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const recentFiles = accessor.get(IRecentFilesService)
+    const exclude = accessor.get(IExcludeService)
 
     const root = workspace.current?.folder
 
@@ -225,7 +243,7 @@ export class GoToFileAction extends Action2 {
     }
 
     // Workspace open — enumerate all files.
-    const uris = await getWorkspaceFiles(root, fileService)
+    const uris = await getWorkspaceFiles(root, fileService, exclude)
     const rootPath = root.fsPath
     const recent = await recentFiles.getAll()
     const recentMap = new Map(recent.map((f) => [f.uri.toString(), f.lastOpened]))

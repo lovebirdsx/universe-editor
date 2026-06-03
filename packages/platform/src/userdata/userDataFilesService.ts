@@ -17,6 +17,8 @@ export const enum UserDataFile {
   Keybindings = 'keybindings',
   /** Project-level settings: `<workspace>/.universe-editor/settings.json`. */
   ProjectSettings = 'projectSettings',
+  /** Read-only VSCode-compatible workspace settings: `<workspace>/.vscode/settings.json`. */
+  VSCodeSettings = 'vscodeSettings',
 }
 
 export interface IUserDataFilesService {

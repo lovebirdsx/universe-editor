@@ -23,7 +23,17 @@ export interface MentionFileEntry {
   readonly name: string
 }
 
-const IGNORE_DIRS = ['node_modules', '.git', 'dist', 'out', 'build', '.next', '.turbo']
+/**
+ * Exclusion inputs for the workspace walk. `dirNames` prunes big directories
+ * during the walk by bare name; `isExcluded` applies the full glob set to each
+ * workspace-relative path. Decoupled from DI so this helper stays pure-testable.
+ */
+export interface MentionFileFilter {
+  readonly dirNames: readonly string[]
+  isExcluded(relPath: string): boolean
+}
+
+const FALLBACK_IGNORE_DIRS = ['node_modules', '.git', 'dist', 'out', 'build', '.next', '.turbo']
 const MAX_FILES = 5000
 const CACHE_TTL_MS = 10_000
 
@@ -36,21 +46,23 @@ const _cache = new Map<string, _Cache>()
 
 /**
  * Walk the workspace under `root` (cached). Returns at most `MAX_FILES`
- * entries with workspace-relative `relPath`. The cache key is the URI string;
- * each entry is normalized to use forward slashes regardless of the host OS
- * so the displayed mention is stable across platforms.
+ * entries with workspace-relative `relPath`. The cache key is the URI string
+ * plus the dir-name signature; each entry is normalized to use forward slashes
+ * regardless of the host OS so the displayed mention is stable across platforms.
  */
 export async function loadWorkspaceFiles(
   root: URI,
   fileService: IFileService,
+  filter?: MentionFileFilter,
 ): Promise<readonly MentionFileEntry[]> {
-  const key = root.toString()
+  const dirNames = filter ? filter.dirNames : FALLBACK_IGNORE_DIRS
+  const key = root.toString() + '|' + dirNames.join(',')
   const now = Date.now()
   const cached = _cache.get(key)
   if (cached && now - cached.timestamp < CACHE_TTL_MS) return cached.entries
 
   const paths = await fileService.listRecursive(root, {
-    ignore: IGNORE_DIRS,
+    ignore: dirNames,
     maxFiles: MAX_FILES,
   })
   const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
@@ -62,6 +74,7 @@ export async function loadWorkspaceFiles(
       : norm.startsWith(rootPath)
         ? norm.slice(rootPath.length)
         : norm
+    if (filter && filter.isExcluded(rel)) continue
     const idx = norm.lastIndexOf('/')
     const name = idx >= 0 ? norm.slice(idx + 1) : norm
     entries.push({ uri: URI.file(abs).toString(), relPath: rel, name })
@@ -72,8 +85,15 @@ export async function loadWorkspaceFiles(
 
 /** Invalidate the cache — exposed for tests and for explicit refresh actions. */
 export function invalidateMentionFileCache(root?: URI): void {
-  if (root) _cache.delete(root.toString())
-  else _cache.clear()
+  if (!root) {
+    _cache.clear()
+    return
+  }
+  // Keys are `<root>|<dirNameSignature>`, so clear every variant for this root.
+  const prefix = root.toString() + '|'
+  for (const key of [..._cache.keys()]) {
+    if (key.startsWith(prefix)) _cache.delete(key)
+  }
 }
 
 /**

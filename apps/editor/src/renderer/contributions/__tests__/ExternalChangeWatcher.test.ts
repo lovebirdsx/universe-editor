@@ -28,6 +28,7 @@ class FakeWatcher implements IFileWatcherServiceType {
   private readonly _emitter = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles = this._emitter.event
   async watch(_folder: UriComponents): Promise<void> {}
+  async setExcludes(): Promise<void> {}
   async unwatch(): Promise<void> {}
   fire(events: readonly IFileChangeEvent[]): void {
     this._emitter.fire(events)

@@ -16,10 +16,12 @@ export const enum ConfigurationTarget {
   Default = 0,
   /** User-global settings (e.g. ~/.universe-editor/settings.json). */
   User = 1,
-  /** Project-level settings (editor.config.json). */
-  Project = 2,
+  /** Read-only VSCode-compatible workspace settings (<workspace>/.vscode/settings.json). */
+  VSCodeWorkspace = 2,
+  /** Project-level settings (<workspace>/.universe-editor/settings.json). */
+  Project = 3,
   /** Runtime in-memory overrides (highest priority). */
-  Memory = 3,
+  Memory = 4,
 }
 
 export interface IConfigurationChangeEvent {
@@ -36,6 +38,15 @@ export interface IConfigurationService {
    * @param defaultValue Fallback if the key is not found in any layer.
    */
   get<T>(key: string, defaultValue?: T): T | undefined
+
+  /**
+   * Merge an object-typed key across all layers (low → high priority). Each
+   * layer's object value is spread on top of lower layers (per-key override);
+   * non-object layer values for the key are ignored. Returns an empty object
+   * when no layer defines the key. Used for VSCode-style map settings such as
+   * `files.exclude` where layers compose instead of replacing wholesale.
+   */
+  getMerged<T = Record<string, unknown>>(key: string): T
 
   /**
    * Write a configuration value to the specified target layer.
@@ -73,6 +84,7 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
   private readonly _layers: ConfigStore[] = [
     {}, // Default — populated lazily from ConfigurationRegistry
     {}, // User
+    {}, // VSCodeWorkspace — read-only .vscode/settings.json
     {}, // Project
     {}, // Memory
   ]
@@ -114,6 +126,18 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
       }
     }
     return defaultValue
+  }
+
+  getMerged<T = Record<string, unknown>>(key: string): T {
+    const out: Record<string, unknown> = {}
+    // Low → high priority: higher layers overwrite same-named keys.
+    for (let i = 0; i < this._layers.length; i++) {
+      const value = this._layers[i]?.[key]
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        Object.assign(out, value)
+      }
+    }
+    return out as T
   }
 
   update(

@@ -1,17 +1,22 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Main-process implementation of IFileWatcherService. Uses Node's recursive
- *  `fs.watch` (Windows + macOS stable; Linux requires Node 20+) and batches
- *  events over a short debounce window. Hard-coded ignore prefixes match the
- *  defaults of VSCode `files.watcherExclude`.
+ *  Main-process implementation of IFileWatcherService backed by `@parcel/watcher`
+ *  (native, prebuilt N-API binding). The renderer drives a single recursive
+ *  subscription on the active workspace root.
+ *
+ *  Excludes (`files.watcherExclude`) are pushed down as parcel's `ignore` option,
+ *  so excluded directories (node_modules, .git, …) are pruned at the watcher level
+ *  — their children never generate events. This mirrors VSCode and avoids the OS
+ *  recursive-watch + per-event JS cost of watching huge trees and filtering after.
  *--------------------------------------------------------------------------------------------*/
 
-import { promises as fs, type FSWatcher, watch } from 'node:fs'
-import { join as pathJoin, sep as pathSep } from 'node:path'
+import watcher from '@parcel/watcher'
+import type { AsyncSubscription, Event as ParcelEvent } from '@parcel/watcher'
 import {
   createNamedLogger,
   Emitter,
   type Event,
+  type FileChangeType,
   type IDisposable,
   type IFileChangeEvent,
   type IFileWatcherService,
@@ -23,22 +28,44 @@ import {
 
 const DEBOUNCE_MS = 50
 
-const IGNORE_PREFIXES: readonly string[] = [
-  'node_modules' + pathSep,
-  '.git' + pathSep,
-  'dist' + pathSep,
-  'out' + pathSep,
-  '.turbo' + pathSep,
+// Fallback ignore globs, used only when watch() is called without explicit
+// excludes (the renderer normally seeds `files.watcherExclude` from the start).
+// Use the `/**` form so toIgnore() also derives the directory form, letting
+// parcel prune the subtree (matching a child path needs the `/**` variant).
+const DEFAULT_IGNORE: readonly string[] = [
+  '**/node_modules/**',
+  '**/.git/**',
+  '**/dist/**',
+  '**/out/**',
+  '**/.turbo/**',
 ]
 
-function isIgnored(relPath: string): boolean {
-  if (relPath === '') return false
-  // Match `node_modules` either as the full segment or as a path prefix.
-  for (const prefix of IGNORE_PREFIXES) {
-    if (relPath === prefix.slice(0, -1)) return true
-    if (relPath.startsWith(prefix)) return true
+const PARCEL_EVENT_TYPE: Record<ParcelEvent['type'], FileChangeType> = {
+  create: 'added',
+  update: 'modified',
+  delete: 'deleted',
+}
+
+/**
+ * Normalise VSCode-style exclude globs for parcel's `ignore`. A glob like
+ * `**\/node_modules/**` only matches files *inside* the directory, so parcel may
+ * still recurse into the directory itself. We additionally emit the directory
+ * form (`**\/node_modules`) so the whole subtree is pruned. Result is sorted +
+ * de-duped for cheap set comparison.
+ */
+function toIgnore(globs: readonly string[]): string[] {
+  const set = new Set<string>()
+  for (const g of globs) {
+    set.add(g)
+    if (g.endsWith('/**')) set.add(g.slice(0, -3))
   }
-  return false
+  return Array.from(set).sort()
+}
+
+function sameSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
 }
 
 function reviveUri(value: UriComponents): URI {
@@ -58,50 +85,42 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private readonly _onDidChangeFiles = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles: Event<readonly IFileChangeEvent[]> = this._onDidChangeFiles.event
 
-  private _watcher: FSWatcher | null = null
+  private _subscription: AsyncSubscription | null = null
   private _rootFsPath: string | null = null
-  private _pending = new Map<string, 'unknown' | 'deleted'>()
+  private _currentIgnore: string[] = []
+  private _pending = new Map<string, FileChangeType>()
   private _flushTimer: NodeJS.Timeout | null = null
 
-  async watch(folder: UriComponents): Promise<void> {
+  async watch(folder: UriComponents, options?: { excludes?: readonly string[] }): Promise<void> {
     const uri = reviveUri(folder)
     if (uri.scheme !== 'file') {
       throw new Error(`FileWatcher: unsupported scheme: ${uri.scheme}`)
     }
     const target = uri.fsPath
-    if (this._rootFsPath === target && this._watcher) return
-    await this.unwatch()
-    try {
-      const w = watch(target, { recursive: true }, (_event, filename) => {
-        if (filename === null) return
-        const rel = typeof filename === 'string' ? filename : String(filename)
-        if (isIgnored(rel)) return
-        this._enqueue(rel)
-      })
-      w.on('error', () => {
-        // Surface as silent stop; renderer can re-arm by calling watch() again.
-        this._logger.warn(`watcher error ${target}`)
-        this._teardownWatcher()
-      })
-      this._watcher = w
-      this._rootFsPath = target
-      this._logger.info(`watch ${target}`)
-    } catch (err) {
-      this._rootFsPath = null
-      this._logger.warn(
-        `watch failed ${target}`,
-        err instanceof Error ? (err.stack ?? err.message) : String(err),
-      )
-      throw err
+    const ignore = toIgnore(options?.excludes ?? DEFAULT_IGNORE)
+    if (this._rootFsPath === target && this._subscription && sameSet(ignore, this._currentIgnore)) {
+      return
     }
+    await this._subscribe(target, ignore)
+  }
+
+  async setExcludes(excludes: readonly string[]): Promise<void> {
+    const ignore = toIgnore(excludes)
+    if (sameSet(ignore, this._currentIgnore)) return
+    if (!this._rootFsPath) {
+      this._currentIgnore = ignore
+      return
+    }
+    // parcel's `ignore` is fixed at subscribe time; re-subscribe the same root.
+    await this._subscribe(this._rootFsPath, ignore)
   }
 
   async unwatch(): Promise<void> {
-    this._teardownWatcher()
+    await this._teardown()
   }
 
   dispose(): void {
-    this._teardownWatcher()
+    void this._teardown()
     this._onDidChangeFiles.dispose()
   }
 
@@ -111,62 +130,79 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       clearTimeout(this._flushTimer)
       this._flushTimer = null
     }
-    void this._flush()
+    this._flush()
   }
 
-  private _teardownWatcher(): void {
+  private async _subscribe(target: string, ignore: string[]): Promise<void> {
+    await this._teardown()
+    try {
+      const sub = await watcher.subscribe(target, this._onParcel, { ignore })
+      this._subscription = sub
+      this._rootFsPath = target
+      this._currentIgnore = ignore
+      this._logger.info(`watch ${target}`)
+    } catch (err) {
+      // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
+      this._rootFsPath = null
+      this._subscription = null
+      this._logger.warn(
+        `watch failed ${target}`,
+        err instanceof Error ? (err.stack ?? err.message) : String(err),
+      )
+    }
+  }
+
+  private async _teardown(): Promise<void> {
     if (this._flushTimer) {
       clearTimeout(this._flushTimer)
       this._flushTimer = null
     }
     this._pending.clear()
-    if (this._watcher) {
-      const root = this._rootFsPath
+    const sub = this._subscription
+    this._subscription = null
+    const root = this._rootFsPath
+    this._rootFsPath = null
+    this._currentIgnore = []
+    if (sub) {
       try {
-        this._watcher.close()
+        await sub.unsubscribe()
       } catch {
         // ignore
       }
-      this._watcher = null
       if (root) this._logger.info(`unwatch ${root}`)
     }
-    this._rootFsPath = null
   }
 
-  private _enqueue(relPath: string): void {
-    // Latest event wins for the resource within a single batch; we always
-    // re-stat in `_flush`, so 'unknown' is fine.
-    if (!this._pending.has(relPath)) this._pending.set(relPath, 'unknown')
+  private readonly _onParcel = (err: Error | null, events: ParcelEvent[]): void => {
+    if (err) {
+      this._logger.warn('watcher error', err instanceof Error ? err.message : String(err))
+      return
+    }
+    for (const ev of events) {
+      this._enqueue(ev.path, PARCEL_EVENT_TYPE[ev.type])
+    }
+  }
+
+  private _enqueue(absPath: string, type: FileChangeType): void {
+    // Latest event wins for a resource within a single debounce batch.
+    this._pending.set(absPath, type)
     if (this._flushTimer) return
     this._flushTimer = setTimeout(() => {
       this._flushTimer = null
-      void this._flush()
+      this._flush()
     }, DEBOUNCE_MS)
   }
 
-  private async _flush(): Promise<void> {
+  private _flush(): void {
     if (this._pending.size === 0) return
-    const root = this._rootFsPath
-    if (!root) {
-      this._pending.clear()
-      return
-    }
-    const batch: IFileChangeEvent[] = []
     const entries = Array.from(this._pending.entries())
     this._pending.clear()
-    for (const [rel] of entries) {
-      const abs = pathJoin(root, rel)
-      let type: 'added' | 'deleted' | 'modified'
-      try {
-        await fs.stat(abs)
-        type = 'modified'
-      } catch {
-        type = 'deleted'
-      }
-      batch.push({ type, resource: URI.file(abs).toJSON() })
-    }
+    const batch: IFileChangeEvent[] = entries.map(([abs, type]) => ({
+      type,
+      resource: URI.file(abs).toJSON(),
+    }))
     if (batch.length > 0) {
-      this._logger.debug(`file events root=${root} count=${batch.length}`)
+      this._logger.debug(`file events count=${batch.length}`)
       this._onDidChangeFiles.fire(batch)
     }
   }

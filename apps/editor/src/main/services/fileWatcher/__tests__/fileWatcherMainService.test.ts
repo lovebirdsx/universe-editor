@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
- *  Tests for FileWatcherMainService — verifies recursive fs.watch wiring,
- *  ignore prefixes, debounce, and add/modify/delete classification.
+ *  Tests for FileWatcherMainService — verifies @parcel/watcher wiring, ignore
+ *  globs, debounce, and create/update/delete classification.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, sep as pathSep } from 'node:path'
@@ -22,22 +22,22 @@ function normPath(p: string): string {
   return p.toLowerCase().replace(/\\/g, '/')
 }
 
-async function waitForEvents(
-  svc: FileWatcherMainService,
-  timeoutMs = 500,
-): Promise<readonly IFileChangeEvent[]> {
-  return new Promise((resolve) => {
-    let collected: readonly IFileChangeEvent[] = []
-    const sub = svc.onDidChangeFiles((batch) => {
-      collected = batch
-    })
-    setTimeout(() => {
-      svc._flushForTests()
-      sub.dispose()
-      resolve(collected)
-    }, timeoutMs)
-  })
+// Accumulates every event the service fires until stopped. parcel's native→JS
+// delivery latency varies with machine load, so tests poll this buffer (for
+// "expect an event") or wait a fixed window (for "expect no event").
+function startCollecting(svc: FileWatcherMainService): {
+  events: IFileChangeEvent[]
+  stop: () => void
+} {
+  const events: IFileChangeEvent[] = []
+  const sub = svc.onDidChangeFiles((batch) => events.push(...batch))
+  return { events, stop: () => sub.dispose() }
 }
+
+const WAIT = { timeout: 5000, interval: 50 } as const
+// Fixed window for "no event should arrive": an ignored change never fires, so
+// waiting longer can't make it appear — this stays deterministic under load.
+const NO_EVENT_WINDOW_MS = 800
 
 describe('FileWatcherMainService', () => {
   let root: string
@@ -53,36 +53,78 @@ describe('FileWatcherMainService', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('emits a modified event when a file is created', async () => {
+  it('emits an event when a file is created', async () => {
     await svc.watch(URI.file(root).toJSON())
     const target = join(root, 'new.txt')
+    const c = startCollecting(svc)
     await fs.writeFile(target, 'hello')
-    const events = await waitForEvents(svc)
-    const matched = events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
-    expect(matched).toBeDefined()
-    expect(matched?.type).toBe('modified')
+    await vi.waitFor(() => {
+      svc._flushForTests()
+      const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
+      expect(matched).toBeDefined()
+      // create + write may collapse to create or update depending on platform/timing.
+      expect(['added', 'modified']).toContain(matched?.type)
+    }, WAIT)
+    c.stop()
   })
 
   it('emits a deleted event when a file is removed', async () => {
     const target = join(root, 'gone.txt')
     await fs.writeFile(target, 'x')
     await svc.watch(URI.file(root).toJSON())
+    const c = startCollecting(svc)
     await fs.rm(target)
-    const events = await waitForEvents(svc)
-    const matched = events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
-    expect(matched).toBeDefined()
-    expect(matched?.type).toBe('deleted')
+    await vi.waitFor(() => {
+      svc._flushForTests()
+      const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
+      expect(matched?.type).toBe('deleted')
+    }, WAIT)
+    c.stop()
   })
 
   it('ignores changes inside node_modules', async () => {
     await fs.mkdir(join(root, 'node_modules'), { recursive: true })
     await svc.watch(URI.file(root).toJSON())
+    const c = startCollecting(svc)
     await fs.writeFile(join(root, 'node_modules', 'pkg.json'), '{}')
-    const events = await waitForEvents(svc)
-    const insideNodeModules = events.filter((e) =>
+    await new Promise((r) => setTimeout(r, NO_EVENT_WINDOW_MS))
+    svc._flushForTests()
+    c.stop()
+    const insideNodeModules = c.events.filter((e) =>
       normPath(reviveFsPath(e)).includes(normPath(`${root}${pathSep}node_modules`)),
     )
     expect(insideNodeModules.length).toBe(0)
+  })
+
+  it('applies excludes passed to watch()', async () => {
+    await fs.mkdir(join(root, 'build'), { recursive: true })
+    await svc.watch(URI.file(root).toJSON(), { excludes: ['**/build', '**/build/**'] })
+    const c = startCollecting(svc)
+    await fs.writeFile(join(root, 'build', 'out.js'), '1')
+    await new Promise((r) => setTimeout(r, NO_EVENT_WINDOW_MS))
+    svc._flushForTests()
+    c.stop()
+    const inside = c.events.filter((e) =>
+      normPath(reviveFsPath(e)).includes(normPath(`${root}${pathSep}build`)),
+    )
+    expect(inside.length).toBe(0)
+  })
+
+  it('setExcludes re-applies the ignore set on the active watch', async () => {
+    await svc.watch(URI.file(root).toJSON())
+    // node_modules is no longer ignored once we install an empty exclude set.
+    await svc.setExcludes([])
+    await fs.mkdir(join(root, 'node_modules'), { recursive: true })
+    const c = startCollecting(svc)
+    await fs.writeFile(join(root, 'node_modules', 'pkg.json'), '{}')
+    await vi.waitFor(() => {
+      svc._flushForTests()
+      const inside = c.events.filter((e) =>
+        normPath(reviveFsPath(e)).includes(normPath(`${root}${pathSep}node_modules`)),
+      )
+      expect(inside.length).toBeGreaterThan(0)
+    }, WAIT)
+    c.stop()
   })
 
   it('debounces rapid writes into a small number of batches', async () => {
@@ -93,10 +135,11 @@ describe('FileWatcherMainService', () => {
     for (let i = 0; i < 5; i++) {
       await fs.writeFile(target, String(i))
     }
-    await new Promise((r) => setTimeout(r, 200))
+    // Poll for the debounced batch instead of relying on a fixed sleep.
+    await vi.waitFor(() => expect(batches.length).toBeGreaterThan(0), WAIT)
+    // Allow a moment for any trailing batch, then assert writes coalesced.
+    await new Promise((r) => setTimeout(r, 100))
     sub.dispose()
-    // 5 rapid writes collapse into at most 2 debounced batches.
-    expect(batches.length).toBeGreaterThan(0)
     expect(batches.length).toBeLessThanOrEqual(2)
   })
 })

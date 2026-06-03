@@ -10,6 +10,7 @@
 import './quickInput/QuickInputService.js'
 import './progress/ProgressService.js'
 import './search/TextSearchService.js'
+import './exclude/ExcludeService.js'
 import './keybindings/UserKeybindingsService.js'
 import './acp/acpAgentRegistry.js'
 import './acp/acpPermissionHandler.js'

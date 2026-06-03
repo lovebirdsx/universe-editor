@@ -14,6 +14,7 @@ import { OutputView } from '../OutputView.js'
 const mockConfigService: IConfigurationService = {
   _serviceBrand: undefined,
   get: vi.fn().mockReturnValue(undefined),
+  getMerged: vi.fn().mockReturnValue({}),
   update: vi.fn(),
   loadLayer: vi.fn(),
   getLayerSnapshot: vi.fn().mockReturnValue({}),

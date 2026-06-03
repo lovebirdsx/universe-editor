@@ -23,9 +23,18 @@ export interface IFileWatcherService {
   /**
    * Replace the current watch with a recursive watch on `folder`. Pass a
    * `file:` URI as `UriComponents` so the call works across the IPC boundary.
-   * No-op if the new folder equals the current one.
+   * No-op if the new folder equals the current one. `options.excludes` are
+   * glob patterns (workspace-relative); matching paths are dropped before any
+   * change event is emitted.
    */
-  watch(folder: UriComponents): Promise<void>
+  watch(folder: UriComponents, options?: { excludes?: readonly string[] }): Promise<void>
+
+  /**
+   * Update the exclude globs applied to the active watch without tearing down
+   * the underlying FSWatcher. Used for config hot-reload while the workspace
+   * stays the same (where `watch()` would no-op on an identical folder).
+   */
+  setExcludes(excludes: readonly string[]): Promise<void>
 
   /** Stop watching. Safe to call when no watch is active. */
   unwatch(): Promise<void>

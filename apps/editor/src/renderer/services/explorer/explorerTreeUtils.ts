@@ -30,6 +30,19 @@ export function isDescendant(root: URI, target: URI): boolean {
   return targetPath === root.path || targetPath.startsWith(rootPath)
 }
 
+/**
+ * Workspace-relative, forward-slash path of `child` under `root` (no leading
+ * slash). Returns '' when child === root and the unchanged path when `child`
+ * lies outside `root`.
+ */
+export function relativeTo(root: URI, child: URI): string {
+  const rootPath = root.path.endsWith('/') ? root.path : root.path + '/'
+  const cp = child.path
+  if (cp === root.path) return ''
+  if (cp.startsWith(rootPath)) return cp.slice(rootPath.length)
+  return cp
+}
+
 export function dedupe(resources: readonly URI[]): URI[] {
   const seen = new Set<string>()
   const out: URI[] = []
