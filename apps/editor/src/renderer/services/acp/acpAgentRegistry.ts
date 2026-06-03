@@ -104,7 +104,7 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
   },
   {
     id: 'codex',
-    name: 'Codex (OpenAI)',
+    name: 'Codex',
     // The codex-acp adapter binary is not on PATH — it is downloaded on demand
     // by ICodexBinaryService and its absolute path is injected as the spawn
     // `command` in AcpClientService._ensureCodexBinary. `command` here is a
