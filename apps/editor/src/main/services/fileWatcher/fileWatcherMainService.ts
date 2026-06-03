@@ -8,10 +8,17 @@
  *  so excluded directories (node_modules, .git, …) are pruned at the watcher level
  *  — their children never generate events. This mirrors VSCode and avoids the OS
  *  recursive-watch + per-event JS cost of watching huge trees and filtering after.
+ *
+ *  The native backend is pinned per platform (see PARCEL_BACKEND). Parcel's
+ *  "default" backend on Windows first probes for watchman — shelling out to a
+ *  `watchman` subprocess on every (re)subscribe and printing "'watchman' is not
+ *  recognized" — before falling back to the windows backend. Naming the backend
+ *  skips that probe entirely.
  *--------------------------------------------------------------------------------------------*/
 
+import { platform } from 'node:process'
 import watcher from '@parcel/watcher'
-import type { AsyncSubscription, Event as ParcelEvent } from '@parcel/watcher'
+import type { AsyncSubscription, BackendType, Event as ParcelEvent } from '@parcel/watcher'
 import {
   createNamedLogger,
   Emitter,
@@ -27,6 +34,17 @@ import {
 } from '@universe-editor/platform'
 
 const DEBOUNCE_MS = 50
+
+// Pin the parcel backend per platform; see the file header for why "default" is
+// avoided. undefined on unknown platforms falls back to parcel's own default.
+const PARCEL_BACKEND: BackendType | undefined =
+  platform === 'win32'
+    ? 'windows'
+    : platform === 'darwin'
+      ? 'fs-events'
+      : platform === 'linux'
+        ? 'inotify'
+        : undefined
 
 // Fallback ignore globs, used only when watch() is called without explicit
 // excludes (the renderer normally seeds `files.watcherExclude` from the start).
@@ -136,7 +154,8 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private async _subscribe(target: string, ignore: string[]): Promise<void> {
     await this._teardown()
     try {
-      const sub = await watcher.subscribe(target, this._onParcel, { ignore })
+      const opts = PARCEL_BACKEND ? { ignore, backend: PARCEL_BACKEND } : { ignore }
+      const sub = await watcher.subscribe(target, this._onParcel, opts)
       this._subscription = sub
       this._rootFsPath = target
       this._currentIgnore = ignore
