@@ -103,7 +103,18 @@
         font-weight: 600;
         margin: 0 0 16px;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0;
+      }
+      .version-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--fg);
+        margin: 0 0 10px;
+      }
+      .version-title:not(:first-child) {
+        margin-top: 24px;
+        padding-top: 22px;
+        border-top: 1px solid var(--border);
       }
       .group {
         margin-bottom: 18px;
@@ -160,7 +171,7 @@
         </a>
 
         <section class="notes hidden" id="notes">
-          <h2>本次更新</h2>
+          <h2>最近 7 天更新</h2>
           <div id="groups"></div>
         </section>
       </div>
@@ -172,6 +183,9 @@
 
     <script>
       // 轻量解析 electron-builder 生成的 latest.yml：只取页面要用的字段，避免引入 YAML 库。
+      const NOTE_WINDOW_DAYS = 7
+      const DAY_MS = 24 * 60 * 60 * 1000
+
       function parseLatestYml(text) {
         const lines = text.split(/\r?\n/)
         const out = { version: '', releaseDate: '', files: [] }
@@ -212,10 +226,48 @@
 
       function formatDate(raw) {
         if (!raw) return ''
+        const dateKey = toDateKey(raw)
+        if (dateKey) return dateKey
         const d = new Date(raw)
-        if (Number.isNaN(d.getTime())) return raw.slice(0, 10)
+        if (Number.isNaN(d.getTime())) return String(raw).slice(0, 10)
         const p = (n) => String(n).padStart(2, '0')
         return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+      }
+
+      function toDateKey(raw) {
+        if (!raw) return ''
+        const text = String(raw)
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(text)
+        if (m) {
+          const key = `${m[1]}-${m[2]}-${m[3]}`
+          return Number.isNaN(dateKeyToDay(key)) ? '' : key
+        }
+        const d = new Date(text)
+        if (Number.isNaN(d.getTime())) return ''
+        return formatUtcDate(d)
+      }
+
+      function formatUtcDate(date) {
+        const p = (n) => String(n).padStart(2, '0')
+        return `${date.getUTCFullYear()}-${p(date.getUTCMonth() + 1)}-${p(date.getUTCDate())}`
+      }
+
+      function dateKeyToDay(key) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key)
+        if (!m) return Number.NaN
+        const year = Number(m[1])
+        const month = Number(m[2])
+        const day = Number(m[3])
+        const time = Date.UTC(year, month - 1, day)
+        const d = new Date(time)
+        if (
+          d.getUTCFullYear() !== year ||
+          d.getUTCMonth() + 1 !== month ||
+          d.getUTCDate() !== day
+        ) {
+          return Number.NaN
+        }
+        return Math.floor(time / DAY_MS)
       }
 
       function show(id) {
@@ -225,28 +277,73 @@
         document.getElementById(id).classList.add('hidden')
       }
 
-      function renderNotes(notes, version) {
-        const entry = Array.isArray(notes) ? notes.find((n) => n.version === version) : null
-        if (!entry || !Array.isArray(entry.groups) || entry.groups.length === 0) return
+      function findNoteByVersion(notes, version) {
+        return Array.isArray(notes) ? notes.find((n) => n && n.version === version) : null
+      }
+
+      function selectRecentNotes(notes, latest) {
+        if (!Array.isArray(notes)) return []
+        const current = findNoteByVersion(notes, latest.version)
+        const anchorKey = toDateKey(current && current.date) || toDateKey(latest.releaseDate)
+        if (!anchorKey) return []
+        const anchorDay = dateKeyToDay(anchorKey)
+        const startDay = anchorDay - NOTE_WINDOW_DAYS + 1
+        return notes.filter((note) => {
+          if (!note) return false
+          const noteDay = dateKeyToDay(toDateKey(note.date))
+          return noteDay >= startDay && noteDay <= anchorDay
+        })
+      }
+
+      function hasRenderableGroups(entry) {
+        return (
+          entry &&
+          Array.isArray(entry.groups) &&
+          entry.groups.some((group) => Array.isArray(group.items) && group.items.length > 0)
+        )
+      }
+
+      function renderNotes(notes, latest) {
+        const recent = selectRecentNotes(notes, latest)
+        const current = findNoteByVersion(notes, latest.version)
+        const entries = recent.length > 0 ? recent : current ? [current] : []
+        if (entries.length === 0) return
         const container = document.getElementById('groups')
-        for (const group of entry.groups) {
-          if (!Array.isArray(group.items) || group.items.length === 0) continue
-          const wrap = document.createElement('div')
-          wrap.className = 'group'
-          const title = document.createElement('div')
-          title.className = 'group-title'
-          title.textContent = group.title || group.type || ''
-          const ul = document.createElement('ul')
-          for (const item of group.items) {
-            const li = document.createElement('li')
-            li.textContent = item
-            ul.appendChild(li)
+        container.textContent = ''
+        for (const entry of entries) {
+          if (!hasRenderableGroups(entry)) continue
+          renderVersionHeader(container, entry)
+          for (const group of entry.groups) {
+            renderGroup(container, group)
           }
-          wrap.appendChild(title)
-          wrap.appendChild(ul)
-          container.appendChild(wrap)
         }
         if (container.children.length > 0) show('notes')
+      }
+
+      function renderVersionHeader(container, entry) {
+        const title = document.createElement('div')
+        title.className = 'version-title'
+        const date = formatDate(entry.date)
+        title.textContent = date ? `v${entry.version} · ${date}` : `v${entry.version}`
+        container.appendChild(title)
+      }
+
+      function renderGroup(container, group) {
+        if (!Array.isArray(group.items) || group.items.length === 0) return
+        const wrap = document.createElement('div')
+        wrap.className = 'group'
+        const title = document.createElement('div')
+        title.className = 'group-title'
+        title.textContent = group.title || group.type || ''
+        const ul = document.createElement('ul')
+        for (const item of group.items) {
+          const li = document.createElement('li')
+          li.textContent = item
+          ul.appendChild(li)
+        }
+        wrap.appendChild(title)
+        wrap.appendChild(ul)
+        container.appendChild(wrap)
       }
 
       async function main() {
@@ -270,7 +367,7 @@
           // 更新日志失败不影响主流程：单独 try，拿不到就只展示下载按钮。
           try {
             const notesRes = await fetch('release-notes.json', { cache: 'no-store' })
-            if (notesRes.ok) renderNotes(await notesRes.json(), latest.version)
+            if (notesRes.ok) renderNotes(await notesRes.json(), latest)
           } catch {
             /* 忽略：无更新日志时不展示该区块 */
           }
