@@ -8,6 +8,7 @@
 import {
   ConfigurationTarget,
   createDecorator,
+  Disposable,
   IConfigurationService,
   InstantiationType,
   observableValue,
@@ -117,7 +118,7 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
 /** Built-in agents whose binary is fetched on demand rather than found on PATH. */
 const MANAGED_BINARY_AGENT_IDS: ReadonlySet<string> = new Set(['codex'])
 
-export class AcpAgentRegistry implements IAcpAgentRegistry {
+export class AcpAgentRegistry extends Disposable implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
 
   private readonly _probeCache = new Map<string, Promise<boolean>>()
@@ -128,19 +129,22 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
     @IConfigurationService private readonly _config: IConfigurationService,
     @IAcpHostService private readonly _host: IAcpHostService,
   ) {
+    super()
     this._defaultAgentIdSettable = observableValue<string>(
       'acp.defaultAgentId',
       this._config.get<string>('acp.defaultAgentId') ?? 'claude-code',
     )
     this.defaultAgentIdObs = this._defaultAgentIdSettable
-    this._config.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('acp.defaultAgentId')) {
-        this._defaultAgentIdSettable.set(
-          this._config.get<string>('acp.defaultAgentId') ?? 'claude-code',
-          undefined,
-        )
-      }
-    })
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('acp.defaultAgentId')) {
+          this._defaultAgentIdSettable.set(
+            this._config.get<string>('acp.defaultAgentId') ?? 'claude-code',
+            undefined,
+          )
+        }
+      }),
+    )
   }
 
   list(): readonly IAcpAgentDescriptor[] {
