@@ -60,6 +60,7 @@ import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
+import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
 import {
   AcpSession,
@@ -314,6 +315,9 @@ export class AcpSessionService
   async createSession(agentId?: string): Promise<IAcpSession> {
     const resolvedAgentId = agentId ?? this._registry.defaultAgentId()
     const agentName = this._registry.get(resolvedAgentId).name
+    const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
+    const initialCollapseMode: CollapseMode =
+      (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
     return this._progress.withProgress(
       {
         location: ProgressLocation.Notification,
@@ -374,6 +378,7 @@ export class AcpSessionService
             conn,
             this._telemetry,
             initState,
+            initialCollapseMode,
             this._history,
             this._agentDefaults,
           )
@@ -494,6 +499,7 @@ export class AcpSessionService
         conn,
         this._telemetry,
         entry.usage ? { usage: entry.usage } : undefined,
+        entry.collapseMode ?? 'default',
         this._history,
         this._agentDefaults,
       )

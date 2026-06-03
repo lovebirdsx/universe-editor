@@ -89,12 +89,14 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     configOptions: configObs,
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),
     mcpServers: observableValue('mcp', []),
+    collapseMode: observableValue('cm', 'default' as const),
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,
     cancelTurn: vi.fn().mockResolvedValue(undefined) as never,
     close: () => Promise.resolve(),
     setConfigOption: setConfigOption as never,
+    cycleCollapseMode: () => {},
     configObs,
   } satisfies FakeSession
 }

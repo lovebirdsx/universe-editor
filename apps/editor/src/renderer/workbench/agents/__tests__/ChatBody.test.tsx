@@ -71,6 +71,10 @@ function makeMessage(id: string, text: string): AcpMessage {
 }
 
 function makeSession(id: string, items: readonly TimelineItem[]): IAcpSession {
+  const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
+    't.collapse',
+    'default',
+  )
   return {
     id,
     agentId: 'fake',
@@ -85,6 +89,13 @@ function makeSession(id: string, items: readonly TimelineItem[]): IAcpSession {
     pendingQuestion: observableValue('t.question', undefined),
     configOptions: observableValue<readonly SessionConfigOption[]>('t.cfg', []),
     availableCommands: observableValue('t.cmds', []),
+    mcpServers: observableValue('t.mcp', []),
+    collapseMode,
+    cycleCollapseMode: () => {
+      const cur = collapseMode.get()
+      const next = cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'
+      collapseMode.set(next, undefined)
+    },
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined),

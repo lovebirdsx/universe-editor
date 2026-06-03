@@ -27,6 +27,8 @@ import {
   type MutableRefObject,
 } from 'react'
 import { IFileSearchService, IWorkspaceService, localize } from '@universe-editor/platform'
+import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
+import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
 import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
@@ -83,6 +85,7 @@ export function PromptInput({
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
   const running = status === 'running'
+  const collapseMode = useObservable(session.collapseMode)
 
   // Expose `focus()` to the AcpChatWidget handle so the registered widget can
   // serve Ctrl+Alt+I (Focus Agent Input) without a global event bus.
@@ -332,6 +335,7 @@ export function PromptInput({
       </div>
       <div className={styles['promptActions']}>
         <ConfigOptionsBar session={session} />
+        <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton
           session={session}
@@ -369,4 +373,31 @@ function mergeMention(
   const out = prev.filter((m) => m.name !== next.name)
   out.push(next)
   return out
+}
+
+const COLLAPSE_ICON: Record<CollapseMode, LucideIcon> = {
+  default: AlignJustify,
+  collapsed: FoldVertical,
+  expanded: UnfoldVertical,
+}
+
+const COLLAPSE_TOOLTIP: Record<CollapseMode, string> = {
+  default: localize('acp.collapse.default', 'Timeline: Smart folding — click to collapse all'),
+  collapsed: localize('acp.collapse.collapsed', 'Timeline: All collapsed — click to expand all'),
+  expanded: localize('acp.collapse.expanded', 'Timeline: All expanded — click to reset'),
+}
+
+function CollapseToggleButton({ mode, onCycle }: { mode: CollapseMode; onCycle: () => void }) {
+  const Icon = COLLAPSE_ICON[mode]
+  return (
+    <button
+      type="button"
+      className={styles['collapseToggle']}
+      onClick={onCycle}
+      title={COLLAPSE_TOOLTIP[mode]}
+      aria-label={COLLAPSE_TOOLTIP[mode]}
+    >
+      <Icon size={14} strokeWidth={1.75} aria-hidden="true" />
+    </button>
+  )
 }

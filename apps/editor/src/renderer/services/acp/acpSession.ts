@@ -8,6 +8,7 @@
 
 import {
   Disposable,
+  autorun,
   observableValue,
   TransactionImpl,
   type ITelemetryService,
@@ -25,6 +26,7 @@ import type {
 import type { IAcpClientConnection } from './acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
+import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 import { parseMcpToolName, type McpTransport } from './acpMcpServers.js'
@@ -256,6 +258,10 @@ export interface IAcpSession {
    * system-init snapshot. Empty when no MCP servers are involved.
    */
   readonly mcpServers: IObservable<readonly AcpMcpServerStatus[]>
+  /** Current timeline collapse mode for this session. */
+  readonly collapseMode: IObservable<CollapseMode>
+  /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
+  cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
   presentPermission(p: AcpPendingPermission): void
   /** Internal — call site is the AskUserQuestion sink. */
@@ -295,6 +301,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
   readonly mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
+  readonly collapseMode: ISettableObservable<CollapseMode>
 
   private readonly _configOptions: ConfigOptionStateMachine
 
@@ -342,6 +349,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _conn: IAcpClientConnection,
     private readonly _telemetry: ITelemetryService,
     initState?: IAcpSessionInitState,
+    initialCollapseMode: CollapseMode = 'default',
     private readonly _history?: IAcpSessionHistoryService,
     private readonly _agentDefaults?: IAcpAgentDefaultsService,
   ) {
@@ -368,6 +376,10 @@ export class AcpSession extends Disposable implements IAcpSession {
       `acp.session.mcpServers.${id}`,
       [],
     )
+    this.collapseMode = observableValue<CollapseMode>(
+      `acp.session.collapseMode.${id}`,
+      initialCollapseMode,
+    )
     this._configOptions = new ConfigOptionStateMachine({
       conn: _conn,
       telemetry: _telemetry,
@@ -377,6 +389,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     })
     if (initState) {
       this.applyInitState(initState)
+    }
+    if (this._history) {
+      const h = this._history
+      this._register(
+        autorun((r) => {
+          h.setHistoryCollapseMode(id, this.collapseMode.read(r))
+        }),
+      )
     }
     this._register({ dispose: () => this._conn.dispose() })
     // Connection close → seal the session.
@@ -395,6 +415,13 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   get configOptions(): IObservable<readonly SessionConfigOption[]> {
     return this._configOptions.configOptions
+  }
+
+  cycleCollapseMode(): void {
+    const cur = this.collapseMode.get()
+    const next: CollapseMode =
+      cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'
+    this.collapseMode.set(next, undefined)
   }
 
   /**

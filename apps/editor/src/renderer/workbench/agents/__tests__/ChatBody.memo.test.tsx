@@ -101,6 +101,9 @@ function makeSession(
     cancelTurn: vi.fn().mockResolvedValue(undefined),
     close: () => Promise.resolve(),
     setConfigOption: () => Promise.resolve(),
+    mcpServers: observableValue('t.mcpServers', []),
+    collapseMode: observableValue('t.collapseMode', 'default' as const),
+    cycleCollapseMode: () => {},
   } as unknown as IAcpSession
   return { session, timeline }
 }

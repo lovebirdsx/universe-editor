@@ -267,7 +267,7 @@ describe('AcpSessionHistoryService — persistence', () => {
     expect(call.key).toBe('acp.sessionHistory')
     expect(call.scope).toBe(StorageScope.WORKSPACE)
     const persisted = call.value as { schemaVersion: number; entries: unknown[] }
-    expect(persisted.schemaVersion).toBe(1)
+    expect(persisted.schemaVersion).toBe(2)
     expect(persisted.entries).toHaveLength(1)
   })
 

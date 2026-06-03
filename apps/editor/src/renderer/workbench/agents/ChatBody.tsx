@@ -21,6 +21,7 @@ import {
   useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type MouseEvent as ReactMouseEvent,
@@ -55,7 +56,7 @@ import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
-import { nextCollapseMode, resolveCollapsed, type CollapseState } from './timelineCollapse.js'
+import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
@@ -143,12 +144,20 @@ function ChatScroll({
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
 
-  const [collapse, setCollapse] = useState<CollapseState>(() => ({
-    mode: saved?.collapse?.mode ?? 'default',
-    overrides: new Map(saved?.collapse?.overrides ?? []),
-  }))
+  const mode = useObservable(session.collapseMode)
+  const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
+    () => new Map(saved?.collapse?.overrides ?? []),
+  )
+  const collapse: CollapseState = useMemo(() => ({ mode, overrides }), [mode, overrides])
   const collapseRef = useRef(collapse)
   collapseRef.current = collapse
+
+  // When mode changes from outside (e.g. toggle button), clear per-item overrides.
+  const prevModeRef = useRef(mode)
+  if (prevModeRef.current !== mode) {
+    prevModeRef.current = mode
+    setOverrides(new Map())
+  }
 
   // Virtualize only past a threshold so short conversations keep the plain DOM
   // list (cheaper, and what the tests exercise). The scroll element is the same
@@ -207,10 +216,10 @@ function ChatScroll({
     })
   }, [session.id])
 
-  // Persist whenever the collapse state changes (Alt+F / Ctrl+Alt+F / chevron).
+  // Persist whenever the overrides change (Alt+F / chevron).
   useEffect(() => {
     persist()
-  }, [collapse, persist])
+  }, [overrides, persist])
 
   const handleScroll = () => {
     if (restoringRef.current) return
@@ -329,10 +338,10 @@ function ChatScroll({
     const item = findByStickyKey(timelineRef.current, key)
     if (!item) return
     const current = resolveCollapsed(key, item, collapseRef.current)
-    setCollapse((s) => {
-      const overrides = new Map(s.overrides)
-      overrides.set(key, !current)
-      return { mode: s.mode, overrides }
+    setOverrides((prev) => {
+      const next = new Map(prev)
+      next.set(key, !current)
+      return next
     })
   }, [])
 
@@ -419,7 +428,7 @@ function ChatScroll({
       if (key !== null) handleToggleCollapse(key)
     }
     handle.cycleCollapseMode = () => {
-      setCollapse((s) => ({ mode: nextCollapseMode(s.mode), overrides: new Map() }))
+      session.cycleCollapseMode()
     }
     return () => {
       handle.move = noop
@@ -427,7 +436,7 @@ function ChatScroll({
       handle.toggleCollapse = noop
       handle.cycleCollapseMode = noop
     }
-  }, [handleRef, handleToggleCollapse, scrollToBottomStable])
+  }, [handleRef, handleToggleCollapse, scrollToBottomStable, session])
 
   return (
     <div

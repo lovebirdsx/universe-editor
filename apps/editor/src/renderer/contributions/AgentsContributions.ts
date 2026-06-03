@@ -124,6 +124,17 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Show an OS desktop notification when an agent needs attention (permission request, question, task completed, or error) while the editor window is not focused. Clicking the notification focuses the window and jumps to that session.',
             ),
           },
+          'acp.defaultCollapseModes': {
+            type: 'object',
+            default: {
+              'claude-code': 'default',
+              codex: 'collapsed',
+            },
+            description: localize(
+              'settings.acp.defaultCollapseModes',
+              'Default timeline collapse mode for new sessions per agent ID. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded). Example: { "claude-code": "default", "codex": "collapsed" }.',
+            ),
+          },
         },
       }),
     )

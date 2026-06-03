@@ -32,6 +32,7 @@ import {
   type ISettableObservable,
 } from '@universe-editor/platform'
 import { PersistedStateBase } from './persistedStateBase.js'
+import type { CollapseMode } from './acpChatViewStateCache.js'
 
 export interface AcpSessionHistoryEntry {
   /**
@@ -68,6 +69,8 @@ export interface AcpSessionHistoryEntry {
     readonly size: number
     readonly cost?: { readonly amount: number; readonly currency: string }
   }
+  /** Timeline collapse mode persisted per-session so it survives editor restarts. */
+  readonly collapseMode?: CollapseMode
 }
 
 export interface IAcpSessionHistoryService {
@@ -91,6 +94,11 @@ export interface IAcpSessionHistoryService {
    * selections so they survive editor restart.
    */
   setHistoryConfigOption(sessionId: string, configId: string, value: string): void
+  /**
+   * Persist the timeline collapse mode for a session. No-op if id is unknown
+   * or the value is unchanged.
+   */
+  setHistoryCollapseMode(sessionId: string, mode: CollapseMode): void
   /**
    * Mirror the latest usage snapshot onto a history entry. No-op if id is
    * unknown or the snapshot is unchanged. Called by `AcpSession.applyUpdate`
@@ -236,6 +244,9 @@ export class AcpSessionHistoryService
       lastUsedAt: now,
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
       ...(carriedUsage !== undefined ? { usage: carriedUsage } : {}),
+      ...(existingIdx >= 0 && this._state[existingIdx]!.collapseMode !== undefined
+        ? { collapseMode: this._state[existingIdx]!.collapseMode }
+        : {}),
     }
     if (existingIdx >= 0) {
       this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
@@ -282,6 +293,17 @@ export class AcpSessionHistoryService
     if (prevOpts[configId] === value) return
     const nextOpts: Readonly<Record<string, string>> = { ...prevOpts, [configId]: value }
     const next: AcpSessionHistoryEntry = { ...cur, configOptions: nextOpts }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryCollapseMode(sessionId: string, mode: CollapseMode): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.collapseMode === mode) return
+    const next: AcpSessionHistoryEntry = { ...cur, collapseMode: mode }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
