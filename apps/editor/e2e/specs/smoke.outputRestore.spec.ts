@@ -17,6 +17,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
 
+function seedUserSettings(userDataDir: string): void {
+  writeFileSync(
+    join(userDataDir, 'settings.json'),
+    JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
+    'utf8',
+  )
+}
+
 function fsPathToUriComponents(fsPath: string) {
   const forwardSlash = fsPath.replace(/\\/g, '/')
   const path = forwardSlash.startsWith('/') ? forwardSlash : '/' + forwardSlash
@@ -65,6 +73,7 @@ function seedWorkspaceKey(userDataDir: string, folder: string, key: string, valu
 }
 
 async function launchWithState(userDataDir: string) {
+  seedUserSettings(userDataDir)
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,

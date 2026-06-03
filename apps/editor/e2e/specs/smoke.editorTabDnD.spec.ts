@@ -11,103 +11,113 @@ test.describe('@p1 editor tab drag-and-drop', () => {
   test('drag tab to another group moves the editor', async ({ workbench }) => {
     // Create a temp workspace with two files.
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-tabdnd-'))
-    await fs.writeFile(path.join(tmpDir, 'alpha.txt'), 'alpha')
-    await fs.writeFile(path.join(tmpDir, 'beta.txt'), 'beta')
+    const alphaPath = path.join(tmpDir, 'alpha.txt')
+    const betaPath = path.join(tmpDir, 'beta.txt')
+    await fs.writeFile(alphaPath, 'alpha')
+    await fs.writeFile(betaPath, 'beta')
 
-    await workbench.waitForRestored()
-    await workbench.openWorkspace(tmpDir)
+    try {
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
 
-    await expect
-      .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
-      .toBe(true)
+      await expect
+        .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
+        .toBe(true)
 
-    // Open alpha.txt in the default group.
-    const alphaRow = workbench.page.locator('[role="treeitem"]', { hasText: 'alpha.txt' })
-    await expect(alphaRow).toBeVisible({ timeout: 5000 })
-    await alphaRow.dblclick()
-
-    // Split the editor to create a second group.
-    await workbench.page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.splitEditorRight')
-    })
-
-    // Wait for the second group to appear in the DOM before opening beta.txt.
-    const tabBars = workbench.page.locator('[data-testid="editor-group-tabbar"]')
-    await expect(tabBars).toHaveCount(2, { timeout: 5000 })
-
-    // Open beta.txt in the second group.
-    const betaRow = workbench.page.locator('[role="treeitem"]', { hasText: 'beta.txt' })
-    await expect(betaRow).toBeVisible({ timeout: 5000 })
-    await betaRow.dblclick()
-
-    const firstTabBar = tabBars.nth(0)
-    const secondTabBar = tabBars.nth(1)
-
-    // beta.txt tab should be in the second group.
-    const betaTab = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
-    await expect(betaTab).toBeVisible({ timeout: 3000 })
-
-    // Wait until the first group's body has a real layout box before dropping on
-    // its center. On headless CI the freshly-split group can briefly report a
-    // zero-area rect, which would otherwise make the center drop misfire.
-    const firstBody = workbench.page.locator('[data-testid="editor-group-body"]').nth(0)
-    await expect
-      .poll(
-        async () => {
-          const box = await firstBody.boundingBox()
-          return box ? Math.min(box.width, box.height) : 0
-        },
-        { timeout: 5000 },
+      // Open alpha.txt in the default group.
+      await workbench.page.evaluate(
+        ([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }),
+        [alphaPath.replace(/\\/g, '/')] as const,
       )
-      .toBeGreaterThan(0)
+      await expect
+        .poll(() => workbench.getActiveEditorUri(), { timeout: 5000 })
+        .toContain('alpha.txt')
 
-    // Dispatch native HTML5 drag events directly: dragstart on the source tab,
-    // then drop onto the *body* (center) of the first group — equivalent to a
-    // tab-bar drop visually but exercises the body drop branch. We intentionally
-    // omit dragenter/dragover: a robust drop handler must not silently no-op
-    // just because internal scratch state happens to be uninitialized (real
-    // browsers always fire them, but a drop event already carries coordinates).
-    await workbench.page.evaluate(() => {
-      const bars = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-tabbar"]')
-      const bodies = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-body"]')
-      const source = Array.from(bars[1]?.querySelectorAll<HTMLElement>('[role="tab"]') ?? []).find(
-        (t) => (t.textContent ?? '').includes('beta.txt'),
+      // Split the editor to create a second group.
+      await workbench.runCommand('workbench.action.splitEditorRight')
+      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+
+      // Wait for the second group to appear in the DOM before opening beta.txt.
+      const tabBars = workbench.page.locator('[data-testid="editor-group-tabbar"]')
+      await expect(tabBars).toHaveCount(2, { timeout: 5000 })
+
+      // Open beta.txt in the second group.
+      await workbench.page.evaluate(
+        ([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }),
+        [betaPath.replace(/\\/g, '/')] as const,
       )
-      const target = bodies[0]
-      if (!source || !target) throw new Error('drag source/target missing')
+      await expect
+        .poll(() => workbench.getActiveEditorUri(), { timeout: 5000 })
+        .toContain('beta.txt')
 
-      const dt = new DataTransfer()
-      const fire = (el: HTMLElement, type: string, clientX: number, clientY: number) => {
-        const ev = new DragEvent(type, {
-          bubbles: true,
-          cancelable: true,
-          composed: true,
-          clientX,
-          clientY,
-          dataTransfer: dt,
-        })
-        el.dispatchEvent(ev)
-      }
-      const sRect = source.getBoundingClientRect()
-      const tRect = target.getBoundingClientRect()
-      const sx = sRect.left + sRect.width / 2
-      const sy = sRect.top + sRect.height / 2
-      const tx = tRect.left + tRect.width / 2
-      const ty = tRect.top + tRect.height / 2
+      const firstTabBar = tabBars.nth(0)
+      const secondTabBar = tabBars.nth(1)
 
-      fire(source, 'dragstart', sx, sy)
-      fire(target, 'drop', tx, ty)
-      fire(source, 'dragend', tx, ty)
-    })
+      // beta.txt tab should be in the second group.
+      const betaTab = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
+      await expect(betaTab).toBeVisible({ timeout: 3000 })
 
-    // Now both files should be in the first group.
-    const betaTabInSecond = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
-    await expect(betaTabInSecond).toBeHidden({ timeout: 3000 })
+      // Wait until the first group's body has a real layout box before dropping on
+      // its center. On headless CI the freshly-split group can briefly report a
+      // zero-area rect, which would otherwise make the center drop misfire.
+      const firstBody = workbench.page.locator('[data-testid="editor-group-body"]').nth(0)
+      await expect
+        .poll(
+          async () => {
+            const box = await firstBody.boundingBox()
+            return box ? Math.min(box.width, box.height) : 0
+          },
+          { timeout: 5000 },
+        )
+        .toBeGreaterThan(0)
 
-    const betaTabInFirst = firstTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
-    await expect(betaTabInFirst).toBeVisible({ timeout: 3000 })
+      // Dispatch native HTML5 drag events directly: dragstart on the source tab,
+      // then drop onto the *body* (center) of the first group — equivalent to a
+      // tab-bar drop visually but exercises the body drop branch. We intentionally
+      // omit dragenter/dragover: a robust drop handler must not silently no-op
+      // just because internal scratch state happens to be uninitialized (real
+      // browsers always fire them, but a drop event already carries coordinates).
+      await workbench.page.evaluate(() => {
+        const bars = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-tabbar"]')
+        const bodies = document.querySelectorAll<HTMLElement>('[data-testid="editor-group-body"]')
+        const source = Array.from(
+          bars[1]?.querySelectorAll<HTMLElement>('[role="tab"]') ?? [],
+        ).find((t) => (t.textContent ?? '').includes('beta.txt'))
+        const target = bodies[0]
+        if (!source || !target) throw new Error('drag source/target missing')
 
-    // Cleanup.
-    await fs.rm(tmpDir, { recursive: true, force: true })
+        const dt = new DataTransfer()
+        const fire = (el: HTMLElement, type: string, clientX: number, clientY: number) => {
+          const ev = new DragEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            clientX,
+            clientY,
+            dataTransfer: dt,
+          })
+          el.dispatchEvent(ev)
+        }
+        const sRect = source.getBoundingClientRect()
+        const tRect = target.getBoundingClientRect()
+        const sx = sRect.left + sRect.width / 2
+        const sy = sRect.top + sRect.height / 2
+        const tx = tRect.left + tRect.width / 2
+        const ty = tRect.top + tRect.height / 2
+
+        fire(source, 'dragstart', sx, sy)
+        fire(target, 'drop', tx, ty)
+        fire(source, 'dragend', tx, ty)
+      })
+
+      // Now both files should be in the first group.
+      const betaTabInSecond = secondTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
+      await expect(betaTabInSecond).toBeHidden({ timeout: 3000 })
+
+      const betaTabInFirst = firstTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
+      await expect(betaTabInFirst).toBeVisible({ timeout: 3000 })
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true })
+    }
   })
 })
