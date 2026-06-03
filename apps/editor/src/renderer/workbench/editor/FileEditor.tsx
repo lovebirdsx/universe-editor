@@ -20,6 +20,7 @@ import {
   IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
+  markAsSingleton,
   PartId,
 } from '@universe-editor/platform'
 import { useService } from '../useService.js'
@@ -211,23 +212,25 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
   // Apply config changes to the live editor instance.
   useEffect(() => {
-    const disposable = configService.onDidChangeConfiguration((e) => {
-      const options: monaco.editor.IEditorOptions = {}
-      if (e.affectsConfiguration('editor.fontSize')) {
-        options.fontSize = getEditorFontSize(configService)
-      }
-      if (e.affectsConfiguration('editor.fontFamily')) {
-        options.fontFamily = getEditorFontFamily(configService)
-      }
-      if (e.affectsConfiguration('editor.wordWrap')) {
-        options.wordWrap = getEditorWordWrap(configService)
-      }
-      if (e.affectsConfiguration('editor.minimap.enabled')) {
-        const enabled = configService.get<boolean>('editor.minimap.enabled') ?? true
-        options.minimap = { enabled }
-      }
-      if (Object.keys(options).length > 0) editorRef.current?.updateOptions(options)
-    })
+    const disposable = markAsSingleton(
+      configService.onDidChangeConfiguration((e) => {
+        const options: monaco.editor.IEditorOptions = {}
+        if (e.affectsConfiguration('editor.fontSize')) {
+          options.fontSize = getEditorFontSize(configService)
+        }
+        if (e.affectsConfiguration('editor.fontFamily')) {
+          options.fontFamily = getEditorFontFamily(configService)
+        }
+        if (e.affectsConfiguration('editor.wordWrap')) {
+          options.wordWrap = getEditorWordWrap(configService)
+        }
+        if (e.affectsConfiguration('editor.minimap.enabled')) {
+          const enabled = configService.get<boolean>('editor.minimap.enabled') ?? true
+          options.minimap = { enabled }
+        }
+        if (Object.keys(options).length > 0) editorRef.current?.updateOptions(options)
+      }),
+    )
     return () => disposable.dispose()
   }, [configService])
 
