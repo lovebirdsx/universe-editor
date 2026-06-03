@@ -6,10 +6,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  ConfigurationTarget,
   createDecorator,
   IConfigurationService,
   InstantiationType,
+  observableValue,
   registerSingleton,
+  type IObservable,
+  type ISettableObservable,
 } from '@universe-editor/platform'
 import type { AcpLaunchSpec } from '../../../shared/ipc/acpHostService.js'
 import { IAcpHostService } from '../../../shared/ipc/acpHostService.js'
@@ -71,6 +75,10 @@ export interface IAcpAgentRegistry {
   resolve(agentId: string, cwdOverride?: string): AcpLaunchSpec
   /** Default agent id (`acp.defaultAgentId`, falls back to `claude-code`). */
   defaultAgentId(): string
+  /** Reactive default agent id — subscribe in React components via useObservable(). */
+  readonly defaultAgentIdObs: IObservable<string>
+  /** Update the default agent for this session (Memory layer, resets on restart). */
+  setDefaultAgentId(agentId: string): void
   /**
    * Probe whether the agent's command resolves in PATH. Memoized per command —
    * call sites can hit this repeatedly without paying the `where`/`which` cost
@@ -113,11 +121,27 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
 
   private readonly _probeCache = new Map<string, Promise<boolean>>()
+  private readonly _defaultAgentIdSettable: ISettableObservable<string>
+  readonly defaultAgentIdObs: IObservable<string>
 
   constructor(
     @IConfigurationService private readonly _config: IConfigurationService,
     @IAcpHostService private readonly _host: IAcpHostService,
-  ) {}
+  ) {
+    this._defaultAgentIdSettable = observableValue<string>(
+      'acp.defaultAgentId',
+      this._config.get<string>('acp.defaultAgentId') ?? 'claude-code',
+    )
+    this.defaultAgentIdObs = this._defaultAgentIdSettable
+    this._config.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('acp.defaultAgentId')) {
+        this._defaultAgentIdSettable.set(
+          this._config.get<string>('acp.defaultAgentId') ?? 'claude-code',
+          undefined,
+        )
+      }
+    })
+  }
 
   list(): readonly IAcpAgentDescriptor[] {
     const userAgents = this._readUserAgents()
@@ -155,6 +179,11 @@ export class AcpAgentRegistry implements IAcpAgentRegistry {
 
   defaultAgentId(): string {
     return this._config.get<string>('acp.defaultAgentId') ?? 'claude-code'
+  }
+
+  setDefaultAgentId(agentId: string): void {
+    this._config.update('acp.defaultAgentId', agentId, ConfigurationTarget.User)
+    // onDidChangeConfiguration syncs the observable automatically.
   }
 
   async health(agentId: string): Promise<IAcpAgentHealth> {

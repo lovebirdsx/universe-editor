@@ -191,7 +191,9 @@ export class SelectAgentAction extends Action2 {
       placeholder: localize('agent.selectAgent.placeholder', 'Select default ACP agent'),
     })
     if (!picked) return
-    // Update the default agent at runtime (Memory layer). User can persist via Settings UI.
+    // Persist the user's choice as the new default so the next "New session" uses
+    // the same agent. The original code only created a session without writing this.
+    registry.setDefaultAgentId(picked.id)
     await sessions.createSession(picked.id)
   }
 }

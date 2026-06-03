@@ -8,12 +8,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { ICommandService, localize } from '@universe-editor/platform'
-import { ArrowLeftRight, Bot, Plus, RefreshCw } from 'lucide-react'
+import { ArrowLeftRight, Plus, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
-import { useService } from '../useService.js'
+import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
+import { AgentIcon } from './agentIcon.js'
 import { SessionListBody } from './SessionListBody.js'
 import styles from './agents.module.css'
 
@@ -22,6 +23,7 @@ export function SessionListPanel() {
   const registry = useService(IAcpAgentRegistry)
   const commands = useService(ICommandService)
   const location = useService(IAcpChatLocationService)
+  const defaultAgentId = useObservable(registry.defaultAgentIdObs)
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = () => {
@@ -50,11 +52,13 @@ export function SessionListPanel() {
           className={styles['toolbarButton']}
           onClick={() => void commands.executeCommand('workbench.action.agent.selectAgent')}
           data-testid="acp-select-agent"
-          title={localize('acp.selectAgent', 'Choose agent…')}
+          title={localize('acp.selectAgent.titled', 'Choose agent… (current: {name})', {
+            name: defaultAgentId,
+          })}
           aria-label={localize('acp.selectAgent', 'Choose agent…')}
         >
           <span aria-hidden="true">
-            <Bot size={14} strokeWidth={1.75} />
+            <AgentIcon agentId={defaultAgentId} size={14} />
           </span>
         </button>
         <button

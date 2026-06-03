@@ -23,6 +23,7 @@ export function ChatPanel() {
   const registry = useService(IAcpAgentRegistry)
   const location = useService(IAcpChatLocationService)
   const active = useObservable(service.activeSession)
+  const defaultAgentId = useObservable(registry.defaultAgentIdObs)
   const [sessionsOpen, setSessionsOpen] = useState(false)
 
   return (
@@ -45,9 +46,15 @@ export function ChatPanel() {
             className={styles['toolbarButton']}
             onClick={() => void service.createSession(registry.defaultAgentId())}
             data-testid="acp-new-session"
-            title={localize('acp.newSession', 'New session')}
+            title={localize('acp.newSession.titled', 'New {name} session', {
+              name: defaultAgentId,
+            })}
           >
-            <span aria-hidden="true">⊕</span>
+            <AgentIcon
+              agentId={defaultAgentId}
+              size={13}
+              className={styles['chatTitleAgentIcon']}
+            />
           </button>
         </div>
         <span className={styles['chatToolbarTitle']} data-testid="acp-chat-title">

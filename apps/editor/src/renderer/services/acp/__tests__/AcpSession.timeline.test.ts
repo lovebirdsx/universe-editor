@@ -88,6 +88,8 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
   defaultAgentId(): string {
     return 'fake'
   }
+  readonly defaultAgentIdObs = observableValue<string>('fake.defaultAgentId', 'fake')
+  setDefaultAgentId(_agentId: string): void {}
   async health(): Promise<{ available: boolean }> {
     return { available: true }
   }
