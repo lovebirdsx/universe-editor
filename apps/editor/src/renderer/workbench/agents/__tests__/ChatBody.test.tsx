@@ -65,6 +65,7 @@ afterEach(() => {
 })
 
 const focusedClass = styles['timelineSlotFocused'] as string
+const emptySessionClass = styles['chatEmptySession'] as string
 
 function makeMessage(id: string, text: string): AcpMessage {
   return { id, role: 'agent', text, blocks: [{ type: 'text', text }], streaming: false }
@@ -318,6 +319,9 @@ describe('ChatBody — empty session hint', () => {
   it('shows session, prompt, and keyboard hints before the first visible item', () => {
     const { container } = renderChat(makeSession('s1', []))
     expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="acp-chat"]')?.className).toContain(
+      emptySessionClass,
+    )
 
     const text = container.textContent ?? ''
     expect(text).toContain('New session')
@@ -344,6 +348,9 @@ describe('ChatBody — empty session hint', () => {
     )
     expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).toBeNull()
     expect(container.querySelector('[data-testid="acp-timeline"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="acp-chat"]')?.className).not.toContain(
+      emptySessionClass,
+    )
   })
 
   it('keeps the hint for settled agent messages with no visible content', () => {

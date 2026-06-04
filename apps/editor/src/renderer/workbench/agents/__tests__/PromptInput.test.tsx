@@ -43,6 +43,7 @@ import { FakeExcludeService } from '../../../services/exclude/testing/fakeExclud
 
 afterEach(() => {
   cleanup()
+  vi.restoreAllMocks()
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
 })
@@ -414,6 +415,35 @@ describe('PromptInput — submit and cancel', () => {
       session.commandsObs.set(COMMANDS, undefined)
     })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+  })
+})
+
+describe('PromptInput — textarea sizing and browser checks', () => {
+  it('disables browser spellcheck underlines', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    expect(getTextarea().getAttribute('spellcheck')).toBe('false')
+  })
+
+  it('grows up to sixteen rows before enabling internal scrolling', () => {
+    vi.spyOn(globalThis, 'getComputedStyle').mockReturnValue({
+      lineHeight: '18px',
+      fontSize: '12px',
+      paddingTop: '3px',
+      paddingBottom: '3px',
+      borderTopWidth: '1px',
+      borderBottomWidth: '1px',
+    } as CSSStyleDeclaration)
+
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const ta = getTextarea()
+    Object.defineProperty(ta, 'scrollHeight', { value: 420, configurable: true })
+
+    fireEvent.change(ta, {
+      target: { value: Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') },
+    })
+
+    expect(ta.style.height).toBe('296px')
+    expect(ta.style.overflowY).toBe('auto')
   })
 })
 

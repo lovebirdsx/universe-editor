@@ -19,6 +19,7 @@
 
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -52,6 +53,9 @@ import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import styles from './agents.module.css'
 
+const MIN_PROMPT_ROWS = 3
+const MAX_PROMPT_ROWS = 16
+
 export function PromptInput({
   session,
   autoFocus = false,
@@ -76,6 +80,10 @@ export function PromptInput({
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useLayoutEffect(() => {
+    resizePromptTextarea(textareaRef.current)
+  }, [text])
 
   const fileSearch = useService(IFileSearchService)
   const workspace = useService(IWorkspaceService)
@@ -329,6 +337,7 @@ export function PromptInput({
           onFocus={syncCaretFromEvent}
           placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
           rows={3}
+          spellCheck={false}
           onKeyDown={onKeyDown}
           data-testid="acp-prompt-input"
         />
@@ -359,6 +368,30 @@ export function extractSlashQuery(text: string): string | null {
   const rest = text.slice(1)
   if (/\s/.test(rest)) return null
   return rest
+}
+
+function resizePromptTextarea(el: HTMLTextAreaElement | null): void {
+  if (!el) return
+  const style = getComputedStyle(el)
+  const lineHeight = cssPixels(style.lineHeight) ?? (cssPixels(style.fontSize) ?? 12) * 1.5
+  const verticalInsets =
+    (cssPixels(style.paddingTop) ?? 0) +
+    (cssPixels(style.paddingBottom) ?? 0) +
+    (cssPixels(style.borderTopWidth) ?? 0) +
+    (cssPixels(style.borderBottomWidth) ?? 0)
+  const minHeight = Math.ceil(lineHeight * MIN_PROMPT_ROWS + verticalInsets)
+  const maxHeight = Math.ceil(lineHeight * MAX_PROMPT_ROWS + verticalInsets)
+
+  el.style.height = 'auto'
+  const contentHeight = Math.max(el.scrollHeight, minHeight)
+  const nextHeight = Math.min(contentHeight, maxHeight)
+  el.style.height = `${nextHeight}px`
+  el.style.overflowY = contentHeight > maxHeight ? 'auto' : 'hidden'
+}
+
+function cssPixels(value: string): number | undefined {
+  const n = Number.parseFloat(value)
+  return Number.isFinite(n) ? n : undefined
 }
 
 /**

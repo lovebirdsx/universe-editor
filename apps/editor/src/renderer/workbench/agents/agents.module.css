@@ -8,6 +8,14 @@
   color: var(--color-editor-fg, #d4d4d4);
 }
 
+.chatEmptySession {
+  justify-content: center;
+  gap: 12px;
+  padding: 8px 0;
+  overflow-y: auto;
+  box-sizing: border-box;
+}
+
 .chatPanel {
   display: flex;
   flex-direction: column;
@@ -809,15 +817,19 @@
 
 .promptTextarea {
   width: 100%;
-  resize: vertical;
+  resize: none;
   font-family: var(--font-ui);
   font-size: 12px;
+  line-height: 18px;
+  min-height: calc(18px * 3 + 8px);
+  max-height: calc(18px * 16 + 8px);
   padding: 3px 6px;
   background: var(--color-input-bg, #3c3c3c);
   color: var(--color-input-fg, #d4d4d4);
   border: 1px solid var(--color-input-border, #555);
   border-radius: 3px;
   box-sizing: border-box;
+  overflow-y: hidden;
 }
 
 .promptActions {
@@ -867,9 +879,27 @@
   justify-content: center;
 }
 
+.sendButtonCirclePrimary {
+  --acp-send-color: var(--color-badge-progress, #4fa6e2);
+  --acp-send-hover-color: #6fbaf5;
+  --acp-send-track-color: rgba(79, 166, 226, 0.36);
+  color: var(--acp-send-color);
+  border-radius: 50%;
+}
+
+.sendButtonCirclePrimary:hover:not(:disabled) {
+  background: rgba(79, 166, 226, 0.12);
+  color: var(--acp-send-hover-color);
+}
+
 .sendButtonCircle:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+
+.sendButtonCircle:focus-visible {
+  outline: 1px solid var(--color-badge-progress, #4fa6e2);
+  outline-offset: 1px;
 }
 
 .sendButtonRing {
@@ -899,8 +929,21 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: var(--color-button-bg, #0e639c);
+  color: inherit;
   pointer-events: none;
+}
+
+.sendButtonCirclePrimary .sendButtonIcon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--acp-send-color);
+  color: var(--color-button-fg, #ffffff);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.sendButtonCirclePrimary:hover:not(:disabled) .sendButtonIcon {
+  background: var(--acp-send-hover-color);
 }
 
 .sessionList {
@@ -1017,6 +1060,26 @@
   gap: 14px;
 }
 
+.chatEmptySession .chatBody {
+  flex: 0 1 auto;
+  width: 100%;
+  max-height: min(52vh, 360px);
+  padding: 0 12px;
+}
+
+.chatEmptySession .emptySessionHint {
+  margin: 0 auto;
+  padding: 0 20px 20px;
+}
+
+.chatEmptySession .promptForm {
+  align-self: center;
+  width: min(100%, 560px);
+  padding: 0 12px 4px;
+  border-top: 0;
+  box-sizing: border-box;
+}
+
 .emptyHintHeader {
   display: flex;
   flex-direction: column;
@@ -1096,7 +1159,7 @@
 }
 
 .emptyHintKeys {
-  flex: 0 0 78px;
+  flex: 0 0 90px;
   display: inline-flex;
   align-items: center;
   gap: 4px;

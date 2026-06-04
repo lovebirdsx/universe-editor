@@ -82,9 +82,20 @@ const NOOP_HANDLE: WidgetHandle = {
 export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
   const service = useService(IAcpSessionService)
   const registry = useService(IAcpAgentRegistry)
-  const widgetService = useService(IAcpChatWidgetService)
   const active = useObservable(service.activeSession)
   const target = session ?? active
+
+  if (!target) {
+    return <EmptyChat onCreate={() => void service.createSession(registry.defaultAgentId())} />
+  }
+
+  return <ChatSessionBody session={target} {...(autoFocus !== undefined ? { autoFocus } : {})} />
+}
+
+function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFocus?: boolean }) {
+  const widgetService = useService(IAcpChatWidgetService)
+  const timeline = useObservable(session.timeline)
+  const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
 
@@ -100,22 +111,21 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
     })
     return () => sub.dispose()
-  }, [widgetService, target?.id])
+  }, [widgetService, session.id])
 
-  if (!target) {
-    return <EmptyChat onCreate={() => void service.createSession(registry.defaultAgentId())} />
-  }
-
+  const chatClassName = hasTimelineContent
+    ? styles['chat']
+    : `${styles['chat']} ${styles['chatEmptySession']}`
   return (
-    <div ref={containerRef} className={styles['chat']} data-testid="acp-chat">
-      <StickyUserMessageBar key={`user:${target.id}`} session={target} />
-      <StickyPlanBar key={`plan:${target.id}`} session={target} />
-      <ChatScroll key={target.id} session={target} handleRef={handleRef} />
-      <PermissionCard session={target} />
-      <QuestionCard session={target} />
+    <div ref={containerRef} className={chatClassName} data-testid="acp-chat">
+      <StickyUserMessageBar key={`user:${session.id}`} session={session} />
+      <StickyPlanBar key={`plan:${session.id}`} session={session} />
+      <ChatScroll key={session.id} session={session} handleRef={handleRef} />
+      <PermissionCard session={session} />
+      <QuestionCard session={session} />
       <PromptInput
-        key={`prompt:${target.id}`}
-        session={target}
+        key={`prompt:${session.id}`}
+        session={session}
         handleRef={handleRef}
         {...(autoFocus !== undefined ? { autoFocus } : {})}
       />
@@ -597,18 +607,11 @@ function EmptySessionHint() {
       </div>
       <div className={styles['emptyHintSection']}>
         <div className={styles['emptyHintSectionTitle']}>
-          {localize('acp.emptySession.prompt', 'Prompt')}
+          {localize('acp.emptySession.keyboard', 'Keyboard')}
         </div>
         <div className={styles['emptyHintGrid']}>
           <HintItem keys={['/']} label={localize('acp.emptySession.commands', 'Commands')} />
           <HintItem keys={['@']} label={localize('acp.emptySession.mentions', 'Mention files')} />
-        </div>
-      </div>
-      <div className={styles['emptyHintSection']}>
-        <div className={styles['emptyHintSectionTitle']}>
-          {localize('acp.emptySession.keyboard', 'Keyboard')}
-        </div>
-        <div className={styles['emptyHintGrid']}>
           <HintItem
             keys={['Ctrl+Alt+I']}
             label={localize('acp.emptySession.focusInput', 'Focus input')}

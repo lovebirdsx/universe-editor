@@ -4,6 +4,7 @@ import { observableValue } from '@universe-editor/platform'
 import type { ISettableObservable } from '@universe-editor/platform'
 import type { AcpUsage, IAcpSession } from '../../../services/acp/acpSessionService.js'
 import { SendButton } from '../SendButton.js'
+import styles from '../agents.module.css'
 
 afterEach(() => cleanup())
 
@@ -21,7 +22,9 @@ describe('SendButton', () => {
     const { session } = makeSession()
     const onSend = vi.fn()
     render(<SendButton session={session} running={false} disabled={false} onSend={onSend} />)
-    fireEvent.click(screen.getByTestId('acp-prompt-send'))
+    const send = screen.getByTestId('acp-prompt-send')
+    expect(send.className).toContain(styles['sendButtonCirclePrimary'])
+    fireEvent.click(send)
     expect(onSend).toHaveBeenCalledTimes(1)
   })
 

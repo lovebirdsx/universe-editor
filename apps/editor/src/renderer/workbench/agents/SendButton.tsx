@@ -73,7 +73,7 @@ export function SendButton({
   return (
     <button
       type="button"
-      className={styles['sendButtonCircle']}
+      className={`${styles['sendButtonCircle']} ${styles['sendButtonCirclePrimary']}`}
       disabled={inert}
       title={title}
       aria-label={title}
@@ -91,7 +91,7 @@ export function SendButton({
           cy={CENTER}
           r={RADIUS}
           fill="none"
-          stroke="var(--color-border, #555)"
+          stroke="var(--acp-send-track-color, var(--color-border, #555))"
           strokeWidth={STROKE}
         />
         {pct > 0 ? (
@@ -100,7 +100,7 @@ export function SendButton({
             cy={CENTER}
             r={RADIUS}
             fill="none"
-            stroke={near ? 'var(--color-badge-error, #a1260d)' : 'var(--color-button-bg, #0e639c)'}
+            stroke={near ? 'var(--color-badge-error, #a1260d)' : 'var(--acp-send-color, #4fa6e2)'}
             strokeWidth={STROKE}
             strokeLinecap="round"
             strokeDasharray={CIRCUMFERENCE}
@@ -124,7 +124,7 @@ export function SendButton({
             cy={CENTER}
             r={RADIUS}
             fill="none"
-            stroke="var(--color-button-bg, #0e639c)"
+            stroke="var(--acp-send-color, #4fa6e2)"
             strokeWidth={STROKE}
             strokeLinecap="butt"
             strokeDasharray={`${CIRCUMFERENCE * 0.25} ${CIRCUMFERENCE * 0.75}`}
