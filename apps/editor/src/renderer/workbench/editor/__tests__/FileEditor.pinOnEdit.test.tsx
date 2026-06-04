@@ -14,8 +14,30 @@ const monacoMockState = vi.hoisted(() => ({
 }))
 
 vi.mock('../monaco/MonacoLoader.js', () => {
+  const makeModel = (initial: string, language: string, uri: unknown) => {
+    let value = initial
+    const listeners = new Set<() => void>()
+    return {
+      uri,
+      getValue: () => value,
+      setValue: (next: string) => {
+        if (next === value) return
+        value = next
+        for (const listener of listeners) listener()
+      },
+      getLanguageId: () => language,
+      onDidChangeContent: (cb: () => void) => {
+        listeners.add(cb)
+        return { dispose: () => listeners.delete(cb) }
+      },
+      dispose: () => listeners.clear(),
+    }
+  }
+
   const monacoStub = {
+    Uri: { parse: (value: string) => ({ toString: () => value }) },
     editor: {
+      createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
       create: (_container: unknown, options: Record<string, unknown>) => {
         monacoMockState.createOptions = options
         return {
@@ -49,25 +71,6 @@ vi.mock('../monaco/MonacoLoader.js', () => {
   }
 })
 
-let onDidChangeContentCb: (() => void) | undefined
-
-vi.mock('../monaco/MonacoModelRegistry.js', () => {
-  return {
-    languageForResource: () => 'plaintext',
-    MonacoModelRegistry: {
-      acquire: () => ({
-        onDidChangeContent: (cb: () => void) => {
-          onDidChangeContentCb = cb
-          return { dispose: () => {} }
-        },
-        getValue: () => 'edited',
-      }),
-      release: () => {},
-      peek: () => null,
-    },
-  }
-})
-
 vi.mock('../../../services/editor/FileEditorRegistry.js', () => {
   return {
     FileEditorRegistry: {
@@ -94,6 +97,7 @@ import {
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { FileEditor } from '../FileEditor.js'
+import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -190,7 +194,7 @@ class FakeConfigurationService {
 
 afterEach(() => {
   cleanup()
-  onDidChangeContentCb = undefined
+  MonacoModelRegistry._resetForTests()
   monacoMockState.createOptions = undefined
   monacoMockState.updateOptionsCalls = []
 })
@@ -217,11 +221,11 @@ describe('FileEditor — auto-pin on first edit', () => {
       </ServicesContext.Provider>,
     )
 
-    // Wait for the resolve()->setModel async chain to register the listener.
+    // Wait for the resolve()->setModel async chain to register the model.
     await vi.waitFor(() => {
-      if (!onDidChangeContentCb) throw new Error('not yet')
+      expect(MonacoModelRegistry.peek(input.resource)).toBeDefined()
     })
-    onDidChangeContentCb!()
+    MonacoModelRegistry.peek(input.resource)?.setValue('edited')
     expect(group.pinCalls).toContain(input)
     expect(group.previewEditor).toBeUndefined()
   })

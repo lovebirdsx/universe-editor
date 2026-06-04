@@ -2,10 +2,15 @@
  *  Tests for UntitledEditorInput — basic identity + save/revert behavior (主题 11 WP3).
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
+import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { UntitledEditorInput } from '../UntitledEditorInput.js'
 
 describe('UntitledEditorInput', () => {
+  afterEach(() => {
+    MonacoModelRegistry._resetForTests()
+  })
+
   it('reports the untitled typeId', () => {
     const input = new UntitledEditorInput()
     expect(input.typeId).toBe('untitled')
@@ -30,5 +35,15 @@ describe('UntitledEditorInput', () => {
     const a = new UntitledEditorInput()
     const b = new UntitledEditorInput()
     expect(a.getName()).not.toBe(b.getName())
+  })
+
+  it('keeps its model alive until the input is disposed', async () => {
+    const input = new UntitledEditorInput()
+    const model = await input.resolveModel()
+    model.setValue('draft')
+    expect(input.serialize().content).toBe('draft')
+
+    input.dispose()
+    expect(MonacoModelRegistry.peek(input.resource)).toBeUndefined()
   })
 })

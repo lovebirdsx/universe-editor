@@ -26,7 +26,6 @@ import {
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
-import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 import { getAllMonacoDefaultKeybindings } from './monaco/monacoActionsBridge.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
@@ -241,7 +240,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     let contentSub: IDisposable | undefined
     let cursorSub: IDisposable | undefined
     let scrollSub: IDisposable | undefined
-    let acquired = false
 
     const groupId = group?.id
     const resourceUri = fileInput.resource.toString()
@@ -254,19 +252,13 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     }
 
     void (async () => {
-      const text = await fileInput.resolve().catch(() => '')
+      const model = await fileInput.resolveModel()
       if (cancelled) return
-      const model = MonacoModelRegistry.acquire(fileInput.resource, text)
-      acquired = true
-      // If the model existed already (other split), keep its buffer rather
-      // than overwriting from disk. If we just created it, its buffer == text.
       editorRef.current?.setModel(model)
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.
-      if (model.getValue() !== fileInput.backupContent) {
-        fileInput.setDirty(true)
-      }
+      fileInput.setDirty(model.getValue() !== fileInput.backupContent)
 
       // Restore previously saved viewState (cursor, selection, scroll).
       if (groupId !== undefined && editorRef.current) {
@@ -307,7 +299,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       cursorSub?.dispose()
       scrollSub?.dispose()
       if (editorRef.current) FileEditorRegistry.unregister(fileInput, editorRef.current)
-      if (acquired) MonacoModelRegistry.release(fileInput.resource)
     }
   }, [monacoNs, contextKeyService, fileInput, groupsService, group])
 

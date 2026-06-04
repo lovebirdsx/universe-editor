@@ -7,6 +7,7 @@
 
 import { EditorInput, URI } from '@universe-editor/platform'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 export class UntitledEditorInput extends EditorInput {
   static readonly TYPE_ID = 'untitled'
@@ -15,6 +16,7 @@ export class UntitledEditorInput extends EditorInput {
   private readonly _resource: URI
   private readonly _name: string
   private _content: string
+  private _modelRefAcquired = false
 
   constructor(restoredName?: string, restoredContent?: string) {
     super()
@@ -42,6 +44,18 @@ export class UntitledEditorInput extends EditorInput {
 
   async resolve(): Promise<string> {
     return this._content
+  }
+
+  async resolveModel(): Promise<monaco.editor.ITextModel> {
+    if (this._modelRefAcquired) {
+      const existing = MonacoModelRegistry.peek(this._resource)
+      if (existing) return existing
+      this._modelRefAcquired = false
+    }
+    const text = await this.resolve()
+    const model = MonacoModelRegistry.acquire(this._resource, text)
+    this._modelRefAcquired = true
+    return model
   }
 
   get backupContent(): string {
@@ -83,5 +97,13 @@ export class UntitledEditorInput extends EditorInput {
       if (n >= UntitledEditorInput._counter) UntitledEditorInput._counter = n + 1
     }
     return new UntitledEditorInput(d.name, d.content ?? '')
+  }
+
+  override dispose(): void {
+    if (this._modelRefAcquired) {
+      MonacoModelRegistry.release(this._resource)
+      this._modelRefAcquired = false
+    }
+    super.dispose()
   }
 }

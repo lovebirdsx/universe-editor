@@ -16,6 +16,7 @@ import {
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 import { languageForResource } from '../../workbench/files/resourceLanguage.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 interface ISerializedFileEditor {
   readonly resource: UriComponents
@@ -35,6 +36,7 @@ export class FileEditorInput extends EditorInput {
   /** Dirty content pending application on next resolve() (hot exit restore). */
   private _pendingDirtyContent: string | undefined
   private _isReadonly = false
+  private _modelRefAcquired = false
 
   constructor(
     private readonly _resource: URI,
@@ -89,6 +91,18 @@ export class FileEditorInput extends EditorInput {
       return dirty
     }
     return text
+  }
+
+  async resolveModel(): Promise<monaco.editor.ITextModel> {
+    if (this._modelRefAcquired) {
+      const existing = MonacoModelRegistry.peek(this._resource)
+      if (existing) return existing
+      this._modelRefAcquired = false
+    }
+    const text = await this.resolve().catch(() => '')
+    const model = MonacoModelRegistry.acquire(this._resource, text)
+    this._modelRefAcquired = true
+    return model
   }
 
   /** True once `resolve()` has succeeded at least once. */
@@ -201,5 +215,13 @@ export class FileEditorInput extends EditorInput {
       input._pendingDirtyContent = d.dirtyContent
     }
     return input
+  }
+
+  override dispose(): void {
+    if (this._modelRefAcquired) {
+      MonacoModelRegistry.release(this._resource)
+      this._modelRefAcquired = false
+    }
+    super.dispose()
   }
 }
