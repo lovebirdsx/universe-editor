@@ -573,7 +573,10 @@ export class FocusActiveEditorGroupAction extends Action2 {
       id: FocusActiveEditorGroupAction.ID,
       title: localize('action.focusActiveEditorGroup.title', 'Focus Active Editor Group'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'escape', when: '!quickInputVisible && !editorFocus' },
+      keybinding: {
+        primary: 'escape',
+        when: '!quickInputVisible && !editorFocus && !terminalFocus',
+      },
       precondition: 'hasActiveEditor',
       f1: true,
     })
