@@ -29,6 +29,9 @@ interface Harness {
   created: Array<{ info: ITerminalCreatedInfo; spec: ITerminalSpawnSpec }>
   released: string[]
   inputs: Array<{ id: string; data: string }>
+  resizes: Array<{ id: string; cols: number; rows: number }>
+  warnings: string[]
+  terminalErrors: { input: Error | undefined; resize: Error | undefined }
 }
 
 function makeStorage(): IStorageService {
@@ -67,6 +70,9 @@ function makeHarness(
   const created: Harness['created'] = []
   const released: string[] = []
   const inputs: Harness['inputs'] = []
+  const resizes: Harness['resizes'] = []
+  const warnings: string[] = []
+  const terminalErrors: Harness['terminalErrors'] = { input: undefined, resize: undefined }
   let nextId = 0
 
   const terminal: ITerminalService = {
@@ -85,10 +91,15 @@ function makeHarness(
       return Promise.resolve(info)
     },
     input: (id, data) => {
+      if (terminalErrors.input) return Promise.reject(terminalErrors.input)
       inputs.push({ id, data })
       return Promise.resolve()
     },
-    resize: () => Promise.resolve(),
+    resize: (id, cols, rows) => {
+      if (terminalErrors.resize) return Promise.reject(terminalErrors.resize)
+      resizes.push({ id, cols, rows })
+      return Promise.resolve()
+    },
     kill: () => Promise.resolve(),
     list: () => Promise.resolve(created.map((c) => c.info)),
     release: (id) => {
@@ -106,7 +117,9 @@ function makeHarness(
       trace() {},
       debug() {},
       info() {},
-      warn() {},
+      warn(message: string) {
+        warnings.push(message)
+      },
       error() {},
     }),
   } as unknown as ILoggerService
@@ -118,7 +131,7 @@ function makeHarness(
     makeStorage(),
     makeConfig(configOverrides),
   )
-  return { manager, onData, onExit, created, released, inputs }
+  return { manager, onData, onExit, created, released, inputs, resizes, warnings, terminalErrors }
 }
 
 describe('TerminalManagerService', () => {
@@ -187,6 +200,29 @@ describe('TerminalManagerService', () => {
     const id = await h.manager.newTerminal()
     h.manager.input(id!, 'ls\n')
     expect(h.inputs).toEqual([{ id, data: 'ls\n' }])
+  })
+
+  it('does not forward input or resize after a terminal has exited locally', async () => {
+    const id = await h.manager.newTerminal()
+    h.onExit.fire({ id: id!, exitCode: 0 })
+
+    h.manager.input(id!, 'late')
+    h.manager.resize(id!, 80, 24)
+
+    expect(h.inputs).toEqual([])
+    expect(h.resizes).toEqual([])
+  })
+
+  it('swallows stale unknown-terminal rejections from late input and resize IPC', async () => {
+    const id = await h.manager.newTerminal()
+    h.terminalErrors.input = new Error(`Terminal: unknown terminal ${id}`)
+    h.terminalErrors.resize = new Error(`Terminal: unknown terminal ${id}`)
+
+    h.manager.input(id!, 'late')
+    h.manager.resize(id!, 80, 24)
+    await Promise.resolve()
+
+    expect(h.warnings).toEqual([])
   })
 
   it('keeps terminals isolated — data for one does not reach the other', async () => {

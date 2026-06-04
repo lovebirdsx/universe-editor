@@ -210,11 +210,17 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   input(id: string, data: string): void {
-    void this._terminal.input(id, data)
+    if (!this._clients.has(id)) return
+    void this._terminal
+      .input(id, data)
+      .catch((err) => this._handleTerminalCallError('input', id, err))
   }
 
   resize(id: string, cols: number, rows: number): void {
-    void this._terminal.resize(id, cols, rows)
+    if (!this._clients.has(id)) return
+    void this._terminal
+      .resize(id, cols, rows)
+      .catch((err) => this._handleTerminalCallError('resize', id, err))
   }
 
   focus(): void {
@@ -287,6 +293,12 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     this._onDidTerminalExit.fire({ id, exitCode, target: client?.target ?? 'panel' })
     this._remove(id)
     this._schedulePersist()
+  }
+
+  private _handleTerminalCallError(operation: 'input' | 'resize', id: string, err: unknown): void {
+    const message = err instanceof Error ? err.message : String(err)
+    if (message === `Terminal: unknown terminal ${id}`) return
+    this._logger.warn(`${operation} failed id=${id}: ${message}`)
   }
 
   private _remove(id: string): void {
