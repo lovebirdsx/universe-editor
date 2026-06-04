@@ -3,8 +3,8 @@
  *  StickyUserMessageBar — pins the latest user message above the chat scroll,
  *  mirroring StickyPlanBar. The message stays in the timeline as part of the
  *  history; this bar is the always-visible copy so the active request never
- *  scrolls out of view. Collapsed (the default) it shows the first line;
- *  expanded it shows the full content. Returns null until a user message exists.
+ *  scrolls out of view. Expanded (the default) it shows the full content;
+ *  collapsed it shows the first line. Returns null until a user message exists.
  *--------------------------------------------------------------------------------------------*/
 
 import { useState } from 'react'
@@ -17,8 +17,7 @@ import styles from './agents.module.css'
 
 const SUMMARY_MAX = 80
 
-// Per-session collapse state, in-memory like StickyPlanBar's. Defaults to
-// collapsed so the bar stays a one-line summary unless the user opens it.
+// Per-session collapse state, in-memory like StickyPlanBar's.
 const userBarCollapsedCache = new Map<string, boolean>()
 
 function clampLine(text: string): string {
@@ -36,7 +35,7 @@ function lastUserMessage(timeline: readonly TimelineItem[]): AcpMessage | undefi
 
 export function StickyUserMessageBar({ session }: { session: IAcpSession }) {
   const timeline = useObservable(session.timeline)
-  const [collapsed, setCollapsed] = useState(() => userBarCollapsedCache.get(session.id) ?? true)
+  const [collapsed, setCollapsed] = useState(() => userBarCollapsedCache.get(session.id) ?? false)
   const message = lastUserMessage(timeline)
   if (!message) return null
   const toggle = (): void =>
