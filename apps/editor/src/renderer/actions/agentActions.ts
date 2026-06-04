@@ -40,7 +40,7 @@ export class NewAgentSessionAction extends Action2 {
     super({
       id: NewAgentSessionAction.ID,
       title: localize('action.agent.newSession', 'New Agent Session'),
-      keybinding: { primary: 'ctrl+shift+n' },
+      keybinding: { primary: 'ctrl+alt+n' },
       category: CATEGORY,
       f1: true,
     })
