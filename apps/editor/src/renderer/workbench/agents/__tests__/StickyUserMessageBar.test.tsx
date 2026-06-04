@@ -41,13 +41,13 @@ describe('StickyUserMessageBar', () => {
         session={makeSession('s-one', [message('u1', 'user', 'Hello world')])}
       />,
     )
-    expect(screen.getByTestId('acp-user-bar')).toBeTruthy()
-    // Collapsed: summary text shows, full markdown body is not mounted.
     expect(screen.getByText('Hello world')).toBeTruthy()
-    expect(screen.queryByTestId('acp-markdown')).toBeNull()
-    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+    expect(screen.getByTestId('acp-user-bar')).toBeTruthy()
     const md = screen.getByTestId('acp-markdown')
     expect(md.textContent).toContain('Hello world')
+    fireEvent.click(screen.getByTestId('acp-collapsible-toggle'))
+    // Collapsed: summary text shows, full markdown body is not mounted.
+    expect(screen.queryByTestId('acp-markdown')).toBeNull()
   })
 
   it('shows the last user message when several exist', () => {
