@@ -87,7 +87,13 @@ import {
   RefreshExplorerAction,
 } from './fileOpenActions.js'
 import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from './revealActions.js'
-import { OpenInTerminalAction } from './terminalActions.js'
+import {
+  NewTerminalAction,
+  OpenInTerminalAction,
+  ToggleTerminalAction,
+  OpenTerminalInEditorAction,
+  FocusTerminalPanelAction,
+} from './terminalActions.js'
 import {
   FindInFileAction,
   FindInFilesAction,
@@ -305,6 +311,10 @@ registerAction2(ShowReleaseNotesAction)
 
 // Terminal
 registerAction2(OpenInTerminalAction)
+registerAction2(ToggleTerminalAction)
+registerAction2(NewTerminalAction)
+registerAction2(OpenTerminalInEditorAction)
+registerAction2(FocusTerminalPanelAction)
 
 // Agents
 registerAction2(NewAgentSessionAction)

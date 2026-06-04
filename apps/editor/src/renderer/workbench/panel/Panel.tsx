@@ -12,14 +12,20 @@ import { usePartContainer } from '../usePartContainer.js'
 import { ViewContainerHeader } from '../viewContainerHeader/ViewContainerHeader.js'
 import { OutputView } from './output/OutputView.js'
 import { OutputViewToolbar } from './output/OutputViewToolbar.js'
+import { TerminalView } from './terminal/TerminalView.js'
+import { TerminalViewToolbar } from './terminal/TerminalViewToolbar.js'
 import styles from './Panel.module.css'
 
 /** Registry of React components keyed by IViewDescriptor.componentKey. */
-const panelViewComponentMap = new Map<string, ComponentType>([['output.main', OutputView]])
+const panelViewComponentMap = new Map<string, ComponentType>([
+  ['output.main', OutputView],
+  ['terminal.main', TerminalView],
+])
 
 /** Per-view custom right-side toolbar widgets (channel selector, etc). */
 const panelViewToolbarMap = new Map<string, ComponentType>([
   ['workbench.view.output', OutputViewToolbar],
+  ['workbench.view.terminal', TerminalViewToolbar],
 ])
 
 export function Panel({ part }: { part?: IPart | undefined } = {}) {

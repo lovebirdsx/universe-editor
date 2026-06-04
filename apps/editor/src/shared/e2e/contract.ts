@@ -192,6 +192,18 @@ export interface E2EProbe {
   getOutputChannelNames(): readonly string[]
   /** Create a named output channel (for testing restore without ACP). */
   createOutputChannel(name: string): void
+  // -- Terminal probe ------------------------------------------------------
+  /**
+   * Create an integrated terminal directly via ITerminalService and return its
+   * id. The probe begins accumulating its output immediately. This exercises the
+   * full cross-process path (renderer → main → node-pty), which is the highest-
+   * signal check that the native PTY actually spawns in the packaged build.
+   */
+  terminalCreate(): Promise<string>
+  /** Write input to a terminal created via `terminalCreate`. */
+  terminalInput(id: string, data: string): Promise<void>
+  /** All output observed for a terminal id since creation. */
+  terminalReadBuffer(id: string): string
   /**
    * Read the Disposable leak report stored in sessionStorage by the previous
    * session's beforeunload handler. Returns null if no leaks were detected

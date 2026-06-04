@@ -24,6 +24,7 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
+import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
 
@@ -100,6 +101,12 @@ export class BuiltInEditorProvidersContribution
         typeId: StartupPerformanceInput.TYPE_ID,
         componentKey: 'startupPerformance',
         deserialize: () => StartupPerformanceInput.deserialize(),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: TerminalEditorInput.TYPE_ID,
+        componentKey: 'terminal.editor',
       }),
     )
   }

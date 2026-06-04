@@ -1,0 +1,133 @@
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  position: relative;
+}
+
+.instanceSelect {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: var(--color-dropdown-bg, #2f2f35);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%238a8a92'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  color: var(--color-foreground, #c8c8c8);
+  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  border-radius: 3px;
+  padding: 2px 22px 2px 6px;
+  font-size: 12px;
+  font-family: inherit;
+  outline: none;
+  cursor: default;
+  height: 22px;
+  min-width: 60px;
+  max-width: 140px;
+}
+
+.instanceSelect:focus {
+  border-color: var(--color-focus-border, #0070e0);
+}
+
+.instanceSelect:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-fg-muted, #999);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.splitBtn {
+  display: flex;
+  align-items: center;
+}
+
+.newBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-fg-muted, #999);
+  background: transparent;
+  border: none;
+  border-radius: 3px 0 0 3px;
+  cursor: pointer;
+}
+
+.newBtn:hover {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.chevronBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-fg-muted, #999);
+  background: transparent;
+  border: none;
+  border-radius: 0 3px 3px 0;
+  cursor: pointer;
+}
+
+.chevronBtn:hover,
+.chevronBtn.active {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.shellMenu {
+  position: absolute;
+  top: calc(100% + 2px);
+  right: 0;
+  z-index: 100;
+  background: var(--color-dropdown-bg, #2f2f35);
+  border: 1px solid var(--color-dropdown-border, #0f0f11);
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  min-width: 120px;
+  overflow: hidden;
+}
+
+.shellItem {
+  display: block;
+  width: 100%;
+  padding: 5px 10px;
+  text-align: left;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--color-foreground, #c8c8c8);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+}
+
+.shellItem:hover {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.08));
+}

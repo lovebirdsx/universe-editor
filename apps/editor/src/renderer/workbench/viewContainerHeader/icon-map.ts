@@ -9,6 +9,7 @@ import {
   Settings,
   Sparkles,
   SquareTerminal,
+  Terminal,
   Trash2,
   type LucideIcon,
 } from 'lucide-react'
@@ -26,6 +27,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   extensions: Puzzle,
   'settings-gear': Settings,
   output: SquareTerminal,
+  terminal: Terminal,
   outline: ListTree,
   sparkle: Sparkles,
   'trash-2': Trash2,

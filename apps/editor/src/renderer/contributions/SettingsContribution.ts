@@ -265,6 +265,31 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Which terminal to launch on Windows when running "Open in External Terminal".',
             ),
           },
+          'terminal.integrated.shell': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.terminal.integrated.shell.description',
+              'The default shell for new integrated terminals. Leave empty to use the system default.',
+            ),
+          },
+          'terminal.integrated.shellArgs': {
+            type: 'array',
+            items: { type: 'string' },
+            default: [],
+            description: localize(
+              'settings.terminal.integrated.shellArgs.description',
+              'Arguments to pass to the default integrated terminal shell.',
+            ),
+          },
+          'terminal.integrated.cwd': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.terminal.integrated.cwd.description',
+              'Default working directory for new integrated terminals. Leave empty to use workspace root.',
+            ),
+          },
         },
       }),
     )

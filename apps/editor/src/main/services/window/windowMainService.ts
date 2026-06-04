@@ -31,6 +31,7 @@ import { type LogMainService } from '../log/logMainService.js'
 import { MainStorageService } from '../storage/storageMainService.js'
 import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
 import { UserDataMainService } from '../userData/userDataMainService.js'
+import { TerminalMainService } from '../terminal/terminalMainService.js'
 import { ElectronFolderDialog } from '../workspace/electronFolderDialog.js'
 import {
   applyWindowState,
@@ -205,12 +206,14 @@ export class WindowMainService implements IWindowMainService {
       ),
     )
     const logChannel = new MainLogChannelService(logService)
+    const terminal = disposables.add(new TerminalMainService(undefined, logService))
     const windowServices: WindowScopedServices = {
       host,
       logChannel,
       storage: windowStorage,
       workspace,
       userData,
+      terminal,
     }
 
     const ipc = bootstrapWindowIpc(win, appServices, windowServices, this._windowsService)

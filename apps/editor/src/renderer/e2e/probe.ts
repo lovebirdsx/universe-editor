@@ -9,8 +9,10 @@
 
 import {
   ConfigurationTarget,
+  DisposableStore,
   EditorInput,
   EditorRegistry,
+  IDisposable,
   LifecyclePhase,
   StatusBarAlignment,
   URI,
@@ -30,6 +32,7 @@ import {
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
+import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import {
@@ -58,6 +61,7 @@ export interface E2EProbeServices {
   readonly acpSessionService: IAcpSessionService
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
+  readonly terminalService: ITerminalService
 }
 
 class DummyEditorInput extends EditorInput {
@@ -93,8 +97,17 @@ function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
   }
 }
 
-export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
-  if (typeof window === 'undefined' || window[E2E_PROBE_ENABLED_KEY] !== true) return
+export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposable {
+  const ds = new DisposableStore()
+  if (typeof window === 'undefined' || window[E2E_PROBE_ENABLED_KEY] !== true) return ds
+
+  // Accumulate every terminal's output so specs can poll it. Lives for the app's
+  // lifetime — acceptable for the probe (only present under UNIVERSE_E2E=1).
+  const terminalBuffers = new Map<string, string>()
+  const d = services.terminalService.onData(({ id, data }) => {
+    terminalBuffers.set(id, (terminalBuffers.get(id) ?? '') + data)
+  })
+  ds.add(d)
 
   const probe: E2EProbe = {
     whenReady: () => services.lifecycleService.when(LifecyclePhase.Ready),
@@ -237,6 +250,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
     createOutputChannel: (name: string) => {
       services.outputService.createChannel(name)
     },
+    terminalCreate: async (): Promise<string> => {
+      const info = await services.terminalService.create({})
+      if (!terminalBuffers.has(info.id)) terminalBuffers.set(info.id, '')
+      return info.id
+    },
+    terminalInput: (id: string, data: string): Promise<void> =>
+      services.terminalService.input(id, data),
+    terminalReadBuffer: (id: string): string => terminalBuffers.get(id) ?? '',
     getStoredLeakReport: (): E2EDisposableLeakReport | null => {
       const raw = sessionStorage.getItem(DISPOSABLE_LEAK_REPORT_KEY)
       if (!raw) return null
@@ -247,4 +268,5 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): void {
   window[E2E_PROBE_KEY] = probe
 
   console.info('[E2E] probe installed')
+  return ds
 }

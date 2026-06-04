@@ -60,5 +60,15 @@ export class BuiltInViewContainersContribution
         location: ViewContainerLocation.Panel,
       }),
     )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.terminal',
+        label: localize('viewContainer.terminal', 'Terminal'),
+        icon: 'terminal',
+        order: 2,
+        location: ViewContainerLocation.Panel,
+      }),
+    )
   }
 }

@@ -52,6 +52,7 @@ import { AgentNotificationContribution } from './AgentNotificationContribution.j
 import { FirstRunAgentOnboardingContribution } from './FirstRunAgentOnboardingContribution.js'
 import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
+import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -374,6 +375,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.startupPerformanceStatus',
   StartupPerformanceStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Close editor tabs whose terminal process has exited. AfterRestore so editor
+// groups are already rebuilt from storage.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.terminalEditorLifecycle',
+  TerminalEditorLifecycleContribution,
   WorkbenchPhase.AfterRestore,
 )
 

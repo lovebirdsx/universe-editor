@@ -26,6 +26,7 @@ import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
+import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
@@ -62,4 +63,5 @@ export interface WindowScopedServices {
   readonly storage: IStorageService
   readonly workspace: IWorkspaceServiceWire
   readonly userData: IUserDataFilesService
+  readonly terminal: ITerminalService
 }

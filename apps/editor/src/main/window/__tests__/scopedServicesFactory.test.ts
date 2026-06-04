@@ -36,8 +36,9 @@ describe('WindowScopedServices type', () => {
       storage: {} as WindowScopedServices['storage'],
       workspace: {} as WindowScopedServices['workspace'],
       userData: {} as WindowScopedServices['userData'],
+      terminal: {} as WindowScopedServices['terminal'],
     }
-    expect(Object.keys(svc)).toHaveLength(5)
+    expect(Object.keys(svc)).toHaveLength(6)
   })
 })
 
@@ -64,7 +65,8 @@ describe('service layer separation', () => {
       'storage',
       'workspace',
       'userData',
+      'terminal',
     ]
-    expect(windowKeys).toHaveLength(5)
+    expect(windowKeys).toHaveLength(6)
   })
 })

@@ -46,5 +46,15 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
         order: 1,
       }),
     )
+
+    this._register(
+      ViewRegistry.registerView({
+        id: 'workbench.view.terminal.main',
+        name: localize('view.terminal', 'Terminal'),
+        containerId: 'workbench.view.terminal',
+        componentKey: 'terminal.main',
+        order: 1,
+      }),
+    )
   }
 }

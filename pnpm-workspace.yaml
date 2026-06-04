@@ -75,3 +75,12 @@ catalog:
   # 注:electron-updater 在 apps/editor/package.json 里必须写显式版本(^6.3.0),不能用 catalog:。
   # electron-builder 打包时直接 semver.coerce 读源 package.json 的版本字符串,无法解析 "catalog:"。
   electron-updater: ^6.3.0
+
+  # Integrated terminal (PTY + xterm.js)
+  # @lydell/node-pty 是 node-pty 的 prebuilt fork:N-API 二进制(无 ABI 后缀,跨 Node/Electron
+  # 版本通用),按平台用 optionalDependencies 分发,安装即用、不调 node-gyp。固定 beta 版本号
+  # (semver 范围对 prerelease 不友好)。
+  '@lydell/node-pty': 1.2.0-beta.12
+  '@xterm/xterm': ^6.0.0
+  '@xterm/addon-fit': ^0.11.0
+  '@xterm/addon-web-links': ^0.12.0

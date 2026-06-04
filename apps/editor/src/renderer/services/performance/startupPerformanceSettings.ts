@@ -11,7 +11,7 @@ export const STARTUP_WARNING_DEVELOPMENT_THRESHOLD_KEY =
   'performance.startupWarning.developmentThresholdMs'
 
 export const DEFAULT_STARTUP_WARNING_RELEASE_THRESHOLD_MS = 1000
-export const DEFAULT_STARTUP_WARNING_DEVELOPMENT_THRESHOLD_MS = 3500
+export const DEFAULT_STARTUP_WARNING_DEVELOPMENT_THRESHOLD_MS = 4000
 
 export function startupWarningEnabled(
   configuration: IConfigurationService,

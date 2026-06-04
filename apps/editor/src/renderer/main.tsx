@@ -53,6 +53,7 @@ import { ServiceChannels } from '../shared/ipc/channelNames.js'
 import { PerfMarks } from '../shared/perf/marks.js'
 import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
+import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -100,6 +101,7 @@ import {
   RendererDisposableLeakService,
 } from './services/disposableLeak/DisposableLeakService.js'
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
+import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import './workbench.css'
 import './services/index.js'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'
@@ -408,7 +410,7 @@ async function bootstrapWorkbench(): Promise<void> {
   lifecycle.setPhase(LifecyclePhase.Ready)
 
   // E2E probe: only attaches when the app was launched with UNIVERSE_E2E=1.
-  installE2EProbeIfEnabled({
+  const d = installE2EProbeIfEnabled({
     commandService,
     contextKeyService,
     lifecycleService: lifecycle,
@@ -423,12 +425,16 @@ async function bootstrapWorkbench(): Promise<void> {
     acpSessionService,
     outputService,
     updateService: services.get(IUpdateService) as IUpdateService,
+    terminalService: services.get(ITerminalService) as ITerminalService,
   })
+  workbenchStore.add(d)
 
   // Load persisted layout and view state before mounting React so Allotment starts with the
   // correct preferredSize. Allotment 1.20.5 only reads preferredSize on mount
   // (or pane-show); changing it after mount is silently ignored.
-  await Promise.all([layoutService.load(), viewsService.load()])
+  // Also restore panel terminals for the current workspace.
+  const terminalManagerService = instantiation.invokeFunction((a) => a.get(ITerminalManagerService))
+  await Promise.all([layoutService.load(), viewsService.load(), terminalManagerService.load()])
   rootLogger.info('bootstrap services restored')
   mark(PerfMarks.rendererDidRestoreServices)
 
