@@ -22,4 +22,8 @@ export class PanelPO {
       .toBe(true)
     await this.root.waitFor({ state: 'attached' })
   }
+
+  async waitForActiveTab(id: string): Promise<void> {
+    await expect(this.tab(id)).toHaveAttribute('aria-selected', 'true')
+  }
 }
