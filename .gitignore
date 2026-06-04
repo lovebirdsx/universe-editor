@@ -10,6 +10,8 @@ release/
 !.env.example
 coverage/
 .next/
+.claude/plans/
+.claude/explore-results/
 
 # Playwright
 playwright-report/

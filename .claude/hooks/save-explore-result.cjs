@@ -24,11 +24,10 @@ function safePart(value) {
   return String(value || "unknown").replace(/[^a-zA-Z0-9._-]/g, "_");
 }
 
-function utcTimestamp() {
-  return new Date()
-    .toISOString()
-    .replace(/[-:]/g, "")
-    .replace(/\.\d{3}Z$/, "Z");
+function localTimestamp() {
+  const now = new Date();
+  const pad = n => String(n).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
 }
 
 async function main() {
@@ -49,7 +48,7 @@ async function main() {
 
   const sessionId = safePart(input.session_id);
   const agentId = safePart(input.agent_id);
-  const timestamp = utcTimestamp();
+  const timestamp = localTimestamp();
 
   const outPath = path.join(
     outDir,
