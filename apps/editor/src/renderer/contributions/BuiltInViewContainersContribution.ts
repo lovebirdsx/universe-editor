@@ -43,6 +43,16 @@ export class BuiltInViewContainersContribution
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.scm',
+        label: localize('viewContainer.scm', 'Source Control'),
+        icon: 'source-control',
+        order: 3,
+        location: ViewContainerLocation.SideBar,
+      }),
+    )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.outline',
         label: localize('viewContainer.outline', 'Outline'),
         icon: 'outline',

@@ -90,6 +90,7 @@ function makeOpts() {
       logFiles: {} as never,
       acpHost: {} as never,
       acpTerminal: {} as never,
+      extensionHost: {} as never,
       claudeBinary: {} as never,
       codexBinary: {} as never,
       disposableLeak: {} as never,

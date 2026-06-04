@@ -97,6 +97,11 @@ import { AcpClientService, IAcpClientService } from './services/acp/acpClientSer
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
 import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
 import {
+  ExtensionHostClientService,
+  IExtensionHostClientService,
+} from './services/extensions/ExtensionHostClientService.js'
+import { IScmService, ScmService } from './services/extensions/ScmService.js'
+import {
   IRendererDisposableLeakService,
   RendererDisposableLeakService,
 } from './services/disposableLeak/DisposableLeakService.js'
@@ -390,6 +395,17 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(AcpChatWidgetService),
   )
   services.set(IAcpChatWidgetService, acpChatWidgetService)
+
+  // Extension host client: owns the extension-host subprocess + RPC. Created here
+  // (after IOutputService/ILoggerService/proxy services are set) so the
+  // ExtensionsContribution can inject it; it starts the host on an idle phase.
+  const scmService = workbenchStore.add(new ScmService())
+  services.set(IScmService, scmService)
+
+  const extensionHostClientService = workbenchStore.add(
+    instantiation.createInstance(ExtensionHostClientService),
+  )
+  services.set(IExtensionHostClientService, extensionHostClientService)
 
   // Register all built-in contributions + actions (side-effect import) so the
   // ContributionService below can instantiate them by phase. UserSettingsSync +

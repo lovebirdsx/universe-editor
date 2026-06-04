@@ -57,6 +57,7 @@
     "@types/react-dom": "catalog:",
     "@universe-editor/config-eslint": "workspace:*",
     "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extensions-common": "workspace:*",
     "@universe-editor/platform": "workspace:*",
     "@universe-editor/workbench-ui": "workspace:*",
     "@vitejs/plugin-react": "catalog:",

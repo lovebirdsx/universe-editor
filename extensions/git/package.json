@@ -1,0 +1,74 @@
+{
+  "name": "@universe-editor/git",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "displayName": "Git",
+  "description": "Git source control integration (first-party Universe extension).",
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": "^0.1.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "git.commit", "title": "Commit", "category": "Git" },
+      { "command": "git.refresh", "title": "Refresh", "category": "Git" },
+      { "command": "git.stage", "title": "Stage Changes", "category": "Git" },
+      { "command": "git.unstage", "title": "Unstage Changes", "category": "Git" },
+      { "command": "git.stageAll", "title": "Stage All Changes", "category": "Git" },
+      { "command": "git.unstageAll", "title": "Unstage All Changes", "category": "Git" },
+      { "command": "git.discard", "title": "Discard Changes", "category": "Git" },
+      { "command": "git.checkout", "title": "Checkout to...", "category": "Git" },
+      { "command": "git.createBranch", "title": "Create Branch...", "category": "Git" },
+      { "command": "git.openChange", "title": "Open Changes", "category": "Git" }
+    ],
+    "menus": {
+      "scm/title": [
+        { "command": "git.commit", "group": "navigation@1" },
+        { "command": "git.refresh", "group": "navigation@2" },
+        { "command": "git.stageAll", "group": "navigation@3" }
+      ],
+      "scm/resourceState/context": [
+        { "command": "git.stage", "when": "scmResourceGroup == workingTree", "group": "inline" },
+        { "command": "git.discard", "when": "scmResourceGroup == workingTree", "group": "inline" },
+        { "command": "git.unstage", "when": "scmResourceGroup == index", "group": "inline" }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "git.refresh",
+        "key": "ctrl+alt+g"
+      }
+    ],
+    "configuration": {
+      "title": "Git",
+      "properties": {
+        "git.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether git source control is enabled."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

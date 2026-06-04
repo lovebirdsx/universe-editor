@@ -54,6 +54,7 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.Window, ProxyChannel.fromService(windows))
   server.registerChannel(ServiceChannels.LogFiles, ProxyChannel.fromService(app.logFiles))
   server.registerChannel(ServiceChannels.AcpHost, ProxyChannel.fromService(app.acpHost))
+  server.registerChannel(ServiceChannels.ExtensionHost, ProxyChannel.fromService(app.extensionHost))
   server.registerChannel(ServiceChannels.AcpTerminal, ProxyChannel.fromService(app.acpTerminal))
   server.registerChannel(ServiceChannels.ClaudeBinary, ProxyChannel.fromService(app.claudeBinary))
   server.registerChannel(ServiceChannels.CodexBinary, ProxyChannel.fromService(app.codexBinary))

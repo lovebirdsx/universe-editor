@@ -1,0 +1,212 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Renderer-side owner of the SCM model. Handles the host → renderer
+ *  `mainThreadScm` channel (source controls, groups, resource states, input box)
+ *  and exposes it as observables the built-in ScmView renders. Commit-box edits
+ *  flow back to the host through the `extHostScm` proxy set on connect.
+ *
+ *  Source controls and groups are keyed by the host-allocated handle. Group
+ *  handles are globally unique, so a flat handle → group map suffices for routing
+ *  resource updates without walking every provider.
+ *--------------------------------------------------------------------------------------------*/
+
+import {
+  createDecorator,
+  Disposable,
+  observableValue,
+  type IObservable,
+  type ISettableObservable,
+} from '@universe-editor/platform'
+import type {
+  ICommandDto,
+  IExtHostScm,
+  IMainThreadScm,
+  ISourceControlFeaturesDto,
+  ISourceControlGroupFeaturesDto,
+  ISourceControlResourceStateDto,
+} from '@universe-editor/extensions-common'
+
+export interface IScmGroupModel {
+  readonly handle: number
+  readonly id: string
+  readonly label: IObservable<string>
+  readonly hideWhenEmpty: IObservable<boolean>
+  readonly resources: IObservable<readonly ISourceControlResourceStateDto[]>
+}
+
+export interface IScmSourceControlModel {
+  readonly handle: number
+  readonly id: string
+  readonly label: string
+  readonly rootUri: string | undefined
+  readonly inputValue: IObservable<string>
+  readonly inputPlaceholder: IObservable<string>
+  readonly count: IObservable<number | undefined>
+  readonly acceptCommand: IObservable<ICommandDto | undefined>
+  readonly groups: IObservable<readonly IScmGroupModel[]>
+}
+
+export interface IScmService {
+  readonly _serviceBrand: undefined
+  readonly sourceControls: IObservable<readonly IScmSourceControlModel[]>
+  /** A user edit in the commit box: update the model and report it to the host. */
+  changeInputBoxValue(handle: number, value: string): void
+  /** Wire the host proxy once the extension host connection is up. */
+  setExtHost(extHost: IExtHostScm): void
+}
+
+export const IScmService = createDecorator<IScmService>('scmService')
+
+class ScmGroupModel implements IScmGroupModel {
+  readonly label: ISettableObservable<string>
+  readonly hideWhenEmpty = observableValue<boolean>('scmGroupHideWhenEmpty', false)
+  readonly resources = observableValue<readonly ISourceControlResourceStateDto[]>(
+    'scmGroupResources',
+    [],
+  )
+
+  constructor(
+    readonly handle: number,
+    readonly id: string,
+    label: string,
+  ) {
+    this.label = observableValue<string>('scmGroupLabel', label)
+  }
+}
+
+class ScmSourceControlModel implements IScmSourceControlModel {
+  readonly inputValue = observableValue<string>('scmInputValue', '')
+  readonly inputPlaceholder = observableValue<string>('scmInputPlaceholder', '')
+  readonly count = observableValue<number | undefined>('scmCount', undefined)
+  readonly acceptCommand = observableValue<ICommandDto | undefined>('scmAcceptCommand', undefined)
+  readonly groups = observableValue<readonly IScmGroupModel[]>('scmGroups', [])
+  /** Live groups in registration order; `groups` observable mirrors this. */
+  readonly groupOrder: ScmGroupModel[] = []
+
+  constructor(
+    readonly handle: number,
+    readonly id: string,
+    readonly label: string,
+    readonly rootUri: string | undefined,
+  ) {}
+}
+
+export class ScmService extends Disposable implements IScmService, IMainThreadScm {
+  declare readonly _serviceBrand: undefined
+
+  private readonly _sourceControls = observableValue<readonly IScmSourceControlModel[]>(
+    'scmSourceControls',
+    [],
+  )
+  private readonly _byHandle = new Map<number, ScmSourceControlModel>()
+  private readonly _groupsByHandle = new Map<
+    number,
+    { sc: ScmSourceControlModel; group: ScmGroupModel }
+  >()
+  private _extHost: IExtHostScm | undefined
+
+  get sourceControls(): IObservable<readonly IScmSourceControlModel[]> {
+    return this._sourceControls
+  }
+
+  setExtHost(extHost: IExtHostScm): void {
+    this._extHost = extHost
+  }
+
+  changeInputBoxValue(handle: number, value: string): void {
+    this._byHandle.get(handle)?.inputValue.set(value, undefined)
+    void this._extHost?.$onInputBoxValueChange(handle, value)
+  }
+
+  // --- IMainThreadScm (called from the host) ---
+
+  $registerSourceControl(
+    handle: number,
+    id: string,
+    label: string,
+    rootUri?: string,
+  ): Promise<void> {
+    const model = new ScmSourceControlModel(handle, id, label, rootUri)
+    this._byHandle.set(handle, model)
+    this._sourceControls.set([...this._byHandle.values()], undefined)
+    return Promise.resolve()
+  }
+
+  $updateSourceControl(handle: number, features: ISourceControlFeaturesDto): Promise<void> {
+    const model = this._byHandle.get(handle)
+    if (model) {
+      if (features.count !== undefined) model.count.set(features.count, undefined)
+      if (features.acceptInputCommand !== undefined) {
+        model.acceptCommand.set(features.acceptInputCommand, undefined)
+      }
+    }
+    return Promise.resolve()
+  }
+
+  $unregisterSourceControl(handle: number): Promise<void> {
+    const model = this._byHandle.get(handle)
+    if (model) {
+      for (const group of model.groupOrder) this._groupsByHandle.delete(group.handle)
+      this._byHandle.delete(handle)
+      this._sourceControls.set([...this._byHandle.values()], undefined)
+    }
+    return Promise.resolve()
+  }
+
+  $registerGroup(
+    sourceControlHandle: number,
+    groupHandle: number,
+    id: string,
+    label: string,
+  ): Promise<void> {
+    const sc = this._byHandle.get(sourceControlHandle)
+    if (sc) {
+      const group = new ScmGroupModel(groupHandle, id, label)
+      sc.groupOrder.push(group)
+      sc.groups.set([...sc.groupOrder], undefined)
+      this._groupsByHandle.set(groupHandle, { sc, group })
+    }
+    return Promise.resolve()
+  }
+
+  $updateGroup(groupHandle: number, features: ISourceControlGroupFeaturesDto): Promise<void> {
+    const entry = this._groupsByHandle.get(groupHandle)
+    if (entry) {
+      if (features.label !== undefined) entry.group.label.set(features.label, undefined)
+      if (features.hideWhenEmpty !== undefined) {
+        entry.group.hideWhenEmpty.set(features.hideWhenEmpty, undefined)
+      }
+    }
+    return Promise.resolve()
+  }
+
+  $updateGroupResourceStates(
+    groupHandle: number,
+    resources: ISourceControlResourceStateDto[],
+  ): Promise<void> {
+    this._groupsByHandle.get(groupHandle)?.group.resources.set(resources, undefined)
+    return Promise.resolve()
+  }
+
+  $unregisterGroup(groupHandle: number): Promise<void> {
+    const entry = this._groupsByHandle.get(groupHandle)
+    if (entry) {
+      const { sc, group } = entry
+      const index = sc.groupOrder.indexOf(group)
+      if (index !== -1) sc.groupOrder.splice(index, 1)
+      sc.groups.set([...sc.groupOrder], undefined)
+      this._groupsByHandle.delete(groupHandle)
+    }
+    return Promise.resolve()
+  }
+
+  $setInputBoxValue(sourceControlHandle: number, value: string): Promise<void> {
+    this._byHandle.get(sourceControlHandle)?.inputValue.set(value, undefined)
+    return Promise.resolve()
+  }
+
+  $setInputBoxPlaceholder(sourceControlHandle: number, placeholder: string): Promise<void> {
+    this._byHandle.get(sourceControlHandle)?.inputPlaceholder.set(placeholder, undefined)
+    return Promise.resolve()
+  }
+}

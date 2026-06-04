@@ -20,6 +20,10 @@ export const enum MenuId {
   TitleBar = 'titleBar',
   StatusBar = 'statusBar',
   SideBarTitle = 'sideBarTitle',
+  // Source Control (SCM) menu locations — populated by the Git extension.
+  ScmTitle = 'scm/title',
+  ScmResourceStateContext = 'scm/resourceState/context',
+  ScmResourceGroupContext = 'scm/resourceGroup/context',
   /** Title-bar actions shown in the active ViewContainer's header (Panel / Secondary Side Bar). */
   ViewContainerTitle = 'viewContainerTitle',
   // Title-bar menubar dropdowns

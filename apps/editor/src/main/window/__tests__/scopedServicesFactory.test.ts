@@ -17,6 +17,7 @@ describe('ApplicationServices type', () => {
       logFiles: {} as ApplicationServices['logFiles'],
       acpHost: {} as ApplicationServices['acpHost'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
+      extensionHost: {} as ApplicationServices['extensionHost'],
       claudeBinary: {} as ApplicationServices['claudeBinary'],
       codexBinary: {} as ApplicationServices['codexBinary'],
       disposableLeak: {} as ApplicationServices['disposableLeak'],
@@ -24,7 +25,7 @@ describe('ApplicationServices type', () => {
       releaseNotes: {} as ApplicationServices['releaseNotes'],
       performance: {} as ApplicationServices['performance'],
     }
-    expect(Object.keys(svc)).toHaveLength(15)
+    expect(Object.keys(svc)).toHaveLength(16)
   })
 })
 

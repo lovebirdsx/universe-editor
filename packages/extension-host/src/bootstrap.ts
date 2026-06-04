@@ -1,0 +1,122 @@
+/**
+ * Extension Host bootstrap — runs in a separate Node process spawned by the
+ * main process through Electron's own runtime (ELECTRON_RUN_AS_NODE). The
+ * renderer is the RPC peer; the main process is only a byte pipe over stdio.
+ *
+ * Wiring: a ChannelServer exposes the ExtHost* channels the renderer calls, and
+ * a ChannelClient opens the MainThread* channels the host calls back on (over
+ * the same full-duplex protocol). The ExtensionService scans the built-in
+ * extensions directory and drives lazy activation.
+ *
+ * IMPORTANT: stdout carries the RPC wire — nothing else may be written there.
+ * All diagnostics go to stderr (console.error), which main forwards as onStderr.
+ */
+import { ChannelClient, ChannelServer, Emitter, ProxyChannel } from '@universe-editor/platform'
+import {
+  ExtHostChannels,
+  StdioFramingProtocol,
+  type IExtHostCommands,
+  type IExtHostExtensions,
+  type IExtHostScm,
+  type IMainThreadCommands,
+  type IMainThreadFs,
+  type IMainThreadScm,
+  type IMainThreadWindow,
+  type StdioTransport,
+} from '@universe-editor/extensions-common'
+import { scanExtensions } from './extensionScanner.js'
+import { ExtensionService } from './extensionService.js'
+import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
+
+const onData = new Emitter<string>()
+process.stdin.setEncoding('utf8')
+process.stdin.on('data', (chunk: string) => onData.fire(chunk))
+
+const transport: StdioTransport = {
+  write: (frame) => {
+    process.stdout.write(frame)
+  },
+  onData: onData.event,
+}
+
+const protocol = new StdioFramingProtocol(transport)
+const server = new ChannelServer(protocol)
+const client = new ChannelClient(protocol)
+
+const mainThreadCommands = ProxyChannel.toService<IMainThreadCommands>(
+  client.getChannel(ExtHostChannels.mainThreadCommands),
+)
+const mainThreadWindow = ProxyChannel.toService<IMainThreadWindow>(
+  client.getChannel(ExtHostChannels.mainThreadWindow),
+)
+const mainThreadScm = ProxyChannel.toService<IMainThreadScm>(
+  client.getChannel(ExtHostChannels.mainThreadScm),
+)
+const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
+  client.getChannel(ExtHostChannels.mainThreadFs),
+)
+
+// Register channels synchronously so a renderer call that races the async scan
+// queues on `serviceReady` instead of hitting a "channel not found" error.
+let resolveService!: (service: ExtensionService) => void
+const serviceReady = new Promise<ExtensionService>((resolve) => {
+  resolveService = resolve
+})
+
+const extHostCommands: IExtHostCommands = {
+  $executeContributedCommand: async (id, args) =>
+    (await serviceReady).executeContributedCommand(id, args),
+}
+const extHostExtensions: IExtHostExtensions = {
+  $getContributions: async () => (await serviceReady).getContributions(),
+  $activateByEvent: async (event) => {
+    await (await serviceReady).activateByEvent(event)
+  },
+}
+const extHostScm: IExtHostScm = {
+  $onInputBoxValueChange: async (handle, value) => {
+    ;(await serviceReady).onInputBoxValueChange(handle, value)
+  },
+}
+
+server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
+server.registerChannel(
+  ExtHostChannels.extHostExtensions,
+  ProxyChannel.fromService(extHostExtensions),
+)
+server.registerChannel(ExtHostChannels.extHostScm, ProxyChannel.fromService(extHostScm))
+
+async function main(): Promise<void> {
+  const kind = process.env.UNIVERSE_EXT_HOST_KIND === 'restricted' ? 'restricted' : 'trusted'
+  const dir =
+    kind === 'restricted'
+      ? process.env.UNIVERSE_USER_EXTENSIONS_DIR
+      : process.env.UNIVERSE_BUILTIN_EXTENSIONS_DIR
+  const extensions = dir ? await scanExtensions(dir, HOST_API_VERSION) : []
+  if (!dir) {
+    console.error(`[ext-host] no extensions directory configured for ${kind} host`)
+  } else {
+    console.error(`[ext-host] (${kind}) scanned ${extensions.length} extension(s) from ${dir}`)
+  }
+
+  const workspaceRoot = process.env.UNIVERSE_WORKSPACE_ROOT || undefined
+  console.error(`[ext-host] workspace root: ${workspaceRoot ?? '(none)'}`)
+
+  resolveService(
+    new ExtensionService(
+      extensions,
+      mainThreadCommands,
+      mainThreadWindow,
+      mainThreadScm,
+      workspaceRoot,
+      mainThreadFs,
+      kind,
+    ),
+  )
+  console.error(`[ext-host] ready (${kind})`)
+}
+
+void main().catch((err: unknown) => {
+  console.error(`[ext-host] fatal: ${(err as Error).stack ?? String(err)}`)
+  process.exit(1)
+})

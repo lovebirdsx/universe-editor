@@ -12,6 +12,7 @@ import { usePartContainer } from '../usePartContainer.js'
 import { ViewPaneContainer } from './ViewPaneContainer.js'
 import { ExplorerView } from '../explorer/ExplorerView.js'
 import { SearchView } from '../search/SearchView.js'
+import { ScmView } from '../scm/ScmView.js'
 import { AgentsView } from '../agents/AgentsView.js'
 import { McpServersView } from '../agents/McpServersView.js'
 import styles from './SideBar.module.css'
@@ -20,6 +21,7 @@ import styles from './SideBar.module.css'
 export const viewComponentMap = new Map<string, ComponentType>()
 viewComponentMap.set('explorer.tree', ExplorerView)
 viewComponentMap.set('search.results', SearchView)
+viewComponentMap.set('scm.main', ScmView)
 viewComponentMap.set('agents.main', AgentsView)
 viewComponentMap.set('agents.mcp', McpServersView)
 

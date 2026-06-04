@@ -47,13 +47,17 @@ export const test = base.extend<E2EFixtures>({
       JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
       'utf8',
     )
+    // ELECTRON_RUN_AS_NODE=1 (set by Claude Code's shell) makes Electron behave as
+    // plain Node.js, which rejects Chromium-only flags like --remote-debugging-port.
+    // Explicitly unset it so the Electron binary runs as a full Chromium app.
+    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
     const app = await electron.launch({
       args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
       cwd: APP_ROOT,
       env: {
-        ...process.env,
+        ...inheritedEnv,
         UNIVERSE_E2E: '1',
-        NODE_ENV: process.env['NODE_ENV'] ?? 'production',
+        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
       },
     })
     await use(app)

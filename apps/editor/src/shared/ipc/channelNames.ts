@@ -30,6 +30,7 @@ export const ServiceChannels = {
   ReleaseNotes: 'releaseNotes',
   Performance: 'performance',
   Lifecycle: 'lifecycle',
+  ExtensionHost: 'extensionHost',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

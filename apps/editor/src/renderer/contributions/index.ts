@@ -53,6 +53,7 @@ import { FirstRunAgentOnboardingContribution } from './FirstRunAgentOnboardingCo
 import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
+import { ExtensionsContribution } from './ExtensionsContribution.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -384,6 +385,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.terminalEditorLifecycle',
   TerminalEditorLifecycleContribution,
   WorkbenchPhase.AfterRestore,
+)
+
+// Extension system: spawn the extension host + connect the RPC. Eventually so it
+// never blocks first paint; contributed UI is translated into the kernel
+// registries before activation in later phases.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.extensions',
+  ExtensionsContribution,
+  WorkbenchPhase.Eventually,
 )
 
 export {

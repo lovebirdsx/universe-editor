@@ -10,6 +10,10 @@ test.describe('@p0 notification service', () => {
   }) => {
     await workbench.waitForRestored()
 
+    // 0. Clear any startup notifications (e.g. extension-host crash noise) so
+    //    subsequent count assertions are only affected by our test notification.
+    await workbench.runCommand('workbench.action.notifications.clearAll')
+
     // 1. Trigger a test notification.
     await workbench.runCommand('workbench.action.notifications.test')
 
@@ -31,9 +35,15 @@ test.describe('@p0 notification service', () => {
     expect(bellBefore?.text).not.toMatch(/\d/)
 
     // 6. Open notification center → still holds the read (but not dismissed) notification.
+    //    Use text-based filtering instead of exact count to tolerate any transient
+    //    background notifications (e.g. extension host restarts) that may co-exist.
     await workbench.runCommand('workbench.action.notifications.toggleList')
     await expect(workbench.page.locator('[data-testid="notifications-center"]')).toBeVisible()
-    await expect(workbench.page.locator('[data-testid="notification-center-item"]')).toHaveCount(1)
+    await expect(
+      workbench.page
+        .locator('[data-testid="notification-center-item"]')
+        .filter({ hasText: 'This is a test notification.' }),
+    ).toBeVisible()
 
     // 7. Clear all → center becomes empty.
     await workbench.runCommand('workbench.action.notifications.clearAll')

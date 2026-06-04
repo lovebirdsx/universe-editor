@@ -32,6 +32,18 @@ extraResources:
   # reused), so only the small JS bundle goes in `resources/`.
   - from: ../../vendor/claude-agent-acp/dist
     to: claude-agent-acp/dist
+  # Extension Host bundle (esbuild single-file). Spawned by the main process via
+  # ELECTRON_RUN_AS_NODE; run `pnpm ext:build` first so `dist/bootstrap.js` exists.
+  - from: ../../packages/extension-host/dist
+    to: extension-host/dist
+  # Built-in Git extension bundle. Loaded from resources/extensions/ at runtime
+  # (dev loads from the repo `extensions/` tree instead).
+  - from: ../../extensions/git/dist
+    to: extensions/git/dist
+  # The git extension's manifest (package.json) — scanned for its `contributes`
+  # and `activationEvents` before activation.
+  - from: ../../extensions/git/package.json
+    to: extensions/git/package.json
   # Release notes generated from git history (pnpm release:notes). Read by the
   # main-process ReleaseNotesMainService and shown after an upgrade.
   - from: resources/release-notes.json

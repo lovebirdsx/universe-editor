@@ -25,6 +25,7 @@ import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
+import type { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -42,6 +43,7 @@ export interface ApplicationServices {
   readonly recentWorkspaces: RecentWorkspacesMainService
   readonly logFiles: ILogFilesService
   readonly acpHost: IAcpHostService
+  readonly extensionHost: IExtensionHostService
   readonly acpTerminal: IAcpTerminalService
   readonly claudeBinary: IClaudeBinaryService
   readonly codexBinary: ICodexBinaryService

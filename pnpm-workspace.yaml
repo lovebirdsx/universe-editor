@@ -1,6 +1,7 @@
 packages:
   - 'apps/*'
   - 'packages/*'
+  - 'extensions/*'
 allowBuilds:
   esbuild: true
   electron: true
@@ -58,6 +59,7 @@ catalog:
 
   # Build tools
   vite: ^7.0.0
+  esbuild: ^0.25.0
 
   # Test
   '@testing-library/react': ^16.0.0

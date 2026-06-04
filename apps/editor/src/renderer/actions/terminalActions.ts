@@ -109,7 +109,7 @@ export class NewTerminalAction extends Action2 {
       id: NewTerminalAction.ID,
       title: localize('action.newTerminal.title', 'New Terminal'),
       category: localize('command.category.terminal', 'Terminal'),
-      keybinding: [{ primary: 'ctrl+shift+`' }, { primary: 'alt+`' }],
+      keybinding: [{ primary: 'ctrl+shift+`' }],
       f1: true,
     })
   }
@@ -132,6 +132,7 @@ export class FocusTerminalPanelAction extends Action2 {
       id: FocusTerminalPanelAction.ID,
       title: localize('action.terminal.focusPanel.title', 'Focus Terminal'),
       category: localize('command.category.terminal', 'Terminal'),
+      keybinding: { primary: 'alt+`', when: '!terminalFocus' },
       f1: true,
     })
   }

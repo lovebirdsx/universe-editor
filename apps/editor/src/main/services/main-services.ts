@@ -24,6 +24,7 @@ import {
   IPingService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
+import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
@@ -40,6 +41,7 @@ import {
 } from './workspace/recentWorkspacesMainService.js'
 import { LogFilesMainService } from './log/logFilesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
+import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
 import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
@@ -87,6 +89,16 @@ registerSingleton(
   IAcpTerminalService,
   // 1 leading static param (spawn) before @ILoggerService.
   new SyncDescriptor<IAcpTerminalService>(AcpTerminalMainService, [undefined], false),
+)
+registerSingleton(
+  IExtensionHostService,
+  // 4 leading static params (spawn, resolveEntry, resolveExtensionsDir,
+  // resolveUserExtensionsDir) before @ILoggerService.
+  new SyncDescriptor<IExtensionHostService>(
+    ExtensionHostMainService,
+    [undefined, undefined, undefined, undefined],
+    false,
+  ),
 )
 registerSingleton(
   IClaudeBinaryService,
