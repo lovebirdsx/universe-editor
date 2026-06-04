@@ -180,7 +180,7 @@ export class GoToFileAction extends Action2 {
       id: GoToFileAction.ID,
       title: localize('action.goToFile.title', 'Go to File…'),
       category: localize('command.category.file', 'File'),
-      keybinding: { primary: 'ctrl+p' },
+      keybinding: { primary: 'ctrl+h' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 1 },
       f1: true,
     })

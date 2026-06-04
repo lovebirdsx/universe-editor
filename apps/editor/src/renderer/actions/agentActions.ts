@@ -40,6 +40,7 @@ export class NewAgentSessionAction extends Action2 {
     super({
       id: NewAgentSessionAction.ID,
       title: localize('action.agent.newSession', 'New Agent Session'),
+      keybinding: { primary: 'ctrl+shift+n' },
       category: CATEGORY,
       f1: true,
     })
@@ -385,6 +386,7 @@ export class ResumeAgentSessionAction extends Action2 {
     super({
       id: ResumeAgentSessionAction.ID,
       title: localize('action.agent.resumeSession', 'Resume Agent Session…'),
+      keybinding: { primary: 'ctrl+shift+h' },
       category: CATEGORY,
       f1: true,
     })

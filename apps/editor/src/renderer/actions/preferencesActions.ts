@@ -200,6 +200,7 @@ export class OpenKeybindingsJsonAction extends Action2 {
     super({
       id: OpenKeybindingsJsonAction.ID,
       title: localize('action.openKeybindingsJson.title', 'Open Keyboard Shortcuts (JSON)'),
+      keybinding: { primary: ['ctrl+k', 'ctrl+k'] },
       category: localize('command.category.preferences', 'Preferences'),
       f1: true,
     })

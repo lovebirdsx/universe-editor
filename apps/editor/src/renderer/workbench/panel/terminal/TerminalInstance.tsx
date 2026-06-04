@@ -4,8 +4,10 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { URI } from '@universe-editor/platform'
+import { IContextKeyService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { createFileLinkProvider } from './terminalLinkProvider.js'
+import { useService } from '../../useService.js'
 import styles from './TerminalInstance.module.css'
 
 interface XtermTheme {
@@ -39,6 +41,7 @@ export function TerminalInstance({
   resolveFile,
   openFile,
 }: TerminalInstanceProps) {
+  const contextKeyService = useService(IContextKeyService)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -95,7 +98,19 @@ export function TerminalInstance({
     observer.observe(el)
     doFit()
 
+    const onFocusIn = () => contextKeyService.set('terminalFocus', true)
+    const onFocusOut = (e: FocusEvent) => {
+      if (!el.contains(e.relatedTarget as Node | null)) {
+        contextKeyService.set('terminalFocus', false)
+      }
+    }
+    el.addEventListener('focusin', onFocusIn)
+    el.addEventListener('focusout', onFocusOut)
+
     return () => {
+      el.removeEventListener('focusin', onFocusIn)
+      el.removeEventListener('focusout', onFocusOut)
+      contextKeyService.set('terminalFocus', false)
       observer.disconnect()
       selectionSub.dispose()
       inputSub.dispose()

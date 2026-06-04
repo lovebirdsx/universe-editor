@@ -73,7 +73,7 @@ export class CloseActiveEditorAction extends Action2 {
       id: CloseActiveEditorAction.ID,
       title: localize('action.closeActiveEditor.title', 'Close Editor'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+w' },
+      keybinding: { primary: 'ctrl+w', when: '!terminalFocus' },
       precondition: 'hasActiveEditor',
       menu: [
         { id: MenuId.EditorTitle, group: '1_close', order: 10 },
@@ -96,6 +96,7 @@ export class CloseOtherEditorsAction extends Action2 {
       id: CloseOtherEditorsAction.ID,
       title: localize('action.closeOtherEditors.title', 'Close Other Editors'),
       category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'alt+w' },
       precondition: 'hasActiveEditor',
       menu: [
         { id: MenuId.EditorTitle, group: '1_close', order: 20 },
@@ -120,6 +121,7 @@ export class CloseEditorsToTheRightAction extends Action2 {
       id: CloseEditorsToTheRightAction.ID,
       title: localize('action.closeEditorsToTheRight.title', 'Close Editors to the Right'),
       category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'alt+a' },
       precondition: 'hasActiveEditor && !activeEditorIsLastInGroup',
       menu: [
         { id: MenuId.EditorTitle, group: '1_close', order: 30 },

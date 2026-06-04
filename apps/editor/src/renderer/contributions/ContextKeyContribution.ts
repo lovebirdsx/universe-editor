@@ -91,6 +91,10 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // fire via natural event bubbling. Written by FileEditor through onDidFocus/BlurEditorWidget.
     contextKeyService.createKey<boolean>('editorFocus', false)
 
+    // True when an xterm.js terminal instance holds DOM focus (panel or editor tab).
+    // Written by TerminalInstance via xterm's onFocus/onBlur events.
+    contextKeyService.createKey<boolean>('terminalFocus', false)
+
     // -- group-level editor keys
     const editorPartMultipleEditorGroups = contextKeyService.createKey<boolean>(
       'editorPartMultipleEditorGroups',

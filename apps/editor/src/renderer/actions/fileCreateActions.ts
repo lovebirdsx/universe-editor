@@ -43,7 +43,7 @@ export class NewUntitledFileAction extends Action2 {
       id: NewUntitledFileAction.ID,
       title: localize('action.newUntitledFile.title', 'New File'),
       category: localize('command.category.file', 'File'),
-      keybinding: { primary: 'ctrl+n' },
+      keybinding: { primary: 'ctrl+n', when: '!terminalFocus' },
       menu: { id: MenuId.MenubarFileMenu, group: '1_new', order: 0 },
       f1: true,
     })
