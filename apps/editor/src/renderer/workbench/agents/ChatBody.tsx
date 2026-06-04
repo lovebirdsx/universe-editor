@@ -374,7 +374,11 @@ function ChatScroll({
       const keys = list.map(slotKey)
       const current = focusedKeyRef.current
       let nextIndex: number
-      if (current === null) {
+      if (direction === 'first') {
+        nextIndex = 0
+      } else if (direction === 'last') {
+        nextIndex = keys.length - 1
+      } else if (current === null) {
         nextIndex = direction === 'next' ? 0 : keys.length - 1
       } else {
         const idx = keys.indexOf(current)
@@ -388,8 +392,20 @@ function ChatScroll({
       }
       const nextKey = keys[nextIndex]
       if (nextKey === undefined) return
-      stickRef.current = false
+      stickRef.current = direction === 'last'
       setFocusedKey(nextKey)
+      focusedKeyRef.current = nextKey
+      if (direction === 'first') {
+        const container = containerRef.current
+        if (container) container.scrollTop = 0
+        persist()
+        return
+      }
+      if (direction === 'last') {
+        scrollToBottomStable()
+        persist()
+        return
+      }
       const container = containerRef.current
       const el = container?.querySelector<HTMLElement>(
         `[data-timeline-key="${cssEscape(nextKey)}"]`,
@@ -402,6 +418,7 @@ function ChatScroll({
       } else {
         virtualizerRef.current?.scrollToIndex(nextIndex, { align: 'center' })
       }
+      persist()
     }
     handle.scrollTimeline = (target) => {
       const el = containerRef.current
@@ -409,6 +426,12 @@ function ChatScroll({
       // Setting scrollTop dispatches onScroll → handleScroll recomputes
       // stickRef and persists, so stick state stays correct without manual work.
       switch (target) {
+        case 'up':
+          el.scrollTop -= 48
+          break
+        case 'down':
+          el.scrollTop += 48
+          break
         case 'top':
           el.scrollTop = 0
           break
@@ -436,7 +459,7 @@ function ChatScroll({
       handle.toggleCollapse = noop
       handle.cycleCollapseMode = noop
     }
-  }, [handleRef, handleToggleCollapse, scrollToBottomStable, session])
+  }, [handleRef, handleToggleCollapse, persist, scrollToBottomStable, session])
 
   return (
     <div
@@ -591,11 +614,11 @@ function EmptySessionHint() {
             label={localize('acp.emptySession.focusInput', 'Focus input')}
           />
           <HintItem
-            keys={['Alt+J/K']}
+            keys={['Alt+Up/Down']}
             label={localize('acp.emptySession.nextPrevious', 'Next / previous item')}
           />
           <HintItem
-            keys={['Alt+A/E']}
+            keys={['Alt+Home/End']}
             label={localize('acp.emptySession.topBottom', 'Top / bottom')}
           />
           <HintItem

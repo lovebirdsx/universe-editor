@@ -181,6 +181,19 @@ function renderChat(session: IAcpSession) {
   )
 }
 
+function renderChatWithWidget(session: IAcpSession) {
+  const widgetRef: { current?: AcpChatWidget } = {}
+  const inst = makeInstantiation((w) => {
+    widgetRef.current = w
+  })
+  const result = render(
+    <ServicesContext.Provider value={inst}>
+      <ChatBody session={session} />
+    </ServicesContext.Provider>,
+  )
+  return { ...result, widgetRef }
+}
+
 function slotEl(container: HTMLElement, key: string): HTMLElement {
   const el = container.querySelector<HTMLElement>(`[data-timeline-key="${key}"]`)
   if (!el) throw new Error(`no slot for ${key}`)
@@ -247,6 +260,60 @@ function scrollEl(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.parentElement!
 }
 
+describe('ChatBody — timeline keyboard handle', () => {
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
+    { kind: 'message', id: 'c', message: makeMessage('c', 'third') },
+  ]
+
+  it('moves to first/last item and updates the focused slot', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 500
+
+    act(() => {
+      widgetRef.current!.moveTimeline('first')
+    })
+    expect(slotEl(container, 'm:a').className).toContain(focusedClass)
+    expect(slotEl(container, 'm:c').className).not.toContain(focusedClass)
+    expect(scroll.scrollTop).toBe(0)
+
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    expect(slotEl(container, 'm:c').className).toContain(focusedClass)
+    expect(slotEl(container, 'm:a').className).not.toContain(focusedClass)
+    expect(scroll.scrollTop).toBe(1000)
+  })
+
+  it('page scrolling keeps the focused slot unchanged', () => {
+    const { container, widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    Object.defineProperty(scroll, 'scrollHeight', { value: 1000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:b'))
+    })
+    scroll.scrollTop = 400
+
+    act(() => {
+      widgetRef.current!.scrollTimeline('pageDown')
+    })
+    expect(scroll.scrollTop).toBe(700)
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+
+    act(() => {
+      widgetRef.current!.scrollTimeline('pageUp')
+    })
+    expect(scroll.scrollTop).toBe(400)
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
+  })
+})
+
 describe('ChatBody — empty session hint', () => {
   it('shows session, prompt, and keyboard hints before the first visible item', () => {
     const { container } = renderChat(makeSession('s1', []))
@@ -259,8 +326,8 @@ describe('ChatBody — empty session hint', () => {
     expect(text).toContain('Commands')
     expect(text).toContain('Mention files')
     expect(text).toContain('Ctrl+Alt+I')
-    expect(text).toContain('Alt+J/K')
-    expect(text).toContain('Alt+A/E')
+    expect(text).toContain('Alt+Up/Down')
+    expect(text).toContain('Alt+Home/End')
     expect(text).toContain('Ctrl+Alt+F')
   })
 
@@ -384,19 +451,6 @@ describe('ChatBody — collapse', () => {
     { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
     { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
   ]
-
-  function renderChatWithWidget(session: IAcpSession) {
-    const widgetRef: { current?: AcpChatWidget } = {}
-    const inst = makeInstantiation((w) => {
-      widgetRef.current = w
-    })
-    const result = render(
-      <ServicesContext.Provider value={inst}>
-        <ChatBody session={session} />
-      </ServicesContext.Provider>,
-    )
-    return { ...result, widgetRef }
-  }
 
   function ariaExpanded(container: HTMLElement, key: string): string | null {
     return slotEl(container, key).querySelector('button')!.getAttribute('aria-expanded')

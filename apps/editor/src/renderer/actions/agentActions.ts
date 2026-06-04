@@ -518,7 +518,10 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
       id: FocusNextAcpTimelineItemAction.ID,
       title: localize('action.agent.focusNextTimelineItem', 'Focus Next Timeline Item'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+j', when: 'acpChatFocused' },
+      keybinding: [
+        { primary: 'alt+down', when: 'acpChatFocused' },
+        { primary: 'alt+j', when: 'acpChatFocused' },
+      ],
       precondition: 'acpChatFocused',
       f1: true,
     })
@@ -535,7 +538,10 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
       id: FocusPreviousAcpTimelineItemAction.ID,
       title: localize('action.agent.focusPreviousTimelineItem', 'Focus Previous Timeline Item'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+k', when: 'acpChatFocused' },
+      keybinding: [
+        { primary: 'alt+up', when: 'acpChatFocused' },
+        { primary: 'alt+k', when: 'acpChatFocused' },
+      ],
       precondition: 'acpChatFocused',
       f1: true,
     })
@@ -545,43 +551,84 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
   }
 }
 
-export class ScrollAcpTimelineToTopAction extends Action2 {
-  static readonly ID = 'workbench.action.agent.scrollTimelineToTop'
+export class FocusTopAcpTimelineAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusTopTimelineItem'
   constructor() {
     super({
-      id: ScrollAcpTimelineToTopAction.ID,
-      title: localize('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
+      id: FocusTopAcpTimelineAction.ID,
+      title: localize('action.agent.focusTopTimelineItem', 'Focus Top Timeline Item'),
       category: CATEGORY,
       keybinding: [
-        { primary: 'alt+a', when: 'acpChatFocused' },
         { primary: 'alt+home', when: 'acpChatFocused' },
+        { primary: 'alt+a', when: 'acpChatFocused' },
       ],
       precondition: 'acpChatFocused',
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('top')
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('first')
   }
 }
 
-export class ScrollAcpTimelineToBottomAction extends Action2 {
-  static readonly ID = 'workbench.action.agent.scrollTimelineToBottom'
+export class FocusBottomAcpTimelineAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusBottomTimelineItem'
   constructor() {
     super({
-      id: ScrollAcpTimelineToBottomAction.ID,
-      title: localize('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
+      id: FocusBottomAcpTimelineAction.ID,
+      title: localize('action.agent.focusBottomTimelineItem', 'Focus Bottom Timeline Item'),
       category: CATEGORY,
       keybinding: [
-        { primary: 'alt+e', when: 'acpChatFocused' },
         { primary: 'alt+end', when: 'acpChatFocused' },
+        { primary: 'alt+e', when: 'acpChatFocused' },
       ],
       precondition: 'acpChatFocused',
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('bottom')
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('last')
+  }
+}
+
+export class ScrollAcpTimelineUpAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelineUp'
+  constructor() {
+    super({
+      id: ScrollAcpTimelineUpAction.ID,
+      title: localize('action.agent.scrollTimelineUp', 'Scroll Timeline Up'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'ctrl+alt+up', when: 'acpChatFocused' },
+        { primary: 'ctrl+alt+k', when: 'acpChatFocused' },
+      ],
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('up')
+  }
+}
+
+export class ScrollAcpTimelineDownAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelineDown'
+  constructor() {
+    super({
+      id: ScrollAcpTimelineDownAction.ID,
+      title: localize('action.agent.scrollTimelineDown', 'Scroll Timeline Down'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'ctrl+alt+down', when: 'acpChatFocused' },
+        { primary: 'ctrl+alt+j', when: 'acpChatFocused' },
+      ],
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('down')
   }
 }
 
@@ -592,7 +639,7 @@ export class ScrollAcpTimelinePageUpAction extends Action2 {
       id: ScrollAcpTimelinePageUpAction.ID,
       title: localize('action.agent.scrollTimelinePageUp', 'Scroll Timeline Page Up'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+pageup', when: 'acpChatFocused' },
+      keybinding: [{ primary: 'ctrl+alt+pageup', when: 'acpChatFocused' }],
       precondition: 'acpChatFocused',
       f1: true,
     })
@@ -609,13 +656,47 @@ export class ScrollAcpTimelinePageDownAction extends Action2 {
       id: ScrollAcpTimelinePageDownAction.ID,
       title: localize('action.agent.scrollTimelinePageDown', 'Scroll Timeline Page Down'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+pagedown', when: 'acpChatFocused' },
+      keybinding: [{ primary: 'ctrl+alt+pagedown', when: 'acpChatFocused' }],
       precondition: 'acpChatFocused',
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
     accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('pageDown')
+  }
+}
+
+export class ScrollAcpTimelineToTopAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelineToTop'
+  constructor() {
+    super({
+      id: ScrollAcpTimelineToTopAction.ID,
+      title: localize('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
+      category: CATEGORY,
+      keybinding: { primary: 'ctrl+alt+home', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('top')
+  }
+}
+
+export class ScrollAcpTimelineToBottomAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.scrollTimelineToBottom'
+  constructor() {
+    super({
+      id: ScrollAcpTimelineToBottomAction.ID,
+      title: localize('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
+      category: CATEGORY,
+      keybinding: { primary: 'ctrl+alt+end', when: 'acpChatFocused' },
+      precondition: 'acpChatFocused',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('bottom')
   }
 }
 

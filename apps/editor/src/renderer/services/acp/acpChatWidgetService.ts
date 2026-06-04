@@ -21,9 +21,9 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 
-export type AcpTimelineMoveDirection = 'next' | 'prev'
+export type AcpTimelineMoveDirection = 'next' | 'prev' | 'first' | 'last'
 
-export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown'
+export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown' | 'up' | 'down'
 
 export interface AcpChatWidget {
   readonly container: HTMLElement

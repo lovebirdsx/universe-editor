@@ -139,8 +139,8 @@ import {
   ResumeAgentSessionAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
-  ScrollAcpTimelineToBottomAction,
-  ScrollAcpTimelineToTopAction,
+  FocusBottomAcpTimelineAction,
+  FocusTopAcpTimelineAction,
   SelectAgentAction,
   SelectAgentModeAction,
   SelectAgentModelAction,
@@ -148,6 +148,8 @@ import {
   ToggleAcpTimelineItemCollapseAction,
   CycleAcpTimelineCollapseAction,
   ToggleAgentChatLocationAction,
+  ScrollAcpTimelineUpAction,
+  ScrollAcpTimelineDownAction,
 } from './agentActions.js'
 
 // Layout
@@ -321,8 +323,10 @@ registerAction2(ClearAgentSessionHistoryAction)
 registerAction2(RefreshAgentSessionsAction)
 registerAction2(FocusNextAcpTimelineItemAction)
 registerAction2(FocusPreviousAcpTimelineItemAction)
-registerAction2(ScrollAcpTimelineToTopAction)
-registerAction2(ScrollAcpTimelineToBottomAction)
+registerAction2(FocusTopAcpTimelineAction)
+registerAction2(FocusBottomAcpTimelineAction)
+registerAction2(ScrollAcpTimelineUpAction)
+registerAction2(ScrollAcpTimelineDownAction)
 registerAction2(ScrollAcpTimelinePageUpAction)
 registerAction2(ScrollAcpTimelinePageDownAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
