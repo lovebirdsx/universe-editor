@@ -111,11 +111,10 @@ export class WindowMainService implements IWindowMainService {
    *  close handler bypasses the renderer veto round-trip on the second pass. */
   private readonly _allowClose = new Set<number>()
   private _sessionPersistTimer: ReturnType<typeof setTimeout> | null = null
+  private _hasCreatedFirstWindow = false
 
   private readonly _onDidChangeWindows = new Emitter<void>()
   readonly onDidChangeWindows: Event<void> = this._onDidChangeWindows.event
-
-  private readonly _windowsService = new MainWindowsService(this)
 
   constructor(private readonly _opts: WindowMainServiceOptions) {}
 
@@ -131,6 +130,8 @@ export class WindowMainService implements IWindowMainService {
       logService,
     } = this._opts
     const logger = logService.createLogger({ id: 'window', name: 'Window' })
+    const isFirstWindow = !this._hasCreatedFirstWindow
+    this._hasCreatedFirstWindow = true
 
     const isMac = process.platform === 'darwin'
     const uiState = opts?.uiState
@@ -216,7 +217,8 @@ export class WindowMainService implements IWindowMainService {
       terminal,
     }
 
-    const ipc = bootstrapWindowIpc(win, appServices, windowServices, this._windowsService)
+    const windowsService = disposables.add(new MainWindowsService(this, isFirstWindow))
+    const ipc = bootstrapWindowIpc(win, appServices, windowServices, windowsService)
     disposables.add(ipc.disposable)
 
     // Persist the session whenever this window's workspace or geometry changes.

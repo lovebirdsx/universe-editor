@@ -35,6 +35,9 @@ export interface IWindowsService {
   /** Snapshot of all currently open windows (for Switch Window / open-state markers). */
   getWindows(): Promise<readonly IOpenWindowInfo[]>
 
+  /** Whether the renderer using this service belongs to the first window in this app session. */
+  isCurrentWindowFirst(): Promise<boolean>
+
   /** Bring the window with the given id to the foreground. */
   focusWindow(id: number): Promise<void>
 

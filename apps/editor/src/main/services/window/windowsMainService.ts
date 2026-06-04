@@ -18,7 +18,10 @@ import type { WindowMainService } from './windowMainService.js'
 export class MainWindowsService implements IWindowsService, IDisposable {
   declare readonly _serviceBrand: undefined
 
-  constructor(private readonly _windows: WindowMainService) {}
+  constructor(
+    private readonly _windows: WindowMainService,
+    private readonly _isCurrentWindowFirst: boolean,
+  ) {}
 
   get onDidChangeWindows(): Event<void> {
     return this._windows.onDidChangeWindows
@@ -26,6 +29,10 @@ export class MainWindowsService implements IWindowsService, IDisposable {
 
   getWindows(): Promise<readonly IOpenWindowInfo[]> {
     return Promise.resolve(this._windows.getOpenWindowInfos())
+  }
+
+  isCurrentWindowFirst(): Promise<boolean> {
+    return Promise.resolve(this._isCurrentWindowFirst)
   }
 
   focusWindow(id: number): Promise<void> {

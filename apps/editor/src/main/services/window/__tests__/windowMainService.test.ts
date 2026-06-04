@@ -9,7 +9,10 @@ import { combinedDisposable, URI } from '@universe-editor/platform'
 
 // --- Mock IPC bootstrap ---
 vi.mock('../../../ipc/registerMainServices.js', () => ({
-  bootstrapWindowIpc: vi.fn(() => combinedDisposable()),
+  bootstrapWindowIpc: vi.fn(() => ({
+    disposable: combinedDisposable(),
+    rendererLifecycle: { confirmShutdown: vi.fn().mockResolvedValue(true) },
+  })),
 }))
 
 // --- Mock per-window workspace stack (kept lightweight; exercised in their own
@@ -74,6 +77,7 @@ vi.mock('electron', () => ({
 
 // Import after mocks
 const { WindowMainService } = await import('../windowMainService.js')
+const { bootstrapWindowIpc } = await import('../../../ipc/registerMainServices.js')
 const { LogMainService } = await import('../../log/logMainService.js')
 const { WorkspaceMainService } = await import('../../workspace/workspaceMainService.js')
 
@@ -131,6 +135,19 @@ describe('WindowMainService', () => {
     const id2 = await svc.createWindow()
     expect(id1).not.toBe(id2)
     expect(svc.getWindows()).toHaveLength(2)
+  })
+
+  it('marks only the first created window as the current session first window', async () => {
+    const svc = new WindowMainService(makeOpts())
+    await svc.createWindow()
+    await svc.createWindow()
+
+    const calls = vi.mocked(bootstrapWindowIpc).mock.calls
+    const firstWindowsService = calls[0]?.[3]
+    const secondWindowsService = calls[1]?.[3]
+
+    await expect(firstWindowsService?.isCurrentWindowFirst()).resolves.toBe(true)
+    await expect(secondWindowsService?.isCurrentWindowFirst()).resolves.toBe(false)
   })
 
   it('dispose clears all windows', async () => {

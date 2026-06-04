@@ -156,6 +156,9 @@ function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
     async getWindows() {
       return open
     },
+    async isCurrentWindowFirst() {
+      return true
+    },
     async focusWindow() {},
     async openWindow(folder?: URI) {
       openWindowCalls.push(folder)

@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
-import { ConfigurationService, ConfigurationTarget } from '@universe-editor/platform'
+import {
+  ConfigurationService,
+  ConfigurationTarget,
+  type IWindowsService,
+} from '@universe-editor/platform'
 import { StatusBarService } from '../../services/statusbar/StatusBarService.js'
 import { StartupPerformanceStatusContribution } from '../StartupPerformanceStatusContribution.js'
 import type { ITimerService, IStartupMetrics } from '../../services/performance/TimerService.js'
@@ -27,9 +31,24 @@ function timerStub(metrics: IStartupMetrics = EMPTY_METRICS): ITimerService {
   }
 }
 
+interface WindowsStub extends IWindowsService {
+  isCurrentWindowFirst: ReturnType<typeof vi.fn>
+}
+
+function windowsStub(isFirst = true): WindowsStub {
+  return {
+    _serviceBrand: undefined,
+    onDidChangeWindows: vi.fn(() => ({ dispose: vi.fn() })),
+    getWindows: vi.fn(() => Promise.resolve([])),
+    isCurrentWindowFirst: vi.fn(() => Promise.resolve(isFirst)),
+    focusWindow: vi.fn(() => Promise.resolve()),
+    openWindow: vi.fn(() => Promise.resolve()),
+    quit: vi.fn(() => Promise.resolve()),
+  } as WindowsStub
+}
+
 async function flushAsyncRender(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
+  for (let i = 0; i < 4; i++) await Promise.resolve()
 }
 
 describe('startup performance warning settings', () => {
@@ -81,7 +100,12 @@ describe('StartupPerformanceStatusContribution', () => {
     const statusBar = new StatusBarService()
     const timer = timerStub({ ...EMPTY_METRICS, totalTime: 5000 })
 
-    const contribution = new StartupPerformanceStatusContribution(timer, statusBar, config)
+    const contribution = new StartupPerformanceStatusContribution(
+      timer,
+      statusBar,
+      config,
+      windowsStub(),
+    )
     await flushAsyncRender()
 
     expect(timer.getStartupMetrics).not.toHaveBeenCalled()
@@ -98,7 +122,12 @@ describe('StartupPerformanceStatusContribution', () => {
     const statusBar = new StatusBarService()
     const timer = timerStub({ ...EMPTY_METRICS, totalTime: 1000 })
 
-    const contribution = new StartupPerformanceStatusContribution(timer, statusBar, config)
+    const contribution = new StartupPerformanceStatusContribution(
+      timer,
+      statusBar,
+      config,
+      windowsStub(),
+    )
     await flushAsyncRender()
 
     expect(timer.getStartupMetrics).toHaveBeenCalledOnce()
@@ -115,7 +144,12 @@ describe('StartupPerformanceStatusContribution', () => {
     const statusBar = new StatusBarService()
     const timer = timerStub({ ...EMPTY_METRICS, totalTime: 2500 })
 
-    const contribution = new StartupPerformanceStatusContribution(timer, statusBar, config)
+    const contribution = new StartupPerformanceStatusContribution(
+      timer,
+      statusBar,
+      config,
+      windowsStub(),
+    )
     await flushAsyncRender()
 
     const entry = statusBar.entries.get()[0]?.entry
@@ -134,7 +168,12 @@ describe('StartupPerformanceStatusContribution', () => {
     const statusBar = new StatusBarService()
     const timer = timerStub({ ...EMPTY_METRICS, totalTime: 2500 })
 
-    const contribution = new StartupPerformanceStatusContribution(timer, statusBar, config)
+    const contribution = new StartupPerformanceStatusContribution(
+      timer,
+      statusBar,
+      config,
+      windowsStub(),
+    )
     await flushAsyncRender()
     expect(statusBar.entries.get()).toHaveLength(0)
     expect(timer.getStartupMetrics).not.toHaveBeenCalled()
@@ -156,13 +195,44 @@ describe('StartupPerformanceStatusContribution', () => {
     const statusBar = new StatusBarService()
     const timer = timerStub({ ...EMPTY_METRICS, totalTime: 2500 })
 
-    const contribution = new StartupPerformanceStatusContribution(timer, statusBar, config)
+    const contribution = new StartupPerformanceStatusContribution(
+      timer,
+      statusBar,
+      config,
+      windowsStub(),
+    )
     await flushAsyncRender()
     expect(statusBar.entries.get()).toHaveLength(1)
 
     config.update(STARTUP_WARNING_ENABLED_KEY, false, ConfigurationTarget.Memory)
     await flushAsyncRender()
 
+    expect(statusBar.entries.get()).toHaveLength(0)
+
+    contribution.dispose()
+  })
+
+  it('does not measure startup metrics in secondary windows', async () => {
+    const config = new ConfigurationService()
+    config.update(STARTUP_WARNING_ENABLED_KEY, true, ConfigurationTarget.Memory)
+    config.update(STARTUP_WARNING_RELEASE_THRESHOLD_KEY, 1, ConfigurationTarget.Memory)
+    config.update(STARTUP_WARNING_DEVELOPMENT_THRESHOLD_KEY, 1, ConfigurationTarget.Memory)
+    const statusBar = new StatusBarService()
+    const timer = timerStub({ ...EMPTY_METRICS, totalTime: 2500 })
+    const windows = windowsStub(false)
+
+    const contribution = new StartupPerformanceStatusContribution(timer, statusBar, config, windows)
+    await flushAsyncRender()
+
+    expect(windows.isCurrentWindowFirst).toHaveBeenCalledOnce()
+    expect(timer.getStartupMetrics).not.toHaveBeenCalled()
+    expect(statusBar.entries.get()).toHaveLength(0)
+
+    config.update(STARTUP_WARNING_RELEASE_THRESHOLD_KEY, 2, ConfigurationTarget.Memory)
+    await flushAsyncRender()
+
+    expect(windows.isCurrentWindowFirst).toHaveBeenCalledOnce()
+    expect(timer.getStartupMetrics).not.toHaveBeenCalled()
     expect(statusBar.entries.get()).toHaveLength(0)
 
     contribution.dispose()

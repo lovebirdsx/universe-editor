@@ -82,6 +82,9 @@ function makeWindowsStub(open: readonly IOpenWindowInfo[] = []): WindowsStub {
       async getWindows() {
         return current
       },
+      async isCurrentWindowFirst() {
+        return true
+      },
       async focusWindow() {},
       async openWindow() {},
       async quit() {},

@@ -8,6 +8,7 @@ import {
   Disposable,
   IConfigurationService,
   IStatusBarService,
+  IWindowsService,
   IWorkbenchContribution,
   StatusBarAlignment,
   localize,
@@ -30,12 +31,14 @@ export class StartupPerformanceStatusContribution
 {
   private _entry: IStatusBarEntryAccessor | undefined
   private _metricsPromise: Promise<IStartupMetrics> | undefined
+  private _isCurrentWindowFirstPromise: Promise<boolean> | undefined
   private _renderGeneration = 0
 
   constructor(
     @ITimerService private readonly _timer: ITimerService,
     @IStatusBarService private readonly _statusBar: IStatusBarService,
     @IConfigurationService private readonly _configuration: IConfigurationService,
+    @IWindowsService private readonly _windows: IWindowsService,
   ) {
     super()
     this._register({ dispose: () => this._entry?.dispose() })
@@ -48,10 +51,18 @@ export class StartupPerformanceStatusContribution
         ) {
           return
         }
-        void this._render()
+        void this._renderIfFirstWindow()
       }),
     )
-    void this._render()
+    void this._renderIfFirstWindow()
+  }
+
+  private async _renderIfFirstWindow(): Promise<void> {
+    if (!(await this._isCurrentWindowFirst())) {
+      this._hide()
+      return
+    }
+    await this._render()
   }
 
   private async _render(): Promise<void> {
@@ -90,6 +101,11 @@ export class StartupPerformanceStatusContribution
   private _getStartupMetrics(): Promise<IStartupMetrics> {
     this._metricsPromise ??= this._timer.getStartupMetrics()
     return this._metricsPromise
+  }
+
+  private _isCurrentWindowFirst(): Promise<boolean> {
+    this._isCurrentWindowFirstPromise ??= this._windows.isCurrentWindowFirst().catch(() => false)
+    return this._isCurrentWindowFirstPromise
   }
 
   private _hide(): void {
