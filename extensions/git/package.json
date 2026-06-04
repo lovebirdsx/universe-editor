@@ -3,6 +3,9 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
+  "files": [
+    "dist"
+  ],
   "displayName": "Git",
   "description": "Git source control integration (first-party Universe extension).",
   "main": "dist/extension.js",

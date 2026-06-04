@@ -20,6 +20,7 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { verifyPackagedRuntimeResources } from './runtime-resources.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
@@ -427,6 +428,11 @@ function verifyPackagedVersion(version) {
   if (!artifacts.some((file) => file.endsWith('.exe'))) die('release/ 下没有 .exe 产物')
   if (!artifacts.some((file) => file.endsWith('.blockmap'))) die('release/ 下没有 .blockmap 产物')
   if (!artifacts.includes('latest.yml')) die('release/ 下没有 latest.yml')
+  try {
+    verifyPackagedRuntimeResources()
+  } catch (error) {
+    die(error instanceof Error ? error.message : String(error))
+  }
 }
 
 function createTagIfNeeded(tag, dryRun, resume) {

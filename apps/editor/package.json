@@ -25,9 +25,9 @@
     "lint:fix": "eslint --fix src bench integration e2e",
     "clean": "tsc --build --clean",
     "package": "pnpm run package:win",
-    "package:win": "pnpm -w run agent:build && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis dir",
-    "package:win:dir": "pnpm -w run agent:build && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win dir",
-    "package:win:installer": "pnpm -w run agent:build && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis"
+    "package:win": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis dir && pnpm -w run runtime:verify:packaged",
+    "package:win:dir": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win dir && pnpm -w run runtime:verify:packaged",
+    "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis && pnpm -w run runtime:verify:packaged"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "catalog:",
