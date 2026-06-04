@@ -3,5 +3,19 @@
     "additionalDirectories": [
       "..\\vscode"
     ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jq -r '.tool_input.file_path // empty' | grep -E '\\.(ts|tsx|js|jsx)$' | xargs -r pnpm exec eslint --fix",
+            "statusMessage": "ESLint fix..."
+          }
+        ]
+      }
+    ]
   }
 }
