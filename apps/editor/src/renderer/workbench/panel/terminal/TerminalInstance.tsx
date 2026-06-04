@@ -1,8 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
+import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
+import type { URI } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
+import { createFileLinkProvider } from './terminalLinkProvider.js'
 import styles from './TerminalInstance.module.css'
 
 interface XtermTheme {
@@ -22,12 +25,32 @@ export interface TerminalInstanceProps {
   active: boolean
   isDark: boolean
   manager: ITerminalManagerService
+  cwd: string
+  resolveFile: (absolutePath: string) => Promise<URI | null>
+  openFile: (uri: URI, line?: number, col?: number) => void
 }
 
-export function TerminalInstance({ id, active, isDark, manager }: TerminalInstanceProps) {
+export function TerminalInstance({
+  id,
+  active,
+  isDark,
+  manager,
+  cwd,
+  resolveFile,
+  openFile,
+}: TerminalInstanceProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
+  const resolveFileRef = useRef(resolveFile)
+  resolveFileRef.current = resolveFile
+  const openFileRef = useRef(openFile)
+  openFileRef.current = openFile
+  const cwdRef = useRef(cwd)
+  cwdRef.current = cwd
+
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
+  const [hasSelection, setHasSelection] = useState(false)
 
   useEffect(() => {
     const el = containerRef.current
@@ -41,9 +64,19 @@ export function TerminalInstance({ id, active, isDark, manager }: TerminalInstan
     })
     const fit = new FitAddon()
     term.loadAddon(fit)
+    term.loadAddon(new WebLinksAddon())
     term.open(el)
     termRef.current = term
     fitRef.current = fit
+
+    const linkDisposable = term.registerLinkProvider(
+      createFileLinkProvider(
+        term,
+        (absPath) => resolveFileRef.current(absPath),
+        (uri, line, col) => openFileRef.current(uri, line, col),
+        () => cwdRef.current,
+      ),
+    )
 
     const doFit = () => {
       if (el.clientWidth === 0 || el.clientHeight === 0) return
@@ -57,14 +90,17 @@ export function TerminalInstance({ id, active, isDark, manager }: TerminalInstan
 
     const detach = manager.attach(id, (data) => term.write(data))
     const inputSub = term.onData((data) => manager.input(id, data))
+    const selectionSub = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
     const observer = new ResizeObserver(() => doFit())
     observer.observe(el)
     doFit()
 
     return () => {
       observer.disconnect()
+      selectionSub.dispose()
       inputSub.dispose()
       detach.dispose()
+      linkDisposable.dispose()
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -104,11 +140,60 @@ export function TerminalInstance({ id, active, isDark, manager }: TerminalInstan
     return () => d.dispose()
   }, [active, manager])
 
+  // Dismiss context menu on Escape.
+  useEffect(() => {
+    if (!contextMenu) return
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setContextMenu(null)
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [contextMenu])
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault()
+    setContextMenu({ x: e.clientX, y: e.clientY })
+  }
+
+  const handleCopy = async () => {
+    const term = termRef.current
+    if (term?.hasSelection()) {
+      await navigator.clipboard.writeText(term.getSelection())
+    }
+    setContextMenu(null)
+  }
+
+  const handlePaste = async () => {
+    const text = await navigator.clipboard.readText()
+    termRef.current?.paste(text)
+    setContextMenu(null)
+  }
+
   return (
-    <div
-      ref={containerRef}
-      className={active ? `${styles['instance']} ${styles['visible']}` : styles['instance']}
-      data-terminal-id={id}
-    />
+    <>
+      <div
+        ref={containerRef}
+        className={active ? `${styles['instance']} ${styles['visible']}` : styles['instance']}
+        data-terminal-id={id}
+        onContextMenu={handleContextMenu}
+      />
+      {contextMenu && (
+        <>
+          <div className={styles['ctx-overlay']} onClick={() => setContextMenu(null)} />
+          <div className={styles['ctx-menu']} style={{ left: contextMenu.x, top: contextMenu.y }}>
+            <button
+              className={hasSelection ? styles['ctx-item'] : styles['ctx-item-disabled']}
+              disabled={!hasSelection}
+              onClick={handleCopy}
+            >
+              Copy
+            </button>
+            <button className={styles['ctx-item']} onClick={handlePaste}>
+              Paste
+            </button>
+          </div>
+        </>
+      )}
+    </>
   )
 }
