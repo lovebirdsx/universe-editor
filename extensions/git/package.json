@@ -18,6 +18,8 @@
   "contributes": {
     "commands": [
       { "command": "git.commit", "title": "Commit", "category": "Git", "icon": "git-commit" },
+      { "command": "git.commitAndPush", "title": "Commit & Push", "category": "Git", "icon": "git-commit" },
+      { "command": "git.commitAndSync", "title": "Commit & Sync", "category": "Git", "icon": "git-commit" },
       { "command": "git.refresh", "title": "Refresh", "category": "Git", "icon": "refresh" },
       { "command": "git.stage", "title": "Stage Changes", "category": "Git", "icon": "add" },
       { "command": "git.unstage", "title": "Unstage Changes", "category": "Git", "icon": "remove" },
@@ -50,6 +52,11 @@
         { "command": "git.stage", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
         { "command": "git.discard", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "discard" },
         { "command": "git.unstage", "when": "scmResourceGroup == index", "group": "inline", "icon": "remove" }
+      ],
+      "scm/resourceGroup/context": [
+        { "command": "git.stageAll", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "stage-all" },
+        { "command": "git.discardAll", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "discard-all" },
+        { "command": "git.unstageAll", "when": "scmResourceGroup == index", "group": "inline", "icon": "unstage-all" }
       ]
     },
     "keybindings": [

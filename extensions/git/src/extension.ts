@@ -20,6 +20,10 @@ function resourceLetter(arg: unknown): string | undefined {
   return (arg as { contextValue?: string } | undefined)?.contextValue
 }
 
+function isDirectoryArg(arg: unknown): boolean {
+  return (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
@@ -36,17 +40,34 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(repo)
   void repo.refresh()
 
+  // Smart commit: with nothing staged, stage every change first (mirrors VSCode).
+  const commitSmart = async (): Promise<boolean> => {
+    const message = repo.commitMessage.trim()
+    if (!message) {
+      await window.showWarningMessage('Type a commit message first.')
+      return false
+    }
+    if (!repo.hasStagedChanges) {
+      if (!repo.hasChanges) {
+        await window.showWarningMessage('There are no changes to commit.')
+        return false
+      }
+      await repo.stageAll()
+    }
+    const ok = await repo.commit(message)
+    if (ok) repo.commitMessage = ''
+    return ok
+  }
+
   context.subscriptions.push(
     commands.registerCommand('git.refresh', () => repo.refresh()),
 
-    commands.registerCommand('git.commit', async () => {
-      const message = repo.commitMessage.trim()
-      if (!message) {
-        await window.showWarningMessage('Type a commit message first.')
-        return
-      }
-      const ok = await repo.commit(message)
-      if (ok) repo.commitMessage = ''
+    commands.registerCommand('git.commit', () => commitSmart()),
+    commands.registerCommand('git.commitAndPush', async () => {
+      if (await commitSmart()) await repo.push()
+    }),
+    commands.registerCommand('git.commitAndSync', async () => {
+      if (await commitSmart()) await repo.sync()
     }),
 
     commands.registerCommand('git.stage', (arg) => {
@@ -68,7 +89,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
         'Discard Changes',
       )
       if (confirm !== 'Discard Changes') return
-      await repo.discard(path, resourceLetter(arg) === '?')
+      if (isDirectoryArg(arg)) {
+        await repo.discardFolder(path)
+      } else {
+        await repo.discard(path, resourceLetter(arg) === '?')
+      }
     }),
 
     commands.registerCommand('git.checkout', () => repo.checkout()),

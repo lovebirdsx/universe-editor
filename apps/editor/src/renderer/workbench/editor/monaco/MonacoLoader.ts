@@ -75,16 +75,23 @@ async function loadMonaco(): Promise<typeof monaco> {
   if (!_monacoPromise) {
     _monacoPromise = (async () => {
       applyMonacoNls(getCurrentLocale())
-      const [monacoMod, EditorWorker, JsonWorker, TsWorker] = await Promise.all([
-        import('monaco-editor'),
-        import('monaco-editor/esm/vs/editor/editor.worker?worker'),
-        import('monaco-editor/esm/vs/language/json/json.worker?worker'),
-        import('monaco-editor/esm/vs/language/typescript/ts.worker?worker'),
-      ])
+      const [monacoMod, EditorWorker, JsonWorker, TsWorker, CssWorker, HtmlWorker] =
+        await Promise.all([
+          import('monaco-editor'),
+          import('monaco-editor/esm/vs/editor/editor.worker?worker'),
+          import('monaco-editor/esm/vs/language/json/json.worker?worker'),
+          import('monaco-editor/esm/vs/language/typescript/ts.worker?worker'),
+          import('monaco-editor/esm/vs/language/css/css.worker?worker'),
+          import('monaco-editor/esm/vs/language/html/html.worker?worker'),
+        ])
       ;(self as unknown as { MonacoEnvironment: monaco.Environment }).MonacoEnvironment = {
         getWorker(_workerId, label) {
           if (label === 'json') return new JsonWorker.default()
           if (label === 'typescript' || label === 'javascript') return new TsWorker.default()
+          if (label === 'css' || label === 'scss' || label === 'less') return new CssWorker.default()
+          if (label === 'html' || label === 'handlebars' || label === 'razor') {
+            return new HtmlWorker.default()
+          }
           return new EditorWorker.default()
         },
       }

@@ -75,6 +75,8 @@ export class Repository {
   private _queued = false
   private _syncing = false
   private _disposed = false
+  private _stagedCount = 0
+  private _workingCount = 0
 
   constructor(readonly root: string) {
     this._sc = scm.createSourceControl('git', 'Git', root)
@@ -125,6 +127,8 @@ export class Repository {
     const working = workingStates(this.root, status.files)
     this._staged.resourceStates = staged
     this._working.resourceStates = working
+    this._stagedCount = staged.length
+    this._workingCount = working.length
     this._sc.count = staged.length + working.length
     this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
 
@@ -141,6 +145,14 @@ export class Repository {
         this._syncItem.hide()
       }
     }
+  }
+
+  get hasStagedChanges(): boolean {
+    return this._stagedCount > 0
+  }
+
+  get hasChanges(): boolean {
+    return this._stagedCount > 0 || this._workingCount > 0
   }
 
   async stage(paths: readonly string[]): Promise<void> {
@@ -204,6 +216,21 @@ export class Repository {
   async discard(path: string, untracked: boolean): Promise<void> {
     const args = untracked ? ['clean', '-f', '--', path] : ['checkout', '--', path]
     await this._run(args, 'discard')
+  }
+
+  /** Discard every change under a directory — restore tracked files and remove untracked ones. */
+  async discardFolder(path: string): Promise<void> {
+    // A folder may hold both tracked and untracked changes; `checkout` restores
+    // the former (and harmlessly errors when there's nothing tracked to restore,
+    // hence no error surfacing here), `clean -fd` removes the latter.
+    await gitExec(['checkout', '--', path], this.root)
+    const clean = await gitExec(['clean', '-fd', '--', path], this.root)
+    if (clean.exitCode !== 0) {
+      void window.showErrorMessage(
+        `Git discard failed: ${clean.stderr.trim() || clean.stdout.trim()}`,
+      )
+    }
+    await this.refresh()
   }
 
   async discardAll(): Promise<void> {

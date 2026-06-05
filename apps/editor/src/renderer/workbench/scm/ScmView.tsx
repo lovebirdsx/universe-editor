@@ -14,6 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -27,6 +28,7 @@ import {
   CommandsRegistry,
   ContextKeyExpr,
   ICommandService,
+  IEditorResolverService,
   IStorageService,
   isSubmenuEntry,
   MenuId,
@@ -44,6 +46,7 @@ import type {
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { useService, useObservable } from '../useService.js'
+import { useViewFocusable } from '../useViewFocusable.js'
 import {
   IScmService,
   type IScmGroupModel,
@@ -118,6 +121,12 @@ function relativePath(root: string | undefined, abs: string): string {
 function dirname(rel: string): string {
   const i = rel.lastIndexOf('/')
   return i === -1 ? '' : rel.slice(0, i)
+}
+
+/** Join a provider root with a forward-slashed relative folder path. */
+function joinFolder(root: string | undefined, rel: string): string {
+  if (!root) return rel
+  return `${root.replace(/[\\/]+$/, '')}/${rel}`
 }
 
 function decorationStyle(resource: ISourceControlResourceStateDto): CSSProperties {
@@ -214,6 +223,7 @@ function ScmFileRow({
   revision: number
 }) {
   const commandService = useService(ICommandService)
+  const editorResolverService = useService(IEditorResolverService)
   const rowScope = useMemo(
     () => ({ ...scope, scmResourceState: resource.contextValue }),
     [scope, resource.contextValue],
@@ -232,6 +242,15 @@ function ScmFileRow({
   }
 
   const uri = useMemo(() => URI.file(resource.resourceUri), [resource.resourceUri])
+  const openFile = (): void => {
+    void editorResolverService.openEditor(uri, { pinned: true })
+  }
+  const openFileAction: ActionItem = {
+    id: 'scm.openFile',
+    title: localize('scm.openFile', 'Open File'),
+    command: '',
+    icon: 'go-to-file',
+  }
 
   return (
     <li
@@ -246,6 +265,13 @@ function ScmFileRow({
       </span>
       {dir ? <span className={styles['resourceDir']}>{dir}</span> : null}
       <span className={styles['resourceActions']}>
+        <ActionButton
+          action={openFileAction}
+          onRun={(e) => {
+            e.stopPropagation()
+            openFile()
+          }}
+        />
         {inline.map((a) => (
           <ActionButton
             key={a.id}
@@ -268,16 +294,56 @@ function ScmFileRow({
 
 function ScmFolderRow({
   name,
+  path,
   depth,
   collapsed,
   onToggle,
+  groupId,
+  rootUri,
 }: {
   name: string
+  path: string
   depth: number
   collapsed: boolean
   onToggle: () => void
+  groupId: string
+  rootUri: string | undefined
 }) {
+  const commandService = useService(ICommandService)
   const folderUri = useMemo(() => URI.file(name), [name])
+  const absPath = useMemo(() => joinFolder(rootUri, path), [rootUri, path])
+
+  const run = (command: string, isDirectory = false): void => {
+    void commandService.executeCommand(command, { resourceUri: absPath, isDirectory })
+  }
+
+  const actions: { action: ActionItem; isDir?: boolean }[] =
+    groupId === 'index'
+      ? [
+          {
+            action: {
+              id: 'git.unstage',
+              title: 'Unstage Changes',
+              command: 'git.unstage',
+              icon: 'remove',
+            },
+          },
+        ]
+      : [
+          {
+            action: {
+              id: 'git.discard',
+              title: 'Discard Changes',
+              command: 'git.discard',
+              icon: 'discard',
+            },
+            isDir: true,
+          },
+          {
+            action: { id: 'git.stage', title: 'Stage Changes', command: 'git.stage', icon: 'add' },
+          },
+        ]
+
   return (
     <li
       className={styles['folder']}
@@ -294,6 +360,18 @@ function ScmFolderRow({
         size={16}
       />
       <span className={styles['folderLabel']}>{name}</span>
+      <span className={styles['resourceActions']}>
+        {actions.map(({ action, isDir }) => (
+          <ActionButton
+            key={action.id}
+            action={action}
+            onRun={(e) => {
+              e.stopPropagation()
+              run(action.command, isDir)
+            }}
+          />
+        ))}
+      </span>
     </li>
   )
 }
@@ -322,7 +400,13 @@ function ScmGroupView({
   const label = useObservable(group.label)
   const hideWhenEmpty = useObservable(group.hideWhenEmpty)
   const resources = useObservable(group.resources)
+  const commandService = useService(ICommandService)
   const groupScope = useMemo(() => ({ ...scope, scmResourceGroup: group.id }), [scope, group.id])
+  const groupActions = useMemo(
+    () => menuActions(MenuId.ScmResourceGroupContext, groupScope, 'inline'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groupScope, revision],
+  )
 
   if (resources.length === 0 && hideWhenEmpty) return null
 
@@ -348,6 +432,18 @@ function ScmGroupView({
       <div className={styles['groupHeader']} onClick={() => toggle(groupKey)} role="button">
         <span className={styles['twistie']}>{collapsed ? '▸' : '▾'}</span>
         <span className={styles['groupLabel']}>{label}</span>
+        <span className={styles['groupActions']}>
+          {groupActions.map((a) => (
+            <ActionButton
+              key={a.id}
+              action={a}
+              onRun={(e) => {
+                e.stopPropagation()
+                void commandService.executeCommand(a.command)
+              }}
+            />
+          ))}
+        </span>
         <span className={styles['groupCount']}>{resources.length}</span>
       </div>
       {!collapsed && (
@@ -357,9 +453,12 @@ function ScmGroupView({
               <ScmFolderRow
                 key={`f:${row.path}`}
                 name={row.name}
+                path={row.path}
                 depth={row.depth}
                 collapsed={isCollapsed(`folder:${group.id}/${row.path}`)}
                 onToggle={() => toggle(`folder:${group.id}/${row.path}`)}
+                groupId={group.id}
+                rootUri={rootUri}
               />
             ) : (
               <ScmFileRow
@@ -455,25 +554,67 @@ function TitleOverflowMenu({
 
 function ScmProviderView({
   model,
+  index,
   viewMode,
   setViewMode,
   revision,
 }: {
   model: IScmSourceControlModel
+  index: number
   viewMode: ViewMode
   setViewMode: (mode: ViewMode) => void
   revision: number
 }) {
   const scm = useService(IScmService)
   const commandService = useService(ICommandService)
+  const storage = useService(IStorageService)
   const inputValue = useObservable(model.inputValue)
   const placeholder = useObservable(model.inputPlaceholder)
-  const count = useObservable(model.count)
   const acceptCommand = useObservable(model.acceptCommand)
   const groups = useObservable(model.groups)
 
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [overflow, setOverflow] = useState<{ x: number; y: number } | null>(null)
+  const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
+
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  // Only the first provider claims the view's focus target so multiple repos
+  // don't fight over the same focusable id.
+  useViewFocusable(
+    index === 0 ? 'workbench.view.scm.main' : `scm.provider.${model.handle}`,
+    useCallback(() => inputRef.current, []),
+  )
+
+  // Persist the commit message per repository so it survives a window reload.
+  const inputStorageKey = `scm/input/${model.rootUri ?? model.id}`
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current) return
+    restoredRef.current = true
+    void storage.get<string>(inputStorageKey, StorageScope.WORKSPACE).then((stored) => {
+      if (stored && !model.inputValue.get()) scm.changeInputBoxValue(model.handle, stored)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    const id = setTimeout(() => {
+      void storage.set(inputStorageKey, inputValue, StorageScope.WORKSPACE)
+    }, 300)
+    return () => clearTimeout(id)
+  }, [inputValue, inputStorageKey, storage])
+
+  // Auto-grow the commit box up to 5 lines, then scroll.
+  useLayoutEffect(() => {
+    const ta = inputRef.current
+    if (!ta) return
+    ta.style.height = 'auto'
+    const style = getComputedStyle(ta)
+    const line = parseFloat(style.lineHeight) || 18
+    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
+    const max = line * 5 + padding
+    ta.style.height = `${Math.min(ta.scrollHeight, max)}px`
+    ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden'
+  }, [inputValue])
 
   const scope = useMemo(() => ({ scmProvider: model.id }), [model.id])
   const navActions = useMemo(
@@ -522,6 +663,39 @@ function ScmProviderView({
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setOverflow({ x: rect.right - 220, y: rect.bottom + 2 })
   }
+
+  const openCommitMenu = (e: ReactMouseEvent): void => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setCommitMenu({ x: rect.right - 200, y: rect.bottom + 2 })
+  }
+
+  const commitRows = useMemo<OverflowRow[]>(
+    () => [
+      {
+        kind: 'item',
+        id: 'git.commit',
+        label: 'Commit',
+        icon: 'git-commit',
+        run: () => runCommand('git.commit'),
+      },
+      {
+        kind: 'item',
+        id: 'git.commitAndPush',
+        label: 'Commit & Push',
+        icon: 'push',
+        run: () => runCommand('git.commitAndPush'),
+      },
+      {
+        kind: 'item',
+        id: 'git.commitAndSync',
+        label: 'Commit & Sync',
+        icon: 'sync',
+        run: () => runCommand('git.commitAndSync'),
+      },
+    ],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
 
   const overflowRows = useMemo<OverflowRow[]>(() => {
     const rows: OverflowRow[] = []
@@ -572,8 +746,6 @@ function ScmProviderView({
   return (
     <section className={styles['provider']}>
       <div className={styles['providerHeader']}>
-        <span className={styles['providerLabel']}>{model.label}</span>
-        {count !== undefined && <span className={styles['providerBadge']}>{count}</span>}
         <span className={styles['providerActions']}>
           {navActions.map((a) => (
             <ActionButton key={a.id} action={a} onRun={() => runCommand(a.command)} />
@@ -593,6 +765,7 @@ function ScmProviderView({
       </div>
 
       <textarea
+        ref={inputRef}
         className={styles['commitInput']}
         value={inputValue}
         placeholder={placeholder}
@@ -606,13 +779,23 @@ function ScmProviderView({
         }}
       />
       {acceptCommand && (
-        <button
-          type="button"
-          className={styles['commitButton']}
-          onClick={() => runCommand(acceptCommand)}
-        >
-          {acceptCommand.title}
-        </button>
+        <div className={styles['commitBar']}>
+          <button
+            type="button"
+            className={styles['commitButton']}
+            onClick={() => runCommand(acceptCommand)}
+          >
+            {acceptCommand.title}
+          </button>
+          <button
+            type="button"
+            className={styles['commitDropdown']}
+            title={localize('scm.commitActions', 'Commit actions...')}
+            onClick={openCommitMenu}
+          >
+            ▾
+          </button>
+        </div>
       )}
 
       {groups.map((g) => (
@@ -634,6 +817,13 @@ function ScmProviderView({
           anchor={overflow}
           rows={overflowRows}
           onClose={() => setOverflow(null)}
+        />
+      )}
+      {commitMenu && (
+        <TitleOverflowMenu
+          anchor={commitMenu}
+          rows={commitRows}
+          onClose={() => setCommitMenu(null)}
         />
       )}
     </section>
@@ -669,10 +859,11 @@ export function ScmView() {
           {localize('scm.empty', 'No source control providers registered.')}
         </div>
       ) : (
-        sourceControls.map((sc) => (
+        sourceControls.map((sc, i) => (
           <ScmProviderView
             key={sc.handle}
             model={sc}
+            index={i}
             viewMode={viewMode}
             setViewMode={setViewMode}
             revision={revision}

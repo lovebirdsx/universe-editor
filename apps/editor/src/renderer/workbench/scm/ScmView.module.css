@@ -25,24 +25,6 @@
   margin-bottom: 6px;
 }
 
-.providerLabel {
-  font-weight: 600;
-  text-transform: uppercase;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-}
-
-.providerBadge {
-  min-width: 16px;
-  padding: 0 5px;
-  border-radius: 8px;
-  background: var(--vscode-badge-background, #4d4d4d);
-  color: var(--vscode-badge-foreground, #fff);
-  font-size: 11px;
-  line-height: 16px;
-  text-align: center;
-}
-
 .providerActions {
   display: flex;
   gap: 2px;
@@ -52,7 +34,8 @@
 .commitInput {
   width: 100%;
   box-sizing: border-box;
-  resize: vertical;
+  resize: none;
+  overflow: hidden;
   min-height: 26px;
   padding: 4px 6px;
   font-family: inherit;
@@ -63,11 +46,17 @@
   border-radius: 2px;
 }
 
-.commitButton {
+.commitBar {
+  display: flex;
   margin-top: 6px;
+  gap: 1px;
+}
+
+.commitButton {
+  flex: 1 1 auto;
   padding: 4px 8px;
   border: none;
-  border-radius: 2px;
+  border-radius: 2px 0 0 2px;
   cursor: pointer;
   background: var(--vscode-button-background, #0e639c);
   color: var(--vscode-button-foreground, #fff);
@@ -75,6 +64,21 @@
 }
 
 .commitButton:hover {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+.commitDropdown {
+  flex: 0 0 auto;
+  width: 24px;
+  border: none;
+  border-radius: 0 2px 2px 0;
+  cursor: pointer;
+  background: var(--vscode-button-background, #0e639c);
+  color: var(--vscode-button-foreground, #fff);
+  font-size: 11px;
+}
+
+.commitDropdown:hover {
   background: var(--vscode-button-hoverBackground, #1177bb);
 }
 
@@ -104,7 +108,6 @@
 
 .groupCount {
   min-width: 16px;
-  margin-left: auto;
   padding: 0 5px;
   border-radius: 8px;
   background: var(--vscode-badge-background, #4d4d4d);
@@ -112,6 +115,24 @@
   font-size: 11px;
   line-height: 16px;
   text-align: center;
+}
+
+.groupActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.08s ease-in-out;
+}
+
+.groupHeader:hover .groupActions,
+.groupHeader:focus-within .groupActions {
+  opacity: 1;
+}
+
+/* When actions are present they own the right-edge gap; keep count flush right. */
+.groupActions + .groupCount {
+  margin-left: 4px;
 }
 
 .resources {
@@ -198,7 +219,9 @@
 }
 
 .resource:hover .resourceActions,
-.resource:focus-within .resourceActions {
+.resource:focus-within .resourceActions,
+.folder:hover .resourceActions,
+.folder:focus-within .resourceActions {
   opacity: 1;
 }
 
