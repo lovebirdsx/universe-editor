@@ -62,7 +62,7 @@ function ConfirmDialog({
         if (e.key === 'Escape') {
           e.preventDefault()
           onResolve({ confirmed: false, choice: 'cancel' })
-        } else if (e.key === 'Enter') {
+        } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
           e.preventDefault()
           onResolve({ confirmed: true, choice: 'primary' })
         }
