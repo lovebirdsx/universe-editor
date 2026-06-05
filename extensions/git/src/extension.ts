@@ -74,6 +74,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.checkout', () => repo.checkout()),
     commands.registerCommand('git.createBranch', () => repo.createBranch()),
 
+    commands.registerCommand('git.sync', () => repo.sync()),
+
     commands.registerCommand('git.openChange', (arg) => {
       const path = resourcePath(arg)
       return path ? repo.openChange(path) : undefined

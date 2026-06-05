@@ -8,6 +8,7 @@ import { OpenDiffAction } from './diffActions.js'
 import {
   ShowCommandsAction,
   ShowExplorerAction,
+  ShowScmAction,
   ToggleActivityBarVisibilityAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
@@ -166,6 +167,7 @@ registerAction2(ToggleSecondarySidebarVisibilityAction)
 registerAction2(TogglePanelAction)
 registerAction2(ShowCommandsAction)
 registerAction2(ShowExplorerAction)
+registerAction2(ShowScmAction)
 
 // Editor — view
 registerAction2(ToggleMinimapAction)

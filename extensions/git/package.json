@@ -26,7 +26,8 @@
       { "command": "git.discard", "title": "Discard Changes", "category": "Git" },
       { "command": "git.checkout", "title": "Checkout to...", "category": "Git" },
       { "command": "git.createBranch", "title": "Create Branch...", "category": "Git" },
-      { "command": "git.openChange", "title": "Open Changes", "category": "Git" }
+      { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
+      { "command": "git.sync", "title": "Sync (Pull & Push)", "category": "Git" }
     ],
     "menus": {
       "scm/title": [

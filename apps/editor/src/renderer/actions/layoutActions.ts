@@ -134,6 +134,35 @@ export class TogglePanelAction extends Action2 {
   }
 }
 
+export class ShowScmAction extends Action2 {
+  static readonly ID = 'workbench.view.scm'
+  constructor() {
+    super({
+      id: ShowScmAction.ID,
+      title: localize('action.showScm.title', 'Show Source Control'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+g' },
+      menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 3 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    const sidebarVisible = layoutService.getVisible(PartId.SideBar)
+    const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
+    if (
+      sidebarVisible &&
+      activeId === 'workbench.view.scm' &&
+      layoutService.getPart(PartId.SideBar)?.isFocused()
+    ) {
+      layoutService.setVisible(PartId.SideBar, false)
+      return
+    }
+    await layoutService.focusView('workbench.view.scm.main', { source: 'command' })
+  }
+}
+
 export class ShowCommandsAction extends Action2 {
   static readonly ID = 'workbench.action.showCommands'
   constructor() {

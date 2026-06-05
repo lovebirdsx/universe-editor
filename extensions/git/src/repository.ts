@@ -68,10 +68,12 @@ export class Repository {
   private readonly _staged: SourceControlResourceGroup
   private readonly _working: SourceControlResourceGroup
   private readonly _branchItem: StatusBarItem
+  private readonly _syncItem: StatusBarItem
   private readonly _watchers: FSWatcher[] = []
   private _debounce: ReturnType<typeof setTimeout> | undefined
   private _refreshing = false
   private _queued = false
+  private _syncing = false
   private _disposed = false
 
   constructor(readonly root: string) {
@@ -88,6 +90,9 @@ export class Repository {
     this._branchItem.tooltip = 'Checkout branch'
     this._branchItem.text = '$(git-branch) …'
     this._branchItem.show()
+
+    this._syncItem = window.createStatusBarItem(StatusBarAlignment.Left, 99)
+    this._syncItem.command = 'git.sync'
 
     this._startWatching()
   }
@@ -122,6 +127,20 @@ export class Repository {
     this._working.resourceStates = working
     this._sc.count = staged.length + working.length
     this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
+
+    if (!this._syncing) {
+      const { ahead, behind } = status
+      if (ahead > 0 || behind > 0) {
+        const parts: string[] = []
+        if (ahead > 0) parts.push(`↑${ahead}`)
+        if (behind > 0) parts.push(`↓${behind}`)
+        this._syncItem.text = parts.join(' ')
+        this._syncItem.tooltip = `${ahead} commit(s) ahead, ${behind} behind — click to sync`
+        this._syncItem.show()
+      } else {
+        this._syncItem.hide()
+      }
+    }
   }
 
   async stage(paths: readonly string[]): Promise<void> {
@@ -150,6 +169,28 @@ export class Repository {
     }
     await this.refresh()
     return true
+  }
+
+  async sync(): Promise<void> {
+    if (this._syncing) return
+    this._syncing = true
+    this._syncItem.text = 'Syncing…'
+    this._syncItem.tooltip = 'Syncing…'
+    this._syncItem.show()
+    try {
+      const pull = await gitExec(['pull', '--rebase'], this.root)
+      if (pull.exitCode !== 0) {
+        void window.showErrorMessage(`Git pull failed: ${pull.stderr.trim() || pull.stdout.trim()}`)
+        return
+      }
+      const push = await gitExec(['push'], this.root)
+      if (push.exitCode !== 0) {
+        void window.showErrorMessage(`Git push failed: ${push.stderr.trim() || push.stdout.trim()}`)
+      }
+    } finally {
+      this._syncing = false
+      await this.refresh()
+    }
   }
 
   async discard(path: string, untracked: boolean): Promise<void> {
@@ -255,6 +296,7 @@ export class Repository {
       }
     }
     this._branchItem.dispose()
+    this._syncItem.dispose()
     this._sc.dispose()
   }
 }
