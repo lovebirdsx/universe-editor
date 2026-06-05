@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Tests for StickyUserMessageBar — derives the latest user message from the
- *  timeline, starts collapsed, expands on click, and tracks the last message.
+ *  Tests for StickyUserMessageBar — derives the first user message from the
+ *  timeline, starts collapsed, expands on click, and pins the opening message.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
@@ -50,7 +50,7 @@ describe('StickyUserMessageBar', () => {
     expect(screen.queryByTestId('acp-markdown')).toBeNull()
   })
 
-  it('shows the last user message when several exist', () => {
+  it('shows the first user message when several exist', () => {
     render(
       <StickyUserMessageBar
         session={makeSession('s-many', [
@@ -60,7 +60,7 @@ describe('StickyUserMessageBar', () => {
         ])}
       />,
     )
-    expect(screen.getByText('second request')).toBeTruthy()
-    expect(screen.queryByText('first request')).toBeNull()
+    expect(screen.getByText('first request')).toBeTruthy()
+    expect(screen.queryByText('second request')).toBeNull()
   })
 })

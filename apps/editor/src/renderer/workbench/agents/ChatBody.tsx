@@ -177,28 +177,38 @@ function ChatScroll({
   const threshold = configService.get<number>('workbench.chat.virtualizationThreshold')!
   const virtualize = timeline.length > threshold
 
+  const firstUserIdx = timeline.findIndex(
+    (it) => it.kind === 'message' && it.message.role === 'user',
+  )
+  const displayTimeline =
+    firstUserIdx >= 0
+      ? [...timeline.slice(0, firstUserIdx), ...timeline.slice(firstUserIdx + 1)]
+      : timeline
+
   // Keep the timeline reachable from the keyboard handle without re-binding it on
   // every render (the ref read is cheap; capturing `timeline` would re-allocate
   // the closure each render).
   const timelineRef = useRef(timeline)
   timelineRef.current = timeline
+  const displayTimelineRef = useRef(displayTimeline)
+  displayTimelineRef.current = displayTimeline
 
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
 
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
-    count: virtualize ? timeline.length : 0,
+    count: virtualize ? displayTimeline.length : 0,
     getScrollElement: () => containerRef.current,
     // Stable, content-derived estimate. It must NOT vary as other rows get
     // measured: a moving estimate shifts every not-yet-measured row's offset on
     // each measurement, so a streaming tail would make the whole list — and any
     // position you've scrolled to — jitter. Same item → same height here; the
     // virtualizer overrides each row with its real measured size once mounted.
-    estimateSize: (i) => estimateRow(timeline[i]),
+    estimateSize: (i) => estimateRow(displayTimeline[i]),
     // Stable per-row identity so measured heights are cached by slot key, not by
     // index — appending / re-slicing the tail during streaming no longer shifts
     // every cached measurement onto the wrong row.
     getItemKey: (i) => {
-      const item = timeline[i]
+      const item = displayTimeline[i]
       return item ? slotKey(item) : i
     },
     overscan: 8,
@@ -379,7 +389,7 @@ function ChatScroll({
   useEffect(() => {
     const handle = handleRef.current
     handle.move = (direction) => {
-      const list = timelineRef.current
+      const list = displayTimelineRef.current
       if (list.length === 0) return
       const keys = list.map(slotKey)
       const current = focusedKeyRef.current
@@ -481,11 +491,11 @@ function ChatScroll({
     >
       <StickyScrollOverlay
         containerRef={containerRef}
-        timeline={timeline}
+        timeline={displayTimeline}
         collapse={collapse}
         onToggleCollapse={handleToggleCollapse}
         onJumpTo={handleStickyJump}
-        revision={`${virtualize}:${timeline.length}:${tailSignature}`}
+        revision={`${virtualize}:${displayTimeline.length}:${tailSignature}`}
       />
       {!hasTimelineContent ? (
         <EmptySessionHint />
@@ -496,7 +506,7 @@ function ChatScroll({
           style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
         >
           {virtualizer.getVirtualItems().map((vi) => {
-            const item = timeline[vi.index]
+            const item = displayTimeline[vi.index]
             if (item === undefined) return null
             const key = slotKey(item)
             const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
@@ -529,7 +539,7 @@ function ChatScroll({
         </div>
       ) : (
         <ol className={styles['timeline']} data-testid="acp-timeline">
-          {timeline.map((item) => {
+          {displayTimeline.map((item) => {
             const key = slotKey(item)
             // Derive a per-slot running flag: only a streaming message's caret cares
             // about it, so settled slots get a constant `false` and a session

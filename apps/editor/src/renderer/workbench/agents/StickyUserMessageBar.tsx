@@ -25,8 +25,8 @@ function clampLine(text: string): string {
   return firstLine.length > SUMMARY_MAX ? `${firstLine.slice(0, SUMMARY_MAX)}…` : firstLine
 }
 
-function lastUserMessage(timeline: readonly TimelineItem[]): AcpMessage | undefined {
-  for (let i = timeline.length - 1; i >= 0; i--) {
+function firstUserMessage(timeline: readonly TimelineItem[]): AcpMessage | undefined {
+  for (let i = 0; i < timeline.length; i++) {
     const it = timeline[i]
     if (it?.kind === 'message' && it.message.role === 'user') return it.message
   }
@@ -36,7 +36,7 @@ function lastUserMessage(timeline: readonly TimelineItem[]): AcpMessage | undefi
 export function StickyUserMessageBar({ session }: { session: IAcpSession }) {
   const timeline = useObservable(session.timeline)
   const [collapsed, setCollapsed] = useState(() => userBarCollapsedCache.get(session.id) ?? false)
-  const message = lastUserMessage(timeline)
+  const message = firstUserMessage(timeline)
   if (!message) return null
   const toggle = (): void =>
     setCollapsed((v) => {
