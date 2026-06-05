@@ -10,6 +10,7 @@ import {
 } from '@universe-editor/platform'
 import type { IPart, IViewContainerDescriptor } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { IActivityService } from '../../services/activity/ActivityService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { resolveActivityIcon } from './icon-map.js'
 import styles from './ActivityBar.module.css'
@@ -22,6 +23,8 @@ interface ActivityBarItemProps {
 
 function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps) {
   const [showTooltip, setShowTooltip] = useState(false)
+  const activityService = useService(IActivityService)
+  const badge = useObservable(activityService.getBadge(descriptor.id))
   const Icon = resolveActivityIcon(descriptor.icon)
 
   return (
@@ -36,6 +39,11 @@ function ActivityBarItem({ descriptor, isActive, onClick }: ActivityBarItemProps
       data-testid={`activitybar-item-${descriptor.id}`}
     >
       <Icon size={18} strokeWidth={1.75} aria-hidden />
+      {badge && badge.count > 0 && (
+        <span className={styles['badge']} data-testid={`activitybar-badge-${descriptor.id}`}>
+          {badge.count > 99 ? '99+' : badge.count}
+        </span>
+      )}
       {showTooltip && <span className={styles['tooltip']}>{descriptor.label}</span>}
     </button>
   )

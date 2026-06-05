@@ -101,6 +101,7 @@ import {
   IExtensionHostClientService,
 } from './services/extensions/ExtensionHostClientService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
+import { IActivityService, ActivityService } from './services/activity/ActivityService.js'
 import {
   IRendererDisposableLeakService,
   RendererDisposableLeakService,
@@ -401,6 +402,11 @@ async function bootstrapWorkbench(): Promise<void> {
   // ExtensionsContribution can inject it; it starts the host on an idle phase.
   const scmService = workbenchStore.add(new ScmService())
   services.set(IScmService, scmService)
+
+  // Activity Bar badges (unsaved files on Explorer, changed files on SCM).
+  // Pure renderer state, no deps; contributions push counts into it.
+  const activityService = workbenchStore.add(new ActivityService())
+  services.set(IActivityService, activityService)
 
   const extensionHostClientService = workbenchStore.add(
     instantiation.createInstance(ExtensionHostClientService),

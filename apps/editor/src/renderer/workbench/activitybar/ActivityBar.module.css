@@ -63,6 +63,24 @@
   border-radius: 0 2px 2px 0;
 }
 
+.badge {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  box-sizing: border-box;
+  border-radius: 8px;
+  background: var(--vscode-activityBarBadge-background, var(--vscode-badge-background, #0070e0));
+  color: var(--vscode-activityBarBadge-foreground, var(--vscode-badge-foreground, #ffffff));
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 16px;
+  text-align: center;
+  pointer-events: none;
+}
+
 .tooltip {
   position: absolute;
   left: 100%;

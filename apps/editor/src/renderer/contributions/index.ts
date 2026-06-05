@@ -54,6 +54,10 @@ import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
 import { ExtensionsContribution } from './ExtensionsContribution.js'
+import {
+  DirtyEditorsActivityContribution,
+  ScmActivityContribution,
+} from './ActivityBarBadgeContributions.js'
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -394,6 +398,19 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.extensions',
   ExtensionsContribution,
   WorkbenchPhase.Eventually,
+)
+
+// Activity Bar badges: unsaved file count on the Explorer, changed file count on
+// Source Control. AfterRestore so the editor service + SCM model are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.dirtyEditorsActivity',
+  DirtyEditorsActivityContribution,
+  WorkbenchPhase.AfterRestore,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.scmActivity',
+  ScmActivityContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 export {
