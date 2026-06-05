@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
   type ICommandService,
+  type IDialogService,
   type IFileService,
   type ILoggerService,
   type INotificationService,
@@ -65,6 +66,7 @@ function makeService(host: IExtensionHostService) {
     {} as INotificationService,
     {} as IQuickInputService,
     {} as IStatusBarService,
+    {} as IDialogService,
     {} as IScmService,
     {
       onDidChangeWorkspace: Event.None,

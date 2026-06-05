@@ -8,11 +8,13 @@
 
 import {
   Disposable,
+  IDialogService,
   INotificationService,
   IQuickInputService,
   IStatusBarService,
   Severity,
   StatusBarAlignment,
+  type IConfirmOptions,
   type IQuickPickItem,
   type IStatusBarEntry,
   type IStatusBarEntryAccessor,
@@ -43,6 +45,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     private readonly _notification: INotificationService,
     private readonly _quickInput: IQuickInputService,
     private readonly _statusBar: IStatusBarService,
+    private readonly _dialog: IDialogService,
   ) {
     super()
   }
@@ -57,15 +60,21 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       this._notification.notify({ severity: sev, message })
       return Promise.resolve(undefined)
     }
-    return new Promise<string | undefined>((resolve) => {
-      let picked: string | undefined
-      const choices = items.map((label) => ({
-        label,
-        run: () => {
-          picked = label
-        },
-      }))
-      void this._notification.prompt(sev, message, choices).then(() => resolve(picked))
+    // items[0] is guaranteed by the length check above.
+    const primary = items[0]!
+    const second = items[1]
+    const third = items[2]
+    let opts: IConfirmOptions = { message, type: severity, primaryButton: primary }
+    if (third !== undefined && second !== undefined) {
+      opts = { ...opts, secondaryButton: second, cancelButton: third }
+    } else if (second !== undefined) {
+      opts = { ...opts, cancelButton: second }
+    }
+    return this._dialog.confirm(opts).then((result) => {
+      if (result.confirmed) return primary
+      if (result.choice === 'secondary') return second
+      if (result.choice === 'cancel' && third !== undefined) return third
+      return undefined
     })
   }
 

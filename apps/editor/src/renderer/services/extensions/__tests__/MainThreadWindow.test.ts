@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   Severity,
   StatusBarAlignment,
+  type IDialogService,
   type INotificationService,
   type IQuickInputService,
   type IStatusBarService,
@@ -21,12 +22,16 @@ function fakeNotification(): {
   prompt: ReturnType<typeof vi.fn>
 } {
   const notify = vi.fn()
-  // Simulate the user clicking the first choice.
-  const prompt = vi.fn((_sev, _msg, choices: { run: () => void }[]) => {
-    choices[0]?.run()
-    return Promise.resolve()
-  })
+  const prompt = vi.fn().mockResolvedValue(undefined)
   return { service: { notify, prompt } as unknown as INotificationService, notify, prompt }
+}
+
+function fakeDialog(confirmed = true): {
+  service: IDialogService
+  confirm: ReturnType<typeof vi.fn>
+} {
+  const confirm = vi.fn().mockResolvedValue({ confirmed, choice: confirmed ? 'primary' : 'cancel' })
+  return { service: { confirm } as unknown as IDialogService, confirm }
 }
 
 function fakeStatusBar(): {
@@ -56,29 +61,53 @@ function fakeStatusBar(): {
 describe('MainThreadWindow', () => {
   it('shows a plain notification and resolves undefined when no items', async () => {
     const notif = fakeNotification()
+    const dialog = fakeDialog()
     const mt = new MainThreadWindow(
       notif.service,
       {} as IQuickInputService,
       {} as IStatusBarService,
+      dialog.service,
     )
     await expect(mt.$showMessage('warning', 'heads up', [])).resolves.toBeUndefined()
     expect(notif.notify).toHaveBeenCalledWith({ severity: Severity.Warning, message: 'heads up' })
+    expect(dialog.confirm).not.toHaveBeenCalled()
   })
 
-  it('resolves to the picked item label when items are provided', async () => {
+  it('resolves to the primary item label when confirmed', async () => {
     const notif = fakeNotification()
+    const dialog = fakeDialog(true)
     const mt = new MainThreadWindow(
       notif.service,
       {} as IQuickInputService,
       {} as IStatusBarService,
+      dialog.service,
     )
     await expect(mt.$showMessage('error', 'pick one', ['Yes', 'No'])).resolves.toBe('Yes')
+    expect(dialog.confirm).toHaveBeenCalledWith(
+      expect.objectContaining({ primaryButton: 'Yes', cancelButton: 'No', type: 'error' }),
+    )
+  })
+
+  it('resolves to undefined when dialog is dismissed', async () => {
+    const dialog = fakeDialog(false)
+    const mt = new MainThreadWindow(
+      {} as INotificationService,
+      {} as IQuickInputService,
+      {} as IStatusBarService,
+      dialog.service,
+    )
+    await expect(mt.$showMessage('warning', 'confirm?', ['Do it'])).resolves.toBeUndefined()
   })
 
   it('maps quick pick selection back to its label', async () => {
     const pick = vi.fn().mockResolvedValue({ id: '1', label: 'second' })
     const quick = { pick } as unknown as IQuickInputService
-    const mt = new MainThreadWindow({} as INotificationService, quick, {} as IStatusBarService)
+    const mt = new MainThreadWindow(
+      {} as INotificationService,
+      quick,
+      {} as IStatusBarService,
+      {} as IDialogService,
+    )
     await expect(mt.$showQuickPick(['first', 'second'], { placeHolder: 'choose' })).resolves.toBe(
       'second',
     )
@@ -97,6 +126,7 @@ describe('MainThreadWindow', () => {
       {} as INotificationService,
       {} as IQuickInputService,
       sb.service,
+      {} as IDialogService,
     )
 
     await mt.$setStatusBarEntry(7, {

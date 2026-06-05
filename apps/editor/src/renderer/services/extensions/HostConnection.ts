@@ -19,6 +19,7 @@ import {
   Event,
   ProxyChannel,
   type ICommandService,
+  type IDialogService,
   type IFileService,
   type ILogger,
   type INotificationService,
@@ -48,6 +49,7 @@ export interface HostConnectionDeps {
   readonly notification: INotificationService
   readonly quickInput: IQuickInputService
   readonly statusBar: IStatusBarService
+  readonly dialog: IDialogService
   readonly files: IFileService
   readonly pathPolicy: IAcpPathPolicy
   readonly commandService: ICommandService
@@ -112,7 +114,7 @@ export class HostConnection extends Disposable {
     )
 
     const mainThreadWindow = store.add(
-      new MainThreadWindow(deps.notification, deps.quickInput, deps.statusBar),
+      new MainThreadWindow(deps.notification, deps.quickInput, deps.statusBar, deps.dialog),
     )
     server.registerChannel(
       ExtHostChannels.mainThreadWindow,
