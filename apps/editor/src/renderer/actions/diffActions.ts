@@ -22,6 +22,8 @@ export interface OpenDiffPayload {
   readonly original: string
   /** Right-hand side content (e.g. the working-tree version). */
   readonly modified: string
+  /** When true the editor opens (or is promoted) as a permanent tab, ending preview state. */
+  readonly pinned?: boolean
 }
 
 export class OpenDiffAction extends Action2 {
@@ -33,11 +35,27 @@ export class OpenDiffAction extends Action2 {
 
   override run(accessor: ServicesAccessor, payload: OpenDiffPayload): void {
     const groups = accessor.get(IEditorGroupsService)
+    const group = groups.activeGroup
+    const id = `diff:${URI.parse(payload.originalUri).toString()}`
+
+    const pinned = payload.pinned ?? false
+
+    // Reuse an already-open diff for the same file: refresh its content in place
+    // and re-activate, instead of opening a duplicate.
+    const existing = group.editors.find((e) => e.id === id)
+    if (existing instanceof DiffEditorInput) {
+      existing.update(payload.original, payload.modified)
+      // Double-click (pinned=true) promotes a preview tab to permanent.
+      group.openEditor(existing, { activate: true, pinned })
+      return
+    }
+
     const input = new DiffEditorInput(
       URI.parse(payload.originalUri),
       payload.original,
       payload.modified,
     )
-    groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+    // Single-click uses the preview slot; double-click opens a permanent tab.
+    group.openEditor(input, { activate: true, pinned })
   }
 }

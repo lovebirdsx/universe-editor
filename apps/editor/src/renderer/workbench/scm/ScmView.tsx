@@ -240,6 +240,10 @@ function ScmFileRow({
   const openChange = (): void => {
     if (resource.command) void commandService.executeCommand(resource.command.command, resource)
   }
+  const openChangePinned = (): void => {
+    if (resource.command)
+      void commandService.executeCommand(resource.command.command, resource, { pinned: true })
+  }
 
   const uri = useMemo(() => URI.file(resource.resourceUri), [resource.resourceUri])
   const openFile = (): void => {
@@ -258,6 +262,7 @@ function ScmFileRow({
       style={{ paddingLeft: depth * 12 + 6 }}
       title={resource.decorations?.tooltip ?? resource.resourceUri}
       onClick={openChange}
+      onDoubleClick={openChangePinned}
     >
       <FileIcon resource={uri} className={styles['fileIcon']} isDirectory={false} size={16} />
       <span className={styles['resourceLabel']} style={decorationStyle(resource)}>

@@ -12,6 +12,7 @@ import {
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileChangeEvent,
+  type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type ILoggerService as ILoggerServiceType,
   LogLevel,
@@ -21,6 +22,7 @@ import {
 } from '@universe-editor/platform'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
 
 class FakeWatcher implements IFileWatcherServiceType {
@@ -79,6 +81,30 @@ function makeLoggerService(): ILoggerServiceType {
   }
 }
 
+/**
+ * Fake file service. `existing` lists URIs whose `stat` succeeds (file present);
+ * any other path throws (file gone). `contents` backs `readFileText`.
+ */
+function makeFileService(opts?: {
+  existing?: Iterable<URI>
+  contents?: Iterable<[URI, string]>
+}): IFileServiceType {
+  const existing = new Set<string>()
+  for (const u of opts?.existing ?? []) existing.add(u.toString())
+  const contents = new Map<string, string>()
+  for (const [u, text] of opts?.contents ?? []) contents.set(u.toString(), text)
+  return {
+    _serviceBrand: undefined,
+    async stat(resource: URI) {
+      if (!existing.has(resource.toString())) throw new Error('ENOENT')
+      return { resource, isFile: true, isDirectory: false, size: 0, mtime: 1 }
+    },
+    async readFileText(resource: URI) {
+      return contents.get(resource.toString()) ?? ''
+    },
+  } as unknown as IFileServiceType
+}
+
 function makeFileInput(uri: URI): FileEditorInput {
   const checks: number[] = []
   const fake = Object.create(FileEditorInput.prototype) as FileEditorInput & {
@@ -107,7 +133,7 @@ describe('ExternalChangeWatcher', () => {
     const inputB = makeFileInput(uriB) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([inputA, inputB])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
 
     watcher.fire([{ type: 'modified', resource: uriA.toJSON() }])
     await flush()
@@ -121,7 +147,7 @@ describe('ExternalChangeWatcher', () => {
     const untitled = new UntitledEditorInput()
     const groups = makeGroups([fileInput, untitled])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
 
     watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt').toJSON() }])
     await flush()
@@ -133,12 +159,32 @@ describe('ExternalChangeWatcher', () => {
     const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([fileInput])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
 
     watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
     await flush()
     expect(groups.closed).toEqual([fileInput])
     expect(fileInput.checks).toHaveLength(0)
+  })
+
+  it('reloads instead of closing when a "deleted" event hits a file still on disk', async () => {
+    // `git checkout` rewrites the file, which the watcher may report as deleted.
+    const uri = URI.file('/ws/a.txt')
+    const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([fileInput])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri] }),
+      makeLoggerService(),
+    )
+
+    watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
+    await flush()
+    expect(groups.closed).toEqual([])
+    expect(fileInput.checks).toHaveLength(1)
   })
 
   it('closes descendant file tabs when a directory is deleted', async () => {
@@ -148,11 +194,31 @@ describe('ExternalChangeWatcher', () => {
     const inputOutside = makeFileInput(outside) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([inputInside, inputOutside])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeLoggerService())
+    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
 
     watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder').toJSON() }])
     await flush()
     expect(groups.closed).toEqual([inputInside])
     expect(groups.group.editors).toEqual([inputOutside])
+  })
+
+  it('refreshes the working-tree side of an open diff editor on change', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const diff = new DiffEditorInput(uri, 'head', 'old-working')
+    const groups = makeGroups([diff])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri], contents: [[uri, 'head']] }),
+      makeLoggerService(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
+    await flush()
+    // Discard reverts working tree to HEAD → modified side now equals original.
+    expect(diff.modifiedContent).toBe('head')
+    expect(diff.originalContent).toBe('head')
   })
 })

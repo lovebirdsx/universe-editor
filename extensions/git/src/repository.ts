@@ -269,7 +269,7 @@ export class Repository {
   }
 
   /** Open a diff of the file's HEAD revision against its current working-tree content. */
-  async openChange(absPath: string): Promise<void> {
+  async openChange(absPath: string, pinned = false): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
     const head = await gitExec(['show', `HEAD:${rel}`], this.root)
     const original = head.exitCode === 0 ? head.stdout : '' // new file → no HEAD revision
@@ -284,6 +284,7 @@ export class Repository {
       originalUri: pathToFileURL(absPath).href,
       original,
       modified,
+      pinned,
     })
   }
 

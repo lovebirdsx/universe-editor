@@ -88,7 +88,8 @@ async function loadMonaco(): Promise<typeof monaco> {
         getWorker(_workerId, label) {
           if (label === 'json') return new JsonWorker.default()
           if (label === 'typescript' || label === 'javascript') return new TsWorker.default()
-          if (label === 'css' || label === 'scss' || label === 'less') return new CssWorker.default()
+          if (label === 'css' || label === 'scss' || label === 'less')
+            return new CssWorker.default()
           if (label === 'html' || label === 'handlebars' || label === 'razor') {
             return new HtmlWorker.default()
           }

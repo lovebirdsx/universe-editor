@@ -28,6 +28,10 @@ function getEditorFontFamily(configService: IConfigurationService): string {
   return typeof raw === 'string' && raw.trim() ? raw : "'Fira Code', Consolas, monospace"
 }
 
+function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
+  return configService.get<boolean>('editor.wordWrap') === true ? 'on' : 'off'
+}
+
 function getEditorTheme(configService: IConfigurationService): 'output-light' | 'output-dark' {
   return configService.get<string>('workbench.colorTheme') === 'light'
     ? 'output-light'
@@ -39,6 +43,8 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
+  const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
+  const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
 
   // Load Monaco on demand.
@@ -60,6 +66,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       automaticLayout: true,
       fontSize: getEditorFontSize(configService),
       fontFamily: getEditorFontFamily(configService),
+      wordWrap: getEditorWordWrap(configService),
       readOnly: true,
       originalEditable: false,
       renderSideBySide: true,
@@ -86,6 +93,9 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       if (e.affectsConfiguration('editor.fontFamily')) {
         options.fontFamily = getEditorFontFamily(configService)
       }
+      if (e.affectsConfiguration('editor.wordWrap')) {
+        options.wordWrap = getEditorWordWrap(configService)
+      }
       if (Object.keys(options).length > 0) diffEditorRef.current?.updateOptions(options)
     })
     return () => disposable.dispose()
@@ -107,13 +117,38 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'modified').toString()),
     )
     diffEditorRef.current.setModel({ original: originalModel, modified: modifiedModel })
+    originalModelRef.current = originalModel
+    modifiedModelRef.current = modifiedModel
 
     return () => {
       diffEditorRef.current?.setModel(null)
+      originalModelRef.current = null
+      modifiedModelRef.current = null
       originalModel.dispose()
       modifiedModel.dispose()
     }
   }, [monacoNs, diffInput])
+
+  // Refresh both sides in place when the input's content changes (e.g. the file
+  // is reverted via SCM discard). The diffInput instance is mutated, so the
+  // set-model effect above won't re-run — update the live models directly.
+  useEffect(() => {
+    const disposable = diffInput.onDidChangeContent(() => {
+      if (
+        originalModelRef.current &&
+        originalModelRef.current.getValue() !== diffInput.originalContent
+      ) {
+        originalModelRef.current.setValue(diffInput.originalContent)
+      }
+      if (
+        modifiedModelRef.current &&
+        modifiedModelRef.current.getValue() !== diffInput.modifiedContent
+      ) {
+        modifiedModelRef.current.setValue(diffInput.modifiedContent)
+      }
+    })
+    return () => disposable.dispose()
+  }, [diffInput])
 
   if (!monacoNs) {
     return (

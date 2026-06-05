@@ -4,16 +4,20 @@
  *  diff editor. Holds original and modified text for a single file.
  *--------------------------------------------------------------------------------------------*/
 
-import { EditorInput, URI } from '@universe-editor/platform'
+import { EditorInput, Emitter, URI, type Event } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 
 export class DiffEditorInput extends EditorInput {
   static readonly TYPE_ID = 'diff'
 
+  private readonly _onDidChangeContent = this._register(new Emitter<void>())
+  /** Fires when original/modified content is refreshed in place (e.g. after a discard). */
+  readonly onDidChangeContent: Event<void> = this._onDidChangeContent.event
+
   constructor(
     private readonly _originalUri: URI,
-    private readonly _originalContent: string,
-    private readonly _modifiedContent: string,
+    private _originalContent: string,
+    private _modifiedContent: string,
   ) {
     super()
   }
@@ -44,5 +48,15 @@ export class DiffEditorInput extends EditorInput {
 
   get modifiedContent(): string {
     return this._modifiedContent
+  }
+
+  /** Refresh both sides in place and notify the mounted DiffEditor to re-render. */
+  update(originalContent: string, modifiedContent: string): void {
+    if (this._originalContent === originalContent && this._modifiedContent === modifiedContent) {
+      return
+    }
+    this._originalContent = originalContent
+    this._modifiedContent = modifiedContent
+    this._onDidChangeContent.fire()
   }
 }

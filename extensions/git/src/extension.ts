@@ -104,9 +104,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.push', () => repo.push()),
     commands.registerCommand('git.discardAll', () => repo.discardAll()),
 
-    commands.registerCommand('git.openChange', (arg) => {
+    commands.registerCommand('git.openChange', (...args: unknown[]) => {
+      const [arg, options] = args as [unknown, ({ pinned?: boolean } | undefined)?]
       const path = resourcePath(arg)
-      return path ? repo.openChange(path) : undefined
+      return path ? repo.openChange(path, options?.pinned ?? false) : undefined
     }),
   )
 }
