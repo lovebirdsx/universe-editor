@@ -62,6 +62,16 @@ export function ViewPaneContainer({
     return <p className={styles['empty']}>{emptyMessage}</p>
   }
 
+  if (views.length === 1) {
+    const v = views[0]!
+    const Component = componentMap.get(v.componentKey)
+    return (
+      <div data-view-id={v.id} className={styles['viewBody']} style={{ flex: 1, minHeight: 0 }}>
+        {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
+      </div>
+    )
+  }
+
   return (
     <Allotment
       ref={allotmentRef}
