@@ -3,6 +3,14 @@
   inset: 0;
   display: none;
   padding: 4px 6px;
+  /*
+   * FitAddon reads getComputedStyle(parent).height to size the grid. Under
+   * box-sizing: border-box that value includes this padding, but the addon only
+   * subtracts the terminal element's own padding (zero) — so it would over-count
+   * by the padding and render a partial extra row that spills below the editor,
+   * behind the status bar. content-box makes the computed height exclude padding.
+   */
+  box-sizing: content-box;
 }
 
 .instance.visible {
