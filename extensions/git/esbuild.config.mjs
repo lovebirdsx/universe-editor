@@ -1,19 +1,13 @@
-// Bundles the git extension into a single ESM file shipped under
-// resources/extensions/git/dist. `@universe-editor/extension-api` is bundled in:
-// its runtime is a thin shim that delegates to the host bridge installed on
-// globalThis, so the extension carries no API implementation of its own.
-
-import { build } from 'esbuild'
-import { rm, writeFile } from 'node:fs/promises'
+import { build, context } from 'esbuild'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = dirname(fileURLToPath(import.meta.url))
 const outFile = resolve(root, 'dist/extension.js')
+const watch = process.argv.includes('--watch')
 
-await rm(resolve(root, 'dist'), { recursive: true, force: true })
-
-await build({
+const buildOptions = {
   entryPoints: [resolve(root, 'src/extension.ts')],
   outfile: outFile,
   bundle: true,
@@ -26,11 +20,25 @@ await build({
   banner: {
     js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
   },
-})
+}
+
+if (watch) {
+  await mkdir(resolve(root, 'dist'), { recursive: true })
+} else {
+  await rm(resolve(root, 'dist'), { recursive: true, force: true })
+  await mkdir(resolve(root, 'dist'), { recursive: true })
+}
 
 await writeFile(
   resolve(root, 'dist/package.json'),
   JSON.stringify({ type: 'module' }, null, 2) + '\n',
 )
 
-console.log('git extension bundled → dist/extension.js')
+if (watch) {
+  const ctx = await context(buildOptions)
+  await ctx.watch()
+  console.log('[git] watching...')
+} else {
+  await build(buildOptions)
+  console.log('git extension bundled → dist/extension.js')
+}

@@ -6,6 +6,7 @@ import type { Plugin } from 'vite'
 import { monacoNlsPlugin } from './build/plugins/monacoNlsPlugin'
 import { monacoUnicodeHighlighterPlugin } from './build/plugins/monacoUnicodeHighlighterPlugin'
 import { mainHmrPlugin } from './build/plugins/mainHmrPlugin'
+import { devRuntimeWatchPlugin } from './build/plugins/devRuntimeWatchPlugin'
 import {
   NLS_FILE_SUFFIX,
   patchNlsSource,
@@ -13,6 +14,7 @@ import {
 
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
 const workbenchUiSrc = resolve(__dirname, '../../packages/workbench-ui/src/index.ts')
+const REPO_ROOT = resolve(__dirname, '../..')
 
 // platform/src uses `.js` suffix on relative imports (TS NodeNext convention).
 // Vite 7 removed extensionAlias; use a plugin instead to remap .js → .ts.
@@ -41,7 +43,7 @@ const decoratorTsconfigRaw = {
 
 export default defineConfig({
   main: {
-    plugins: [jsToTsResolvePlugin(), mainHmrPlugin()],
+    plugins: [jsToTsResolvePlugin(), mainHmrPlugin(), devRuntimeWatchPlugin({ repoRoot: REPO_ROOT })],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,
