@@ -109,6 +109,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     diffEditorRef.current.setModel({ original: originalModel, modified: modifiedModel })
 
     return () => {
+      diffEditorRef.current?.setModel(null)
       originalModel.dispose()
       modifiedModel.dispose()
     }
