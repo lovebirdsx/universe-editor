@@ -10,7 +10,7 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "start": "electron-vite preview",
-    "typecheck": "tsc --build && tsc --build integration/tsconfig.json && tsc --project bench/tsconfig.json && tsc --project e2e/tsconfig.json",
+    "typecheck": "tsc --build integration/tsconfig.json && tsc --project bench/tsconfig.json && tsc --project e2e/tsconfig.json",
     "test": "pnpm run test:unit && pnpm run test:integration",
     "test:unit": "vitest run",
     "test:integration": "vitest run --config integration/vitest.config.ts --reporter=verbose",

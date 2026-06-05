@@ -1,5 +1,5 @@
 import type { Plugin } from 'vite'
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process'
+import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync, readdirSync } from 'node:fs'
 import { resolve } from 'node:path'
 
@@ -37,6 +37,16 @@ function pkgLabel(repoRoot: string, pkgDir: string): string {
   return rel.replace(/\\/g, '/')
 }
 
+function buildOnce(pkgDir: string, label: string): Promise<void> {
+  return new Promise((res, rej) => {
+    const p = spawn('node', ['esbuild.config.mjs'], { cwd: pkgDir, stdio: 'inherit' })
+    p.on('error', rej)
+    p.on('exit', (code) =>
+      code === 0 ? res() : rej(new Error(`[dev-runtime] ${label} build failed (exit ${code})`)),
+    )
+  })
+}
+
 export function devRuntimeWatchPlugin({ repoRoot }: Options): Plugin {
   const watchers: ChildProcess[] = []
 
@@ -44,13 +54,16 @@ export function devRuntimeWatchPlugin({ repoRoot }: Options): Plugin {
     name: 'universe-editor:dev-runtime-watch',
     apply: 'serve',
 
-    buildStart() {
+    async buildStart() {
       const packages = discoverRuntimePackages(repoRoot)
-      for (const pkgDir of packages) {
-        const label = pkgLabel(repoRoot, pkgDir)
-        console.log(`[dev-runtime] building ${label}...`)
-        execFileSync('node', ['esbuild.config.mjs'], { cwd: pkgDir, stdio: 'inherit' })
+      const labels = packages.map((pkgDir) => pkgLabel(repoRoot, pkgDir))
 
+      console.log(`[dev-runtime] building ${labels.join(', ')}...`)
+      await Promise.all(packages.map((pkgDir, i) => buildOnce(pkgDir, labels[i]!)))
+
+      for (let i = 0; i < packages.length; i++) {
+        const pkgDir = packages[i]!
+        const label = labels[i]!
         const watcher = spawn('node', ['esbuild.config.mjs', '--watch'], {
           cwd: pkgDir,
           stdio: 'pipe',

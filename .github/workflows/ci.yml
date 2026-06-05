@@ -26,6 +26,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
       - name: Lint
         run: pnpm lint
 
@@ -58,8 +66,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
       - name: Build (platform dist required for integration imports)
-        run: pnpm build
+        run: pnpm build --filter=@universe-editor/platform...
 
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
@@ -87,6 +103,14 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
 
       # Playwright bundles its own browsers — for `_electron` tests we only need
       # the Linux system libs (libnss3, libgtk, etc). On Windows nothing extra
@@ -158,8 +182,16 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
       - name: Build (platform dist required by bench imports)
-        run: pnpm build
+        run: pnpm build --filter=@universe-editor/platform...
 
       - name: Run benchmarks
         run: pnpm --filter @universe-editor/editor bench
@@ -194,6 +226,20 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Cache Turbo
+        uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            turbo-${{ runner.os }}-
+
+      - name: Cache agent vendor deps
+        uses: actions/cache@v4
+        with:
+          path: vendor/claude-agent-acp/node_modules
+          key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
 
       - name: Build Windows release artifacts
         run: pnpm --filter @universe-editor/editor package:win

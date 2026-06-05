@@ -3,11 +3,18 @@
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
-      "inputs": ["src/**", "!src/**/__tests__/**", "!src/**/*.test.ts", "!src/**/*.test.tsx", "package.json", "tsconfig*.json"],
+      "inputs": [
+        "src/**",
+        "!src/**/__tests__/**",
+        "!src/**/*.test.ts",
+        "!src/**/*.test.tsx",
+        "package.json",
+        "tsconfig*.json"
+      ],
       "outputs": ["dist/**", ".tsbuildinfo"]
     },
     "typecheck": {
-      "dependsOn": ["^typecheck"],
+      "dependsOn": ["^build", "build"],
       "outputs": []
     },
     "test": {

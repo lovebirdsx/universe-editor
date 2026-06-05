@@ -13,7 +13,7 @@
     "check": "turbo run lint typecheck test",
     "check:full": "turbo run lint typecheck test build",
     "dev": "turbo run dev --filter=@universe-editor/editor",
-    "agent:build": "npm --prefix vendor/claude-agent-acp ci && npm --prefix vendor/claude-agent-acp run build",
+    "agent:build": "node scripts/release/agent-install.mjs && npm --prefix vendor/claude-agent-acp run build",
     "ext:build": "turbo run build --filter=@universe-editor/extension-host --filter=\"./extensions/*\"",
     "runtime:stage": "pnpm -w run agent:build && pnpm -w run ext:build && node scripts/release/runtime-resources.mjs stage",
     "runtime:verify:source": "node scripts/release/runtime-resources.mjs verify-source",
