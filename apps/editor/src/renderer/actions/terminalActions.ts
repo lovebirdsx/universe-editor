@@ -77,7 +77,7 @@ export class OpenInTerminalAction extends Action2 {
  *   - already showing Terminal → hide the panel
  */
 export class ToggleTerminalAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.toggle'
+  static readonly ID = 'workbench.action.terminal.toggleTerminal'
   constructor() {
     super({
       id: ToggleTerminalAction.ID,
@@ -126,7 +126,7 @@ export class NewTerminalAction extends Action2 {
 
 /** Focus the terminal panel (show + switch container + focus xterm). */
 export class FocusTerminalPanelAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.focusPanel'
+  static readonly ID = 'workbench.action.terminal.focus'
   constructor() {
     super({
       id: FocusTerminalPanelAction.ID,
@@ -152,7 +152,7 @@ export class FocusTerminalPanelAction extends Action2 {
 
 /** Open a new terminal in an editor tab. */
 export class OpenTerminalInEditorAction extends Action2 {
-  static readonly ID = 'workbench.action.terminal.openInEditor'
+  static readonly ID = 'workbench.action.createTerminalEditor'
   constructor() {
     super({
       id: OpenTerminalInEditorAction.ID,

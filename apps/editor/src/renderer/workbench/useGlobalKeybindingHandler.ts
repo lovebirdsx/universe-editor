@@ -10,6 +10,7 @@ import {
   ICommandService,
   IContextKeyService,
   IStatusBarService,
+  CommandsRegistry,
   KeybindingsRegistry,
   StatusBarAlignment,
   type IDisposable,
@@ -173,9 +174,10 @@ export function useGlobalKeybindingHandler(): void {
         const result = KeybindingsRegistry.resolveKeystroke(secondKey, contextKeyService, [
           pending.key,
         ])
+        clearChord()
+        if (result.kind === 'execute' && !CommandsRegistry.getCommand(result.command)) return
         e.preventDefault()
         e.stopPropagation()
-        clearChord()
         if (result.kind === 'execute') {
           void commandService.executeCommand(result.command)
         }
@@ -193,6 +195,8 @@ export function useGlobalKeybindingHandler(): void {
       const isPrintableTyping =
         e.key.length === 1 && !hasFunctionalModifier(e) && isEditableTarget(e.target)
       if (isPrintableTyping || isNativeEditableKey(e)) return
+
+      if (result.kind === 'execute' && !CommandsRegistry.getCommand(result.command)) return
 
       e.preventDefault()
       e.stopPropagation()

@@ -49,7 +49,7 @@ export function TerminalViewToolbar() {
   }
 
   const handleOpenInEditor = () =>
-    void commandService.executeCommand('workbench.action.terminal.openInEditor')
+    void commandService.executeCommand('workbench.action.createTerminalEditor')
 
   const shells = shellsForPlatform()
 

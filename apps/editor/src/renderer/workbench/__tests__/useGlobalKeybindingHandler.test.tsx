@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render } from '@testing-library/react'
 import {
+  CommandsRegistry,
   ContextKeyService,
   ICommandService,
   IContextKeyService,
@@ -60,6 +61,7 @@ describe('useGlobalKeybindingHandler', () => {
 
   function bind(key: string, command: string) {
     disposables.push(KeybindingsRegistry.registerKeybinding({ key, command }))
+    disposables.push(CommandsRegistry.registerCommand(command, () => {}))
   }
 
   function mountHost(instantiation: InstantiationService) {
@@ -211,6 +213,7 @@ describe('useGlobalKeybindingHandler — chord support', () => {
 
   function bindChord(chords: readonly [string, string], command: string) {
     disposables.push(KeybindingsRegistry.registerKeybinding({ chords, command }))
+    disposables.push(CommandsRegistry.registerCommand(command, () => {}))
   }
 
   function mountHost(instantiation: InstantiationService) {
@@ -316,6 +319,7 @@ describe('useGlobalKeybindingHandler — ESC always fires globally', () => {
 
   function bind(key: string, command: string) {
     disposables.push(KeybindingsRegistry.registerKeybinding({ key, command }))
+    disposables.push(CommandsRegistry.registerCommand(command, () => {}))
   }
 
   function mountHost(instantiation: InstantiationService) {
@@ -418,6 +422,8 @@ describe('useGlobalKeybindingHandler — ESC routing by contextKey', () => {
         when: 'quickInputVisible',
       }),
     )
+    disposables.push(CommandsRegistry.registerCommand('test.focusEditor', () => {}))
+    disposables.push(CommandsRegistry.registerCommand('test.closeQuickInput', () => {}))
     mountHost(instantiation)
 
     // quickInputVisible=false → focus editor
@@ -639,6 +645,7 @@ describe('useGlobalKeybindingHandler — Monaco interop (capture phase)', () => 
 
   function bindChord(chords: readonly [string, string], command: string) {
     disposables.push(KeybindingsRegistry.registerKeybinding({ chords, command }))
+    disposables.push(CommandsRegistry.registerCommand(command, () => {}))
   }
 
   function mountHost(instantiation: InstantiationService) {

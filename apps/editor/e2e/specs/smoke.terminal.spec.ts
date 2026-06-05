@@ -38,12 +38,12 @@ test.describe('@p1 integrated terminal toggle', () => {
     await workbench.waitForRestored()
 
     // Force the terminal to be the visible panel container first.
-    await workbench.runCommand('workbench.action.terminal.toggle')
+    await workbench.runCommand('workbench.action.terminal.toggleTerminal')
     await workbench.panel.waitForVisible()
     await workbench.panel.waitForActiveTab('workbench.view.terminal')
 
     // Toggling while the terminal is showing hides the panel.
-    await workbench.runCommand('workbench.action.terminal.toggle')
+    await workbench.runCommand('workbench.action.terminal.toggleTerminal')
     await expect.poll(() => workbench.getContextKey<boolean>('panelVisible')).toBe(false)
   })
 })
