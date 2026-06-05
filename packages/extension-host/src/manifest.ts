@@ -11,12 +11,14 @@ const commandContributionSchema = z.object({
   command: z.string().min(1),
   title: z.string().min(1),
   category: z.string().optional(),
+  icon: z.string().optional(),
 })
 
 const menuItemSchema = z.object({
   command: z.string().min(1),
   when: z.string().optional(),
   group: z.string().optional(),
+  icon: z.string().optional(),
 })
 
 const keybindingSchema = z.object({

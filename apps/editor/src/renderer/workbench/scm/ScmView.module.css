@@ -43,8 +43,7 @@
   text-align: center;
 }
 
-.providerActions,
-.resourceActions {
+.providerActions {
   display: flex;
   gap: 2px;
   margin-left: auto;
@@ -86,8 +85,14 @@
 .groupHeader {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 2px 0;
+  gap: 4px;
+  padding: 2px 4px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.groupHeader:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
 }
 
 .groupLabel {
@@ -99,6 +104,7 @@
 
 .groupCount {
   min-width: 16px;
+  margin-left: auto;
   padding: 0 5px;
   border-radius: 8px;
   background: var(--vscode-badge-background, #4d4d4d);
@@ -114,17 +120,39 @@
   padding: 0;
 }
 
-.resource {
+.twistie {
+  flex: 0 0 auto;
+  width: 12px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
+.fileIcon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+}
+
+.resource,
+.folder {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   padding: 2px 4px;
-  cursor: default;
+  cursor: pointer;
   font-size: 13px;
 }
 
-.resource:hover {
+.resource:hover,
+.folder:hover {
   background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.folderLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .resourceLabel {
@@ -133,23 +161,101 @@
   white-space: nowrap;
 }
 
+.resourceDir {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  opacity: 0.7;
+  color: var(--vscode-descriptionForeground, #888);
+}
+
 .statusLetter {
-  width: 14px;
+  flex: 0 0 auto;
+  width: 16px;
+  margin-left: auto;
   text-align: center;
   font-size: 12px;
   color: var(--vscode-descriptionForeground, #888);
 }
 
+/* When a row carries a dir label it already grows; keep the status letter flush right. */
+.resourceDir ~ .statusLetter {
+  margin-left: 0;
+}
+
+.resourceActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity 0.08s ease-in-out;
+}
+
+.resourceDir ~ .resourceActions {
+  margin-left: 0;
+}
+
+.resource:hover .resourceActions,
+.resource:focus-within .resourceActions {
+  opacity: 1;
+}
+
 .actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: none;
   background: transparent;
-  color: var(--vscode-foreground, #ccc);
+  color: var(--vscode-icon-foreground, var(--vscode-foreground, #ccc));
   cursor: pointer;
   font-size: 11px;
-  padding: 1px 4px;
-  border-radius: 2px;
+  padding: 2px;
+  border-radius: 3px;
 }
 
 .actionButton:hover {
   background: var(--vscode-toolbar-hoverBackground, #5a5a5a55);
+}
+
+/* --- Title overflow menu --- */
+
+.overflowMenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--vscode-menu-background, #252526);
+  color: var(--vscode-menu-foreground, #ccc);
+  border: 1px solid var(--vscode-menu-border, #454545);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+}
+
+.overflowItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.overflowItem:hover {
+  background: var(--vscode-menu-selectionBackground, #04395e);
+  color: var(--vscode-menu-selectionForeground, #fff);
+}
+
+.overflowIconGap {
+  display: inline-block;
+  width: 16px;
+}
+
+.overflowSeparator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--vscode-menu-separatorBackground, #454545);
 }

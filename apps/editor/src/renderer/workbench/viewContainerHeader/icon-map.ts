@@ -1,8 +1,20 @@
 import {
+  ArrowDown,
+  ArrowUp,
   Bug,
+  Check,
+  ChevronsDownUp,
   FolderTree,
+  GitBranch,
+  GitBranchPlus,
   GitPullRequest,
+  List,
+  ListMinus,
+  ListPlus,
   ListTree,
+  Minus,
+  MoreHorizontal,
+  Plus,
   Puzzle,
   RefreshCw,
   Search,
@@ -11,6 +23,7 @@ import {
   SquareTerminal,
   Terminal,
   Trash2,
+  Undo2,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -32,6 +45,23 @@ const ICON_MAP: Record<string, LucideIcon> = {
   sparkle: Sparkles,
   'trash-2': Trash2,
   refresh: RefreshCw,
+  // SCM / Git actions and view controls.
+  'git-commit': Check,
+  add: Plus,
+  remove: Minus,
+  discard: Undo2,
+  'stage-all': ListPlus,
+  'unstage-all': ListMinus,
+  'discard-all': Trash2,
+  pull: ArrowDown,
+  push: ArrowUp,
+  sync: RefreshCw,
+  checkout: GitBranch,
+  'create-branch': GitBranchPlus,
+  'list-view': List,
+  'tree-view': FolderTree,
+  'collapse-all': ChevronsDownUp,
+  more: MoreHorizontal,
 }
 
 export function resolveHeaderIcon(name: string | undefined): LucideIcon | undefined {

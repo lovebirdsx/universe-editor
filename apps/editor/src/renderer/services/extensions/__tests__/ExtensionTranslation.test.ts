@@ -88,7 +88,12 @@ describe('ExtensionPointTranslator', () => {
         contributes: {
           menus: {
             'scm/title': [
-              { command: 'test.cmd', group: 'navigation@2', when: 'scmProvider == git' },
+              {
+                command: 'test.cmd',
+                group: 'navigation@2',
+                when: 'scmProvider == git',
+                icon: 'git-commit',
+              },
             ],
           },
         },
@@ -100,6 +105,7 @@ describe('ExtensionPointTranslator', () => {
     expect(item).toBeDefined()
     expect(item && 'group' in item ? item.group : undefined).toBe('navigation')
     expect(item && 'order' in item ? item.order : undefined).toBe(2)
+    expect(item && 'icon' in item ? item.icon : undefined).toBe('git-commit')
   })
 
   it('ignores an unknown menu location instead of throwing', () => {

@@ -111,6 +111,7 @@ export class ExtensionPointTranslator extends Disposable {
             ...(item.when !== undefined ? { when: item.when } : {}),
             ...(group !== undefined ? { group } : {}),
             ...(order !== undefined ? { order } : {}),
+            ...(item.icon !== undefined ? { icon: item.icon } : {}),
           }),
         )
       }

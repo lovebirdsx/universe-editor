@@ -193,9 +193,33 @@ export class Repository {
     }
   }
 
+  async pull(): Promise<void> {
+    await this._run(['pull', '--rebase'], 'pull')
+  }
+
+  async push(): Promise<void> {
+    await this._run(['push'], 'push')
+  }
+
   async discard(path: string, untracked: boolean): Promise<void> {
     const args = untracked ? ['clean', '-f', '--', path] : ['checkout', '--', path]
     await this._run(args, 'discard')
+  }
+
+  async discardAll(): Promise<void> {
+    const confirm = await window.showWarningMessage(
+      'Discard all changes in the working tree? This cannot be undone.',
+      'Discard All Changes',
+    )
+    if (confirm !== 'Discard All Changes') return
+    const checkout = await gitExec(['checkout', '--', '.'], this.root)
+    if (checkout.exitCode !== 0) {
+      void window.showErrorMessage(
+        `Git discard failed: ${checkout.stderr.trim() || checkout.stdout.trim()}`,
+      )
+    }
+    await gitExec(['clean', '-fd'], this.root)
+    await this.refresh()
   }
 
   async checkout(): Promise<void> {

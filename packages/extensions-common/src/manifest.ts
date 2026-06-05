@@ -16,6 +16,8 @@ export interface ICommandContribution {
   title: string
   /** Optional category prefix shown in the palette (e.g. `Git`). */
   category?: string
+  /** Optional icon identifier (resolved to a concrete icon by the renderer). */
+  icon?: string
 }
 
 /**
@@ -26,6 +28,8 @@ export interface IMenuContribution {
   command: string
   when?: string
   group?: string
+  /** Optional icon identifier (resolved to a concrete icon by the renderer). */
+  icon?: string
 }
 
 /**
