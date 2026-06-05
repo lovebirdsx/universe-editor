@@ -8,9 +8,11 @@ import {
   getDisposableTracker,
   IDialogService,
   IHostService,
+  ILifecycleService,
   IQuickInputService,
   IWindowsService,
   MenuId,
+  ShutdownReason,
   URI,
   localize,
   type DisposableTracker,
@@ -146,6 +148,7 @@ export class RestartEditorAction extends Action2 {
     // Resolve all services synchronously up front: the accessor is only valid
     // during invokeFunction's call, not across awaits.
     const hostService = accessor.get(IHostService)
+    const lifecycleService = accessor.get(ILifecycleService)
     const tracker = getDisposableTracker() as DisposableTracker | null
     // E2E spec has its own sessionStorage-based leak detection and runs
     // headless, so a modal would hang the test. Skip the modal in E2E.
@@ -176,6 +179,7 @@ export class RestartEditorAction extends Action2 {
       }
       leakService!.markUnloadReason('restart')
     }
+    if (await lifecycleService.confirmBeforeShutdown(ShutdownReason.Reload)) return
     await hostService.restart()
   }
 }

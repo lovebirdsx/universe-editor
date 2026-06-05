@@ -5,6 +5,7 @@ import {
   Emitter,
   IDialogService,
   IHostService,
+  ILifecycleService,
   ILoggerService,
   InstantiationService,
   KeybindingsRegistry,
@@ -13,6 +14,7 @@ import {
   MenuRegistry,
   NullLogger,
   ServiceCollection,
+  ShutdownReason,
   toDisposable,
   registerAction2,
   setDisposableTracker,
@@ -51,6 +53,22 @@ class FakeDialogService implements IDialogService {
   }
 }
 
+class FakeLifecycleService {
+  declare readonly _serviceBrand: undefined
+  vetoed = false
+  phase = 0
+  async when(): Promise<void> {}
+  onBeforeShutdown = new Emitter<never>().event
+  onWillShutdown = new Emitter<never>().event
+  async confirmBeforeShutdown(_reason: ShutdownReason): Promise<boolean> {
+    return this.vetoed
+  }
+  async shutdown(_reason: ShutdownReason): Promise<boolean> {
+    return this.vetoed
+  }
+  dispose(): void {}
+}
+
 function makeHostStub(): IHostServiceType & {
   closeCalls: number
   restartCalls: number
@@ -81,9 +99,10 @@ function makeHostStub(): IHostServiceType & {
   } as never
 }
 
-function runCommand(commandId: string, host: IHostServiceType): void {
+function runCommand(commandId: string, host: IHostServiceType): Promise<unknown> {
   const services = new ServiceCollection()
   services.set(IHostService, host)
+  services.set(ILifecycleService, new FakeLifecycleService())
   services.set(ILoggerService, {
     _serviceBrand: undefined,
     createLogger: () => new NullLogger(),
@@ -91,9 +110,9 @@ function runCommand(commandId: string, host: IHostServiceType): void {
     getLevel: () => LogLevel.Info,
   })
   const inst = new InstantiationService(services)
-  inst.invokeFunction((accessor) => {
+  return inst.invokeFunction((accessor) => {
     const cmd = CommandsRegistry.getCommand(commandId)!
-    cmd.handler(accessor)
+    return cmd.handler(accessor) as unknown as Promise<void>
   })
 }
 
@@ -119,10 +138,10 @@ describe('windowActions', () => {
     ).toBe(true)
   })
 
-  it('RestartEditor.run invokes IHostService.restart', () => {
+  it('RestartEditor.run invokes IHostService.restart', async () => {
     disposables.push(registerAction2(RestartEditorAction))
     const host = makeHostStub()
-    runCommand(RestartEditorAction.ID, host)
+    await runCommand(RestartEditorAction.ID, host)
     expect(host.restart).toHaveBeenCalledTimes(1)
   })
 
@@ -203,11 +222,13 @@ describe('RestartEditorAction leak-detection path', () => {
     host: IHostServiceType,
     dialog: IDialogService,
     leak: IRendererDisposableLeakService,
+    lifecycle = new FakeLifecycleService(),
   ): Promise<void> {
     const services = new ServiceCollection()
     services.set(IHostService, host)
     services.set(IDialogService, dialog)
     services.set(IRendererDisposableLeakService, leak)
+    services.set(ILifecycleService, lifecycle)
     const inst = new InstantiationService(services)
     await inst.invokeFunction((accessor) => {
       const cmd = CommandsRegistry.getCommand(RestartEditorAction.ID)!
