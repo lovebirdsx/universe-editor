@@ -14,6 +14,7 @@
 import { app } from 'electron'
 import { promises as fs, type FSWatcher, watch } from 'node:fs'
 import { dirname, join, resolve as resolvePath, basename } from 'node:path'
+import os from 'node:os'
 import { applyEdits, modify, type FormattingOptions } from 'jsonc-parser'
 import {
   Disposable,
@@ -43,6 +44,18 @@ const PROJECT_SETTINGS_TEMPLATE = `// Project settings — overrides user settin
 
 const SELF_WRITE_SUPPRESS_MS = 250
 const FLUSH_DEBOUNCE_MS = 50
+
+function defaultVSCodeKeybindingsPath(): string {
+  if (process.platform === 'win32') {
+    const appdata = process.env['APPDATA'] ?? join(os.homedir(), 'AppData', 'Roaming')
+    return join(appdata, 'Code', 'User', 'keybindings.json')
+  }
+  if (process.platform === 'darwin') {
+    return join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'keybindings.json')
+  }
+  const xdgConfig = process.env['XDG_CONFIG_HOME'] ?? join(os.homedir(), '.config')
+  return join(xdgConfig, 'Code', 'User', 'keybindings.json')
+}
 
 const FORMATTING: FormattingOptions = {
   insertSpaces: true,
@@ -74,6 +87,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     const userData = app.getPath('userData')
     this._installSlot(UserDataFile.Settings, join(userData, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(userData, 'keybindings.json'))
+    this._installSlot(UserDataFile.VSCodeKeybindings, defaultVSCodeKeybindingsPath(), true)
 
     // Project settings track the active workspace. The read-only VSCode layer
     // (.vscode/settings.json) tracks it in parallel for cross-editor compat.
@@ -128,8 +142,8 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   async write(file: UserDataFile, content: string): Promise<void> {
-    if (file === UserDataFile.VSCodeSettings) {
-      throw new Error('UserData: VSCode settings are read-only (cannot write)')
+    if (file === UserDataFile.VSCodeSettings || file === UserDataFile.VSCodeKeybindings) {
+      throw new Error(`UserData: ${file} is read-only`)
     }
     const slot = this._slots.get(file)
     if (!slot) {
@@ -143,7 +157,8 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     jsonPath: readonly (string | number)[],
     value: unknown,
   ): Promise<boolean> {
-    if (file === UserDataFile.VSCodeSettings) return false
+    if (file === UserDataFile.VSCodeSettings || file === UserDataFile.VSCodeKeybindings)
+      return false
     const slot = this._slots.get(file)
     if (!slot) return false
     let current = await this.read(file)

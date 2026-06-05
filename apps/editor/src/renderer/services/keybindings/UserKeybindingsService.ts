@@ -116,6 +116,8 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   private readonly _userEntries = new Map<string, IUserKeybindingEntry>()
   private readonly _registrationStore = this._register(new DisposableStore())
   private readonly _registrationDisposables = new Map<string, IDisposable>()
+  private readonly _vscodeRegistrationStore = this._register(new DisposableStore())
+  private readonly _vscodeRegistrationDisposables = new Map<string, IDisposable>()
   private readonly _defaultSnapshot = new Map<string, string>()
 
   /** Suspend file write-back while we apply an external file change. */
@@ -148,12 +150,16 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
 
   async initialize(): Promise<void> {
     await this._migrateLegacyKeybindings()
+    await this._reloadVSCodeFile()
     await this._reloadFromFile()
 
     this._register(
       this._files.onDidChangeFile((file) => {
-        if (file !== UserDataFile.Keybindings) return
-        void this._reloadFromFile()
+        if (file === UserDataFile.VSCodeKeybindings) {
+          void this._reloadVSCodeAndUser()
+        } else if (file === UserDataFile.Keybindings) {
+          void this._reloadFromFile()
+        }
       }),
     )
   }
@@ -192,6 +198,28 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._onDidChange.fire()
   }
 
+  private async _reloadVSCodeFile(): Promise<void> {
+    const text = await this._files.read(UserDataFile.VSCodeKeybindings)
+    const entries = parseKeybindingsFile(text)
+    this._vscodeRegistrationStore.clear()
+    this._vscodeRegistrationDisposables.clear()
+    for (const entry of entries) {
+      this._applyEntryToStore(
+        entry,
+        this._vscodeRegistrationStore,
+        this._vscodeRegistrationDisposables,
+      )
+    }
+  }
+
+  private async _reloadVSCodeAndUser(): Promise<void> {
+    // Clear user entries first so they can be re-registered after VSCode entries (LIFO order).
+    this._registrationStore.clear()
+    this._registrationDisposables.clear()
+    await this._reloadVSCodeFile()
+    await this._reloadFromFile()
+  }
+
   private async _reloadFromFile(): Promise<void> {
     if (this._suspendWriteBack) return
     const text = await this._files.read(UserDataFile.Keybindings)
@@ -210,14 +238,21 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   }
 
   private _applyEntry(entry: IUserKeybindingEntry): void {
-    // Remove previous user registration for this command first.
-    const prev = this._registrationDisposables.get(entry.command)
-    if (prev) {
-      this._registrationStore.delete(prev)
-      this._registrationDisposables.delete(entry.command)
-    }
-
+    this._applyEntryToStore(entry, this._registrationStore, this._registrationDisposables)
     this._userEntries.set(entry.command, entry)
+  }
+
+  private _applyEntryToStore(
+    entry: IUserKeybindingEntry,
+    store: DisposableStore,
+    disposables: Map<string, IDisposable>,
+  ): void {
+    // Remove previous registration for this command first.
+    const prev = disposables.get(entry.command)
+    if (prev) {
+      store.delete(prev)
+      disposables.delete(entry.command)
+    }
 
     if (entry.key === null) {
       const toNegate: IKeybindingItem[] = KeybindingsRegistry.getAllKeybindings().filter(
@@ -225,7 +260,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
       )
       if (toNegate.length === 0) return
 
-      const disposables: IDisposable[] = toNegate.map((kb) => {
+      const ds: IDisposable[] = toNegate.map((kb) => {
         if (kb.chords) {
           return KeybindingsRegistry.registerKeybinding({
             chords: kb.chords as [string, string],
@@ -240,17 +275,17 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
         })
       })
 
-      const combined = combinedDisposable(...disposables)
-      this._registrationStore.add(combined)
-      this._registrationDisposables.set(entry.command, combined)
+      const combined = combinedDisposable(...ds)
+      store.add(combined)
+      disposables.set(entry.command, combined)
     } else {
       const d = KeybindingsRegistry.registerKeybinding({
         key: entry.key,
         command: entry.command,
         ...(entry.when !== undefined ? { when: entry.when } : {}),
       })
-      this._registrationStore.add(d)
-      this._registrationDisposables.set(entry.command, d)
+      store.add(d)
+      disposables.set(entry.command, d)
     }
   }
 
