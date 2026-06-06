@@ -47,4 +47,36 @@ test.describe('@p1 disposable leak detection', () => {
         : '',
     ).toBeNull()
   })
+
+  test('Restart Editor with an open diff editor leaves no un-disposed Disposables', async ({
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    await workbench.page.evaluate(
+      (key) => sessionStorage.removeItem(key),
+      DISPOSABLE_LEAK_REPORT_KEY,
+    )
+
+    // Open a diff editor (the DiffEditor React component subscribes to
+    // configuration + input content changes; both must be torn down on restart).
+    await workbench.runCommand('_workbench.openDiff', {
+      title: 'a.txt (Diff)',
+      originalUri: 'file:///ws/a.txt',
+      original: 'before\nshared\n',
+      modified: 'after\nshared\n',
+      pinned: true,
+    })
+
+    await workbench.waitForRestartRestore()
+
+    const report = await workbench.getLeakReport()
+
+    expect(
+      report,
+      report
+        ? `${report.count} Disposable leak(s) detected after Restart Editor with a diff editor:\n${report.details}`
+        : '',
+    ).toBeNull()
+  })
 })

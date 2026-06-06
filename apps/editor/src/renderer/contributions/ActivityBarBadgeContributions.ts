@@ -15,8 +15,8 @@ import {
   EditorInput,
   IEditorService,
   IWorkbenchContribution,
+  MutableDisposable,
   autorun,
-  toDisposable,
   type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
@@ -28,7 +28,7 @@ const SCM_CONTAINER_ID = 'workbench.view.scm'
 
 export class DirtyEditorsActivityContribution extends Disposable implements IWorkbenchContribution {
   private readonly _dirtyListeners = this._register(new DisposableStore())
-  private _badgeHandle: IDisposable | undefined
+  private readonly _badge = this._register(new MutableDisposable<IDisposable>())
 
   constructor(
     @IEditorService editorService: IEditorService,
@@ -50,7 +50,6 @@ export class DirtyEditorsActivityContribution extends Disposable implements IWor
         this._update(inputs)
       }),
     )
-    this._register(toDisposable(() => this._badgeHandle?.dispose()))
   }
 
   private _update(inputs: readonly IEditorInput[]): void {
@@ -58,8 +57,7 @@ export class DirtyEditorsActivityContribution extends Disposable implements IWor
     for (const input of inputs) {
       if (input.isDirty) dirty.add(input.id)
     }
-    this._badgeHandle?.dispose()
-    this._badgeHandle =
+    this._badge.value =
       dirty.size > 0
         ? this._activityService.showActivity(EXPLORER_CONTAINER_ID, { count: dirty.size })
         : undefined
@@ -67,7 +65,7 @@ export class DirtyEditorsActivityContribution extends Disposable implements IWor
 }
 
 export class ScmActivityContribution extends Disposable implements IWorkbenchContribution {
-  private _badgeHandle: IDisposable | undefined
+  private readonly _badge = this._register(new MutableDisposable<IDisposable>())
 
   constructor(
     @IScmService scmService: IScmService,
@@ -82,12 +80,10 @@ export class ScmActivityContribution extends Disposable implements IWorkbenchCon
         this._update(total)
       }),
     )
-    this._register(toDisposable(() => this._badgeHandle?.dispose()))
   }
 
   private _update(total: number): void {
-    this._badgeHandle?.dispose()
-    this._badgeHandle =
+    this._badge.value =
       total > 0 ? this._activityService.showActivity(SCM_CONTAINER_ID, { count: total }) : undefined
   }
 }
