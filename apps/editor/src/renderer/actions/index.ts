@@ -43,6 +43,7 @@ import {
   PreviousEditorAction,
   QuickOpenRecentEditorAction,
   QuickOpenRecentEditorReverseAction,
+  ReopenClosedEditorAction,
   SplitEditorDownAction,
   SplitEditorLeftAction,
   SplitEditorRightAction,
@@ -181,6 +182,7 @@ registerAction2(CloseEditorsToTheRightAction)
 registerAction2(CloseEditorsToTheLeftAction)
 registerAction2(CloseUnmodifiedEditorsAction)
 registerAction2(CloseEditorsInGroupAction)
+registerAction2(ReopenClosedEditorAction)
 
 // Editor — tab navigation
 registerAction2(NextEditorAction)

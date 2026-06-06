@@ -16,6 +16,7 @@ import {
   IEditorGroupsService,
   type IEditorGroup,
   IFocusStackService,
+  IInstantiationService,
   IQuickInputService,
   type IQuickPickItem,
   MenuId,
@@ -27,6 +28,7 @@ import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfir
 import { focusEditorInput } from '../services/editor/editorFocus.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
 import { IRecentEditorsService } from '../services/editor/RecentEditorsService.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
@@ -794,6 +796,31 @@ export class MoveEditorToPreviousGroupAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     moveEditorByLocation(accessor, GroupLocation.Previous, true)
+  }
+}
+
+export class ReopenClosedEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.reopenClosedEditor'
+  constructor() {
+    super({
+      id: ReopenClosedEditorAction.ID,
+      title: localize('action.reopenClosedEditor.title', 'Reopen Closed Editor'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+t' },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const groups = accessor.get(IEditorGroupsService)
+    const closedService = accessor.get(IClosedEditorsService)
+    const entry = closedService.popMostRecent()
+    if (!entry) return
+    const group = groups.getGroup(entry.groupId) ?? groups.activeGroup
+    const input = accessor
+      .get(IInstantiationService)
+      .createInstance(FileEditorInput, entry.resource)
+    group.openEditor(input, { activate: true, pinned: true })
+    activateGroupAndFocus(groups, group, accessor.get(IFocusStackService))
   }
 }
 

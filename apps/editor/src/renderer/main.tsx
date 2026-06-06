@@ -91,6 +91,10 @@ import {
   IRecentEditorsService,
   RecentEditorsService,
 } from './services/editor/RecentEditorsService.js'
+import {
+  IClosedEditorsService,
+  ClosedEditorsService,
+} from './services/editor/ClosedEditorsService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
@@ -348,6 +352,11 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(RecentEditorsService),
   )
   services.set(IRecentEditorsService, recentEditorsService)
+
+  const closedEditorsService = workbenchStore.add(
+    instantiation.createInstance(ClosedEditorsService),
+  )
+  services.set(IClosedEditorsService, closedEditorsService)
 
   // IDialogService — React-portal-backed; <DialogHost /> is mounted by Workbench.
   const dialogService = workbenchStore.add(new RendererDialogService())
