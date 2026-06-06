@@ -124,7 +124,7 @@ export class Repository {
   }
 
   private async _doRefresh(): Promise<void> {
-    const res = await gitExec(['status', '--porcelain=v2', '--branch', '-z'], this.root)
+    const res = await gitExec(['status', '--porcelain=v2', '--branch', '-z', '-uall'], this.root)
     if (this._disposed) return
     if (res.exitCode !== 0) {
       console.error(`[git] status failed: ${res.stderr.trim()}`)
