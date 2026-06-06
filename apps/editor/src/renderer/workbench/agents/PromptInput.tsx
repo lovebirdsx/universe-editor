@@ -51,6 +51,7 @@ import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
+import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import styles from './agents.module.css'
 
 const MIN_PROMPT_ROWS = 3
@@ -94,6 +95,7 @@ export function PromptInput({
   const commands = useObservable(session.availableCommands)
   const running = status === 'running'
   const collapseMode = useObservable(session.collapseMode)
+  const totalRunningMs = useSessionTimer(session)
 
   // Expose `focus()` to the AcpChatWidget handle so the registered widget can
   // serve Ctrl+Alt+I (Focus Agent Input) without a global event bus.
@@ -344,6 +346,11 @@ export function PromptInput({
       </div>
       <div className={styles['promptActions']}>
         <ConfigOptionsBar session={session} />
+        {totalRunningMs > 0 || running ? (
+          <span className={styles['sessionTimerInline']} title="Session running time">
+            {formatRunningTime(totalRunningMs)}
+          </span>
+        ) : null}
         <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton

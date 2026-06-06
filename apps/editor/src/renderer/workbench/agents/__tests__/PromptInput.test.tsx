@@ -180,6 +180,8 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     availableCommands: commandsObs,
     mcpServers: observableValue('test.mcpServers', []),
     collapseMode: observableValue('test.collapseMode', 'default' as const),
+    accumulatedRunningMs: observableValue('test.arm', 0),
+    runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: sendPrompt as never,

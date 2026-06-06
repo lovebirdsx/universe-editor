@@ -222,6 +222,8 @@ export interface IAcpSessionInitState {
    * transport from config.
    */
   readonly mcpServers?: ReadonlyArray<{ readonly name: string; readonly transport: McpTransport }>
+  /** Cumulative running duration in ms, restored from history on resume. */
+  readonly accumulatedRunningMs?: number
 }
 
 export interface IAcpSession {
@@ -260,6 +262,10 @@ export interface IAcpSession {
   readonly mcpServers: IObservable<readonly AcpMcpServerStatus[]>
   /** Current timeline collapse mode for this session. */
   readonly collapseMode: IObservable<CollapseMode>
+  /** Cumulative milliseconds in 'running' status — does not include the current segment if still running. */
+  readonly accumulatedRunningMs: IObservable<number>
+  /** Timestamp (epoch ms) when the current running segment started, or undefined if not running. */
+  readonly runningStartedAt: IObservable<number | undefined>
   /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
@@ -302,6 +308,8 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly availableCommands: ISettableObservable<readonly AvailableCommand[]>
   readonly mcpServers: ISettableObservable<readonly AcpMcpServerStatus[]>
   readonly collapseMode: ISettableObservable<CollapseMode>
+  readonly accumulatedRunningMs: ISettableObservable<number>
+  readonly runningStartedAt: ISettableObservable<number | undefined>
 
   private readonly _configOptions: ConfigOptionStateMachine
 
@@ -380,6 +388,11 @@ export class AcpSession extends Disposable implements IAcpSession {
       `acp.session.collapseMode.${id}`,
       initialCollapseMode,
     )
+    this.accumulatedRunningMs = observableValue<number>(`acp.session.accumulatedRunningMs.${id}`, 0)
+    this.runningStartedAt = observableValue<number | undefined>(
+      `acp.session.runningStartedAt.${id}`,
+      undefined,
+    )
     this._configOptions = new ConfigOptionStateMachine({
       conn: _conn,
       telemetry: _telemetry,
@@ -402,6 +415,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Connection close → seal the session.
     const onClose = (): void => {
       this._commitBatchedTx()
+      this._finalizeRunningSegment()
       this.status.set('closed', undefined)
       this._cancelPending()
       this._abortAllInFlight()
@@ -445,6 +459,9 @@ export class AcpSession extends Disposable implements IAcpSession {
         state.mcpServers.map((s) => ({ name: s.name, status: 'pending', transport: s.transport })),
         undefined,
       )
+    }
+    if (state.accumulatedRunningMs !== undefined && this.accumulatedRunningMs.get() === 0) {
+      this.accumulatedRunningMs.set(state.accumulatedRunningMs, undefined)
     }
   }
 
@@ -574,12 +591,24 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _recomputeStatus(): void {
     if (this.status.get() === 'closed') return // closed is terminal
+    const prev = this.status.get()
     if (this._inFlight.size > 0) {
+      if (prev !== 'running') this.runningStartedAt.set(Date.now(), undefined)
       this.status.set('running', undefined)
       return
     }
+    if (prev === 'running') this._finalizeRunningSegment()
     this.status.set(this._sawError ? 'errored' : 'idle', undefined)
     this._sawError = false
+  }
+
+  private _finalizeRunningSegment(): void {
+    const started = this.runningStartedAt.get()
+    if (started === undefined) return
+    const accumulated = this.accumulatedRunningMs.get() + (Date.now() - started)
+    this.accumulatedRunningMs.set(accumulated, undefined)
+    this.runningStartedAt.set(undefined, undefined)
+    this._history?.setHistoryRunningDuration(this.id, accumulated)
   }
 
   private _abortAllInFlight(): void {
@@ -597,6 +626,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   async close(): Promise<void> {
     this._commitBatchedTx()
+    this._finalizeRunningSegment()
     this.status.set('closed', undefined)
     this._abortAllInFlight()
     this._cancelPending()

@@ -103,6 +103,8 @@ function makeSession(
     setConfigOption: () => Promise.resolve(),
     mcpServers: observableValue('t.mcpServers', []),
     collapseMode: observableValue('t.collapseMode', 'default' as const),
+    accumulatedRunningMs: observableValue('t.arm', 0),
+    runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     cycleCollapseMode: () => {},
   } as unknown as IAcpSession
   return { session, timeline }

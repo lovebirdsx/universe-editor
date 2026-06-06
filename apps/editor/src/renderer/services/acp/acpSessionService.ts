@@ -498,7 +498,12 @@ export class AcpSessionService
         title,
         conn,
         this._telemetry,
-        entry.usage ? { usage: entry.usage } : undefined,
+        {
+          ...(entry.usage ? { usage: entry.usage } : {}),
+          ...(entry.accumulatedRunningMs
+            ? { accumulatedRunningMs: entry.accumulatedRunningMs }
+            : {}),
+        },
         entry.collapseMode ?? 'default',
         this._history,
         this._agentDefaults,

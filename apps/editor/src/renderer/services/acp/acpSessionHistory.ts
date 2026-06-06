@@ -71,6 +71,8 @@ export interface AcpSessionHistoryEntry {
   }
   /** Timeline collapse mode persisted per-session so it survives editor restarts. */
   readonly collapseMode?: CollapseMode
+  /** Cumulative milliseconds the session spent in 'running' status. Updated each time a run segment ends. */
+  readonly accumulatedRunningMs?: number
 }
 
 export interface IAcpSessionHistoryService {
@@ -105,6 +107,12 @@ export interface IAcpSessionHistoryService {
    * on every `usage_update` so the arc can be restored after resume.
    */
   setHistoryUsage(sessionId: string, usage: AcpSessionHistoryEntry['usage']): void
+  /**
+   * Accumulate the total running duration for a session. No-op if id is
+   * unknown. Called each time a 'running' segment ends (transition to idle /
+   * errored / closed) so it survives editor restarts.
+   */
+  setHistoryRunningDuration(sessionId: string, ms: number): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -316,6 +324,17 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (sameUsage(cur.usage, usage)) return
     const next: AcpSessionHistoryEntry = { ...cur, usage }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryRunningDuration(sessionId: string, ms: number): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.accumulatedRunningMs === ms) return
+    const next: AcpSessionHistoryEntry = { ...cur, accumulatedRunningMs: ms }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()

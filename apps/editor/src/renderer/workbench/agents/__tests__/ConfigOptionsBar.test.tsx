@@ -90,6 +90,8 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     availableCommands: observableValue<readonly AvailableCommand[]>('c', []),
     mcpServers: observableValue('mcp', []),
     collapseMode: observableValue('cm', 'default' as const),
+    accumulatedRunningMs: observableValue('arm', 0),
+    runningStartedAt: observableValue<number | undefined>('rsa', undefined),
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,

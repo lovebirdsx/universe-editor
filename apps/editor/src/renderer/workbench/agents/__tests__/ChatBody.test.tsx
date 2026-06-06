@@ -92,6 +92,8 @@ function makeSession(id: string, items: readonly TimelineItem[]): IAcpSession {
     availableCommands: observableValue('t.cmds', []),
     mcpServers: observableValue('t.mcp', []),
     collapseMode,
+    accumulatedRunningMs: observableValue('t.arm', 0),
+    runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
     cycleCollapseMode: () => {
       const cur = collapseMode.get()
       const next = cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'

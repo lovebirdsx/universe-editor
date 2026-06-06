@@ -11,12 +11,13 @@
 
 import { localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
-import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
+import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/acpSessionHistory.js'
 import { AgentIcon } from './agentIcon.js'
+import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import styles from './agents.module.css'
 
 function relativeTime(timestamp: number): string {
@@ -35,6 +36,12 @@ function relativeTime(timestamp: number): string {
   })
 }
 
+function LiveSessionTimer({ session }: { session: IAcpSession }) {
+  const ms = useSessionTimer(session)
+  if (ms === 0) return null
+  return <span className={styles['sessionRowTimer']}>{formatRunningTime(ms)}</span>
+}
+
 export interface SessionListBodyProps {
   /** Suppress the inline "no sessions" line — popovers render their own. */
   hideEmptyState?: boolean
@@ -44,6 +51,57 @@ export interface SessionListBodyProps {
    * fire-and-forget.
    */
   onPick?: (entry: AcpSessionHistoryEntry) => void
+}
+
+function SessionRow({
+  entry,
+  liveSession,
+  isActive,
+  onActivate,
+  onRemove,
+}: {
+  entry: AcpSessionHistoryEntry
+  liveSession: IAcpSession | undefined
+  isActive: boolean
+  onActivate: () => void
+  onRemove: () => void
+}) {
+  const isRunning = liveSession !== undefined
+  const historyMs = entry.accumulatedRunningMs ?? 0
+  return (
+    <li
+      className={styles['sessionRow']}
+      data-active={isActive ? 'true' : 'false'}
+      data-running={isRunning ? 'true' : 'false'}
+      onClick={onActivate}
+    >
+      <div className={styles['sessionRowTitle']}>
+        <span className={styles['sessionRowLabelLine']}>
+          <AgentIcon agentId={entry.agentId} size={14} className={styles['sessionRowAgentIcon']} />
+          <span className={styles['sessionRowLabel']}>{entry.title}</span>
+        </span>
+        <span className={styles['sessionRowMeta']}>
+          {relativeTime(entry.lastUsedAt)}
+          {liveSession !== undefined ? (
+            <LiveSessionTimer session={liveSession} />
+          ) : historyMs > 0 ? (
+            <span className={styles['sessionRowTimer']}>{formatRunningTime(historyMs)}</span>
+          ) : null}
+        </span>
+      </div>
+      <button
+        type="button"
+        className={styles['sessionClose']}
+        onClick={(e) => {
+          e.stopPropagation()
+          onRemove()
+        }}
+        aria-label="Remove session"
+      >
+        ×
+      </button>
+    </li>
+  )
 }
 
 export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps) {
@@ -63,15 +121,15 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
     <ul>
       {entries.map((entry) => {
         const live = service.getById(entry.id)
-        const running = live && live.status.get() !== 'closed' ? live : undefined
-        const isActive = running !== undefined && running.id === activeId
+        const liveSession = live && live.status.get() !== 'closed' ? live : undefined
+        const isActive = liveSession !== undefined && liveSession.id === activeId
         return (
-          <li
+          <SessionRow
             key={entry.id}
-            className={styles['sessionRow']}
-            data-active={isActive ? 'true' : 'false'}
-            data-running={running !== undefined ? 'true' : 'false'}
-            onClick={() => {
+            entry={entry}
+            liveSession={liveSession}
+            isActive={isActive}
+            onActivate={() => {
               const fresh = service.getById(entry.id)
               const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
               if (liveNow) {
@@ -83,34 +141,14 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
               }
               onPick?.(entry)
             }}
-          >
-            <div className={styles['sessionRowTitle']}>
-              <span className={styles['sessionRowLabelLine']}>
-                <AgentIcon
-                  agentId={entry.agentId}
-                  size={14}
-                  className={styles['sessionRowAgentIcon']}
-                />
-                <span className={styles['sessionRowLabel']}>{entry.title}</span>
-              </span>
-              <span className={styles['sessionRowMeta']}>{relativeTime(entry.lastUsedAt)}</span>
-            </div>
-            <button
-              type="button"
-              className={styles['sessionClose']}
-              onClick={(e) => {
-                e.stopPropagation()
-                void (async () => {
-                  if (running) await service.closeSession(running.id)
-                  await service.deleteOnAgent(entry.id)
-                  history.remove(entry.id)
-                })()
-              }}
-              aria-label="Remove session"
-            >
-              ×
-            </button>
-          </li>
+            onRemove={() => {
+              void (async () => {
+                if (liveSession) await service.closeSession(liveSession.id)
+                await service.deleteOnAgent(entry.id)
+                history.remove(entry.id)
+              })()
+            }}
+          />
         )
       })}
     </ul>
