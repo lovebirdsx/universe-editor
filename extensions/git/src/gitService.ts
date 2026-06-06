@@ -39,9 +39,17 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
  * the exit code (callers decide what a non-zero code means); rejects only if the
  * process can't be spawned at all (e.g. git not installed). Output is collected
  * as bytes and decoded as UTF-8 so NUL-delimited `-z` output survives intact.
+ *
+ * If `log` is provided, the command and its result are written to it.
  */
-export function gitExec(args: readonly string[], cwd: string): Promise<GitExecResult> {
+export function gitExec(
+  args: readonly string[],
+  cwd: string,
+  log?: (msg: string) => void,
+): Promise<GitExecResult> {
   return new Promise((resolve, reject) => {
+    log?.(`> git ${args.join(' ')}`)
+    const start = Date.now()
     const proc = spawn('git', [...args], {
       cwd,
       env: sanitizeEnv(),
@@ -54,11 +62,15 @@ export function gitExec(args: readonly string[], cwd: string): Promise<GitExecRe
     proc.stderr.on('data', (chunk: Buffer) => stderr.push(chunk))
     proc.on('error', reject)
     proc.on('close', (code) => {
-      resolve({
+      const result: GitExecResult = {
         stdout: Buffer.concat(stdout).toString('utf8'),
         stderr: Buffer.concat(stderr).toString('utf8'),
         exitCode: code ?? 0,
-      })
+      }
+      const elapsed = Date.now() - start
+      const stderrNote = result.stderr.trim() ? `\n  stderr: ${result.stderr.trim()}` : ''
+      log?.(`  exit ${result.exitCode} (${elapsed}ms)${stderrNote}`)
+      resolve(result)
     })
   })
 }

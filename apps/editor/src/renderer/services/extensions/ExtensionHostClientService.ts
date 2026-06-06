@@ -165,6 +165,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
       ...(kind === 'trusted' ? { scm: this._scm } : {}),
+      output: this._output,
       stderr,
       logger: this._logger,
       ledger: {

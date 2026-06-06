@@ -24,6 +24,7 @@ import {
   type ILogger,
   type INotificationService,
   type IOutputChannel,
+  type IOutputService,
   type IQuickInputService,
   type IStatusBarService,
 } from '@universe-editor/platform'
@@ -41,6 +42,7 @@ import type {
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadFs } from './MainThreadFs.js'
+import { MainThreadOutput } from './MainThreadOutput.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
 import type { IScmService } from './ScmService.js'
 
@@ -55,6 +57,7 @@ export interface HostConnectionDeps {
   readonly commandService: ICommandService
   /** Wired only for the trusted connection — the SCM service is a singleton. */
   readonly scm?: IScmService
+  readonly output: IOutputService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
   readonly ledger: CommandOwnershipLedger
@@ -130,6 +133,12 @@ export class HostConnection extends Disposable {
 
     const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
+
+    const mainThreadOutput = new MainThreadOutput(deps.output)
+    server.registerChannel(
+      ExtHostChannels.mainThreadOutput,
+      ProxyChannel.fromService(mainThreadOutput),
+    )
   }
 
   get dead(): boolean {

@@ -27,6 +27,8 @@ export const ExtHostChannels = {
   extHostScm: 'extHostScm',
   /** Ext host → renderer: gated filesystem access (path policy + IFileService). */
   mainThreadFs: 'mainThreadFs',
+  /** Ext host → renderer: output channels shown in the Output panel. */
+  mainThreadOutput: 'mainThreadOutput',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -153,4 +155,16 @@ export interface IMainThreadFs {
   $readDirectory(path: string): Promise<Array<[name: string, type: ExtHostFileType]>>
   $createDirectory(path: string): Promise<void>
   $delete(path: string, recursive: boolean): Promise<void>
+}
+
+/**
+ * Renderer → exposed to the ext host: output channels shown in the Output panel.
+ * The host allocates handles; the renderer creates/manages the actual channels.
+ */
+export interface IMainThreadOutput {
+  $registerOutputChannel(handle: number, name: string): Promise<void>
+  $append(handle: number, text: string): Promise<void>
+  $clearOutputChannel(handle: number): Promise<void>
+  $showOutputChannel(handle: number): Promise<void>
+  $disposeOutputChannel(handle: number): Promise<void>
 }

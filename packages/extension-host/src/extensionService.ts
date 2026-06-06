@@ -15,6 +15,7 @@ import {
   type ExtensionContext,
   type FileStat,
   type InputBoxOptions,
+  type OutputChannel,
   type QuickPickItem,
   type QuickPickOptions,
   type SourceControl,
@@ -30,6 +31,7 @@ import {
   type IExtensionDescriptionDto,
   type IMainThreadCommands,
   type IMainThreadFs,
+  type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadWindow,
 } from '@universe-editor/extensions-common'
@@ -133,6 +135,38 @@ class HostStatusBarItem implements StatusBarItem {
   }
 }
 
+/**
+ * Host-side OutputChannel. Delegates append/clear/show/dispose over RPC to the
+ * renderer's MainThreadOutput, which owns the real IOutputChannel instance.
+ */
+class HostOutputChannel implements OutputChannel {
+  constructor(
+    private readonly _handle: number,
+    readonly name: string,
+    private readonly _output: IMainThreadOutput,
+  ) {}
+
+  append(text: string): void {
+    void this._output.$append(this._handle, text)
+  }
+
+  appendLine(text: string): void {
+    void this._output.$append(this._handle, `${text}\n`)
+  }
+
+  clear(): void {
+    void this._output.$clearOutputChannel(this._handle)
+  }
+
+  show(): void {
+    void this._output.$showOutputChannel(this._handle)
+  }
+
+  dispose(): void {
+    void this._output.$disposeOutputChannel(this._handle)
+  }
+}
+
 export class ExtensionService implements IExtensionHostBridge {
   private readonly _commands = new Map<string, CommandHandler>()
   private readonly _activated = new Map<string, ActivatedExtension>()
@@ -140,6 +174,7 @@ export class ExtensionService implements IExtensionHostBridge {
   private _statusBarHandle = 0
   private readonly _sourceControls = new Map<number, HostSourceControl>()
   private _scmHandle = 0
+  private _outputHandle = 0
 
   constructor(
     private readonly _extensions: readonly IScannedExtension[],
@@ -149,6 +184,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _workspaceRoot?: string,
     private readonly _mainThreadFs?: IMainThreadFs,
     private readonly _kind: 'trusted' | 'restricted' = 'trusted',
+    private readonly _mainThreadOutput?: IMainThreadOutput,
   ) {
     installApiBridge(this)
   }
@@ -289,6 +325,15 @@ export class ExtensionService implements IExtensionHostBridge {
   ): Promise<unknown> {
     const fullKey = section ? `${section}.${key}` : key
     return this.executeCommand('_workbench.getConfiguration', [fullKey, defaultValue])
+  }
+
+  createOutputChannel(name: string): OutputChannel {
+    if (!this._mainThreadOutput) {
+      throw new Error('output channel support is not available in this extension host')
+    }
+    const handle = this._outputHandle++
+    void this._mainThreadOutput.$registerOutputChannel(handle, name)
+    return new HostOutputChannel(handle, name, this._mainThreadOutput)
   }
 
   // --- RPC surface (called from the renderer) ---

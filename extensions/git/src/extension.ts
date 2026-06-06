@@ -36,7 +36,11 @@ export async function activate(context: ExtensionContext): Promise<void> {
     return
   }
 
-  const repo = new Repository(repoRoot)
+  const out = window.createOutputChannel('Git')
+  context.subscriptions.push(out)
+  const log = (msg: string): void => out.appendLine(msg)
+
+  const repo = new Repository(repoRoot, log)
   context.subscriptions.push(repo)
   void repo.refresh()
 

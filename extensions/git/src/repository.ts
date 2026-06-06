@@ -85,7 +85,10 @@ export class Repository {
   private _autofetchTimer: ReturnType<typeof setInterval> | undefined
   private _autofetchInitial: ReturnType<typeof setTimeout> | undefined
 
-  constructor(readonly root: string) {
+  constructor(
+    readonly root: string,
+    private readonly _log?: (msg: string) => void,
+  ) {
     this._sc = scm.createSourceControl('git', 'Git', root)
     this._sc.inputBox.placeholder = 'Message (Ctrl+Enter to commit)'
     this._sc.acceptInputCommand = { command: 'git.commit', title: 'Commit' }
@@ -124,10 +127,14 @@ export class Repository {
   }
 
   private async _doRefresh(): Promise<void> {
-    const res = await gitExec(['status', '--porcelain=v2', '--branch', '-z', '-uall'], this.root)
+    const res = await gitExec(
+      ['status', '--porcelain=v2', '--branch', '-z', '-uall'],
+      this.root,
+      this._log,
+    )
     if (this._disposed) return
     if (res.exitCode !== 0) {
-      console.error(`[git] status failed: ${res.stderr.trim()}`)
+      this._log?.(`[git] status failed: ${res.stderr.trim()}`)
       return
     }
     const status = parseStatus(res.stdout)
@@ -201,7 +208,7 @@ export class Repository {
   async commit(message: string): Promise<boolean> {
     this._beginProgress('Committing…', 'spinning')
     try {
-      const res = await gitExec(['commit', '-m', message], this.root)
+      const res = await gitExec(['commit', '-m', message], this.root, this._log)
       if (res.exitCode !== 0) {
         void window.showErrorMessage(`Git commit failed: ${res.stderr.trim() || res.stdout.trim()}`)
         return false
@@ -225,12 +232,12 @@ export class Repository {
     this._syncing = true
     this._beginProgress('Syncing…', 'syncing')
     try {
-      const pull = await gitExec(['pull', '--rebase'], this.root)
+      const pull = await gitExec(['pull', '--rebase'], this.root, this._log)
       if (pull.exitCode !== 0) {
         void window.showErrorMessage(`Git pull failed: ${pull.stderr.trim() || pull.stdout.trim()}`)
         return
       }
-      const push = await gitExec(['push'], this.root)
+      const push = await gitExec(['push'], this.root, this._log)
       if (push.exitCode !== 0) {
         void window.showErrorMessage(`Git push failed: ${push.stderr.trim() || push.stdout.trim()}`)
       }
@@ -286,7 +293,7 @@ export class Repository {
     this._beginProgress('Fetching…', 'spinning')
     try {
       const args = opts?.prune ? ['fetch', '--prune'] : ['fetch']
-      const res = await gitExec(args, this.root)
+      const res = await gitExec(args, this.root, this._log)
       if (res.exitCode !== 0 && opts?.silent !== true) {
         void window.showErrorMessage(`Git fetch failed: ${res.stderr.trim() || res.stdout.trim()}`)
       }
@@ -349,7 +356,7 @@ export class Repository {
       placeHolder: 'Select a branch to delete',
     })
     if (!branch) return
-    const res = await gitExec(['branch', '-d', branch], this.root)
+    const res = await gitExec(['branch', '-d', branch], this.root, this._log)
     if (res.exitCode !== 0) {
       // Not fully merged — offer a force delete.
       const force = await window.showWarningMessage(
@@ -426,8 +433,8 @@ export class Repository {
     // A folder may hold both tracked and untracked changes; `checkout` restores
     // the former (and harmlessly errors when there's nothing tracked to restore,
     // hence no error surfacing here), `clean -fd` removes the latter.
-    await gitExec(['checkout', '--', path], this.root)
-    const clean = await gitExec(['clean', '-fd', '--', path], this.root)
+    await gitExec(['checkout', '--', path], this.root, this._log)
+    const clean = await gitExec(['clean', '-fd', '--', path], this.root, this._log)
     if (clean.exitCode !== 0) {
       void window.showErrorMessage(
         `Git discard failed: ${clean.stderr.trim() || clean.stdout.trim()}`,
@@ -442,13 +449,13 @@ export class Repository {
       'Discard All Changes',
     )
     if (confirm !== 'Discard All Changes') return
-    const checkout = await gitExec(['checkout', '--', '.'], this.root)
+    const checkout = await gitExec(['checkout', '--', '.'], this.root, this._log)
     if (checkout.exitCode !== 0) {
       void window.showErrorMessage(
         `Git discard failed: ${checkout.stderr.trim() || checkout.stdout.trim()}`,
       )
     }
-    await gitExec(['clean', '-fd'], this.root)
+    await gitExec(['clean', '-fd'], this.root, this._log)
     await this.refresh()
   }
 
@@ -467,7 +474,7 @@ export class Repository {
   /** Open a diff of the file's HEAD revision against its current working-tree content. */
   async openChange(absPath: string, pinned = false, preserveFocus = false): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
-    const head = await gitExec(['show', `HEAD:${rel}`], this.root)
+    const head = await gitExec(['show', `HEAD:${rel}`], this.root, this._log)
     const original = head.exitCode === 0 ? head.stdout : '' // new file → no HEAD revision
     let modified = ''
     try {
@@ -492,7 +499,7 @@ export class Repository {
   ): Promise<void> {
     if (progress) this._beginProgress(progress.text, progress.kind)
     try {
-      const res = await gitExec(args, this.root)
+      const res = await gitExec(args, this.root, this._log)
       if (res.exitCode !== 0) {
         void window.showErrorMessage(
           `Git ${label} failed: ${res.stderr.trim() || res.stdout.trim()}`,
@@ -505,7 +512,7 @@ export class Repository {
   }
 
   private async _listBranches(): Promise<string[]> {
-    const res = await gitExec(['branch', '--format=%(refname:short)'], this.root)
+    const res = await gitExec(['branch', '--format=%(refname:short)'], this.root, this._log)
     return res.stdout
       .split('\n')
       .map((b) => b.trim())
@@ -513,7 +520,7 @@ export class Repository {
   }
 
   private async _listRemotes(): Promise<string[]> {
-    const res = await gitExec(['remote'], this.root)
+    const res = await gitExec(['remote'], this.root, this._log)
     return res.stdout
       .split('\n')
       .map((r) => r.trim())
@@ -521,7 +528,7 @@ export class Repository {
   }
 
   private async _listTags(): Promise<string[]> {
-    const res = await gitExec(['tag'], this.root)
+    const res = await gitExec(['tag'], this.root, this._log)
     return res.stdout
       .split('\n')
       .map((t) => t.trim())
@@ -539,7 +546,7 @@ export class Repository {
 
   /** Show the stash list as a rich quick pick; resolves to the chosen `stash@{n}` ref. */
   private async _pickStash(placeHolder: string): Promise<string | undefined> {
-    const res = await gitExec(['stash', 'list', '--format=%gd%x1f%s'], this.root)
+    const res = await gitExec(['stash', 'list', '--format=%gd%x1f%s'], this.root, this._log)
     const stashes = res.stdout
       .split('\n')
       .filter(Boolean)
@@ -590,6 +597,7 @@ export class Repository {
         this._watchers.push(watch(join(this.root, '.git'), () => trigger()))
       } catch {
         console.error('[git] filesystem watch unavailable; auto-refresh disabled')
+        this._log?.('[git] filesystem watch unavailable; auto-refresh disabled')
       }
     }
   }

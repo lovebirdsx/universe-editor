@@ -92,6 +92,15 @@ export interface InputBoxOptions {
   value?: string
 }
 
+/** A channel in the Output panel that an extension can write to. */
+export interface OutputChannel extends Disposable {
+  readonly name: string
+  append(text: string): void
+  appendLine(text: string): void
+  clear(): void
+  show(): void
+}
+
 /** The `window` namespace: UI surfaced through the host's renderer. */
 export interface WindowApi {
   showInformationMessage(message: string, ...items: string[]): Promise<string | undefined>
@@ -104,6 +113,7 @@ export interface WindowApi {
   ): Promise<T | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment?: StatusBarAlignment, priority?: number): StatusBarItem
+  createOutputChannel(name: string): OutputChannel
 }
 
 /** The `workspace` namespace: the folder the editor currently has open. */
@@ -185,6 +195,7 @@ interface IExtensionHostBridge {
     key: string,
     defaultValue: unknown,
   ): Promise<unknown>
+  createOutputChannel(name: string): OutputChannel
 }
 
 /** Global key the host installs the bridge under. KEEP IN SYNC with the host. */
@@ -213,6 +224,7 @@ export const window: WindowApi = {
   showInputBox: (options) => bridge().showInputBox(options),
   createStatusBarItem: (alignment = StatusBarAlignment.Left, priority = 0) =>
     bridge().createStatusBarItem(alignment, priority),
+  createOutputChannel: (name) => bridge().createOutputChannel(name),
 }
 
 export const scm: ScmApi = {

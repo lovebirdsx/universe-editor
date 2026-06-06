@@ -20,6 +20,7 @@ import {
   type IExtHostScm,
   type IMainThreadCommands,
   type IMainThreadFs,
+  type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadWindow,
   type StdioTransport,
@@ -54,6 +55,9 @@ const mainThreadScm = ProxyChannel.toService<IMainThreadScm>(
 )
 const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
   client.getChannel(ExtHostChannels.mainThreadFs),
+)
+const mainThreadOutput = ProxyChannel.toService<IMainThreadOutput>(
+  client.getChannel(ExtHostChannels.mainThreadOutput),
 )
 
 // Register channels synchronously so a renderer call that races the async scan
@@ -111,6 +115,7 @@ async function main(): Promise<void> {
       workspaceRoot,
       mainThreadFs,
       kind,
+      mainThreadOutput,
     ),
   )
   console.error(`[ext-host] ready (${kind})`)

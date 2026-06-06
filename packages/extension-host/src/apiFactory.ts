@@ -11,6 +11,7 @@ import type {
   FileType,
   InputBoxOptions,
   Memento,
+  OutputChannel,
   QuickPickItem,
   QuickPickOptions,
   SourceControl,
@@ -53,6 +54,7 @@ export interface IExtensionHostBridge {
     key: string,
     defaultValue: unknown,
   ): Promise<unknown>
+  createOutputChannel(name: string): OutputChannel
 }
 
 export function installApiBridge(bridge: IExtensionHostBridge): void {
