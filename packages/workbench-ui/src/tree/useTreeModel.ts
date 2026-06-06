@@ -9,6 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useMemo, useState } from 'react'
+import { combinedDisposable, markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 
 export interface ITreeModelBinding<T> {
@@ -24,10 +25,12 @@ export function useTreeModel<T>(model: TreeModel<T>): ITreeModelBinding<T> {
   useEffect(() => {
     const ds = model.onDidChangeStructure(() => setStructureVersion((v) => v + 1))
     const sel = model.onDidChangeSelection(() => setSelectionVersion((v) => v + 1))
-    return () => {
-      ds.dispose()
-      sel.dispose()
-    }
+    // React owns these via this cleanup. On a page reload the beforeunload
+    // handler unmounts before passive-effect cleanup flushes, so mark them as
+    // singletons to keep the leak tracker from reporting them; a normal unmount
+    // still disposes them. Mirrors useTitleBarMenus.
+    const combined = markAsSingleton(combinedDisposable(ds, sel))
+    return () => combined.dispose()
   }, [model])
 
   const visibleNodes = useMemo(

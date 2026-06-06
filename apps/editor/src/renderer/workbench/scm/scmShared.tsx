@@ -18,6 +18,7 @@ import {
   CommandsRegistry,
   ContextKeyExpr,
   isSubmenuEntry,
+  markAsSingleton,
   MenuId,
   MenuRegistry,
   type ContextKeyExpression,
@@ -50,7 +51,10 @@ export function evalWhen(
 export function useMenuRevision(): number {
   const [rev, setRev] = useState(0)
   useLayoutEffect(() => {
-    const d = MenuRegistry.onDidChangeMenu(() => setRev((v) => v + 1))
+    // markAsSingleton: a page-reload unmount (beforeunload) snapshots leaks
+    // before this effect's cleanup flushes, which would otherwise report the
+    // subscription. A normal unmount still disposes it. Mirrors useTitleBarMenus.
+    const d = markAsSingleton(MenuRegistry.onDidChangeMenu(() => setRev((v) => v + 1)))
     return () => d.dispose()
   }, [])
   return rev

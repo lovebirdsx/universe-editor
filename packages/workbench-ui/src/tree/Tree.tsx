@@ -25,6 +25,7 @@ import {
   type Ref,
 } from 'react'
 import { VirtualList, type VirtualListHandle } from '../list/VirtualList.js'
+import { markAsSingleton } from '@universe-editor/platform'
 import { type IVisibleNode, type TreeModel } from './TreeModel.js'
 import { useTreeModel } from './useTreeModel.js'
 
@@ -114,8 +115,10 @@ export function Tree<T>(props: ITreeProps<T>) {
   // target row is outside the virtualizer's rendered window.
   const [revealRequest, setRevealRequest] = useState<{ id: string; tick: number } | null>(null)
   useEffect(() => {
-    const d = model.onReveal(({ id }) =>
-      setRevealRequest((prev) => ({ id, tick: (prev?.tick ?? 0) + 1 })),
+    // Singleton for the same reason as useTreeModel: a page-reload unmount runs
+    // before passive cleanup flushes, which would otherwise leak-report this.
+    const d = markAsSingleton(
+      model.onReveal(({ id }) => setRevealRequest((prev) => ({ id, tick: (prev?.tick ?? 0) + 1 }))),
     )
     return () => d.dispose()
   }, [model])
