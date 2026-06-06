@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { URI } from '@universe-editor/platform'
-import { IContextKeyService } from '@universe-editor/platform'
+import { IConfigurationService, IContextKeyService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { createFileLinkProvider } from './terminalLinkProvider.js'
 import { useService } from '../../useService.js'
@@ -42,6 +42,7 @@ export function TerminalInstance({
   openFile,
 }: TerminalInstanceProps) {
   const contextKeyService = useService(IContextKeyService)
+  const configService = useService(IConfigurationService)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -63,6 +64,7 @@ export function TerminalInstance({
       fontFamily: 'Consolas, "Courier New", monospace',
       fontSize: 13,
       cursorBlink: true,
+      scrollback: configService.get<number>('terminal.integrated.scrollback') ?? 5000,
       theme: themeFor(isDark),
     })
     const fit = new FitAddon()
@@ -128,6 +130,18 @@ export function TerminalInstance({
     const term = termRef.current
     if (term) term.options.theme = themeFor(isDark)
   }, [isDark])
+
+  // Live scrollback update when the setting changes.
+  useEffect(() => {
+    const d = configService.onDidChangeConfiguration((e) => {
+      if (!e.affectsConfiguration('terminal.integrated.scrollback')) return
+      const term = termRef.current
+      if (term)
+        term.options.scrollback =
+          configService.get<number>('terminal.integrated.scrollback') ?? 5000
+    })
+    return () => d.dispose()
+  }, [configService])
 
   // When this instance becomes active it may have been display:none (size 0);
   // refit against the now-laid-out container and focus.

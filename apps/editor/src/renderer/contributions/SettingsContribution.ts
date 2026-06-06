@@ -290,6 +290,15 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Default working directory for new integrated terminals. Leave empty to use workspace root.',
             ),
           },
+          'terminal.integrated.scrollback': {
+            type: 'number',
+            default: 5000,
+            minimum: 0,
+            description: localize(
+              'settings.terminal.integrated.scrollback.description',
+              'Maximum number of lines kept in the terminal scrollback (history). Restored when switching back to a terminal editor. Set to 0 for unlimited.',
+            ),
+          },
         },
       }),
     )

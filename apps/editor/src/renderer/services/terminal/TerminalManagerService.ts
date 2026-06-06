@@ -83,6 +83,7 @@ export const ITerminalManagerService =
 
 interface TermClient {
   buffer: string[]
+  lineCount: number
   writer: ((data: string) => void) | undefined
   target: TerminalTarget
 }
@@ -100,6 +101,16 @@ interface IPersistedTerminalState {
 
 const STORAGE_KEY = 'terminal.panelState'
 const SAVE_DEBOUNCE_MS = 200
+const DEFAULT_SCROLLBACK = 5000
+// Extra headroom kept before compacting the retained buffer, so we don't
+// re-join on every newline once at the limit.
+const TRIM_SLACK_LINES = 1024
+
+function countNewlines(s: string): number {
+  let n = 0
+  for (let i = 0; i < s.length; i++) if (s.charCodeAt(i) === 10) n++
+  return n
+}
 
 export class TerminalManagerService extends Disposable implements ITerminalManagerService {
   declare readonly _serviceBrand: undefined
@@ -167,7 +178,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
     try {
       const info = await this._terminal.create(ipcSpec)
-      this._clients.set(info.id, { buffer: [], writer: undefined, target })
+      this._clients.set(info.id, { buffer: [], lineCount: 0, writer: undefined, target })
       this._specs.set(info.id, {
         shell: info.shell,
         ...(cwd !== undefined ? { cwd } : {}),
@@ -199,11 +210,10 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     const client = this._clients.get(id)
     if (!client) return toDisposable(() => {})
     client.writer = onData
-    if (client.buffer.length > 0) {
-      const pending = client.buffer
-      client.buffer = []
-      for (const chunk of pending) onData(chunk)
-    }
+    // Replay the full retained history so a freshly-created xterm (e.g. after
+    // switching editors) restores its scrollback. The buffer is kept, not
+    // cleared — it is the long-lived history copy.
+    for (const chunk of client.buffer) onData(chunk)
     return toDisposable(() => {
       if (client.writer === onData) client.writer = undefined
     })
@@ -283,8 +293,24 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private _dispatch(id: string, data: string): void {
     const client = this._clients.get(id)
     if (!client) return
+    client.buffer.push(data)
+    client.lineCount += countNewlines(data)
+    this._trim(client)
     if (client.writer) client.writer(data)
-    else client.buffer.push(data)
+  }
+
+  private _trim(client: TermClient): void {
+    const maxLines =
+      this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK
+    if (maxLines <= 0) return // unlimited
+    // Compact lazily: only when comfortably over the limit, to avoid
+    // re-joining the buffer on every chunk.
+    if (client.lineCount <= maxLines + TRIM_SLACK_LINES) return
+    const lines = client.buffer.join('').split('\n')
+    const kept = lines.slice(-maxLines)
+    const joined = kept.join('\n')
+    client.buffer = joined ? [joined] : []
+    client.lineCount = kept.length - 1
   }
 
   private _onExit(id: string, exitCode: number): void {
