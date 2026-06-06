@@ -270,10 +270,13 @@ export class Repository {
   }
 
   async undoLastCommit(): Promise<void> {
+    const msgRes = await gitExec(['log', '-1', '--format=%B', 'HEAD'], this.root, this._log)
+    const lastMessage = msgRes.exitCode === 0 ? msgRes.stdout.trimEnd() : ''
     await this._run(['reset', '--soft', 'HEAD~1'], 'undo last commit', {
       text: 'Undoing…',
       kind: 'spinning',
     })
+    if (lastMessage) this.commitMessage = lastMessage
   }
 
   async sync(): Promise<void> {
