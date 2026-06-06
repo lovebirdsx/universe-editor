@@ -21,6 +21,7 @@ import { Folder, FolderOpen } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { useObservable } from '../useService.js'
 import { searchViewState } from './searchViewState.js'
+import { searchSession } from './searchSession.js'
 import {
   EMPTY_SNAPSHOT,
   buildSearchSnapshot,
@@ -72,8 +73,12 @@ export function SearchResultsTree({
       getRoots: () => snapshotRef.current.roots,
       getParent: (n) => snapshotRef.current.parentMap.get(n.id) ?? null,
     }
-    // Everything expanded by default so results show without a post-mount event.
-    return new TreeModel<SearchNode>({ dataSource, defaultExpanded: () => true })
+    // Everything expanded by default; restored collapses applied via defaultExpanded
+    // so the first render already shows the correct state without a flash.
+    return new TreeModel<SearchNode>({
+      dataSource,
+      defaultExpanded: (n) => !searchSession.treeCollapsedIds.has(n.id),
+    })
   })
 
   const snapshot = useMemo(
@@ -82,14 +87,12 @@ export function SearchResultsTree({
   )
   snapshotRef.current = snapshot
   useLayoutEffect(() => {
-    // Seed newly-seen expandable nodes as expanded so the model's stored state
-    // matches the default-expanded display — otherwise the first toggle/collapse
-    // is a no-op (toggle reads _state, which would be empty). Existing nodes keep
-    // whatever the user set; refresh() always re-reads the changed snapshot.
-    const updates = snapshot.expandableIds
-      .filter((id) => !model.hasState(id))
-      .map((id) => [id, true] as const)
-    if (updates.length > 0) model.setExpansion(updates)
+    // Seed newly-seen expandable nodes, respecting any saved collapsed state from
+    // a prior mount so switching views and back preserves user collapses.
+    const toSeed = snapshot.expandableIds.filter((id) => !model.hasState(id))
+    if (toSeed.length > 0) {
+      model.setExpansion(toSeed.map((id) => [id, !searchSession.treeCollapsedIds.has(id)] as const))
+    }
     model.refresh()
   }, [snapshot, model])
 
@@ -101,6 +104,16 @@ export function SearchResultsTree({
     seenCollapse.current = collapseSignal
     model.setExpansion(snapshotRef.current.expandableIds.map((id) => [id, false] as const))
   }, [collapseSignal, model])
+
+  // Persist collapsed nodes to searchSession so switching views and back restores them.
+  useEffect(() => {
+    const d = model.onDidChangeStructure(() => {
+      searchSession.treeCollapsedIds = new Set(
+        snapshotRef.current.expandableIds.filter((id) => !model.isExpanded(id)),
+      )
+    })
+    return () => d.dispose()
+  }, [model])
 
   const renderRow = (ctx: ITreeRowRenderContext<SearchNode>) => {
     const n = ctx.node.element

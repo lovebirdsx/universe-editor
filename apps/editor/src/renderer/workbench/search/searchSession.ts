@@ -21,6 +21,7 @@ export interface SearchSessionState {
   replaceVisible: boolean
   filtersVisible: boolean
   results: readonly IFileMatch[]
+  treeCollapsedIds: ReadonlySet<string>
 }
 
 function emptyState(): SearchSessionState {
@@ -35,6 +36,7 @@ function emptyState(): SearchSessionState {
     replaceVisible: false,
     filtersVisible: false,
     results: [],
+    treeCollapsedIds: new Set<string>(),
   }
 }
 

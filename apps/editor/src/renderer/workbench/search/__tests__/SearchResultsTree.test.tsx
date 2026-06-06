@@ -7,10 +7,12 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { URI, type IFileMatch } from '@universe-editor/platform'
 import { SearchResultsTree } from '../SearchResultsTree.js'
 import { searchViewState } from '../searchViewState.js'
+import { searchSession } from '../searchSession.js'
 
 afterEach(() => {
   cleanup()
   searchViewState.setViewMode('list')
+  searchSession.treeCollapsedIds = new Set()
 })
 
 function makeMatch(path: string, line: number, preview: string): IFileMatch {
