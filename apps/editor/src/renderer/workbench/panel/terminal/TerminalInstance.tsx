@@ -4,7 +4,11 @@ import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
 import type { URI } from '@universe-editor/platform'
-import { IConfigurationService, IContextKeyService } from '@universe-editor/platform'
+import {
+  IConfigurationService,
+  IContextKeyService,
+  markAsSingleton,
+} from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { createFileLinkProvider } from './terminalLinkProvider.js'
 import { useService } from '../../useService.js'
@@ -93,7 +97,10 @@ export function TerminalInstance({
       }
     }
 
-    const detach = manager.attach(id, (data) => term.write(data))
+    // markAsSingleton: Restart Editor snapshots the leak tracker while React is
+    // still mounted (before unmount flushes passive cleanup), so these live
+    // subscriptions would otherwise read as leaks. Unmount still disposes them.
+    const detach = markAsSingleton(manager.attach(id, (data) => term.write(data)))
     const inputSub = term.onData((data) => manager.input(id, data))
     const selectionSub = term.onSelectionChange(() => setHasSelection(term.hasSelection()))
     const observer = new ResizeObserver(() => doFit())
@@ -133,13 +140,15 @@ export function TerminalInstance({
 
   // Live scrollback update when the setting changes.
   useEffect(() => {
-    const d = configService.onDidChangeConfiguration((e) => {
-      if (!e.affectsConfiguration('terminal.integrated.scrollback')) return
-      const term = termRef.current
-      if (term)
-        term.options.scrollback =
-          configService.get<number>('terminal.integrated.scrollback') ?? 5000
-    })
+    const d = markAsSingleton(
+      configService.onDidChangeConfiguration((e) => {
+        if (!e.affectsConfiguration('terminal.integrated.scrollback')) return
+        const term = termRef.current
+        if (term)
+          term.options.scrollback =
+            configService.get<number>('terminal.integrated.scrollback') ?? 5000
+      }),
+    )
     return () => d.dispose()
   }, [configService])
 
@@ -165,7 +174,7 @@ export function TerminalInstance({
   // Respond to programmatic focus requests (e.g. FocusTerminalPanelAction).
   useEffect(() => {
     if (!active) return
-    const d = manager.onFocusRequest(() => termRef.current?.focus())
+    const d = markAsSingleton(manager.onFocusRequest(() => termRef.current?.focus()))
     return () => d.dispose()
   }, [active, manager])
 
