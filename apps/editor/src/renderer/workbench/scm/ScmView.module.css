@@ -196,9 +196,11 @@
 
 .resource,
 .folder {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow: hidden;
   padding: 2px 4px;
   cursor: pointer;
   font-size: 13px;
@@ -210,6 +212,8 @@
 }
 
 .folderLabel {
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -252,22 +256,34 @@
 }
 
 .resourceActions {
-  display: flex;
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  z-index: 1;
+  display: none;
   gap: 2px;
-  margin-left: auto;
-  opacity: 0;
-  transition: opacity 0.08s ease-in-out;
-}
-
-.resourceDir ~ .resourceActions {
-  margin-left: 0;
+  transform: translateY(-50%);
 }
 
 .resource:hover .resourceActions,
 .resource:focus-within .resourceActions,
 .folder:hover .resourceActions,
 .folder:focus-within .resourceActions {
-  opacity: 1;
+  display: flex;
+}
+
+.resource:hover .resourceActions,
+.folder:hover .resourceActions {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.resource.selected .resourceActions,
+.folder.selected .resourceActions {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+}
+
+.tree:not([data-focused='true']) .selected .resourceActions {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
 }
 
 .actionButton {
