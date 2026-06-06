@@ -121,7 +121,7 @@ async function loadMonaco(): Promise<typeof monaco> {
         for (const r of resources) {
           if (!r.path.toLowerCase().endsWith('.json')) continue
           const ms = _monaco!.editor.getModelMarkers({ resource: r })
-          // eslint-disable-next-line no-console
+
           console.log(
             '[ue-diag]',
             r.path,

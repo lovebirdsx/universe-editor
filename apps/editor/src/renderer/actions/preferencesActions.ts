@@ -212,7 +212,11 @@ export class OpenSettingsJsonAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    void openUserDataFile(userDataFileServices(accessor), UserDataFile.Settings, SETTINGS_JSON_TEMPLATE)
+    void openUserDataFile(
+      userDataFileServices(accessor),
+      UserDataFile.Settings,
+      SETTINGS_JSON_TEMPLATE,
+    )
   }
 }
 
