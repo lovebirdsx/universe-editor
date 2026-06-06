@@ -73,6 +73,12 @@ export interface AcpSessionHistoryEntry {
   readonly collapseMode?: CollapseMode
   /** Cumulative milliseconds the session spent in 'running' status. Updated each time a run segment ends. */
   readonly accumulatedRunningMs?: number
+  /**
+   * True once the user has sent at least one message in this session. Unset
+   * (or explicitly `false`) for sessions that were created but never used.
+   * Used by the restore coordinator to skip sessions the agent never persisted.
+   */
+  readonly hasMessages?: boolean
 }
 
 export interface IAcpSessionHistoryService {
@@ -113,6 +119,13 @@ export interface IAcpSessionHistoryService {
    * errored / closed) so it survives editor restarts.
    */
   setHistoryRunningDuration(sessionId: string, ms: number): void
+  /**
+   * Mark a session as having at least one user message. Idempotent.
+   * No-op if the session id is unknown. Called by `AcpSession.sendPrompt`
+   * so the restore coordinator can skip sessions that were created but
+   * never used (the agent does not persist those across restarts).
+   */
+  setHistoryHasMessages(sessionId: string): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -242,6 +255,13 @@ export class AcpSessionHistoryService
     // (e.g. on resume) must not blow away the restored arc.
     const carriedUsage =
       entry.usage ?? (existingIdx >= 0 ? this._state[existingIdx]!.usage : undefined)
+    // Once hasMessages is true it must never revert. Input value takes
+    // precedence; fall back to the existing row so resume() preserves it.
+    const carriedHasMessages = (() => {
+      const existing = existingIdx >= 0 ? this._state[existingIdx]!.hasMessages : undefined
+      if (existing === true) return true
+      return entry.hasMessages
+    })()
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -255,6 +275,7 @@ export class AcpSessionHistoryService
       ...(existingIdx >= 0 && this._state[existingIdx]!.collapseMode !== undefined
         ? { collapseMode: this._state[existingIdx]!.collapseMode }
         : {}),
+      ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
     }
     if (existingIdx >= 0) {
       this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
@@ -335,6 +356,17 @@ export class AcpSessionHistoryService
     const cur = this._state[idx]!
     if (cur.accumulatedRunningMs === ms) return
     const next: AcpSessionHistoryEntry = { ...cur, accumulatedRunningMs: ms }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
+  setHistoryHasMessages(sessionId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.hasMessages === true) return
+    const next: AcpSessionHistoryEntry = { ...cur, hasMessages: true }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -535,7 +567,8 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     typeof o['createdAt'] === 'number' &&
     typeof o['lastUsedAt'] === 'number' &&
     (o['configOptions'] === undefined || isStringRecord(o['configOptions'])) &&
-    (o['usage'] === undefined || isValidUsage(o['usage']))
+    (o['usage'] === undefined || isValidUsage(o['usage'])) &&
+    (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean')
   )
 }
 

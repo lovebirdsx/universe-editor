@@ -530,6 +530,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
     // Safe no-op when this session wasn't created with a history reference.
     this._history?.touch(this.id)
+    this._history?.setHistoryHasMessages(this.id)
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
     this._appendMessage('user', text)

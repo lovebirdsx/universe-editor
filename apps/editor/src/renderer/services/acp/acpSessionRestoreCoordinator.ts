@@ -219,9 +219,13 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     // (e.g. autorun firing twice for visibility + active container) restore once.
     const sessionId = this._pendingRestoreSessionId
     this._pendingRestoreSessionId = undefined
+
     try {
       await this._callbacks.resumeSession(sessionId)
     } catch (err) {
+      // resumeSession owns the failure policy: a genuine session surfaces an
+      // error to the user, an empty session (created but never messaged) is
+      // discarded silently. Either way we only log here.
       this._logger.warn(`tryRestoreActiveSession failed: ${(err as Error).message}`)
     }
   }

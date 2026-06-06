@@ -281,6 +281,17 @@ export class AgentsSessionEditorLifecycleContribution
       this._subscribeGroup(group)
     }
     this._register(this._editorGroups.onDidAddGroup((group) => this._subscribeGroup(group)))
+    this._register(
+      this._sessions.onDidCloseSession((closedId) => {
+        for (const group of this._editorGroups.groups) {
+          for (const editor of [...group.editors]) {
+            if (editor instanceof AcpSessionEditorInput && editor.sessionId === closedId) {
+              group.closeEditor(editor)
+            }
+          }
+        }
+      }),
+    )
   }
 
   private _subscribeGroup(group: IEditorGroup): void {

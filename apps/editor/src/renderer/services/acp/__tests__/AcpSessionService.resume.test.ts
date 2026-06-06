@@ -684,6 +684,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     await built.history.initialize()
     const original = await svc.createSession()
     const historyId = built.history.list()[0]!.id
+    built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(original.id)
 
     await expect(svc.resumeSession(historyId)).rejects.toThrow(/does not advertise.*loadSession/)
@@ -699,6 +700,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     await built.history.initialize()
     const original = await svc.createSession()
     const historyId = built.history.list()[0]!.id
+    built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(original.id)
 
     await expect(svc.resumeSession(historyId)).rejects.toThrow(/agent went sideways/)
@@ -757,6 +759,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     await built.history.initialize()
     const original = await svc.createSession() // connect #1 — succeeds
     const historyId = built.history.list()[0]!.id
+    built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(original.id)
 
     built.client.failConnect = true
@@ -778,6 +781,36 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     const resumed = await svc.resumeSession(historyId)
     expect(resumed.id).toBe(historyId)
     expect(svc.getById(historyId)?.id).toBe(historyId)
+  })
+
+  it('discards an empty session silently when resume fails (no notification, history removed)', async () => {
+    // Repro for bug2: a session created but never messaged (hasMessages=false)
+    // cannot be resumed after a restart — the agent never persisted it. Instead
+    // of surfacing an error, resumeSession must drop the history row and stay
+    // silent so the editor tab can close itself with no "Failed to resume" toast.
+    const built = buildService({ loadSessionResult: {} })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    const historyId = built.history.list()[0]!.id
+    // NOTE: deliberately NOT calling setHistoryHasMessages — the session is empty.
+    await svc.closeSession(original.id)
+    expect(built.history.get(historyId)).toBeDefined()
+
+    // Simulate the post-restart agent that no longer knows this session.
+    built.client.failConnect = true
+    const closed: string[] = []
+    svc.onDidCloseSession((id) => closed.push(id))
+
+    await expect(svc.resumeSession(historyId)).rejects.toThrow()
+    // No live session leaked.
+    expect(svc.sessions.get()).toHaveLength(0)
+    // The empty session was discarded from history (leaves the session list).
+    expect(built.history.get(historyId)).toBeUndefined()
+    // No error notification was shown to the user.
+    expect(built.notifications.captured.filter((n) => /Failed to resume/.test(n.message))).toEqual(
+      [],
+    )
   })
 })
 
@@ -911,6 +944,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     await round1.history.initialize()
     const original = await round1.svc.createSession()
     const sessionId = original.id
+    // Mark as having messages so the restore coordinator does not skip it.
+    round1.history.setHistoryHasMessages(sessionId)
     await Promise.resolve()
     expect(round1.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(sessionId)
     await flushHistoryWrite()
@@ -1048,7 +1083,9 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
   it('claims pending exactly once across concurrent invocations', async () => {
     const round1 = buildService({ loadSessionResult: {} })
     await round1.history.initialize()
-    await round1.svc.createSession()
+    const session = await round1.svc.createSession()
+    // Mark as having messages so the restore coordinator does not skip it.
+    round1.history.setHistoryHasMessages(session.id)
     await Promise.resolve()
     const storage = round1.storage
     await flushHistoryWrite()

@@ -36,6 +36,7 @@ import {
   type ILogger,
   type IObservable,
   type ISettableObservable,
+  type Event,
 } from '@universe-editor/platform'
 import {
   type LoadSessionRequest,
@@ -57,7 +58,7 @@ import {
 } from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
-import { IAcpSessionHistoryService } from './acpSessionHistory.js'
+import { IAcpSessionHistoryService, type AcpSessionHistoryEntry } from './acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
@@ -106,6 +107,8 @@ export interface IAcpSessionService {
   readonly sessions: IObservable<readonly IAcpSession[]>
   readonly activeSessionId: IObservable<string | undefined>
   readonly activeSession: IObservable<IAcpSession | undefined>
+  /** Fired after a session is removed from `sessions`. Carries the closed session id. */
+  readonly onDidCloseSession: Event<string>
   createSession(agentId?: string): Promise<IAcpSession>
   /**
    * Resume a previously-persisted session by its (agent-issued) sessionId.
@@ -179,6 +182,9 @@ export class AcpSessionService
 
   private readonly _onDidCreate = this._register(new Emitter<IAcpSession>())
   readonly onDidCreate = this._onDidCreate.event
+
+  private readonly _onDidCloseSession = this._register(new Emitter<string>())
+  readonly onDidCloseSession = this._onDidCloseSession.event
 
   private _sessions: AcpSession[] = []
   private readonly _logger: ILogger
@@ -370,6 +376,7 @@ export class AcpSessionService
             sessionIdOnAgent: result.sessionId,
             title,
             ...(cwd !== undefined ? { cwd } : {}),
+            hasMessages: false,
           })
           const session = new AcpSession(
             result.sessionId,
@@ -464,20 +471,11 @@ export class AcpSessionService
     } catch (err) {
       // connect() now bounds the spawn+initialize handshake, so a stall surfaces
       // here as a rejection instead of an infinite "Resuming agent session…"
-      // spinner. Mirror the other resume failure paths (notify + telemetry);
+      // spinner. _onResumeFailure decides whether to surface this (real session)
+      // or discard it silently (empty session the agent never persisted);
       // resumeSession's `finally` then clears the in-flight dedup entry so the
       // poisoned promise can no longer make every later Retry/switch a no-op.
-      const msg = (err as Error).message
-      this._logger.warn(`resumeSession connect failed: ${msg}`)
-      this._notification.notify({
-        severity: Severity.Error,
-        message: `Failed to resume agent session: ${msg}`,
-      })
-      this._telemetry.publicLogError('acp.session_resume_failed', {
-        agentId: entry.agentId,
-        error: msg,
-      })
-      throw err
+      this._onResumeFailure(entry, err)
     }
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const mcpServers = this._readMcpServers()
@@ -569,7 +567,24 @@ export class AcpSessionService
       } else {
         conn.dispose()
       }
-      const msg = (err as Error).message
+      this._onResumeFailure(entry, err)
+    }
+  }
+
+  /**
+   * Centralised resume-failure policy. An empty session (created but never
+   * messaged) cannot be revived after a restart — the agent never persisted it —
+   * so we discard it silently: drop the history row (it leaves the session list)
+   * and let the restored editor tab close itself, with NO error notification.
+   * Any session that has messages (or predates the `hasMessages` flag) surfaces
+   * the failure to the user as before. Always rethrows so callers see the error.
+   */
+  private _onResumeFailure(entry: AcpSessionHistoryEntry, err: unknown): never {
+    const msg = (err as Error).message
+    if (entry.hasMessages === false) {
+      this._logger.info(`discarding empty session that failed to resume: ${entry.id}`)
+      this._history.remove(entry.id)
+    } else {
       this._logger.warn(`resumeSession failed: ${msg}`)
       this._notification.notify({
         severity: Severity.Error,
@@ -579,8 +594,8 @@ export class AcpSessionService
         agentId: entry.agentId,
         error: msg,
       })
-      throw err
     }
+    throw err
   }
 
   async closeSession(sessionId: string): Promise<void> {
@@ -598,6 +613,7 @@ export class AcpSessionService
       this.activeSession.set(next, undefined)
     }
     this._telemetry.publicLog('acp.session_closed', { sessionId })
+    this._onDidCloseSession.fire(sessionId)
   }
 
   getById(sessionId: string): IAcpSession | undefined {

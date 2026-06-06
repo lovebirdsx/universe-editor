@@ -65,6 +65,8 @@ class FakeSessionService {
   declare readonly _serviceBrand: undefined
   readonly closed: string[] = []
   private readonly _byId = new Map<string, IAcpSession>()
+  private readonly _onDidCloseSession = new Emitter<string>()
+  readonly onDidCloseSession = this._onDidCloseSession.event
   register(session: IAcpSession): void {
     this._byId.set(session.id, session)
   }

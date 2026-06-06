@@ -11,6 +11,7 @@ import {
   InstantiationService,
   ServiceCollection,
   observableValue,
+  Emitter,
   IEditorService,
 } from '@universe-editor/platform'
 import type { IEditorService as IEditorServiceType } from '@universe-editor/platform'
@@ -53,12 +54,14 @@ function makeService(
       initial.resumeResult ?? (() => Promise.resolve(undefined as unknown as IAcpSession)),
     )
   const createSession = vi.fn().mockResolvedValue(undefined as unknown as IAcpSession)
+  const onDidCloseSession = new Emitter<string>()
   return {
     _serviceBrand: undefined,
     sessions,
     sessionsObs: sessions,
     activeSessionId,
     activeSession,
+    onDidCloseSession: onDidCloseSession.event,
     _byId: byId,
     createSession: createSession as never,
     resumeSession: resumeSession as never,
@@ -76,27 +79,45 @@ function makeService(
   } satisfies FakeAcpSessionService
 }
 
-function makeHistory(): IAcpSessionHistoryServiceType {
+function makeHistory(
+  get: (id: string) => AcpSessionHistoryEntry | undefined = (id) =>
+    ({
+      id,
+      agentId: 'fake',
+      sessionIdOnAgent: id,
+      title: id,
+      createdAt: 0,
+      lastUsedAt: 0,
+    }) as AcpSessionHistoryEntry,
+): IAcpSessionHistoryServiceType {
   return {
     _serviceBrand: undefined,
     entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.history', []),
-    get: () => undefined,
+    get,
     list: () => [],
     async initialize() {},
   } as unknown as IAcpSessionHistoryServiceType
 }
 
-const stubEditor: IEditorServiceType = {
-  _serviceBrand: undefined,
-  openEditor: vi.fn(),
-  closeEditor: vi.fn(),
-} as unknown as IEditorServiceType
+function makeEditor(): IEditorServiceType {
+  return {
+    _serviceBrand: undefined,
+    openEditor: vi.fn(),
+    closeEditor: vi.fn(),
+  } as unknown as IEditorServiceType
+}
 
-function makeCollection(service: FakeAcpSessionService, history?: IAcpSessionHistoryServiceType) {
+const stubEditor = makeEditor()
+
+function makeCollection(
+  service: FakeAcpSessionService,
+  history?: IAcpSessionHistoryServiceType,
+  editor: IEditorServiceType = stubEditor,
+) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, service)
   services.set(IAcpSessionHistoryService, history ?? makeHistory())
-  services.set(IEditorService, stubEditor)
+  services.set(IEditorService, editor)
   return services
 }
 
@@ -109,8 +130,9 @@ function renderEditor(
   service: FakeAcpSessionService,
   input: AcpSessionEditorInput,
   history?: IAcpSessionHistoryServiceType,
+  editor?: IEditorServiceType,
 ) {
-  const inst = new InstantiationService(makeCollection(service, history))
+  const inst = new InstantiationService(makeCollection(service, history, editor))
   return render(
     <ServicesContext.Provider value={inst}>
       <AcpSessionEditor input={input} />
@@ -203,5 +225,26 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
       fireEvent.click(retry)
     })
     expect(service.resumeSession).toHaveBeenCalledTimes(2)
+  })
+
+  it('closes its own tab silently (no error UI) when resume fails and the session vanished from history', async () => {
+    // Repro for bug2: an empty session (created but never messaged) cannot be
+    // resumed after a restart — the agent never persisted it. resumeSession
+    // rejects AND drops the history row. The editor must NOT show a resume
+    // error; it must close its own tab.
+    const service = makeService({
+      resumeResult: () => Promise.reject(new Error('Unknown agent session id')),
+    })
+    const { input } = buildInput(service, 'sess-empty', 'fake')
+    const editor = makeEditor()
+    // History reports the session as gone (it was discarded on resume failure).
+    const history = makeHistory(() => undefined)
+    await act(async () => {
+      renderEditor(service, input, history, editor)
+    })
+    expect(service.resumeSession).toHaveBeenCalledTimes(1)
+    // No error UI — the tab is being closed instead.
+    expect(screen.queryByTestId('acp-session-resume-error')).toBeNull()
+    expect(editor.closeEditor).toHaveBeenCalledWith(input.id)
   })
 })

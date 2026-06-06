@@ -1071,3 +1071,63 @@ describe('AcpSessionHistoryService — workspace scope', () => {
     }
   })
 })
+
+describe('AcpSessionHistoryService — setHistoryHasMessages', () => {
+  let svc: AcpSessionHistoryService
+
+  beforeEach(async () => {
+    svc = makeService().svc
+    await svc.initialize()
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('sets hasMessages to true on a known session', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't', hasMessages: false })
+    svc.setHistoryHasMessages('s1')
+    expect(svc.get('s1')?.hasMessages).toBe(true)
+  })
+
+  it('is idempotent — calling multiple times keeps hasMessages true', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't', hasMessages: false })
+    svc.setHistoryHasMessages('s1')
+    svc.setHistoryHasMessages('s1')
+    expect(svc.get('s1')?.hasMessages).toBe(true)
+  })
+
+  it('is a no-op for an unknown session id', () => {
+    expect(() => svc.setHistoryHasMessages('nonexistent')).not.toThrow()
+  })
+
+  it('add with hasMessages:false preserves the field', () => {
+    const entry = svc.add({ agentId: 'a', sessionIdOnAgent: 's2', title: 't', hasMessages: false })
+    expect(entry.hasMessages).toBe(false)
+    expect(svc.get('s2')?.hasMessages).toBe(false)
+  })
+
+  it('entries loaded from storage without hasMessages retain undefined', async () => {
+    const storage = new FakeStorage()
+    storage.buckets.get(StorageScope.WORKSPACE)!.set('acp.sessionHistory', {
+      schemaVersion: 1,
+      entries: [
+        {
+          id: 'old-s',
+          agentId: 'a',
+          sessionIdOnAgent: 'old-s',
+          title: 'old session',
+          createdAt: 1,
+          lastUsedAt: 1,
+        },
+      ],
+    })
+    const { svc: svc2 } = makeService({ storage })
+    try {
+      await svc2.initialize()
+      expect(svc2.get('old-s')?.hasMessages).toBeUndefined()
+    } finally {
+      svc2.dispose()
+    }
+  })
+})

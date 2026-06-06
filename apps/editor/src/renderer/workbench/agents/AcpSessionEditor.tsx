@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from 'react'
 import { AlertCircle, Loader2, RotateCw } from 'lucide-react'
-import { IEditorInput, localize } from '@universe-editor/platform'
+import { IEditorInput, IEditorService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
@@ -38,11 +38,14 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   // 复位），`phase !== 'idle'` 守卫会永久挡住下一个 session 的 resume，表现为切到第二个
   // 会话永远转圈、不发 session/load、也不报错。用 sessionId 作 key 让每个会话拥有独立
   // 的 resume 状态机即可根治。
-  return <AcpSessionResumer key={acpInput.sessionId} sessionId={acpInput.sessionId} />
+  return <AcpSessionResumer key={acpInput.sessionId} input={acpInput} />
 }
 
-function AcpSessionResumer({ sessionId }: { sessionId: string }) {
+function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
   const service = useService(IAcpSessionService)
+  const history = useService(IAcpSessionHistoryService)
+  const editor = useService(IEditorService)
+  const sessionId = input.sessionId
   const [phase, setPhase] = useState<ResumePhase>({ kind: 'idle' })
 
   useEffect(() => {
@@ -54,10 +57,17 @@ function AcpSessionResumer({ sessionId }: { sessionId: string }) {
         // 切到 <ChatBody />（本组件随即卸载），无需在此 setPhase。
       },
       (err: unknown) => {
+        // 若 session 已从 history 消失，说明它是一个「创建了但从未发过消息」的空会话：
+        // 重启后 agent 没能恢复它，已被静默丢弃。此时不显示加载失败，直接关闭本 tab。
+        // 真正的失败（agent 崩溃等）会保留 history 条目 → 落到下面的 error 分支并提供重试。
+        if (history.get(sessionId) === undefined) {
+          editor.closeEditor(input.id)
+          return
+        }
         setPhase({ kind: 'error', message: (err as Error).message })
       },
     )
-  }, [service, sessionId, phase.kind])
+  }, [service, history, editor, input, sessionId, phase.kind])
 
   if (phase.kind === 'error') {
     return (
