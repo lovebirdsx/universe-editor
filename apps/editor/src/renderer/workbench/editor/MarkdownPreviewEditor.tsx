@@ -5,11 +5,12 @@
  *  (so edits show immediately) and falls back to reading disk otherwise.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { IEditorInput, IFileService } from '@universe-editor/platform'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
+import { useMarkdownSyncScroll } from './useMarkdownSyncScroll.js'
 import { useService } from '../useService.js'
 import styles from './MarkdownPreviewEditor.module.css'
 
@@ -17,6 +18,8 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const fileService = useService(IFileService)
   const sourceUri = (input as MarkdownPreviewInput).sourceUri
   const [content, setContent] = useState('')
+  const rootRef = useRef<HTMLDivElement>(null)
+  useMarkdownSyncScroll(rootRef, sourceUri)
 
   useEffect(() => {
     const model = MonacoModelRegistry.peek(sourceUri)
@@ -40,7 +43,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   }, [fileService, sourceUri])
 
   return (
-    <div className={styles['previewRoot']} data-testid="markdown-preview">
+    <div ref={rootRef} className={styles['previewRoot']} data-testid="markdown-preview">
       <MarkdownView text={content} className={styles['previewBody'] ?? ''} />
     </div>
   )

@@ -6,7 +6,9 @@ import {
   Check,
   ChevronsDownUp,
   Cloud,
+  Columns2,
   Download,
+  Eye,
   FileSymlink,
   FolderTree,
   GitBranch,
@@ -74,6 +76,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'tree-view': FolderTree,
   'collapse-all': ChevronsDownUp,
   more: MoreHorizontal,
+  // Editor title actions.
+  'open-preview': Eye,
+  'open-preview-side': Columns2,
 }
 
 export function resolveHeaderIcon(name: string | undefined): LucideIcon | undefined {

@@ -197,6 +197,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
     }
+    // Create the editor once and keep it for the component's lifetime — never
+    // recreate on active-group change. `groupsService.activeGroup` is read lazily
+    // inside the blur handler via the stable singleton, so it isn't a dependency.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     monacoNs,
     commandService,
@@ -205,7 +209,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     contextKeyService,
     focusStackService,
     group,
-    groupsService.activeGroup,
     fileInput,
   ])
 

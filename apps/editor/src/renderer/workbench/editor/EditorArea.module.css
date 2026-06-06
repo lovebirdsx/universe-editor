@@ -73,6 +73,15 @@
   background: var(--color-tab-hover-bg, #353535);
 }
 
+.editorActionsBar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  height: 100%;
+  padding: 0 4px;
+}
+
 .tab {
   display: flex;
   align-items: center;

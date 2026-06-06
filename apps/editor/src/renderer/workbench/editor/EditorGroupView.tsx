@@ -38,6 +38,7 @@ import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithCon
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
+import { EditorTitleActions } from './EditorTitleActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import styles from './EditorArea.module.css'
@@ -513,6 +514,9 @@ export function EditorGroupView({
               ›
             </button>
           )}
+          <div className={styles['editorActionsBar']}>
+            <EditorTitleActions group={group} />
+          </div>
         </div>
       )}
       <div

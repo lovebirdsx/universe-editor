@@ -28,11 +28,16 @@ function resolveLabel(item: IMenuItem): string {
   return cmd?.metadata?.description ?? item.command
 }
 
-function resolve(menuId: MenuId, ctx: IContextKeyService): ResolvedViewTitleAction[] {
+function resolve(
+  menuId: MenuId,
+  ctx: IContextKeyService,
+  groupFilter?: string,
+): ResolvedViewTitleAction[] {
   const items = MenuRegistry.getMenuItems(menuId, ctx)
   const out: ResolvedViewTitleAction[] = []
   for (const item of items) {
     if (isSubmenuEntry(item)) continue
+    if (groupFilter !== undefined && item.group !== groupFilter) continue
     out.push({
       command: item.command,
       label: resolveLabel(item),
@@ -45,32 +50,33 @@ function resolve(menuId: MenuId, ctx: IContextKeyService): ResolvedViewTitleActi
 export function useViewTitleActions(
   menuId: MenuId,
   ctx: IContextKeyService,
+  groupFilter?: string,
 ): ResolvedViewTitleAction[] {
   const cacheRef = useRef<ResolvedViewTitleAction[] | null>(null)
 
   if (cacheRef.current === null) {
-    cacheRef.current = resolve(menuId, ctx)
+    cacheRef.current = resolve(menuId, ctx, groupFilter)
   }
 
   useEffect(() => {
-    cacheRef.current = resolve(menuId, ctx)
-  }, [menuId, ctx])
+    cacheRef.current = resolve(menuId, ctx, groupFilter)
+  }, [menuId, ctx, groupFilter])
 
   const subscribe = useCallback(
     (onChange: () => void) => {
       const d1 = MenuRegistry.onDidChangeMenu((changed) => {
         if (changed !== menuId) return
-        cacheRef.current = resolve(menuId, ctx)
+        cacheRef.current = resolve(menuId, ctx, groupFilter)
         onChange()
       })
       const d2 = ctx.onDidChangeContext(() => {
-        cacheRef.current = resolve(menuId, ctx)
+        cacheRef.current = resolve(menuId, ctx, groupFilter)
         onChange()
       })
       const combined = markAsSingleton(combinedDisposable(d1, d2))
       return () => combined.dispose()
     },
-    [menuId, ctx],
+    [menuId, ctx, groupFilter],
   )
 
   const getSnapshot = useCallback(() => cacheRef.current!, [])

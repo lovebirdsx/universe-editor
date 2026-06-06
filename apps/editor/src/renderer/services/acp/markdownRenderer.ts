@@ -25,26 +25,34 @@
  *--------------------------------------------------------------------------------------------*/
 
 export type MdNode =
-  | { readonly type: 'paragraph'; readonly children: readonly MdInline[] }
+  | { readonly type: 'paragraph'; readonly children: readonly MdInline[]; readonly line?: number }
   | {
       readonly type: 'heading'
       readonly level: 1 | 2 | 3 | 4 | 5 | 6
       readonly children: readonly MdInline[]
+      readonly line?: number
     }
-  | { readonly type: 'code_fence'; readonly lang: string; readonly code: string }
+  | {
+      readonly type: 'code_fence'
+      readonly lang: string
+      readonly code: string
+      readonly line?: number
+    }
   | {
       readonly type: 'list'
       readonly ordered: boolean
       readonly items: readonly (readonly MdInline[])[]
+      readonly line?: number
     }
-  | { readonly type: 'blockquote'; readonly children: readonly MdInline[] }
+  | { readonly type: 'blockquote'; readonly children: readonly MdInline[]; readonly line?: number }
   | {
       readonly type: 'table'
       readonly align: readonly (TableAlign | null)[]
       readonly header: readonly (readonly MdInline[])[]
       readonly rows: readonly (readonly (readonly MdInline[])[])[]
+      readonly line?: number
     }
-  | { readonly type: 'hr' }
+  | { readonly type: 'hr'; readonly line?: number }
 
 export type TableAlign = 'left' | 'center' | 'right'
 
@@ -74,6 +82,10 @@ export function parseMarkdown(input: string): readonly MdNode[] {
       continue
     }
 
+    // Source line of this block (0-based, = monaco lineNumber - 1). Consumed by
+    // the markdown preview for scroll sync; ACP chat ignores it.
+    const blockStart = i
+
     // Fenced code block. We require the closing fence at column 0 to keep
     // the parser cheap; if the agent emits a fence inside indented content
     // we treat the rest as code until we see the closing line.
@@ -89,7 +101,7 @@ export function parseMarkdown(input: string): readonly MdNode[] {
       // Consume the closing fence if present; an unterminated fence still
       // produces a code block ending at EOF (defensive against partial streams).
       if (i < lines.length) i++
-      out.push({ type: 'code_fence', lang, code: codeLines.join('\n') })
+      out.push({ type: 'code_fence', lang, code: codeLines.join('\n'), line: blockStart })
       continue
     }
 
@@ -97,14 +109,19 @@ export function parseMarkdown(input: string): readonly MdNode[] {
     const heading = /^(#{1,6})\s+(.*?)\s*#*\s*$/.exec(line)
     if (heading) {
       const level = heading[1]!.length as 1 | 2 | 3 | 4 | 5 | 6
-      out.push({ type: 'heading', level, children: parseInline(heading[2] ?? '') })
+      out.push({
+        type: 'heading',
+        level,
+        children: parseInline(heading[2] ?? ''),
+        line: blockStart,
+      })
       i++
       continue
     }
 
     // Horizontal rule — three or more of the same char, optional spaces.
     if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
-      out.push({ type: 'hr' })
+      out.push({ type: 'hr', line: blockStart })
       i++
       continue
     }
@@ -116,7 +133,7 @@ export function parseMarkdown(input: string): readonly MdNode[] {
         buf.push((lines[i] ?? '').replace(/^\s*>\s?/, ''))
         i++
       }
-      out.push({ type: 'blockquote', children: parseInline(buf.join('\n')) })
+      out.push({ type: 'blockquote', children: parseInline(buf.join('\n')), line: blockStart })
       continue
     }
 
@@ -134,7 +151,7 @@ export function parseMarkdown(input: string): readonly MdNode[] {
         items.push([...parseInline(m[1] ?? '')])
         i++
       }
-      out.push({ type: 'list', ordered, items })
+      out.push({ type: 'list', ordered, items, line: blockStart })
       continue
     }
 
@@ -153,7 +170,7 @@ export function parseMarkdown(input: string): readonly MdNode[] {
         rows.push(splitTableRow(cur, cols))
         i++
       }
-      out.push({ type: 'table', align, header, rows })
+      out.push({ type: 'table', align, header, rows, line: blockStart })
       continue
     }
 
@@ -174,7 +191,7 @@ export function parseMarkdown(input: string): readonly MdNode[] {
       para.push(cur)
       i++
     }
-    out.push({ type: 'paragraph', children: parseInline(para.join('\n')) })
+    out.push({ type: 'paragraph', children: parseInline(para.join('\n')), line: blockStart })
   }
   return out
 }

@@ -15,11 +15,12 @@ import styles from './ViewContainerHeader.module.css'
 interface Props {
   menuId: MenuId
   contextKeyService: IContextKeyService
+  group?: string
 }
 
-export function ViewTitleActions({ menuId, contextKeyService }: Props) {
+export function ViewTitleActions({ menuId, contextKeyService, group }: Props) {
   const commandService = useService(ICommandService)
-  const actions = useViewTitleActions(menuId, contextKeyService)
+  const actions = useViewTitleActions(menuId, contextKeyService, group)
 
   if (actions.length === 0) return null
 

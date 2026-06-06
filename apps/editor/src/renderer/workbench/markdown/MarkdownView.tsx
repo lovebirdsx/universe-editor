@@ -40,34 +40,41 @@ export function MarkdownView({ text, className, testId }: MarkdownViewProps) {
 }
 
 function Block({ node }: { node: MdNode }): ReactNode {
+  const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
   switch (node.type) {
     case 'paragraph':
-      return <p>{renderInline(node.children)}</p>
+      return <p {...lineAttr}>{renderInline(node.children)}</p>
     case 'heading': {
       const Tag = `h${node.level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
-      return <Tag>{renderInline(node.children)}</Tag>
+      return <Tag {...lineAttr}>{renderInline(node.children)}</Tag>
     }
     case 'code_fence':
-      return <CodeBlock code={node.code} lang={node.lang} />
+      return (
+        <CodeBlock
+          code={node.code}
+          lang={node.lang}
+          {...(node.line !== undefined ? { line: node.line } : {})}
+        />
+      )
     case 'list':
       return node.ordered ? (
-        <ol>
+        <ol {...lineAttr}>
           {node.items.map((item, i) => (
             <li key={i}>{renderInline(item)}</li>
           ))}
         </ol>
       ) : (
-        <ul>
+        <ul {...lineAttr}>
           {node.items.map((item, i) => (
             <li key={i}>{renderInline(item)}</li>
           ))}
         </ul>
       )
     case 'blockquote':
-      return <blockquote>{renderInline(node.children)}</blockquote>
+      return <blockquote {...lineAttr}>{renderInline(node.children)}</blockquote>
     case 'table':
       return (
-        <table>
+        <table {...lineAttr}>
           <thead>
             <tr>
               {node.header.map((cell, c) => (
@@ -91,7 +98,7 @@ function Block({ node }: { node: MdNode }): ReactNode {
         </table>
       )
     case 'hr':
-      return <hr />
+      return <hr {...lineAttr} />
   }
 }
 

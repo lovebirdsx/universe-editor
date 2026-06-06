@@ -23,7 +23,7 @@ describe('parseMarkdown — block layer', () => {
 
   it('parses a single paragraph', () => {
     expect(parseMarkdown('hello world')).toEqual<readonly MdNode[]>([
-      { type: 'paragraph', children: [text('hello world')] },
+      { type: 'paragraph', children: [text('hello world')], line: 0 },
     ])
   })
 
@@ -32,14 +32,15 @@ describe('parseMarkdown — block layer', () => {
       {
         type: 'paragraph',
         children: [text('line one'), { type: 'softbreak' }, text('line two')],
+        line: 0,
       },
     ])
   })
 
   it('splits paragraphs at blank lines', () => {
     expect(parseMarkdown('p1\n\np2')).toEqual<readonly MdNode[]>([
-      { type: 'paragraph', children: [text('p1')] },
-      { type: 'paragraph', children: [text('p2')] },
+      { type: 'paragraph', children: [text('p1')], line: 0 },
+      { type: 'paragraph', children: [text('p2')], line: 2 },
     ])
   })
 
@@ -52,25 +53,25 @@ describe('parseMarkdown — block layer', () => {
 
   it('tolerates trailing hashes in an ATX heading', () => {
     expect(parseMarkdown('## title ##')).toEqual<readonly MdNode[]>([
-      { type: 'heading', level: 2, children: [text('title')] },
+      { type: 'heading', level: 2, children: [text('title')], line: 0 },
     ])
   })
 
   it('parses a fenced code block with a language', () => {
     expect(parseMarkdown('```ts\nconst x = 1\n```')).toEqual<readonly MdNode[]>([
-      { type: 'code_fence', lang: 'ts', code: 'const x = 1' },
+      { type: 'code_fence', lang: 'ts', code: 'const x = 1', line: 0 },
     ])
   })
 
   it('parses a fenced code block without a language', () => {
     expect(parseMarkdown('```\nplain\ntext\n```')).toEqual<readonly MdNode[]>([
-      { type: 'code_fence', lang: '', code: 'plain\ntext' },
+      { type: 'code_fence', lang: '', code: 'plain\ntext', line: 0 },
     ])
   })
 
   it('handles an unterminated code fence by closing it at EOF', () => {
     expect(parseMarkdown('```js\nstill open')).toEqual<readonly MdNode[]>([
-      { type: 'code_fence', lang: 'js', code: 'still open' },
+      { type: 'code_fence', lang: 'js', code: 'still open', line: 0 },
     ])
   })
 
@@ -88,7 +89,7 @@ describe('parseMarkdown — block layer', () => {
 
   it('parses ordered lists', () => {
     expect(parseMarkdown('1. a\n2. b')).toEqual<readonly MdNode[]>([
-      { type: 'list', ordered: true, items: [[text('a')], [text('b')]] },
+      { type: 'list', ordered: true, items: [[text('a')], [text('b')]], line: 0 },
     ])
   })
 
@@ -105,14 +106,15 @@ describe('parseMarkdown — block layer', () => {
       {
         type: 'blockquote',
         children: [text('quoted'), { type: 'softbreak' }, text('more')],
+        line: 0,
       },
     ])
   })
 
   it('parses horizontal rules', () => {
-    expect(parseMarkdown('---')).toEqual<readonly MdNode[]>([{ type: 'hr' }])
-    expect(parseMarkdown('***')).toEqual<readonly MdNode[]>([{ type: 'hr' }])
-    expect(parseMarkdown('___')).toEqual<readonly MdNode[]>([{ type: 'hr' }])
+    expect(parseMarkdown('---')).toEqual<readonly MdNode[]>([{ type: 'hr', line: 0 }])
+    expect(parseMarkdown('***')).toEqual<readonly MdNode[]>([{ type: 'hr', line: 0 }])
+    expect(parseMarkdown('___')).toEqual<readonly MdNode[]>([{ type: 'hr', line: 0 }])
   })
 
   it('normalizes CRLF and CR line endings', () => {
@@ -120,6 +122,7 @@ describe('parseMarkdown — block layer', () => {
       {
         type: 'paragraph',
         children: [text('a'), { type: 'softbreak' }, text('b'), { type: 'softbreak' }, text('c')],
+        line: 0,
       },
     ])
   })
@@ -138,6 +141,7 @@ describe('parseMarkdown — GFM tables', () => {
           [[text('1')], [text('2')]],
           [[text('3')], [text('4')]],
         ],
+        line: 0,
       },
     ])
   })
@@ -177,13 +181,13 @@ describe('parseMarkdown — GFM tables', () => {
 
   it('ends the preceding paragraph when a table starts', () => {
     const nodes = parseMarkdown('intro text\n| A | B |\n| --- | --- |\n| 1 | 2 |')
-    expect(nodes[0]).toEqual<MdNode>({ type: 'paragraph', children: [text('intro text')] })
+    expect(nodes[0]).toEqual<MdNode>({ type: 'paragraph', children: [text('intro text')], line: 0 })
     expect(nodes[1]?.type).toBe('table')
   })
 
   it('does not treat pipe text without a delimiter row as a table', () => {
     expect(parseMarkdown('a | b | c')).toEqual<readonly MdNode[]>([
-      { type: 'paragraph', children: [text('a | b | c')] },
+      { type: 'paragraph', children: [text('a | b | c')], line: 0 },
     ])
   })
 })

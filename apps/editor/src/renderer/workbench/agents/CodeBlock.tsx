@@ -9,14 +9,16 @@
 
 import { useEffect, useState } from 'react'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
+import { resolveLanguageId } from '../editor/monaco/languageId.js'
 import styles from './agents.module.css'
 
 interface CodeBlockProps {
   readonly code: string
   readonly lang?: string
+  readonly line?: number
 }
 
-export function CodeBlock({ code, lang }: CodeBlockProps) {
+export function CodeBlock({ code, lang, line }: CodeBlockProps) {
   const [html, setHtml] = useState<string | null>(null)
 
   useEffect(() => {
@@ -26,7 +28,10 @@ export function CodeBlock({ code, lang }: CodeBlockProps) {
     }
     let cancelled = false
     void MonacoLoader.ensureInitialized()
-      .then((monaco) => monaco.editor.colorize(code, lang, { tabSize: 2 }))
+      .then((monaco) => {
+        const id = resolveLanguageId(lang, monaco)
+        return id ? monaco.editor.colorize(code, id, { tabSize: 2 }) : null
+      })
       .then((rendered) => {
         if (!cancelled) setHtml(rendered)
       })
@@ -39,7 +44,11 @@ export function CodeBlock({ code, lang }: CodeBlockProps) {
   }, [code, lang])
 
   return (
-    <pre className={styles['codeBlock']} data-lang={lang || 'text'}>
+    <pre
+      className={styles['codeBlock']}
+      data-lang={lang || 'text'}
+      {...(line !== undefined ? { 'data-line': line } : {})}
+    >
       {html === null ? <code>{code}</code> : <code dangerouslySetInnerHTML={{ __html: html }} />}
     </pre>
   )
