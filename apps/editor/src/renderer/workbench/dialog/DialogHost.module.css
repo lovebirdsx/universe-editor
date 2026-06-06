@@ -36,6 +36,8 @@
   color: var(--color-dialog-detail-fg, #aaaaaa);
   white-space: pre-wrap;
   word-break: break-word;
+  max-height: 320px;
+  overflow-y: auto;
 }
 
 .input {

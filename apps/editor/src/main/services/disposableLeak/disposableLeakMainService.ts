@@ -27,11 +27,8 @@ export class DisposableLeakMainService implements IDisposableLeakService {
     // Surface on the terminal immediately: when the developer closes a window
     // or quits the app, the next-bootstrap notification may be hours away (or
     // never, if they don't relaunch). The terminal where `pnpm dev` is running
-    // is the most reliable channel right now. Bypass the console interceptor
-    // so we don't recurse through the log pipeline.
-    getOriginalConsole().warn(
-      `[renderer:${report.source}] ${report.count} Disposable leak(s) detected:\n${report.details}`,
-    )
+    // is the most reliable channel right now.
+    await this.printLeaks(report)
     const payload = JSON.stringify(report)
     this._writeChain = this._writeChain
       .catch(() => {})
@@ -42,6 +39,14 @@ export class DisposableLeakMainService implements IDisposableLeakService {
         await fs.rename(tmp, this._filePath)
       })
     return this._writeChain
+  }
+
+  async printLeaks(report: IDisposableLeakReport): Promise<void> {
+    // Bypass the console interceptor so we don't recurse through the log
+    // pipeline, and so output lands on real stdout (the `pnpm dev` terminal).
+    getOriginalConsole().warn(
+      `[renderer:${report.source}] ${report.count} Disposable leak(s) detected:\n${report.details}`,
+    )
   }
 
   async consumePendingReport(): Promise<IDisposableLeakReport | null> {

@@ -20,6 +20,7 @@ export interface IRendererDisposableLeakService {
   markUnloadReason(source: DisposableLeakSource): void
   readUnloadReason(): DisposableLeakSource
   reportLeaks(report: IDisposableLeakReport): Promise<void>
+  printLeaks(report: IDisposableLeakReport): Promise<void>
   consumePendingReport(): Promise<IDisposableLeakReport | null>
 }
 
@@ -44,6 +45,10 @@ export class RendererDisposableLeakService implements IRendererDisposableLeakSer
 
   reportLeaks(report: IDisposableLeakReport): Promise<void> {
     return this._proxy.reportLeaks(report)
+  }
+
+  printLeaks(report: IDisposableLeakReport): Promise<void> {
+    return this._proxy.printLeaks(report)
   }
 
   consumePendingReport(): Promise<IDisposableLeakReport | null> {

@@ -12,7 +12,7 @@
     "lint:fix": "turbo run lint:fix",
     "check": "turbo run lint typecheck test",
     "check:full": "turbo run lint typecheck test build",
-    "dev": "turbo run dev --filter=@universe-editor/editor",
+    "dev": "pnpm --filter=@universe-editor/editor dev",
     "agent:build": "node scripts/release/agent-install.mjs && npm --prefix vendor/claude-agent-acp run build",
     "ext:build": "turbo run build --filter=@universe-editor/extension-host --filter=\"./extensions/*\"",
     "runtime:stage": "pnpm -w run agent:build && pnpm -w run ext:build && node scripts/release/runtime-resources.mjs stage",

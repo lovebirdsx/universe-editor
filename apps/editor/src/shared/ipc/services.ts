@@ -105,6 +105,12 @@ export interface IDisposableLeakReport {
 export interface IDisposableLeakService {
   readonly _serviceBrand: undefined
   reportLeaks(report: IDisposableLeakReport): Promise<void>
+  /**
+   * Prints the leak report to the `pnpm dev` terminal (node stdout) without
+   * persisting it. Renderer console output never reaches that terminal, so this
+   * is the only bridge for surfacing renderer leaks there, on par with main.
+   */
+  printLeaks(report: IDisposableLeakReport): Promise<void>
   /** Reads the pending report (if any) and deletes the file. */
   consumePendingReport(): Promise<IDisposableLeakReport | null>
 }

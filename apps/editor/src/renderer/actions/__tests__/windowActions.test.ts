@@ -37,6 +37,7 @@ import type { IDisposableLeakService } from '../../../shared/ipc/services.js'
 const stubProxy: IDisposableLeakService = {
   _serviceBrand: undefined,
   reportLeaks: vi.fn(async () => undefined),
+  printLeaks: vi.fn(async () => undefined),
   consumePendingReport: vi.fn(async () => null),
 }
 

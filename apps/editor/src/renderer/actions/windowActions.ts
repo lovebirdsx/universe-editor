@@ -164,6 +164,15 @@ export class RestartEditorAction extends Action2 {
     if (trackerActive && tracker) {
       const report = tracker.computeLeakingDisposables()
       if (report) {
+        // Echo to the `pnpm dev` terminal: renderer console output never reaches
+        // it, so without this the leaks shown in the modal would only ever live
+        // in this window. Fire-and-forget; the modal is the dev-facing surface.
+        void leakService!.printLeaks({
+          count: report.leaks.length,
+          details: report.details,
+          capturedAt: Date.now(),
+          source: 'restart',
+        })
         const choice = await dialogService!.confirm({
           type: 'warning',
           message: localize(
@@ -171,9 +180,10 @@ export class RestartEditorAction extends Action2 {
             'Detected {count} un-disposed Disposable(s)',
             { count: report.leaks.length },
           ),
-          detail: report.details.slice(0, 2000),
+          detail: report.details,
           primaryButton: localize('restart.leakDetected.restart', 'Restart Anyway'),
           cancelButton: localize('common.cancel', 'Cancel'),
+          copyButton: localize('common.copy', 'Copy'),
         })
         if (!choice.confirmed) return
       }
