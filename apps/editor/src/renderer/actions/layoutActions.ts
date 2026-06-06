@@ -183,10 +183,11 @@ export class ShowCommandsAction extends Action2 {
     const registryItems: IQuickPickItem[] = [...CommandsRegistry.getCommands().values()].map(
       (cmd) => {
         const keybinding = resolveShortcut(cmd.id)
+        const title = cmd.metadata?.description ?? cmd.id
+        const category = cmd.metadata?.category
         return {
           id: cmd.id,
-          label: cmd.metadata?.description ?? cmd.id,
-          ...(cmd.metadata?.category !== undefined ? { description: cmd.metadata.category } : {}),
+          label: category !== undefined ? `${category}: ${title}` : title,
           ...(keybinding !== undefined ? { keybinding } : {}),
         }
       },

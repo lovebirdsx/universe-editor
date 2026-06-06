@@ -117,6 +117,27 @@ describe('QuickPickPanel prefix mode', () => {
     expect(options[0]).toContain('Focus Right Editor Group')
   })
 
+  it('word filter matches "Category: Title" label when searching by category name', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            { id: 'git.commit', label: 'Git: Commit' },
+            { id: 'git.push', label: 'Git: Push' },
+            { id: 'view.toggle', label: 'View: Toggle Sidebar' },
+          ],
+          filterMode: 'word',
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '>git' } })
+    expect(screen.getByText('Git: Commit')).toBeTruthy()
+    expect(screen.getByText('Git: Push')).toBeTruthy()
+    expect(screen.queryByText('View: Toggle Sidebar')).toBeNull()
+  })
+
   it('does not match description or detail unless enabled', () => {
     render(
       <QuickPickPanel

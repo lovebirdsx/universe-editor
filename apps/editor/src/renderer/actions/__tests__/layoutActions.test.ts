@@ -238,6 +238,37 @@ describe('Built-in layout Action2s', () => {
     expect(item?.keybinding).toBe('F1')
   })
 
+  it('ShowCommands formats label as "Category: Title" so commands are findable by category name', async () => {
+    disposables.push(
+      CommandsRegistry.registerCommand({
+        id: 'git.commit',
+        handler: () => undefined,
+        metadata: { description: 'Commit', category: 'Git' },
+      }),
+    )
+    const pick = vi.fn().mockResolvedValue(undefined)
+    const services = new ServiceCollection()
+    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
+    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: undefined },
+    } as never)
+    const inst = new InstantiationService(services)
+    disposables.push(registerAction2(ShowCommandsAction))
+    await inst.invokeFunction(async (accessor) => {
+      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
+      await cmd.handler(accessor)
+    })
+    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
+    const item = items?.find((i) => i.id === 'git.commit')
+    // label must be "Git: Commit" — not just "Commit" — so the user can type
+    // "git" in the command palette and find this command via word filter.
+    expect(item?.label).toBe('Git: Commit')
+    // category must NOT appear as a separate description field (it is now in the label)
+    expect(item?.description).toBeUndefined()
+  })
+
   it('ShowCommands leaves keybinding undefined for commands without bindings', async () => {
     const pick = vi.fn().mockResolvedValue(undefined)
     const services = new ServiceCollection()
