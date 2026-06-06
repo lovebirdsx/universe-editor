@@ -40,7 +40,27 @@ const DECORATIONS: Record<string, Decoration> = {
 }
 
 const GIT_COMMIT_INPUT_COMMAND = { command: 'git.commit', title: 'Commit' } as const
-const GIT_SYNC_INPUT_COMMAND = { command: 'git.sync', title: 'Sync' } as const
+const GIT_COMMIT_DISABLED_INPUT_COMMAND = {
+  command: 'git.commit',
+  title: 'Commit',
+  disabled: true,
+} as const
+const GIT_PULL_INPUT_COMMAND = { command: 'git.pull', title: 'Pull' } as const
+const GIT_PULL_REBASE_INPUT_COMMAND = {
+  command: 'git.pullRebase',
+  title: 'Pull Rebase',
+} as const
+const GIT_PUSH_INPUT_COMMAND = { command: 'git.push', title: 'Push' } as const
+
+interface RefreshOptions {
+  readonly fetch?: boolean
+  readonly silent?: boolean
+}
+
+interface FetchOptions {
+  readonly prune?: boolean
+  readonly silent?: boolean
+}
 
 export function gitPrimaryInputCommand({
   hasChanges,
@@ -51,9 +71,11 @@ export function gitPrimaryInputCommand({
   readonly ahead: number
   readonly behind: number
 }) {
-  return !hasChanges && (ahead > 0 || behind > 0)
-    ? GIT_SYNC_INPUT_COMMAND
-    : GIT_COMMIT_INPUT_COMMAND
+  if (hasChanges) return GIT_COMMIT_INPUT_COMMAND
+  if (ahead > 0 && behind > 0) return GIT_PULL_REBASE_INPUT_COMMAND
+  if (ahead > 0) return GIT_PUSH_INPUT_COMMAND
+  if (behind > 0) return GIT_PULL_INPUT_COMMAND
+  return GIT_COMMIT_DISABLED_INPUT_COMMAND
 }
 
 function toResourceState(root: string, path: string, letter: string): SourceControlResourceState {
@@ -127,15 +149,20 @@ export class Repository {
     void this._startAutofetch()
   }
 
-  async refresh(): Promise<void> {
+  async refresh(opts?: RefreshOptions): Promise<void> {
     if (this._refreshing) {
       this._queued = true
       return
     }
     this._refreshing = true
+    let shouldFetch = opts?.fetch === true
     try {
       do {
         this._queued = false
+        if (shouldFetch) {
+          shouldFetch = false
+          await this._fetchRemote(opts?.silent !== undefined ? { silent: opts.silent } : undefined)
+        }
         await this._doRefresh()
       } while (this._queued && !this._disposed)
     } finally {
@@ -309,7 +336,12 @@ export class Repository {
     await this._run(['push', remote], 'push', { text: 'Pushing…', kind: 'syncing' })
   }
 
-  async fetch(opts?: { prune?: boolean; silent?: boolean }): Promise<void> {
+  async fetch(opts?: FetchOptions): Promise<void> {
+    await this._fetchRemote(opts)
+    await this.refresh()
+  }
+
+  private async _fetchRemote(opts?: FetchOptions): Promise<void> {
     if (this._fetching) return
     this._fetching = true
     this._beginProgress('Fetching…', 'spinning')
@@ -322,7 +354,6 @@ export class Repository {
     } finally {
       this._fetching = false
       this._endProgress()
-      await this.refresh()
     }
   }
 

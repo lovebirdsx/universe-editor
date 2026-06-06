@@ -86,13 +86,13 @@ describe('ScmView under StrictMode', () => {
     expect(await screen.findByText('foo.txt')).toBeTruthy()
   })
 
-  it('disables the git Commit button when there are no local changes and nothing to sync', async () => {
+  it('disables Commit when git has no local changes and nothing to synchronize', async () => {
     const { scm, executeCommand } = setup()
 
     await act(async () => {
       await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
       await scm.$updateSourceControl(0, {
-        acceptInputCommand: { command: 'git.commit', title: 'Commit' },
+        acceptInputCommand: { command: 'git.commit', title: 'Commit', disabled: true },
       })
       await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
     })
@@ -103,21 +103,55 @@ describe('ScmView under StrictMode', () => {
     expect(executeCommand).not.toHaveBeenCalled()
   })
 
-  it('shows Sync when git has no local changes but has commits to synchronize', async () => {
+  it('shows Pull Rebase when git has no local changes and local plus remote commits exist', async () => {
     const { scm, executeCommand } = setup()
 
     await act(async () => {
       await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
       await scm.$updateSourceControl(0, {
-        acceptInputCommand: { command: 'git.sync', title: 'Sync' },
+        acceptInputCommand: { command: 'git.pullRebase', title: 'Pull Rebase' },
       })
       await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
     })
 
-    const button = (await screen.findByRole('button', { name: 'Sync' })) as HTMLButtonElement
+    const button = (await screen.findByRole('button', { name: 'Pull Rebase' })) as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    expect(executeCommand).toHaveBeenCalledWith('git.sync', { sourceControlId: 'git' })
+    expect(executeCommand).toHaveBeenCalledWith('git.pullRebase', { sourceControlId: 'git' })
+  })
+
+  it('shows Push when git has no local changes and only local commits exist', async () => {
+    const { scm, executeCommand } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$updateSourceControl(0, {
+        acceptInputCommand: { command: 'git.push', title: 'Push' },
+      })
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+    })
+
+    const button = (await screen.findByRole('button', { name: 'Push' })) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(executeCommand).toHaveBeenCalledWith('git.push', { sourceControlId: 'git' })
+  })
+
+  it('shows Pull when git has no local changes and only remote commits exist', async () => {
+    const { scm, executeCommand } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$updateSourceControl(0, {
+        acceptInputCommand: { command: 'git.pull', title: 'Pull' },
+      })
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+    })
+
+    const button = (await screen.findByRole('button', { name: 'Pull' })) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(executeCommand).toHaveBeenCalledWith('git.pull', { sourceControlId: 'git' })
   })
 
   it('keeps Commit enabled when git has local changes', async () => {

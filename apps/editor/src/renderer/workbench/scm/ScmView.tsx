@@ -677,18 +677,18 @@ function ScmProviderView({
   const isGitProvider = model.id === 'git'
   const primaryCommitAction = useMemo<PrimaryCommitAction | undefined>(() => {
     if (isGitProvider) {
-      if (!hasLocalChanges && acceptCommand?.command === 'git.sync') {
-        return {
-          label: acceptCommand.title || localize('scm.sync', 'Sync'),
-          command: acceptCommand.command,
-          disabled: false,
-        }
-      }
       if (!hasLocalChanges) {
+        if (!acceptCommand) {
+          return {
+            label: DEFAULT_COMMIT_ACTION.label,
+            command: DEFAULT_COMMIT_ACTION.command,
+            disabled: true,
+          }
+        }
         return {
-          label: DEFAULT_COMMIT_ACTION.label,
-          command: DEFAULT_COMMIT_ACTION.command,
-          disabled: true,
+          label: acceptCommand.title || localize('scm.commit', 'Commit'),
+          command: acceptCommand.command,
+          disabled: acceptCommand.disabled === true,
         }
       }
       return {

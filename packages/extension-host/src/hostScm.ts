@@ -25,6 +25,7 @@ function toCommandDto(cmd: Command): ICommandDto {
     command: cmd.command,
     title: cmd.title,
     ...(cmd.tooltip !== undefined ? { tooltip: cmd.tooltip } : {}),
+    ...(cmd.disabled !== undefined ? { disabled: cmd.disabled } : {}),
     ...(cmd.arguments !== undefined ? { arguments: cmd.arguments } : {}),
   }
 }

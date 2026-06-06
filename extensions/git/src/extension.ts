@@ -42,7 +42,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
   const repo = new Repository(repoRoot, log)
   context.subscriptions.push(repo)
-  void repo.refresh()
+  void repo.refresh({ fetch: true, silent: true })
 
   // Smart commit: with nothing staged, stage every change first (mirrors VSCode).
   const commitSmart = async (): Promise<boolean> => {
@@ -64,7 +64,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   context.subscriptions.push(
-    commands.registerCommand('git.refresh', () => repo.refresh()),
+    commands.registerCommand('git.refresh', () => repo.refresh({ fetch: true })),
 
     commands.registerCommand('git.commit', () => commitSmart()),
     commands.registerCommand('git.commitAndPush', async () => {

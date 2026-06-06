@@ -13,6 +13,7 @@ export interface Command {
   command: string
   title: string
   tooltip?: string
+  disabled?: boolean
   arguments?: unknown[]
 }
 

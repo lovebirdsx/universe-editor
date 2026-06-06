@@ -14,6 +14,7 @@ export interface ICommandDto {
   command: string
   title: string
   tooltip?: string
+  disabled?: boolean
   arguments?: unknown[]
 }
 
