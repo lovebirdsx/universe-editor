@@ -116,21 +116,6 @@ async function loadMonaco(): Promise<typeof monaco> {
       _monaco = monacoMod
       registerLogLanguage(_monaco)
       disableLanguageDiagnostics()
-      // TEMP DEBUG: trace JSON markers to diagnose missing keybindings warnings.
-      _monaco.editor.onDidChangeMarkers((resources) => {
-        for (const r of resources) {
-          if (!r.path.toLowerCase().endsWith('.json')) continue
-          const ms = _monaco!.editor.getModelMarkers({ resource: r })
-
-          console.log(
-            '[ue-diag]',
-            r.path,
-            'markers=',
-            ms.length,
-            ms.slice(0, 5).map((m) => `${m.severity}:${m.message}`),
-          )
-        }
-      })
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here
