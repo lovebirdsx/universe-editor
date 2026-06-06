@@ -1,10 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Renders the icon-button row driven by `MenuId.ViewContainerTitle`. The
- *  ContextKeyService passed in is owned by the parent ViewContainerHeader
- *  and carries `activeViewContainer` / `activeViewContainerLocation`, so a
- *  `when: 'activeViewContainer == ...'` clause makes the action follow its
- *  container across locations.
+ *  Renders the icon-button row driven by the given menu. The ContextKeyService
+ *  passed in is owned by the parent (ViewPane / ViewContainerHeader / SideBar)
+ *  and carries the `view` key, so a `when: 'view == ...'` clause makes the
+ *  action follow its view wherever the view is rendered.
  *--------------------------------------------------------------------------------------------*/
 
 import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/platform'
@@ -14,12 +13,13 @@ import { resolveHeaderIcon } from './icon-map.js'
 import styles from './ViewContainerHeader.module.css'
 
 interface Props {
+  menuId: MenuId
   contextKeyService: IContextKeyService
 }
 
-export function ViewTitleActions({ contextKeyService }: Props) {
+export function ViewTitleActions({ menuId, contextKeyService }: Props) {
   const commandService = useService(ICommandService)
-  const actions = useViewTitleActions(MenuId.ViewContainerTitle, contextKeyService)
+  const actions = useViewTitleActions(menuId, contextKeyService)
 
   if (actions.length === 0) return null
 

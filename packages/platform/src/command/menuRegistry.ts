@@ -24,8 +24,8 @@ export const enum MenuId {
   ScmTitle = 'scm/title',
   ScmResourceStateContext = 'scm/resourceState/context',
   ScmResourceGroupContext = 'scm/resourceGroup/context',
-  /** Title-bar actions shown in the active ViewContainer's header (Panel / Secondary Side Bar). */
-  ViewContainerTitle = 'viewContainerTitle',
+  /** Per-view title-bar actions, resolved by a `view == <viewId>` clause. */
+  ViewTitle = 'view/title',
   // Title-bar menubar dropdowns
   MenubarFileMenu = 'menubar.file',
   MenubarEditMenu = 'menubar.edit',

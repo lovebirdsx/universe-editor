@@ -11,6 +11,7 @@ import { usePartContainer } from '../usePartContainer.js'
 import { ViewContainerHeader } from '../viewContainerHeader/ViewContainerHeader.js'
 import { ViewPaneContainer } from './ViewPaneContainer.js'
 import { viewComponentMap } from './SideBar.js'
+import { viewToolbarMap } from '../viewRegistry/viewToolbarMap.js'
 import styles from './SideBar.module.css'
 
 export function SecondarySideBar({ part }: { part?: IPart | undefined } = {}) {
@@ -27,9 +28,14 @@ export function SecondarySideBar({ part }: { part?: IPart | undefined } = {}) {
       <ViewContainerHeader
         location={ViewContainerLocation.SecondarySideBar}
         partId={PartId.SecondarySideBar}
+        customToolbarMap={viewToolbarMap}
       />
       <div className={styles['views']}>
-        <ViewPaneContainer views={views} componentMap={viewComponentMap} />
+        <ViewPaneContainer
+          views={views}
+          componentMap={viewComponentMap}
+          toolbarMap={viewToolbarMap}
+        />
       </div>
     </aside>
   )

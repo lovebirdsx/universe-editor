@@ -38,30 +38,30 @@ describe('ClearOutputAction', () => {
     while (disposables.length) disposables.pop()?.dispose()
   })
 
-  it('registers under MenuId.ViewContainerTitle for the Output container', () => {
+  it('registers under MenuId.ViewTitle for the Output view', () => {
     disposables.push(registerAction2(ClearOutputAction))
 
-    const items = MenuRegistry.getMenuItems(MenuId.ViewContainerTitle)
+    const items = MenuRegistry.getMenuItems(MenuId.ViewTitle)
     const item = items.find((it) => 'command' in it && it.command === ClearOutputAction.ID)
     expect(item).toBeDefined()
     expect(item).toMatchObject({ icon: 'trash-2' })
   })
 
-  it('follows the active container regardless of header location', () => {
+  it('shows only when the Output view is the active view', () => {
     disposables.push(registerAction2(ClearOutputAction))
 
     const ctx = new ContextKeyService()
     disposables.push(ctx)
 
     const matches = () =>
-      MenuRegistry.getMenuItems(MenuId.ViewContainerTitle, ctx).some(
+      MenuRegistry.getMenuItems(MenuId.ViewTitle, ctx).some(
         (it) => 'command' in it && it.command === ClearOutputAction.ID,
       )
 
     expect(matches()).toBe(false)
-    ctx.set('activeViewContainer', 'workbench.view.output')
+    ctx.set('view', 'workbench.view.output.main')
     expect(matches()).toBe(true)
-    ctx.set('activeViewContainer', 'workbench.view.search')
+    ctx.set('view', 'workbench.view.search.results')
     expect(matches()).toBe(false)
   })
 

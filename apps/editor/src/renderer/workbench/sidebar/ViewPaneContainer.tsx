@@ -13,6 +13,7 @@ const OPEN_MIN = HEADER_H + MIN_BODY
 interface Props {
   views: readonly IViewDescriptor[]
   componentMap: ReadonlyMap<string, ComponentType>
+  toolbarMap?: ReadonlyMap<string, ComponentType>
   emptyMessage?: string
 }
 
@@ -24,6 +25,7 @@ interface Props {
 export function ViewPaneContainer({
   views,
   componentMap,
+  toolbarMap,
   emptyMessage = 'No views registered.',
 }: Props) {
   const allotmentRef = useRef<AllotmentHandle>(null)
@@ -89,7 +91,13 @@ export function ViewPaneContainer({
             minSize={isCollapsed ? HEADER_H : OPEN_MIN}
             maxSize={isCollapsed ? HEADER_H : Infinity}
           >
-            <ViewPane title={v.name} open={!isCollapsed} onToggle={() => toggle(v.id)}>
+            <ViewPane
+              viewId={v.id}
+              title={v.name}
+              open={!isCollapsed}
+              onToggle={() => toggle(v.id)}
+              toolbar={toolbarMap?.get(v.id)}
+            >
               <div data-view-id={v.id} className={styles['viewBody']}>
                 {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
               </div>

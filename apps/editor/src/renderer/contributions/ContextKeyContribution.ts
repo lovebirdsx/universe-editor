@@ -12,10 +12,9 @@
  *   - activeEditorIsFirstInGroup / activeEditorIsLastInGroup / activeEditorIsDirty
  *   - workbenchReady / workbenchRestored                        (lifecycle gates)
  *
- *  Per-header keys (`activeViewContainer`, `activeViewContainerLocation`) are
- *  NOT set here — they live on per-header scoped ContextKeyServices owned by
- *  `ViewContainerHeader`, so `MenuId.ViewContainerTitle` actions resolve
- *  independently for the Panel and Secondary Side Bar.
+ *  The per-view key (`view`) is NOT set here — it lives on per-view scoped
+ *  ContextKeyServices owned by `ViewPane` / `ViewContainerHeader` / `SideBar`,
+ *  so `MenuId.ViewTitle` actions resolve independently for each view.
  *--------------------------------------------------------------------------------------------*/
 
 import {

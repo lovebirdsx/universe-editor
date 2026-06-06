@@ -13,24 +13,39 @@
 .header {
   display: flex;
   align-items: center;
-  padding: 0 8px;
+  padding: 0 4px 0 8px;
   height: 28px;
-  cursor: pointer;
   user-select: none;
+  background: var(--color-sidebar-section-header-bg, #2d2d2d);
+  flex-shrink: 0;
+}
+
+.headerToggle {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  cursor: pointer;
   color: var(--color-sidebar-section-header-fg, #bbbbbb);
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  background: var(--color-sidebar-section-header-bg, #2d2d2d);
+  background: transparent;
   border: none;
-  width: 100%;
   text-align: left;
-  flex-shrink: 0;
 }
 
 .header:hover {
   background: var(--color-sidebar-section-header-hover, #3a3a3a);
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
 }
 
 .chevron {

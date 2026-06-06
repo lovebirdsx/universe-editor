@@ -3,93 +3,52 @@
  *  Compact 28-px header shared by Panel and Secondary Side Bar:
  *   - Left:   icon-only tabs for every ViewContainer at this location
  *             (click switches active container; tooltip shows the label)
- *   - Right:  MenuId.ViewContainerTitle actions for the active container,
- *             resolved through a per-header *scoped* ContextKeyService
- *             that carries `activeViewContainer` and `activeViewContainerLocation`.
- *             Actions therefore follow the container — when a container
- *             moves between Panel and Secondary Side Bar, its title
- *             buttons re-render in the new header automatically.
- *             + optional custom toolbar slot (e.g. dropdowns)
+ *   - Right:  for a single-view container, the lone view's title bar —
+ *             an optional custom toolbar + MenuId.ViewTitle actions resolved
+ *             through a per-view *scoped* ContextKeyService carrying `view`.
+ *             Multi-view containers render nothing here; each view shows its
+ *             own actions in its ViewPane header instead.
  *             + close button
  *--------------------------------------------------------------------------------------------*/
 
 import type { ComponentType } from 'react'
-import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
 import {
-  IContextKeyService,
   ILayoutService,
   IViewsService,
-  markAsSingleton,
+  MenuId,
   PartId,
   ViewContainerLocation,
   ViewContainerRegistry,
+  ViewRegistry,
   localize,
-  type IScopedContextKeyService,
 } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
 import { resolveHeaderIcon } from './icon-map.js'
 import { ViewTitleActions } from './ViewTitleActions.js'
+import { useViewScopedContextKey } from './useViewScopedContextKey.js'
 import styles from './ViewContainerHeader.module.css'
 
 interface Props {
   location: ViewContainerLocation
   partId: PartId
-  /** viewContainerId -> custom right-side React component (e.g. channel dropdown). */
+  /** viewId -> custom right-side React component (e.g. channel dropdown). */
   customToolbarMap?: ReadonlyMap<string, ComponentType>
-}
-
-function locationKey(location: ViewContainerLocation): string {
-  switch (location) {
-    case ViewContainerLocation.Panel:
-      return 'panel'
-    case ViewContainerLocation.SecondarySideBar:
-      return 'auxiliarybar'
-    case ViewContainerLocation.SideBar:
-      return 'sidebar'
-  }
 }
 
 export function ViewContainerHeader({ location, partId, customToolbarMap }: Props) {
   const viewsService = useService(IViewsService)
   const layoutService = useService(ILayoutService)
-  const rootCtx = useService(IContextKeyService)
   const activeByLocation = useObservable(viewsService.activeContainerByLocation)
   const activeId = activeByLocation[location]
 
-  const scopedCtxRef = useRef<IScopedContextKeyService | null>(null)
-  if (scopedCtxRef.current === null) {
-    // React useEffect cleanup disposes on unmount, but beforeunload (page
-    // reload / Restart Editor) fires before React teardown — mark singleton
-    // so the leak tracker doesn't flag this scoped service and its descendants.
-    scopedCtxRef.current = markAsSingleton(
-      rootCtx.createScoped({
-        activeViewContainerLocation: locationKey(location),
-        activeViewContainer: activeId,
-      }),
-    )
-  }
-
-  useEffect(() => {
-    return () => {
-      scopedCtxRef.current?.dispose()
-      scopedCtxRef.current = null
-    }
-  }, [])
-
-  useEffect(() => {
-    const s = scopedCtxRef.current
-    if (!s) return
-    if (activeId) {
-      s.set('activeViewContainer', activeId)
-    } else {
-      s.remove('activeViewContainer')
-    }
-  }, [activeId])
+  const views = activeId ? ViewRegistry.getViewsForContainer(activeId) : []
+  const onlyView = views.length === 1 ? views[0] : undefined
+  const ctx = useViewScopedContextKey(onlyView?.id)
+  const Custom = onlyView ? customToolbarMap?.get(onlyView.id) : undefined
 
   const containers = ViewContainerRegistry.getViewContainers(location)
   const isSingle = containers.length <= 1
-  const Custom = activeId ? customToolbarMap?.get(activeId) : undefined
 
   return (
     <div className={styles['header']} role="tablist">
@@ -121,8 +80,12 @@ export function ViewContainerHeader({ location, partId, customToolbarMap }: Prop
         })}
       </div>
       <div className={styles['toolbar']}>
-        {Custom ? <Custom /> : null}
-        <ViewTitleActions contextKeyService={scopedCtxRef.current!} />
+        {onlyView ? (
+          <>
+            {Custom ? <Custom /> : null}
+            <ViewTitleActions menuId={MenuId.ViewTitle} contextKeyService={ctx} />
+          </>
+        ) : null}
         <button
           className={styles['closeBtn']}
           onClick={() => layoutService.setVisible(partId, false)}

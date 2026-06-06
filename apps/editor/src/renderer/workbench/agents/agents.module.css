@@ -36,6 +36,15 @@
   box-sizing: border-box;
 }
 
+/* Title-bar toolbar slot (AgentsViewToolbar) rendered inside the ViewPane
+   header. Positioned so the sessions popover anchors to it. */
+.viewToolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
 .chatToolbarLeft {
   display: flex;
   align-items: center;

@@ -40,6 +40,7 @@ const MENU_ID_BY_KEY: Readonly<Record<string, MenuId>> = {
   'editor/title': MenuId.EditorTitle,
   'editor/context': MenuId.EditorContext,
   'explorer/context': MenuId.ExplorerContext,
+  'view/title': MenuId.ViewTitle,
   'scm/title': MenuId.ScmTitle,
   'scm/resourceState/context': MenuId.ScmResourceStateContext,
   'scm/resourceGroup/context': MenuId.ScmResourceGroupContext,

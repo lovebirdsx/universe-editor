@@ -14,6 +14,7 @@ import {
   IQuickInputService,
   IViewsService,
   ILayoutService,
+  MenuId,
   PartId,
   Severity,
   localize,
@@ -207,6 +208,15 @@ export class OpenAcpMcpSettingsAction extends Action2 {
       id: OpenAcpMcpSettingsAction.ID,
       title: localize('action.agent.openMcpSettings', 'Open MCP Settings'),
       category: CATEGORY,
+      icon: 'settings-gear',
+      menu: [
+        {
+          id: MenuId.ViewTitle,
+          when: 'view == workbench.view.agents.mcp',
+          group: 'navigation',
+          order: 1,
+        },
+      ],
       f1: true,
     })
   }

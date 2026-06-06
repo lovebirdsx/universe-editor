@@ -330,8 +330,8 @@ export class ClearOutputAction extends Action2 {
       icon: 'trash-2',
       menu: [
         {
-          id: MenuId.ViewContainerTitle,
-          when: 'activeViewContainer == workbench.view.output',
+          id: MenuId.ViewTitle,
+          when: 'view == workbench.view.output.main',
           group: 'navigation',
           order: 1,
         },
