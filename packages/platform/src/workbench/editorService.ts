@@ -204,6 +204,8 @@ export interface IOpenEditorServiceOptions {
   activate?: boolean
   /** Pin the editor (default: true). false opens into the active group's preview slot. */
   pinned?: boolean
+  /** Open without moving keyboard focus to the editor (default: false). */
+  preserveFocus?: boolean
 }
 
 export interface IEditorService {

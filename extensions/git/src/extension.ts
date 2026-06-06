@@ -98,16 +98,45 @@ export async function activate(context: ExtensionContext): Promise<void> {
 
     commands.registerCommand('git.checkout', () => repo.checkout()),
     commands.registerCommand('git.createBranch', () => repo.createBranch()),
+    commands.registerCommand('git.renameBranch', () => repo.renameBranch()),
+    commands.registerCommand('git.deleteBranch', () => repo.deleteBranch()),
+    commands.registerCommand('git.merge', () => repo.merge()),
+    commands.registerCommand('git.rebase', () => repo.rebase()),
+    commands.registerCommand('git.publishBranch', () => repo.publishBranch()),
 
     commands.registerCommand('git.sync', () => repo.sync()),
     commands.registerCommand('git.pull', () => repo.pull()),
+    commands.registerCommand('git.pullRebase', () => repo.pullRebase()),
+    commands.registerCommand('git.pullAutostash', () => repo.pullAutostash()),
     commands.registerCommand('git.push', () => repo.push()),
+    commands.registerCommand('git.pushForce', () => repo.pushForce()),
+    commands.registerCommand('git.pushTo', () => repo.pushTo()),
+    commands.registerCommand('git.fetch', () => repo.fetch()),
+    commands.registerCommand('git.fetchPrune', () => repo.fetch({ prune: true })),
+    commands.registerCommand('git.undoLastCommit', () => repo.undoLastCommit()),
     commands.registerCommand('git.discardAll', () => repo.discardAll()),
 
+    commands.registerCommand('git.stash', () => repo.stashPush()),
+    commands.registerCommand('git.stashIncludeUntracked', () => repo.stashPush(true)),
+    commands.registerCommand('git.stashApply', () => repo.stashApply()),
+    commands.registerCommand('git.stashPop', () => repo.stashApply(true)),
+    commands.registerCommand('git.stashDrop', () => repo.stashDrop()),
+
+    commands.registerCommand('git.addRemote', () => repo.addRemote()),
+    commands.registerCommand('git.removeRemote', () => repo.removeRemote()),
+
+    commands.registerCommand('git.createTag', () => repo.createTag()),
+    commands.registerCommand('git.deleteTag', () => repo.deleteTag()),
+
     commands.registerCommand('git.openChange', (...args: unknown[]) => {
-      const [arg, options] = args as [unknown, ({ pinned?: boolean } | undefined)?]
+      const [arg, options] = args as [
+        unknown,
+        ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
+      ]
       const path = resourcePath(arg)
-      return path ? repo.openChange(path, options?.pinned ?? false) : undefined
+      return path
+        ? repo.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
+        : undefined
     }),
   )
 }

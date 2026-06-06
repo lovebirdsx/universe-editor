@@ -390,13 +390,28 @@ export function EditorGroupView({
   }
 
   // When this group becomes active (e.g. user returns from sidebar without changing file),
-  // focus the Monaco editor so keyboard input goes to the editor immediately.
+  // focus the Monaco editor so keyboard input goes to the editor immediately — unless the
+  // open explicitly asked to keep focus elsewhere (Space-preview from a list).
   const activeEditor = group.activeEditor
+  const focusedActivationRef = useRef<number>(-1)
+  const wasActiveGroupRef = useRef(false)
   useLayoutEffect(() => {
-    if (!isActiveGroup) return
-    if (!activeEditor) return
+    const wasActive = wasActiveGroupRef.current
+    wasActiveGroupRef.current = isActiveGroup
+    if (!isActiveGroup || !activeEditor) return
+    // Group just (re-)activated without an editor change → always focus.
+    if (!wasActive) {
+      focusedActivationRef.current = group.activationId
+      focusEditorInput(activeEditor, contextKeyService, group.id)
+      return
+    }
+    // Already-active group: handle each activation once (dedupes StrictMode's
+    // double-invoke) and honor preserveFocus.
+    if (focusedActivationRef.current === group.activationId) return
+    focusedActivationRef.current = group.activationId
+    if (group.lastActivationPreservedFocus) return
     focusEditorInput(activeEditor, contextKeyService, group.id)
-  }, [contextKeyService, group.id, isActiveGroup, activeEditor])
+  }, [contextKeyService, group, isActiveGroup, activeEditor])
 
   const renderContent = () => {
     const active = group.activeEditor

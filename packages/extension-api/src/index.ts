@@ -63,6 +63,11 @@ export interface StatusBarItem {
   text: string
   tooltip: string | undefined
   command: string | undefined
+  /**
+   * Render a spinner alongside the text while a background operation runs.
+   * `true`/`'spinning'` → a loader; `'syncing'` → a rotating sync icon.
+   */
+  showProgress: boolean | 'spinning' | 'syncing' | undefined
   readonly alignment: StatusBarAlignment
   readonly priority: number
   show(): void
@@ -72,6 +77,13 @@ export interface StatusBarItem {
 
 export interface QuickPickOptions {
   placeHolder?: string
+}
+
+/** A richer quick-pick entry with secondary text. */
+export interface QuickPickItem {
+  label: string
+  description?: string
+  detail?: string
 }
 
 export interface InputBoxOptions {
@@ -86,6 +98,10 @@ export interface WindowApi {
   showWarningMessage(message: string, ...items: string[]): Promise<string | undefined>
   showErrorMessage(message: string, ...items: string[]): Promise<string | undefined>
   showQuickPick(items: readonly string[], options?: QuickPickOptions): Promise<string | undefined>
+  showQuickPick<T extends QuickPickItem>(
+    items: readonly T[],
+    options?: QuickPickOptions,
+  ): Promise<T | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment?: StatusBarAlignment, priority?: number): StatusBarItem
 }
@@ -103,6 +119,11 @@ export interface WorkspaceApi {
    * touching disk — the only filesystem an external/restricted extension gets.
    */
   readonly fs: FileSystemApi
+  /**
+   * Read configuration values. `section` is an optional key prefix (e.g. `'git'`),
+   * so `getConfiguration('git').get('autofetch', true)` reads `git.autofetch`.
+   */
+  getConfiguration(section?: string): WorkspaceConfiguration
 }
 
 /** Kind of a filesystem entry returned by {@link FileSystemApi}. */
@@ -128,6 +149,11 @@ export interface FileSystemApi {
   delete(path: string, options?: { recursive?: boolean }): Promise<void>
 }
 
+/** Read-only view over a configuration section (async — values live in the renderer). */
+export interface WorkspaceConfiguration {
+  get<T>(key: string, defaultValue: T): Promise<T>
+}
+
 /**
  * The host bridge contract installed on globalThis. KEEP IN SYNC with the
  * producer in `extension-host/src/apiFactory.ts` (same key, same shapes).
@@ -140,7 +166,10 @@ interface IExtensionHostBridge {
     message: string,
     items: string[],
   ): Promise<string | undefined>
-  showQuickPick(items: readonly string[], options?: QuickPickOptions): Promise<string | undefined>
+  showQuickPick(
+    items: readonly (string | QuickPickItem)[],
+    options?: QuickPickOptions,
+  ): Promise<string | QuickPickItem | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
@@ -151,6 +180,11 @@ interface IExtensionHostBridge {
   fsReadDirectory(path: string): Promise<[string, FileType][]>
   fsCreateDirectory(path: string): Promise<void>
   fsDelete(path: string, recursive: boolean): Promise<void>
+  getConfiguration(
+    section: string | undefined,
+    key: string,
+    defaultValue: unknown,
+  ): Promise<unknown>
 }
 
 /** Global key the host installs the bridge under. KEEP IN SYNC with the host. */
@@ -174,7 +208,8 @@ export const window: WindowApi = {
   showInformationMessage: (message, ...items) => bridge().showMessage('info', message, items),
   showWarningMessage: (message, ...items) => bridge().showMessage('warning', message, items),
   showErrorMessage: (message, ...items) => bridge().showMessage('error', message, items),
-  showQuickPick: (items, options) => bridge().showQuickPick(items, options),
+  showQuickPick: ((items: readonly (string | QuickPickItem)[], options?: QuickPickOptions) =>
+    bridge().showQuickPick(items, options)) as WindowApi['showQuickPick'],
   showInputBox: (options) => bridge().showInputBox(options),
   createStatusBarItem: (alignment = StatusBarAlignment.Left, priority = 0) =>
     bridge().createStatusBarItem(alignment, priority),
@@ -196,4 +231,8 @@ export const workspace: WorkspaceApi = {
     createDirectory: (path) => bridge().fsCreateDirectory(path),
     delete: (path, options) => bridge().fsDelete(path, options?.recursive ?? false),
   },
+  getConfiguration: (section) => ({
+    get: <T>(key: string, defaultValue: T): Promise<T> =>
+      bridge().getConfiguration(section, key, defaultValue) as Promise<T>,
+  }),
 }

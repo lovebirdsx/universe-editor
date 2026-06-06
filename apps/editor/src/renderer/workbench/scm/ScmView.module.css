@@ -216,13 +216,19 @@
 }
 
 .resourceLabel {
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* The directory grows to fill but shrinks far more eagerly than the file name
+   (shrink weight 100 vs 1), so the name stays fully visible and the path is the
+   first thing to get an ellipsis when space is tight. */
 .resourceDir {
-  flex: 1 1 auto;
+  flex: 1 100 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -304,6 +310,20 @@
   padding: 4px 12px;
   cursor: pointer;
   font-size: 13px;
+}
+
+.overflowItemLabel {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overflowSubmenuArrow {
+  flex: 0 0 auto;
+  margin-left: 8px;
+  font-size: 10px;
+  opacity: 0.7;
 }
 
 .overflowItem:hover {

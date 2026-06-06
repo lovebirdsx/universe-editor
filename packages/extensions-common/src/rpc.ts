@@ -79,6 +79,12 @@ export interface IExtHostQuickPickOptions {
   placeHolder?: string
 }
 
+export interface IExtHostQuickPickItemDto {
+  label: string
+  description?: string
+  detail?: string
+}
+
 export interface IExtHostInputBoxOptions {
   placeHolder?: string
   prompt?: string
@@ -92,6 +98,7 @@ export interface IExtHostStatusBarEntryDto {
   command?: string
   alignment: number
   priority: number
+  showProgress?: boolean | 'spinning' | 'syncing'
 }
 
 /**
@@ -106,7 +113,15 @@ export interface IMainThreadWindow {
     message: string,
     items: string[],
   ): Promise<string | undefined>
-  $showQuickPick(items: string[], options?: IExtHostQuickPickOptions): Promise<string | undefined>
+  /**
+   * Show a quick pick of plain strings or rich items; resolves to the selected
+   * entry's index in `items` (or undefined when dismissed). The caller maps the
+   * index back to its original item.
+   */
+  $showQuickPick(
+    items: Array<string | IExtHostQuickPickItemDto>,
+    options?: IExtHostQuickPickOptions,
+  ): Promise<number | undefined>
   $showInputBox(options?: IExtHostInputBoxOptions): Promise<string | undefined>
   /** Create or update the status-bar entry for `handle`. */
   $setStatusBarEntry(handle: number, entry: IExtHostStatusBarEntryDto): Promise<void>

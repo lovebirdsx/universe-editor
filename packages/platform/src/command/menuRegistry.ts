@@ -66,6 +66,8 @@ export interface ISubmenuItem {
   when?: ContextKeyExpression | string
   group?: string
   order?: number
+  /** Optional icon identifier (resolved to a concrete icon by the renderer). */
+  icon?: string
 }
 
 export type MenubarEntry = IMenuItem | ISubmenuItem
@@ -89,6 +91,7 @@ interface IResolvedSubmenuItem {
   when: ContextKeyExpression | undefined
   group?: string
   order?: number
+  icon?: string
 }
 
 type ResolvedEntry =
@@ -166,6 +169,7 @@ class MenuRegistryImpl implements IMenuRegistry {
       when: resolveWhen(item.when),
       ...(item.group !== undefined ? { group: item.group } : {}),
       ...(item.order !== undefined ? { order: item.order } : {}),
+      ...(item.icon !== undefined ? { icon: item.icon } : {}),
     }
     items.push(resolved)
     this._onDidChangeMenu.fire(parent)
@@ -204,6 +208,7 @@ class MenuRegistryImpl implements IMenuRegistry {
             ...(it.when !== undefined ? { when: it.when } : {}),
             ...(it.group !== undefined ? { group: it.group } : {}),
             ...(it.order !== undefined ? { order: it.order } : {}),
+            ...(it.icon !== undefined ? { icon: it.icon } : {}),
           } as ISubmenuItem
         }
         return {

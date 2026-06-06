@@ -63,6 +63,12 @@ export class EditorGroup implements IEditorGroup, IGridView {
   get count() {
     return this.model.count
   }
+  get activationId() {
+    return this.model.activationId
+  }
+  get lastActivationPreservedFocus() {
+    return this.model.lastActivationPreservedFocus
+  }
   get onDidChangeModel() {
     return this.model.onDidChangeModel
   }
@@ -85,8 +91,8 @@ export class EditorGroup implements IEditorGroup, IGridView {
   moveEditor(editor: EditorInput, toIndex: number): void {
     this.model.moveEditor(editor, toIndex)
   }
-  setActive(editor: EditorInput): void {
-    this.model.setActive(editor)
+  setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void {
+    this.model.setActive(editor, options)
   }
   pinEditor(editor: EditorInput): void {
     this.model.pinEditor(editor)

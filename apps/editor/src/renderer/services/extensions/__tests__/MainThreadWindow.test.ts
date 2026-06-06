@@ -99,7 +99,7 @@ describe('MainThreadWindow', () => {
     await expect(mt.$showMessage('warning', 'confirm?', ['Do it'])).resolves.toBeUndefined()
   })
 
-  it('maps quick pick selection back to its label', async () => {
+  it('maps quick pick selection back to its index', async () => {
     const pick = vi.fn().mockResolvedValue({ id: '1', label: 'second' })
     const quick = { pick } as unknown as IQuickInputService
     const mt = new MainThreadWindow(
@@ -108,9 +108,7 @@ describe('MainThreadWindow', () => {
       {} as IStatusBarService,
       {} as IDialogService,
     )
-    await expect(mt.$showQuickPick(['first', 'second'], { placeHolder: 'choose' })).resolves.toBe(
-      'second',
-    )
+    await expect(mt.$showQuickPick(['first', 'second'], { placeHolder: 'choose' })).resolves.toBe(1)
     expect(pick).toHaveBeenCalledWith(
       [
         { id: '0', label: 'first' },

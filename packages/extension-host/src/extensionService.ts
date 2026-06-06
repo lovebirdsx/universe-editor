@@ -15,6 +15,7 @@ import {
   type ExtensionContext,
   type FileStat,
   type InputBoxOptions,
+  type QuickPickItem,
   type QuickPickOptions,
   type SourceControl,
   type StatusBarAlignment,
@@ -68,6 +69,7 @@ class HostStatusBarItem implements StatusBarItem {
   private _text = ''
   private _tooltip: string | undefined
   private _command: string | undefined
+  private _showProgress: boolean | 'spinning' | 'syncing' | undefined
   private _visible = false
 
   constructor(
@@ -98,6 +100,13 @@ class HostStatusBarItem implements StatusBarItem {
     this._command = value
     this._sync()
   }
+  get showProgress(): boolean | 'spinning' | 'syncing' | undefined {
+    return this._showProgress
+  }
+  set showProgress(value: boolean | 'spinning' | 'syncing' | undefined) {
+    this._showProgress = value
+    this._sync()
+  }
 
   show(): void {
     this._visible = true
@@ -119,6 +128,7 @@ class HostStatusBarItem implements StatusBarItem {
       priority: this.priority,
       ...(this._tooltip !== undefined ? { tooltip: this._tooltip } : {}),
       ...(this._command !== undefined ? { command: this._command } : {}),
+      ...(this._showProgress !== undefined ? { showProgress: this._showProgress } : {}),
     })
   }
 }
@@ -179,8 +189,22 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._mainThreadWindow.$showMessage(severity, message, items)
   }
 
-  showQuickPick(items: readonly string[], options?: QuickPickOptions): Promise<string | undefined> {
-    return this._mainThreadWindow.$showQuickPick([...items], options)
+  showQuickPick(
+    items: readonly (string | QuickPickItem)[],
+    options?: QuickPickOptions,
+  ): Promise<string | QuickPickItem | undefined> {
+    const wireItems = items.map((it) =>
+      typeof it === 'string'
+        ? it
+        : {
+            label: it.label,
+            ...(it.description !== undefined ? { description: it.description } : {}),
+            ...(it.detail !== undefined ? { detail: it.detail } : {}),
+          },
+    )
+    return this._mainThreadWindow
+      .$showQuickPick(wireItems, options)
+      .then((index) => (index === undefined ? undefined : items[index]))
   }
 
   showInputBox(options?: InputBoxOptions): Promise<string | undefined> {
@@ -256,6 +280,15 @@ export class ExtensionService implements IExtensionHostBridge {
 
   fsDelete(path: string, recursive: boolean): Promise<void> {
     return this._fs().$delete(path, recursive)
+  }
+
+  getConfiguration(
+    section: string | undefined,
+    key: string,
+    defaultValue: unknown,
+  ): Promise<unknown> {
+    const fullKey = section ? `${section}.${key}` : key
+    return this.executeCommand('_workbench.getConfiguration', [fullKey, defaultValue])
   }
 
   // --- RPC surface (called from the renderer) ---

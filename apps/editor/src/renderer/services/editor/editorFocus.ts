@@ -1,6 +1,7 @@
 import type { EditorInput, IContextKeyService } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
+import { DiffEditorRegistry } from './DiffEditorRegistry.js'
 
 export function syncEditorFocusContext(contextKeyService: IContextKeyService): void {
   const active = document.activeElement
@@ -14,9 +15,20 @@ export function focusEditorInput(
   groupId?: number,
 ): boolean {
   const editor = FileEditorRegistry.get(input, groupId)
-  if (!editor) return false
-  focusStandaloneEditor(editor, contextKeyService)
-  return true
+  if (editor) {
+    focusStandaloneEditor(editor, contextKeyService)
+    return true
+  }
+  // Diff editors live in their own registry; focus the modified side so keyboard
+  // input lands in the editor after opening a diff (e.g. from the SCM view).
+  const diff = DiffEditorRegistry.get(input, groupId)
+  if (diff) {
+    diff.focus()
+    syncEditorFocusContext(contextKeyService)
+    queueMicrotask(() => syncEditorFocusContext(contextKeyService))
+    return true
+  }
+  return false
 }
 
 export function focusStandaloneEditor(

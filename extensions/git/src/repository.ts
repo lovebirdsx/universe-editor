@@ -14,6 +14,7 @@ import {
   commands,
   scm,
   window,
+  workspace,
   StatusBarAlignment,
   type SourceControl,
   type SourceControlResourceGroup,
@@ -74,9 +75,15 @@ export class Repository {
   private _refreshing = false
   private _queued = false
   private _syncing = false
+  private _fetching = false
+  /** Count of in-flight progress operations; while > 0 the sync item shows a spinner. */
+  private _busy = 0
   private _disposed = false
   private _stagedCount = 0
   private _workingCount = 0
+  private _branch: string | undefined
+  private _autofetchTimer: ReturnType<typeof setInterval> | undefined
+  private _autofetchInitial: ReturnType<typeof setTimeout> | undefined
 
   constructor(readonly root: string) {
     this._sc = scm.createSourceControl('git', 'Git', root)
@@ -97,6 +104,7 @@ export class Repository {
     this._syncItem.command = 'git.sync'
 
     this._startWatching()
+    void this._startAutofetch()
   }
 
   async refresh(): Promise<void> {
@@ -130,9 +138,11 @@ export class Repository {
     this._stagedCount = staged.length
     this._workingCount = working.length
     this._sc.count = staged.length + working.length
+    this._branch = status.branch
     this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
 
-    if (!this._syncing) {
+    // While an operation is showing a spinner, leave the sync item alone.
+    if (this._busy === 0) {
       const { ahead, behind } = status
       if (ahead > 0 || behind > 0) {
         const parts: string[] = []
@@ -140,11 +150,26 @@ export class Repository {
         if (behind > 0) parts.push(`↓${behind}`)
         this._syncItem.text = parts.join(' ')
         this._syncItem.tooltip = `${ahead} commit(s) ahead, ${behind} behind — click to sync`
+        this._syncItem.showProgress = false
         this._syncItem.show()
       } else {
         this._syncItem.hide()
       }
     }
+  }
+
+  /** Show a spinner on the sync item for the duration of an operation. */
+  private _beginProgress(text: string, kind: 'syncing' | 'spinning'): void {
+    this._busy++
+    this._syncItem.text = text
+    this._syncItem.tooltip = text
+    this._syncItem.showProgress = kind
+    this._syncItem.show()
+  }
+
+  private _endProgress(): void {
+    this._busy = Math.max(0, this._busy - 1)
+    if (this._busy === 0) this._syncItem.showProgress = false
   }
 
   get hasStagedChanges(): boolean {
@@ -174,21 +199,31 @@ export class Repository {
   }
 
   async commit(message: string): Promise<boolean> {
-    const res = await gitExec(['commit', '-m', message], this.root)
-    if (res.exitCode !== 0) {
-      void window.showErrorMessage(`Git commit failed: ${res.stderr.trim() || res.stdout.trim()}`)
-      return false
+    this._beginProgress('Committing…', 'spinning')
+    try {
+      const res = await gitExec(['commit', '-m', message], this.root)
+      if (res.exitCode !== 0) {
+        void window.showErrorMessage(`Git commit failed: ${res.stderr.trim() || res.stdout.trim()}`)
+        return false
+      }
+      return true
+    } finally {
+      this._endProgress()
+      await this.refresh()
     }
-    await this.refresh()
-    return true
+  }
+
+  async undoLastCommit(): Promise<void> {
+    await this._run(['reset', '--soft', 'HEAD~1'], 'undo last commit', {
+      text: 'Undoing…',
+      kind: 'spinning',
+    })
   }
 
   async sync(): Promise<void> {
     if (this._syncing) return
     this._syncing = true
-    this._syncItem.text = 'Syncing…'
-    this._syncItem.tooltip = 'Syncing…'
-    this._syncItem.show()
+    this._beginProgress('Syncing…', 'syncing')
     try {
       const pull = await gitExec(['pull', '--rebase'], this.root)
       if (pull.exitCode !== 0) {
@@ -201,16 +236,184 @@ export class Repository {
       }
     } finally {
       this._syncing = false
+      this._endProgress()
       await this.refresh()
     }
   }
 
   async pull(): Promise<void> {
-    await this._run(['pull', '--rebase'], 'pull')
+    await this._run(['pull'], 'pull', { text: 'Pulling…', kind: 'syncing' })
+  }
+
+  async pullRebase(): Promise<void> {
+    await this._run(['pull', '--rebase'], 'pull (rebase)', { text: 'Pulling…', kind: 'syncing' })
+  }
+
+  async pullAutostash(): Promise<void> {
+    await this._run(['pull', '--rebase', '--autostash'], 'pull (autostash)', {
+      text: 'Pulling…',
+      kind: 'syncing',
+    })
   }
 
   async push(): Promise<void> {
-    await this._run(['push'], 'push')
+    await this._run(['push'], 'push', { text: 'Pushing…', kind: 'syncing' })
+  }
+
+  async pushForce(): Promise<void> {
+    await this._run(['push', '--force-with-lease'], 'push (force)', {
+      text: 'Pushing…',
+      kind: 'syncing',
+    })
+  }
+
+  async pushTo(): Promise<void> {
+    const remotes = await this._listRemotes()
+    if (remotes.length === 0) {
+      void window.showWarningMessage('No remotes configured.')
+      return
+    }
+    const remote = await window.showQuickPick(remotes, {
+      placeHolder: 'Select a remote to push to',
+    })
+    if (!remote) return
+    await this._run(['push', remote], 'push', { text: 'Pushing…', kind: 'syncing' })
+  }
+
+  async fetch(opts?: { prune?: boolean; silent?: boolean }): Promise<void> {
+    if (this._fetching) return
+    this._fetching = true
+    this._beginProgress('Fetching…', 'spinning')
+    try {
+      const args = opts?.prune ? ['fetch', '--prune'] : ['fetch']
+      const res = await gitExec(args, this.root)
+      if (res.exitCode !== 0 && opts?.silent !== true) {
+        void window.showErrorMessage(`Git fetch failed: ${res.stderr.trim() || res.stdout.trim()}`)
+      }
+    } finally {
+      this._fetching = false
+      this._endProgress()
+      await this.refresh()
+    }
+  }
+
+  async stashPush(includeUntracked = false): Promise<void> {
+    if (!this.hasChanges) {
+      void window.showInformationMessage('There are no changes to stash.')
+      return
+    }
+    const args = includeUntracked ? ['stash', 'push', '-u'] : ['stash', 'push']
+    await this._run(args, 'stash')
+  }
+
+  async stashApply(pop = false): Promise<void> {
+    const ref = await this._pickStash(pop ? 'Select a stash to pop' : 'Select a stash to apply')
+    if (!ref) return
+    await this._run(['stash', pop ? 'pop' : 'apply', ref], pop ? 'stash pop' : 'stash apply')
+  }
+
+  async stashDrop(): Promise<void> {
+    const ref = await this._pickStash('Select a stash to drop')
+    if (!ref) return
+    await this._run(['stash', 'drop', ref], 'stash drop')
+  }
+
+  async merge(): Promise<void> {
+    const branch = await this._pickBranch('Select a branch to merge into the current branch')
+    if (!branch) return
+    await this._run(['merge', branch], 'merge')
+  }
+
+  async rebase(): Promise<void> {
+    const branch = await this._pickBranch('Select a branch to rebase onto')
+    if (!branch) return
+    await this._run(['rebase', branch], 'rebase')
+  }
+
+  async renameBranch(): Promise<void> {
+    const name = await window.showInputBox({
+      prompt: 'New branch name',
+      ...(this._branch !== undefined ? { value: this._branch } : {}),
+    })
+    if (!name) return
+    await this._run(['branch', '-m', name.trim()], 'rename branch')
+  }
+
+  async deleteBranch(): Promise<void> {
+    const branches = (await this._listBranches()).filter((b) => b !== this._branch)
+    if (branches.length === 0) {
+      void window.showInformationMessage('No other branches to delete.')
+      return
+    }
+    const branch = await window.showQuickPick(branches, {
+      placeHolder: 'Select a branch to delete',
+    })
+    if (!branch) return
+    const res = await gitExec(['branch', '-d', branch], this.root)
+    if (res.exitCode !== 0) {
+      // Not fully merged — offer a force delete.
+      const force = await window.showWarningMessage(
+        `Branch '${branch}' is not fully merged. Delete anyway?`,
+        'Delete',
+      )
+      if (force === 'Delete') await this._run(['branch', '-D', branch], 'delete branch')
+      return
+    }
+    await this.refresh()
+  }
+
+  async publishBranch(): Promise<void> {
+    if (this._branch === undefined) {
+      void window.showWarningMessage('No branch to publish.')
+      return
+    }
+    const remotes = await this._listRemotes()
+    let remote = remotes[0] ?? 'origin'
+    if (remotes.length > 1) {
+      const pick = await window.showQuickPick(remotes, { placeHolder: 'Select a remote' })
+      if (!pick) return
+      remote = pick
+    }
+    await this._run(['push', '-u', remote, this._branch], 'publish branch', {
+      text: 'Publishing…',
+      kind: 'syncing',
+    })
+  }
+
+  async addRemote(): Promise<void> {
+    const name = await window.showInputBox({ prompt: 'Remote name (e.g. origin)' })
+    if (!name) return
+    const url = await window.showInputBox({ prompt: 'Remote URL' })
+    if (!url) return
+    await this._run(['remote', 'add', name.trim(), url.trim()], 'add remote')
+  }
+
+  async removeRemote(): Promise<void> {
+    const remotes = await this._listRemotes()
+    if (remotes.length === 0) {
+      void window.showInformationMessage('No remotes configured.')
+      return
+    }
+    const remote = await window.showQuickPick(remotes, { placeHolder: 'Select a remote to remove' })
+    if (!remote) return
+    await this._run(['remote', 'remove', remote], 'remove remote')
+  }
+
+  async createTag(): Promise<void> {
+    const name = await window.showInputBox({ prompt: 'Tag name' })
+    if (!name) return
+    await this._run(['tag', name.trim()], 'create tag')
+  }
+
+  async deleteTag(): Promise<void> {
+    const tags = await this._listTags()
+    if (tags.length === 0) {
+      void window.showInformationMessage('No tags to delete.')
+      return
+    }
+    const tag = await window.showQuickPick(tags, { placeHolder: 'Select a tag to delete' })
+    if (!tag) return
+    await this._run(['tag', '-d', tag], 'delete tag')
   }
 
   async discard(path: string, untracked: boolean): Promise<void> {
@@ -250,14 +453,7 @@ export class Repository {
   }
 
   async checkout(): Promise<void> {
-    const res = await gitExec(['branch', '--format=%(refname:short)'], this.root)
-    const branches = res.stdout
-      .split('\n')
-      .map((b) => b.trim())
-      .filter(Boolean)
-    const pick = await window.showQuickPick(branches, {
-      placeHolder: 'Select a branch to checkout',
-    })
+    const pick = await this._pickBranch('Select a branch to checkout')
     if (!pick) return
     await this._run(['checkout', pick], 'checkout')
   }
@@ -269,7 +465,7 @@ export class Repository {
   }
 
   /** Open a diff of the file's HEAD revision against its current working-tree content. */
-  async openChange(absPath: string, pinned = false): Promise<void> {
+  async openChange(absPath: string, pinned = false, preserveFocus = false): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')
     const head = await gitExec(['show', `HEAD:${rel}`], this.root)
     const original = head.exitCode === 0 ? head.stdout : '' // new file → no HEAD revision
@@ -285,15 +481,94 @@ export class Repository {
       original,
       modified,
       pinned,
+      preserveFocus,
     })
   }
 
-  private async _run(args: readonly string[], label: string): Promise<void> {
-    const res = await gitExec(args, this.root)
-    if (res.exitCode !== 0) {
-      void window.showErrorMessage(`Git ${label} failed: ${res.stderr.trim() || res.stdout.trim()}`)
+  private async _run(
+    args: readonly string[],
+    label: string,
+    progress?: { text: string; kind: 'syncing' | 'spinning' },
+  ): Promise<void> {
+    if (progress) this._beginProgress(progress.text, progress.kind)
+    try {
+      const res = await gitExec(args, this.root)
+      if (res.exitCode !== 0) {
+        void window.showErrorMessage(
+          `Git ${label} failed: ${res.stderr.trim() || res.stdout.trim()}`,
+        )
+      }
+    } finally {
+      if (progress) this._endProgress()
+      await this.refresh()
     }
-    await this.refresh()
+  }
+
+  private async _listBranches(): Promise<string[]> {
+    const res = await gitExec(['branch', '--format=%(refname:short)'], this.root)
+    return res.stdout
+      .split('\n')
+      .map((b) => b.trim())
+      .filter(Boolean)
+  }
+
+  private async _listRemotes(): Promise<string[]> {
+    const res = await gitExec(['remote'], this.root)
+    return res.stdout
+      .split('\n')
+      .map((r) => r.trim())
+      .filter(Boolean)
+  }
+
+  private async _listTags(): Promise<string[]> {
+    const res = await gitExec(['tag'], this.root)
+    return res.stdout
+      .split('\n')
+      .map((t) => t.trim())
+      .filter(Boolean)
+  }
+
+  private async _pickBranch(placeHolder: string): Promise<string | undefined> {
+    const branches = await this._listBranches()
+    if (branches.length === 0) {
+      void window.showInformationMessage('No branches available.')
+      return undefined
+    }
+    return window.showQuickPick(branches, { placeHolder })
+  }
+
+  /** Show the stash list as a rich quick pick; resolves to the chosen `stash@{n}` ref. */
+  private async _pickStash(placeHolder: string): Promise<string | undefined> {
+    const res = await gitExec(['stash', 'list', '--format=%gd%x1f%s'], this.root)
+    const stashes = res.stdout
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        const [ref, subject] = line.split('\x1f')
+        return { ref: ref ?? '', label: subject ?? ref ?? '' }
+      })
+      .filter((s) => s.ref)
+    if (stashes.length === 0) {
+      void window.showInformationMessage('No stashes.')
+      return undefined
+    }
+    const pick = await window.showQuickPick(
+      stashes.map((s) => ({ label: s.label, description: s.ref })),
+      { placeHolder },
+    )
+    return pick?.description
+  }
+
+  private async _startAutofetch(): Promise<void> {
+    const config = workspace.getConfiguration('git')
+    const enabled = await config.get('autofetch', true)
+    if (!enabled || this._disposed) return
+    const period = await config.get('autofetchPeriod', 180)
+    if (this._disposed) return
+    const ms = Math.max(30, period) * 1000
+    // Kick off an initial fetch shortly after startup, then on a fixed interval.
+    this._autofetchInitial = setTimeout(() => void this.fetch({ silent: true }), 3000)
+    this._autofetchTimer = setInterval(() => void this.fetch({ silent: true }), ms)
   }
 
   private _startWatching(): void {
@@ -340,6 +615,8 @@ export class Repository {
   dispose(): void {
     this._disposed = true
     if (this._debounce) clearTimeout(this._debounce)
+    if (this._autofetchInitial) clearTimeout(this._autofetchInitial)
+    if (this._autofetchTimer) clearInterval(this._autofetchTimer)
     for (const w of this._watchers) {
       try {
         w.close()

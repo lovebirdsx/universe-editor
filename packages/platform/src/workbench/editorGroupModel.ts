@@ -42,6 +42,8 @@ export interface IOpenEditorOptions {
    * preview slot, replacing any existing preview in-place.
    */
   pinned?: boolean
+  /** Open without moving keyboard focus to the editor (default: false). */
+  preserveFocus?: boolean
 }
 
 export interface IEditorGroupModel {
@@ -50,6 +52,10 @@ export interface IEditorGroupModel {
   readonly activeEditor: EditorInput | undefined
   readonly previewEditor: EditorInput | undefined
   readonly count: number
+  /** Monotonic counter bumped on every effective activation; lets views dedupe focus handling. */
+  readonly activationId: number
+  /** Whether the most recent activation asked to keep keyboard focus off the editor. */
+  readonly lastActivationPreservedFocus: boolean
 
   readonly onDidChangeModel: Event<IEditorGroupModelChangeEvent>
   readonly onDidActiveEditorChange: Event<void>
@@ -64,7 +70,7 @@ export interface IEditorGroupModel {
    */
   detachEditor(editor: EditorInput): boolean
   moveEditor(editor: EditorInput, toIndex: number): void
-  setActive(editor: EditorInput): void
+  setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void
   pinEditor(editor: EditorInput): void
   isPinned(editor: EditorInput): boolean
 
@@ -84,6 +90,8 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   private readonly _editors: EditorInput[] = []
   private _activeEditor: EditorInput | undefined = undefined
   private _previewEditor: EditorInput | undefined = undefined
+  private _activationId = 0
+  private _lastActivationPreservedFocus = false
   private readonly _mru: EditorInput[] = []
   /**
    * Owns the lifetime of editors that belong to this group: each `openEditor`
@@ -116,9 +124,18 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     return this._editors.length
   }
 
+  get activationId(): number {
+    return this._activationId
+  }
+
+  get lastActivationPreservedFocus(): boolean {
+    return this._lastActivationPreservedFocus
+  }
+
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void {
     const activate = options?.activate !== false
     const pinned = options?.pinned !== false
+    this._lastActivationPreservedFocus = options?.preserveFocus === true
     const existing = this.findEditor(editor)
 
     if (existing) {
@@ -247,9 +264,10 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
     this._onDidChangeModel.fire({ kind: 'move', editor: moved!, oldIndex, newIndex: target })
   }
 
-  setActive(editor: EditorInput): void {
+  setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void {
     const existing = this.findEditor(editor)
     if (!existing) return
+    this._lastActivationPreservedFocus = options?.preserveFocus === true
     if (existing === this._activeEditor) return
     this._setActiveInternal(existing)
   }
@@ -296,6 +314,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   private _setActiveInternal(editor: EditorInput | undefined): void {
     if (this._activeEditor === editor) return
     this._activeEditor = editor
+    this._activationId++
     if (editor) {
       // Move to front of MRU.
       const idx = this._mru.indexOf(editor)

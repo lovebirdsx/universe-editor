@@ -32,6 +32,7 @@ import {
   type IExtensionDescriptionDto,
   type IKeybindingContribution,
   type IMenuContribution,
+  type ISubmenuContribution,
 } from '@universe-editor/extensions-common'
 
 /** Maps VSCode-style manifest menu keys to our internal MenuId. */
@@ -71,7 +72,7 @@ export class ExtensionPointTranslator extends Disposable {
         this._registerCommand(command)
       }
       if (contributes.menus) {
-        this._registerMenus(contributes.menus)
+        this._registerMenus(contributes.menus, contributes.submenus ?? [])
       }
       for (const keybinding of contributes.keybindings ?? []) {
         this._registerKeybinding(keybinding)
@@ -97,15 +98,43 @@ export class ExtensionPointTranslator extends Disposable {
     )
   }
 
-  private _registerMenus(menus: Record<string, IMenuContribution[]>): void {
+  private _registerMenus(
+    menus: Record<string, IMenuContribution[]>,
+    submenus: readonly ISubmenuContribution[],
+  ): void {
+    const submenuById = new Map(submenus.map((s) => [s.id, s]))
     for (const [key, items] of Object.entries(menus)) {
-      const menuId = MENU_ID_BY_KEY[key]
+      // A menus key is either a well-known location or a declared submenu id
+      // (whose children live under the submenu's own id used as a MenuId).
+      const menuId = MENU_ID_BY_KEY[key] ?? (submenuById.has(key) ? (key as MenuId) : undefined)
       if (menuId === undefined) {
         console.warn(`[extensions] ignoring unknown menu location: ${key}`)
         continue
       }
       for (const item of items) {
         const { group, order } = parseGroup(item.group)
+        if (item.submenu !== undefined) {
+          const decl = submenuById.get(item.submenu)
+          if (!decl) {
+            console.warn(`[extensions] ignoring menu item for unknown submenu: ${item.submenu}`)
+            continue
+          }
+          this._register(
+            MenuRegistry.addSubmenuItem(menuId, {
+              submenu: item.submenu as MenuId,
+              title: decl.label,
+              ...(item.when !== undefined ? { when: item.when } : {}),
+              ...(group !== undefined ? { group } : {}),
+              ...(order !== undefined ? { order } : {}),
+              ...(decl.icon !== undefined ? { icon: decl.icon } : {}),
+            }),
+          )
+          continue
+        }
+        if (item.command === undefined) {
+          console.warn(`[extensions] ignoring menu item with neither command nor submenu`)
+          continue
+        }
         this._register(
           MenuRegistry.addMenuItem(menuId, {
             command: item.command,

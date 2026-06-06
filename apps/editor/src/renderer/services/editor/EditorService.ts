@@ -128,7 +128,9 @@ export class EditorService extends Disposable implements IEditorService {
         if (options?.pinned === true && group.previewEditor === existing) {
           group.pinEditor(existing)
         }
-        if (options?.activate !== false) group.setActive(existing)
+        if (options?.activate !== false) {
+          group.setActive(existing, { preserveFocus: options?.preserveFocus === true })
+        }
         if (input instanceof EditorInput && input !== existing) {
           // Caller handed us a fresh input for an already-open resource; the
           // existing one wins, so release the discarded duplicate so the leak

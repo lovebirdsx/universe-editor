@@ -18,8 +18,9 @@
   "contributes": {
     "commands": [
       { "command": "git.commit", "title": "Commit", "category": "Git", "icon": "git-commit" },
-      { "command": "git.commitAndPush", "title": "Commit & Push", "category": "Git", "icon": "git-commit" },
-      { "command": "git.commitAndSync", "title": "Commit & Sync", "category": "Git", "icon": "git-commit" },
+      { "command": "git.commitAndPush", "title": "Commit & Push", "category": "Git", "icon": "push" },
+      { "command": "git.commitAndSync", "title": "Commit & Sync", "category": "Git", "icon": "sync" },
+      { "command": "git.undoLastCommit", "title": "Undo Last Commit", "category": "Git", "icon": "discard" },
       { "command": "git.refresh", "title": "Refresh", "category": "Git", "icon": "refresh" },
       { "command": "git.stage", "title": "Stage Changes", "category": "Git", "icon": "add" },
       { "command": "git.unstage", "title": "Unstage Changes", "category": "Git", "icon": "remove" },
@@ -29,24 +30,106 @@
       { "command": "git.discardAll", "title": "Discard All Changes", "category": "Git", "icon": "discard-all" },
       { "command": "git.checkout", "title": "Checkout to...", "category": "Git", "icon": "checkout" },
       { "command": "git.createBranch", "title": "Create Branch...", "category": "Git", "icon": "create-branch" },
+      { "command": "git.renameBranch", "title": "Rename Branch...", "category": "Git", "icon": "checkout" },
+      { "command": "git.deleteBranch", "title": "Delete Branch...", "category": "Git", "icon": "remove" },
+      { "command": "git.merge", "title": "Merge Branch...", "category": "Git", "icon": "merge" },
+      { "command": "git.rebase", "title": "Rebase Branch...", "category": "Git", "icon": "merge" },
+      { "command": "git.publishBranch", "title": "Publish Branch", "category": "Git", "icon": "push" },
       { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
       { "command": "git.pull", "title": "Pull", "category": "Git", "icon": "pull" },
+      { "command": "git.pullRebase", "title": "Pull (Rebase)", "category": "Git", "icon": "pull" },
+      { "command": "git.pullAutostash", "title": "Pull (Autostash)", "category": "Git", "icon": "pull" },
       { "command": "git.push", "title": "Push", "category": "Git", "icon": "push" },
-      { "command": "git.sync", "title": "Sync (Pull & Push)", "category": "Git", "icon": "sync" }
+      { "command": "git.pushForce", "title": "Push (Force)", "category": "Git", "icon": "push" },
+      { "command": "git.pushTo", "title": "Push to...", "category": "Git", "icon": "push" },
+      { "command": "git.sync", "title": "Sync (Pull & Push)", "category": "Git", "icon": "sync" },
+      { "command": "git.fetch", "title": "Fetch", "category": "Git", "icon": "fetch" },
+      { "command": "git.fetchPrune", "title": "Fetch (Prune)", "category": "Git", "icon": "fetch" },
+      { "command": "git.stash", "title": "Stash", "category": "Git", "icon": "stash" },
+      { "command": "git.stashIncludeUntracked", "title": "Stash (Include Untracked)", "category": "Git", "icon": "stash" },
+      { "command": "git.stashApply", "title": "Apply Stash...", "category": "Git", "icon": "stash" },
+      { "command": "git.stashPop", "title": "Pop Stash...", "category": "Git", "icon": "stash" },
+      { "command": "git.stashDrop", "title": "Drop Stash...", "category": "Git", "icon": "stash" },
+      { "command": "git.addRemote", "title": "Add Remote...", "category": "Git", "icon": "remote" },
+      { "command": "git.removeRemote", "title": "Remove Remote...", "category": "Git", "icon": "remote" },
+      { "command": "git.createTag", "title": "Create Tag...", "category": "Git", "icon": "tag" },
+      { "command": "git.deleteTag", "title": "Delete Tag...", "category": "Git", "icon": "tag" }
+    ],
+    "submenus": [
+      { "id": "git.commitMenu", "label": "Commit", "icon": "git-commit" },
+      { "id": "git.changesMenu", "label": "Changes", "icon": "stage-all" },
+      { "id": "git.pullMenu", "label": "Pull", "icon": "pull" },
+      { "id": "git.pushMenu", "label": "Push", "icon": "push" },
+      { "id": "git.fetchMenu", "label": "Fetch", "icon": "fetch" },
+      { "id": "git.branchMenu", "label": "Branch", "icon": "checkout" },
+      { "id": "git.stashMenu", "label": "Stash", "icon": "stash" },
+      { "id": "git.remoteMenu", "label": "Remote", "icon": "remote" },
+      { "id": "git.tagsMenu", "label": "Tags", "icon": "tag" }
     ],
     "menus": {
       "scm/title": [
         { "command": "git.commit", "group": "navigation@1", "icon": "git-commit" },
         { "command": "git.refresh", "group": "navigation@2", "icon": "refresh" },
         { "command": "git.stageAll", "group": "navigation@3", "icon": "stage-all" },
-        { "command": "git.pull", "group": "1_sync@1", "icon": "pull" },
-        { "command": "git.push", "group": "1_sync@2", "icon": "push" },
-        { "command": "git.sync", "group": "1_sync@3", "icon": "sync" },
-        { "command": "git.stageAll", "group": "2_changes@1", "icon": "stage-all" },
-        { "command": "git.unstageAll", "group": "2_changes@2", "icon": "unstage-all" },
-        { "command": "git.discardAll", "group": "2_changes@3", "icon": "discard-all" },
-        { "command": "git.checkout", "group": "3_branch@1", "icon": "checkout" },
-        { "command": "git.createBranch", "group": "3_branch@2", "icon": "create-branch" }
+        { "submenu": "git.commitMenu", "group": "1_commit@1" },
+        { "submenu": "git.changesMenu", "group": "2_changes@1" },
+        { "submenu": "git.pullMenu", "group": "3_sync@1" },
+        { "submenu": "git.pushMenu", "group": "3_sync@2" },
+        { "command": "git.sync", "group": "3_sync@3", "icon": "sync" },
+        { "submenu": "git.fetchMenu", "group": "3_sync@4" },
+        { "submenu": "git.branchMenu", "group": "4_branch@1" },
+        { "submenu": "git.stashMenu", "group": "5_stash@1" },
+        { "submenu": "git.remoteMenu", "group": "6_remote@1" },
+        { "submenu": "git.tagsMenu", "group": "6_remote@2" }
+      ],
+      "git.commitMenu": [
+        { "command": "git.commit", "group": "1@1", "icon": "git-commit" },
+        { "command": "git.commitAndPush", "group": "1@2", "icon": "push" },
+        { "command": "git.commitAndSync", "group": "1@3", "icon": "sync" },
+        { "command": "git.undoLastCommit", "group": "2@1", "icon": "discard" }
+      ],
+      "git.changesMenu": [
+        { "command": "git.stageAll", "group": "1@1", "icon": "stage-all" },
+        { "command": "git.unstageAll", "group": "1@2", "icon": "unstage-all" },
+        { "command": "git.discardAll", "group": "1@3", "icon": "discard-all" }
+      ],
+      "git.pullMenu": [
+        { "command": "git.pull", "group": "1@1", "icon": "pull" },
+        { "command": "git.pullRebase", "group": "1@2", "icon": "pull" },
+        { "command": "git.pullAutostash", "group": "1@3", "icon": "pull" }
+      ],
+      "git.pushMenu": [
+        { "command": "git.push", "group": "1@1", "icon": "push" },
+        { "command": "git.pushForce", "group": "1@2", "icon": "push" },
+        { "command": "git.pushTo", "group": "1@3", "icon": "push" }
+      ],
+      "git.fetchMenu": [
+        { "command": "git.fetch", "group": "1@1", "icon": "fetch" },
+        { "command": "git.fetchPrune", "group": "1@2", "icon": "fetch" }
+      ],
+      "git.branchMenu": [
+        { "command": "git.checkout", "group": "1@1", "icon": "checkout" },
+        { "command": "git.createBranch", "group": "1@2", "icon": "create-branch" },
+        { "command": "git.renameBranch", "group": "1@3", "icon": "checkout" },
+        { "command": "git.deleteBranch", "group": "1@4", "icon": "remove" },
+        { "command": "git.merge", "group": "2@1", "icon": "merge" },
+        { "command": "git.rebase", "group": "2@2", "icon": "merge" },
+        { "command": "git.publishBranch", "group": "3@1", "icon": "push" }
+      ],
+      "git.stashMenu": [
+        { "command": "git.stash", "group": "1@1", "icon": "stash" },
+        { "command": "git.stashIncludeUntracked", "group": "1@2", "icon": "stash" },
+        { "command": "git.stashApply", "group": "2@1", "icon": "stash" },
+        { "command": "git.stashPop", "group": "2@2", "icon": "stash" },
+        { "command": "git.stashDrop", "group": "2@3", "icon": "stash" }
+      ],
+      "git.remoteMenu": [
+        { "command": "git.addRemote", "group": "1@1", "icon": "remote" },
+        { "command": "git.removeRemote", "group": "1@2", "icon": "remote" }
+      ],
+      "git.tagsMenu": [
+        { "command": "git.createTag", "group": "1@1", "icon": "tag" },
+        { "command": "git.deleteTag", "group": "1@2", "icon": "tag" }
       ],
       "scm/resourceState/context": [
         { "command": "git.stage", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
@@ -72,6 +155,17 @@
           "type": "boolean",
           "default": true,
           "description": "Whether git source control is enabled."
+        },
+        "git.autofetch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Periodically fetch from the remote so the status bar shows incoming/outgoing commits."
+        },
+        "git.autofetchPeriod": {
+          "type": "number",
+          "default": 180,
+          "minimum": 30,
+          "description": "Interval (in seconds) between automatic fetches when git.autofetch is enabled."
         }
       }
     }

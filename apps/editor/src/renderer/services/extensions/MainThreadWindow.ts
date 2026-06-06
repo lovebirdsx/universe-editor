@@ -22,6 +22,7 @@ import {
 import {
   type ExtHostMessageSeverity,
   type IExtHostInputBoxOptions,
+  type IExtHostQuickPickItemDto,
   type IExtHostQuickPickOptions,
   type IExtHostStatusBarEntryDto,
   type IMainThreadWindow,
@@ -78,11 +79,23 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
     })
   }
 
-  $showQuickPick(items: string[], options?: IExtHostQuickPickOptions): Promise<string | undefined> {
-    const picks: IQuickPickItem[] = items.map((label, index) => ({ id: String(index), label }))
+  $showQuickPick(
+    items: Array<string | IExtHostQuickPickItemDto>,
+    options?: IExtHostQuickPickOptions,
+  ): Promise<number | undefined> {
+    const picks: IQuickPickItem[] = items.map((it, index) =>
+      typeof it === 'string'
+        ? { id: String(index), label: it }
+        : {
+            id: String(index),
+            label: it.label,
+            ...(it.description !== undefined ? { description: it.description } : {}),
+            ...(it.detail !== undefined ? { detail: it.detail } : {}),
+          },
+    )
     return this._quickInput
       .pick(picks, options?.placeHolder !== undefined ? { placeholder: options.placeHolder } : {})
-      .then((selected) => selected?.label)
+      .then((selected) => (selected ? Number(selected.id) : undefined))
   }
 
   $showInputBox(options?: IExtHostInputBoxOptions): Promise<string | undefined> {
@@ -122,6 +135,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       ...(icon !== undefined ? { icon } : {}),
       ...(entry.tooltip !== undefined ? { tooltip: entry.tooltip } : {}),
       ...(entry.command !== undefined ? { command: entry.command } : {}),
+      ...(entry.showProgress !== undefined ? { showProgress: entry.showProgress } : {}),
     }
   }
 

@@ -18,6 +18,7 @@ import {
   ActionButton,
   TitleOverflowMenu,
   menuActions,
+  menuToRows,
   useMenuRevision,
   type OverflowRow,
 } from './scmShared.js'
@@ -74,20 +75,12 @@ export function ScmViewToolbar() {
     ]
     const multi = sourceControls.length > 1
     for (const sc of sourceControls) {
-      const nonNav = menuActions(MenuId.ScmTitle, { scmProvider: sc.id }).filter(
-        (a) => a.group !== 'navigation',
+      const scRows = menuToRows(MenuId.ScmTitle, { scmProvider: sc.id }, (cmd) =>
+        runCommand(cmd, sc.id),
       )
-      if (nonNav.length === 0) continue
+      if (scRows.length === 0) continue
       rows.push({ kind: 'separator', id: `sep-${sc.id}`, ...(multi ? { label: sc.label } : {}) })
-      for (const a of nonNav) {
-        rows.push({
-          kind: 'item',
-          id: `${sc.id}:${a.id}`,
-          label: a.title,
-          icon: a.icon,
-          run: () => runCommand(a.command, sc.id),
-        })
-      }
+      rows.push(...scRows)
     }
     return rows
     // eslint-disable-next-line react-hooks/exhaustive-deps

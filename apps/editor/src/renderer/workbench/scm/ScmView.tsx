@@ -66,6 +66,22 @@ import { scmViewState } from './scmViewState.js'
 import styles from './ScmView.module.css'
 
 const VIEW_MODE_STORAGE_KEY = 'scm.viewMode'
+const COMMIT_ACTION_STORAGE_KEY = 'scm.commitAction'
+
+interface CommitAction {
+  readonly id: string
+  readonly label: string
+  readonly icon: string
+  readonly command: string
+}
+
+/** The commit-button choices; the last one picked becomes the sticky default. */
+const COMMIT_ACTIONS: readonly CommitAction[] = [
+  { id: 'git.commit', label: 'Commit', icon: 'git-commit', command: 'git.commit' },
+  { id: 'git.commitAndPush', label: 'Commit & Push', icon: 'push', command: 'git.commitAndPush' },
+  { id: 'git.commitAndSync', label: 'Commit & Sync', icon: 'sync', command: 'git.commitAndSync' },
+]
+const DEFAULT_COMMIT_ACTION = COMMIT_ACTIONS[0]!
 
 function basename(path: string): string {
   const i = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
@@ -532,6 +548,19 @@ function ScmProviderView({
   const viewMode = useObservable(scmViewState.viewMode)
 
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
+  const [stickyCommitId, setStickyCommitId] = useState<string>(DEFAULT_COMMIT_ACTION.id)
+
+  // Restore the last-picked commit action so the button defaults to it.
+  const restoredCommitRef = useRef(false)
+  useEffect(() => {
+    if (restoredCommitRef.current) return
+    restoredCommitRef.current = true
+    void storage.get<string>(COMMIT_ACTION_STORAGE_KEY, StorageScope.GLOBAL).then((stored) => {
+      if (stored && COMMIT_ACTIONS.some((a) => a.id === stored)) setStickyCommitId(stored)
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const stickyCommit = COMMIT_ACTIONS.find((a) => a.id === stickyCommitId) ?? DEFAULT_COMMIT_ACTION
 
   // Single TreeModel per provider; its data source reads a snapshot that is
   // rebuilt (during render) whenever groups / resources / view-mode change.
@@ -674,31 +703,20 @@ function ScmProviderView({
   }
 
   const commitRows = useMemo<OverflowRow[]>(
-    () => [
-      {
+    () =>
+      COMMIT_ACTIONS.map((a) => ({
         kind: 'item',
-        id: 'git.commit',
-        label: 'Commit',
-        icon: 'git-commit',
-        run: () => runCommand('git.commit'),
-      },
-      {
-        kind: 'item',
-        id: 'git.commitAndPush',
-        label: 'Commit & Push',
-        icon: 'push',
-        run: () => runCommand('git.commitAndPush'),
-      },
-      {
-        kind: 'item',
-        id: 'git.commitAndSync',
-        label: 'Commit & Sync',
-        icon: 'sync',
-        run: () => runCommand('git.commitAndSync'),
-      },
-    ],
+        id: a.id,
+        label: a.label,
+        icon: a.icon,
+        run: () => {
+          setStickyCommitId(a.id)
+          void storage.set(COMMIT_ACTION_STORAGE_KEY, a.id, StorageScope.GLOBAL)
+          runCommand(a.command)
+        },
+      })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [storage],
   )
 
   return (
@@ -724,7 +742,7 @@ function ScmProviderView({
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
             e.preventDefault()
-            runCommand(acceptCommand)
+            runCommand(stickyCommit.command)
           }
         }}
       />
@@ -733,9 +751,9 @@ function ScmProviderView({
           <button
             type="button"
             className={styles['commitButton']}
-            onClick={() => runCommand(acceptCommand)}
+            onClick={() => runCommand(stickyCommit.command)}
           >
-            {acceptCommand.title}
+            {stickyCommit.label}
           </button>
           <button
             type="button"
@@ -757,7 +775,10 @@ function ScmProviderView({
           const n = node.element
           if (n.kind !== 'file' || !n.resource.command) return
           if (opts.preview) {
-            void commandService.executeCommand(n.resource.command.command, n.resource)
+            // Space previews the change without stealing focus from the list.
+            void commandService.executeCommand(n.resource.command.command, n.resource, {
+              preserveFocus: true,
+            })
           } else {
             void commandService.executeCommand(n.resource.command.command, n.resource, {
               pinned: true,

@@ -98,6 +98,57 @@ export function ActionButton({
 export type OverflowRow =
   | { kind: 'separator'; id: string; label?: string }
   | { kind: 'item'; id: string; label?: string; icon?: string | undefined; run?: () => void }
+  | {
+      kind: 'submenu'
+      id: string
+      label?: string
+      icon?: string | undefined
+      children: OverflowRow[]
+    }
+
+/**
+ * Resolve a MenuId into renderable overflow rows, recursing into submenu
+ * contributions. `navigation` items are skipped (they live inline in the
+ * toolbar). Group changes insert a separator so VSCode-style sections stay
+ * visually distinct.
+ */
+export function menuToRows(
+  menuId: MenuId,
+  scope: Record<string, unknown>,
+  runCommand: (command: string) => void,
+): OverflowRow[] {
+  const rows: OverflowRow[] = []
+  let prevGroup: string | undefined
+  let started = false
+  for (const entry of MenuRegistry.getMenuItems(menuId)) {
+    if (entry.group === 'navigation') continue
+    if (!evalWhen(entry.when, scope)) continue
+    if (started && entry.group !== prevGroup) {
+      rows.push({ kind: 'separator', id: `sep-${prevGroup ?? ''}-${entry.group ?? ''}` })
+    }
+    prevGroup = entry.group
+    started = true
+    if (isSubmenuEntry(entry)) {
+      rows.push({
+        kind: 'submenu',
+        id: entry.submenu,
+        label: entry.title,
+        icon: entry.icon,
+        children: menuToRows(entry.submenu, scope, runCommand),
+      })
+    } else {
+      const cmd = CommandsRegistry.getCommand(entry.command)
+      rows.push({
+        kind: 'item',
+        id: entry.command,
+        label: entry.title ?? cmd?.metadata?.description ?? entry.command,
+        icon: entry.icon,
+        run: () => runCommand(entry.command),
+      })
+    }
+  }
+  return rows
+}
 
 export function TitleOverflowMenu({
   anchor,
@@ -109,9 +160,17 @@ export function TitleOverflowMenu({
   onClose: () => void
 }) {
   const ref = useRef<HTMLUListElement>(null)
+  const [openSub, setOpenSub] = useState<{
+    id: string
+    anchor: { x: number; y: number }
+    rows: OverflowRow[]
+  } | null>(null)
+
   useEffect(() => {
     const onDocClick = (e: MouseEvent): void => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
+      // Ignore clicks inside any level of the (portalled) menu stack.
+      if ((e.target as Element | null)?.closest('[data-overflow-menu]')) return
+      onClose()
     }
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
@@ -125,45 +184,74 @@ export function TitleOverflowMenu({
   }, [onClose])
 
   return createPortal(
-    <ul
-      ref={ref}
-      role="menu"
-      className={styles['overflowMenu']}
-      style={{ top: anchor.y, left: anchor.x }}
-    >
-      {rows.map((row) =>
-        row.kind === 'separator' ? (
-          row.label ? (
-            <li key={row.id} className={styles['overflowSeparatorLabel']}>
-              {row.label}
-            </li>
+    <>
+      <ul
+        ref={ref}
+        role="menu"
+        data-overflow-menu=""
+        className={styles['overflowMenu']}
+        style={{ top: anchor.y, left: anchor.x }}
+      >
+        {rows.map((row) => {
+          if (row.kind === 'separator') {
+            return row.label ? (
+              <li key={row.id} className={styles['overflowSeparatorLabel']}>
+                {row.label}
+              </li>
+            ) : (
+              <li key={row.id} role="separator" className={styles['overflowSeparator']} />
+            )
+          }
+          const Icon = resolveHeaderIcon(row.icon)
+          const iconEl = Icon ? (
+            <Icon size={16} strokeWidth={1.6} />
           ) : (
-            <li key={row.id} role="separator" className={styles['overflowSeparator']} />
+            <span className={styles['overflowIconGap']} />
           )
-        ) : (
-          <li
-            key={row.id}
-            role="menuitem"
-            className={styles['overflowItem']}
-            tabIndex={-1}
-            onClick={() => {
-              onClose()
-              row.run?.()
-            }}
-          >
-            {(() => {
-              const Icon = resolveHeaderIcon(row.icon)
-              return Icon ? (
-                <Icon size={16} strokeWidth={1.6} />
-              ) : (
-                <span className={styles['overflowIconGap']} />
-              )
-            })()}
-            <span>{row.label}</span>
-          </li>
-        ),
+          if (row.kind === 'submenu') {
+            return (
+              <li
+                key={row.id}
+                role="menuitem"
+                className={styles['overflowItem']}
+                tabIndex={-1}
+                onMouseEnter={(e) => {
+                  const r = e.currentTarget.getBoundingClientRect()
+                  setOpenSub({
+                    id: row.id,
+                    anchor: { x: r.right - 4, y: r.top - 4 },
+                    rows: row.children,
+                  })
+                }}
+              >
+                {iconEl}
+                <span className={styles['overflowItemLabel']}>{row.label}</span>
+                <span className={styles['overflowSubmenuArrow']}>▸</span>
+              </li>
+            )
+          }
+          return (
+            <li
+              key={row.id}
+              role="menuitem"
+              className={styles['overflowItem']}
+              tabIndex={-1}
+              onMouseEnter={() => setOpenSub(null)}
+              onClick={() => {
+                onClose()
+                row.run?.()
+              }}
+            >
+              {iconEl}
+              <span className={styles['overflowItemLabel']}>{row.label}</span>
+            </li>
+          )
+        })}
+      </ul>
+      {openSub && (
+        <TitleOverflowMenu anchor={openSub.anchor} rows={openSub.rows} onClose={onClose} />
       )}
-    </ul>,
+    </>,
     document.body,
   )
 }

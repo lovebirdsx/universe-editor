@@ -9,6 +9,7 @@ import {
   GoToPreviousDifferenceAction,
   OpenDiffAction,
 } from './diffActions.js'
+import { GetConfigurationAction } from './extensionApiActions.js'
 import {
   ShowCommandsAction,
   ShowExplorerAction,
@@ -317,6 +318,7 @@ registerAction2(OpenMarkdownPreviewToSideAction)
 registerAction2(OpenDiffAction)
 registerAction2(GoToNextDifferenceAction)
 registerAction2(GoToPreviousDifferenceAction)
+registerAction2(GetConfigurationAction)
 
 // Update
 registerAction2(CheckForUpdatesAction)

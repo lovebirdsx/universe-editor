@@ -22,12 +22,23 @@ export interface ICommandContribution {
 
 /**
  * A single menu item under a `contributes.menus[location][]`. `group` may carry
- * an `@order` suffix (VSCode convention), e.g. `navigation@1`.
+ * an `@order` suffix (VSCode convention), e.g. `navigation@1`. An item carries
+ * either a `command` (runs it) or a `submenu` (opens a nested menu by its id).
  */
 export interface IMenuContribution {
-  command: string
+  command?: string
+  /** Id of a `contributes.submenus[]` entry to nest here instead of a command. */
+  submenu?: string
   when?: string
   group?: string
+  /** Optional icon identifier (resolved to a concrete icon by the renderer). */
+  icon?: string
+}
+
+/** A `contributes.submenus[]` entry: a reusable nested menu referenced by id. */
+export interface ISubmenuContribution {
+  id: string
+  label: string
   /** Optional icon identifier (resolved to a concrete icon by the renderer). */
   icon?: string
 }
@@ -65,6 +76,8 @@ export interface IExtensionContributions {
   commands?: ICommandContribution[]
   /** Keyed by menu location, e.g. `commandPalette`, `scm/title`. */
   menus?: Record<string, IMenuContribution[]>
+  /** Reusable nested menus referenced by `IMenuContribution.submenu`. */
+  submenus?: ISubmenuContribution[]
   keybindings?: IKeybindingContribution[]
   configuration?: IConfigurationContribution | IConfigurationContribution[]
 }

@@ -14,10 +14,21 @@ const commandContributionSchema = z.object({
   icon: z.string().optional(),
 })
 
-const menuItemSchema = z.object({
-  command: z.string().min(1),
-  when: z.string().optional(),
-  group: z.string().optional(),
+const menuItemSchema = z
+  .object({
+    command: z.string().min(1).optional(),
+    submenu: z.string().min(1).optional(),
+    when: z.string().optional(),
+    group: z.string().optional(),
+    icon: z.string().optional(),
+  })
+  .refine((m) => m.command !== undefined || m.submenu !== undefined, {
+    message: 'menu item must have either "command" or "submenu"',
+  })
+
+const submenuSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
   icon: z.string().optional(),
 })
 
@@ -48,6 +59,7 @@ const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
     menus: z.record(z.array(menuItemSchema)).optional(),
+    submenus: z.array(submenuSchema).optional(),
     keybindings: z.array(keybindingSchema).optional(),
     configuration: z.union([configurationSchema, z.array(configurationSchema)]).optional(),
   })

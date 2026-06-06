@@ -11,6 +11,7 @@ import type {
   FileType,
   InputBoxOptions,
   Memento,
+  QuickPickItem,
   QuickPickOptions,
   SourceControl,
   StatusBarAlignment,
@@ -33,7 +34,10 @@ export interface IExtensionHostBridge {
     message: string,
     items: string[],
   ): Promise<string | undefined>
-  showQuickPick(items: readonly string[], options?: QuickPickOptions): Promise<string | undefined>
+  showQuickPick(
+    items: readonly (string | QuickPickItem)[],
+    options?: QuickPickOptions,
+  ): Promise<string | QuickPickItem | undefined>
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
@@ -44,6 +48,11 @@ export interface IExtensionHostBridge {
   fsReadDirectory(path: string): Promise<[string, FileType][]>
   fsCreateDirectory(path: string): Promise<void>
   fsDelete(path: string, recursive: boolean): Promise<void>
+  getConfiguration(
+    section: string | undefined,
+    key: string,
+    defaultValue: unknown,
+  ): Promise<unknown>
 }
 
 export function installApiBridge(bridge: IExtensionHostBridge): void {
