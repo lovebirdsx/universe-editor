@@ -117,9 +117,16 @@
   padding: 0;
 }
 
-.itemIcon {
+.itemIconSlot {
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
   margin-right: 6px;
+}
+
+.itemIcon {
   opacity: 0.85;
 }
 

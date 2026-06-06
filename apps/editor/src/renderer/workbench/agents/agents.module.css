@@ -1508,6 +1508,8 @@
   margin: 4px 0 0 22px;
   width: calc(100% - 22px);
   font-size: 12px;
+  font-family: var(--font-ui);
+  line-height: 1.4;
   padding: 3px 6px;
   border: 1px solid var(--color-border, #333);
   border-radius: 3px;
@@ -1534,6 +1536,8 @@
 .questionNotes {
   width: 100%;
   font-size: 12px;
+  font-family: var(--font-ui);
+  line-height: 1.4;
   padding: 3px 6px;
   border: 1px solid var(--color-border, #333);
   border-radius: 3px;

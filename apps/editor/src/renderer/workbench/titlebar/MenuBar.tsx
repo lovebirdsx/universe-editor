@@ -2,6 +2,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { useMenuItems, type ResolvedMenuSection } from './useTitleBarMenus.js'
+import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import styles from './TitleBar.module.css'
 
 interface DropdownContentsProps {
@@ -25,6 +26,13 @@ function DropdownContents({ sections, onExecute }: DropdownContentsProps) {
         <Fragment key={`section-${section.group}-${sectionIdx}`}>
           {sectionIdx > 0 && <div className={styles['separator']} />}
           {section.items.map((item, itemIdx) => {
+            const showIconColumn = section.items.some((entry) => entry.icon !== undefined)
+            const Icon = resolveHeaderIcon(item.icon)
+            const iconCell = showIconColumn ? (
+              <span className={styles['dropdown-icon-cell']} aria-hidden="true">
+                {Icon ? <Icon size={14} strokeWidth={1.75} /> : null}
+              </span>
+            ) : null
             if (item.kind === 'submenu') {
               const key = `${section.group}-${itemIdx}-sub-${item.submenu}`
               const isOpen = openSubmenu === key
@@ -38,7 +46,8 @@ function DropdownContents({ sections, onExecute }: DropdownContentsProps) {
                   aria-haspopup="true"
                   aria-expanded={isOpen}
                 >
-                  <span>{item.label}</span>
+                  {iconCell}
+                  <span className={styles['dropdown-label-text']}>{item.label}</span>
                   <span className={styles['submenu-arrow']}>▶</span>
                   {isOpen && <SubmenuPanel submenu={item.submenu} onExecute={onExecute} />}
                 </div>
@@ -51,7 +60,8 @@ function DropdownContents({ sections, onExecute }: DropdownContentsProps) {
                 onClick={() => onExecute(item.command)}
                 role="menuitem"
               >
-                <span>{item.label}</span>
+                {iconCell}
+                <span className={styles['dropdown-label-text']}>{item.label}</span>
                 {item.shortcut && <span className={styles['shortcut']}>{item.shortcut}</span>}
               </div>
             )

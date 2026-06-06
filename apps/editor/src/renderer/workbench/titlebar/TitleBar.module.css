@@ -73,7 +73,6 @@
 
 .dropdown-item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
   padding: 4px 12px;
   font-size: 12px;
@@ -81,6 +80,26 @@
   cursor: default;
   white-space: nowrap;
   -webkit-app-region: no-drag;
+}
+
+.dropdown-icon-cell {
+  width: 16px;
+  margin-right: 8px;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-foreground-muted, #8a8a92);
+}
+
+.dropdown-item:hover .dropdown-icon-cell {
+  color: #ffffff;
+}
+
+.dropdown-label-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .dropdown-item:hover:not(.disabled) {

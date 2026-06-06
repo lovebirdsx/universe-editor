@@ -39,6 +39,23 @@ const DECORATIONS: Record<string, Decoration> = {
   '?': { color: '#73c991', tooltip: 'Untracked' },
 }
 
+const GIT_COMMIT_INPUT_COMMAND = { command: 'git.commit', title: 'Commit' } as const
+const GIT_SYNC_INPUT_COMMAND = { command: 'git.sync', title: 'Sync' } as const
+
+export function gitPrimaryInputCommand({
+  hasChanges,
+  ahead,
+  behind,
+}: {
+  readonly hasChanges: boolean
+  readonly ahead: number
+  readonly behind: number
+}) {
+  return !hasChanges && (ahead > 0 || behind > 0)
+    ? GIT_SYNC_INPUT_COMMAND
+    : GIT_COMMIT_INPUT_COMMAND
+}
+
 function toResourceState(root: string, path: string, letter: string): SourceControlResourceState {
   const decoration = DECORATIONS[letter] ?? { color: '#cccccc', tooltip: letter }
   return {
@@ -91,7 +108,7 @@ export class Repository {
   ) {
     this._sc = scm.createSourceControl('git', 'Git', root)
     this._sc.inputBox.placeholder = 'Message (Ctrl+Enter to commit)'
-    this._sc.acceptInputCommand = { command: 'git.commit', title: 'Commit' }
+    this._sc.acceptInputCommand = GIT_COMMIT_INPUT_COMMAND
 
     this._staged = this._sc.createResourceGroup('index', 'Staged Changes')
     this._staged.hideWhenEmpty = true
@@ -145,6 +162,11 @@ export class Repository {
     this._stagedCount = staged.length
     this._workingCount = working.length
     this._sc.count = staged.length + working.length
+    this._sc.acceptInputCommand = gitPrimaryInputCommand({
+      hasChanges: staged.length + working.length > 0,
+      ahead: status.ahead,
+      behind: status.behind,
+    })
     this._branch = status.branch
     this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
 

@@ -52,6 +52,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   outline: ListTree,
   sparkle: Sparkles,
   'trash-2': Trash2,
+  check: Check,
   refresh: RefreshCw,
   // SCM / Git actions and view controls.
   'git-commit': Check,

@@ -198,9 +198,14 @@ describe('WorkspaceRecentMenuContribution', () => {
         .filter((i): i is { command: string; title?: string } => 'command' in i)
         .map((i) => i.title)
 
-    let titles = titlesOf()
-    expect(titles).toContain('a (Opened)')
+    const titles = titlesOf()
+    expect(titles).toContain('a')
     expect(titles).toContain('b')
+    const openEntry = MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu).find(
+      (i): i is { command: string; title?: string; icon?: string } =>
+        'command' in i && i.title === 'a',
+    )
+    expect(openEntry?.icon).toBe('check')
 
     // When /tmp/b also opens, its marker appears too.
     windows.setOpen([
@@ -209,8 +214,10 @@ describe('WorkspaceRecentMenuContribution', () => {
     ])
     await Promise.resolve()
     await Promise.resolve()
-    titles = titlesOf()
-    expect(titles).toContain('a (Opened)')
-    expect(titles).toContain('b (Opened)')
+    const entries = MenuRegistry.getMenuItems(MenuId.MenubarFileOpenRecentMenu).filter(
+      (i): i is { command: string; title?: string; icon?: string } => 'command' in i,
+    )
+    expect(entries.find((i) => i.title === 'a')?.icon).toBe('check')
+    expect(entries.find((i) => i.title === 'b')?.icon).toBe('check')
   })
 })

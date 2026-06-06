@@ -77,7 +77,6 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
 
   private _rebuild(recent: readonly IRecentWorkspace[]): void {
     this._dynamic.clear()
-    const openedSuffix = localize('workspace.recent.openedSuffix', ' (Opened)')
     recent.forEach((entry, index) => {
       const commandId = `workbench.action.openRecent.${index}`
       this._dynamic.add(
@@ -89,7 +88,8 @@ export class WorkspaceRecentMenuContribution extends Disposable implements IWork
       this._dynamic.add(
         MenuRegistry.addMenuItem(MenuId.MenubarFileOpenRecentMenu, {
           command: commandId,
-          title: isOpen ? `${entry.name}${openedSuffix}` : entry.name,
+          title: entry.name,
+          ...(isOpen ? { icon: 'check' } : {}),
           group: RECENT_GROUP,
           order: index,
         }),

@@ -6,9 +6,9 @@
  *  list/tree stayed permanently empty.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
-import { act, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import {
   Event,
   ICommandService,
@@ -23,13 +23,6 @@ import {
 import { ScmView } from '../ScmView.js'
 import { IScmService, ScmService } from '../../../services/extensions/ScmService.js'
 import { ServicesContext } from '../../useService.js'
-
-const stubCommand: ICommandServiceType = {
-  _serviceBrand: undefined,
-  async executeCommand() {
-    return undefined
-  },
-}
 
 const stubStorage: IStorageServiceType = {
   _serviceBrand: undefined,
@@ -50,6 +43,11 @@ const stubEditorResolver: IEditorResolverServiceType = {
 
 function setup() {
   const scm = new ScmService()
+  const executeCommand = vi.fn().mockResolvedValue(undefined)
+  const stubCommand: ICommandServiceType = {
+    _serviceBrand: undefined,
+    executeCommand,
+  }
   const services = new ServiceCollection()
   services.set(IScmService, scm)
   services.set(ICommandService, stubCommand)
@@ -63,7 +61,7 @@ function setup() {
       </StrictMode>
     </ServicesContext.Provider>,
   )
-  return { scm }
+  return { scm, executeCommand }
 }
 
 describe('ScmView under StrictMode', () => {
@@ -86,5 +84,59 @@ describe('ScmView under StrictMode', () => {
     })
 
     expect(await screen.findByText('foo.txt')).toBeTruthy()
+  })
+
+  it('disables the git Commit button when there are no local changes and nothing to sync', async () => {
+    const { scm, executeCommand } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$updateSourceControl(0, {
+        acceptInputCommand: { command: 'git.commit', title: 'Commit' },
+      })
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+    })
+
+    const button = (await screen.findByRole('button', { name: 'Commit' })) as HTMLButtonElement
+    expect(button.disabled).toBe(true)
+    fireEvent.click(button)
+    expect(executeCommand).not.toHaveBeenCalled()
+  })
+
+  it('shows Sync when git has no local changes but has commits to synchronize', async () => {
+    const { scm, executeCommand } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$updateSourceControl(0, {
+        acceptInputCommand: { command: 'git.sync', title: 'Sync' },
+      })
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+    })
+
+    const button = (await screen.findByRole('button', { name: 'Sync' })) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(executeCommand).toHaveBeenCalledWith('git.sync', { sourceControlId: 'git' })
+  })
+
+  it('keeps Commit enabled when git has local changes', async () => {
+    const { scm, executeCommand } = setup()
+
+    await act(async () => {
+      await scm.$registerSourceControl(0, 'git', 'Git', 'D:/repo')
+      await scm.$updateSourceControl(0, {
+        acceptInputCommand: { command: 'git.sync', title: 'Sync' },
+      })
+      await scm.$registerGroup(0, 1, 'workingTree', 'Changes')
+      await scm.$updateGroupResourceStates(1, [
+        { resourceUri: 'D:/repo/foo.txt', contextValue: 'M' },
+      ])
+    })
+
+    const button = (await screen.findByRole('button', { name: 'Commit' })) as HTMLButtonElement
+    expect(button.disabled).toBe(false)
+    fireEvent.click(button)
+    expect(executeCommand).toHaveBeenCalledWith('git.commit', { sourceControlId: 'git' })
   })
 })

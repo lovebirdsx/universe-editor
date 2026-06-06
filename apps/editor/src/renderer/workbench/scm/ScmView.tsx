@@ -6,11 +6,12 @@
  *  a `…` overflow menu), and its resource groups shown either as a flat list or
  *  a nested folder tree, with per-row inline actions revealed on hover.
  *
- *  The view owns no git knowledge — providers supply resource states, commands
- *  and decorations; menu contributions (scm/title, scm/resourceState/context)
- *  supply the actions and their icons. Clicking an action runs its command
- *  through the normal command flow (→ extension host). View mode (list/tree) is
- *  the view's own concern, persisted through IStorageService.
+ *  The view is provider-driven: providers supply resource states, commands and
+ *  decorations; menu contributions (scm/title, scm/resourceState/context)
+ *  supply the actions and their icons. Git keeps a narrow built-in affordance
+ *  for commit-button defaults. Clicking an action runs its command through the
+ *  normal command flow (-> extension host). View mode (list/tree) is the view's
+ *  own concern, persisted through IStorageService.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -73,6 +74,12 @@ interface CommitAction {
   readonly label: string
   readonly icon: string
   readonly command: string
+}
+
+interface PrimaryCommitAction {
+  readonly label: string
+  readonly command: string
+  readonly disabled: boolean
 }
 
 /** The commit-button choices; the last one picked becomes the sticky default. */
@@ -660,6 +667,41 @@ function ScmProviderView({
     void commandService.executeCommand(id, { sourceControlId: model.id })
   }
 
+  const localChangeCount = useMemo(
+    () => groups.reduce((total, group) => total + group.resources.get().length, 0),
+    // dataRevision tracks resource mutations inside stable group objects.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, dataRevision],
+  )
+  const hasLocalChanges = localChangeCount > 0
+  const isGitProvider = model.id === 'git'
+  const primaryCommitAction = useMemo<PrimaryCommitAction | undefined>(() => {
+    if (isGitProvider) {
+      if (!hasLocalChanges && acceptCommand?.command === 'git.sync') {
+        return {
+          label: acceptCommand.title || localize('scm.sync', 'Sync'),
+          command: acceptCommand.command,
+          disabled: false,
+        }
+      }
+      if (!hasLocalChanges) {
+        return {
+          label: DEFAULT_COMMIT_ACTION.label,
+          command: DEFAULT_COMMIT_ACTION.command,
+          disabled: true,
+        }
+      }
+      return {
+        label: stickyCommit.label,
+        command: stickyCommit.command,
+        disabled: false,
+      }
+    }
+    if (!acceptCommand) return undefined
+    return { label: acceptCommand.title, command: acceptCommand.command, disabled: false }
+  }, [acceptCommand, hasLocalChanges, isGitProvider, stickyCommit])
+  const showCommitMenuButton = isGitProvider && hasLocalChanges
+
   const collapseAll = (): void => {
     const folderIds = snapshotRef.current.collapsibleIds.filter((id) => id.startsWith('folder:'))
     treeModel.setExpansion(folderIds.map((id) => [id, false] as const))
@@ -742,27 +784,34 @@ function ScmProviderView({
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
             e.preventDefault()
-            runCommand(stickyCommit.command)
+            if (primaryCommitAction && !primaryCommitAction.disabled) {
+              runCommand(primaryCommitAction.command)
+            }
           }
         }}
       />
-      {acceptCommand && (
+      {primaryCommitAction && (
         <div className={styles['commitBar']}>
           <button
             type="button"
-            className={styles['commitButton']}
-            onClick={() => runCommand(stickyCommit.command)}
+            className={`${styles['commitButton']} ${
+              showCommitMenuButton ? '' : styles['commitButtonOnly']
+            }`}
+            disabled={primaryCommitAction.disabled}
+            onClick={() => runCommand(primaryCommitAction.command)}
           >
-            {stickyCommit.label}
+            {primaryCommitAction.label}
           </button>
-          <button
-            type="button"
-            className={styles['commitDropdown']}
-            title={localize('scm.commitActions', 'Commit actions...')}
-            onClick={openCommitMenu}
-          >
-            ▾
-          </button>
+          {showCommitMenuButton && (
+            <button
+              type="button"
+              className={styles['commitDropdown']}
+              title={localize('scm.commitActions', 'Commit actions...')}
+              onClick={openCommitMenu}
+            >
+              ▾
+            </button>
+          )}
         </div>
       )}
 

@@ -274,8 +274,8 @@ describe('workspaceActions', () => {
     const windows = makeWindowsStub([{ id: 1, folder: folderA.toJSON(), name: 'a' }])
     await runCommand(OpenRecentAction.ID, ws, qi, windows)
     const items = qi.pickCalls[0]!
-    expect(asQuickPickItem(items[0])?.keybinding).toBe('Opened')
-    expect(asQuickPickItem(items[1])?.keybinding).toBeUndefined()
+    expect(asQuickPickItem(items[0])?.iconId).toBe('check')
+    expect(asQuickPickItem(items[1])?.iconId).toBeUndefined()
   })
 
   it('OpenRecent.run with Ctrl held opens the choice in a new window', async () => {

@@ -24,6 +24,7 @@ import { useService } from '../useService.js'
 import { FocusScopeOverlay } from '../common/FocusScopeOverlay.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
+import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import {
   QuickInputService,
   type QuickPickState,
@@ -176,6 +177,10 @@ function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p')
   return e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === key
 }
 
+function resolveQuickInputIcon(iconId: string) {
+  return resolveHeaderIcon(iconId) ?? resolveAgentIcon(iconId)
+}
+
 // Exported for unit tests so prefix / filtering behavior can be exercised
 // without booting the full portal + service plumbing.
 export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onClose: () => void }) {
@@ -193,6 +198,10 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
   const onItemRemove = state.onItemRemove
   const filterExternally = state.filterExternally === true
   const compact = state.presentation === 'compact'
+  const hasIconColumn = useMemo(
+    () => (state.items ?? []).some((item) => !isSeparator(item) && item.iconId !== undefined),
+    [state.items],
+  )
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -374,6 +383,7 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
           onKeyDown={handleKey}
           placeholder={state.placeholder ?? 'Type to filter…'}
           aria-label={state.placeholder ?? 'Quick pick input'}
+          spellCheck={false}
           data-testid="quick-input-field"
         />
       </div>
@@ -426,11 +436,20 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                       onMouseMove={() => setFocusedIdx(idx)}
                     >
                       {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
-                      {item.iconId &&
-                        (() => {
-                          const Icon = resolveAgentIcon(item.iconId)
-                          return <Icon size={14} className={styles['itemIcon']} />
-                        })()}
+                      {hasIconColumn && (
+                        <span
+                          className={styles['itemIconSlot']}
+                          data-testid="quick-input-item-icon-slot"
+                          data-icon-id={item.iconId ?? ''}
+                          aria-hidden="true"
+                        >
+                          {item.iconId &&
+                            (() => {
+                              const Icon = resolveQuickInputIcon(item.iconId)
+                              return <Icon size={14} className={styles['itemIcon']} />
+                            })()}
+                        </span>
+                      )}
                       {item.leadingLabel && (
                         <span className={styles['itemLeading']}>{item.leadingLabel}</span>
                       )}
@@ -516,6 +535,7 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
           placeholder={state.placeholder}
           aria-label={state.placeholder ?? 'Input'}
           aria-invalid={!!error}
+          spellCheck={false}
         />
       </div>
       {state.busy === true && (

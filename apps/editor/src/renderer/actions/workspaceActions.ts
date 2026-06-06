@@ -139,14 +139,13 @@ export class OpenRecentAction extends Action2 {
       // Best-effort: without open-state we just omit the markers.
     }
 
-    const openedBadge = localize('workspace.recent.opened', 'Opened')
     const items: RecentPickItem[] = recent.map((r, index) => {
       const isOpen = openFolders.has(r.folder.toString())
       return {
         id: `recent.${index}`,
         label: r.name,
         description: r.folder.fsPath,
-        ...(isOpen ? { keybinding: openedBadge } : {}),
+        ...(isOpen ? { iconId: 'check' } : {}),
         index,
       }
     })

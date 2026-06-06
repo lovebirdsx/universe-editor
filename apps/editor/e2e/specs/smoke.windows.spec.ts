@@ -4,7 +4,7 @@
  *  Covers the VSCode-consistent capabilities added on top of "one window =
  *  one workspace":
  *    - Open Folder in New Window (bypassing the native dialog via the probe)
- *    - getOpenWindows tracking (backs Switch Window + Open Recent "Opened" markers)
+ *    - getOpenWindows tracking (backs Switch Window + Open Recent open-state icons)
  *    - Open Recent marks the workspace already open in a window
  *    - Remove from Recently Opened
  *    - Exit (workbench.action.quit) closes every window
@@ -80,7 +80,9 @@ test.describe('@p0 windows', () => {
     void page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.openRecent'))
 
     await workbench.quickInput.waitForVisible()
-    await expect(workbench.quickInput.dialog).toContainText('Opened')
+    await expect(
+      workbench.quickInput.dialog.locator('[data-testid="quick-input-item-icon-slot"]').first(),
+    ).toHaveAttribute('data-icon-id', 'check')
 
     await page.keyboard.press('Escape')
     await workbench.quickInput.waitForHidden()

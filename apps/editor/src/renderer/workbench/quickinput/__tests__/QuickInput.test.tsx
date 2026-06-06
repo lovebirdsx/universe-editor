@@ -56,7 +56,9 @@ function makeState(extra: Partial<QuickPickState> = {}): QuickPickState {
 describe('QuickPickPanel prefix mode', () => {
   it('prefills the input with the prefix on open', () => {
     render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
-    expect((screen.getByTestId('quick-input-field') as HTMLInputElement).value).toBe('>')
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    expect(input.value).toBe('>')
+    expect(input.getAttribute('spellcheck')).toBe('false')
     // both items visible (empty filter text after stripping prefix)
     expect(screen.getByText('Format Document')).toBeTruthy()
     expect(screen.getByText('Go to Line')).toBeTruthy()
@@ -94,6 +96,26 @@ describe('QuickPickPanel prefix mode', () => {
     })
     render(<QuickPickPanel state={state} onClose={() => undefined} />)
     expect(screen.getByText('Ctrl+Shift+P')).toBeTruthy()
+  })
+
+  it('reserves an aligned icon column when any item has an icon', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: [
+            { id: 'open', label: 'Open workspace', iconId: 'check' },
+            { id: 'closed', label: 'Closed workspace' },
+          ],
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    const iconSlots = screen.getAllByTestId('quick-input-item-icon-slot')
+    expect(iconSlots).toHaveLength(2)
+    expect(iconSlots[0]?.getAttribute('data-icon-id')).toBe('check')
+    expect(iconSlots[1]?.getAttribute('data-icon-id')).toBe('')
   })
 
   it('does not render keybinding when item has no keybinding field', () => {

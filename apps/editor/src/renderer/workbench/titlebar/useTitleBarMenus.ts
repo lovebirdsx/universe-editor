@@ -22,12 +22,14 @@ export interface ResolvedCommandItem {
   command: string
   label: string
   shortcut?: string
+  icon?: string
 }
 
 export interface ResolvedSubmenuItem {
   kind: 'submenu'
   submenu: MenuId
   label: string
+  icon?: string
 }
 
 export type ResolvedMenuEntry = ResolvedCommandItem | ResolvedSubmenuItem
@@ -44,7 +46,12 @@ function resolveLabel(item: IMenuItem): string {
 }
 
 function resolveSubmenuEntry(entry: ISubmenuItem): ResolvedSubmenuItem {
-  return { kind: 'submenu', submenu: entry.submenu, label: entry.title }
+  return {
+    kind: 'submenu',
+    submenu: entry.submenu,
+    label: entry.title,
+    ...(entry.icon !== undefined ? { icon: entry.icon } : {}),
+  }
 }
 
 function resolveCommandEntry(entry: IMenuItem): ResolvedCommandItem {
@@ -52,6 +59,7 @@ function resolveCommandEntry(entry: IMenuItem): ResolvedCommandItem {
     kind: 'command',
     command: entry.command,
     label: resolveLabel(entry),
+    ...(entry.icon !== undefined ? { icon: entry.icon } : {}),
   }
   const shortcut = resolveShortcut(entry.command)
   if (shortcut !== undefined) resolved.shortcut = shortcut
