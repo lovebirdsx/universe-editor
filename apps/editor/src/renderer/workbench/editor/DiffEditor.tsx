@@ -140,23 +140,31 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       if (state) EditorViewStateCache.save(groupId, resourceUri, state)
     }
 
-    const restoreViewState = (): boolean => {
-      if (groupId === undefined) return false
-      const saved = EditorViewStateCache.load(groupId, resourceUri)
-      if (!saved) return false
-      diffEditorRef.current?.restoreViewState(saved as monaco.editor.IDiffEditorViewState)
-      return true
-    }
+    // Snapshot the persisted view state up front. The cursor/scroll listeners
+    // registered below fire synchronously while Monaco initialises the fresh
+    // models, overwriting the cache with a top-of-file state before the diff is
+    // even computed — so re-loading from the cache inside onDidUpdateDiff would
+    // read that bogus state and skip the first-change reveal. Capture the
+    // original saved state and re-apply that exact value instead.
+    const savedViewState =
+      groupId !== undefined
+        ? (EditorViewStateCache.load(groupId, resourceUri) as
+            | monaco.editor.IDiffEditorViewState
+            | undefined)
+        : undefined
 
-    let didRestoreViewState = restoreViewState()
-    // Diff layout is computed asynchronously; re-apply once after the first
-    // computation so scroll position lands on the right line, or reveal the
-    // first change for newly-opened diff editors without a saved state.
+    if (savedViewState) ed.restoreViewState(savedViewState)
+
+    // Diff layout is computed asynchronously; re-apply the saved scroll position
+    // once the first diff lands, or reveal the first change for a freshly-opened
+    // diff without a saved state. revealFirstDiff() waits for the diff
+    // computation (and the ensuing layout) internally — goToDiff does not — so
+    // the view reliably lands on the first change.
     let updateDiffSub: IDisposable | undefined = ed.onDidUpdateDiff(() => {
       updateDiffSub?.dispose()
       updateDiffSub = undefined
-      didRestoreViewState = restoreViewState() || didRestoreViewState
-      if (!didRestoreViewState) ed.goToDiff('next')
+      if (savedViewState) ed.restoreViewState(savedViewState)
+      else ed.revealFirstDiff()
     })
 
     const original = ed.getOriginalEditor()

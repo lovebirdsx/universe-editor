@@ -1,5 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for DiffEditor initial diff navigation.
+ *
+ *  The mocked Monaco mirrors two real behaviours that the original test missed:
+ *  attaching a model emits an initial cursor event (so flushViewState writes the
+ *  cache *before* the first diff is computed), and saveViewState() returns a
+ *  non-null state. Together those used to poison the view-state cache and make
+ *  the editor skip the first-change reveal — the regression this suite guards.
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -8,7 +14,7 @@ type Listener = () => void
 
 interface DiffEditorStub {
   model: unknown
-  readonly goToDiffCalls: string[]
+  revealFirstDiffCalls: number
   readonly restoreViewStateCalls: unknown[]
   setModel(model: unknown): void
   fireUpdateDiff(): void
@@ -23,9 +29,14 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     return { dispose }
   }
 
+  // Monaco fires an initial cursor event while a model attaches; mimic it so the
+  // DiffEditor's flushViewState runs before the diff is computed.
   function makeCodeEditor() {
     return {
-      onDidChangeCursorPosition: () => disposable(),
+      onDidChangeCursorPosition: (listener: Listener) => {
+        listener()
+        return disposable()
+      },
       onDidScrollChange: () => disposable(),
     }
   }
@@ -49,7 +60,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     const modified = makeCodeEditor()
     const editor = {
       model: null as unknown,
-      goToDiffCalls: [] as string[],
+      revealFirstDiffCalls: 0,
       restoreViewStateCalls: [] as unknown[],
       setModel(model: unknown) {
         this.model = model
@@ -57,7 +68,8 @@ vi.mock('../monaco/MonacoLoader.js', () => {
       getOriginalEditor: () => original,
       getModifiedEditor: () => modified,
       updateOptions: () => {},
-      saveViewState: () => null,
+      // A freshly-created editor already has a (top-of-file) view state.
+      saveViewState: () => ({ kind: 'auto-flushed' }),
       restoreViewState(state: unknown) {
         this.restoreViewStateCalls.push(state)
       },
@@ -65,8 +77,8 @@ vi.mock('../monaco/MonacoLoader.js', () => {
         listeners.add(listener)
         return disposable(() => listeners.delete(listener))
       },
-      goToDiff(target: string) {
-        this.goToDiffCalls.push(target)
+      revealFirstDiff() {
+        this.revealFirstDiffCalls++
       },
       fireUpdateDiff() {
         for (const listener of [...listeners]) listener()
@@ -159,17 +171,18 @@ afterEach(() => {
 })
 
 describe('DiffEditor auto reveal', () => {
-  it('jumps to the first change after the initial diff computation', async () => {
+  it('reveals the first change on a fresh open, despite the initial cursor event populating the cache', async () => {
     const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
     renderDiffEditor(input, { id: 1 })
 
     const editor = await waitForDiffEditor()
     editor.fireUpdateDiff()
 
-    expect(editor.goToDiffCalls).toEqual(['next'])
+    expect(editor.revealFirstDiffCalls).toBe(1)
+    expect(editor.restoreViewStateCalls).toEqual([])
   })
 
-  it('restores saved view state instead of jumping to the first change', async () => {
+  it('restores saved view state instead of revealing the first change', async () => {
     const group = { id: 2 }
     const input = new DiffEditorInput(URI.file('/ws/a.txt'), 'before\n', 'after\n')
     const savedState = { modified: { cursorState: [] } }
@@ -180,8 +193,10 @@ describe('DiffEditor auto reveal', () => {
     const editor = await waitForDiffEditor()
     editor.fireUpdateDiff()
 
+    // Applied once on open and re-applied once the diff lands — both times the
+    // original snapshot, not the cache value clobbered by the initial event.
     expect(editor.restoreViewStateCalls).toEqual([savedState, savedState])
-    expect(editor.goToDiffCalls).toEqual([])
+    expect(editor.revealFirstDiffCalls).toBe(0)
   })
 
   it('only handles the first diff update for initial navigation', async () => {
@@ -192,6 +207,6 @@ describe('DiffEditor auto reveal', () => {
     editor.fireUpdateDiff()
     editor.fireUpdateDiff()
 
-    expect(editor.goToDiffCalls).toEqual(['next'])
+    expect(editor.revealFirstDiffCalls).toBe(1)
   })
 })

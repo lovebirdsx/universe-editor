@@ -35,6 +35,8 @@ import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import {
   E2E_PROBE_ENABLED_KEY,
   E2E_PROBE_KEY,
@@ -181,6 +183,23 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       monaco.setPosition({ lineNumber, column })
       monaco.focus()
       return true
+    },
+    getActiveDiffViewState: () => {
+      const group = services.editorGroupsService.activeGroup
+      const active = group?.activeEditor
+      if (!(active instanceof DiffEditorInput)) return undefined
+      const ed = DiffEditorRegistry.get(active, group?.id)
+      if (!ed) return undefined
+      const modified = ed.getModifiedEditor()
+      const cursorLine = modified.getPosition()?.lineNumber ?? 0
+      const firstVisibleLine = modified.getVisibleRanges()[0]?.startLineNumber ?? 0
+      return {
+        cursorLine,
+        firstVisibleLine,
+        lineChanges: ed.getLineChanges()?.length ?? 0,
+        scrollTop: modified.getScrollTop(),
+        layoutHeight: modified.getLayoutInfo().height,
+      }
     },
     installAcpEchoAgent: (agentId, jsPath) => {
       services.configurationService.update(

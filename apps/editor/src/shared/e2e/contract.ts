@@ -140,6 +140,21 @@ export interface E2EProbe {
    * exercise HistoryContribution's debounced cursor recorder without typing.
    */
   setActiveEditorCursor(lineNumber: number, column: number): boolean
+  /**
+   * Snapshot of the active diff editor's modified-side view state: the cursor
+   * line and the first visible line. Used by diff auto-reveal specs to assert
+   * the view scrolled to the first change. Undefined when the active editor is
+   * not a diff editor (or its Monaco instance is not yet mounted).
+   */
+  getActiveDiffViewState():
+    | {
+        cursorLine: number
+        firstVisibleLine: number
+        lineChanges: number
+        scrollTop: number
+        layoutHeight: number
+      }
+    | undefined
   // -- ACP probe -----------------------------------------------------------
   /**
    * Inject a test ACP agent that runs `node <jsPath>`. Writes into the Memory
