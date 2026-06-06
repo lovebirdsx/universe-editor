@@ -27,6 +27,7 @@ import { StartupPerformanceInput } from '../services/editor/StartupPerformanceIn
 import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { WelcomeEditorInput } from '../services/editor/WelcomeEditorInput.js'
+import { GitGraphEditorInput } from '../services/editor/GitGraphEditorInput.js'
 
 export class BuiltInEditorProvidersContribution
   extends Disposable
@@ -107,6 +108,13 @@ export class BuiltInEditorProvidersContribution
       EditorRegistry.registerEditorProvider({
         typeId: TerminalEditorInput.TYPE_ID,
         componentKey: 'terminal.editor',
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: GitGraphEditorInput.TYPE_ID,
+        componentKey: 'gitGraph',
+        deserialize: () => GitGraphEditorInput.deserialize(),
       }),
     )
   }

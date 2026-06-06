@@ -19,6 +19,7 @@ import { StartupPerformanceEditor } from './StartupPerformanceEditor.js'
 import { DocEditor } from './DocEditor.js'
 import { AcpSessionEditor } from '../agents/AcpSessionEditor.js'
 import { TerminalEditorView } from './TerminalEditorView.js'
+import { GitGraphEditor } from '../gitGraph/GitGraphEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
 import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
@@ -37,6 +38,7 @@ editorComponentMap.set('releaseNotes', ReleaseNotesEditor)
 editorComponentMap.set('startupPerformance', StartupPerformanceEditor)
 editorComponentMap.set('doc', DocEditor)
 editorComponentMap.set('agents.session', AcpSessionEditor)
+editorComponentMap.set('gitGraph', GitGraphEditor)
 editorComponentMap.set(
   'terminal.editor',
   TerminalEditorView as ComponentType<{ input: IEditorInput }>,
