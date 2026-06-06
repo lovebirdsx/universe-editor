@@ -8,6 +8,7 @@ import {
   Action2,
   ConfigurationTarget,
   type EditorInput,
+  EditorRegistry,
   GroupDirection,
   GroupLocation,
   IConfigurationService,
@@ -46,6 +47,12 @@ function activateGroupAndFocus(
   const ae = group.activeEditor
   if (!(ae instanceof FileEditorInput)) return
   FileEditorRegistry.get(ae)?.focus()
+}
+
+function cloneEditorInputForSplit(input: EditorInput, accessor: ServicesAccessor): EditorInput {
+  const serialized = input.serialize?.()
+  if (serialized === undefined) return input
+  return EditorRegistry.deserialize(input.typeId, serialized, accessor) ?? input
 }
 
 // ---------------------------------------------------------------------------
@@ -425,7 +432,7 @@ function splitInDirection(accessor: ServicesAccessor, direction: GroupDirection)
   const active = source.activeEditor
   if (!active) return
   const newGroup = groups.addGroup(source, direction)
-  groups.copyEditor(active, newGroup)
+  groups.copyEditor(cloneEditorInputForSplit(active, accessor), newGroup)
   activateGroupAndFocus(groups, newGroup, accessor.get(IFocusStackService))
 }
 

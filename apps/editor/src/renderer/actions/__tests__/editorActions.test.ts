@@ -3,6 +3,7 @@ import {
   CommandsRegistry,
   ContextKeyService,
   EditorInput,
+  EditorRegistry,
   IContextKeyService,
   IDialogService,
   IEditorGroupsService,
@@ -56,6 +57,30 @@ class TestEditor extends EditorInput {
   }
   getName() {
     return this._name
+  }
+}
+
+class CloneableEditor extends EditorInput {
+  static readonly TYPE_ID = 'cloneable-test'
+
+  constructor(private readonly _name: string) {
+    super()
+  }
+  get typeId() {
+    return CloneableEditor.TYPE_ID
+  }
+  get resource() {
+    return URI.file(`D:/${this._name}.txt`)
+  }
+  getName() {
+    return this._name
+  }
+  override serialize(): { name: string } {
+    return { name: this._name }
+  }
+  static deserialize(data: unknown): CloneableEditor | null {
+    const d = data as { name?: string } | null
+    return d?.name ? new CloneableEditor(d.name) : null
   }
 }
 
@@ -337,6 +362,27 @@ describe('Built-in editor Action2s', () => {
     exec(SplitEditorRightAction, svc)
     expect(svc.groups).toHaveLength(2)
     expect(svc.activeGroup.activeEditor).toBe(a)
+  })
+
+  it('SplitEditorRight clones serializable editor inputs for the new group', () => {
+    const reg = EditorRegistry.registerEditorProvider({
+      typeId: CloneableEditor.TYPE_ID,
+      componentKey: 'file',
+      deserialize: (data) => CloneableEditor.deserialize(data),
+    })
+    try {
+      const svc = new EditorGroupsService()
+      const a = new CloneableEditor('a')
+      const first = svc.activeGroup
+      first.openEditor(a)
+      exec(SplitEditorRightAction, svc)
+      expect(svc.groups).toHaveLength(2)
+      expect(first.activeEditor).toBe(a)
+      expect(svc.activeGroup.activeEditor).not.toBe(a)
+      expect(svc.activeGroup.activeEditor?.matches(a)).toBe(true)
+    } finally {
+      reg.dispose()
+    }
   })
 
   it('SplitEditorDown / Left / Up each create a new group', () => {
