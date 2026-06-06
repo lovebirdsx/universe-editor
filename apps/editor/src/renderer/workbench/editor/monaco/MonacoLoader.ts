@@ -23,10 +23,12 @@ type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas
 let _extraSchemas: JsonSchemas = []
 
 const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'schemas'> = {
-  validate: false,
+  validate: true,
   allowComments: true,
   trailingCommas: 'ignore',
-  schemaValidation: 'ignore',
+  // Surface schema violations (e.g. an unknown command id in keybindings.json)
+  // as warnings rather than red errors, and keep JSONC comments quiet.
+  schemaValidation: 'warning',
   schemaRequest: 'ignore',
   comments: 'ignore',
 }
@@ -42,8 +44,23 @@ function pushJsonDiagnostics(): void {
 function disableLanguageDiagnostics(): void {
   if (!_monaco) return
 
+  // JSON is the exception: we keep diagnostics ON so settings.json /
+  // keybindings.json get schema validation (e.g. unknown command ids surface
+  // as warnings). Everything else stays off — TS/JS/CSS/HTML validation is the
+  // real memory hog and we don't need it.
+  //
+  // documentSymbols is forced OFF: monaco 0.52's JSON worker has a special
+  // outline branch for files whose path ends with `/user/keybindings.json`
+  // (matching VS Code's keybindings) that emits symbols without a `children`
+  // field; the jsonMode adapter then mis-detects them as flat SymbolInformation
+  // and dereferences a missing `.location`, throwing on open. We don't surface
+  // a JSON outline anyway, so disabling it sidesteps the crash.
   const { jsonDefaults } = _monaco.languages.json
-  jsonDefaults.setModeConfiguration({ ...jsonDefaults.modeConfiguration, diagnostics: false })
+  jsonDefaults.setModeConfiguration({
+    ...jsonDefaults.modeConfiguration,
+    diagnostics: true,
+    documentSymbols: false,
+  })
   pushJsonDiagnostics()
 
   const tsDiagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions = {
@@ -99,6 +116,21 @@ async function loadMonaco(): Promise<typeof monaco> {
       _monaco = monacoMod
       registerLogLanguage(_monaco)
       disableLanguageDiagnostics()
+      // TEMP DEBUG: trace JSON markers to diagnose missing keybindings warnings.
+      _monaco.editor.onDidChangeMarkers((resources) => {
+        for (const r of resources) {
+          if (!r.path.toLowerCase().endsWith('.json')) continue
+          const ms = _monaco!.editor.getModelMarkers({ resource: r })
+          // eslint-disable-next-line no-console
+          console.log(
+            '[ue-diag]',
+            r.path,
+            'markers=',
+            ms.length,
+            ms.slice(0, 5).map((m) => `${m.severity}:${m.message}`),
+          )
+        }
+      })
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here

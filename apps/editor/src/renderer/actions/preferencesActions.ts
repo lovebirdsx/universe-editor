@@ -9,10 +9,13 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorGroupsService,
+  IFileService,
   IInstantiationService,
+  INotificationService,
   IQuickInputService,
   IUserDataFilesService,
   MenuId,
+  Severity,
   URI,
   UserDataFile,
   localize,
@@ -45,23 +48,29 @@ const KEYBINDINGS_JSON_TEMPLATE = `// User keybinding overrides — edit and sav
 `
 
 async function openUserDataFile(
-  accessor: ServicesAccessor,
+  services: {
+    files: IUserDataFilesService
+    groups: IEditorGroupsService
+    instantiation: IInstantiationService
+  },
   file: UserDataFile,
   template: string,
+  options?: { readOnly?: boolean; seedTemplate?: boolean },
 ): Promise<void> {
-  const files = accessor.get(IUserDataFilesService)
-  const groups = accessor.get(IEditorGroupsService)
-  const instantiation = accessor.get(IInstantiationService)
+  const { files, groups, instantiation } = services
 
   const uriComponents = await files.getFileUri(file)
   if (!uriComponents) return
   const uri = URI.revive(uriComponents) as URI
 
   // Seed the file with a template if it doesn't exist yet, so users see useful
-  // scaffolding instead of an empty buffer.
-  const text = await files.read(file)
-  if (text === '') {
-    await files.write(file, template)
+  // scaffolding instead of an empty buffer. Skipped for files we don't own
+  // (e.g. the VS Code keybindings) — we never overwrite those with our template.
+  if (options?.seedTemplate ?? true) {
+    const text = await files.read(file)
+    if (text === '') {
+      await files.write(file, template)
+    }
   }
 
   // De-dupe: if already open, reactivate.
@@ -76,7 +85,20 @@ async function openUserDataFile(
   }
 
   const input = instantiation.createInstance(FileEditorInput, uri)
+  if (options?.readOnly) input.markReadonly()
   groups.activeGroup.openEditor(input)
+}
+
+function userDataFileServices(accessor: ServicesAccessor): {
+  files: IUserDataFilesService
+  groups: IEditorGroupsService
+  instantiation: IInstantiationService
+} {
+  return {
+    files: accessor.get(IUserDataFilesService),
+    groups: accessor.get(IEditorGroupsService),
+    instantiation: accessor.get(IInstantiationService),
+  }
 }
 
 interface DisplayLanguagePickItem extends IQuickPickItem {
@@ -190,7 +212,7 @@ export class OpenSettingsJsonAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    void openUserDataFile(accessor, UserDataFile.Settings, SETTINGS_JSON_TEMPLATE)
+    void openUserDataFile(userDataFileServices(accessor), UserDataFile.Settings, SETTINGS_JSON_TEMPLATE)
   }
 }
 
@@ -207,7 +229,48 @@ export class OpenKeybindingsJsonAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    void openUserDataFile(accessor, UserDataFile.Keybindings, KEYBINDINGS_JSON_TEMPLATE)
+    void openUserDataFile(
+      userDataFileServices(accessor),
+      UserDataFile.Keybindings,
+      KEYBINDINGS_JSON_TEMPLATE,
+    )
+  }
+}
+
+export class OpenVSCodeKeybindingsJsonAction extends Action2 {
+  static readonly ID = 'workbench.action.openVSCodeKeybindingsJson'
+  constructor() {
+    super({
+      id: OpenVSCodeKeybindingsJsonAction.ID,
+      title: localize(
+        'action.openVSCodeKeybindingsJson.title',
+        'Open VS Code Keyboard Shortcuts (JSON)',
+      ),
+      category: localize('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const services = userDataFileServices(accessor)
+    const fileService = accessor.get(IFileService)
+    const notification = accessor.get(INotificationService)
+
+    const uriComponents = await services.files.getFileUri(UserDataFile.VSCodeKeybindings)
+    if (uriComponents && (await fileService.exists(URI.revive(uriComponents) as URI))) {
+      // Open editable (not read-only) so users can change VS Code's own
+      // keybindings; never seed our template into VS Code's file.
+      await openUserDataFile(services, UserDataFile.VSCodeKeybindings, '', { seedTemplate: false })
+      return
+    }
+
+    notification.notify({
+      severity: Severity.Warning,
+      message: localize(
+        'action.openVSCodeKeybindingsJson.notFound',
+        'No VS Code keybindings file found (VS Code may not be installed).',
+      ),
+    })
   }
 }
 
@@ -300,6 +363,10 @@ export class OpenWorkspaceSettingsJsonAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    void openUserDataFile(accessor, UserDataFile.ProjectSettings, SETTINGS_JSON_TEMPLATE)
+    void openUserDataFile(
+      userDataFileServices(accessor),
+      UserDataFile.ProjectSettings,
+      SETTINGS_JSON_TEMPLATE,
+    )
   }
 }

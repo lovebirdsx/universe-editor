@@ -62,6 +62,7 @@ import {
   OpenKeybindingsEditorAction,
   OpenKeybindingsJsonAction,
   OpenSettingsJsonAction,
+  OpenVSCodeKeybindingsJsonAction,
   OpenWorkspaceSettingsAction,
   OpenWorkspaceSettingsJsonAction,
 } from './preferencesActions.js'
@@ -237,6 +238,7 @@ registerAction2(OpenSettingsAction)
 registerAction2(OpenKeybindingsEditorAction)
 registerAction2(OpenSettingsJsonAction)
 registerAction2(OpenKeybindingsJsonAction)
+registerAction2(OpenVSCodeKeybindingsJsonAction)
 registerAction2(ConfigureDisplayLanguageAction)
 registerAction2(OpenWorkspaceSettingsAction)
 registerAction2(OpenWorkspaceSettingsJsonAction)
