@@ -466,6 +466,7 @@ async function bootstrapWorkbench(): Promise<void> {
     outputService,
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,
+    scmService,
   })
   workbenchStore.add(d)
 

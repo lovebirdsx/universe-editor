@@ -47,6 +47,7 @@ import {
   type E2EStatusBarEntry,
   type E2EUpdateState,
 } from '../../shared/e2e/contract.js'
+import type { IScmService } from '../services/extensions/ScmService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -64,6 +65,7 @@ export interface E2EProbeServices {
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
+  readonly scmService: IScmService
 }
 
 class DummyEditorInput extends EditorInput {
@@ -282,6 +284,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!raw) return null
       return JSON.parse(raw) as E2EDisposableLeakReport
     },
+    getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
   }
 
   window[E2E_PROBE_KEY] = probe

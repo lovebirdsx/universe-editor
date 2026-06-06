@@ -116,6 +116,11 @@ export class WorkbenchPO {
     return this.page.evaluate(() => window.__E2E__!.getStoredLeakReport())
   }
 
+  /** Number of currently registered SCM source controls. */
+  getScmSourceControlCount(): Promise<number> {
+    return this.page.evaluate(() => window.__E2E__!.getScmSourceControlCount())
+  }
+
   /**
    * Fire the "Restart Editor" command and wait for the reloaded page to reach
    * Restored. Must be called instead of a bare runCommand + waitForRestored pair

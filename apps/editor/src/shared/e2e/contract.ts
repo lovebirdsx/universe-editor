@@ -225,6 +225,8 @@ export interface E2EProbe {
    * (or if the tracker was not installed, e.g. in production builds).
    */
   getStoredLeakReport(): E2EDisposableLeakReport | null
+  /** Number of currently registered SCM source controls. */
+  getScmSourceControlCount(): number
 }
 
 declare global {

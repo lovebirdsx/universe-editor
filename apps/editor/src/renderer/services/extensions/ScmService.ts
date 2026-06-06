@@ -53,6 +53,8 @@ export interface IScmService {
   changeInputBoxValue(handle: number, value: string): void
   /** Wire the host proxy once the extension host connection is up. */
   setExtHost(extHost: IExtHostScm): void
+  /** Drop all registered source controls (called when the extension host tears down). */
+  resetSourceControls(): void
 }
 
 export const IScmService = createDecorator<IScmService>('scmService')
@@ -111,6 +113,12 @@ export class ScmService extends Disposable implements IScmService, IMainThreadSc
 
   setExtHost(extHost: IExtHostScm): void {
     this._extHost = extHost
+  }
+
+  resetSourceControls(): void {
+    this._byHandle.clear()
+    this._groupsByHandle.clear()
+    this._sourceControls.set([], undefined)
   }
 
   changeInputBoxValue(handle: number, value: string): void {

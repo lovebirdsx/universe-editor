@@ -256,6 +256,10 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       this._restricted = undefined
       this._startingRestricted = undefined
     }
+    // Fire-and-forget $unregisterSourceControl messages from the dying host may
+    // be lost when the IPC channel closes. Reset SCM state eagerly so the view
+    // doesn't show stale source controls from the previous workspace.
+    this._scm.resetSourceControls()
     conn.dispose()
   }
 
