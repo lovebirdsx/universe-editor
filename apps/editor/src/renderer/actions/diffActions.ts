@@ -10,9 +10,11 @@ import {
   Action2,
   IEditorGroupsService,
   URI,
+  localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 
 export interface OpenDiffPayload {
   readonly title: string
@@ -57,5 +59,50 @@ export class OpenDiffAction extends Action2 {
     )
     // Single-click uses the preview slot; double-click opens a permanent tab.
     group.openEditor(input, { activate: true, pinned })
+  }
+}
+
+function goToDiff(accessor: ServicesAccessor, target: 'next' | 'previous'): void {
+  const group = accessor.get(IEditorGroupsService).activeGroup
+  const active = group.activeEditor
+  if (!(active instanceof DiffEditorInput)) return
+  DiffEditorRegistry.get(active, group.id)?.goToDiff(target)
+}
+
+export class GoToNextDifferenceAction extends Action2 {
+  static readonly ID = 'editor.action.compareEditor.nextChange'
+
+  constructor() {
+    super({
+      id: GoToNextDifferenceAction.ID,
+      title: localize('action.diffEditor.nextChange.title', 'Go to Next Difference'),
+      category: localize('command.category.diffEditor', 'Diff Editor'),
+      keybinding: { primary: 'alt+f5' },
+      precondition: 'isInDiffEditor',
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    goToDiff(accessor, 'next')
+  }
+}
+
+export class GoToPreviousDifferenceAction extends Action2 {
+  static readonly ID = 'editor.action.compareEditor.previousChange'
+
+  constructor() {
+    super({
+      id: GoToPreviousDifferenceAction.ID,
+      title: localize('action.diffEditor.previousChange.title', 'Go to Previous Difference'),
+      category: localize('command.category.diffEditor', 'Diff Editor'),
+      keybinding: { primary: 'shift+alt+f5' },
+      precondition: 'isInDiffEditor',
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    goToDiff(accessor, 'previous')
   }
 }

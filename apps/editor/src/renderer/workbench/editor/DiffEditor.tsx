@@ -8,13 +8,21 @@
  *  MonacoModelRegistry) because diff views are transient.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
-import { IConfigurationService, type IEditorInput } from '@universe-editor/platform'
+import { useContext, useEffect, useRef, useState } from 'react'
+import {
+  IConfigurationService,
+  type IDisposable,
+  type IEditorInput,
+} from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
+import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
+import { EditorGroupContext } from './EditorGroupContext.js'
+import { DiffEditorToolbar } from './DiffEditorToolbar.js'
 import { diffModelUri } from './diffModelUri.js'
 import styles from './DiffEditor.module.css'
 
@@ -41,6 +49,7 @@ function getEditorTheme(configService: IConfigurationService): 'output-light' | 
 export function DiffEditor({ input }: { input: IEditorInput }) {
   const diffInput = input as DiffEditorInput
   const configService = useService(IConfigurationService)
+  const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
   const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
@@ -101,9 +110,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     return () => disposable.dispose()
   }, [configService])
 
-  // Set the diff model when the input changes.
+  // Set the diff model when the input changes, and wire viewState save/restore.
   useEffect(() => {
     if (!monacoNs || !diffEditorRef.current) return
+    const ed = diffEditorRef.current
 
     const language = languageForResource(diffInput.originalUri)
     const originalModel = monacoNs.editor.createModel(
@@ -116,18 +126,59 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       language,
       monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'modified').toString()),
     )
-    diffEditorRef.current.setModel({ original: originalModel, modified: modifiedModel })
+    ed.setModel({ original: originalModel, modified: modifiedModel })
     originalModelRef.current = originalModel
     modifiedModelRef.current = modifiedModel
+    DiffEditorRegistry.register(diffInput, ed, group?.id)
+
+    const groupId = group?.id
+    const resourceUri = diffInput.resource.toString()
+
+    const flushViewState = () => {
+      if (groupId === undefined) return
+      const state = diffEditorRef.current?.saveViewState()
+      if (state) EditorViewStateCache.save(groupId, resourceUri, state)
+    }
+
+    const restoreViewState = () => {
+      if (groupId === undefined) return
+      const saved = EditorViewStateCache.load(groupId, resourceUri)
+      if (saved)
+        diffEditorRef.current?.restoreViewState(saved as monaco.editor.IDiffEditorViewState)
+    }
+
+    restoreViewState()
+    // Diff layout is computed asynchronously; re-apply once after the first
+    // computation so scroll position lands on the right line.
+    let updateDiffSub: IDisposable | undefined = ed.onDidUpdateDiff(() => {
+      updateDiffSub?.dispose()
+      updateDiffSub = undefined
+      restoreViewState()
+    })
+
+    const original = ed.getOriginalEditor()
+    const modified = ed.getModifiedEditor()
+    const subs = [
+      original.onDidChangeCursorPosition(flushViewState),
+      modified.onDidChangeCursorPosition(flushViewState),
+      original.onDidScrollChange(flushViewState),
+      modified.onDidScrollChange(flushViewState),
+    ]
 
     return () => {
+      flushViewState()
+      updateDiffSub?.dispose()
+      for (const s of subs) s.dispose()
+      DiffEditorRegistry.unregister(diffInput, ed)
+      // create-effect cleanup may have already disposed the instance (React runs
+      // effect cleanups in declaration order), so guard against a disposed editor.
       diffEditorRef.current?.setModel(null)
       originalModelRef.current = null
       modifiedModelRef.current = null
       originalModel.dispose()
       modifiedModel.dispose()
     }
-  }, [monacoNs, diffInput])
+  }, [monacoNs, diffInput, group])
 
   // Refresh both sides in place when the input's content changes (e.g. the file
   // is reverted via SCM discard). The diffInput instance is mutated, so the
@@ -158,5 +209,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     )
   }
 
-  return <div ref={containerRef} className={styles['diffEditor']} data-testid="diff-editor" />
+  return (
+    <div className={styles['diffEditor']} data-testid="diff-editor">
+      <div ref={containerRef} className={styles['monacoContainer']} />
+      <DiffEditorToolbar />
+    </div>
+  )
 }

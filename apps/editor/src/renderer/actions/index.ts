@@ -4,7 +4,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { registerAction2 } from '@universe-editor/platform'
-import { OpenDiffAction } from './diffActions.js'
+import {
+  GoToNextDifferenceAction,
+  GoToPreviousDifferenceAction,
+  OpenDiffAction,
+} from './diffActions.js'
 import {
   ShowCommandsAction,
   ShowExplorerAction,
@@ -310,6 +314,8 @@ registerAction2(OpenMarkdownPreviewToSideAction)
 
 // Diff (internal, invoked by the extension host)
 registerAction2(OpenDiffAction)
+registerAction2(GoToNextDifferenceAction)
+registerAction2(GoToPreviousDifferenceAction)
 
 // Update
 registerAction2(CheckForUpdatesAction)

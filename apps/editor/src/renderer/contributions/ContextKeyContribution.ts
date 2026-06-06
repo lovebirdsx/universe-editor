@@ -5,6 +5,7 @@
  *   - activityBarVisible / sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
  *   - activeEditorLanguageId                                     (active file language id)
+ *   - isInDiffEditor                                             (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
@@ -31,6 +32,7 @@ import {
   PartId,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 
 export class ContextKeyContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -71,6 +73,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     const activeEditorId = contextKeyService.createKey<string>('activeEditorId', undefined)
     const hasActiveEditor = contextKeyService.createKey<boolean>('hasActiveEditor', false)
     const activeEditorLanguageId = contextKeyService.createKey<string>('activeEditorLanguageId', '')
+    const isInDiffEditor = contextKeyService.createKey<boolean>('isInDiffEditor', false)
     this._register(
       autorun((reader) => {
         const editor = editorService.activeEditor.read(reader)
@@ -82,6 +85,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
           hasActiveEditor.set(false)
         }
         activeEditorLanguageId.set(editor instanceof FileEditorInput ? editor.language : '')
+        isInDiffEditor.set(editor instanceof DiffEditorInput)
       }),
     )
 

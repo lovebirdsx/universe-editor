@@ -1,0 +1,37 @@
+.toolbar {
+  position: absolute;
+  top: 4px;
+  right: 14px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 4px;
+  background: var(--color-editor-bg, #1e1e1e);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+}
+
+.iconBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--color-fg-muted, #999);
+  background: transparent;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.iconBtn:hover:not(:disabled) {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.iconBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
