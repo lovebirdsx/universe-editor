@@ -140,20 +140,23 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       if (state) EditorViewStateCache.save(groupId, resourceUri, state)
     }
 
-    const restoreViewState = () => {
-      if (groupId === undefined) return
+    const restoreViewState = (): boolean => {
+      if (groupId === undefined) return false
       const saved = EditorViewStateCache.load(groupId, resourceUri)
-      if (saved)
-        diffEditorRef.current?.restoreViewState(saved as monaco.editor.IDiffEditorViewState)
+      if (!saved) return false
+      diffEditorRef.current?.restoreViewState(saved as monaco.editor.IDiffEditorViewState)
+      return true
     }
 
-    restoreViewState()
+    let didRestoreViewState = restoreViewState()
     // Diff layout is computed asynchronously; re-apply once after the first
-    // computation so scroll position lands on the right line.
+    // computation so scroll position lands on the right line, or reveal the
+    // first change for newly-opened diff editors without a saved state.
     let updateDiffSub: IDisposable | undefined = ed.onDidUpdateDiff(() => {
       updateDiffSub?.dispose()
       updateDiffSub = undefined
-      restoreViewState()
+      didRestoreViewState = restoreViewState() || didRestoreViewState
+      if (!didRestoreViewState) ed.goToDiff('next')
     })
 
     const original = ed.getOriginalEditor()
