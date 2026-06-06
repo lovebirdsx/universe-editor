@@ -34,6 +34,9 @@ export interface IExplorerEntry {
   readonly resource: URI
   readonly name: string
   readonly isDirectory: boolean
+  readonly compactName?: string
+  /** The topmost directory in the compact chain — used as drag source. */
+  readonly compactRoot?: URI
 }
 
 export const IExplorerTreeService = createDecorator<ExplorerTreeService>('explorerTreeService')
@@ -72,15 +75,30 @@ export class ExplorerTreeService extends Disposable {
   private readonly _dataSource: ITreeDataSource<IExplorerEntry> = {
     getId: (e) => e.resource.toString(),
     hasChildren: (e) => e.isDirectory,
-    getChildren: (e) => this._nodes.get(e.resource.toString())?.children ?? null,
-    loadChildren: (e) => this._loadChildren(e.resource, this._ensureNode(e.resource)),
+    getChildren: (e) => {
+      const raw = this._nodes.get(e.resource.toString())?.children ?? null
+      if (!raw) return null
+      return this._computeCompactChildren(raw)
+    },
+    loadChildren: async (e) => {
+      const node = this._ensureNode(e.resource)
+      await this._loadChildren(e.resource, node)
+      await Promise.all(
+        (node.children ?? [])
+          .filter((c) => c.isDirectory)
+          .map((c) => this._eagerLoadForCompact(c.resource)),
+      )
+    },
     getRoots: () => (this._root ? [this._rootEntry(this._root)] : []),
     getParent: (e) => {
-      const parent = this.getParent(e.resource)
-      if (!parent) return null
-      if (this._root && parent.toString() === this._root.toString())
+      let cursor: URI | null = this.getParent(e.resource)
+      while (cursor !== null && this._isSingleDirChild(cursor)) {
+        cursor = this.getParent(cursor)
+      }
+      if (!cursor) return null
+      if (this._root && cursor.toString() === this._root.toString())
         return this._rootEntry(this._root)
-      return { resource: parent, name: basename(parent), isDirectory: true }
+      return { resource: cursor, name: basename(cursor), isDirectory: true }
     },
   }
   private readonly _model = this._register(
@@ -421,6 +439,44 @@ export class ExplorerTreeService extends Disposable {
       this._nodes.set(key, node)
     }
     return node
+  }
+
+  private _isSingleDirChild(resource: URI): boolean {
+    if (this._root && resource.toString() === this._root.toString()) return false
+    const ch = this._nodes.get(resource.toString())?.children
+    return ch !== null && ch !== undefined && ch.length === 1 && (ch[0]?.isDirectory ?? false)
+  }
+
+  private _computeCompactChildren(raw: readonly IExplorerEntry[]): readonly IExplorerEntry[] {
+    return raw.map((entry) => {
+      if (!entry.isDirectory) return entry
+      let current = entry
+      let displayName = entry.name
+      for (let d = 0; d < 20; d++) {
+        if (!this._isSingleDirChild(current.resource)) break
+        const child = this._nodes.get(current.resource.toString())!.children![0]!
+        displayName += '/' + child.name
+        current = child
+      }
+      if (current === entry) return entry
+      return {
+        resource: current.resource,
+        name: current.name,
+        isDirectory: true,
+        compactName: displayName,
+        compactRoot: entry.resource,
+      }
+    })
+  }
+
+  private async _eagerLoadForCompact(resource: URI, depth = 0): Promise<void> {
+    if (depth >= 20) return
+    const node = this._ensureNode(resource)
+    if (node.children === null) await this._loadChildren(resource, node)
+    const ch = node.children
+    if (ch && ch.length === 1 && (ch[0]?.isDirectory ?? false)) {
+      await this._eagerLoadForCompact(ch[0]!.resource, depth + 1)
+    }
   }
 
   private async _loadChildren(resource: URI, node: NodeState): Promise<void> {

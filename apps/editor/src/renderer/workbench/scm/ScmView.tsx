@@ -155,7 +155,7 @@ function buildFolderTree(
 }
 
 /** Materialise the provider's groups into a flat-navigable tree snapshot. */
-function buildSnapshot(
+export function buildSnapshot(
   groups: readonly IScmGroupModel[],
   rootUri: string | undefined,
   viewMode: ViewMode,
@@ -187,20 +187,30 @@ function buildSnapshot(
       const addLevel = (node: FolderNode, parent: ScmNode, into: ScmNode[]): void => {
         const folders = [...node.folders.values()].sort((a, b) => a.name.localeCompare(b.name))
         for (const f of folders) {
-          const id = `folder:${g.id}/${f.path}`
+          // Compact a single-subfolder chain ("a" → "a/b" → "a/b/c") into one
+          // node: walk down while each folder holds exactly one subfolder and no
+          // files. The node keeps the leaf path; its label shows the joined path.
+          let leaf = f
+          let displayName = f.name
+          while (leaf.files.length === 0 && leaf.folders.size === 1) {
+            const only = [...leaf.folders.values()][0]!
+            displayName += `/${only.name}`
+            leaf = only
+          }
+          const id = `folder:${g.id}/${leaf.path}`
           const folderNode: ScmNode = {
             kind: 'folder',
             id,
             groupId: g.id,
-            path: f.path,
-            name: f.name,
+            path: leaf.path,
+            name: displayName,
           }
           into.push(folderNode)
           parentMap.set(id, parent)
           collapsibleIds.push(id)
           const children: ScmNode[] = []
           childrenMap.set(id, children)
-          addLevel(f, folderNode, children)
+          addLevel(leaf, folderNode, children)
         }
         for (const file of node.files) {
           const id = `file:${g.id}/${file.resourceUri}`

@@ -113,6 +113,21 @@
   text-overflow: ellipsis;
 }
 
+/* Compact folder ("a/b/c"): each segment is independently hoverable so the
+   active directory under the cursor is highlighted (drag / right-click / new). */
+.segment {
+  border-radius: 3px;
+  padding: 0 1px;
+}
+
+.segmentActive {
+  background: var(--color-list-focus-bg, rgba(0, 127, 212, 0.28));
+}
+
+.segmentSep {
+  color: var(--color-sidebar-fg-dim, #888888);
+}
+
 .menu {
   position: fixed;
   margin: 0;

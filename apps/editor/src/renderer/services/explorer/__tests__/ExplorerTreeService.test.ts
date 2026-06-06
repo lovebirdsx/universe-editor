@@ -520,3 +520,97 @@ describe('ExplorerTreeService', () => {
     expect(tree.activeEditorResource).toBeNull()
   })
 })
+
+describe('ExplorerTreeService — compact folders', () => {
+  const root = URI.file('/compact')
+  const src = URI.joinPath(root, 'src')
+  const lib = URI.joinPath(src, 'lib')
+  const utils = URI.joinPath(lib, 'utils')
+
+  function makeCompactFs() {
+    return makeFs({
+      [root.toString()]: [{ name: 'src', isFile: false, isDirectory: true }],
+      [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
+      [lib.toString()]: [],
+    })
+  }
+
+  function makeDeepCompactFs() {
+    return makeFs({
+      [root.toString()]: [{ name: 'src', isFile: false, isDirectory: true }],
+      [src.toString()]: [{ name: 'lib', isFile: false, isDirectory: true }],
+      [lib.toString()]: [{ name: 'utils', isFile: false, isDirectory: true }],
+      [utils.toString()]: [],
+    })
+  }
+
+  function flush(): Promise<void> {
+    return new Promise((r) => setTimeout(r, 0))
+  }
+
+  it('compact entry has compactName showing the merged path', async () => {
+    const inst = makeInst(makeCompactFs(), new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const visible = tree.getVisibleEntries()
+    const compact = visible.find((e) => e.compactName !== undefined)
+    expect(compact).toBeDefined()
+    expect(compact?.compactName).toBe('src/lib')
+    expect(compact?.resource.toString()).toBe(lib.toString())
+  })
+
+  it('compact entry exposes compactRoot pointing to the chain head (src)', async () => {
+    const inst = makeInst(makeCompactFs(), new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const visible = tree.getVisibleEntries()
+    const compact = visible.find((e) => e.compactName !== undefined)
+    // compactRoot must be src — the topmost dir in the compact chain
+    expect(compact?.compactRoot?.toString()).toBe(src.toString())
+  })
+
+  it('deep compact entry exposes compactRoot pointing to src (chain head)', async () => {
+    const inst = makeInst(makeDeepCompactFs(), new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const visible = tree.getVisibleEntries()
+    const compact = visible.find((e) => e.compactName !== undefined)
+    expect(compact?.compactName).toBe('src/lib/utils')
+    expect(compact?.compactRoot?.toString()).toBe(src.toString())
+  })
+
+  it('non-compact entries have no compactRoot', async () => {
+    const fs = makeFs({
+      [root.toString()]: [
+        { name: 'src', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [src.toString()]: [
+        { name: 'a', isFile: false, isDirectory: true },
+        { name: 'b', isFile: false, isDirectory: true },
+      ],
+    })
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const visible = tree.getVisibleEntries()
+    for (const e of visible) {
+      expect(e.compactRoot).toBeUndefined()
+      expect(e.compactName).toBeUndefined()
+    }
+  })
+
+  it('file created in compact leaf is visible as a child of the compact node', async () => {
+    const fs = makeCompactFs()
+    const inst = makeInst(fs, new FakeWorkspaceService(root), new FakeWatcher())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    await tree.expand(lib)
+    expect(tree.getChildren(lib)).toHaveLength(0)
+
+    // Simulate file creation: update fs mock then call refresh
+    fs.dirs.set(lib.toString(), [{ name: 'index.ts', isFile: true, isDirectory: false }])
+    await tree.refresh(lib)
+    expect(tree.getChildren(lib)?.some((e) => e.name === 'index.ts')).toBe(true)
+  })
+})

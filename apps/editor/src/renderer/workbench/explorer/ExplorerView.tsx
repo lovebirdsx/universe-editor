@@ -106,8 +106,9 @@ export function ExplorerView() {
       <ExplorerTreeNode
         key={key}
         {...(ctx.style !== undefined ? { style: ctx.style } : {})}
+        {...(entry.compactRoot !== undefined ? { compactRoot: entry.compactRoot } : {})}
         resource={entry.resource}
-        name={key === rootKey ? workspaceName : entry.name}
+        name={key === rootKey ? workspaceName : (entry.compactName ?? entry.name)}
         isDirectory={entry.isDirectory}
         expanded={ctx.node.expanded}
         indentPadding={ctx.indentPadding}

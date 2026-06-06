@@ -6,7 +6,15 @@
  *  visible-rows enumeration; this component never recurses into children.
  *--------------------------------------------------------------------------------------------*/
 
-import { memo, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  Fragment,
+  memo,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { type IFileService, type URI } from '@universe-editor/platform'
 import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
@@ -22,6 +30,8 @@ interface Props {
   readonly isSelected: boolean
   readonly isFocused: boolean
   readonly isActiveEditor: boolean
+  /** Topmost dir of the compact chain — drag source when set. */
+  readonly compactRoot?: URI
   readonly tree: ExplorerTreeService
   readonly onOpenFile: (resource: URI, options?: { preview?: boolean }) => void
   readonly onContextMenu: (
@@ -41,6 +51,7 @@ function ExplorerTreeNodeImpl({
   isSelected,
   isFocused,
   isActiveEditor,
+  compactRoot,
   tree,
   onOpenFile,
   onContextMenu,
@@ -57,6 +68,26 @@ function ExplorerTreeNodeImpl({
   ]
     .filter(Boolean)
     .join(' ')
+
+  // For a compact folder ("a/b/c") each path segment maps to its own directory
+  // URI. Hovering / right-clicking / dropping onto a segment must target THAT
+  // directory, mirroring VSCode's compact-folder behaviour.
+  const segments = useMemo(() => {
+    if (!compactRoot) return null
+    const names = name.split('/')
+    if (names.length < 2) return null
+    const uris: URI[] = [compactRoot]
+    for (let i = 1; i < names.length; i++) {
+      const prev = uris[i - 1]!
+      uris.push(prev.with({ path: `${prev.path}/${names[i]}` }))
+    }
+    return names.map((segName, i) => ({ name: segName, uri: uris[i]! }))
+  }, [compactRoot, name])
+
+  const [activeSeg, setActiveSeg] = useState<number | null>(null)
+  // Drop destination for this row: the compact segment under the drag cursor,
+  // defaulting to the leaf (= `resource`) when no segment is hovered.
+  const dropDirRef = useRef<URI>(resource)
 
   const onClick = (e: ReactMouseEvent) => {
     if (e.shiftKey) {
@@ -82,7 +113,7 @@ function ExplorerTreeNodeImpl({
   }
 
   const { dragHandleProps } = useDragHandle<{ resource: URI; isDirectory: boolean }>({
-    resource,
+    resource: compactRoot ?? resource,
     isDirectory,
   })
 
@@ -91,7 +122,8 @@ function ExplorerTreeNodeImpl({
       if (!fileService || !isDirectory) return
       const srcName = src.path.split('/').pop()
       if (!srcName) return
-      const dest = resource.with({ path: `${resource.path}/${srcName}` })
+      const destDir = dropDirRef.current
+      const dest = destDir.with({ path: `${destDir.path}/${srcName}` })
       void fileService.rename(src, dest)
     },
   )
@@ -99,6 +131,7 @@ function ExplorerTreeNodeImpl({
   return (
     <div
       data-row-key={key}
+      data-drag-source={(compactRoot ?? resource).toString()}
       role="treeitem"
       aria-expanded={isDirectory ? expanded : undefined}
       aria-selected={isSelected}
@@ -117,7 +150,45 @@ function ExplorerTreeNodeImpl({
       <span className={styles['icon']} aria-hidden="true">
         <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />
       </span>
-      <span className={styles['label']}>{name}</span>
+      {segments ? (
+        <span className={styles['label']}>
+          {segments.map((s, i) => (
+            <Fragment key={i}>
+              {i > 0 && (
+                <span className={styles['segmentSep']} aria-hidden="true">
+                  /
+                </span>
+              )}
+              <span
+                className={[styles['segment'], activeSeg === i && styles['segmentActive']]
+                  .filter(Boolean)
+                  .join(' ')}
+                data-segment-uri={s.uri.toString()}
+                {...(activeSeg === i ? { 'data-segment-active': 'true' } : {})}
+                onMouseEnter={() => setActiveSeg(i)}
+                onMouseLeave={() => setActiveSeg((cur) => (cur === i ? null : cur))}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  e.stopPropagation()
+                  onContextMenu(e, { resource: s.uri, isDirectory: true })
+                }}
+                onDragEnter={() => {
+                  dropDirRef.current = s.uri
+                  setActiveSeg(i)
+                }}
+                onDragOver={() => {
+                  dropDirRef.current = s.uri
+                }}
+                onDragLeave={() => setActiveSeg((cur) => (cur === i ? null : cur))}
+              >
+                {s.name}
+              </span>
+            </Fragment>
+          ))}
+        </span>
+      ) : (
+        <span className={styles['label']}>{name}</span>
+      )}
     </div>
   )
 }
