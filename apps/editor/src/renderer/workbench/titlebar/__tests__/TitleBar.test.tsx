@@ -7,10 +7,13 @@ import {
   IEditorGroupsService,
   IFileService,
   IHostService,
+  ILayoutService,
   IWorkspaceService,
   InstantiationService,
+  PartId,
   ServiceCollection,
   URI,
+  constObservable,
   type IWorkspace,
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
@@ -68,6 +71,24 @@ function makeWorkspaceService(workspace: IWorkspace | null = null): IWorkspaceSe
   } as unknown as IWorkspaceService
 }
 
+function makeLayoutService(): ILayoutService {
+  const allVisible = {
+    [PartId.ActivityBar]: true,
+    [PartId.SideBar]: true,
+    [PartId.SecondarySideBar]: false,
+    [PartId.EditorArea]: true,
+    [PartId.Panel]: false,
+    [PartId.StatusBar]: true,
+  }
+  return {
+    _serviceBrand: undefined,
+    visible: constObservable(allVisible),
+    toggleVisible: () => {},
+    getVisible: () => true,
+    setVisible: () => {},
+  } as unknown as ILayoutService
+}
+
 function makeContainer(
   groupsService: EditorGroupsService,
   opts: { platform?: 'win32' | 'darwin' | 'linux'; workspace?: IWorkspace | null } = {},
@@ -78,6 +99,7 @@ function makeContainer(
   sc.set(IEditorGroupsService, groupsService)
   sc.set(IFileService, makeFs())
   sc.set(IContextKeyService, new ContextKeyService())
+  sc.set(ILayoutService, makeLayoutService())
   sc.set(ICommandService, {
     _serviceBrand: undefined,
     executeCommand: () => Promise.resolve(undefined),

@@ -22,7 +22,9 @@ export function DiffEditorToolbar() {
         type="button"
         className={styles['iconBtn']}
         title="下一处更改 (Alt+F5)"
-        onClick={() => void commandService.executeCommand('workbench.action.compareEditor.nextChange')}
+        onClick={() =>
+          void commandService.executeCommand('workbench.action.compareEditor.nextChange')
+        }
       >
         <ArrowDown size={14} />
       </button>

@@ -179,3 +179,35 @@
   background: #e81123;
   color: #fff;
 }
+
+.layout-controls {
+  display: flex;
+  align-items: center;
+  -webkit-app-region: no-drag;
+  gap: 1px;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
+.layout-btn {
+  width: 28px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: default;
+  border-radius: 3px;
+  color: var(--color-foreground-muted, #8a8a92);
+}
+
+.layout-btn:hover {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.layout-btn--active {
+  color: var(--color-foreground, #c8c8c8);
+}
