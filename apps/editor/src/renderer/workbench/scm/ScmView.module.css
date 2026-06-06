@@ -141,6 +141,34 @@
   padding: 0;
 }
 
+.tree {
+  outline: none;
+}
+
+/* Selection / keyboard-focus states shared by group / folder / file rows. */
+.groupHeader.selected,
+.folder.selected,
+.resource.selected {
+  background: var(--vscode-list-activeSelectionBackground, #094771);
+  color: var(--vscode-list-activeSelectionForeground, #fff);
+}
+
+.tree:not([data-focused='true']) .selected {
+  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
+  color: inherit;
+}
+
+.groupHeader.focused,
+.folder.focused,
+.resource.focused {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.tree:not([data-focused='true']) .focused {
+  outline: none;
+}
+
 .twistie {
   flex: 0 0 auto;
   width: 12px;

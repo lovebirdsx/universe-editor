@@ -2,9 +2,12 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ExplorerTreeService — workspace-folder-rooted lazy tree backed by IFileService.
  *
- *  Holds expansion state and child-entry caches keyed by URI. CRUD operations
- *  delegate to IFileService and invalidate the affected parent. Tree state is
- *  not persisted — switching workspace folders drops everything and starts over.
+ *  Holds child-entry caches keyed by URI and orchestrates IFileService /
+ *  IFileWatcherService / IExcludeService. The generic tree state (expansion,
+ *  selection, focus, visible-row flattening, reveal) is delegated to the shared
+ *  workbench-ui TreeModel; this service adapts it to URIs and owns the
+ *  file-system specifics (lazy loading, CRUD, watcher refresh, exclude filter).
+ *  Tree state is not persisted — switching workspace folders drops everything.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -23,14 +26,8 @@ import {
   type ILogger,
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
-import {
-  dedupe,
-  isDescendant,
-  parentOf,
-  relativeTo,
-  sameUri,
-  sameUriList,
-} from './explorerTreeUtils.js'
+import { TreeModel, type ITreeDataSource } from '@universe-editor/workbench-ui'
+import { isDescendant, parentOf, relativeTo, sameUri } from './explorerTreeUtils.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
 
 export interface IExplorerEntry {
@@ -42,10 +39,14 @@ export interface IExplorerEntry {
 export const IExplorerTreeService = createDecorator<ExplorerTreeService>('explorerTreeService')
 
 interface NodeState {
-  expanded: boolean
   children: IExplorerEntry[] | null
   loading: boolean
   error: string | null
+}
+
+function basename(resource: URI): string {
+  const segments = resource.path.split('/')
+  return segments[segments.length - 1] ?? ''
 }
 
 function sortEntries(entries: readonly IDirectoryEntry[], parent: URI): IExplorerEntry[] {
@@ -65,17 +66,31 @@ export class ExplorerTreeService extends Disposable {
   declare readonly _serviceBrand: undefined
   private _root: URI | null = null
   private readonly _nodes = new Map<string, NodeState>()
-  private _selection: URI[] = []
-  private _selectionKeys = new Set<string>()
-  private _focused: URI | null = null
   private _activeEditorResource: URI | null = null
   private readonly _logger: ILogger
 
-  // Visible-rows cache: invalidated only when the tree structure changes
-  // (expand/collapse/refresh/root-swap). Selection mutations never touch it.
-  private _structureVersion = 0
-  private _visibleCache: readonly IExplorerEntry[] | null = null
-  private _visibleCacheVersion = -1
+  private readonly _dataSource: ITreeDataSource<IExplorerEntry> = {
+    getId: (e) => e.resource.toString(),
+    hasChildren: (e) => e.isDirectory,
+    getChildren: (e) => this._nodes.get(e.resource.toString())?.children ?? null,
+    loadChildren: (e) => this._loadChildren(e.resource, this._ensureNode(e.resource)),
+    getRoots: () => (this._root ? [this._rootEntry(this._root)] : []),
+    getParent: (e) => {
+      const parent = this.getParent(e.resource)
+      if (!parent) return null
+      if (this._root && parent.toString() === this._root.toString())
+        return this._rootEntry(this._root)
+      return { resource: parent, name: basename(parent), isDirectory: true }
+    },
+  }
+  private readonly _model = this._register(
+    new TreeModel<IExplorerEntry>({ dataSource: this._dataSource }),
+  )
+
+  // Stable mapping of model visible nodes → entries (kept identity-stable so
+  // ExplorerView's memo / key reads don't churn between selection changes).
+  private _visibleNodesRef: readonly { element: IExplorerEntry }[] | null = null
+  private _visibleEntries: readonly IExplorerEntry[] = []
 
   private readonly _onDidChangeStructure = this._register(new Emitter<void>())
   readonly onDidChangeStructure: Event<void> = this._onDidChangeStructure.event
@@ -98,27 +113,53 @@ export class ExplorerTreeService extends Disposable {
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'explorer', name: 'Explorer' })
+    this._register(
+      this._model.onDidChangeStructure(() => {
+        this._onDidChangeStructure.fire()
+        this._onDidChange.fire()
+      }),
+    )
+    this._register(
+      this._model.onDidChangeSelection(() => {
+        this._onDidChangeSelection.fire()
+        this._onDidChange.fire()
+      }),
+    )
+    this._register(this._model.onReveal(({ id }) => this._onReveal.fire(URI.parse(id))))
     this._setRoot(this._workspace.current?.folder ?? null)
     this._register(this._workspace.onDidChangeWorkspace((w) => this._setRoot(w?.folder ?? null)))
     this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))
-    // files.exclude changed → drop cached children so the next render re-filters.
     this._register(this._exclude.onDidChange(() => this._onExcludeChange()))
+  }
+
+  /** The TreeModel powering this view — consumed directly by ExplorerView's <Tree>. */
+  get model(): TreeModel<IExplorerEntry> {
+    return this._model
   }
 
   get root(): URI | null {
     return this._root
   }
 
+  private _rootEntry(root: URI): IExplorerEntry {
+    return { resource: root, name: '', isDirectory: true }
+  }
+
+  private _leafEntry(resource: URI, isDirectory = false): IExplorerEntry {
+    return { resource, name: basename(resource), isDirectory }
+  }
+
   get selection(): readonly URI[] {
-    return this._selection
+    return this._model.selection.map((id) => URI.parse(id))
   }
 
   isSelected(resource: URI): boolean {
-    return this._selectionKeys.has(resource.toString())
+    return this._model.isSelected(resource.toString())
   }
 
   get focused(): URI | null {
-    return this._focused
+    const id = this._model.focused
+    return id ? URI.parse(id) : null
   }
 
   get activeEditorResource(): URI | null {
@@ -127,11 +168,10 @@ export class ExplorerTreeService extends Disposable {
 
   /**
    * Back-compat single-resource getter. Returns the focused row when present,
-   * otherwise the first of the multi-selection. New code should consult
-   * `focused` / `selection` directly.
+   * otherwise the first of the multi-selection.
    */
   get selectedResource(): URI | null {
-    return this._focused ?? this._selection[0] ?? null
+    return this.focused ?? this.selection[0] ?? null
   }
 
   /**
@@ -151,104 +191,43 @@ export class ExplorerTreeService extends Disposable {
 
   /**
    * Flat, top-to-bottom list of every node currently rendered in the tree,
-   * including the workspace root. Cached across selection changes; only
-   * structure mutations invalidate the cache.
+   * including the workspace root. Identity-stable across selection changes.
    */
   getVisibleEntries(): readonly IExplorerEntry[] {
-    if (this._visibleCache && this._visibleCacheVersion === this._structureVersion) {
-      return this._visibleCache
+    const nodes = this._model.getVisibleNodes()
+    if (nodes !== this._visibleNodesRef) {
+      this._visibleNodesRef = nodes
+      this._visibleEntries = nodes.map((n) => n.element)
     }
-    const out: IExplorerEntry[] = []
-    if (this._root) {
-      out.push({ resource: this._root, name: '', isDirectory: true })
-      this._collectVisible(this._root, out)
-    }
-    this._visibleCache = out
-    this._visibleCacheVersion = this._structureVersion
-    return out
-  }
-
-  private _collectVisible(parent: URI, acc: IExplorerEntry[]): void {
-    const node = this._nodes.get(parent.toString())
-    if (!node || !node.expanded || !node.children) return
-    for (const child of node.children) {
-      acc.push(child)
-      if (child.isDirectory) this._collectVisible(child.resource, acc)
-    }
-  }
-
-  private _emitStructure(): void {
-    this._structureVersion++
-    this._visibleCache = null
-    this._onDidChangeStructure.fire()
-    this._onDidChange.fire()
-  }
-
-  private _emitSelection(): void {
-    this._onDidChangeSelection.fire()
-    this._onDidChange.fire()
-  }
-
-  private _replaceSelection(list: readonly URI[]): void {
-    this._selection = list as URI[]
-    this._selectionKeys = new Set(list.map((u) => u.toString()))
+    return this._visibleEntries
   }
 
   setSelection(resources: readonly URI[] | URI | null, focus?: URI | null): void {
-    const list =
-      resources == null ? [] : Array.isArray(resources) ? dedupe(resources) : [resources as URI]
-    const newFocus =
-      focus === undefined ? (list.length > 0 ? (list[list.length - 1] ?? null) : null) : focus
-    if (sameUriList(this._selection, list) && sameUri(this._focused, newFocus)) return
-    this._replaceSelection(list)
-    this._focused = newFocus
-    this._emitSelection()
-    if (newFocus) this._fireReveal(newFocus)
+    const list = resources == null ? [] : Array.isArray(resources) ? resources : [resources as URI]
+    const ids = list.map((u) => u.toString())
+    if (focus === undefined) this._model.setSelection(ids)
+    else this._model.setSelection(ids, focus === null ? null : focus.toString())
   }
 
   setFocus(resource: URI | null): void {
-    if (sameUri(this._focused, resource)) return
-    this._focused = resource
-    this._emitSelection()
-    if (resource) this._fireReveal(resource)
+    this._model.setFocus(resource ? resource.toString() : null)
   }
 
   /** Ctrl/Cmd+Click semantics: add when absent, remove when present. */
   toggleInSelection(resource: URI): void {
-    const key = resource.toString()
-    const idx = this._selection.findIndex((u) => u.toString() === key)
-    const next =
-      idx >= 0 ? this._selection.filter((_, i) => i !== idx) : [...this._selection, resource]
-    this._replaceSelection(next)
-    this._focused = resource
-    this._emitSelection()
-    this._fireReveal(resource)
+    this._model.toggleInSelection(resource.toString())
   }
 
-  /** Shift+Click semantics: replace selection with the inclusive range between anchor and target in the visible-rows order. */
+  /** Shift+Click semantics: inclusive range between anchor and target in visible order. */
   selectRange(anchor: URI, target: URI): void {
-    const visible = this.getVisibleEntries()
-    const aIdx = visible.findIndex((e) => e.resource.toString() === anchor.toString())
-    const tIdx = visible.findIndex((e) => e.resource.toString() === target.toString())
-    if (aIdx < 0 || tIdx < 0) {
-      this.setSelection([target], target)
-      return
-    }
-    const [lo, hi] = aIdx <= tIdx ? [aIdx, tIdx] : [tIdx, aIdx]
-    this._replaceSelection(visible.slice(lo, hi + 1).map((e) => e.resource))
-    this._focused = target
-    this._emitSelection()
-    this._fireReveal(target)
+    this._model.selectRange(anchor.toString(), target.toString())
   }
 
   setActiveEditorResource(resource: URI | null): void {
     if (sameUri(this._activeEditorResource, resource)) return
     this._activeEditorResource = resource
-    this._emitSelection()
-  }
-
-  private _fireReveal(target: URI): void {
-    this._onReveal.fire(target)
+    this._onDidChangeSelection.fire()
+    this._onDidChange.fire()
   }
 
   /**
@@ -259,37 +238,28 @@ export class ExplorerTreeService extends Disposable {
   async reveal(target: URI): Promise<boolean> {
     if (!this._root) return false
     if (!isDescendant(this._root, target)) return false
-    const chain: URI[] = []
-    let cursor: URI | null = parentOf(target)
-    while (cursor && cursor.toString() !== this._root.toString()) {
-      chain.unshift(cursor)
-      cursor = parentOf(cursor)
-    }
-    chain.unshift(this._root)
-    for (const dir of chain) {
-      await this.expand(dir)
-    }
-    this._replaceSelection([target])
-    this._focused = target
-    this._emitSelection()
-    this._fireReveal(target)
+    await this._model.reveal(this._leafEntry(target))
     return true
   }
 
   /** Synchronous snapshot of a node. Returns a fresh default state for unknown URIs. */
-  getNode(resource: URI): NodeState {
-    return (
-      this._nodes.get(resource.toString()) ?? {
-        expanded: false,
-        children: null,
-        loading: false,
-        error: null,
-      }
-    )
+  getNode(resource: URI): {
+    expanded: boolean
+    children: IExplorerEntry[] | null
+    loading: boolean
+    error: string | null
+  } {
+    const node = this._nodes.get(resource.toString())
+    return {
+      expanded: this._model.isExpanded(resource.toString()),
+      children: node?.children ?? null,
+      loading: node?.loading ?? false,
+      error: node?.error ?? null,
+    }
   }
 
   isExpanded(resource: URI): boolean {
-    return this._nodes.get(resource.toString())?.expanded ?? false
+    return this._model.isExpanded(resource.toString())
   }
 
   getChildren(resource: URI): readonly IExplorerEntry[] | null {
@@ -297,37 +267,28 @@ export class ExplorerTreeService extends Disposable {
   }
 
   async expand(resource: URI): Promise<void> {
-    const node = this._ensureNode(resource)
-    const wasExpanded = node.expanded
-    node.expanded = true
-    if (node.children === null && !node.loading) {
-      await this._loadChildren(resource, node)
-    }
-    if (!wasExpanded || node.children !== null) {
-      this._emitStructure()
-    }
+    await this._model.expand(this._dirEntry(resource))
   }
 
   collapse(resource: URI): void {
-    const node = this._nodes.get(resource.toString())
-    if (!node || !node.expanded) return
-    node.expanded = false
-    this._emitStructure()
+    this._model.collapse(this._dirEntry(resource))
   }
 
   async toggle(resource: URI): Promise<void> {
-    if (this.isExpanded(resource)) {
-      this.collapse(resource)
-    } else {
-      await this.expand(resource)
-    }
+    await this._model.toggle(this._dirEntry(resource))
+  }
+
+  private _dirEntry(resource: URI): IExplorerEntry {
+    if (this._root && resource.toString() === this._root.toString())
+      return this._rootEntry(this._root)
+    return { resource, name: basename(resource), isDirectory: true }
   }
 
   /** Force re-read of a directory's entries, keeping its expanded state. */
   async refresh(resource: URI): Promise<void> {
     const node = this._ensureNode(resource)
     await this._loadChildren(resource, node)
-    this._emitStructure()
+    this._model.refresh()
   }
 
   async createFile(parent: URI, name: string): Promise<URI> {
@@ -388,7 +349,7 @@ export class ExplorerTreeService extends Disposable {
       if (parent) {
         await this.refresh(parent)
       } else {
-        this._emitStructure()
+        this._model.refresh()
       }
       this._logger.info(`delete ${target.toString()} recursive=${opts?.recursive === true}`)
     } catch (err) {
@@ -401,24 +362,18 @@ export class ExplorerTreeService extends Disposable {
     this._logger.info(`setRoot ${root?.toString() ?? '<none>'}`)
     this._root = root
     this._nodes.clear()
-    this._replaceSelection([])
-    this._focused = null
     this._activeEditorResource = null
+    this._model.reset()
     if (root) {
-      const node = this._ensureNode(root)
-      node.expanded = true
-      void this._loadChildren(root, node).then(() => this._emitStructure())
+      void this._model.expand(this._rootEntry(root))
       void this._watcher
         .watch(root.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
         .catch(() => {
-          // Watcher failures are non-fatal: the tree still works, just no auto-refresh.
           this._logger.warn(`watch failed ${root.toString()}`)
         })
     } else {
       void this._watcher.unwatch().catch(() => {})
     }
-    this._emitStructure()
-    this._emitSelection()
   }
 
   /**
@@ -435,7 +390,7 @@ export class ExplorerTreeService extends Disposable {
       if (node.children !== null) loaded.push(URI.parse(key))
     }
     void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u)))).then(() =>
-      this._emitStructure(),
+      this._model.refresh(),
     )
   }
 
@@ -462,7 +417,7 @@ export class ExplorerTreeService extends Disposable {
     const key = resource.toString()
     let node = this._nodes.get(key)
     if (!node) {
-      node = { expanded: false, children: null, loading: false, error: null }
+      node = { children: null, loading: false, error: null }
       this._nodes.set(key, node)
     }
     return node

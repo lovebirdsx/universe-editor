@@ -14,6 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  memo,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -30,6 +31,7 @@ import {
   ICommandService,
   IEditorResolverService,
   IStorageService,
+  autorun,
   isSubmenuEntry,
   MenuId,
   MenuRegistry,
@@ -43,6 +45,13 @@ import type {
   ICommandDto,
   ISourceControlResourceStateDto,
 } from '@universe-editor/extensions-common'
+import {
+  Tree,
+  TreeModel,
+  useOwnedTreeModel,
+  type ITreeDataSource,
+  type ITreeRowRenderContext,
+} from '@universe-editor/workbench-ui'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { useService, useObservable } from '../useService.js'
@@ -164,9 +173,24 @@ interface FolderNode {
   files: ISourceControlResourceStateDto[]
 }
 
-type VisibleRow =
-  | { kind: 'folder'; depth: number; path: string; name: string }
-  | { kind: 'file'; depth: number; resource: ISourceControlResourceStateDto; dir?: string }
+type ScmNode =
+  | { kind: 'group'; id: string; groupId: string; handle: number; label: string; count: number }
+  | { kind: 'folder'; id: string; groupId: string; path: string; name: string }
+  | {
+      kind: 'file'
+      id: string
+      groupId: string
+      resource: ISourceControlResourceStateDto
+      dir?: string
+    }
+
+interface ScmSnapshot {
+  roots: ScmNode[]
+  childrenMap: Map<string, ScmNode[]>
+  parentMap: Map<string, ScmNode>
+  /** Groups + folders — seeded expanded the first time they appear. */
+  collapsibleIds: string[]
+}
 
 function buildFolderTree(
   resources: readonly ISourceControlResourceStateDto[],
@@ -193,40 +217,140 @@ function buildFolderTree(
   return rootNode
 }
 
-function flattenTree(
-  node: FolderNode,
-  depth: number,
-  isCollapsed: (folderPath: string) => boolean,
-  out: VisibleRow[],
-): void {
-  const folders = [...node.folders.values()].sort((a, b) => a.name.localeCompare(b.name))
-  for (const folder of folders) {
-    out.push({ kind: 'folder', depth, path: folder.path, name: folder.name })
-    if (!isCollapsed(folder.path)) flattenTree(folder, depth + 1, isCollapsed, out)
+/** Materialise the provider's groups into a flat-navigable tree snapshot. */
+function buildSnapshot(
+  groups: readonly IScmGroupModel[],
+  rootUri: string | undefined,
+  viewMode: ViewMode,
+): ScmSnapshot {
+  const roots: ScmNode[] = []
+  const childrenMap = new Map<string, ScmNode[]>()
+  const parentMap = new Map<string, ScmNode>()
+  const collapsibleIds: string[] = []
+
+  for (const g of groups) {
+    const resources = g.resources.get()
+    if (resources.length === 0 && g.hideWhenEmpty.get()) continue
+    const groupNodeId = `group:${g.id}`
+    const groupNode: ScmNode = {
+      kind: 'group',
+      id: groupNodeId,
+      groupId: g.id,
+      handle: g.handle,
+      label: g.label.get(),
+      count: resources.length,
+    }
+    roots.push(groupNode)
+    collapsibleIds.push(groupNodeId)
+    const groupChildren: ScmNode[] = []
+    childrenMap.set(groupNodeId, groupChildren)
+
+    if (viewMode === 'tree') {
+      const tree = buildFolderTree(resources, rootUri)
+      const addLevel = (node: FolderNode, parent: ScmNode, into: ScmNode[]): void => {
+        const folders = [...node.folders.values()].sort((a, b) => a.name.localeCompare(b.name))
+        for (const f of folders) {
+          const id = `folder:${g.id}/${f.path}`
+          const folderNode: ScmNode = {
+            kind: 'folder',
+            id,
+            groupId: g.id,
+            path: f.path,
+            name: f.name,
+          }
+          into.push(folderNode)
+          parentMap.set(id, parent)
+          collapsibleIds.push(id)
+          const children: ScmNode[] = []
+          childrenMap.set(id, children)
+          addLevel(f, folderNode, children)
+        }
+        for (const file of node.files) {
+          const id = `file:${g.id}/${file.resourceUri}`
+          const fileNode: ScmNode = { kind: 'file', id, groupId: g.id, resource: file }
+          into.push(fileNode)
+          parentMap.set(id, parent)
+        }
+      }
+      addLevel(tree, groupNode, groupChildren)
+    } else {
+      for (const r of resources) {
+        const id = `file:${g.id}/${r.resourceUri}`
+        const fileNode: ScmNode = {
+          kind: 'file',
+          id,
+          groupId: g.id,
+          resource: r,
+          dir: dirname(relativePath(rootUri, r.resourceUri)),
+        }
+        groupChildren.push(fileNode)
+        parentMap.set(id, groupNode)
+      }
+    }
   }
-  for (const file of node.files) out.push({ kind: 'file', depth, resource: file })
+  return { roots, childrenMap, parentMap, collapsibleIds }
+}
+
+/** Shared click semantics: shift=range, ctrl/meta=toggle, plain=select (+onPlain). */
+function rowClick(
+  model: TreeModel<ScmNode>,
+  node: ScmNode,
+  e: ReactMouseEvent,
+  onPlain: () => void,
+): void {
+  if (e.shiftKey) {
+    e.preventDefault()
+    model.selectRange(model.focused ?? node.id, node.id)
+    return
+  }
+  if (e.ctrlKey || e.metaKey) {
+    model.toggleInSelection(node.id)
+    return
+  }
+  model.setSelection([node.id], node.id)
+  onPlain()
+}
+
+function rowClassName(base: string, isSelected: boolean, isFocused: boolean): string {
+  return [base, isSelected && styles['selected'], isFocused && styles['focused']]
+    .filter(Boolean)
+    .join(' ')
 }
 
 // --- Rows ------------------------------------------------------------------
 
-function ScmFileRow({
-  resource,
-  scope,
-  depth,
-  dir,
+interface SharedRowProps {
+  model: TreeModel<ScmNode>
+  indentPadding: number
+  isSelected: boolean
+  isFocused: boolean
+  expanded: boolean
+  hasChildren: boolean
+}
+
+const ScmFileRow = memo(function ScmFileRow({
+  model,
+  node,
+  providerId,
+  indentPadding,
+  isSelected,
+  isFocused,
   revision,
-}: {
-  resource: ISourceControlResourceStateDto
-  scope: Record<string, unknown>
-  depth: number
-  dir?: string | undefined
+}: SharedRowProps & {
+  node: Extract<ScmNode, { kind: 'file' }>
+  providerId: string
   revision: number
 }) {
   const commandService = useService(ICommandService)
   const editorResolverService = useService(IEditorResolverService)
+  const resource = node.resource
   const rowScope = useMemo(
-    () => ({ ...scope, scmResourceState: resource.contextValue }),
-    [scope, resource.contextValue],
+    () => ({
+      scmProvider: providerId,
+      scmResourceGroup: node.groupId,
+      scmResourceState: resource.contextValue,
+    }),
+    [providerId, node.groupId, resource.contextValue],
   )
   const inline = useMemo(
     () => menuActions(MenuId.ScmResourceStateContext, rowScope, 'inline'),
@@ -258,17 +382,20 @@ function ScmFileRow({
 
   return (
     <li
-      className={styles['resource']}
-      style={{ paddingLeft: depth * 12 + 6 }}
+      data-row-key={node.id}
+      role="treeitem"
+      aria-selected={isSelected}
+      className={rowClassName(styles['resource'] ?? '', isSelected, isFocused)}
+      style={{ paddingLeft: indentPadding }}
       title={resource.decorations?.tooltip ?? resource.resourceUri}
-      onClick={openChange}
+      onClick={(e) => rowClick(model, node, e, openChange)}
       onDoubleClick={openChangePinned}
     >
       <FileIcon resource={uri} className={styles['fileIcon']} isDirectory={false} size={16} />
       <span className={styles['resourceLabel']} style={decorationStyle(resource)}>
         {basename(resource.resourceUri)}
       </span>
-      {dir ? <span className={styles['resourceDir']}>{dir}</span> : null}
+      {node.dir ? <span className={styles['resourceDir']}>{node.dir}</span> : null}
       <span className={styles['resourceActions']}>
         <ActionButton
           action={openFileAction}
@@ -295,35 +422,31 @@ function ScmFileRow({
       )}
     </li>
   )
-}
+})
 
-function ScmFolderRow({
-  name,
-  path,
-  depth,
-  collapsed,
-  onToggle,
-  groupId,
+const ScmFolderRow = memo(function ScmFolderRow({
+  model,
+  node,
   rootUri,
-}: {
-  name: string
-  path: string
-  depth: number
-  collapsed: boolean
-  onToggle: () => void
-  groupId: string
+  indentPadding,
+  isSelected,
+  isFocused,
+  expanded,
+}: SharedRowProps & {
+  node: Extract<ScmNode, { kind: 'folder' }>
   rootUri: string | undefined
+  revision: number
 }) {
   const commandService = useService(ICommandService)
-  const folderUri = useMemo(() => URI.file(name), [name])
-  const absPath = useMemo(() => joinFolder(rootUri, path), [rootUri, path])
+  const folderUri = useMemo(() => URI.file(node.name), [node.name])
+  const absPath = useMemo(() => joinFolder(rootUri, node.path), [rootUri, node.path])
 
   const run = (command: string, isDirectory = false): void => {
     void commandService.executeCommand(command, { resourceUri: absPath, isDirectory })
   }
 
   const actions: { action: ActionItem; isDir?: boolean }[] =
-    groupId === 'index'
+    node.groupId === 'index'
       ? [
           {
             action: {
@@ -351,20 +474,23 @@ function ScmFolderRow({
 
   return (
     <li
-      className={styles['folder']}
-      style={{ paddingLeft: depth * 12 + 6 }}
-      onClick={onToggle}
-      role="button"
+      data-row-key={node.id}
+      role="treeitem"
+      aria-expanded={expanded}
+      aria-selected={isSelected}
+      className={rowClassName(styles['folder'] ?? '', isSelected, isFocused)}
+      style={{ paddingLeft: indentPadding }}
+      onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
     >
-      <span className={styles['twistie']}>{collapsed ? '▸' : '▾'}</span>
+      <span className={styles['twistie']}>{expanded ? '▾' : '▸'}</span>
       <FileIcon
         resource={folderUri}
         className={styles['fileIcon']}
         isDirectory
-        expanded={!collapsed}
+        expanded={expanded}
         size={16}
       />
-      <span className={styles['folderLabel']}>{name}</span>
+      <span className={styles['folderLabel']}>{node.name}</span>
       <span className={styles['resourceActions']}>
         {actions.map(({ action, isDir }) => (
           <ActionButton
@@ -379,108 +505,62 @@ function ScmFolderRow({
       </span>
     </li>
   )
-}
+})
 
-// --- Group -----------------------------------------------------------------
-
-function ScmGroupView({
-  group,
-  scope,
-  rootUri,
-  viewMode,
-  collapsed,
-  isCollapsed,
-  toggle,
+const ScmGroupRow = memo(function ScmGroupRow({
+  model,
+  node,
+  providerId,
+  indentPadding,
+  isSelected,
+  isFocused,
+  expanded,
+  hasChildren,
   revision,
-}: {
-  group: IScmGroupModel
-  scope: Record<string, unknown>
-  rootUri: string | undefined
-  viewMode: ViewMode
-  collapsed: boolean
-  isCollapsed: (key: string) => boolean
-  toggle: (key: string) => void
+}: SharedRowProps & {
+  node: Extract<ScmNode, { kind: 'group' }>
+  providerId: string
   revision: number
 }) {
-  const label = useObservable(group.label)
-  const hideWhenEmpty = useObservable(group.hideWhenEmpty)
-  const resources = useObservable(group.resources)
   const commandService = useService(ICommandService)
-  const groupScope = useMemo(() => ({ ...scope, scmResourceGroup: group.id }), [scope, group.id])
+  const groupScope = useMemo(
+    () => ({ scmProvider: providerId, scmResourceGroup: node.groupId }),
+    [providerId, node.groupId],
+  )
   const groupActions = useMemo(
     () => menuActions(MenuId.ScmResourceGroupContext, groupScope, 'inline'),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [groupScope, revision],
   )
 
-  if (resources.length === 0 && hideWhenEmpty) return null
-
-  const groupKey = `group:${group.id}`
-
-  const rows: VisibleRow[] =
-    viewMode === 'tree'
-      ? (() => {
-          const tree = buildFolderTree(resources, rootUri)
-          const out: VisibleRow[] = []
-          flattenTree(tree, 0, (p) => isCollapsed(`folder:${group.id}/${p}`), out)
-          return out
-        })()
-      : resources.map((r) => ({
-          kind: 'file',
-          depth: 0,
-          resource: r,
-          dir: dirname(relativePath(rootUri, r.resourceUri)),
-        }))
-
   return (
-    <div className={styles['group']}>
-      <div className={styles['groupHeader']} onClick={() => toggle(groupKey)} role="button">
-        <span className={styles['twistie']}>{collapsed ? '▸' : '▾'}</span>
-        <span className={styles['groupLabel']}>{label}</span>
-        <span className={styles['groupActions']}>
-          {groupActions.map((a) => (
-            <ActionButton
-              key={a.id}
-              action={a}
-              onRun={(e) => {
-                e.stopPropagation()
-                void commandService.executeCommand(a.command)
-              }}
-            />
-          ))}
-        </span>
-        <span className={styles['groupCount']}>{resources.length}</span>
-      </div>
-      {!collapsed && (
-        <ul className={styles['resources']}>
-          {rows.map((row) =>
-            row.kind === 'folder' ? (
-              <ScmFolderRow
-                key={`f:${row.path}`}
-                name={row.name}
-                path={row.path}
-                depth={row.depth}
-                collapsed={isCollapsed(`folder:${group.id}/${row.path}`)}
-                onToggle={() => toggle(`folder:${group.id}/${row.path}`)}
-                groupId={group.id}
-                rootUri={rootUri}
-              />
-            ) : (
-              <ScmFileRow
-                key={row.resource.resourceUri}
-                resource={row.resource}
-                scope={groupScope}
-                depth={row.depth}
-                dir={row.dir}
-                revision={revision}
-              />
-            ),
-          )}
-        </ul>
-      )}
+    <div
+      data-row-key={node.id}
+      role="treeitem"
+      aria-expanded={hasChildren ? expanded : undefined}
+      aria-selected={isSelected}
+      className={rowClassName(styles['groupHeader'] ?? '', isSelected, isFocused)}
+      style={{ paddingLeft: indentPadding }}
+      onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
+    >
+      <span className={styles['twistie']}>{hasChildren ? (expanded ? '▾' : '▸') : ''}</span>
+      <span className={styles['groupLabel']}>{node.label}</span>
+      <span className={styles['groupActions']}>
+        {groupActions.map((a) => (
+          <ActionButton
+            key={a.id}
+            action={a}
+            onRun={(e) => {
+              e.stopPropagation()
+              void commandService.executeCommand(a.command, { sourceControlId: providerId })
+            }}
+          />
+        ))}
+      </span>
+      <span className={styles['groupCount']}>{node.count}</span>
     </div>
   )
-}
+})
 
 // --- Title overflow menu ---------------------------------------------------
 
@@ -578,9 +658,56 @@ function ScmProviderView({
   const acceptCommand = useObservable(model.acceptCommand)
   const groups = useObservable(model.groups)
 
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(new Set())
   const [overflow, setOverflow] = useState<{ x: number; y: number } | null>(null)
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
+
+  // Single TreeModel per provider; its data source reads a snapshot that is
+  // rebuilt (during render) whenever groups / resources / view-mode change.
+  const snapshotRef = useRef<ScmSnapshot>({
+    roots: [],
+    childrenMap: new Map(),
+    parentMap: new Map(),
+    collapsibleIds: [],
+  })
+  const treeModel = useOwnedTreeModel<ScmNode>(() => {
+    const dataSource: ITreeDataSource<ScmNode> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => (snapshotRef.current.childrenMap.get(n.id)?.length ?? 0) > 0,
+      getChildren: (n) => snapshotRef.current.childrenMap.get(n.id) ?? [],
+      getRoots: () => snapshotRef.current.roots,
+      getParent: (n) => snapshotRef.current.parentMap.get(n.id) ?? null,
+    }
+    // Groups and folders default to expanded so the first render shows content
+    // without depending on a post-mount event reaching the <Tree> subscription.
+    return new TreeModel<ScmNode>({ dataSource, defaultExpanded: (n) => n.kind !== 'file' })
+  })
+
+  // Bump when any group's resources / label / visibility change.
+  const [dataRevision, setDataRevision] = useState(0)
+  useEffect(() => {
+    const d = autorun((r) => {
+      for (const g of groups) {
+        g.resources.read(r)
+        g.label.read(r)
+        g.hideWhenEmpty.read(r)
+      }
+      setDataRevision((v) => v + 1)
+    })
+    return () => d.dispose()
+  }, [groups])
+
+  // Build the snapshot during render so the tree has content on first paint;
+  // invalidate the model's visible cache after the snapshot reference changes.
+  const snapshot = useMemo(
+    () => buildSnapshot(groups, model.rootUri, viewMode),
+    // dataRevision is the recompute signal when resources mutate inside groups.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [groups, dataRevision, viewMode, model.rootUri],
+  )
+  snapshotRef.current = snapshot
+  useLayoutEffect(() => {
+    treeModel.refresh()
+  }, [snapshot, treeModel])
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
   // Only the first provider claims the view's focus target so multiple repos
@@ -633,35 +760,35 @@ function ScmProviderView({
     [scope, revision],
   )
 
-  const isCollapsed = (key: string): boolean => collapsed.has(key)
-  const toggle = (key: string): void =>
-    setCollapsed((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
-    })
-
   const runCommand = (command: ICommandDto | string): void => {
     const id = typeof command === 'string' ? command : command.command
     void commandService.executeCommand(id, { sourceControlId: model.id })
   }
 
   const collapseAll = (): void => {
-    const next = new Set<string>()
-    for (const g of groups) {
-      for (const r of g.resources.get()) {
-        const rel = relativePath(model.rootUri, r.resourceUri)
-        const parts = rel.split('/')
-        parts.pop()
-        let acc = ''
-        for (const part of parts) {
-          acc = acc ? `${acc}/${part}` : part
-          next.add(`folder:${g.id}/${acc}`)
-        }
-      }
+    const folderIds = snapshotRef.current.collapsibleIds.filter((id) => id.startsWith('folder:'))
+    treeModel.setExpansion(folderIds.map((id) => [id, false] as const))
+  }
+
+  const renderRow = (ctx: ITreeRowRenderContext<ScmNode>) => {
+    const n = ctx.node.element
+    const shared = {
+      model: treeModel,
+      indentPadding: ctx.indentPadding,
+      isSelected: ctx.isSelected,
+      isFocused: ctx.isFocused,
+      expanded: ctx.node.expanded,
+      hasChildren: ctx.node.hasChildren,
     }
-    setCollapsed(next)
+    if (n.kind === 'group')
+      return (
+        <ScmGroupRow key={n.id} {...shared} node={n} providerId={model.id} revision={revision} />
+      )
+    if (n.kind === 'folder')
+      return (
+        <ScmFolderRow key={n.id} {...shared} node={n} rootUri={model.rootUri} revision={revision} />
+      )
+    return <ScmFileRow key={n.id} {...shared} node={n} providerId={model.id} revision={revision} />
   }
 
   const openOverflow = (e: ReactMouseEvent): void => {
@@ -803,19 +930,23 @@ function ScmProviderView({
         </div>
       )}
 
-      {groups.map((g) => (
-        <ScmGroupView
-          key={g.handle}
-          group={g}
-          scope={scope}
-          rootUri={model.rootUri}
-          viewMode={viewMode}
-          collapsed={isCollapsed(`group:${g.id}`)}
-          isCollapsed={isCollapsed}
-          toggle={toggle}
-          revision={revision}
-        />
-      ))}
+      <Tree<ScmNode>
+        model={treeModel}
+        className={styles['tree'] ?? ''}
+        virtualizationThreshold={Number.MAX_SAFE_INTEGER}
+        renderRow={renderRow}
+        onActivate={(node, opts) => {
+          const n = node.element
+          if (n.kind !== 'file' || !n.resource.command) return
+          if (opts.preview) {
+            void commandService.executeCommand(n.resource.command.command, n.resource)
+          } else {
+            void commandService.executeCommand(n.resource.command.command, n.resource, {
+              pinned: true,
+            })
+          }
+        }}
+      />
 
       {overflow && (
         <TitleOverflowMenu

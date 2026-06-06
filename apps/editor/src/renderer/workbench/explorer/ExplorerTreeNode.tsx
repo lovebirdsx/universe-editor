@@ -18,7 +18,7 @@ interface Props {
   readonly name: string
   readonly isDirectory: boolean
   readonly expanded: boolean
-  readonly depth: number
+  readonly indentPadding: number
   readonly isSelected: boolean
   readonly isFocused: boolean
   readonly isActiveEditor: boolean
@@ -37,7 +37,7 @@ function ExplorerTreeNodeImpl({
   name,
   isDirectory,
   expanded,
-  depth,
+  indentPadding,
   isSelected,
   isFocused,
   isActiveEditor,
@@ -47,7 +47,7 @@ function ExplorerTreeNodeImpl({
   fileService,
   style,
 }: Props) {
-  const indent = { paddingLeft: `${depth * 12 + 6}px` }
+  const indent = { paddingLeft: `${indentPadding}px` }
   const key = resource.toString()
   const className = [
     styles['row'],
