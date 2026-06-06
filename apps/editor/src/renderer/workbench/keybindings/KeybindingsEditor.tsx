@@ -30,12 +30,17 @@ function isModifierOnly(key: string): boolean {
 
 /** Display a normalized key like 'ctrl+shift+b' as individual <kbd> chips. */
 function KeyChips({ keyStr }: { keyStr: string }): JSX.Element {
-  const parts = keyStr.split('+')
+  const chords = keyStr.split(/\s+/)
   return (
     <>
-      {parts.map((p, i) => (
-        <span key={i} className={styles['kbd']}>
-          {p}
+      {chords.map((chord, chordIndex) => (
+        <span key={chordIndex}>
+          {chordIndex > 0 ? ' ' : null}
+          {chord.split('+').map((p, i) => (
+            <span key={i} className={styles['kbd']}>
+              {p}
+            </span>
+          ))}
         </span>
       ))}
     </>
@@ -276,7 +281,7 @@ export function KeybindingsEditor(): JSX.Element {
 function getEffectiveKey(command: string, svc: IUserKeybindingsService): string | undefined {
   const userEntry = svc.getUserEntry(command)
   if (userEntry !== undefined) {
-    return userEntry.key !== null ? formatKey(userEntry.key) : undefined
+    return userEntry.key !== null ? formatUserKeybinding(userEntry.key) : undefined
   }
 
   // No user override — return default from registry.
@@ -295,4 +300,9 @@ function getEffectiveKey(command: string, svc: IUserKeybindingsService): string 
   if (decoded.chords) return formatChord(decoded.chords)
   if (decoded.key !== undefined) return formatKey(decoded.key)
   return undefined
+}
+
+function formatUserKeybinding(key: string): string {
+  const strokes = key.trim().split(/\s+/)
+  return strokes.length === 2 ? formatChord([strokes[0]!, strokes[1]!]) : formatKey(key)
 }

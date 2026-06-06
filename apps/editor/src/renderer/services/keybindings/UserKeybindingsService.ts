@@ -60,6 +60,24 @@ export const IUserKeybindingsService =
 
 const LEGACY_STORAGE_KEY = 'workbench.userKeybindings'
 
+function keyToKeybindingItem(entry: IUserKeybindingEntry): IKeybindingItem | undefined {
+  if (entry.key === null) return undefined
+
+  const strokes = entry.key.trim().split(/\s+/)
+  const base = {
+    command: entry.command,
+    ...(entry.when !== undefined ? { when: entry.when } : {}),
+  }
+
+  if (strokes.length === 2) {
+    return { ...base, chords: [strokes[0]!, strokes[1]!] as [string, string] }
+  }
+  if (strokes.length === 1 && strokes[0] !== '') {
+    return { ...base, key: strokes[0]! }
+  }
+  return undefined
+}
+
 function entryToFile(entry: IUserKeybindingEntry): FileKeybindingEntry {
   if (entry.key === null) {
     return {
@@ -281,11 +299,9 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
       store.add(combined)
       disposables.set(entry.command, combined)
     } else {
-      const d = KeybindingsRegistry.registerKeybinding({
-        key: entry.key,
-        command: entry.command,
-        ...(entry.when !== undefined ? { when: entry.when } : {}),
-      })
+      const item = keyToKeybindingItem(entry)
+      if (!item) return
+      const d = KeybindingsRegistry.registerKeybinding(item)
       store.add(d)
       disposables.set(entry.command, d)
     }
