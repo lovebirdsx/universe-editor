@@ -67,7 +67,7 @@ export function PromptInput({
   handleRef?: MutableRefObject<WidgetHandle>
 }) {
   const [text, setText] = useState(() => AcpPromptDraftCache.load(session.id)?.text ?? '')
-  const [caret, setCaret] = useState(0)
+  const [caret, setCaret] = useState(() => AcpPromptDraftCache.load(session.id)?.caret ?? 0)
   const [slashIndex, setSlashIndex] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
   // User-driven dismissal of the popover for the current token. Reset
@@ -129,13 +129,24 @@ export function PromptInput({
     if (autoFocus) textareaRef.current?.focus()
   }, [autoFocus])
 
+  // On mount, restore the saved caret position into the textarea DOM so the
+  // cursor lands at the right spot when the user refocuses after switching
+  // editor tabs.
+  useEffect(() => {
+    const savedCaret = AcpPromptDraftCache.load(session.id)?.caret
+    if (savedCaret != null && savedCaret > 0 && textareaRef.current) {
+      textareaRef.current.setSelectionRange(savedCaret, savedCaret)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []) // mount only — session.id is stable for this component instance
+
   // Persist the unsent draft (text + recorded mentions) per session so
   // switching tabs / sessions and coming back restores it (see
   // AcpPromptDraftCache).
   useEffect(() => {
-    if (text) AcpPromptDraftCache.save(session.id, { text, mentions })
+    if (text) AcpPromptDraftCache.save(session.id, { text, mentions, caret })
     else AcpPromptDraftCache.clear(session.id)
-  }, [text, mentions, session.id])
+  }, [text, mentions, caret, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text), [text])
   const slashMatches = useMemo<readonly AvailableCommand[]>(

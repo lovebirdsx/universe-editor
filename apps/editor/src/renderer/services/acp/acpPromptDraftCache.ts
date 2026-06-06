@@ -12,6 +12,7 @@ import type { PromptMention } from './promptMentions.js'
 export interface AcpPromptDraft {
   readonly text: string
   readonly mentions: readonly PromptMention[]
+  readonly caret?: number
 }
 
 class AcpPromptDraftCacheImpl {
