@@ -70,7 +70,7 @@ function goToDiff(accessor: ServicesAccessor, target: 'next' | 'previous'): void
 }
 
 export class GoToNextDifferenceAction extends Action2 {
-  static readonly ID = 'editor.action.compareEditor.nextChange'
+  static readonly ID = 'workbench.action.compareEditor.nextChange'
 
   constructor() {
     super({
@@ -89,7 +89,7 @@ export class GoToNextDifferenceAction extends Action2 {
 }
 
 export class GoToPreviousDifferenceAction extends Action2 {
-  static readonly ID = 'editor.action.compareEditor.previousChange'
+  static readonly ID = 'workbench.action.compareEditor.previousChange'
 
   constructor() {
     super({

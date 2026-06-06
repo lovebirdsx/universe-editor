@@ -302,3 +302,7 @@ E2E 冒烟独立于 vitest，跑的是 `out/` 产物——见**套路 F**。
 - **新增 platform API**：必须先在 `packages/platform/src/index.ts` re-export，否则 apps 编译不通过。
 - **ContextKey 表达式**：写字符串如 `'hasActiveEditor'` 会在 Action2 内部 `ContextKeyExpr.deserialize`；先确保 key 已在 `ContextKeyContribution` 里 seed。
 - **URI 经 IPC 后**：`fm.resource` 是 `UriComponents` 而非 `URI` 实例，需要 `URI.revive(fm.resource) as URI`。
+
+## 其它
+
+- 如果是对标vscode的功能，请确保默认按键和command id和其保持一致

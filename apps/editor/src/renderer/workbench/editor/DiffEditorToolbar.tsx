@@ -13,7 +13,7 @@ export function DiffEditorToolbar() {
         className={styles['iconBtn']}
         title="上一处更改 (Shift+Alt+F5)"
         onClick={() =>
-          void commandService.executeCommand('editor.action.compareEditor.previousChange')
+          void commandService.executeCommand('workbench.action.compareEditor.previousChange')
         }
       >
         <ArrowUp size={14} />
@@ -22,7 +22,7 @@ export function DiffEditorToolbar() {
         type="button"
         className={styles['iconBtn']}
         title="下一处更改 (Alt+F5)"
-        onClick={() => void commandService.executeCommand('editor.action.compareEditor.nextChange')}
+        onClick={() => void commandService.executeCommand('workbench.action.compareEditor.nextChange')}
       >
         <ArrowDown size={14} />
       </button>
