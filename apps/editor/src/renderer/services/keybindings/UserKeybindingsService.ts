@@ -14,6 +14,7 @@
 import { parse, type ParseError } from 'jsonc-parser'
 import {
   combinedDisposable,
+  CommandsRegistry,
   createDecorator,
   Disposable,
   DisposableStore,
@@ -204,6 +205,7 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._vscodeRegistrationStore.clear()
     this._vscodeRegistrationDisposables.clear()
     for (const entry of entries) {
+      if (!CommandsRegistry.getCommand(entry.command)) continue
       this._applyEntryToStore(
         entry,
         this._vscodeRegistrationStore,
