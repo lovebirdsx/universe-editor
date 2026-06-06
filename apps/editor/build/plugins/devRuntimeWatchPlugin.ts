@@ -37,12 +37,14 @@ function pkgLabel(repoRoot: string, pkgDir: string): string {
   return rel.replace(/\\/g, '/')
 }
 
-function buildOnce(pkgDir: string, label: string): Promise<void> {
+function runPnpm(args: string[], cwd: string): Promise<void> {
   return new Promise((res, rej) => {
-    const p = spawn('node', ['esbuild.config.mjs'], { cwd: pkgDir, stdio: 'inherit' })
+    const p = spawn('pnpm', args, { cwd, stdio: 'inherit', shell: true })
     p.on('error', rej)
     p.on('exit', (code) =>
-      code === 0 ? res() : rej(new Error(`[dev-runtime] ${label} build failed (exit ${code})`)),
+      code === 0
+        ? res()
+        : rej(new Error(`[dev-runtime] pnpm ${args.join(' ')} failed (exit ${code})`)),
     )
   })
 }
@@ -52,14 +54,24 @@ export function devRuntimeWatchPlugin({ repoRoot }: Options): Plugin {
 
   return {
     name: 'universe-editor:dev-runtime-watch',
-    apply: 'serve',
+    apply(config) {
+      return config.mode === 'development'
+    },
 
     async buildStart() {
-      const packages = discoverRuntimePackages(repoRoot)
-      const labels = packages.map((pkgDir) => pkgLabel(repoRoot, pkgDir))
+      if (watchers.length > 0) return
 
-      console.log(`[dev-runtime] building ${labels.join(', ')}...`)
-      await Promise.all(packages.map((pkgDir, i) => buildOnce(pkgDir, labels[i]!)))
+      const packages = discoverRuntimePackages(repoRoot)
+      if (packages.length === 0) return
+
+      const labels = packages.map((pkgDir) => pkgLabel(repoRoot, pkgDir))
+      console.log(`[dev-runtime] building ${labels.join(', ')} (with dependencies)...`)
+
+      // ext:build runs via turbo with dependsOn:["^build"], so platform /
+      // extension-api / extensions-common dist are built before extension-host
+      // and extensions bundle them. Blocks here so artifacts exist before the
+      // main process spawns the extension host.
+      await runPnpm(['run', 'ext:build'], repoRoot)
 
       for (let i = 0; i < packages.length; i++) {
         const pkgDir = packages[i]!
@@ -76,11 +88,6 @@ export function devRuntimeWatchPlugin({ repoRoot }: Options): Plugin {
         )
         watchers.push(watcher)
       }
-    },
-
-    closeBundle() {
-      for (const w of watchers) w.kill()
-      watchers.length = 0
     },
   }
 }

@@ -14,6 +14,7 @@ import {
 
 const platformSrc = resolve(__dirname, '../../packages/platform/src/index.ts')
 const workbenchUiSrc = resolve(__dirname, '../../packages/workbench-ui/src/index.ts')
+const extensionsCommonSrc = resolve(__dirname, '../../packages/extensions-common/src/index.ts')
 const REPO_ROOT = resolve(__dirname, '../..')
 
 // platform/src uses `.js` suffix on relative imports (TS NodeNext convention).
@@ -80,10 +81,15 @@ export default defineConfig({
       alias: {
         '@universe-editor/platform': platformSrc,
         '@universe-editor/workbench-ui': workbenchUiSrc,
+        '@universe-editor/extensions-common': extensionsCommonSrc,
       },
     },
     optimizeDeps: {
-      exclude: ['@universe-editor/platform', '@universe-editor/workbench-ui'],
+      exclude: [
+        '@universe-editor/platform',
+        '@universe-editor/workbench-ui',
+        '@universe-editor/extensions-common',
+      ],
       include: [
         'monaco-editor',
         'allotment',
