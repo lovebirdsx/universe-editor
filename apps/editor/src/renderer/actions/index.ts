@@ -163,6 +163,7 @@ import {
   ToggleAgentChatLocationAction,
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
+  SwitchSessionAction,
 } from './agentActions.js'
 
 // Layout
@@ -355,3 +356,4 @@ registerAction2(ScrollAcpTimelinePageUpAction)
 registerAction2(ScrollAcpTimelinePageDownAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
 registerAction2(CycleAcpTimelineCollapseAction)
+registerAction2(SwitchSessionAction)

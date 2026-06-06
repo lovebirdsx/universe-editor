@@ -21,6 +21,7 @@ import { PerfMarks } from '../shared/perf/marks.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
+import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
@@ -35,6 +36,7 @@ import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
+import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
 import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
 import { installMainErrorHandlers } from './errors.js'
 import { applyProductIdentity, resolveProductIdentity } from './productPaths.js'
@@ -191,6 +193,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       update: accessor.get(IUpdateService),
       releaseNotes: accessor.get(IReleaseNotesService),
       performance: accessor.get(IPerformanceMarksService),
+      sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
     }))
   }
   if (!windowMainService) {

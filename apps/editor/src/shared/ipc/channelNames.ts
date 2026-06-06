@@ -31,6 +31,8 @@ export const ServiceChannels = {
   Performance: 'performance',
   Lifecycle: 'lifecycle',
   ExtensionHost: 'extensionHost',
+  SessionSwitcher: 'sessionSwitcher',
+  RendererSessions: 'rendererSessions',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

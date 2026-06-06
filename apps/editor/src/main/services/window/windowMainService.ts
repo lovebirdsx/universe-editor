@@ -221,6 +221,14 @@ export class WindowMainService implements IWindowMainService {
     const ipc = bootstrapWindowIpc(win, appServices, windowServices, windowsService)
     disposables.add(ipc.disposable)
 
+    // Register this window with the cross-window session switcher so other
+    // windows' Alt+S can list/reveal its sessions. Unregistered on `closed`.
+    appServices.sessionSwitcher.registerWindow(win.id, {
+      rendererSessions: ipc.rendererSessions,
+      getWorkspaceName: () => workspace.current?.name ?? '',
+      focus: () => this.focusWindow(win.id),
+    })
+
     // Persist the session whenever this window's workspace or geometry changes.
     disposables.add(
       workspace.onDidChangeWorkspace(() => {
@@ -259,6 +267,7 @@ export class WindowMainService implements IWindowMainService {
     win.on('closed', () => {
       this._windows.delete(win.id)
       this._allowClose.delete(win.id)
+      this._opts.appServices.sessionSwitcher.unregisterWindow(win.id)
       logger.info(`closed id=${win.id}`)
       this._onDidChangeWindows.fire()
       // Persist the remaining windows when the user closes one of several. When

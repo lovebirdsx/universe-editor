@@ -33,6 +33,7 @@ import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
+import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 
 export function registerProxyChannelServices(
   services: ServiceCollection,
@@ -116,5 +117,11 @@ export function registerProxyChannelServices(
   services.set(
     IPerformanceMarksService,
     ProxyChannel.toService<IPerformanceMarksService>(ipc.getChannel(ServiceChannels.Performance)),
+  )
+  services.set(
+    ISessionSwitcherService,
+    ProxyChannel.toService<ISessionSwitcherService>(
+      ipc.getChannel(ServiceChannels.SessionSwitcher),
+    ),
   )
 }

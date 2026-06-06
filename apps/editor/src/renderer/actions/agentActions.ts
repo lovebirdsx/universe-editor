@@ -26,6 +26,7 @@ import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import type {
   SessionConfigOptionCategory,
   SessionConfigSelectGroup,
@@ -733,5 +734,46 @@ export class CycleAcpTimelineCollapseAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     accessor.get(IAcpChatWidgetService).lastFocusedWidget?.cycleCollapseMode()
+  }
+}
+
+interface SessionSwitchPickItem extends IQuickPickItem {
+  readonly windowId: number
+  readonly sessionId: string
+}
+
+export class SwitchSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.switchSession'
+  constructor() {
+    super({
+      id: SwitchSessionAction.ID,
+      title: localize('action.agent.switchSession', 'Switch Session…'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+s' },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const switcher = accessor.get(ISessionSwitcherService)
+    const quickInput = accessor.get(IQuickInputService)
+    const sessions = await switcher.getAllSessions()
+    if (sessions.length === 0) return
+    const items: SessionSwitchPickItem[] = sessions.map((s: SessionSummary) => ({
+      id: `${s.windowId}.${s.sessionId}`,
+      leadingLabel:
+        s.workspaceName.length > 0
+          ? s.workspaceName
+          : localize('agent.switchSession.untitled', 'Untitled'),
+      label: s.title,
+      statusIconId: s.status,
+      windowId: s.windowId,
+      sessionId: s.sessionId,
+    }))
+    const pick = await quickInput.pick<SessionSwitchPickItem>(items, {
+      placeholder: localize('agent.switchSession.placeholder', 'Switch to a session in any window'),
+    })
+    if (!pick) return
+    await switcher.reveal(pick.windowId, pick.sessionId)
   }
 }

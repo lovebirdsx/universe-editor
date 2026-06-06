@@ -32,6 +32,7 @@ import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.
 import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
+import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -51,6 +52,11 @@ export interface ApplicationServices {
   readonly update: IUpdateService
   readonly releaseNotes: IReleaseNotesService
   readonly performance: IPerformanceMarksService
+  /**
+   * Concrete (not interface) type: WindowMainService calls registerWindow /
+   * unregisterWindow on it, which are main-internal and not on the wire contract.
+   */
+  readonly sessionSwitcher: SessionSwitcherMainService
 }
 
 /**

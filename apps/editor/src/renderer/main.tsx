@@ -111,6 +111,7 @@ import {
   RendererDisposableLeakService,
 } from './services/disposableLeak/DisposableLeakService.js'
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
+import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import './workbench.css'
 import './services/index.js'
@@ -397,6 +398,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // initialize() on the lifecycle timeline.
   const acpSessionService = workbenchStore.add(instantiation.createInstance(AcpSessionService))
   services.set(IAcpSessionService, acpSessionService)
+
+  // Reverse channel: main's cross-window session switcher lists/reveals this
+  // window's live sessions. Registered after IAcpSessionService is set; the
+  // service's other deps (chat location, history) are DI singletons.
+  ipcService.registerChannel(
+    ServiceChannels.RendererSessions,
+    ProxyChannel.fromService(instantiation.createInstance(RendererSessionsService)),
+  )
 
   // Renderer-only AGENTS UI state. ChatWidget tracks focused ChatBody for
   // single-target action dispatch. ChatLocation persists across restarts and

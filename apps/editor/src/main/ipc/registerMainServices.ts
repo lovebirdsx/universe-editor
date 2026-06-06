@@ -15,6 +15,7 @@ import {
 } from '@universe-editor/platform'
 import { ServiceChannels } from '../../shared/ipc/channelNames.js'
 import { type IRendererLifecycleService } from '../../shared/ipc/lifecycleService.js'
+import { type IRendererSessionsService } from '../../shared/ipc/sessionSwitcher.js'
 import { createMainProtocolForWindow } from './electronProtocol.js'
 import type { ApplicationServices, WindowScopedServices } from '../window/scopedServicesFactory.js'
 
@@ -22,6 +23,8 @@ export interface WindowIpcBootstrap {
   readonly disposable: IDisposable
   /** Reverse proxy: lets main invoke the renderer's lifecycle veto chain. */
   readonly rendererLifecycle: IRendererLifecycleService
+  /** Reverse proxy: lets main list/reveal this renderer's live sessions. */
+  readonly rendererSessions: IRendererSessionsService
 }
 
 /**
@@ -66,13 +69,21 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.Update, ProxyChannel.fromService(app.update))
   server.registerChannel(ServiceChannels.ReleaseNotes, ProxyChannel.fromService(app.releaseNotes))
   server.registerChannel(ServiceChannels.Performance, ProxyChannel.fromService(app.performance))
+  server.registerChannel(
+    ServiceChannels.SessionSwitcher,
+    ProxyChannel.fromService(app.sessionSwitcher),
+  )
 
   const rendererLifecycle = ProxyChannel.toService<IRendererLifecycleService>(
     client.getChannel(ServiceChannels.Lifecycle),
+  )
+  const rendererSessions = ProxyChannel.toService<IRendererSessionsService>(
+    client.getChannel(ServiceChannels.RendererSessions),
   )
 
   return {
     disposable: combinedDisposable(server, client, protoDisposable),
     rendererLifecycle,
+    rendererSessions,
   }
 }

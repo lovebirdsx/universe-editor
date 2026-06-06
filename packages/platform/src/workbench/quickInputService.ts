@@ -18,6 +18,19 @@ export interface IQuickPickItem {
    * icon component by the renderer, keeping the platform layer icon-library free.
    */
   readonly iconId?: string
+  /**
+   * Optional fixed-width leading column rendered before the label. When set, the
+   * row renders as aligned columns: `leadingLabel` (fixed) · `label` (flex,
+   * truncates) · trailing icon. Also folded into fuzzy matching. Used by the
+   * cross-window session switcher to align the workspace-name column.
+   */
+  readonly leadingLabel?: string
+  /**
+   * Optional string id of a trailing status icon, rendered right-aligned after
+   * the label/description. Resolved to a concrete icon component by the renderer
+   * (distinct from `iconId`'s agent-icon resolver).
+   */
+  readonly statusIconId?: string
   readonly highlights?: IQuickPickItemHighlights
 }
 

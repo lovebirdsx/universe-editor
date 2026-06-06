@@ -23,6 +23,7 @@ import type {
 import { useService } from '../useService.js'
 import { FocusScopeOverlay } from '../common/FocusScopeOverlay.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
+import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
 import {
   QuickInputService,
   type QuickPickState,
@@ -39,6 +40,7 @@ function itemMatches(
 ): boolean {
   const matcher = mode === 'word' ? wordMatchField : fuzzyMatchField
   if (matcher(item.label, query)) return true
+  if (item.leadingLabel && matcher(item.leadingLabel, query)) return true
   if (matchOnDescription && item.description && matcher(item.description, query)) {
     return true
   }
@@ -429,6 +431,9 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                           const Icon = resolveAgentIcon(item.iconId)
                           return <Icon size={14} className={styles['itemIcon']} />
                         })()}
+                      {item.leadingLabel && (
+                        <span className={styles['itemLeading']}>{item.leadingLabel}</span>
+                      )}
                       <span className={styles['itemLabel']}>
                         {renderHighlightedText(item.label, item.highlights?.label)}
                       </span>
@@ -440,6 +445,11 @@ export function QuickPickPanel({ state, onClose }: { state: QuickPickState; onCl
                       {item.keybinding && (
                         <span className={styles['itemKeybinding']}>{item.keybinding}</span>
                       )}
+                      {item.statusIconId &&
+                        (() => {
+                          const Icon = resolveSessionStatusIcon(item.statusIconId)
+                          return <Icon size={14} className={styles['itemStatusIcon']} />
+                        })()}
                       {onItemRemove && (
                         <span
                           role="button"

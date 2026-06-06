@@ -24,8 +24,9 @@ describe('ApplicationServices type', () => {
       update: {} as ApplicationServices['update'],
       releaseNotes: {} as ApplicationServices['releaseNotes'],
       performance: {} as ApplicationServices['performance'],
+      sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],
     }
-    expect(Object.keys(svc)).toHaveLength(16)
+    expect(Object.keys(svc)).toHaveLength(17)
   })
 })
 

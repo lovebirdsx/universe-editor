@@ -22,18 +22,22 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
-import type { AcpSessionStatus } from '../services/acp/acpSession.js'
+import {
+  computeSessionDisplayStatus,
+  type AcpSessionDisplayStatus,
+} from '../services/acp/acpSessionStatus.js'
 import {
   formatWindowTitle,
   resolveLiveSessionTitle,
   truncateSessionTitle,
 } from '../services/acp/acpSessionTitle.js'
 
-const STATUS_SYMBOL: Record<AcpSessionStatus, string> = {
+const STATUS_SYMBOL: Record<AcpSessionDisplayStatus, string> = {
   running: '●',
   idle: '○',
   connecting: '◌',
   errored: '✕',
+  ask: '◆',
   closed: '',
 }
 
@@ -76,7 +80,7 @@ export class WindowTitleContribution extends Disposable implements IWorkbenchCon
     let symbol: string | undefined
     let sessionTitle: string | undefined
     if (session) {
-      const status = session.status.read(r)
+      const status = computeSessionDisplayStatus(session, r)
       if (status !== 'closed') {
         symbol = STATUS_SYMBOL[status]
         const raw = resolveLiveSessionTitle(this._history, this._sessions, session.id)

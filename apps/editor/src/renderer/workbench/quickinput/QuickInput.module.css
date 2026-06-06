@@ -93,6 +93,23 @@
   white-space: nowrap;
 }
 
+.itemLeading {
+  flex-shrink: 0;
+  width: 180px;
+  max-width: 40%;
+  margin-right: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-description-fg, #8a8a92);
+}
+
+.itemStatusIcon {
+  flex-shrink: 0;
+  margin-left: 10px;
+  opacity: 0.85;
+}
+
 .highlight {
   background: transparent;
   color: var(--color-accent, #0070e0);
