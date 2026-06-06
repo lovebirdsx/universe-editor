@@ -3,11 +3,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { URI, type IFileMatch } from '@universe-editor/platform'
 import { SearchResultsTree } from '../SearchResultsTree.js'
+import { searchViewState } from '../searchViewState.js'
 
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  searchViewState.setViewMode('list')
+})
 
 function makeMatch(path: string, line: number, preview: string): IFileMatch {
   return {
@@ -52,6 +56,26 @@ describe('SearchResultsTree', () => {
     render(<SearchResultsTree results={results} onActivateMatch={() => {}} />)
     expect(screen.queryByText('foo')).toBeTruthy()
     fireEvent.click(screen.getByLabelText('Toggle a.ts'))
+    expect(screen.queryByText('foo')).toBeFalsy()
+  })
+
+  it('tree mode nests files under workspace-relative folders', () => {
+    searchViewState.setViewMode('tree')
+    const results: IFileMatch[] = [makeMatch('/ws/src/a.ts', 1, 'foo')]
+    render(
+      <SearchResultsTree results={results} rootUri={URI.file('/ws')} onActivateMatch={() => {}} />,
+    )
+    expect(screen.getByText('src')).toBeTruthy()
+    expect(screen.getByText('a.ts')).toBeTruthy()
+  })
+
+  it('collapse-all signal hides every match row', () => {
+    const results: IFileMatch[] = [makeMatch('/ws/a.ts', 1, 'foo')]
+    render(<SearchResultsTree results={results} onActivateMatch={() => {}} />)
+    expect(screen.queryByText('foo')).toBeTruthy()
+    act(() => {
+      searchViewState.requestCollapseAll()
+    })
     expect(screen.queryByText('foo')).toBeFalsy()
   })
 })

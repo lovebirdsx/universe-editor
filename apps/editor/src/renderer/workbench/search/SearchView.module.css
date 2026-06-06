@@ -89,15 +89,54 @@
   border-color: var(--focus-border, #007fd4);
 }
 
-.filtersBtn {
+.filterToggle {
+  flex: 0 0 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
   background: transparent;
   color: var(--text-secondary, #9d9d9d);
-  border: none;
-  text-align: left;
-  padding: 2px 0;
+  border: 1px solid transparent;
+  border-radius: 2px;
   cursor: pointer;
-  font: inherit;
-  font-size: 11px;
+  padding: 0;
+}
+
+.filterToggle:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary, #d4d4d4);
+}
+
+.filterToggleActive {
+  color: var(--accent, #e7e7e7);
+  background: rgba(0, 127, 212, 0.25);
+  border-color: var(--focus-border, #007fd4);
+}
+
+.toolbarBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-foreground-muted, #8a8a92);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toolbarBtn:hover:not(:disabled) {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.toolbarBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 .filters {
@@ -187,63 +226,71 @@
 
 .resultsTree {
   flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   display: flex;
   flex-direction: column;
 }
 
-.fileGroup {
-  display: flex;
-  flex-direction: column;
-}
-
-.fileHeader {
+.row {
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 4px;
-  cursor: default;
+  padding: 1px 6px 1px 0;
+  cursor: pointer;
+  height: 22px;
+  box-sizing: border-box;
+  overflow: hidden;
 }
 
-.fileHeader:hover {
+.row:hover {
   background: rgba(255, 255, 255, 0.04);
 }
 
-.fileToggle {
+.row.selected {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.row.focused {
+  outline: 1px solid var(--focus-border, #007fd4);
+  outline-offset: -1px;
+}
+
+.twisty {
+  flex: 0 0 16px;
+  width: 16px;
   background: transparent;
   color: inherit;
   border: none;
   cursor: pointer;
   padding: 0;
-  width: 16px;
   font: inherit;
   line-height: 1;
+  text-align: center;
 }
 
-.fileName {
-  font-weight: 600;
-}
-
-.fileHeaderIcon {
+.rowIcon {
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
 }
 
-.filePath {
-  color: var(--text-secondary, #9d9d9d);
-  font-size: 11px;
-  flex: 1 1 auto;
+.rowLabel {
+  flex: 0 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .fileCount {
+  margin-left: auto;
   background: rgba(255, 255, 255, 0.08);
   border-radius: 8px;
   padding: 0 6px;
   font-size: 10px;
   min-width: 16px;
   text-align: center;
+  flex-shrink: 0;
 }
 
 .replaceBtn {
@@ -254,29 +301,11 @@
   padding: 0 4px;
   font: inherit;
   visibility: hidden;
+  flex-shrink: 0;
 }
 
-.fileHeader:hover .replaceBtn,
-.matchRow:hover .replaceBtn {
+.row:hover .replaceBtn {
   visibility: visible;
-}
-
-.matchList {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.matchRow {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 4px 2px 24px;
-  cursor: pointer;
-}
-
-.matchRow:hover {
-  background: rgba(255, 255, 255, 0.06);
 }
 
 .lineNumber {
@@ -284,6 +313,7 @@
   font-size: 11px;
   min-width: 20px;
   text-align: right;
+  flex-shrink: 0;
 }
 
 .matchPreview {

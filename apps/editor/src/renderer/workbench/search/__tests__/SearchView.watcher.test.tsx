@@ -29,6 +29,7 @@ import {
 } from '@universe-editor/platform'
 import { SearchView } from '../SearchView.js'
 import { ServicesContext } from '../../useService.js'
+import { resetSearchSession } from '../searchSession.js'
 
 class FakeTextSearch implements ITextSearchServiceType {
   declare readonly _serviceBrand: undefined
@@ -157,6 +158,7 @@ async function runQuery(search: FakeTextSearch) {
 describe('SearchView watcher + workspace', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    resetSearchSession()
   })
 
   afterEach(() => {

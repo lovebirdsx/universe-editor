@@ -1,179 +1,251 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  SearchResultsTree — file-grouped list of search matches.
+ *  SearchResultsTree — file/match results rendered through the generic Tree.
+ *
+ *  Each match range is its own flat, fixed-height row, so virtualization positions
+ *  rows correctly (no overlap when a file group expands) and the TreeModel owns
+ *  expansion centrally — enabling auto-expand, collapse-all and the list/tree
+ *  view modes driven from the title toolbar via searchViewState.
  *--------------------------------------------------------------------------------------------*/
 
-import { type CSSProperties, useState } from 'react'
-import { URI, type IFileMatch, type ITextSearchMatch } from '@universe-editor/platform'
-import { VirtualList } from '@universe-editor/workbench-ui'
+import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
+import { type IFileMatch, type ITextSearchMatch, type URI } from '@universe-editor/platform'
+import {
+  Tree,
+  TreeModel,
+  useOwnedTreeModel,
+  type ITreeDataSource,
+  type ITreeRowRenderContext,
+} from '@universe-editor/workbench-ui'
+import { Folder, FolderOpen } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
-import { basenameOfResource, dirnameOfResource } from '../files/resourceInfo.js'
+import { useObservable } from '../useService.js'
+import { searchViewState } from './searchViewState.js'
+import {
+  EMPTY_SNAPSHOT,
+  buildSearchSnapshot,
+  type SearchNode,
+  type SearchSnapshot,
+} from './searchTree.js'
 import styles from './SearchView.module.css'
 
 export interface SearchResultsTreeProps {
   results: readonly IFileMatch[]
+  rootUri?: URI | null
   onActivateMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
   onReplaceMatch?:
     | ((resource: URI, match: ITextSearchMatch, rangeIndex: number) => void)
     | undefined
   onReplaceFile?: ((resource: URI) => void) | undefined
   replaceVisible?: boolean
-  virtualizationThreshold?: number
 }
 
-function highlight(preview: string, ranges: readonly { startColumn: number; endColumn: number }[]) {
-  if (ranges.length === 0) return preview
-  const out: React.ReactNode[] = []
-  let cursor = 0
-  ranges.forEach((r, i) => {
-    const start = Math.max(r.startColumn - 1, 0)
-    const end = Math.max(r.endColumn - 1, start)
-    if (start > cursor) out.push(preview.slice(cursor, start))
-    out.push(
-      <span key={i} className={styles['match']}>
-        {preview.slice(start, end)}
-      </span>,
-    )
-    cursor = end
-  })
-  if (cursor < preview.length) out.push(preview.slice(cursor))
-  return out
+function highlight(preview: string, range: { startColumn: number; endColumn: number } | undefined) {
+  if (!range) return preview
+  const start = Math.max(range.startColumn - 1, 0)
+  const end = Math.max(range.endColumn - 1, start)
+  return [
+    preview.slice(0, start),
+    <span key="m" className={styles['match']}>
+      {preview.slice(start, end)}
+    </span>,
+    preview.slice(end),
+  ]
 }
 
-function FileGroup({
-  fileMatch,
-  defaultExpanded,
+export function SearchResultsTree({
+  results,
+  rootUri = null,
   onActivateMatch,
   onReplaceFile,
   onReplaceMatch,
   replaceVisible,
-  style,
-}: {
-  fileMatch: IFileMatch
-  defaultExpanded: boolean
-  onActivateMatch: SearchResultsTreeProps['onActivateMatch']
-  onReplaceFile: SearchResultsTreeProps['onReplaceFile']
-  onReplaceMatch: SearchResultsTreeProps['onReplaceMatch']
-  replaceVisible: boolean | undefined
-  style?: CSSProperties
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded)
-  const resource = URI.revive(fileMatch.resource) as URI
-  const total = fileMatch.matches.reduce((n, m) => n + m.ranges.length, 0)
-  return (
-    <div className={styles['fileGroup']} style={style}>
-      <div className={styles['fileHeader']}>
-        <button
-          type="button"
-          className={styles['fileToggle']}
-          aria-expanded={expanded}
-          aria-label={`Toggle ${basenameOfResource(resource)}`}
-          onClick={() => setExpanded((v) => !v)}
+}: SearchResultsTreeProps) {
+  const viewMode = useObservable(searchViewState.viewMode)
+
+  const snapshotRef = useRef<SearchSnapshot>(EMPTY_SNAPSHOT)
+  const model = useOwnedTreeModel<SearchNode>(() => {
+    const dataSource: ITreeDataSource<SearchNode> = {
+      getId: (n) => n.id,
+      hasChildren: (n) => (snapshotRef.current.childrenMap.get(n.id)?.length ?? 0) > 0,
+      getChildren: (n) => snapshotRef.current.childrenMap.get(n.id) ?? [],
+      getRoots: () => snapshotRef.current.roots,
+      getParent: (n) => snapshotRef.current.parentMap.get(n.id) ?? null,
+    }
+    // Everything expanded by default so results show without a post-mount event.
+    return new TreeModel<SearchNode>({ dataSource, defaultExpanded: () => true })
+  })
+
+  const snapshot = useMemo(
+    () => buildSearchSnapshot(results, rootUri, viewMode),
+    [results, rootUri, viewMode],
+  )
+  snapshotRef.current = snapshot
+  useLayoutEffect(() => {
+    // Seed newly-seen expandable nodes as expanded so the model's stored state
+    // matches the default-expanded display — otherwise the first toggle/collapse
+    // is a no-op (toggle reads _state, which would be empty). Existing nodes keep
+    // whatever the user set; refresh() always re-reads the changed snapshot.
+    const updates = snapshot.expandableIds
+      .filter((id) => !model.hasState(id))
+      .map((id) => [id, true] as const)
+    if (updates.length > 0) model.setExpansion(updates)
+    model.refresh()
+  }, [snapshot, model])
+
+  // Collapse-all driven from the title toolbar via a shared signal counter.
+  const collapseSignal = useObservable(searchViewState.collapseAllSignal)
+  const seenCollapse = useRef(collapseSignal)
+  useEffect(() => {
+    if (collapseSignal === seenCollapse.current) return
+    seenCollapse.current = collapseSignal
+    model.setExpansion(snapshotRef.current.expandableIds.map((id) => [id, false] as const))
+  }, [collapseSignal, model])
+
+  const renderRow = (ctx: ITreeRowRenderContext<SearchNode>) => {
+    const n = ctx.node.element
+    const style: CSSProperties = { paddingLeft: ctx.indentPadding, ...(ctx.style ?? {}) }
+    const className = [
+      styles['row'],
+      ctx.isSelected && styles['selected'],
+      ctx.isFocused && styles['focused'],
+    ]
+      .filter(Boolean)
+      .join(' ')
+
+    if (n.kind === 'folder') {
+      return (
+        <div
+          key={n.id}
+          data-row-key={n.id}
+          role="treeitem"
+          aria-expanded={ctx.node.expanded}
+          className={className}
+          style={style}
+          title={n.relPath}
+          onClick={ctx.onClickRow}
         >
-          {expanded ? '▾' : '▸'}
-        </button>
-        <FileIcon
-          resource={resource}
-          isDirectory={false}
-          className={styles['fileHeaderIcon']}
-          size={14}
-        />
-        <span className={styles['fileName']}>{basenameOfResource(resource)}</span>
-        <span className={styles['filePath']}>{dirnameOfResource(resource)}</span>
-        <span className={styles['fileCount']} aria-label={`${total} matches`}>
-          {total}
-        </span>
-        {replaceVisible && onReplaceFile && (
+          <button
+            type="button"
+            className={styles['twisty']}
+            aria-label={`Toggle ${n.name}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              ctx.onToggle()
+            }}
+          >
+            {ctx.node.expanded ? '▾' : '▸'}
+          </button>
+          <span className={styles['rowIcon']} aria-hidden="true">
+            {ctx.node.expanded ? (
+              <FolderOpen size={14} strokeWidth={1.75} />
+            ) : (
+              <Folder size={14} strokeWidth={1.75} />
+            )}
+          </span>
+          <span className={styles['rowLabel']}>{n.name}</span>
+          <span className={styles['fileCount']} aria-label={`${n.matchCount} matches`}>
+            {n.matchCount}
+          </span>
+        </div>
+      )
+    }
+
+    if (n.kind === 'file') {
+      return (
+        <div
+          key={n.id}
+          data-row-key={n.id}
+          role="treeitem"
+          aria-expanded={ctx.node.expanded}
+          className={className}
+          style={style}
+          title={n.relPath}
+          onClick={ctx.onClickRow}
+        >
+          <button
+            type="button"
+            className={styles['twisty']}
+            aria-label={`Toggle ${n.name}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              ctx.onToggle()
+            }}
+          >
+            {ctx.node.expanded ? '▾' : '▸'}
+          </button>
+          <FileIcon
+            resource={n.resource}
+            isDirectory={false}
+            className={styles['rowIcon']}
+            size={14}
+          />
+          <span className={styles['rowLabel']}>{n.name}</span>
+          <span className={styles['fileCount']} aria-label={`${n.matchCount} matches`}>
+            {n.matchCount}
+          </span>
+          {replaceVisible && onReplaceFile && (
+            <button
+              type="button"
+              className={styles['replaceBtn']}
+              title="Replace All in File"
+              aria-label={`Replace all in ${n.name}`}
+              onClick={(e) => {
+                e.stopPropagation()
+                onReplaceFile(n.resource)
+              }}
+            >
+              ⇄
+            </button>
+          )}
+        </div>
+      )
+    }
+
+    const range = n.match.ranges[n.rangeIndex]
+    return (
+      <div
+        key={n.id}
+        data-row-key={n.id}
+        role="treeitem"
+        className={className}
+        style={style}
+        title={n.match.preview}
+        onClick={ctx.onClickRow}
+      >
+        <span className={styles['lineNumber']}>{n.match.lineNumber}</span>
+        <span className={styles['matchPreview']}>{highlight(n.match.preview, range)}</span>
+        {replaceVisible && onReplaceMatch && (
           <button
             type="button"
             className={styles['replaceBtn']}
-            title="Replace All in File"
-            aria-label={`Replace all in ${basenameOfResource(resource)}`}
-            onClick={() => onReplaceFile(resource)}
+            title="Replace"
+            aria-label={`Replace match at line ${n.match.lineNumber}`}
+            onClick={(e) => {
+              e.stopPropagation()
+              onReplaceMatch(n.resource, n.match, n.rangeIndex)
+            }}
           >
             ⇄
           </button>
         )}
       </div>
-      {expanded && (
-        <ul className={styles['matchList']}>
-          {fileMatch.matches.map((m) =>
-            m.ranges.map((_, ri) => (
-              <li
-                key={`${m.lineNumber}:${ri}`}
-                className={styles['matchRow']}
-                onClick={() => onActivateMatch(resource, m, ri)}
-                role="button"
-                tabIndex={0}
-              >
-                <span className={styles['lineNumber']}>{m.lineNumber}</span>
-                <span className={styles['matchPreview']}>{highlight(m.preview, m.ranges)}</span>
-                {replaceVisible && onReplaceMatch && (
-                  <button
-                    type="button"
-                    className={styles['replaceBtn']}
-                    title="Replace"
-                    aria-label={`Replace match at line ${m.lineNumber}`}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onReplaceMatch(resource, m, ri)
-                    }}
-                  >
-                    ⇄
-                  </button>
-                )}
-              </li>
-            )),
-          )}
-        </ul>
-      )}
-    </div>
-  )
-}
-
-export function SearchResultsTree({
-  results,
-  onActivateMatch,
-  onReplaceFile,
-  onReplaceMatch,
-  replaceVisible,
-  virtualizationThreshold = 200,
-}: SearchResultsTreeProps) {
-  if (results.length > virtualizationThreshold) {
-    return (
-      <VirtualList
-        items={results}
-        estimateSize={() => 28}
-        className={styles['resultsTree'] ?? ''}
-        renderItem={(fm, style) => (
-          <FileGroup
-            key={(URI.revive(fm.resource) as URI).toString()}
-            fileMatch={fm}
-            defaultExpanded={false}
-            onActivateMatch={onActivateMatch}
-            onReplaceFile={onReplaceFile}
-            onReplaceMatch={onReplaceMatch}
-            replaceVisible={replaceVisible}
-            style={style}
-          />
-        )}
-      />
     )
   }
 
   return (
-    <div className={styles['resultsTree']} role="tree">
-      {results.map((fm, i) => (
-        <FileGroup
-          key={(URI.revive(fm.resource) as URI).toString()}
-          fileMatch={fm}
-          defaultExpanded={i < 5}
-          onActivateMatch={onActivateMatch}
-          onReplaceFile={onReplaceFile}
-          onReplaceMatch={onReplaceMatch}
-          replaceVisible={replaceVisible}
-        />
-      ))}
-    </div>
+    <Tree<SearchNode>
+      model={model}
+      className={styles['resultsTree'] ?? ''}
+      virtualListClassName={styles['resultsTree'] ?? ''}
+      ariaLabel="Search results"
+      rowHeight={22}
+      indentWidth={10}
+      renderRow={renderRow}
+      onActivate={(node) => {
+        const n = node.element
+        if (n.kind === 'match') onActivateMatch(n.resource, n.match, n.rangeIndex)
+      }}
+    />
   )
 }

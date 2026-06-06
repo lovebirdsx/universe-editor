@@ -43,13 +43,16 @@ export interface ISearchEngine {
   readonly rerun: () => void
 }
 
-export function useSearchEngine(query: ISearchQuery): ISearchEngine {
+export function useSearchEngine(
+  query: ISearchQuery,
+  initialResults: readonly IFileMatch[] = [],
+): ISearchEngine {
   const searchService = useService(ITextSearchService)
   const statusBarService = useService(IStatusBarService)
   const fileWatcherService = useService(IFileWatcherService)
   const workspaceService = useService(IWorkspaceService)
 
-  const [results, setResults] = useState<readonly IFileMatch[]>([])
+  const [results, setResults] = useState<readonly IFileMatch[]>(initialResults)
   const [progress, setProgress] = useState<ITextSearchProgress | null>(null)
   const [isSearching, setIsSearching] = useState(false)
   const [regexError, setRegexError] = useState<string | null>(null)
@@ -58,6 +61,9 @@ export function useSearchEngine(query: ISearchQuery): ISearchEngine {
   const abortRef = useRef<AbortController | null>(null)
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const statusEntryRef = useRef<IStatusBarEntryAccessor | null>(null)
+  // On a remount with cached results for the same query, skip the first debounced
+  // run so switching sidebars back doesn't re-search (and flash the status bar).
+  const skipFirstRef = useRef(initialResults.length > 0 && query.pattern.length > 0)
 
   const { pattern, isRegex, matchCase, matchWholeWord, includes, excludes } = query
 
@@ -109,6 +115,10 @@ export function useSearchEngine(query: ISearchQuery): ISearchEngine {
   )
 
   useEffect(() => {
+    if (skipFirstRef.current) {
+      skipFirstRef.current = false
+      return
+    }
     if (debounceRef.current) clearTimeout(debounceRef.current)
     debounceRef.current = setTimeout(() => runSearch(pattern), DEBOUNCE_MS)
     return () => {

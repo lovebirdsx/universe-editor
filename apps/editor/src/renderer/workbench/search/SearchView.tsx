@@ -9,12 +9,16 @@
  *    • SearchResultsTree — virtualised file/match tree
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { IWorkspaceService } from '@universe-editor/platform'
 import { SearchInputBar } from './SearchInputBar.js'
 import { SearchResultsTree } from './SearchResultsTree.js'
 import { useSearchEngine, type ISearchQuery } from './useSearchEngine.js'
 import { useSearchActions } from './useSearchActions.js'
+import { searchViewState } from './searchViewState.js'
+import { searchSession } from './searchSession.js'
 import { useViewFocusable } from '../useViewFocusable.js'
+import { useObservable, useService } from '../useService.js'
 import styles from './SearchView.module.css'
 
 function splitGlobs(text: string): string[] {
@@ -25,15 +29,15 @@ function splitGlobs(text: string): string[] {
 }
 
 export function SearchView() {
-  const [pattern, setPattern] = useState('')
-  const [replacePattern, setReplacePattern] = useState('')
-  const [includesText, setIncludesText] = useState('')
-  const [excludesText, setExcludesText] = useState('')
-  const [isRegex, setIsRegex] = useState(false)
-  const [matchCase, setMatchCase] = useState(false)
-  const [matchWholeWord, setMatchWholeWord] = useState(false)
-  const [replaceVisible, setReplaceVisible] = useState(false)
-  const [filtersVisible, setFiltersVisible] = useState(false)
+  const [pattern, setPattern] = useState(searchSession.pattern)
+  const [replacePattern, setReplacePattern] = useState(searchSession.replacePattern)
+  const [includesText, setIncludesText] = useState(searchSession.includesText)
+  const [excludesText, setExcludesText] = useState(searchSession.excludesText)
+  const [isRegex, setIsRegex] = useState(searchSession.isRegex)
+  const [matchCase, setMatchCase] = useState(searchSession.matchCase)
+  const [matchWholeWord, setMatchWholeWord] = useState(searchSession.matchWholeWord)
+  const [replaceVisible, setReplaceVisible] = useState(searchSession.replaceVisible)
+  const [filtersVisible, setFiltersVisible] = useState(searchSession.filtersVisible)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -50,18 +54,75 @@ export function SearchView() {
   )
 
   const { results, setResults, progress, isSearching, regexError, isStale, rerun } =
-    useSearchEngine(query)
+    useSearchEngine(query, searchSession.results)
   const { onActivateMatch, onReplaceFile, onReplaceMatch, replaceAll } = useSearchActions(
     results,
     setResults,
     replacePattern,
   )
 
+  const workspaceService = useService(IWorkspaceService)
+  const rootUri = workspaceService.current?.folder ?? null
+
   // Focus event from FindInFilesAction.
   useViewFocusable(
     'workbench.view.search.results',
     useCallback(() => inputRef.current, []),
   )
+
+  // Persist transient state so switching sidebars away and back restores it.
+  useEffect(() => {
+    searchSession.pattern = pattern
+    searchSession.replacePattern = replacePattern
+    searchSession.includesText = includesText
+    searchSession.excludesText = excludesText
+    searchSession.isRegex = isRegex
+    searchSession.matchCase = matchCase
+    searchSession.matchWholeWord = matchWholeWord
+    searchSession.replaceVisible = replaceVisible
+    searchSession.filtersVisible = filtersVisible
+  }, [
+    pattern,
+    replacePattern,
+    includesText,
+    excludesText,
+    isRegex,
+    matchCase,
+    matchWholeWord,
+    replaceVisible,
+    filtersVisible,
+  ])
+  useEffect(() => {
+    searchSession.results = results
+  }, [results])
+
+  // Mirror result presence to the title toolbar; reset on unmount.
+  useEffect(() => {
+    searchViewState.setHasResults(results.length > 0)
+  }, [results])
+  useEffect(() => () => searchViewState.setHasResults(false), [])
+
+  // Toolbar "Clear Search Results": empty the query and drop results immediately.
+  const clearSignal = useObservable(searchViewState.clearSignal)
+  const seenClear = useRef(clearSignal)
+  useEffect(() => {
+    if (clearSignal === seenClear.current) return
+    seenClear.current = clearSignal
+    setPattern('')
+    setReplacePattern('')
+    setIncludesText('')
+    setExcludesText('')
+    setResults([])
+  }, [clearSignal, setResults])
+
+  // Toolbar "Refresh": re-run the current query.
+  const refreshSignal = useObservable(searchViewState.refreshSignal)
+  const seenRefresh = useRef(refreshSignal)
+  useEffect(() => {
+    if (refreshSignal === seenRefresh.current) return
+    seenRefresh.current = refreshSignal
+    rerun()
+  }, [refreshSignal, rerun])
 
   const rerunSearch = useCallback(() => {
     rerun()
@@ -134,6 +195,7 @@ export function SearchView() {
       )}
       <SearchResultsTree
         results={results}
+        rootUri={rootUri}
         onActivateMatch={onActivateMatch}
         onReplaceFile={onReplaceFile}
         onReplaceMatch={onReplaceMatch}

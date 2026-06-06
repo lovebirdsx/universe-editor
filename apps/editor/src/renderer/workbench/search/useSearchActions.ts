@@ -50,20 +50,27 @@ export function useSearchActions(
     (resource: URI, match: ITextSearchMatch, rangeIndex: number) => {
       const input = instantiation.createInstance(FileEditorInput, resource)
       editorService.openEditor(input, { pinned: false })
-      // After opening, schedule a microtask to reveal the line / select range.
-      setTimeout(() => {
-        const editor = FileEditorRegistry.get(input)
+      // Reveal against the *active* editor input, not the one we just created:
+      // openEditor dedupes by resource and discards our fresh input when the file
+      // is already open, so FileEditorRegistry only knows the original instance.
+      const reveal = (): boolean => {
+        const active = editorService.activeEditor.get()
+        if (!(active instanceof FileEditorInput)) return false
+        const editor = FileEditorRegistry.get(active)
         const range = match.ranges[rangeIndex]
-        if (editor && range) {
-          editor.setSelection({
-            startLineNumber: match.lineNumber,
-            startColumn: range.startColumn,
-            endLineNumber: match.lineNumber,
-            endColumn: range.endColumn,
-          })
-          editor.revealLineInCenter(match.lineNumber)
-        }
-      }, 50)
+        if (!editor || !range) return false
+        editor.setSelection({
+          startLineNumber: match.lineNumber,
+          startColumn: range.startColumn,
+          endLineNumber: match.lineNumber,
+          endColumn: range.endColumn,
+        })
+        editor.revealLineInCenter(match.lineNumber)
+        return true
+      }
+      // Monaco may not be mounted yet on first open; retry after a frame.
+      if (reveal()) return
+      setTimeout(reveal, 50)
     },
     [editorService, instantiation],
   )

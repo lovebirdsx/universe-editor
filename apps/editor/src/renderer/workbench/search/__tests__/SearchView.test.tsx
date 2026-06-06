@@ -29,6 +29,8 @@ import {
 } from '@universe-editor/platform'
 import { SearchView } from '../SearchView.js'
 import { ServicesContext } from '../../useService.js'
+import { resetSearchSession } from '../searchSession.js'
+import { searchViewState } from '../searchViewState.js'
 
 class FakeTextSearch implements ITextSearchServiceType {
   declare readonly _serviceBrand: undefined
@@ -172,6 +174,9 @@ function makeFileMatch(path: string, line: number, preview: string): IFileMatch 
 describe('SearchView', () => {
   beforeEach(() => {
     vi.useFakeTimers()
+    resetSearchSession()
+    searchViewState.setViewMode('list')
+    searchViewState.setHasResults(false)
   })
 
   afterEach(() => {
@@ -261,6 +266,35 @@ describe('SearchView', () => {
       await vi.advanceTimersByTimeAsync(100)
     })
     expect(ctx.status.entries[0]?.disposed).toBe(true)
+  })
+
+  it('restores query and results after unmount + remount (sidebar switch)', async () => {
+    const search = new FakeTextSearch()
+    search.results = [makeFileMatch('/ws/a.ts', 1, 'foo bar')]
+    const ctx = renderWithServices(search)
+    const input = screen.getByLabelText('Search') as HTMLInputElement
+    act(() => {
+      fireEvent.change(input, { target: { value: 'foo' } })
+    })
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(260)
+    })
+    expect(search.searchCalls).toBe(1)
+    expect(screen.getByText('a.ts')).toBeTruthy()
+
+    // Switch away (unmount) then back (remount) with the same container.
+    ctx.rendered.unmount()
+    const before = search.searchCalls
+    render(
+      <ServicesContext.Provider value={ctx.inst}>
+        <SearchView />
+      </ServicesContext.Provider>,
+    )
+    const restored = screen.getByLabelText('Search') as HTMLInputElement
+    expect(restored.value).toBe('foo')
+    expect(screen.getByText('a.ts')).toBeTruthy()
+    // Cached results are reused — no redundant search on remount.
+    expect(search.searchCalls).toBe(before)
   })
 
   it('toggles match-case option and reruns the search', async () => {

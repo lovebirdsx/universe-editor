@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { forwardRef, type RefObject } from 'react'
+import { SlidersHorizontal } from 'lucide-react'
 import styles from './SearchView.module.css'
 
 export interface SearchInputBarProps {
@@ -93,6 +94,16 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               />
             </div>
           </div>
+          <button
+            type="button"
+            title="Toggle Search Details"
+            aria-label="Toggle Search Details"
+            aria-pressed={props.filtersVisible}
+            className={`${styles['filterToggle']} ${props.filtersVisible ? styles['filterToggleActive'] : ''}`}
+            onClick={props.onToggleFilters}
+          >
+            <SlidersHorizontal size={14} strokeWidth={1.75} aria-hidden="true" />
+          </button>
         </div>
         {props.replaceVisible && (
           <div className={styles['inputRow']}>
@@ -109,14 +120,6 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
             </div>
           </div>
         )}
-        <button
-          type="button"
-          className={styles['filtersBtn']}
-          aria-pressed={props.filtersVisible}
-          onClick={props.onToggleFilters}
-        >
-          {props.filtersVisible ? '隐藏 files to include/exclude' : '显示 files to include/exclude'}
-        </button>
         {props.filtersVisible && (
           <div className={styles['filters']}>
             <label className={styles['filterLabel']}>
