@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { fuzzyMatchField, scoreFuzzyMatch, wordMatchField } from '../fuzzyMatch.js'
+import { fuzzyMatchField, scoreFuzzyMatch, wordMatchField } from '../text/fuzzyMatch.js'
 
 describe('fuzzyMatchField', () => {
   it('matches the full text for an empty query', () => {

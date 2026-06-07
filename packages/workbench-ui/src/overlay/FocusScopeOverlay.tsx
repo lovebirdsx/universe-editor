@@ -1,5 +1,4 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  FocusScopeOverlay — thin wrapper around @react-aria/focus's FocusScope that
  *  encapsulates the standard popover/dialog focus contract:
  *    - autoFocus:    move focus into the overlay on mount

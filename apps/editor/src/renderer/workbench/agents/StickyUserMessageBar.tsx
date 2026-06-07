@@ -10,7 +10,7 @@
 import { useState } from 'react'
 import { useObservable } from '../useService.js'
 import type { AcpMessage, IAcpSession, TimelineItem } from '../../services/acp/acpSessionService.js'
-import { CollapsibleSlot } from './CollapsibleSlot.js'
+import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { roleIcon } from './timelineIcons.js'
 import styles from './agents.module.css'

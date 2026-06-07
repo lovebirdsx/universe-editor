@@ -4,8 +4,8 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, createEvent, fireEvent, render, screen } from '@testing-library/react'
-import { QuickPickPanel } from '../QuickInput.js'
-import type { QuickPickState } from '../../../services/quickInput/QuickInputService.js'
+import { QuickPickPanel } from '../feedback/quickInput/QuickInputPanel.js'
+import type { QuickPickState } from '../feedback/quickInput/quickInputViewModel.js'
 
 // happy-dom has no layout engine so @tanstack/react-virtual renders 0 visible items.
 // Mock it so all items are "visible" and existing text assertions continue to work.

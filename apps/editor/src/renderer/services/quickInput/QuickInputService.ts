@@ -16,38 +16,14 @@ import {
 import type {
   IQuickPick,
   IQuickPickItem,
-  IKeyMods,
   IPickOptions,
   IInputOptions,
   QuickPickInput,
-  QuickPickFilterMode,
   QuickPickPresentation,
 } from '@universe-editor/platform'
+import type { QuickPickState } from '@universe-editor/workbench-ui'
 
-export interface QuickPickState {
-  type: 'pick' | 'input'
-  items?: readonly QuickPickInput<IQuickPickItem>[]
-  value?: string | undefined
-  mruIds?: readonly string[]
-  placeholder?: string | undefined
-  prefix?: string | undefined
-  matchOnDescription?: boolean | undefined
-  matchOnDetail?: boolean | undefined
-  filterMode?: QuickPickFilterMode | undefined
-  presentation?: QuickPickPresentation | undefined
-  filterExternally?: boolean | undefined
-  quickNavigate?: { modifier: 'ctrl'; initialSelectionIndex?: number } | undefined
-  /** Show an indeterminate progress bar at the top of the panel. */
-  busy?: boolean | undefined
-  onAccept?: (items: IQuickPickItem[], mods?: IKeyMods) => void
-  onItemRemove?: ((item: IQuickPickItem) => void) | undefined
-  onValueChange?: (value: string) => void
-  onInput?: (value: string) => void
-  onHide?: () => void
-  validateInput?: ((value: string) => string | undefined) | undefined
-  inputValue?: string | undefined
-  inputPrompt?: string | undefined
-}
+export type { QuickPickState }
 
 export class QuickInputService implements IQuickInputService {
   declare readonly _serviceBrand: undefined

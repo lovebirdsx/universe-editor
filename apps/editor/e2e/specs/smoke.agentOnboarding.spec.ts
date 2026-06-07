@@ -24,13 +24,14 @@ test.describe('@p1 first-run agent onboarding', () => {
       JSON.stringify({ 'workbench.language': 'en-US', 'update.mode': 'manual' }, null, 2),
       'utf8',
     )
+    const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
     const app = await electron.launch({
       args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
       cwd: APP_ROOT,
       env: {
-        ...process.env,
+        ...inheritedEnv,
         UNIVERSE_E2E: '1',
-        NODE_ENV: process.env['NODE_ENV'] ?? 'production',
+        NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production',
       },
     })
     try {

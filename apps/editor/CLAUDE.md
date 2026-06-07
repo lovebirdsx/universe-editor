@@ -49,6 +49,12 @@ CLI 参数 / 环境变量 / 部署配置文件的读取统一收口到 `Environm
 
 新增模块时先问"它是不是 IWorkbenchContribution"，是 → `contributions/`；否则问"它是不是 Service/Registry/Input"，是 → `services/`；否则问"它是不是 Action2"，是 → `actions/`；都不是就是视图层 → `workbench/`。
 
+### 通用 UI 走 workbench-ui
+
+原子控件（Button/IconButton/Input/Checkbox/Badge/Spinner）、布局件（Sash/GridLayout/CollapsibleSlot）、浮层（FocusScopeOverlay/PopoverList/ContextMenu）、反馈类（Notifications/QuickInput/ProgressDialog/Confirm·PromptDialog）的**展示部分都在 `packages/workbench-ui`**（纯组件，吃数据 + 回调，无 DI、无 Portal）。`workbench/<feature>/` 下只保留**薄 wrapper**：`useService`/`useObservable` 订阅 → `createPortal` → 拍平成 props，并注入图标解析等应用细节（如 `QuickInputPortal`/`DialogHost`/`ProgressDialogHost`/`NotificationsToast`）。wrapper 文件名/导出名/`data-testid` 保持不变，e2e 选择器零改动。
+
+新增通用控件时优先在 workbench-ui 沉淀，不要在 feature 目录里再写一份 `<button>`+`.module.css`。设计 token（间距/圆角/字号/阴影）来自 `@universe-editor/workbench-ui/tokens.css`（已在 `main.tsx` 入口引入）。**渐进迁移项**（尚未收编、属技术债）：Diff/Terminal/SCM/Config/Search 的 `.iconBtn` 等局部按钮、SessionsPopover/ConfigOptionsBar 等交互模型不同的弹窗、未触及旧 css 的 token 化——动到相关文件时顺手迁移即可。
+
 ## bootstrap 链路（renderer 端）
 
 `src/renderer/main.tsx` 顺序：

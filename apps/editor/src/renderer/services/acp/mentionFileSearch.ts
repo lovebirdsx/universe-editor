@@ -12,7 +12,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type IFileSearchService } from '@universe-editor/platform'
-import { fuzzyMatchField } from '../fuzzyMatch/fuzzyMatch.js'
+import { fuzzyMatchField } from '@universe-editor/workbench-ui'
 
 export interface MentionFileEntry {
   /** Absolute file:// URI (the value stored on the AcpContentBlock.resource_link). */

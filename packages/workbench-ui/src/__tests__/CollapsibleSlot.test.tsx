@@ -1,5 +1,4 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tests for CollapsibleSlot — the shared collapse shell: header toggles,
  *  aria-expanded reflects state, body renders only when expanded, summary shows
  *  when collapsed, and the kind label surfaces as a tooltip.
@@ -7,7 +6,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { CollapsibleSlot } from '../CollapsibleSlot.js'
+import { CollapsibleSlot } from '../layout/CollapsibleSlot.js'
 
 afterEach(() => {
   cleanup()

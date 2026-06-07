@@ -80,6 +80,10 @@ export default defineConfig({
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,
+        '@universe-editor/workbench-ui/tokens.css': resolve(
+          __dirname,
+          '../../packages/workbench-ui/src/theme/tokens.css',
+        ),
         '@universe-editor/workbench-ui': workbenchUiSrc,
         '@universe-editor/extensions-common': extensionsCommonSrc,
       },

@@ -4,7 +4,7 @@
 
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
-import { Sash } from '../Sash.js'
+import { Sash } from '../layout/Sash.js'
 
 describe('Sash', () => {
   it('emits delta on mousemove during drag (vertical)', () => {

@@ -10,6 +10,7 @@
 import { useState } from 'react'
 import { ICommandService, localize } from '@universe-editor/platform'
 import { ArrowLeftRight, Plus, RefreshCw } from 'lucide-react'
+import { IconButton } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
@@ -37,35 +38,29 @@ export function AgentsViewToolbar() {
   if (loc === 'sidebar') {
     return (
       <span className={styles['viewToolbar']}>
-        <button
-          type="button"
-          className={styles['toolbarButton']}
+        <IconButton
+          label={localize('acp.sessions.toggle', 'Sessions')}
           onClick={() => setSessionsOpen((v) => !v)}
           aria-expanded={sessionsOpen}
           aria-haspopup="listbox"
           data-testid="acp-toggle-sessions"
-          title={localize('acp.sessions.toggle', 'Sessions')}
         >
           <span aria-hidden="true">📜</span>
-        </button>
-        <button
-          type="button"
-          className={styles['toolbarButton']}
+        </IconButton>
+        <IconButton
+          label={localize('acp.newSession.titled', 'New {name} session', { name: defaultAgentId })}
           onClick={() => void service.createSession(registry.defaultAgentId())}
           data-testid="acp-new-session"
-          title={localize('acp.newSession.titled', 'New {name} session', { name: defaultAgentId })}
         >
           <AgentIcon agentId={defaultAgentId} size={13} className={styles['chatTitleAgentIcon']} />
-        </button>
-        <button
-          type="button"
-          className={styles['toolbarButton']}
+        </IconButton>
+        <IconButton
+          label={localize('acp.switchToEditor.tooltip', 'Move chat to the editor area')}
           onClick={() => location.setLocation('editor')}
           data-testid="acp-switch-to-editor"
-          title={localize('acp.switchToEditor.tooltip', 'Move chat to the editor area')}
         >
           <span aria-hidden="true">⇄</span>
-        </button>
+        </IconButton>
         {sessionsOpen && <SessionsPopover onDismiss={() => setSessionsOpen(false)} />}
       </span>
     )
@@ -73,61 +68,42 @@ export function AgentsViewToolbar() {
 
   return (
     <span className={styles['viewToolbar']}>
-      <button
-        type="button"
-        className={styles['toolbarButton']}
+      <IconButton
+        label={localize('acp.newSession', 'New session')}
         onClick={() => void service.createSession(registry.defaultAgentId())}
         data-testid="acp-new-session"
-        title={localize('acp.newSession', 'New session')}
-        aria-label={localize('acp.newSession', 'New session')}
       >
-        <span aria-hidden="true">
-          <Plus size={14} strokeWidth={1.75} />
-        </span>
-      </button>
-      <button
-        type="button"
-        className={styles['toolbarButton']}
-        onClick={() => void commands.executeCommand('workbench.action.agent.selectAgent')}
-        data-testid="acp-select-agent"
+        <Plus size={14} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
+        label={localize('acp.selectAgent', 'Choose agent…')}
         title={localize('acp.selectAgent.titled', 'Choose agent… (current: {name})', {
           name: defaultAgentId,
         })}
-        aria-label={localize('acp.selectAgent', 'Choose agent…')}
+        onClick={() => void commands.executeCommand('workbench.action.agent.selectAgent')}
+        data-testid="acp-select-agent"
       >
-        <span aria-hidden="true">
-          <AgentIcon agentId={defaultAgentId} size={14} />
-        </span>
-      </button>
-      <button
-        type="button"
-        className={styles['toolbarButton']}
+        <AgentIcon agentId={defaultAgentId} size={14} />
+      </IconButton>
+      <IconButton
+        label={localize('acp.refreshSessions', 'Refresh session list')}
         onClick={handleRefresh}
         disabled={refreshing}
         data-testid="acp-refresh-sessions"
-        title={localize('acp.refreshSessions', 'Refresh session list')}
-        aria-label={localize('acp.refreshSessions', 'Refresh session list')}
       >
-        <span aria-hidden="true">
-          <RefreshCw
-            size={14}
-            strokeWidth={1.75}
-            className={refreshing ? styles['spin'] : undefined}
-          />
-        </span>
-      </button>
-      <button
-        type="button"
-        className={styles['toolbarButton']}
+        <RefreshCw
+          size={14}
+          strokeWidth={1.75}
+          className={refreshing ? styles['spin'] : undefined}
+        />
+      </IconButton>
+      <IconButton
+        label={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
         onClick={() => location.setLocation('sidebar')}
         data-testid="acp-switch-to-sidebar"
-        title={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
-        aria-label={localize('acp.switchToSidebar.tooltip', 'Move chat into the sidebar')}
       >
-        <span aria-hidden="true">
-          <ArrowLeftRight size={14} strokeWidth={1.75} />
-        </span>
-      </button>
+        <ArrowLeftRight size={14} strokeWidth={1.75} />
+      </IconButton>
     </span>
   )
 }

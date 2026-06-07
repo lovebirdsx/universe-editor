@@ -42,10 +42,11 @@ function workspaceIdFromUri(uriString: string): string {
 }
 
 async function launchWithState(userDataDir: string) {
+  const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
   const app = await electron.launch({
     args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
     cwd: APP_ROOT,
-    env: { ...process.env, UNIVERSE_E2E: '1', NODE_ENV: process.env['NODE_ENV'] ?? 'production' },
+    env: { ...inheritedEnv, UNIVERSE_E2E: '1', NODE_ENV: inheritedEnv['NODE_ENV'] ?? 'production' },
   })
   const page = await app.firstWindow()
   // 等首次导航 commit，避免 evaluate 撞上 "Execution context was destroyed"。

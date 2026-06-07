@@ -10,7 +10,7 @@
 
 import type { HTMLAttributes } from 'react'
 import type { AcpPlanEntry } from '../../services/acp/acpSessionService.js'
-import { CollapsibleSlot } from './CollapsibleSlot.js'
+import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { planEntryStatusIcon, planIcon } from './timelineIcons.js'
 import styles from './agents.module.css'
 

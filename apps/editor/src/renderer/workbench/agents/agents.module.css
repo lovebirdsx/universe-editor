@@ -74,35 +74,6 @@
   text-overflow: ellipsis;
 }
 
-.toolbarButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-}
-
-.toolbarButton:hover {
-  background: var(--color-list-hover-bg, #2a2d2e);
-}
-
-.toolbarButton:focus-visible {
-  outline: 1px solid var(--color-badge-progress, #4fa6e2);
-  outline-offset: 1px;
-}
-
-.toolbarButton[aria-expanded='true'] {
-  background: var(--color-list-active-bg, #094771);
-}
-
 .sessionsPopover {
   position: absolute;
   top: calc(100% + 2px);
@@ -169,65 +140,6 @@
 .timelineSlotFocused {
   outline: 1px solid var(--color-focus-border, var(--color-badge-progress, #4fa6e2));
   outline-offset: -1px;
-}
-
-/* Shared shell for every collapsible Timeline Item (message / tool-call / plan).
-   The consumer's root class supplies background / border / radius; the header
-   and body supply padding so collapsed cards collapse to a single header row. */
-.collapsibleSlot {
-  display: flex;
-  flex-direction: column;
-}
-
-.collapsibleHeader {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: 100%;
-  padding: 6px 8px;
-  margin: 0;
-  background: none;
-  border: 0;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.slotIcon {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-message-role-fg, #888);
-}
-
-.slotTitle {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.slotSummary {
-  flex: 1;
-  min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  color: var(--color-message-role-fg, #aaa);
-  font-size: 11px;
-}
-
-.slotChevron {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  color: var(--color-message-role-fg, #888);
-}
-
-.slotBody {
-  padding: 0 8px 6px;
 }
 
 /* Sticky-scroll overlay: pinned card headers above the chat scroll. The shell is
@@ -1674,36 +1586,14 @@
   position: relative;
 }
 
-.slashPopover {
-  position: absolute;
+/* Anchor for PopoverList above the prompt textarea (slash / mention). The
+   popover's own surface styling lives in workbench-ui; this only positions it. */
+.promptPopover {
   left: 0;
   right: 0;
   bottom: 100%;
-  margin-bottom: 4px;
+  margin-bottom: var(--spacing-2);
   z-index: 5;
-  background: var(--color-message-bg, #2a2a2a);
-  border: 1px solid var(--color-border, #555);
-  border-radius: 4px;
-  max-height: 180px;
-  overflow-y: auto;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  font-size: 12px;
-}
-
-.slashItem {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 4px 8px;
-  cursor: pointer;
-}
-
-.slashItem[data-active='true'] {
-  background: var(--color-list-active-bg, #094771);
-}
-
-.slashItem:hover {
-  background: var(--color-list-hover-bg, #2a2d2e);
 }
 
 .slashName {
@@ -1723,12 +1613,6 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.slashEmpty {
-  padding: 6px 8px;
-  color: var(--color-message-role-fg, #888);
-  font-style: italic;
 }
 
 .sessionsPopoverToolbar {

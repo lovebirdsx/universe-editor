@@ -1,0 +1,55 @@
+.collapsibleSlot {
+  display: flex;
+  flex-direction: column;
+}
+
+.collapsibleHeader {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  width: 100%;
+  padding: var(--spacing-3) var(--spacing-4);
+  margin: 0;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.slotIcon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-message-role-fg, #888);
+}
+
+.slotTitle {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+}
+
+.slotSummary {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-message-role-fg, #aaa);
+  font-size: var(--font-size-xs);
+}
+
+.slotChevron {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-message-role-fg, #888);
+}
+
+.slotBody {
+  padding: 0 var(--spacing-4) var(--spacing-3);
+}

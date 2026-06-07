@@ -5,7 +5,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render } from '@testing-library/react'
 import { Direction, Grid, type IGridView } from '@universe-editor/platform'
-import { GridLayout } from '../GridLayout.js'
+import { GridLayout } from '../layout/GridLayout.js'
 
 class TestView implements IGridView {
   readonly minimumWidth = 50

@@ -5,7 +5,7 @@
 
 import { type ComponentType } from 'react'
 import { IEditorGroupsService, IEditorInput, localize, type IPart } from '@universe-editor/platform'
-import { DragSessionProvider } from '@universe-editor/workbench-ui'
+import { DragSessionProvider, GridLayout } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { SettingsEditor } from '../preferences/SettingsEditor.js'
@@ -21,7 +21,6 @@ import { AcpSessionEditor } from '../agents/AcpSessionEditor.js'
 import { TerminalEditorView } from './TerminalEditorView.js'
 import { GitGraphEditor } from '../gitGraph/GitGraphEditor.js'
 import { EditorGroupView } from './EditorGroupView.js'
-import { GridLayout } from './GridLayout.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import styles from './EditorArea.module.css'
 

@@ -44,7 +44,7 @@ import {
   type AcpTimelineScrollTarget,
 } from '../../services/acp/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
-import { CollapsibleSlot } from './CollapsibleSlot.js'
+import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
 import { QuestionCard } from './QuestionCard.js'

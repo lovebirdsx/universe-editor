@@ -1,0 +1,28 @@
+.wrapper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  cursor: pointer;
+  font-size: var(--font-size-base);
+  color: var(--color-foreground, #c8c8c8);
+  user-select: none;
+}
+
+.wrapper.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.box {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--color-accent, #0070e0);
+  cursor: inherit;
+}
+
+.box:focus-visible {
+  outline: 1px solid var(--color-focus-border, #0070e0);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
+}

@@ -1,5 +1,4 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  GridLayout — React renderer for a `Grid<T>` binary tree.
  *
  *  Each branch becomes a flex container in its orientation; each leaf renders

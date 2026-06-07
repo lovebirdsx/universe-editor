@@ -25,19 +25,12 @@ import type {
   IProgressStep,
   IStatusBarEntryAccessor,
 } from '@universe-editor/platform'
+import type { DialogProgressState } from '@universe-editor/workbench-ui'
+
+export type { DialogProgressState }
 
 const DEFAULT_DELAY_MS = 150
 const WINDOW_STATUS_PRIORITY = 50
-
-/** Public state observed by ProgressDialogHost — null when no dialog progress active. */
-export interface DialogProgressState {
-  readonly title: string
-  readonly message: string | undefined
-  /** 0-100, or undefined for indeterminate. */
-  readonly percent: number | undefined
-  readonly cancellable: boolean
-  readonly cancel: () => void
-}
 
 export class ProgressService extends Disposable implements IProgressService {
   declare readonly _serviceBrand: undefined

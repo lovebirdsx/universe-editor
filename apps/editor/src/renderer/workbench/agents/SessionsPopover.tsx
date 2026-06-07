@@ -8,6 +8,7 @@
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { localize } from '@universe-editor/platform'
 import { RefreshCw } from 'lucide-react'
+import { IconButton } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { SessionListBody } from './SessionListBody.js'
@@ -61,23 +62,18 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
       aria-label={localize('acp.sessions.popover', 'Sessions')}
     >
       <div className={styles['sessionsPopoverToolbar']}>
-        <button
-          type="button"
-          className={styles['toolbarButton']}
+        <IconButton
+          label={localize('acp.refreshSessions', 'Refresh session list')}
           onClick={handleRefresh}
           disabled={refreshing}
           data-testid="acp-refresh-sessions-popover"
-          title={localize('acp.refreshSessions', 'Refresh session list')}
-          aria-label={localize('acp.refreshSessions', 'Refresh session list')}
         >
-          <span aria-hidden="true">
-            <RefreshCw
-              size={14}
-              strokeWidth={1.75}
-              className={refreshing ? styles['spin'] : undefined}
-            />
-          </span>
-        </button>
+          <RefreshCw
+            size={14}
+            strokeWidth={1.75}
+            className={refreshing ? styles['spin'] : undefined}
+          />
+        </IconButton>
       </div>
       <SessionListBody onPick={() => onDismiss()} />
     </div>

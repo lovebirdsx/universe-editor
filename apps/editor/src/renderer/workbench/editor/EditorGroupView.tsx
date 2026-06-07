@@ -27,21 +27,33 @@ import {
   IContextKeyService,
   IDialogService,
   markAsSingleton,
+  MenuId,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
   URI,
 } from '@universe-editor/platform'
-import { DragSessionContext, useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
+import {
+  ContextMenu,
+  DragSessionContext,
+  useDragHandle,
+  useDropTarget,
+} from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
-import { EditorTabContextMenu, type TabContextMenuState } from './EditorTabContextMenu.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import styles from './EditorArea.module.css'
+
+interface TabMenuState {
+  readonly x: number
+  readonly y: number
+  readonly groupId: number
+  readonly resource: URI | null
+}
 
 export interface EditorGroupViewProps {
   group: IEditorGroup
@@ -231,7 +243,7 @@ export function EditorGroupView({
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const dragSession = useContext(DragSessionContext)
-  const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null)
+  const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const [bodyZone, setBodyZone] = useState<BodyDropZone | null>(null)
   const tabBarRef = useRef<HTMLDivElement>(null)
@@ -538,8 +550,10 @@ export function EditorGroupView({
         )}
       </div>
       {tabMenu && (
-        <EditorTabContextMenu
-          state={tabMenu}
+        <ContextMenu
+          menuId={MenuId.EditorTabContext}
+          anchor={{ x: tabMenu.x, y: tabMenu.y }}
+          args={[{ groupId: tabMenu.groupId, resource: tabMenu.resource?.toJSON() ?? undefined }]}
           commandService={commandService}
           onClose={() => setTabMenu(null)}
         />

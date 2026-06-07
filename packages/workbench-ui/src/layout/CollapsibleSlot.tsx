@@ -1,22 +1,38 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  CollapsibleSlot — the shared shell for every Timeline Item (message /
- *  tool-call / plan). A clickable header (leading kind icon + title when
+ *  CollapsibleSlot — the shared shell for a collapsible row (e.g. a Timeline Item:
+ *  message / tool-call / plan). A clickable header (leading kind icon + title when
  *  expanded / single-line summary when collapsed + optional status icon +
  *  chevron) toggles the body. Collapse is fully controlled by the parent so a
- *  command can drive it (Alt+F per item, Ctrl+Alt+F cycles all).
+ *  command can drive it.
  *
  *  `rootProps` are spread onto the root element so callers keep their existing
- *  `data-timeline-key` / `data-role` / `data-kind` / `data-status` / focus class
- *  hooks (selectors and tests depend on these living on the root).
+ *  `data-*` / focus class hooks (selectors and tests depend on these living on
+ *  the root). The chevron is rendered inline (no icon-library dependency).
  *--------------------------------------------------------------------------------------------*/
 
 import type { HTMLAttributes, ReactNode } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
-import styles from './agents.module.css'
+import styles from './CollapsibleSlot.module.css'
+
+function Chevron({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {collapsed ? <path d="m9 18 6-6-6-6" /> : <path d="m6 9 6 6 6-6" />}
+    </svg>
+  )
+}
 
 export interface CollapsibleSlotProps {
-  /** Leading kind icon (lucide element). */
+  /** Leading kind icon (any element). */
   readonly icon: ReactNode
   /** Header tooltip — the concrete kind label (e.g. 'read' / 'thought' / 'Plan'). */
   readonly kindLabel: string
@@ -72,7 +88,7 @@ export function CollapsibleSlot({
         )}
         {statusIcon}
         <span className={styles['slotChevron']} aria-hidden="true">
-          {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+          <Chevron collapsed={collapsed} />
         </span>
       </button>
       {!collapsed && <div className={styles['slotBody']}>{children}</div>}

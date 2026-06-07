@@ -6,10 +6,10 @@
  *  on the textarea itself, so focus never leaves the input.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
 import { localize } from '@universe-editor/platform'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
-import { fuzzyMatchField, scoreFuzzyMatch } from '../../services/fuzzyMatch/fuzzyMatch.js'
+import { PopoverList } from '@universe-editor/workbench-ui'
+import { fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import styles from './agents.module.css'
 
 export interface SlashCommandPopoverProps {
@@ -53,54 +53,25 @@ export function SlashCommandPopover({
   onSelect,
   onHover,
 }: SlashCommandPopoverProps) {
-  const listRef = useRef<HTMLDivElement | null>(null)
-
-  // Keep the active row in view when the user navigates with arrow keys.
-  useEffect(() => {
-    const root = listRef.current
-    if (!root) return
-    const el = root.children[activeIndex] as HTMLElement | undefined
-    el?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex])
-
-  if (commands.length === 0) {
-    return (
-      <div className={styles['slashPopover']} role="listbox" data-testid="acp-slash-popover">
-        <div className={styles['slashEmpty']}>
-          {localize('acp.slash.empty', 'No matching commands')}
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div
-      className={styles['slashPopover']}
-      role="listbox"
-      ref={listRef}
+    <PopoverList
+      items={commands}
+      activeIndex={activeIndex}
+      getKey={(c) => c.name}
+      onSelect={(c) => onSelect(c)}
+      onHover={onHover}
+      className={styles['promptPopover']}
       data-testid="acp-slash-popover"
-    >
-      {commands.map((c, i) => (
-        <div
-          key={c.name}
-          role="option"
-          aria-selected={i === activeIndex}
-          data-active={i === activeIndex}
-          className={styles['slashItem']}
-          onMouseDown={(e) => {
-            // Prevent the textarea from losing focus before our click lands.
-            e.preventDefault()
-            onSelect(c)
-          }}
-          onMouseEnter={() => onHover(i)}
-        >
+      emptyLabel={localize('acp.slash.empty', 'No matching commands')}
+      renderItem={(c) => (
+        <>
           <span className={styles['slashName']}>
             {c.name.startsWith('/') ? c.name : `/${c.name}`}
           </span>
           {c.input ? <span className={styles['slashHint']}>{`<${c.input.hint}>`}</span> : null}
           <span className={styles['slashDesc']}>{c.description}</span>
-        </div>
-      ))}
-    </div>
+        </>
+      )}
+    />
   )
 }

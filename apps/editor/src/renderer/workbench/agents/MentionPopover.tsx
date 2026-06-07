@@ -6,9 +6,9 @@
  *  keyboard handlers on the textarea so focus never leaves the input.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
 import { localize } from '@universe-editor/platform'
 import type { MentionFileEntry } from '../../services/acp/mentionFileSearch.js'
+import { PopoverList } from '@universe-editor/workbench-ui'
 import styles from './agents.module.css'
 
 export interface MentionPopoverProps {
@@ -26,60 +26,24 @@ export function MentionPopover({
   onSelect,
   onHover,
 }: MentionPopoverProps) {
-  const listRef = useRef<HTMLDivElement | null>(null)
-
-  useEffect(() => {
-    const root = listRef.current
-    if (!root) return
-    const el = root.children[activeIndex] as HTMLElement | undefined
-    el?.scrollIntoView({ block: 'nearest' })
-  }, [activeIndex])
-
-  if (loading && entries.length === 0) {
-    return (
-      <div className={styles['slashPopover']} role="listbox" data-testid="acp-mention-popover">
-        <div className={styles['slashEmpty']}>
-          {localize('acp.mention.loading', 'Scanning files…')}
-        </div>
-      </div>
-    )
-  }
-
-  if (entries.length === 0) {
-    return (
-      <div className={styles['slashPopover']} role="listbox" data-testid="acp-mention-popover">
-        <div className={styles['slashEmpty']}>
-          {localize('acp.mention.empty', 'No matching files')}
-        </div>
-      </div>
-    )
-  }
-
   return (
-    <div
-      className={styles['slashPopover']}
-      role="listbox"
-      ref={listRef}
+    <PopoverList
+      items={entries}
+      activeIndex={activeIndex}
+      getKey={(e) => e.uri}
+      onSelect={(e) => onSelect(e)}
+      onHover={onHover}
+      loading={loading ?? false}
+      className={styles['promptPopover']}
       data-testid="acp-mention-popover"
-    >
-      {entries.map((e, i) => (
-        <div
-          key={e.uri}
-          role="option"
-          aria-selected={i === activeIndex}
-          data-active={i === activeIndex}
-          className={styles['slashItem']}
-          onMouseDown={(ev) => {
-            // Keep textarea focus.
-            ev.preventDefault()
-            onSelect(e)
-          }}
-          onMouseEnter={() => onHover(i)}
-        >
+      loadingLabel={localize('acp.mention.loading', 'Scanning files…')}
+      emptyLabel={localize('acp.mention.empty', 'No matching files')}
+      renderItem={(e) => (
+        <>
           <span className={styles['slashName']}>{e.name}</span>
           <span className={styles['slashDesc']}>{e.relPath}</span>
-        </div>
-      ))}
-    </div>
+        </>
+      )}
+    />
   )
 }

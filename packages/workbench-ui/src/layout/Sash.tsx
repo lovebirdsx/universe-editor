@@ -1,5 +1,4 @@
 /*---------------------------------------------------------------------------------------------
- *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Sash — a draggable resize handle between two grid views.
  *
  *  The Sash captures the mouse on `mousedown`, listens to `mousemove` on

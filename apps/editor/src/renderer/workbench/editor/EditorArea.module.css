@@ -419,31 +419,6 @@
   color: var(--color-editor-fg-muted, #888888);
 }
 
-.tabContextMenu {
-  position: fixed;
-  margin: 0;
-  padding: 4px 0;
-  list-style: none;
-  min-width: 220px;
-  background: var(--color-menu-bg, #252526);
-  color: var(--color-menu-fg, #cccccc);
-  border: 1px solid var(--color-menu-border, #454545);
-  border-radius: 3px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
-  font-size: 13px;
-  z-index: 1000;
-}
-
-.tabContextMenuItem {
-  padding: 4px 16px;
-  cursor: pointer;
-}
-
-.tabContextMenuItem:hover {
-  background: var(--color-menu-selection-bg, #094771);
-  color: var(--color-menu-selection-fg, #ffffff);
-}
-
 .tab[data-drop-before='true']::before {
   content: '';
   position: absolute;

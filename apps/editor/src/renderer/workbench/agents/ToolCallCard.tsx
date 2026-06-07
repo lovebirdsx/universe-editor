@@ -19,7 +19,7 @@ import type {
   IAcpSession,
 } from '../../services/acp/acpSessionService.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
-import { CollapsibleSlot } from './CollapsibleSlot.js'
+import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallStatusIcon } from './ToolCallOutput.js'
