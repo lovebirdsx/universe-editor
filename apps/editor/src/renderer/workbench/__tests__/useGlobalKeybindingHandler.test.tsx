@@ -15,6 +15,7 @@ import {
 import { StatusBarService } from '../../services/statusbar/StatusBarService.js'
 import { ServicesContext } from '../useService.js'
 import { useGlobalKeybindingHandler } from '../useGlobalKeybindingHandler.js'
+import { IKeyboardDebugService } from '../../services/keybinding/keyboardDebugService.js'
 import { SplitEditorDownAction } from '../../actions/editorActions.js'
 import { OpenKeybindingsEditorAction } from '../../actions/preferencesActions.js'
 import { OpenFolderAction } from '../../actions/workspaceActions.js'
@@ -32,6 +33,13 @@ function createHarness() {
   services.set(ICommandService, commandService as never)
   services.set(IContextKeyService, new ContextKeyService())
   services.set(IStatusBarService, statusBar)
+  services.set(IKeyboardDebugService, {
+    _serviceBrand: undefined,
+    enabled: false,
+    onDidChange: () => ({ dispose() {} }),
+    toggle: () => false,
+    append: () => {},
+  } as never)
   const instantiation = new InstantiationService(services)
   return { executeCommand, instantiation, statusBar }
 }

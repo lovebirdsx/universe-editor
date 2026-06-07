@@ -66,6 +66,10 @@ import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
 import { StatusBarService } from './services/statusbar/StatusBarService.js'
 import { ViewsService } from './services/views/ViewsService.js'
 import { OutputService } from './services/output/OutputService.js'
+import {
+  IKeyboardDebugService,
+  KeyboardDebugService,
+} from './services/keybinding/keyboardDebugService.js'
 import { LayoutService } from './services/layout/LayoutService.js'
 import { RendererDialogService } from './services/dialog/RendererDialogService.js'
 import { NotificationService } from './services/notification/NotificationService.js'
@@ -324,6 +328,12 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IOutputService, outputService)
 
   outputService.createChannel('All', 'aggregated')
+
+  // Keyboard-shortcut troubleshooting sink (depends on IOutputService).
+  services.set(
+    IKeyboardDebugService,
+    workbenchStore.add(instantiation.createInstance(KeyboardDebugService)),
+  )
 
   // EditorResolverService depends on IInstantiationService + IEditorService, both available now.
   const editorResolverService = instantiation.createInstance(EditorResolverService)

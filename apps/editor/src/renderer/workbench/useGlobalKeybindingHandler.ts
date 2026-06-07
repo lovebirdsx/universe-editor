@@ -17,6 +17,12 @@ import {
 } from '@universe-editor/platform'
 import { useService } from './useService.js'
 import { formatChord } from './titlebar/keybindingFormat.js'
+import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
+import {
+  formatGuardStop,
+  formatKeystrokeTrace,
+  type KeyEventDiagnostics,
+} from '../services/keybinding/keyboardDebugFormat.js'
 
 const CHORD_TIMEOUT_MS = 1500
 
@@ -112,10 +118,34 @@ interface PendingChord {
   timer: ReturnType<typeof setTimeout>
 }
 
+function diagTime(): string {
+  const d = new Date()
+  const pad = (n: number, len = 2) => String(n).padStart(len, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}.${pad(d.getMilliseconds(), 3)}`
+}
+
+function toDiagnostics(e: KeyboardEvent, builtKey: string): KeyEventDiagnostics {
+  const targetTag = e.target instanceof HTMLElement ? e.target.tagName : '<non-element>'
+  return {
+    time: diagTime(),
+    code: e.code,
+    key: e.key,
+    ctrl: e.ctrlKey,
+    alt: e.altKey,
+    shift: e.shiftKey,
+    meta: e.metaKey,
+    isComposing: e.isComposing,
+    builtKey,
+    targetTag,
+    isEditable: isEditableTarget(e.target),
+  }
+}
+
 export function useGlobalKeybindingHandler(): void {
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const statusBarService = useService(IStatusBarService)
+  const keyboardDebugService = useService(IKeyboardDebugService)
   const pendingRef = useRef<PendingChord | null>(null)
 
   useEffect(() => {
@@ -144,17 +174,58 @@ export function useGlobalKeybindingHandler(): void {
     // listener. Capture phase fires outer→inner, so document fires before any
     // Monaco container element.
     const handler = (e: KeyboardEvent) => {
-      if (isModifierOnly(e.key)) return
+      const dbg = keyboardDebugService.enabled
+      if (isModifierOnly(e.key)) {
+        if (dbg) {
+          keyboardDebugService.append(
+            formatGuardStop(
+              toDiagnostics(e, e.key.toLowerCase()),
+              'modifier key alone (no stroke)',
+            ),
+          )
+        }
+        return
+      }
       // RendererDialogService dialogs handle their own keyboard events; never
       // intercept from inside them (would prevent Escape from closing dialogs).
-      if (isInsideRendererDialog(e.target)) return
+      if (isInsideRendererDialog(e.target)) {
+        if (dbg) {
+          keyboardDebugService.append(
+            formatGuardStop(
+              toDiagnostics(e, buildKeyString(e)),
+              'focus is inside a modal dialog (dialog owns its keys)',
+            ),
+          )
+        }
+        return
+      }
 
       if (contextKeyService.get('quickInputVisible') === true) {
         clearChord()
-        if (isQuickInputNativeEditingKey(e) || isQuickInputOwnedKey(e)) return
-
         const key = buildKeyString(e)
+        if (isQuickInputNativeEditingKey(e) || isQuickInputOwnedKey(e)) {
+          if (dbg) {
+            keyboardDebugService.append(
+              formatGuardStop(
+                toDiagnostics(e, key),
+                'Quick Input is open and owns this key (native editing/navigation)',
+              ),
+            )
+          }
+          return
+        }
+
         const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
+        if (dbg) {
+          const trace = KeybindingsRegistry.traceKeystroke(key, contextKeyService, undefined)
+          const note =
+            result.kind === 'execute' && e.key.toLowerCase() !== 'escape'
+              ? '\n  ⤫ Quick Input is open: only Escape is honored, command not run'
+              : result.kind === 'no-match'
+                ? '\n  ⤫ Quick Input is open: key not bound, passed to Quick Input'
+                : ''
+          keyboardDebugService.append(formatKeystrokeTrace(toDiagnostics(e, key), trace) + note)
+        }
         if (result.kind === 'no-match') return
 
         e.preventDefault()
@@ -174,8 +245,30 @@ export function useGlobalKeybindingHandler(): void {
         const result = KeybindingsRegistry.resolveKeystroke(secondKey, contextKeyService, [
           pending.key,
         ])
+        if (dbg) {
+          const trace = KeybindingsRegistry.traceKeystroke(secondKey, contextKeyService, [
+            pending.key,
+          ])
+          const note =
+            result.kind === 'no-match'
+              ? '\n  ⤫ second key did not complete a chord — chord cancelled'
+              : ''
+          keyboardDebugService.append(
+            formatKeystrokeTrace(toDiagnostics(e, secondKey), trace) + note,
+          )
+        }
         clearChord()
-        if (result.kind === 'execute' && !CommandsRegistry.getCommand(result.command)) return
+        if (result.kind === 'execute' && !CommandsRegistry.getCommand(result.command)) {
+          if (dbg) {
+            keyboardDebugService.append(
+              formatGuardStop(
+                toDiagnostics(e, secondKey),
+                `command not registered: ${result.command}`,
+              ),
+            )
+          }
+          return
+        }
         e.preventDefault()
         e.stopPropagation()
         if (result.kind === 'execute') {
@@ -186,6 +279,11 @@ export function useGlobalKeybindingHandler(): void {
 
       const key = buildKeyString(e)
       const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
+      const diag = dbg ? toDiagnostics(e, key) : undefined
+      if (dbg && diag) {
+        const trace = KeybindingsRegistry.traceKeystroke(key, contextKeyService, undefined)
+        keyboardDebugService.append(formatKeystrokeTrace(diag, trace))
+      }
       if (result.kind === 'no-match') return
 
       // Reserve printable single-character keys (without ctrl/alt/meta) for
@@ -194,9 +292,26 @@ export function useGlobalKeybindingHandler(): void {
       // are length > 1 and pass through.
       const isPrintableTyping =
         e.key.length === 1 && !hasFunctionalModifier(e) && isEditableTarget(e.target)
-      if (isPrintableTyping || isNativeEditableKey(e)) return
+      if (isPrintableTyping || isNativeEditableKey(e)) {
+        if (dbg && diag) {
+          keyboardDebugService.append(
+            formatGuardStop(
+              diag,
+              'key reserved for text input (editable target, no functional modifier)',
+            ),
+          )
+        }
+        return
+      }
 
-      if (result.kind === 'execute' && !CommandsRegistry.getCommand(result.command)) return
+      if (result.kind === 'execute' && !CommandsRegistry.getCommand(result.command)) {
+        if (dbg && diag) {
+          keyboardDebugService.append(
+            formatGuardStop(diag, `command not registered: ${result.command}`),
+          )
+        }
+        return
+      }
 
       e.preventDefault()
       e.stopPropagation()
@@ -212,5 +327,5 @@ export function useGlobalKeybindingHandler(): void {
       document.removeEventListener('keydown', handler, true)
       clearChord()
     }
-  }, [commandService, contextKeyService, statusBarService])
+  }, [commandService, contextKeyService, statusBarService, keyboardDebugService])
 }

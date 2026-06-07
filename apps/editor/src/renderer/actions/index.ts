@@ -122,6 +122,7 @@ import {
 import { ReopenWithAction } from './editorResolverActions.js'
 import { ViewGitGraphAction } from './gitGraphActions.js'
 import { ShowStartupPerformanceAction } from './performanceActions.js'
+import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
 import { OpenMarkdownPreviewAction, OpenMarkdownPreviewToSideAction } from './markdownActions.js'
 import {
@@ -315,6 +316,7 @@ registerAction2(ViewGitGraphAction)
 
 // Developer
 registerAction2(ShowStartupPerformanceAction)
+registerAction2(ToggleKeybindingsTroubleshootingAction)
 
 // Markdown
 registerAction2(OpenMarkdownPreviewAction)
