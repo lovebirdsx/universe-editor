@@ -26,6 +26,7 @@ export type AcpTimelineMoveDirection = 'next' | 'prev' | 'first' | 'last'
 export type AcpTimelineScrollTarget = 'top' | 'bottom' | 'pageUp' | 'pageDown' | 'up' | 'down'
 
 export interface AcpChatWidget {
+  readonly sessionId?: string
   readonly container: HTMLElement
   moveTimeline(direction: AcpTimelineMoveDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
@@ -40,6 +41,7 @@ export interface IAcpChatWidgetService {
   readonly _serviceBrand: undefined
   readonly lastFocusedWidget: AcpChatWidget | undefined
   register(widget: AcpChatWidget): IDisposable
+  focusSessionInput(sessionId: string): boolean
 }
 
 export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acpChatWidgetService')
@@ -102,6 +104,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       this._unregister(widget)
     })
     return this._registrations.add(sub)
+  }
+
+  focusSessionInput(sessionId: string): boolean {
+    let target: AcpChatWidget | undefined
+    for (const entry of this._entries.values()) {
+      if (entry.widget.sessionId === sessionId) target = entry.widget
+    }
+    if (!target) return false
+    target.focusInput()
+    return true
   }
 
   private _unregister(widget: AcpChatWidget): void {

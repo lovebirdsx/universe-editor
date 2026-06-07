@@ -103,6 +103,7 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
     const container = containerRef.current
     if (!container) return
     const sub = widgetService.register({
+      sessionId: session.id,
       container,
       moveTimeline: (d) => handleRef.current.move(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),

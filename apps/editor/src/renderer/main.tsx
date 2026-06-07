@@ -400,6 +400,13 @@ async function bootstrapWorkbench(): Promise<void> {
   const acpSessionService = workbenchStore.add(instantiation.createInstance(AcpSessionService))
   services.set(IAcpSessionService, acpSessionService)
 
+  // Renderer-only AGENTS UI state. ChatWidget tracks focused ChatBody for
+  // single-target action dispatch and session-specific focusing.
+  const acpChatWidgetService = workbenchStore.add(
+    instantiation.createInstance(AcpChatWidgetService),
+  )
+  services.set(IAcpChatWidgetService, acpChatWidgetService)
+
   // Reverse channel: main's cross-window session switcher lists/reveals this
   // window's live sessions. Registered after IAcpSessionService is set; the
   // service's other deps (chat location, history) are DI singletons.
@@ -407,14 +414,6 @@ async function bootstrapWorkbench(): Promise<void> {
     ServiceChannels.RendererSessions,
     ProxyChannel.fromService(instantiation.createInstance(RendererSessionsService)),
   )
-
-  // Renderer-only AGENTS UI state. ChatWidget tracks focused ChatBody for
-  // single-target action dispatch. ChatLocation persists across restarts and
-  // owns the EditorArea↔SecondarySideBar toggle.
-  const acpChatWidgetService = workbenchStore.add(
-    instantiation.createInstance(AcpChatWidgetService),
-  )
-  services.set(IAcpChatWidgetService, acpChatWidgetService)
 
   // Extension host client: owns the extension-host subprocess + RPC. Created here
   // (after IOutputService/ILoggerService/proxy services are set) so the

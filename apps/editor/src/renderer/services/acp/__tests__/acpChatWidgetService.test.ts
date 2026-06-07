@@ -15,7 +15,10 @@ import {
 } from '@universe-editor/platform'
 import { AcpChatWidgetService, type AcpChatWidget } from '../acpChatWidgetService.js'
 
-function makeWidget(label: string): {
+function makeWidget(
+  label: string,
+  sessionId = label,
+): {
   container: HTMLElement
   child: HTMLElement
   widget: AcpChatWidget
@@ -30,6 +33,7 @@ function makeWidget(label: string): {
   const moveSpy = vi.fn()
   const focusSpy = vi.fn()
   const widget: AcpChatWidget = {
+    sessionId,
     container,
     moveTimeline: moveSpy,
     scrollTimeline: vi.fn(),
@@ -138,6 +142,21 @@ describe('AcpChatWidgetService', () => {
     svc.lastFocusedWidget?.moveTimeline('next')
     expect(b.moveSpy).toHaveBeenCalledWith('next')
     expect(a.moveSpy).not.toHaveBeenCalled()
+  })
+
+  it('focusSessionInput invokes the latest registered widget for that session', () => {
+    const oldA = makeWidget('old-a', 's1')
+    const b = makeWidget('b', 's2')
+    const newA = makeWidget('new-a', 's1')
+    svc.register(oldA.widget)
+    svc.register(b.widget)
+    svc.register(newA.widget)
+
+    expect(svc.focusSessionInput('s1')).toBe(true)
+    expect(newA.focusSpy).toHaveBeenCalledOnce()
+    expect(oldA.focusSpy).not.toHaveBeenCalled()
+    expect(b.focusSpy).not.toHaveBeenCalled()
+    expect(svc.focusSessionInput('missing')).toBe(false)
   })
 
   it('registering a container that already has the active descendant seeds focused=true', () => {

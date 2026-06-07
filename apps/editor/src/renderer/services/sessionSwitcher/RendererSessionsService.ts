@@ -10,9 +10,12 @@ import type {
   IRendererSessionsService,
   RendererSessionSummary,
 } from '../../../shared/ipc/sessionSwitcher.js'
+import { IEditorService, IInstantiationService } from '@universe-editor/platform'
 import { IAcpSessionService } from '../acp/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../acp/acpChatLocationService.js'
+import { IAcpChatWidgetService } from '../acp/acpChatWidgetService.js'
+import { AcpSessionEditorInput } from '../acp/acpSessionEditorInput.js'
 import { computeSessionDisplayStatus } from '../acp/acpSessionStatus.js'
 import { resolveLiveSessionTitle } from '../acp/acpSessionTitle.js'
 
@@ -23,6 +26,9 @@ export class RendererSessionsService implements IRendererSessionsService {
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IAcpChatLocationService private readonly _chatLocation: IAcpChatLocationService,
+    @IEditorService private readonly _editor: IEditorService,
+    @IInstantiationService private readonly _instantiation: IInstantiationService,
+    @IAcpChatWidgetService private readonly _widgets: IAcpChatWidgetService,
   ) {}
 
   listSessions(): Promise<readonly RendererSessionSummary[]> {
@@ -38,11 +44,21 @@ export class RendererSessionsService implements IRendererSessionsService {
   }
 
   reveal(sessionId: string): Promise<void> {
-    if (!this._sessions.getById(sessionId)) return Promise.resolve()
-    // Force the editor location so the session opens as a full-screen tab (the
-    // activeSession autorun in AcpChatLocationService does the actual openEditor).
-    this._chatLocation.setLocation('editor')
+    const session = this._sessions.getById(sessionId)
+    if (!session) return Promise.resolve()
     this._sessions.setActive(sessionId)
+    this._chatLocation.setLocation('editor')
+    this._editor.openEditor(
+      this._instantiation.createInstance(
+        AcpSessionEditorInput,
+        session.id,
+        session.agentId,
+        undefined,
+      ),
+      { activate: true, pinned: true },
+    )
+    this._widgets.focusSessionInput(session.id)
+    requestAnimationFrame(() => this._widgets.focusSessionInput(session.id))
     return Promise.resolve()
   }
 }
