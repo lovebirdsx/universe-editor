@@ -68,9 +68,8 @@
     ],
     "menus": {
       "scm/title": [
-        { "command": "git.commit", "group": "navigation@1", "icon": "git-commit" },
+        { "command": "git-graph.view", "group": "navigation@1", "icon": "git-graph" },
         { "command": "git.refresh", "group": "navigation@2", "icon": "refresh" },
-        { "command": "git.stageAll", "group": "navigation@3", "icon": "stage-all" },
         { "submenu": "git.commitMenu", "group": "1_commit@1" },
         { "submenu": "git.changesMenu", "group": "2_changes@1" },
         { "submenu": "git.pullMenu", "group": "3_sync@1" },

@@ -13,6 +13,7 @@ import {
   FolderTree,
   GitBranch,
   GitBranchPlus,
+  GitGraph,
   GitMerge,
   GitPullRequest,
   List,
@@ -56,6 +57,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   refresh: RefreshCw,
   // SCM / Git actions and view controls.
   'git-commit': Check,
+  'git-graph': GitGraph,
   add: Plus,
   remove: Minus,
   discard: Undo2,

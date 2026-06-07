@@ -45,6 +45,10 @@ export interface GitGraphViewState {
   compareFiles: GitGraphFileChangeDto[] | null
   /** Vertical scroll offset of the graph body, restored on remount. */
   scrollTop: number
+  /** Vertical scroll offset of the detail panel body, keyed by selection. */
+  detailScrollTop: Record<string, number>
+  /** Free-text filter over the loaded commits (message / author / hash). */
+  searchQuery: string
   /** Collapsed directory paths in the detail file tree, keyed by selection. */
   collapsed: Record<string, string[]>
   /** View options (order / remotes / first-parent). */
@@ -68,6 +72,8 @@ export const gitGraphViewState: GitGraphViewState = {
   details: null,
   compareFiles: null,
   scrollTop: 0,
+  detailScrollTop: {},
+  searchQuery: '',
   collapsed: {},
   settings: {
     order: 'date',

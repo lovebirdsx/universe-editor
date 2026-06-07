@@ -13,13 +13,17 @@
 
 import {
   Fragment,
+  memo,
   useCallback,
+  useDeferredValue,
   useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type MouseEvent,
+  type UIEvent,
 } from 'react'
 import { type IEditorInput } from '@universe-editor/platform'
 import { autorun, ICommandService, IDialogService } from '@universe-editor/platform'
@@ -242,6 +246,54 @@ function FileTreeView({
   )
 }
 
+/** A single commit row. Memoised so a selection/scroll/refresh that re-renders
+ *  the parent only reconciles the rows whose `selected` actually flipped — graph
+ *  width and column widths are fed via CSS variables on the container (not props)
+ *  so they never invalidate this memo. */
+const CommitRow = memo(function CommitRow({
+  commit,
+  selected,
+  onRowClick,
+  onCommitMenu,
+  onBranchMenu,
+  onRemoteMenu,
+  onTagMenu,
+}: {
+  commit: GitGraphCommitDto
+  selected: boolean
+  onRowClick: (hash: string, e: MouseEvent) => void
+  onCommitMenu: (commit: GitGraphCommitDto, e: MouseEvent) => void
+  onBranchMenu: (name: string, e: MouseEvent) => void
+  onRemoteMenu: (name: string, e: MouseEvent) => void
+  onTagMenu: (name: string, e: MouseEvent) => void
+}) {
+  return (
+    <div
+      className={`${styles['row']} ${selected ? styles['rowSelected'] : ''}`}
+      style={{ height: ROW_HEIGHT }}
+      data-hash={commit.hash}
+      onClick={(e) => onRowClick(commit.hash, e)}
+      onContextMenu={(e) => onCommitMenu(commit, e)}
+    >
+      <span className={styles['graphSpacer']} />
+      <span className={styles['description']}>
+        <CommitRefs
+          commit={commit}
+          onBranchMenu={onBranchMenu}
+          onRemoteMenu={onRemoteMenu}
+          onTagMenu={onTagMenu}
+        />
+        <span className={styles['message']}>{commit.message}</span>
+      </span>
+      <span className={styles['author']}>{commit.author}</span>
+      <span className={styles['date']}>{formatDate(commit.date)}</span>
+      <span className={styles['hash']}>
+        {commit.hash === UNCOMMITTED_HASH ? '' : shortHash(commit.hash)}
+      </span>
+    </div>
+  )
+})
+
 export function GitGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
@@ -276,6 +328,10 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     () => gitGraphViewState.selectedRepo,
   )
   const [showSettings, setShowSettings] = useState(false)
+  const [searchQuery, setSearchQuery] = useState(() => gitGraphViewState.searchQuery)
+  // Filtering / layout / full-list re-render read the deferred value so typing in
+  // the search box stays responsive — the heavy recompute runs at low priority.
+  const deferredQuery = useDeferredValue(searchQuery)
 
   // The current getCommits options, kept in a ref so load/revalidate stay stable
   // callbacks while always reading the latest settings/limit.
@@ -291,6 +347,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   }
 
   const scrollRef = useRef<HTMLDivElement>(null)
+  const detailBodyRef = useRef<HTMLDivElement>(null)
   // Selection key whose details/compareFiles are already loaded — skips refetch on remount.
   const fetchedKeyRef = useRef<string | null>(
     gitGraphViewState.details || gitGraphViewState.compareFiles
@@ -323,6 +380,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   useEffect(() => {
     gitGraphViewState.selectedRepo = selectedRepo
   }, [selectedRepo])
+  useEffect(() => {
+    gitGraphViewState.searchQuery = searchQuery
+  }, [searchQuery])
 
   const load = useCallback(() => {
     let cancelled = false
@@ -467,6 +527,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     if (selection.length === 0) {
       setDetails(null)
       setCompareFiles(null)
+      fetchedKeyRef.current = null
       return
     }
     if (fetchedKeyRef.current === selKey) return // already have data for this selection
@@ -526,6 +587,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     setCollapsed(new Set(gitGraphViewState.collapsed[selKey] ?? []))
   }, [selKey])
 
+  // Persist and restore the detail panel's scroll offset per selection so it
+  // survives tab switches. Restore after the (async) content has rendered.
+  const onDetailScroll = useCallback(
+    (e: UIEvent<HTMLDivElement>) => {
+      gitGraphViewState.detailScrollTop[selKey] = e.currentTarget.scrollTop
+    },
+    [selKey],
+  )
+  useLayoutEffect(() => {
+    if (panelLoading) return
+    const el = detailBodyRef.current
+    if (el) el.scrollTop = gitGraphViewState.detailScrollTop[selKey] ?? 0
+  }, [selKey, panelLoading, details, compareFiles])
+
   const toggleDir = useCallback(
     (path: string) => {
       setCollapsed((prev) => {
@@ -569,15 +644,16 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [commands],
   )
 
-  // Run a mutating op, then reload the graph (the extension surfaces failures).
+  // Run a mutating op, then revalidate in place so the scroll position and
+  // surviving selection are kept (a full reload would reset both).
   const runOp = useCallback(
     (id: string, ...args: unknown[]): void => {
       void (async () => {
         await commands.executeCommand(id, ...args)
-        load()
+        revalidate()
       })()
     },
-    [commands, load],
+    [commands, revalidate],
   )
 
   const openCommitMenu = useCallback(
@@ -837,21 +913,37 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     return result.commits
   }, [result])
 
+  // Free-text filter over the loaded commits. Filtering only the loaded set
+  // (not refetching) matches the "search what's loaded" behaviour; the layout
+  // tolerates parents missing from the subset (drawn as dangling lines).
+  const filteredCommits = useMemo<GitGraphCommitDto[]>(() => {
+    const q = deferredQuery.trim().toLowerCase()
+    if (!q) return displayCommits
+    return displayCommits.filter((c) => {
+      if (c.hash === UNCOMMITTED_HASH) return true
+      return (
+        c.message.toLowerCase().includes(q) ||
+        c.author.toLowerCase().includes(q) ||
+        c.hash.toLowerCase().startsWith(q)
+      )
+    })
+  }, [displayCommits, deferredQuery])
+
   // Index of the row beneath which the inline detail block is rendered. For a
   // comparison it anchors under the lower (later) of the two selected commits.
   const anchorIndex = useMemo(() => {
     if (selection.length === 0) return -1
     const sel = new Set(selection)
     let idx = -1
-    for (let i = 0; i < displayCommits.length; i++) {
-      if (sel.has(displayCommits[i]!.hash)) idx = i
+    for (let i = 0; i < filteredCommits.length; i++) {
+      if (sel.has(filteredCommits[i]!.hash)) idx = i
     }
     return idx
-  }, [selection, displayCommits])
+  }, [selection, filteredCommits])
 
   const layout = useMemo(() => {
     if (!result) return null
-    const commits = displayCommits.map((c) => ({
+    const commits = filteredCommits.map((c) => ({
       hash: c.hash,
       parents: c.parents,
       isStash: c.stash !== null,
@@ -862,7 +954,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       onlyFollowFirstParent: settings.onlyFollowFirstParent,
       ...(anchorIndex >= 0 ? { expand: { afterIndex: anchorIndex, height: DETAIL_HEIGHT } } : {}),
     })
-  }, [result, displayCommits, anchorIndex, settings.onlyFollowFirstParent])
+  }, [result, filteredCommits, anchorIndex, settings.onlyFollowFirstParent])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
   const selected = useMemo(() => new Set(selection), [selection])
@@ -888,7 +980,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               ×
             </button>
           </div>
-          <div className={styles['detailBody']}>
+          <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
             {compareFiles && compareFiles.length === 0 ? (
               <div className={styles['detailEmpty']}>No uncommitted changes.</div>
             ) : (
@@ -919,7 +1011,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               ×
             </button>
           </div>
-          <div className={styles['detailBody']}>
+          <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
             {compareFiles && compareFiles.length === 0 ? (
               <div className={styles['detailEmpty']}>No file changes.</div>
             ) : (
@@ -952,7 +1044,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             ×
           </button>
         </div>
-        <div className={styles['detailBody']}>
+        <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
           {details.parents.length > 0 && (
             <div className={styles['detailMeta']}>
               Parents: {details.parents.map(shortHash).join(', ')}
@@ -985,6 +1077,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           </span>
         )}
         <span className={styles['toolbarSpacer']} />
+        <input
+          className={styles['searchInput']}
+          type="search"
+          placeholder="Search commits…"
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          aria-label="Search commits"
+        />
         {repos.length > 1 && (
           <select
             className={styles['repoSelect']}
@@ -1135,36 +1235,27 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               })}
             </svg>
 
-            <div className={styles['rows']}>
-              {displayCommits.map((c, i) => (
+            <div
+              className={styles['rows']}
+              style={
+                {
+                  '--graph-width': `${graphWidth}px`,
+                  '--col-author': `${columnWidths.author}px`,
+                  '--col-date': `${columnWidths.date}px`,
+                } as CSSProperties
+              }
+            >
+              {filteredCommits.map((c, i) => (
                 <Fragment key={c.hash}>
-                  <div
-                    className={`${styles['row']} ${selected.has(c.hash) ? styles['rowSelected'] : ''}`}
-                    style={{ height: ROW_HEIGHT }}
-                    data-hash={c.hash}
-                    onClick={(e) => onRowClick(c.hash, e)}
-                    onContextMenu={(e) => openCommitMenu(c, e)}
-                  >
-                    <span className={styles['graphSpacer']} style={{ width: graphWidth }} />
-                    <span className={styles['description']}>
-                      <CommitRefs
-                        commit={c}
-                        onBranchMenu={openBranchMenu}
-                        onRemoteMenu={openRemoteMenu}
-                        onTagMenu={openTagMenu}
-                      />
-                      <span className={styles['message']}>{c.message}</span>
-                    </span>
-                    <span className={styles['author']} style={{ width: columnWidths.author }}>
-                      {c.author}
-                    </span>
-                    <span className={styles['date']} style={{ width: columnWidths.date }}>
-                      {formatDate(c.date)}
-                    </span>
-                    <span className={styles['hash']}>
-                      {c.hash === UNCOMMITTED_HASH ? '' : shortHash(c.hash)}
-                    </span>
-                  </div>
+                  <CommitRow
+                    commit={c}
+                    selected={selected.has(c.hash)}
+                    onRowClick={onRowClick}
+                    onCommitMenu={openCommitMenu}
+                    onBranchMenu={openBranchMenu}
+                    onRemoteMenu={openRemoteMenu}
+                    onTagMenu={openTagMenu}
+                  />
                   {i === anchorIndex && (
                     <div className={styles['detail']} style={{ height: DETAIL_HEIGHT }}>
                       {renderDetail()}
