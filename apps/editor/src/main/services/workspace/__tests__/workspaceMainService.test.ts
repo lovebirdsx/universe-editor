@@ -62,6 +62,7 @@ function makeRecents(initial: Record<string, unknown> = {}): RecentWorkspacesMai
       delete store[key]
     },
     async flush(): Promise<void> {},
+    flushSync(): void {},
   }
   return new RecentWorkspacesMainService(storage)
 }

@@ -256,7 +256,7 @@ app.on('before-quit', (e) => {
   // handlers don't shrink the persisted list to empty.
   if (windowMainService?.isQuitConfirmed() || !windowMainService) {
     mainLogger.info('before-quit proceed')
-    windowMainService?.captureSessionForQuit()
+    void windowMainService?.captureSessionForQuit()
     return
   }
   // First pass: ask every window's renderer before committing to the quit, so
@@ -269,7 +269,11 @@ app.on('before-quit', (e) => {
       mainLogger.info('quit vetoed by renderer')
       return
     }
-    windowMainService.captureSessionForQuit()
+    // Persist AND drain the write to disk before quitting. will-quit cannot await
+    // async work, so the durable write must complete here; flushSync there is a
+    // last-resort backstop.
+    await windowMainService.captureSessionForQuit()
+    await getDefaultStorage().flush()
     app.quit()
   })()
 })
@@ -280,7 +284,10 @@ app.on('will-quit', () => {
   // Disposes every materialized application service (acpHost kills child
   // processes, recentWorkspaces flushes its writes, update tears down, etc.).
   rootInstantiation?.dispose()
-  void getDefaultStorage().flush()
+  // Synchronous: Electron does not wait for promises in will-quit, so a
+  // fire-and-forget flush() could be truncated by process exit. flushSync writes
+  // the latest in-memory state atomically before we return.
+  getDefaultStorage().flushSync()
   consoleInterceptor.dispose()
   logMainService.dispose()
 })

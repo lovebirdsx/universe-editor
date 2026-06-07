@@ -28,6 +28,12 @@ const LEGACY_WORKSPACE_KEYS = [
   'workbench.recentFiles',
 ]
 
+// The legacy purge mutates the shared GLOBAL backend, so it must run exactly once
+// per backend — not once per window. Keyed by backend instance: production windows
+// all share getDefaultStorage() (one purge), while each test builds a fresh backend
+// (purge runs per test). Subsequent windows await the same promise via whenReady.
+const purgePromises = new WeakMap<Storage, Promise<void>>()
+
 export class MainStorageService implements IStorageService {
   declare readonly _serviceBrand: undefined
 
@@ -107,17 +113,23 @@ export class MainStorageService implements IStorageService {
     if (this._workspace) await this._workspace.flush()
   }
 
-  private async _purgeLegacyWorkspaceKeys(): Promise<void> {
-    try {
-      for (const key of LEGACY_WORKSPACE_KEYS) {
-        const existing = await this._global.get(key)
-        if (existing !== undefined) {
-          await this._global.remove(key)
+  private _purgeLegacyWorkspaceKeys(): Promise<void> {
+    const existing = purgePromises.get(this._global)
+    if (existing) return existing
+    const promise = (async () => {
+      try {
+        for (const key of LEGACY_WORKSPACE_KEYS) {
+          const existingValue = await this._global.get(key)
+          if (existingValue !== undefined) {
+            await this._global.remove(key)
+          }
         }
+      } catch {
+        // never block startup on migration; stale keys are harmless
       }
-    } catch {
-      // never block startup on migration; stale keys are harmless
-    }
+    })()
+    purgePromises.set(this._global, promise)
+    return promise
   }
 
   dispose(): void {

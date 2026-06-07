@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { createHash } from 'node:crypto'
-import { promises as fs } from 'node:fs'
+import { promises as fs, mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { createDecorator } from '@universe-editor/platform'
 
@@ -10,6 +10,13 @@ export interface Storage {
   remove(key: string): Promise<void>
   /** Wait for all pending writes to complete. */
   flush(): Promise<void>
+  /**
+   * Synchronously persist the latest in-memory state to disk. Meant for
+   * Electron's `will-quit`, which does not wait for async writes — a fire-and-forget
+   * `flush()` there can be cut off by process exit, truncating the file. No-op if
+   * nothing has been read or written yet.
+   */
+  flushSync(): void
 }
 
 // Application-singleton state.json backend, registered as a preset instance in the
@@ -17,25 +24,77 @@ export interface Storage {
 export const IMainStorageService = createDecorator<Storage>('mainStorageService')
 
 export function createStorage(filePath: string): Storage {
+  const tmpPath = `${filePath}.tmp`
+  const syncTmpPath = `${filePath}.synctmp`
+  const bakPath = `${filePath}.bak`
+  const corruptPath = `${filePath}.corrupt`
   let cache: Record<string, unknown> | null = null
   // Serialize all writes so concurrent set() calls never race on disk.
   let writeChain: Promise<void> = Promise.resolve()
 
+  const tryParse = (raw: string): Record<string, unknown> | null => {
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : null
+    } catch {
+      return null
+    }
+  }
+
   const readAll = async (): Promise<Record<string, unknown>> => {
     if (cache) return cache
+    let raw: string | null = null
     try {
-      const raw = await fs.readFile(filePath, 'utf8')
-      const parsed: unknown = JSON.parse(raw)
-      cache = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+      raw = await fs.readFile(filePath, 'utf8')
     } catch {
-      cache = {}
+      raw = null
     }
+    if (raw !== null) {
+      const parsed = tryParse(raw)
+      if (parsed) {
+        cache = parsed
+        return cache
+      }
+      // File exists but is unparseable: preserve it for diagnostics, then fall
+      // back to the last-good backup instead of silently starting empty (which
+      // would let the next write erase everything that survived).
+      try {
+        await fs.rename(filePath, corruptPath)
+      } catch {
+        // best-effort
+      }
+    }
+    let bakRaw: string | null = null
+    try {
+      bakRaw = await fs.readFile(bakPath, 'utf8')
+    } catch {
+      bakRaw = null
+    }
+    cache = (bakRaw !== null ? tryParse(bakRaw) : null) ?? {}
     return cache
+  }
+
+  // Atomic promotion: write a temp file, rotate the current file to .bak, then
+  // rename the temp into place. A crash at any point leaves either the previous
+  // file or a recoverable .bak — never a half-written primary file.
+  const promote = (tmp: string): void => {
+    try {
+      renameSync(filePath, bakPath)
+    } catch {
+      // first write — no existing file to back up
+    }
+    renameSync(tmp, filePath)
   }
 
   const writeAll = async (content: string): Promise<void> => {
     await fs.mkdir(dirname(filePath), { recursive: true })
-    await fs.writeFile(filePath, content, 'utf8')
+    await fs.writeFile(tmpPath, content, 'utf8')
+    try {
+      await fs.rename(filePath, bakPath)
+    } catch {
+      // first write — no existing file to back up
+    }
+    await fs.rename(tmpPath, filePath)
   }
 
   return {
@@ -60,6 +119,18 @@ export function createStorage(filePath: string): Storage {
     },
     flush(): Promise<void> {
       return writeChain
+    },
+    flushSync(): void {
+      if (cache === null) return
+      try {
+        mkdirSync(dirname(filePath), { recursive: true })
+        // Dedicated sync temp file so this can't collide with an in-flight async
+        // writeAll() using tmpPath.
+        writeFileSync(syncTmpPath, JSON.stringify(cache, null, 2), 'utf8')
+        promote(syncTmpPath)
+      } catch {
+        // best-effort durability backstop
+      }
     },
   }
 }

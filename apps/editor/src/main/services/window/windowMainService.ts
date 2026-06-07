@@ -70,7 +70,7 @@ export interface IWindowMainService {
   getWindows(): ReadonlyArray<BrowserWindow>
   getOpenWindowInfos(): IOpenWindowInfo[]
   openWindowForFolder(folder?: URI): Promise<void>
-  captureSessionForQuit(): void
+  captureSessionForQuit(): Promise<void>
   confirmQuit(): Promise<boolean>
   isQuitConfirmed(): boolean
   dispose(): void
@@ -381,12 +381,12 @@ export class WindowMainService implements IWindowMainService {
 
   /**
    * Snapshot the full session right before the app quits, before windows start
-   * closing (which would otherwise shrink the persisted list). The fire-and-forget
-   * write is drained by getDefaultStorage().flush() in will-quit.
+   * closing (which would otherwise shrink the persisted list). Awaits the write
+   * so the caller in before-quit can guarantee durability before app.quit().
    */
-  captureSessionForQuit(): void {
+  async captureSessionForQuit(): Promise<void> {
     this._quitting = true
-    if (this._windows.size > 0) void this._persistSessionNow()
+    if (this._windows.size > 0) await this._persistSessionNow()
   }
 
   /**

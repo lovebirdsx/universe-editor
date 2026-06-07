@@ -31,6 +31,7 @@ function makeStorage(value?: unknown): Storage {
       delete store[key]
     },
     async flush(): Promise<void> {},
+    flushSync(): void {},
   }
 }
 

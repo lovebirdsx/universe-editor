@@ -77,6 +77,51 @@ describe('createStorage', () => {
     expect(await reader.get('a')).toBe(1)
     expect(await reader.get('b')).toBe(2)
   })
+
+  it('flushSync() synchronously persists the latest state', async () => {
+    const s = createStorage(file)
+    await s.set('a', 1)
+    await s.set('b', 2)
+    // Corrupt the on-disk primary to prove flushSync rewrites from in-memory
+    // cache rather than relying on the async write chain having drained.
+    await fs.writeFile(file, 'clobbered-{', 'utf8')
+    s.flushSync()
+    const reader = createStorage(file)
+    expect(await reader.get('a')).toBe(1)
+    expect(await reader.get('b')).toBe(2)
+  })
+
+  it('flushSync() is a no-op before anything is read or written', () => {
+    const s = createStorage(file)
+    expect(() => s.flushSync()).not.toThrow()
+  })
+
+  it('keeps the previous contents as a .bak on each write', async () => {
+    const s = createStorage(file)
+    await s.set('v', 'first')
+    await s.flush()
+    await s.set('v', 'second')
+    await s.flush()
+    const bak = JSON.parse(await fs.readFile(`${file}.bak`, 'utf8')) as Record<string, unknown>
+    expect(bak['v']).toBe('first')
+    const main = JSON.parse(await fs.readFile(file, 'utf8')) as Record<string, unknown>
+    expect(main['v']).toBe('second')
+  })
+
+  it('recovers from .bak when the primary file is corrupt', async () => {
+    const writer = createStorage(file)
+    await writer.set('keep', 'me')
+    await writer.flush()
+    await writer.set('keep', 'me-too')
+    await writer.flush()
+    // Corrupt the primary; the last-good copy still lives in .bak.
+    await fs.writeFile(file, 'half-written-{', 'utf8')
+
+    const reader = createStorage(file)
+    expect(await reader.get('keep')).toBe('me')
+    // The corrupt primary is preserved for diagnostics rather than discarded.
+    await expect(fs.readFile(`${file}.corrupt`, 'utf8')).resolves.toBe('half-written-{')
+  })
 })
 
 describe('workspaceIdFromUri', () => {
