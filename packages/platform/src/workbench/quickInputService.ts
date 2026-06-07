@@ -129,6 +129,13 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   readonly onDidAccept: Event<T[]>
   readonly onDidHide: Event<void>
   readonly onDidChangeValue: Event<string>
+  /**
+   * Fires when the focused (active) item changes — on keyboard navigation, mouse
+   * hover, or list re-filtering. Carries the active item, or `undefined` when the
+   * list is empty / has no selectable item. Used for live preview (e.g. Go to
+   * Symbol revealing the symbol as you move through results).
+   */
+  readonly onDidChangeActive: Event<T | undefined>
 
   show(): void
   hide(): void

@@ -53,6 +53,17 @@ catalog:
   # JSON with comments (settings.json / keybindings.json)
   jsonc-parser: ^3.3.1
 
+  # Markdown language server (vscode-markdown-languageservice in a spawned LSP subprocess).
+  # The alpha is pinned (semver ranges are unfriendly to prereleases). markdown-it is the
+  # host-provided parser (the language service takes an IMdParser, not markdown-it directly).
+  vscode-markdown-languageservice: 0.5.0-alpha.13
+  markdown-it: ^14.1.0
+  '@types/markdown-it': ^14.1.2
+  vscode-languageserver-protocol: ^3.17.5
+  vscode-languageserver-textdocument: ^1.0.11
+  vscode-languageserver-types: ^3.17.2
+  vscode-uri: ^3.0.8
+
   # Archive extraction (on-demand claude binary download)
   tar: ^7.4.3
   '@vscode/ripgrep': ^1.18.0

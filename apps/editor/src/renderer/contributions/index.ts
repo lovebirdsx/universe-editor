@@ -54,6 +54,9 @@ import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
 import { ExtensionsContribution } from './ExtensionsContribution.js'
+import { LanguageFeaturesContribution } from './LanguageFeaturesContribution.js'
+import { MarkdownDocumentSyncContribution } from './MarkdownDocumentSyncContribution.js'
+import { EditorOpenerContribution } from './EditorOpenerContribution.js'
 import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
@@ -398,6 +401,31 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.extensions',
   ExtensionsContribution,
   WorkbenchPhase.Eventually,
+)
+
+// Markdown language providers (document symbols / definition / references).
+// AfterRestore so the editor area + Monaco are live before providers register.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.languageFeatures',
+  LanguageFeaturesContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Pushes open markdown models to the language server (lazy-starts it). AfterRestore
+// so the editor service + Monaco models are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.markdownDocumentSync',
+  MarkdownDocumentSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Routes Monaco's cross-file "open this resource" hook (Go to Definition into
+// another file) through the workbench editor service. AfterRestore so the editor
+// service + Monaco are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.editorOpener',
+  EditorOpenerContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 // Activity Bar badges: unsaved file count on the Explorer, changed file count on

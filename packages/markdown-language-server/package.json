@@ -1,0 +1,42 @@
+{
+  "name": "@universe-editor/markdown-language-server",
+  "version": "0.0.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "exports": {
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "default": "./dist/protocol.js"
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs && tsc",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "dependencies": {
+    "@universe-editor/extensions-common": "workspace:*",
+    "@universe-editor/platform": "workspace:*",
+    "markdown-it": "catalog:",
+    "vscode-languageserver-protocol": "catalog:",
+    "vscode-languageserver-textdocument": "catalog:",
+    "vscode-languageserver-types": "catalog:",
+    "vscode-markdown-languageservice": "catalog:",
+    "vscode-uri": "catalog:"
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@types/markdown-it": "catalog:",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

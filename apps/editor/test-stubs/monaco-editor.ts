@@ -66,6 +66,7 @@ export const editor = {
   }),
   getModel: () => null,
   defineTheme: () => {},
+  addKeybindingRule: () => {},
 }
 
 function makeDefaults() {

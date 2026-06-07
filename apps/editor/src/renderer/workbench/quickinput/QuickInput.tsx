@@ -13,6 +13,7 @@ import { useService } from '../useService.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { resolveSymbolKindIcon } from './symbolKindIcon.js'
 import {
   QuickInputService,
   type QuickPickState,
@@ -20,7 +21,7 @@ import {
 import styles from './QuickInput.module.css'
 
 function resolveQuickInputIcon(iconId: string) {
-  return resolveHeaderIcon(iconId) ?? resolveAgentIcon(iconId)
+  return resolveSymbolKindIcon(iconId) ?? resolveHeaderIcon(iconId) ?? resolveAgentIcon(iconId)
 }
 
 /** Portal that renders Quick Pick / Input Box over the entire workbench. */

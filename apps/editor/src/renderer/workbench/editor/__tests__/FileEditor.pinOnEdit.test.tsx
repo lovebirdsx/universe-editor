@@ -92,6 +92,7 @@ import {
   IEditorGroupsService,
   IFileService,
   InstantiationService,
+  observableValue,
   ServiceCollection,
   URI,
   type IFileService as IFileServiceType,
@@ -99,7 +100,17 @@ import {
 import { FileEditor } from '../FileEditor.js'
 import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
+import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
 import { ServicesContext } from '../../useService.js'
+
+function makeOutlineStub() {
+  return {
+    _serviceBrand: undefined,
+    outline: observableValue('test.outline', undefined),
+    activeSymbol: observableValue('test.activeSymbol', undefined),
+    revealSymbol: () => {},
+  }
+}
 
 function makeFs(): IFileServiceType {
   return {
@@ -214,6 +225,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     const group = new FakeGroup(input)
     const groups = new FakeGroupsService([group])
     services.set(IEditorGroupsService, groups as unknown as IEditorGroupsService)
+    services.set(IOutlineService, makeOutlineStub() as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -250,6 +262,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
+    services.set(IOutlineService, makeOutlineStub() as never)
 
     render(
       <ServicesContext.Provider value={inst}>
@@ -285,6 +298,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
+    services.set(IOutlineService, makeOutlineStub() as never)
 
     render(
       <ServicesContext.Provider value={inst}>

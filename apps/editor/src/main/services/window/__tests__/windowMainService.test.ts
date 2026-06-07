@@ -95,6 +95,7 @@ function makeOpts() {
       acpHost: {} as never,
       acpTerminal: {} as never,
       extensionHost: {} as never,
+      markdownLanguage: {} as never,
       claudeBinary: {} as never,
       codexBinary: {} as never,
       disposableLeak: {} as never,

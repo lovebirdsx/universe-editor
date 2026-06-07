@@ -116,6 +116,11 @@ async function loadMonaco(): Promise<typeof monaco> {
       _monaco = monacoMod
       registerLogLanguage(_monaco)
       disableLanguageDiagnostics()
+      // Drop monaco's built-in Ctrl+Shift+O (quickOutline) default key so it
+      // doesn't double-fire alongside our own `workbench.action.gotoSymbol`,
+      // which provides the Go to Symbol quick pick. The command itself stays
+      // registered (still triggerable via editor.trigger).
+      monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-editor.action.quickOutline' })
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here

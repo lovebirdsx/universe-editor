@@ -40,6 +40,11 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'extension-host/dist/bootstrap.js',
   },
   {
+    label: 'markdown language server',
+    source: join(repoRoot, 'packages/markdown-language-server/dist/bootstrap.js'),
+    packaged: 'markdown-language-server/dist/bootstrap.js',
+  },
+  {
     label: 'release notes',
     source: join(editorRoot, 'resources/release-notes.json'),
     packaged: 'release-notes.json',
@@ -150,6 +155,10 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
 
   copyPath(join(repoRoot, 'vendor/claude-agent-acp/dist'), join(stageDir, 'claude-agent-acp/dist'))
   copyPath(join(repoRoot, 'packages/extension-host/dist'), join(stageDir, 'extension-host/dist'))
+  copyPath(
+    join(repoRoot, 'packages/markdown-language-server/dist'),
+    join(stageDir, 'markdown-language-server/dist'),
+  )
   copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
 
   for (const extension of discoverBuiltinExtensions()) {

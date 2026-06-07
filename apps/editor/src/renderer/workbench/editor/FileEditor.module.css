@@ -1,6 +1,15 @@
-.fileEditor {
+.fileEditorRoot {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.fileEditor {
+  width: 100%;
+  flex: 1 1 0;
   min-width: 0;
   min-height: 0;
   background: var(--color-editor-bg, #1e1e1e);

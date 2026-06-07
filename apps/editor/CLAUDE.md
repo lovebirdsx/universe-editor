@@ -283,6 +283,19 @@ mark(PerfMarks.rendererDidMount)
 
 要点：底层 `mark()` 是通用基建，未来加任何性能检测都从「往 `PerfMarks` 加常量 + 打点」起步;跨进程聚合统一走 `ITimerService`。
 
+## 套路 H：加一个语言特性（DocumentSymbol / Definition / Reference / Outline）
+
+语言特性走**薄门面 `ILanguageFeaturesService`**（`services/languageFeatures/`）：注册时一边存进镜像表（供 Outline 枚举），一边转发给 `monaco.languages.register*Provider`——所以注册一个 provider 即同时点亮 **Outline 视图** 和 Monaco 内置的 **F12 跳转定义 / Shift+F12 查看引用 peek**，无需自己写 UI。
+
+**给某语言加 provider**（如已支持的 markdown）：
+
+1. 在 `services/languageFeatures/<lang>/` 写 provider（实现 `monaco.languages.DocumentSymbolProvider` 等，纯逻辑抽成可单测纯函数）。
+2. 在 `contributions/LanguageFeaturesContribution.ts` 的 `MonacoLoader.ensureInitialized().then(...)` 里 `this._register(langFeatures.registerXxxProvider('<lang>', new XxxProvider()))`。**必须等 Monaco 就绪**，否则门面转发报错。
+
+Outline 数据由 `IOutlineService` 统一产出（`outline` / `activeSymbol` 两个 observable），`OutlineView`（侧栏，容器 `workbench.view.outline` 在第二侧栏）与 `Breadcrumbs`（`FileEditor` 顶部）共享消费。DocumentSymbol 的 `range`/`selectionRange` 用 1-based lineNumber；跳转走 `outlineService.revealSymbol`（内部 `FileEditorRegistry.get` + `setPosition` + reveal）。
+
+参考：`services/languageFeatures/LanguageFeaturesService.ts`、`OutlineService.ts`、`markdown/markdown*Provider.ts`
+
 ## 编辑器输入三件套
 
 - **`FileEditorInput`**：editor input 描述（URI + 元数据），可序列化恢复

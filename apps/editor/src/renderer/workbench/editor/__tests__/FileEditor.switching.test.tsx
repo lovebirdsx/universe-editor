@@ -82,6 +82,7 @@ import {
   IFileService,
   IFocusStackService,
   InstantiationService,
+  observableValue,
   ServiceCollection,
   URI,
   type IConfigurationChangeEvent,
@@ -91,6 +92,7 @@ import { FileEditor } from '../FileEditor.js'
 import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
+import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
 import { IUserKeybindingsService } from '../../../services/keybindings/UserKeybindingsService.js'
 import { ServicesContext } from '../../useService.js'
 import { EditorGroupContext } from '../EditorGroupContext.js'
@@ -241,6 +243,12 @@ describe('FileEditor tab switching', () => {
     const inputB = instantiation.createInstance(FileEditorInput, uriB)
     const group = new FakeGroup(inputA)
     services.set(IEditorGroupsService, new FakeGroupsService(group) as never)
+    services.set(IOutlineService, {
+      _serviceBrand: undefined,
+      outline: observableValue('test.outline', undefined),
+      activeSymbol: observableValue('test.activeSymbol', undefined),
+      revealSymbol: () => {},
+    } as never)
 
     const { rerender } = render(renderEditor(instantiation, group, inputA))
 

@@ -42,6 +42,12 @@ export namespace ProxyChannel {
         if (typeof propKey !== 'string') {
           return undefined
         }
+        // The proxy must never look like a thenable: otherwise returning it from
+        // an async function (or passing it to Promise.resolve) probes `.then`,
+        // issuing a bogus `then` RPC call that never resolves and hangs the caller.
+        if (propKey === 'then') {
+          return undefined
+        }
         const properties = options?.properties
         if (properties && properties.has(propKey)) {
           return properties.get(propKey)

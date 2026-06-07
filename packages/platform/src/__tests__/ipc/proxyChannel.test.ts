@@ -137,6 +137,17 @@ describe('ProxyChannel.toService / fromService', () => {
     await expect(anyProxy.missingMethod(1)).rejects.toThrow('Method not found: missingMethod')
     cleanup()
   })
+
+  it('is not thenable, so returning it from an async function does not hang', async () => {
+    const { proxy, cleanup } = setup()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect((proxy as any).then).toBeUndefined()
+    // Awaiting an async function that returns the proxy must resolve to the proxy
+    // itself (a thenable proxy would issue a bogus `then` RPC and never settle).
+    const ready = await (async () => proxy)()
+    expect(await ready.add(1, 2)).toBe(3)
+    cleanup()
+  })
 })
 
 describe('ProxyChannel `properties` option', () => {

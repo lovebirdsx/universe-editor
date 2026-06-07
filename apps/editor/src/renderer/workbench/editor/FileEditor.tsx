@@ -28,6 +28,7 @@ import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { getAllMonacoDefaultKeybindings } from './monaco/monacoActionsBridge.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
+import { Breadcrumbs } from './Breadcrumbs.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -93,6 +94,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  // Latest input, read by long-lived editor callbacks (e.g. the blur handler)
+  // that must not be recreated on tab switch. Kept in sync by the model-swap
+  // effect below so switching tabs stays a cheap setModel — no editor rebuild.
+  const fileInputRef = useRef(fileInput)
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
   const activeGroup = groupsService.activeGroup
   const activeGroupActiveEditor = activeGroup.activeEditor
@@ -149,7 +154,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         if (document.activeElement !== document.body) return
         if (group === null) return
         if (groupsService.activeGroup !== group) return
-        if (groupsService.activeGroup.activeEditor !== fileInput) return
+        if (groupsService.activeGroup.activeEditor !== fileInputRef.current) return
         const top = focusStackService.getTop()
         if (top && top.partId !== PartId.EditorArea) return
         if (top && top.groupId !== undefined && top.groupId !== group.id) return
@@ -198,8 +203,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       editorRef.current = null
     }
     // Create the editor once and keep it for the component's lifetime — never
-    // recreate on active-group change. `groupsService.activeGroup` is read lazily
-    // inside the blur handler via the stable singleton, so it isn't a dependency.
+    // recreate on input or active-group change. The active input is read lazily
+    // via `fileInputRef` (blur handler) and the model-swap effect handles input
+    // changes with setModel, so neither is a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     monacoNs,
@@ -209,7 +215,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     contextKeyService,
     focusStackService,
     group,
-    fileInput,
   ])
 
   // Apply config changes to the live editor instance.
@@ -238,11 +243,17 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
   // Wire the active input -> model swap + dirty tracking + viewState save/restore.
   useEffect(() => {
+    fileInputRef.current = fileInput
     if (!monacoNs) return
     let cancelled = false
     let contentSub: IDisposable | undefined
     let cursorSub: IDisposable | undefined
     let scrollSub: IDisposable | undefined
+    // Capture the editor we register so cleanup can unregister it regardless of
+    // editorRef.current — the create-effect cleanup may have already nulled the
+    // ref (it runs first on rebuild/unmount), which would otherwise leave a dead
+    // registration behind and stick the Outline on the previous file.
+    let registeredEditor: monaco.editor.IStandaloneCodeEditor | undefined
 
     const groupId = group?.id
     const resourceUri = fileInput.resource.toString()
@@ -258,6 +269,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       const model = await fileInput.resolveModel()
       if (cancelled) return
       editorRef.current?.setModel(model)
+      // The editor instance is reused across tabs; keep readOnly in sync with
+      // the current input (the create-effect only set it for the first input).
+      editorRef.current?.updateOptions({ readOnly: fileInput.isReadonly })
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.
@@ -272,7 +286,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       }
 
       if (editorRef.current) {
-        FileEditorRegistry.register(fileInput, editorRef.current, group?.id)
+        registeredEditor = editorRef.current
+        FileEditorRegistry.register(fileInput, registeredEditor, group?.id)
         if (groupsService.activeGroup.activeEditor === fileInput) {
           focusStandaloneEditor(editorRef.current, contextKeyService)
         }
@@ -301,7 +316,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       contentSub?.dispose()
       cursorSub?.dispose()
       scrollSub?.dispose()
-      if (editorRef.current) FileEditorRegistry.unregister(fileInput, editorRef.current)
+      if (registeredEditor) FileEditorRegistry.unregister(fileInput, registeredEditor)
     }
   }, [monacoNs, contextKeyService, fileInput, groupsService, group])
 
@@ -313,11 +328,19 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
   if (!monacoNs) {
     return (
-      <div className={styles['fileEditor']} data-testid="file-editor">
-        <div className={styles['fileEditorLoading']}>正在加载编辑器…</div>
+      <div className={styles['fileEditorRoot']}>
+        <Breadcrumbs input={fileInput} />
+        <div className={styles['fileEditor']} data-testid="file-editor">
+          <div className={styles['fileEditorLoading']}>正在加载编辑器…</div>
+        </div>
       </div>
     )
   }
 
-  return <div ref={containerRef} className={styles['fileEditor']} data-testid="file-editor" />
+  return (
+    <div className={styles['fileEditorRoot']}>
+      <Breadcrumbs input={fileInput} />
+      <div ref={containerRef} className={styles['fileEditor']} data-testid="file-editor" />
+    </div>
+  )
 }

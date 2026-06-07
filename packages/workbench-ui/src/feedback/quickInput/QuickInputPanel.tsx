@@ -299,6 +299,20 @@ export function QuickPickPanel({
     }
   }, [focusedIdx, sortedFiltered, sortedFiltered.length, virtualizer])
 
+  // Report the active (focused) item to the host for live preview. Deduped by id
+  // so re-renders that keep the same focused item (e.g. typing, virtual scroll)
+  // don't re-fire. No-op unless the host wired onActiveChange.
+  const onActiveChange = state.onActiveChange
+  const lastActiveIdRef = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!onActiveChange) return
+    const active = sortedFiltered[focusedIdx]
+    const item = isSelectable(active) ? active : undefined
+    if (item?.id === lastActiveIdRef.current) return
+    lastActiveIdRef.current = item?.id
+    onActiveChange(item)
+  }, [onActiveChange, sortedFiltered, focusedIdx])
+
   const accept = useCallback(
     (items: IQuickPickItem[], mods?: IKeyMods) => {
       state.onAccept?.(items, mods)

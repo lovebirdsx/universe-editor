@@ -421,3 +421,45 @@ describe('QuickPickPanel item removal', () => {
     expect(screen.queryByText('Format Document')).toBeNull()
   })
 })
+
+describe('QuickPickPanel active item (live preview)', () => {
+  it('reports the first item on mount and the new item on navigation', () => {
+    const onActiveChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, onActiveChange })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(onActiveChange).toHaveBeenLastCalledWith(items[0])
+
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'ArrowDown' })
+    expect(onActiveChange).toHaveBeenLastCalledWith(items[1])
+  })
+
+  it('does not re-fire while the focused item id stays the same', () => {
+    const onActiveChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, onActiveChange })}
+        onClose={() => undefined}
+      />,
+    )
+    onActiveChange.mockClear()
+    // Typing a query that keeps the first item focused must not re-report it.
+    fireEvent.change(screen.getByTestId('quick-input-field'), { target: { value: 'Format' } })
+    expect(onActiveChange).not.toHaveBeenCalled()
+  })
+
+  it('reports undefined when the list becomes empty', () => {
+    const onActiveChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, onActiveChange })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.change(screen.getByTestId('quick-input-field'), { target: { value: 'zzzznomatch' } })
+    expect(onActiveChange).toHaveBeenLastCalledWith(undefined)
+  })
+})

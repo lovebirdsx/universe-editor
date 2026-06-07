@@ -31,6 +31,7 @@ import {
 } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
+import { IMarkdownLanguageService } from '../shared/ipc/markdownLanguageService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
@@ -195,6 +196,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       logFiles: accessor.get(ILogFilesService),
       acpHost: accessor.get(IAcpHostService),
       extensionHost: accessor.get(IExtensionHostService),
+      markdownLanguage: accessor.get(IMarkdownLanguageService),
       acpTerminal: accessor.get(IAcpTerminalService),
       claudeBinary: accessor.get(IClaudeBinaryService),
       codexBinary: accessor.get(ICodexBinaryService),

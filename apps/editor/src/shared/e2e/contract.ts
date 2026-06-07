@@ -54,6 +54,13 @@ export interface E2EOpenWindow {
   readonly name: string | null
 }
 
+export interface E2EMarker {
+  readonly message: string
+  /** Monaco MarkerSeverity: 8 Error, 4 Warning, 2 Info, 1 Hint. */
+  readonly severity: number
+  readonly startLineNumber: number
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -141,6 +148,12 @@ export interface E2EProbe {
    */
   setActiveEditorCursor(lineNumber: number, column: number): boolean
   /**
+   * The active Monaco editor's 1-based cursor position, or undefined when the
+   * active editor isn't a file editor (or its Monaco instance isn't mounted).
+   * Used by Go to Symbol specs to assert the picker moved the cursor.
+   */
+  getActiveEditorCursor(): { lineNumber: number; column: number } | undefined
+  /**
    * Snapshot of the active diff editor's modified-side view state: the cursor
    * line and the first visible line. Used by diff auto-reveal specs to assert
    * the view scrolled to the first change. Undefined when the active editor is
@@ -227,6 +240,21 @@ export interface E2EProbe {
   getStoredLeakReport(): E2EDisposableLeakReport | null
   /** Number of currently registered SCM source controls. */
   getScmSourceControlCount(): number
+  // -- Markdown language server probe ---------------------------------------
+  /**
+   * Flattened document-symbol names for an open markdown file, via the markdown
+   * language server (the same path that drives the Outline / Breadcrumbs).
+   */
+  getMarkdownDocumentSymbols(uri: string): Promise<readonly string[]>
+  /** Workspace-symbol names matching a query (backs the Ctrl+T picker). */
+  queryMarkdownWorkspaceSymbols(query: string): Promise<readonly string[]>
+  /**
+   * Definition target URIs at a 1-based position (F12). Cross-file targets
+   * resolve to other documents' URIs.
+   */
+  getMarkdownDefinition(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
+  /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
+  getMarkdownMarkers(uri: string): readonly E2EMarker[]
 }
 
 declare global {

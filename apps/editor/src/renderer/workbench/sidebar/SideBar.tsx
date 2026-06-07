@@ -15,6 +15,7 @@ import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
 import { viewToolbarMap } from '../viewRegistry/viewToolbarMap.js'
 import { ExplorerView } from '../explorer/ExplorerView.js'
+import { OutlineView } from '../outline/OutlineView.js'
 import { SearchView } from '../search/SearchView.js'
 import { ScmView } from '../scm/ScmView.js'
 import { AgentsView } from '../agents/AgentsView.js'
@@ -24,6 +25,7 @@ import styles from './SideBar.module.css'
 /** Registry of React components keyed by IViewDescriptor.componentKey. */
 export const viewComponentMap = new Map<string, ComponentType>()
 viewComponentMap.set('explorer.tree', ExplorerView)
+viewComponentMap.set('outline.main', OutlineView)
 viewComponentMap.set('search.results', SearchView)
 viewComponentMap.set('scm.main', ScmView)
 viewComponentMap.set('agents.main', AgentsView)

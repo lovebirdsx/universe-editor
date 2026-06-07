@@ -64,6 +64,7 @@ export class QuickInputService implements IQuickInputService {
     const onDidAccept = new Emitter<T[]>()
     const onDidHide = new Emitter<void>()
     const onDidChangeValue = new Emitter<string>()
+    const onDidChangeActive = new Emitter<T | undefined>()
     let _items: readonly QuickPickInput<T>[] = []
     let _placeholder: string | undefined
     let _value = ''
@@ -87,6 +88,7 @@ export class QuickInputService implements IQuickInputService {
           _value = value
           onDidChangeValue.fire(value)
         },
+        onActiveChange: (item) => onDidChangeActive.fire(item as T | undefined),
         onHide: () => onDidHide.fire(),
       })
     }
@@ -137,6 +139,7 @@ export class QuickInputService implements IQuickInputService {
       onDidAccept: onDidAccept.event,
       onDidHide: onDidHide.event,
       onDidChangeValue: onDidChangeValue.event,
+      onDidChangeActive: onDidChangeActive.event,
       show: () => {
         _visible = true
         this._currentOnHide = () => onDidHide.fire()
@@ -150,6 +153,7 @@ export class QuickInputService implements IQuickInputService {
         onDidAccept.dispose()
         onDidHide.dispose()
         onDidChangeValue.dispose()
+        onDidChangeActive.dispose()
       },
     }
     return qp

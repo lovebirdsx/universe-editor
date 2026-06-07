@@ -30,6 +30,8 @@ export interface QuickPickState {
   onAccept?: (items: IQuickPickItem[], mods?: IKeyMods) => void
   onItemRemove?: ((item: IQuickPickItem) => void) | undefined
   onValueChange?: (value: string) => void
+  /** Fires when the focused (active) item changes; `undefined` when none. */
+  onActiveChange?: (item: IQuickPickItem | undefined) => void
   onInput?: (value: string) => void
   onHide?: () => void
   validateInput?: ((value: string) => string | undefined) | undefined

@@ -33,10 +33,12 @@ import {
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
+import type { IMarkdownLanguageService } from '../../shared/ipc/markdownLanguageService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
+import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
 import {
   E2E_PROBE_ENABLED_KEY,
   E2E_PROBE_KEY,
@@ -66,6 +68,7 @@ export interface E2EProbeServices {
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
   readonly scmService: IScmService
+  readonly markdownLanguageService: IMarkdownLanguageService
 }
 
 class DummyEditorInput extends EditorInput {
@@ -186,6 +189,14 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       monaco.focus()
       return true
     },
+    getActiveEditorCursor: () => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const monaco = FileEditorRegistry.get(active)
+      const position = monaco?.getPosition()
+      if (!position) return undefined
+      return { lineNumber: position.lineNumber, column: position.column }
+    },
     getActiveDiffViewState: () => {
       const group = services.editorGroupsService.activeGroup
       const active = group?.activeEditor
@@ -285,6 +296,44 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return JSON.parse(raw) as E2EDisposableLeakReport
     },
     getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
+    getMarkdownDocumentSymbols: async (uri: string): Promise<readonly string[]> => {
+      const symbols = await services.markdownLanguageService.provideDocumentSymbols(URI.parse(uri))
+      const names: string[] = []
+      const walk = (list: readonly { name: string; children?: readonly unknown[] }[]): void => {
+        for (const s of list) {
+          names.push(s.name)
+          if (s.children) walk(s.children as typeof list)
+        }
+      }
+      walk(symbols)
+      return names
+    },
+    queryMarkdownWorkspaceSymbols: async (query: string): Promise<readonly string[]> => {
+      const symbols = await services.markdownLanguageService.provideWorkspaceSymbols(query)
+      return symbols.map((s) => s.name)
+    },
+    getMarkdownDefinition: async (
+      uri: string,
+      lineNumber: number,
+      column: number,
+    ): Promise<readonly string[]> => {
+      const locations = await services.markdownLanguageService.provideDefinition(URI.parse(uri), {
+        line: lineNumber - 1,
+        character: column - 1,
+      })
+      return locations.map((l) => l.uri)
+    },
+    getMarkdownMarkers: (uri: string) => {
+      const markers = MonacoLoader.get().editor.getModelMarkers({
+        owner: 'markdown',
+        resource: MonacoLoader.get().Uri.parse(uri),
+      })
+      return markers.map((m) => ({
+        message: m.message,
+        severity: m.severity,
+        startLineNumber: m.startLineNumber,
+      }))
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

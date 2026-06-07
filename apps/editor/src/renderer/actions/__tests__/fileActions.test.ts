@@ -305,9 +305,11 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   private readonly _onDidAccept = new Emitter<T[]>()
   private readonly _onDidHide = new Emitter<void>()
   private readonly _onDidChangeValue = new Emitter<string>()
+  private readonly _onDidChangeActive = new Emitter<T | undefined>()
   readonly onDidAccept = this._onDidAccept.event
   readonly onDidHide = this._onDidHide.event
   readonly onDidChangeValue = this._onDidChangeValue.event
+  readonly onDidChangeActive = this._onDidChangeActive.event
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[] = []
   filterExternally = false
@@ -339,6 +341,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidAccept.dispose()
     this._onDidHide.dispose()
     this._onDidChangeValue.dispose()
+    this._onDidChangeActive.dispose()
   }
 }
 

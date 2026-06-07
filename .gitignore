@@ -13,6 +13,7 @@ coverage/
 .next/
 .claude/plans/
 .claude/explore-results/
+.claude/handoff/
 
 # Playwright
 playwright-report/

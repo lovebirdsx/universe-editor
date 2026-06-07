@@ -114,6 +114,7 @@ import {
 import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
+import { GoToWorkspaceSymbolAction, GoToFileSymbolAction } from './gotoSymbolActions.js'
 import {
   ClearAllNotificationsAction,
   TestNotificationAction,
@@ -226,6 +227,10 @@ registerAction2(FocusPreviousPartAction)
 registerAction2(GoBackAction)
 registerAction2(GoForwardAction)
 registerAction2(ClearHistoryAction)
+
+// Go — symbol navigation
+registerAction2(GoToWorkspaceSymbolAction)
+registerAction2(GoToFileSymbolAction)
 
 // Editor — move editor to group
 registerAction2(MoveEditorToLeftGroupAction)

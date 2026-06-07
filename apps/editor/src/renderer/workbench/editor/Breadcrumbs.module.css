@@ -1,0 +1,40 @@
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  height: 22px;
+  padding: 0 8px;
+  gap: 2px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--color-breadcrumb-fg, #a0a0a0);
+  background: var(--color-editor-bg, #1e1e1e);
+  border-bottom: 1px solid var(--color-editor-border, #2b2b2b);
+}
+
+.segment {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 4px;
+  height: 18px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border-radius: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.segment:hover {
+  background: var(--color-list-hover-bg, #2a2d2e);
+  color: var(--color-sidebar-fg, #cccccc);
+}
+
+.separator {
+  display: inline-flex;
+  align-items: center;
+  color: var(--color-sidebar-fg-dim, #707070);
+}

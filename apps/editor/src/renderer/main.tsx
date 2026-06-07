@@ -54,6 +54,7 @@ import { PerfMarks } from '../shared/perf/marks.js'
 import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
+import { IMarkdownLanguageService } from '../shared/ipc/markdownLanguageService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -100,6 +101,11 @@ import {
   ClosedEditorsService,
 } from './services/editor/ClosedEditorsService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
+import {
+  ILanguageFeaturesService,
+  LanguageFeaturesService,
+} from './services/languageFeatures/LanguageFeaturesService.js'
+import { IOutlineService, OutlineService } from './services/languageFeatures/OutlineService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
@@ -339,6 +345,16 @@ async function bootstrapWorkbench(): Promise<void> {
   const editorResolverService = instantiation.createInstance(EditorResolverService)
   services.set(IEditorResolverService, editorResolverService)
 
+  // Language features facade: mirrors providers (for the Outline view) while
+  // forwarding to Monaco (so built-in F12 / Shift+F12 peek works). No deps.
+  const languageFeaturesService = workbenchStore.add(new LanguageFeaturesService())
+  services.set(ILanguageFeaturesService, languageFeaturesService)
+
+  // OutlineService: derives the active editor's symbol tree + cursor symbol from
+  // the facade. Needs IEditorService + ILanguageFeaturesService, both set above.
+  const outlineService = workbenchStore.add(instantiation.createInstance(OutlineService))
+  services.set(IOutlineService, outlineService)
+
   // Services with @IStorageService dependencies go through DI.
   const viewsService = workbenchStore.add(instantiation.createInstance(ViewsService))
   services.set(IViewsService, viewsService)
@@ -477,6 +493,7 @@ async function bootstrapWorkbench(): Promise<void> {
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,
     scmService,
+    markdownLanguageService: services.get(IMarkdownLanguageService) as IMarkdownLanguageService,
   })
   workbenchStore.add(d)
 
