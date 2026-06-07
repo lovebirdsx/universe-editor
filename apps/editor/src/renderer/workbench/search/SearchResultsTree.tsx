@@ -9,7 +9,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { type CSSProperties, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import { type IFileMatch, type ITextSearchMatch, type URI } from '@universe-editor/platform'
+import {
+  type IFileMatch,
+  type ITextSearchMatch,
+  type URI,
+  markAsSingleton,
+} from '@universe-editor/platform'
 import {
   Tree,
   TreeModel,
@@ -107,11 +112,13 @@ export function SearchResultsTree({
 
   // Persist collapsed nodes to searchSession so switching views and back restores them.
   useEffect(() => {
-    const d = model.onDidChangeStructure(() => {
-      searchSession.treeCollapsedIds = new Set(
-        snapshotRef.current.expandableIds.filter((id) => !model.isExpanded(id)),
-      )
-    })
+    const d = markAsSingleton(
+      model.onDidChangeStructure(() => {
+        searchSession.treeCollapsedIds = new Set(
+          snapshotRef.current.expandableIds.filter((id) => !model.isExpanded(id)),
+        )
+      }),
+    )
     return () => d.dispose()
   }, [model])
 

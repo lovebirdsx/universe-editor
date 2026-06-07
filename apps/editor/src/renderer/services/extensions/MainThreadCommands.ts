@@ -11,6 +11,7 @@
 import {
   CommandsRegistry,
   Disposable,
+  DisposableMap,
   type ICommandService,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -30,7 +31,7 @@ export interface CommandOwnershipLedger {
 }
 
 export class MainThreadCommands extends Disposable implements IMainThreadCommands {
-  private readonly _registrations = new Map<string, IDisposable>()
+  private readonly _registrations = this._register(new DisposableMap<string, IDisposable>())
 
   constructor(
     private readonly _extHostCommands: IExtHostCommands,
@@ -55,8 +56,7 @@ export class MainThreadCommands extends Disposable implements IMainThreadCommand
   }
 
   $unregisterCommand(id: string): Promise<void> {
-    this._registrations.get(id)?.dispose()
-    this._registrations.delete(id)
+    this._registrations.deleteAndDispose(id)
     this._ledger?.release(id)
     return Promise.resolve()
   }
@@ -70,11 +70,5 @@ export class MainThreadCommands extends Disposable implements IMainThreadCommand
       )
     }
     return this._commandService.executeCommand(id, ...args)
-  }
-
-  override dispose(): void {
-    for (const reg of this._registrations.values()) reg.dispose()
-    this._registrations.clear()
-    super.dispose()
   }
 }

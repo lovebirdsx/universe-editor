@@ -446,3 +446,63 @@ export class MutableDisposable<T extends IDisposable> implements IDisposable {
     return oldValue
   }
 }
+
+/**
+ * Maps keys to disposable values, parenting each value so it roots through this
+ * map for leak tracking. Plain `Map<K, IDisposable>` does not establish a parent
+ * link, so values it holds are reported as leaks even when the owner is alive
+ * under a singleton root — use this instead whenever the values are disposables.
+ */
+export class DisposableMap<K, V extends IDisposable = IDisposable> implements IDisposable {
+  private readonly _store = new Map<K, V>()
+  private _isDisposed = false
+
+  constructor() {
+    trackDisposable(this)
+  }
+
+  get size(): number {
+    return this._store.size
+  }
+
+  dispose(): void {
+    if (this._isDisposed) {
+      return
+    }
+    markAsDisposed(this)
+    this._isDisposed = true
+    for (const value of this._store.values()) {
+      value.dispose()
+    }
+    this._store.clear()
+  }
+
+  has(key: K): boolean {
+    return this._store.has(key)
+  }
+
+  get(key: K): V | undefined {
+    return this._store.get(key)
+  }
+
+  /** Store `value` under `key`, disposing any value previously held at `key`. */
+  set(key: K, value: V): void {
+    this._store.get(key)?.dispose()
+    setParentOfDisposable(value, this)
+    this._store.set(key, value)
+  }
+
+  /** Dispose the value at `key` (if any) and remove it from the map. */
+  deleteAndDispose(key: K): void {
+    this._store.get(key)?.dispose()
+    this._store.delete(key)
+  }
+
+  values(): IterableIterator<V> {
+    return this._store.values()
+  }
+
+  [Symbol.iterator](): IterableIterator<[K, V]> {
+    return this._store[Symbol.iterator]()
+  }
+}

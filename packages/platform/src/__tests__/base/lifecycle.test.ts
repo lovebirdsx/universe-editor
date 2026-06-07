@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   combinedDisposable,
   Disposable,
+  DisposableMap,
   DisposableStore,
   DisposableTracker,
   dispose,
@@ -191,6 +192,59 @@ describe('markAsSingleton', () => {
   it('returns the same disposable', () => {
     const d = toDisposable(() => {})
     expect(markAsSingleton(d)).toBe(d)
+  })
+})
+
+describe('DisposableMap', () => {
+  afterEach(() => setDisposableTracker(null))
+
+  it('disposes the old value when a key is overwritten', () => {
+    const fn1 = vi.fn()
+    const fn2 = vi.fn()
+    const map = new DisposableMap<string>()
+    map.set('a', toDisposable(fn1))
+    map.set('a', toDisposable(fn2))
+    expect(fn1).toHaveBeenCalledOnce()
+    expect(fn2).not.toHaveBeenCalled()
+  })
+
+  it('deleteAndDispose disposes and removes the value', () => {
+    const fn = vi.fn()
+    const map = new DisposableMap<string>()
+    map.set('a', toDisposable(fn))
+    map.deleteAndDispose('a')
+    expect(fn).toHaveBeenCalledOnce()
+    expect(map.has('a')).toBe(false)
+  })
+
+  it('dispose() releases every held value', () => {
+    const fn1 = vi.fn()
+    const fn2 = vi.fn()
+    const map = new DisposableMap<string>()
+    map.set('a', toDisposable(fn1))
+    map.set('b', toDisposable(fn2))
+    map.dispose()
+    expect(fn1).toHaveBeenCalledOnce()
+    expect(fn2).toHaveBeenCalledOnce()
+    expect(map.size).toBe(0)
+  })
+
+  it('values parent through the map: not reported as leaks under a singleton root', () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    const root = markAsSingleton(new DisposableStore())
+    const map = root.add(new DisposableMap<string>())
+    map.set(
+      'a',
+      toDisposable(() => {}),
+    )
+    map.set(
+      'b',
+      toDisposable(() => {}),
+    )
+    // The owner is alive (never disposed) but rooted at a singleton — exactly the
+    // extension-host scenario. A plain Map would orphan these values and report them.
+    expect(tracker.computeLeakingDisposables()).toBeUndefined()
   })
 })
 

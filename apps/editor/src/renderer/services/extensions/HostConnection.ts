@@ -134,7 +134,7 @@ export class HostConnection extends Disposable {
     const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
 
-    const mainThreadOutput = new MainThreadOutput(deps.output)
+    const mainThreadOutput = store.add(new MainThreadOutput(deps.output))
     server.registerChannel(
       ExtHostChannels.mainThreadOutput,
       ProxyChannel.fromService(mainThreadOutput),

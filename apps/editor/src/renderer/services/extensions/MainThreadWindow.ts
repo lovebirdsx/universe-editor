@@ -8,6 +8,7 @@
 
 import {
   Disposable,
+  DisposableMap,
   IDialogService,
   INotificationService,
   IQuickInputService,
@@ -40,7 +41,7 @@ function mapSeverity(severity: ExtHostMessageSeverity): Severity {
 }
 
 export class MainThreadWindow extends Disposable implements IMainThreadWindow {
-  private readonly _entries = new Map<number, IStatusBarEntryAccessor>()
+  private readonly _entries = this._register(new DisposableMap<number, IStatusBarEntryAccessor>())
 
   constructor(
     private readonly _notification: INotificationService,
@@ -118,8 +119,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
   }
 
   $disposeStatusBarEntry(handle: number): Promise<void> {
-    this._entries.get(handle)?.dispose()
-    this._entries.delete(handle)
+    this._entries.deleteAndDispose(handle)
     return Promise.resolve()
   }
 
@@ -137,11 +137,5 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
       ...(entry.command !== undefined ? { command: entry.command } : {}),
       ...(entry.showProgress !== undefined ? { showProgress: entry.showProgress } : {}),
     }
-  }
-
-  override dispose(): void {
-    for (const entry of this._entries.values()) entry.dispose()
-    this._entries.clear()
-    super.dispose()
   }
 }

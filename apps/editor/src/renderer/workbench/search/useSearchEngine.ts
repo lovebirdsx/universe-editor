@@ -16,6 +16,7 @@ import {
   IWorkspaceService,
   StatusBarAlignment,
   URI,
+  markAsSingleton,
   type IFileMatch,
   type IStatusBarEntryAccessor,
   type ITextSearchProgress,
@@ -137,27 +138,31 @@ export function useSearchEngine(
   useEffect(() => {
     if (results.length === 0) return
     const known = new Set(results.map((fm) => (URI.revive(fm.resource) as URI).toString()))
-    const disposable = fileWatcherService.onDidChangeFiles((events) => {
-      for (const ev of events) {
-        const key = (URI.revive(ev.resource) as URI).toString()
-        if (known.has(key)) {
-          setIsStale(true)
-          return
+    const disposable = markAsSingleton(
+      fileWatcherService.onDidChangeFiles((events) => {
+        for (const ev of events) {
+          const key = (URI.revive(ev.resource) as URI).toString()
+          if (known.has(key)) {
+            setIsStale(true)
+            return
+          }
         }
-      }
-    })
+      }),
+    )
     return () => disposable.dispose()
   }, [results, fileWatcherService])
 
   useEffect(() => {
-    const disposable = workspaceService.onDidChangeWorkspace(() => {
-      abortRef.current?.abort()
-      setResults([])
-      setProgress(null)
-      setIsSearching(false)
-      setRegexError(null)
-      setIsStale(false)
-    })
+    const disposable = markAsSingleton(
+      workspaceService.onDidChangeWorkspace(() => {
+        abortRef.current?.abort()
+        setResults([])
+        setProgress(null)
+        setIsSearching(false)
+        setRegexError(null)
+        setIsStale(false)
+      }),
+    )
     return () => disposable.dispose()
   }, [workspaceService])
 
