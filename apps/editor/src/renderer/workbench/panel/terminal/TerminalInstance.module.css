@@ -2,15 +2,11 @@
   position: absolute;
   inset: 0;
   display: none;
+  /* Padding lives here, not on the xterm wrapper: when the panel is CSS-hidden
+     (Allotment pane height:0) the wrapper's content area collapses to 0 so
+     FitAddon won't clamp the terminal to a single row. */
   padding: 4px 6px;
-  /*
-   * FitAddon reads getComputedStyle(parent).height to size the grid. Under
-   * box-sizing: border-box that value includes this padding, but the addon only
-   * subtracts the terminal element's own padding (zero) — so it would over-count
-   * by the padding and render a partial extra row that spills below the editor,
-   * behind the status bar. content-box makes the computed height exclude padding.
-   */
-  box-sizing: content-box;
+  box-sizing: border-box;
 }
 
 .instance.visible {

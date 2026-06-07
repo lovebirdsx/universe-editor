@@ -62,6 +62,8 @@ export interface ITerminalManagerService {
   readonly onFocusRequest: Event<void>
   /** Fires when any terminal process exits, before the entry is removed. */
   readonly onDidTerminalExit: Event<ITerminalExitEvent>
+  /** Fires after a terminal is removed (user close or process exit). */
+  readonly onDidRemoveTerminal: Event<{ id: string }>
 
   newTerminal(spec?: ITerminalNewSpec): Promise<string | null>
   closeTerminal(id: string): void
@@ -132,6 +134,9 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   private readonly _onDidTerminalExit = this._register(new Emitter<ITerminalExitEvent>())
   readonly onDidTerminalExit: Event<ITerminalExitEvent> = this._onDidTerminalExit.event
+
+  private readonly _onDidRemoveTerminal = this._register(new Emitter<{ id: string }>())
+  readonly onDidRemoveTerminal: Event<{ id: string }> = this._onDidRemoveTerminal.event
 
   private readonly _clients = new Map<string, TermClient>()
   private readonly _specs = new Map<string, TermSpec>()
@@ -330,6 +335,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private _remove(id: string): void {
     if (!this._clients.delete(id)) return
     this._specs.delete(id)
+    this._onDidRemoveTerminal.fire({ id })
     const next = this._terminals.get().filter((t) => t.id !== id)
     this._setAllTerminals(next)
     if (this._activeTerminalId.get() === id) {

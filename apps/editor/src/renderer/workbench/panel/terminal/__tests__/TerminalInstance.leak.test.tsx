@@ -1,72 +1,27 @@
 /*---------------------------------------------------------------------------------------------
  *  Regression: a mounted TerminalInstance must not surface its useEffect-owned
- *  Disposables as leaks. The Restart Editor command snapshots the leak tracker
- *  while React is still mounted (before reactRoot.unmount() flushes passive
- *  cleanup), so the live subscriptions created in useEffect — manager.attach,
- *  config.onDidChangeConfiguration, manager.onFocusRequest — appeared as leaks.
- *  They are marked as singletons (the useOwnedTreeModel pattern): the tracker
- *  ignores them, a real unmount still disposes them.
+ *  Disposables as leaks, and unmounting a view must NOT dispose the persistent
+ *  xterm holder (it outlives the view; only a process exit releases it).
+ *
+ *  The xterm instance + its terminal-level subscriptions now live in
+ *  TerminalXtermService (see TerminalXtermService.test.ts). The component only
+ *  owns: the manager.onFocusRequest subscription (markAsSingleton, so the leak
+ *  tracker ignores it mid-mount), a ResizeObserver and DOM focus listeners.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { act, cleanup, render } from '@testing-library/react'
 import {
   DisposableTracker,
-  IConfigurationService,
+  Emitter,
   IContextKeyService,
   setDisposableTracker,
   toDisposable,
-  type IDisposable,
 } from '@universe-editor/platform'
+import { ITerminalManagerService } from '../../../../services/terminal/TerminalManagerService.js'
+import { ITerminalXtermService } from '../../../../services/terminal/TerminalXtermService.js'
 import { ServicesContext } from '../../../useService.js'
 
-vi.mock('@xterm/xterm/css/xterm.css', () => ({}))
-
-vi.mock('@xterm/xterm', () => {
-  class Terminal {
-    options: Record<string, unknown> = {}
-    cols = 80
-    rows = 24
-    constructor(opts: Record<string, unknown>) {
-      this.options = { ...opts }
-    }
-    loadAddon(): void {}
-    open(): void {}
-    registerLinkProvider(): IDisposable {
-      return { dispose() {} }
-    }
-    onData(): IDisposable {
-      return { dispose() {} }
-    }
-    onSelectionChange(): IDisposable {
-      return { dispose() {} }
-    }
-    attachCustomKeyEventHandler(): void {}
-    write(): void {}
-    focus(): void {}
-    hasSelection(): boolean {
-      return false
-    }
-    getSelection(): string {
-      return ''
-    }
-    paste(): void {}
-    dispose(): void {}
-  }
-  return { Terminal }
-})
-
-vi.mock('@xterm/addon-fit', () => ({
-  FitAddon: class {
-    fit(): void {}
-  },
-}))
-
-vi.mock('@xterm/addon-web-links', () => ({
-  WebLinksAddon: class {},
-}))
-
-// happy-dom lacks ResizeObserver; xterm-adjacent code in the component uses it.
 class FakeResizeObserver {
   observe(): void {}
   unobserve(): void {}
@@ -74,56 +29,81 @@ class FakeResizeObserver {
 }
 
 interface Tracked {
-  attachDisposed: boolean
   focusDisposed: boolean
-  configDisposed: boolean
+  holderDisposed: boolean
+  saveScrollCalls: number
+  wrapperRemoved: boolean
+}
+
+function makeHolder(tracked: Tracked) {
+  const wrapper = document.createElement('div')
+  const onDidChangeSelection = new Emitter<void>()
+  const origRemove = wrapper.remove.bind(wrapper)
+  wrapper.remove = () => {
+    tracked.wrapperRemoved = true
+    origRemove()
+  }
+  return {
+    term: {},
+    wrapper,
+    onDidChangeSelection: onDidChangeSelection.event,
+    setLinkHandlers() {},
+    reattachTo(host: HTMLElement) {
+      host.appendChild(wrapper)
+    },
+    fit() {},
+    scheduleFit() {},
+    saveScroll() {
+      tracked.saveScrollCalls++
+    },
+    restoreScroll() {},
+    focus() {},
+    hasSelection() {
+      return false
+    },
+    async copy() {},
+    async paste() {},
+    dispose() {
+      tracked.holderDisposed = true
+    },
+  }
 }
 
 function makeServices(tracked: Tracked) {
-  const configService = {
-    _serviceBrand: undefined,
-    get: () => 5000,
-    onDidChangeConfiguration: () =>
-      toDisposable(() => {
-        tracked.configDisposed = true
-      }),
-  }
+  const holder = makeHolder(tracked)
 
-  const contextKeyService = {
-    _serviceBrand: undefined,
-    set: () => {},
-  }
+  const contextKeyService = { _serviceBrand: undefined, set: () => {} }
 
   const manager = {
     _serviceBrand: undefined,
-    attach: () =>
-      toDisposable(() => {
-        tracked.attachDisposed = true
-      }),
-    input: () => {},
-    resize: () => {},
     onFocusRequest: () =>
       toDisposable(() => {
         tracked.focusDisposed = true
       }),
   }
 
-  // Minimal DI container substitute: useService reads via invokeFunction, so we
-  // provide a fake container exposing just that.
+  const xtermService = {
+    _serviceBrand: undefined,
+    acquire: () => holder,
+    get: () => holder,
+    release: () => {},
+  }
+
   const map = new Map<unknown, unknown>([
-    [IConfigurationService, configService],
     [IContextKeyService, contextKeyService],
+    [ITerminalManagerService, manager],
+    [ITerminalXtermService, xtermService],
   ])
   const container = {
     invokeFunction: (fn: (accessor: { get: (id: unknown) => unknown }) => unknown) =>
       fn({ get: (id: unknown) => map.get(id) }),
   }
 
-  return { container, manager }
+  return { container, holder }
 }
 
 async function renderInstance(tracked: Tracked) {
-  const { container, manager } = makeServices(tracked)
+  const { container } = makeServices(tracked)
   let unmount!: () => void
   const { TerminalInstance } = await import('../TerminalInstance.js')
   await act(async () => {
@@ -132,8 +112,6 @@ async function renderInstance(tracked: Tracked) {
         <TerminalInstance
           id="t1"
           active
-          isDark
-          manager={manager as never}
           cwd="/tmp"
           resolveFile={async () => null}
           openFile={() => {}}
@@ -162,22 +140,23 @@ describe('TerminalInstance disposable hygiene', () => {
     setDisposableTracker(tracker)
 
     const tracked: Tracked = {
-      attachDisposed: false,
       focusDisposed: false,
-      configDisposed: false,
+      holderDisposed: false,
+      saveScrollCalls: 0,
+      wrapperRemoved: false,
     }
     await renderInstance(tracked)
 
-    // Restart Editor snapshots leaks with React still mounted.
     const report = tracker.computeLeakingDisposables()
     expect(report?.details ?? '').not.toContain('TerminalInstance')
   })
 
-  it('still disposes those subscriptions on unmount', async () => {
+  it('disposes its own subscriptions but keeps the holder alive on unmount', async () => {
     const tracked: Tracked = {
-      attachDisposed: false,
       focusDisposed: false,
-      configDisposed: false,
+      holderDisposed: false,
+      saveScrollCalls: 0,
+      wrapperRemoved: false,
     }
     const { unmount } = await renderInstance(tracked)
 
@@ -185,8 +164,10 @@ describe('TerminalInstance disposable hygiene', () => {
       unmount()
     })
 
-    expect(tracked.attachDisposed).toBe(true)
     expect(tracked.focusDisposed).toBe(true)
-    expect(tracked.configDisposed).toBe(true)
+    expect(tracked.saveScrollCalls).toBe(1)
+    expect(tracked.wrapperRemoved).toBe(true)
+    // The holder outlives the view — only a process exit releases it.
+    expect(tracked.holderDisposed).toBe(false)
   })
 })

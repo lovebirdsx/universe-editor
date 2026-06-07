@@ -1,7 +1,6 @@
-import { IConfigurationService, IEditorInput, IWorkspaceService } from '@universe-editor/platform'
+import { IEditorInput, IWorkspaceService } from '@universe-editor/platform'
 import { TerminalEditorInput } from '../../services/editor/TerminalEditorInput.js'
 import { TerminalInstance } from '../panel/terminal/TerminalInstance.js'
-import { ITerminalManagerService } from '../../services/terminal/TerminalManagerService.js'
 import { useService } from '../useService.js'
 import {
   useResolveTerminalFile,
@@ -10,10 +9,7 @@ import {
 import styles from './TerminalEditorView.module.css'
 
 export function TerminalEditorView({ input }: { input: IEditorInput }) {
-  const manager = useService(ITerminalManagerService)
-  const configService = useService(IConfigurationService)
   const workspaceService = useService(IWorkspaceService)
-  const isDark = configService.get<string>('workbench.colorTheme') !== 'light'
 
   const resolveFile = useResolveTerminalFile()
   const openFile = useOpenTerminalFile()
@@ -27,8 +23,6 @@ export function TerminalEditorView({ input }: { input: IEditorInput }) {
       <TerminalInstance
         id={input.terminalId}
         active={true}
-        isDark={isDark}
-        manager={manager}
         cwd={cwd}
         resolveFile={resolveFile}
         openFile={openFile}

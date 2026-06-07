@@ -274,4 +274,20 @@ describe('TerminalManagerService', () => {
     await withConfig.manager.newTerminal()
     expect(withConfig.created[0]!.spec.shell).toBe('zsh')
   })
+
+  it('onDidRemoveTerminal fires once on user close', async () => {
+    const id = await h.manager.newTerminal()
+    const removed: string[] = []
+    h.manager.onDidRemoveTerminal(({ id }) => removed.push(id))
+    h.manager.closeTerminal(id!)
+    expect(removed).toEqual([id])
+  })
+
+  it('onDidRemoveTerminal fires once on process exit', async () => {
+    const id = await h.manager.newTerminal()
+    const removed: string[] = []
+    h.manager.onDidRemoveTerminal(({ id }) => removed.push(id))
+    h.onExit.fire({ id: id!, exitCode: 0 })
+    expect(removed).toEqual([id])
+  })
 })
