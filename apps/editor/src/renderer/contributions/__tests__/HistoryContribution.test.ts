@@ -293,6 +293,37 @@ describe('HistoryContribution', () => {
     expect(historyService.getBackStack().length).toBe(0)
   })
 
+  it('rebinds the resource when a preview slot reuses the same Monaco instance for a new file', () => {
+    const { historyService, inst } = setup()
+    const uriA = URI.file('/a.ts')
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    const editor = makeFakeEditor(uriA)
+    FileEditorRegistry.register(
+      inputA,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.position = { lineNumber: 30, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+    expect(historyService.getBackStack().map((e) => e.resource.fsPath)).toEqual([uriA.fsPath])
+
+    // Preview-replace reuses the SAME Monaco instance, re-registering it under b.
+    const uriB = URI.file('/b.ts')
+    const inputB = inst.createInstance(FileEditorInput, uriB)
+    FileEditorRegistry.register(
+      inputB,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editor.position = { lineNumber: 5, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+
+    // The cursor move now belongs to b — it must not be recorded against stale a.
+    const stack = historyService.getBackStack()
+    expect(stack[stack.length - 1]?.resource.fsPath).toBe(uriB.fsPath)
+    expect(stack.some((e, i) => i > 0 && e.resource.fsPath === uriA.fsPath)).toBe(false)
+  })
+
   it('does not double-attach when the same editor re-registers', () => {
     const { historyService, inst } = setup()
     const uri = URI.file('/a.ts')

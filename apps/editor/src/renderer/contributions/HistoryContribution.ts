@@ -113,7 +113,19 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
   }
 
   private _attach(editor: MonacoLikeEditor, resource: URI): void {
-    if (this._listeners.has(editor)) return
+    const existing = this._listeners.get(editor)
+    if (existing) {
+      // Preview-replace reuses the same Monaco instance and swaps its model
+      // (a → b in the preview slot). The instance is re-registered under the new
+      // input, so refresh the bound resource — otherwise b's cursor moves would
+      // be recorded against the stale a, wedging a bogus entry into history.
+      if (existing.resource.toString() !== resource.toString()) {
+        existing.resource = resource
+        existing.lastResource = undefined
+        existing.lastLine = -1
+      }
+      return
+    }
     const state: AttachedListener = {
       editor,
       resource,
