@@ -2,7 +2,7 @@
   "name": "@universe-editor/root",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@11.5.0+sha512.dbfcc4f81cf48597afd4bc391ffdf12c11f1a9fb83a395bfa6b0a2d9cc2fd8ffebafdb1ccbd529632153f793904c2615b7f09fe1a345473fd1c35845172a8eb1",
+  "packageManager": "pnpm@11.5.2+sha512.71c631e382066efc25625d5cf029075de07b61b37f6e27350fbd84b1bda5864c8c1967adc280776b45c30a715c0359a3be08fef42d5bb09e2b99029979692916",
   "scripts": {
     "build": "turbo run build",
     "typecheck": "turbo run typecheck",
@@ -18,7 +18,7 @@
     "runtime:stage": "pnpm -w run agent:build && pnpm -w run ext:build && node scripts/release/runtime-resources.mjs stage",
     "runtime:verify:source": "node scripts/release/runtime-resources.mjs verify-source",
     "runtime:verify:packaged": "node scripts/release/runtime-resources.mjs verify-packaged",
-    "clean": "turbo run clean",
+    "clean": "git clean -fdx -e .claude -e apps/editor/release",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "publish-packages": "changeset publish",
