@@ -41,6 +41,7 @@ vi.mock('@xterm/xterm', () => {
     onSelectionChange(): IDisposable {
       return { dispose() {} }
     }
+    attachCustomKeyEventHandler(): void {}
     write(): void {}
     focus(): void {}
     hasSelection(): boolean {

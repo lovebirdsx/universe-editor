@@ -11,6 +11,11 @@ import {
 } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { createFileLinkProvider } from './terminalLinkProvider.js'
+import {
+  copyTerminalSelection,
+  handleTerminalClipboardKey,
+  pasteClipboardIntoTerminal,
+} from './terminalClipboard.js'
 import { useService } from '../../useService.js'
 import styles from './TerminalInstance.module.css'
 
@@ -77,6 +82,7 @@ export function TerminalInstance({
     term.open(el)
     termRef.current = term
     fitRef.current = fit
+    term.attachCustomKeyEventHandler((event) => handleTerminalClipboardKey(event, term))
 
     const linkDisposable = term.registerLinkProvider(
       createFileLinkProvider(
@@ -195,15 +201,13 @@ export function TerminalInstance({
 
   const handleCopy = async () => {
     const term = termRef.current
-    if (term?.hasSelection()) {
-      await navigator.clipboard.writeText(term.getSelection())
-    }
+    if (term) await copyTerminalSelection(term)
     setContextMenu(null)
   }
 
   const handlePaste = async () => {
-    const text = await navigator.clipboard.readText()
-    termRef.current?.paste(text)
+    const term = termRef.current
+    if (term) await pasteClipboardIntoTerminal(term)
     setContextMenu(null)
   }
 
