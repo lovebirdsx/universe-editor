@@ -123,6 +123,15 @@ const consoleInterceptor = installConsoleInterceptor({ logger: consoleLogger })
 
 const e2eEnabled = environmentService.isE2E
 
+// E2E：Playwright 多 worker 会并发开多个互相遮挡的窗口；Chromium 对被遮挡/
+// 后台窗口节流计时器与渲染，使 3 秒通知自动已读等时序相关 UI 偶发失败。
+// 关闭全部后台节流，让 E2E 时序与前台窗口一致。必须在 app.whenReady() 之前。
+if (e2eEnabled) {
+  app.commandLine.appendSwitch('disable-background-timer-throttling')
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+}
+
 // Single-instance lock: a second launch focuses the existing window instead of
 // starting a rival process. Required for the auto-update restart-to-install flow
 // (quitAndInstall relaunches the app). E2E spawns many isolated instances (each

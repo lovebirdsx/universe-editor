@@ -156,6 +156,7 @@ export class WindowMainService implements IWindowMainService {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        ...(e2eEnabled ? { backgroundThrottling: false } : {}),
         additionalArguments: [
           `--ue-home-dir=${homedir()}`,
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),

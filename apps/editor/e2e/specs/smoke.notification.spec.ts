@@ -22,19 +22,23 @@ test.describe('@p0 notification service', () => {
       workbench.page.locator('[data-testid="notification-toast-item"]').first(),
     ).toBeVisible()
 
-    // 3. Wait for auto-read timer (3 s) + small buffer.
-    await workbench.page.waitForTimeout(3500)
+    // 3. Toast auto-reads after 3 s and disappears. Poll instead of a fixed
+    //    sleep so a slightly delayed renderer timer can't race the assertion.
+    await expect(workbench.page.locator('[data-testid="notification-toast-item"]')).toHaveCount(0, {
+      timeout: 8_000,
+    })
 
-    // 4. Toast items gone (notification became read).
-    await expect(workbench.page.locator('[data-testid="notification-toast-item"]')).toHaveCount(0)
+    // 4. Bell badge should not show a count (unreadCount = 0). Poll to avoid a
+    //    transient read at the exact moment the auto-read timer settles.
+    await expect
+      .poll(async () => {
+        const entries = await workbench.statusBar.entriesFromProbe()
+        const bell = entries.find((e) => e.alignment === 'right' && e.icon === 'bell')
+        return bell?.text ?? '<none>'
+      })
+      .not.toMatch(/\d/)
 
-    // 5. Bell badge should not show a count (unreadCount = 0).
-    const entriesBefore = await workbench.statusBar.entriesFromProbe()
-    const bellBefore = entriesBefore.find((e) => e.alignment === 'right' && e.icon === 'bell')
-    expect(bellBefore).toBeDefined()
-    expect(bellBefore?.text).not.toMatch(/\d/)
-
-    // 6. Open notification center → still holds the read (but not dismissed) notification.
+    // 5. Open notification center → still holds the read (but not dismissed) notification.
     //    Use text-based filtering instead of exact count to tolerate any transient
     //    background notifications (e.g. extension host restarts) that may co-exist.
     await workbench.runCommand('workbench.action.notifications.toggleList')
@@ -45,7 +49,7 @@ test.describe('@p0 notification service', () => {
         .filter({ hasText: 'This is a test notification.' }),
     ).toBeVisible()
 
-    // 7. Clear all → center becomes empty.
+    // 6. Clear all → center becomes empty.
     await workbench.runCommand('workbench.action.notifications.clearAll')
     await expect(workbench.page.locator('[data-testid="notification-center-item"]')).toHaveCount(0)
   })
