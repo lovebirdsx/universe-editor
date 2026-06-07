@@ -14,15 +14,20 @@ import {
   Action2,
   DisposableStore,
   IEditorGroupsService,
+  IHostService,
   IInstantiationService,
   IQuickInputService,
   IWorkspaceService,
   URI,
   autorun,
   localize,
+  relativePathUnder,
+  type HostPlatform,
+  type IQuickItemHighlight,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IOutlineService } from '../services/languageFeatures/OutlineService.js'
@@ -33,14 +38,51 @@ import {
   type MdWorkspaceSymbol,
 } from '../../shared/ipc/markdownLanguageService.js'
 
-const SEARCH_DELAY_MS = 200
 const MAX_RESULTS = 512
 
-function relativePath(root: URI | undefined, uri: URI): string {
+function relativePath(root: URI | undefined, uri: URI, platform: HostPlatform): string {
   if (!root) return uri.fsPath
-  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
-  const norm = uri.fsPath.replace(/\\/g, '/')
-  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : uri.fsPath
+  return relativePathUnder(root.fsPath, uri.fsPath, platform) ?? uri.fsPath
+}
+
+/**
+ * Match positions for `query` in `text`, aligned with scoreFuzzyMatch's tiers:
+ * a contiguous substring highlights as one span, otherwise fall back to a
+ * per-character subsequence. Returns `[]` when the query is empty or absent.
+ */
+function fuzzyHighlights(text: string, query: string): readonly IQuickItemHighlight[] {
+  if (!query) return []
+  const t = text.toLowerCase()
+  const q = query.toLowerCase()
+  const idx = t.indexOf(q)
+  if (idx >= 0) return [{ start: idx, end: idx + q.length }]
+  const out: IQuickItemHighlight[] = []
+  let qi = 0
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] === q[qi]) {
+      out.push({ start: i, end: i + 1 })
+      qi++
+    }
+  }
+  return qi === q.length ? out : []
+}
+
+/**
+ * VSCode-style ranking over a cached symbol set: an empty query keeps the
+ * original order (so the picker shows everything on open), otherwise symbols
+ * are scored by name and sorted by relevance. Only the symbol name is matched.
+ */
+function rankSymbols(
+  allSymbols: readonly MdWorkspaceSymbol[],
+  query: string,
+): readonly MdWorkspaceSymbol[] {
+  if (!query) return allSymbols.slice(0, MAX_RESULTS)
+  return allSymbols
+    .map((symbol) => ({ symbol, score: scoreFuzzyMatch(symbol.name, query) }))
+    .filter((entry) => entry.score >= 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_RESULTS)
+    .map((entry) => entry.symbol)
 }
 
 export class GoToWorkspaceSymbolAction extends Action2 {
@@ -61,6 +103,7 @@ export class GoToWorkspaceSymbolAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const md = accessor.get(IMarkdownLanguageService)
+    const host = accessor.get(IHostService)
 
     const root = workspace.current?.folder
     await md.ensureStarted(root?.fsPath)
@@ -74,69 +117,40 @@ export class GoToWorkspaceSymbolAction extends Action2 {
 
     /** Pick id → symbol, so onDidAccept can recover the target location. */
     const byId = new Map<string, MdWorkspaceSymbol>()
+    /** Full symbol set, fetched once on open; filtering then stays local. */
+    let allSymbols: readonly MdWorkspaceSymbol[] = []
 
     await new Promise<void>((resolve) => {
       const store = new DisposableStore()
-      let timer: ReturnType<typeof setTimeout> | undefined
-      let requestSeq = 0
       let accepted = false
       let didResolve = false
+      let currentValue = ''
 
-      const cleanup = (): void => {
-        requestSeq++
-        if (timer !== undefined) clearTimeout(timer)
-        store.dispose()
-        picker.dispose()
-      }
       const resolveOnce = (): void => {
         if (didResolve) return
         didResolve = true
-        cleanup()
+        store.dispose()
+        picker.dispose()
         resolve()
       }
 
-      const runSearch = async (value: string): Promise<void> => {
-        const seq = ++requestSeq
-        const query = value.trim()
-        if (query.length === 0) {
-          picker.busy = false
-          picker.items = []
-          byId.clear()
-          return
-        }
-        picker.busy = true
-        try {
-          const symbols = await md.provideWorkspaceSymbols(query)
-          if (seq !== requestSeq) return
-          byId.clear()
-          picker.items = symbols.slice(0, MAX_RESULTS).map((symbol, i) => {
-            const id = String(i)
-            byId.set(id, symbol)
-            const uri = URI.parse(symbol.location.uri)
-            return {
-              id,
-              label: symbol.name,
-              // MdWorkspaceSymbol.kind is LSP 1-based; the icon resolver expects
-              // Monaco 0-based, matching the file-symbol path.
-              iconId: `symbol-kind-${symbol.kind - 1}`,
-              description: relativePath(root, uri),
-            }
-          })
-        } finally {
-          if (seq === requestSeq) picker.busy = false
-        }
-      }
-
-      const scheduleSearch = (value: string): void => {
-        if (timer !== undefined) clearTimeout(timer)
-        if (value.trim().length === 0) {
-          void runSearch(value)
-          return
-        }
-        timer = setTimeout(() => {
-          timer = undefined
-          void runSearch(value)
-        }, SEARCH_DELAY_MS)
+      const render = (): void => {
+        const query = currentValue.trim()
+        byId.clear()
+        picker.items = rankSymbols(allSymbols, query).map((symbol, i) => {
+          const id = String(i)
+          byId.set(id, symbol)
+          const uri = URI.parse(symbol.location.uri)
+          return {
+            id,
+            label: symbol.name,
+            // MdWorkspaceSymbol.kind is LSP 1-based; the icon resolver expects
+            // Monaco 0-based, matching the file-symbol path.
+            iconId: `symbol-kind-${symbol.kind - 1}`,
+            description: relativePath(root, uri, host.platform),
+            highlights: { label: fuzzyHighlights(symbol.name, query) },
+          }
+        })
       }
 
       const openSymbol = (symbol: MdWorkspaceSymbol): void => {
@@ -166,7 +180,12 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         void revealPosition(input, lineNumber, column)
       }
 
-      store.add(picker.onDidChangeValue(scheduleSearch))
+      store.add(
+        picker.onDidChangeValue((value) => {
+          currentValue = value
+          render()
+        }),
+      )
       store.add(
         picker.onDidAccept((items) => {
           const pick = items[0]
@@ -183,7 +202,14 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         }),
       )
 
+      picker.busy = true
       picker.show()
+      void md.provideWorkspaceSymbols('').then((symbols) => {
+        if (didResolve) return
+        allSymbols = symbols
+        picker.busy = false
+        render()
+      })
     })
   }
 }

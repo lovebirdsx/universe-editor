@@ -86,7 +86,7 @@
 }
 
 .itemLabel {
-  flex: 1;
+  flex: 1 0 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -133,8 +133,19 @@
 .itemDesc {
   font-size: 11px;
   color: var(--color-description-fg, #8a8a92);
-  margin-left: 8px;
-  flex-shrink: 0;
+  /* High shrink weight: the path collapses first (down to 0), so the label only
+     truncates as a last resort when it alone can't fit the row. */
+  flex: 0 9999 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemDesc::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
 }
 
 .separator {
