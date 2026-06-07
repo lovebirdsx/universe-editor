@@ -121,7 +121,7 @@ export class ExitAction extends Action2 {
       id: ExitAction.ID,
       title: localize('action.exit.title', 'Exit'),
       category: localize('command.category.file', 'File'),
-      menu: { id: MenuId.MenubarFileMenu, group: 'z_exit', order: 1 },
+      menu: { id: MenuId.MenubarFileMenu, group: 'zz_exit', order: 1 },
       f1: true,
     })
   }
