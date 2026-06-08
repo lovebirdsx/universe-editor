@@ -53,21 +53,25 @@ export function LogOutputView({
       const model = m.editor.createModel(initial, 'log')
       modelRef.current = model
       prevContentRef.current = initial
-      const ed = m.editor.create(containerRef.current, {
-        model,
-        readOnly: true,
-        theme: latestThemeRef.current === 'vs' ? 'output-light' : 'output-dark',
-        automaticLayout: true,
-        scrollBeyondLastLine: false,
-        lineNumbers: 'off',
-        minimap: { enabled: false },
-        wordWrap: 'on',
-        glyphMargin: false,
-        folding: false,
-        renderLineHighlight: 'none',
-        fontSize: latestFontSizeRef.current,
-        fontFamily: latestFontFamilyRef.current,
-      })
+      const ed = m.editor.create(
+        containerRef.current,
+        {
+          model,
+          readOnly: true,
+          theme: latestThemeRef.current === 'vs' ? 'output-light' : 'output-dark',
+          automaticLayout: true,
+          scrollBeyondLastLine: false,
+          lineNumbers: 'off',
+          minimap: { enabled: false },
+          wordWrap: 'on',
+          glyphMargin: false,
+          folding: false,
+          renderLineHighlight: 'none',
+          fontSize: latestFontSizeRef.current,
+          fontFamily: latestFontFamilyRef.current,
+        },
+        MonacoLoader.getOverrideServices(),
+      )
       editorRef.current = ed
       if (initial) ed.revealLine(model.getLineCount())
     })

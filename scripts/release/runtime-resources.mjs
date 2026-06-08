@@ -45,6 +45,19 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'markdown-language-server/dist/bootstrap.js',
   },
   {
+    label: 'typescript-language-server cli',
+    source: join(
+      repoRoot,
+      'vendor/typescript-language-server/node_modules/typescript-language-server/lib/cli.mjs',
+    ),
+    packaged: 'typescript-language-server/node_modules/typescript-language-server/lib/cli.mjs',
+  },
+  {
+    label: 'tsserver (typescript)',
+    source: join(repoRoot, 'vendor/typescript-language-server/node_modules/typescript/lib/tsserver.js'),
+    packaged: 'typescript-language-server/node_modules/typescript/lib/tsserver.js',
+  },
+  {
     label: 'release notes',
     source: join(editorRoot, 'resources/release-notes.json'),
     packaged: 'release-notes.json',
@@ -158,6 +171,13 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   copyPath(
     join(repoRoot, 'packages/markdown-language-server/dist'),
     join(stageDir, 'markdown-language-server/dist'),
+  )
+  // The TS/JS language server is a prebuilt third-party CLI that needs its own
+  // node_modules at runtime (typescript-language-server + tsserver). Stage the
+  // whole tree — do NOT prune `typescript`, tsserver lives inside it.
+  copyPath(
+    join(repoRoot, 'vendor/typescript-language-server/node_modules'),
+    join(stageDir, 'typescript-language-server/node_modules'),
   )
   copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
 

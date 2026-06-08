@@ -27,6 +27,7 @@ import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import type { IMarkdownLanguageService } from '../../shared/ipc/markdownLanguageService.js'
+import type { ITypescriptLanguageService } from '../../shared/ipc/typescriptLanguageService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -47,6 +48,7 @@ export interface ApplicationServices {
   readonly acpHost: IAcpHostService
   readonly extensionHost: IExtensionHostService
   readonly markdownLanguage: IMarkdownLanguageService
+  readonly typescriptLanguage: ITypescriptLanguageService
   readonly acpTerminal: IAcpTerminalService
   readonly claudeBinary: IClaudeBinaryService
   readonly codexBinary: ICodexBinaryService

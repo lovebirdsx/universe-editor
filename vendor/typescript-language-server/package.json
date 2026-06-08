@@ -1,0 +1,11 @@
+{
+  "name": "@universe-editor/vendor-typescript-language-server",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Vendored typescript-language-server + tsserver, spawned by the editor's main process. Not part of the pnpm workspace; installed with npm via scripts/release/vendor-install.mjs and staged into resources by runtime-resources.mjs.",
+  "dependencies": {
+    "typescript": "^5.8.0",
+    "typescript-language-server": "^5.3.0"
+  }
+}

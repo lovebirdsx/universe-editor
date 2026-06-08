@@ -116,22 +116,26 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     if (!monacoNs || !containerRef.current) return
     const minimapEnabled = configService.get<boolean>('editor.minimap.enabled') ?? true
-    const ed = monacoNs.editor.create(containerRef.current, {
-      theme: getEditorTheme(configService),
-      automaticLayout: true,
-      fontSize: getEditorFontSize(configService),
-      fontFamily: getEditorFontFamily(configService),
-      wordWrap: getEditorWordWrap(configService),
-      minimap: { enabled: minimapEnabled },
-      scrollBeyondLastLine: false,
-      tabSize: 2,
-      insertSpaces: true,
-      readOnly: fileInput.isReadonly,
-      unicodeHighlight: {
-        nonBasicASCII: false,
-        allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
+    const ed = monacoNs.editor.create(
+      containerRef.current,
+      {
+        theme: getEditorTheme(configService),
+        automaticLayout: true,
+        fontSize: getEditorFontSize(configService),
+        fontFamily: getEditorFontFamily(configService),
+        wordWrap: getEditorWordWrap(configService),
+        minimap: { enabled: minimapEnabled },
+        scrollBeyondLastLine: false,
+        tabSize: 2,
+        insertSpaces: true,
+        readOnly: fileInput.isReadonly,
+        unicodeHighlight: {
+          nonBasicASCII: false,
+          allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
+        },
       },
-    })
+      MonacoLoader.getOverrideServices(),
+    )
     // Hijack Monaco's built-in F1 (StandaloneCommandsQuickAccess) so the
     // global, unified command palette wins regardless of focus.
     ed.addCommand(monacoNs.KeyCode.F1, () => {

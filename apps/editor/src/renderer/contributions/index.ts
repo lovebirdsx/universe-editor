@@ -58,11 +58,23 @@ import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleCo
 import { ExtensionsContribution } from './ExtensionsContribution.js'
 import { LanguageFeaturesContribution } from './LanguageFeaturesContribution.js'
 import { MarkdownDocumentSyncContribution } from './MarkdownDocumentSyncContribution.js'
+import { TypescriptLanguageFeaturesContribution } from './TypescriptLanguageFeaturesContribution.js'
+import { TypescriptDocumentSyncContribution } from './TypescriptDocumentSyncContribution.js'
+import { BulkEditServiceContribution } from './BulkEditServiceContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
 import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
 } from './ActivityBarBadgeContributions.js'
+
+// Install the cross-file rename writer (IBulkEditService override) on MonacoLoader
+// before any editor is created — Monaco standalone locks overrides in on first
+// init. BlockStartup runs well ahead of the first editor.create during restore.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.bulkEditService',
+  BulkEditServiceContribution,
+  WorkbenchPhase.BlockStartup,
+)
 
 // ContextKey defaults must seed before any contribution evaluates a when-clause.
 ContributionsRegistry.registerContribution(
@@ -434,6 +446,25 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.markdownDocumentSync',
   MarkdownDocumentSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// TS/JS language providers (definition / references / implementation / type
+// definition / hover / completion / signature help / document symbols / rename)
+// backed by the typescript-language-server. AfterRestore so the editor area +
+// Monaco are live before providers register.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.typescriptLanguageFeatures',
+  TypescriptLanguageFeaturesContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Pushes open TS/JS models to the typescript-language-server (lazy-starts it) and
+// reflects server-pushed diagnostics as Monaco markers. AfterRestore so the
+// editor service + Monaco models are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.typescriptDocumentSync',
+  TypescriptDocumentSyncContribution,
   WorkbenchPhase.AfterRestore,
 )
 

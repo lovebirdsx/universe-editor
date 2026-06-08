@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Symbol navigation pickers backed by our own quick pick:
- *    - Go to Symbol in Workspace (Ctrl+T) — markdown language server workspace
- *      symbols. Mirrors VSCode's `workbench.action.showAllSymbols`.
+ *    - Go to Symbol in Workspace (Ctrl+T) — aggregates workspace symbols from the
+ *      markdown and TS/JS language servers. Mirrors VSCode's
+ *      `workbench.action.showAllSymbols`.
  *    - Go to Symbol in Editor (Ctrl+Shift+O) — the active editor's document
  *      symbols from IOutlineService, with live preview. Mirrors VSCode's
  *      `workbench.action.gotoSymbol` (replaces monaco's quickOutline).
@@ -32,13 +33,19 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import { flattenOutline } from '../services/languageFeatures/outlineFlatten.js'
-import { type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
+import { type monaco, MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
 import {
   IMarkdownLanguageService,
   type MdWorkspaceSymbol,
 } from '../../shared/ipc/markdownLanguageService.js'
+import { ITypescriptLanguageService } from '../../shared/ipc/typescriptLanguageService.js'
+import {
+  workspaceSymbolsToEntries,
+  type WorkspaceSymbolEntry,
+} from '../services/languageFeatures/typescript/lspMonacoConvert.js'
 
 const MAX_RESULTS = 512
+const WORKSPACE_SYMBOL_DEBOUNCE_MS = 150
 
 function relativePath(root: URI | undefined, uri: URI, platform: HostPlatform): string {
   if (!root) return uri.fsPath
@@ -85,6 +92,52 @@ function rankSymbols(
     .map((entry) => entry.symbol)
 }
 
+/** A workspace symbol from any language server, normalized for the picker. */
+interface UnifiedWorkspaceSymbol {
+  readonly name: string
+  /** Monaco 0-based SymbolKind, for `symbol-kind-<n>` icon resolution. */
+  readonly iconKind: number
+  readonly uri: URI
+  readonly lineNumber: number
+  readonly column: number
+  /** Workspace-relative path shown as the item description. */
+  readonly description: string
+}
+
+function mdSymbolToUnified(
+  symbol: MdWorkspaceSymbol,
+  root: URI | undefined,
+  platform: HostPlatform,
+): UnifiedWorkspaceSymbol {
+  const uri = URI.parse(symbol.location.uri)
+  return {
+    name: symbol.name,
+    // MdWorkspaceSymbol.kind is LSP 1-based; the icon resolver expects Monaco 0-based.
+    iconKind: symbol.kind - 1,
+    uri,
+    lineNumber: symbol.location.range.start.line + 1,
+    column: symbol.location.range.start.character + 1,
+    description: relativePath(root, uri, platform),
+  }
+}
+
+function tsEntryToUnified(
+  entry: WorkspaceSymbolEntry,
+  root: URI | undefined,
+  platform: HostPlatform,
+): UnifiedWorkspaceSymbol {
+  const uri = URI.parse(entry.uri.toString())
+  return {
+    name: entry.name,
+    // workspaceSymbolsToEntries already maps kind to Monaco 0-based.
+    iconKind: entry.kind,
+    uri,
+    lineNumber: entry.range.startLineNumber,
+    column: entry.range.startColumn,
+    description: relativePath(root, uri, platform),
+  }
+}
+
 export class GoToWorkspaceSymbolAction extends Action2 {
   static readonly ID = 'workbench.action.showAllSymbols'
   constructor() {
@@ -103,10 +156,12 @@ export class GoToWorkspaceSymbolAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const md = accessor.get(IMarkdownLanguageService)
+    const ts = accessor.get(ITypescriptLanguageService)
     const host = accessor.get(IHostService)
 
     const root = workspace.current?.folder
-    await md.ensureStarted(root?.fsPath)
+    const monacoNs = await MonacoLoader.ensureInitialized()
+    await Promise.all([md.ensureStarted(root?.fsPath), ts.ensureStarted(root?.fsPath)])
 
     const picker = quickInput.createQuickPick<IQuickPickItem>()
     picker.placeholder = localize(
@@ -116,48 +171,73 @@ export class GoToWorkspaceSymbolAction extends Action2 {
     picker.filterExternally = true
 
     /** Pick id → symbol, so onDidAccept can recover the target location. */
-    const byId = new Map<string, MdWorkspaceSymbol>()
-    /** Full symbol set, fetched once on open; filtering then stays local. */
-    let allSymbols: readonly MdWorkspaceSymbol[] = []
+    const byId = new Map<string, UnifiedWorkspaceSymbol>()
+    /** Markdown symbols fetched once on open; filtered locally per keystroke. */
+    let allMarkdown: readonly MdWorkspaceSymbol[] = []
 
     await new Promise<void>((resolve) => {
       const store = new DisposableStore()
       let accepted = false
       let didResolve = false
       let currentValue = ''
+      let seq = 0
+      let debounce: ReturnType<typeof setTimeout> | undefined
 
       const resolveOnce = (): void => {
         if (didResolve) return
         didResolve = true
+        if (debounce) clearTimeout(debounce)
         store.dispose()
         picker.dispose()
         resolve()
       }
 
-      const render = (): void => {
-        const query = currentValue.trim()
+      const render = (
+        mdSymbols: readonly MdWorkspaceSymbol[],
+        tsEntries: readonly WorkspaceSymbolEntry[],
+        query: string,
+      ): void => {
         byId.clear()
-        picker.items = rankSymbols(allSymbols, query).map((symbol, i) => {
+        const merged: UnifiedWorkspaceSymbol[] = [
+          ...mdSymbols.map((s) => mdSymbolToUnified(s, root, host.platform)),
+          ...tsEntries.map((e) => tsEntryToUnified(e, root, host.platform)),
+        ]
+        picker.items = merged.slice(0, MAX_RESULTS).map((symbol, i) => {
           const id = String(i)
           byId.set(id, symbol)
-          const uri = URI.parse(symbol.location.uri)
           return {
             id,
             label: symbol.name,
-            // MdWorkspaceSymbol.kind is LSP 1-based; the icon resolver expects
-            // Monaco 0-based, matching the file-symbol path.
-            iconId: `symbol-kind-${symbol.kind - 1}`,
-            description: relativePath(root, uri, host.platform),
+            iconId: `symbol-kind-${symbol.iconKind}`,
+            description: symbol.description,
             highlights: { label: fuzzyHighlights(symbol.name, query) },
           }
         })
       }
 
-      const openSymbol = (symbol: MdWorkspaceSymbol): void => {
-        const uri = URI.parse(symbol.location.uri)
-        const lineNumber = symbol.location.range.start.line + 1
-        const column = symbol.location.range.start.character + 1
+      // tsserver's `workspace/symbol` filters server-side and returns nothing for
+      // an empty query, so we only hit it once there's a query; markdown is
+      // cached and filtered locally so it can show everything on open.
+      const refresh = (): void => {
+        const query = currentValue.trim()
+        const mdSymbols = rankSymbols(allMarkdown, query)
+        if (!query) {
+          render(mdSymbols, [], query)
+          return
+        }
+        const mySeq = ++seq
+        picker.busy = true
+        void ts.provideWorkspaceSymbols(query).then((symbols) => {
+          if (didResolve || mySeq !== seq) return
+          picker.busy = false
+          render(mdSymbols, workspaceSymbolsToEntries(symbols, monacoNs), query)
+        })
+        // Show markdown immediately while the TS query is in flight.
+        render(mdSymbols, [], query)
+      }
 
+      const openSymbol = (symbol: UnifiedWorkspaceSymbol): void => {
+        const uri = symbol.uri
         let input: FileEditorInput | undefined
         for (const group of groups.groups) {
           for (const editor of group.editors) {
@@ -177,13 +257,14 @@ export class GoToWorkspaceSymbolAction extends Action2 {
           input = inst.createInstance(FileEditorInput, uri)
           groups.activeGroup.openEditor(input, { activate: true, pinned: true })
         }
-        void revealPosition(input, lineNumber, column)
+        void revealPosition(input, symbol.lineNumber, symbol.column)
       }
 
       store.add(
         picker.onDidChangeValue((value) => {
           currentValue = value
-          render()
+          if (debounce) clearTimeout(debounce)
+          debounce = setTimeout(refresh, WORKSPACE_SYMBOL_DEBOUNCE_MS)
         }),
       )
       store.add(
@@ -206,9 +287,9 @@ export class GoToWorkspaceSymbolAction extends Action2 {
       picker.show()
       void md.provideWorkspaceSymbols('').then((symbols) => {
         if (didResolve) return
-        allSymbols = symbols
+        allMarkdown = symbols
         picker.busy = false
-        render()
+        refresh()
       })
     })
   }

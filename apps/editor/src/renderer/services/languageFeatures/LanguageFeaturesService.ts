@@ -42,6 +42,24 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.ReferenceProvider,
   ): IDisposable
+  registerImplementationProvider(
+    languageId: string,
+    provider: monaco.languages.ImplementationProvider,
+  ): IDisposable
+  registerTypeDefinitionProvider(
+    languageId: string,
+    provider: monaco.languages.TypeDefinitionProvider,
+  ): IDisposable
+  registerHoverProvider(languageId: string, provider: monaco.languages.HoverProvider): IDisposable
+  registerCompletionProvider(
+    languageId: string,
+    provider: monaco.languages.CompletionItemProvider,
+  ): IDisposable
+  registerSignatureHelpProvider(
+    languageId: string,
+    provider: monaco.languages.SignatureHelpProvider,
+  ): IDisposable
+  registerRenameProvider(languageId: string, provider: monaco.languages.RenameProvider): IDisposable
   getDocumentSymbolProviders(languageId: string): readonly monaco.languages.DocumentSymbolProvider[]
 }
 
@@ -60,6 +78,24 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     Set<monaco.languages.DefinitionProvider>
   >()
   private readonly _referenceProviders = new Map<string, Set<monaco.languages.ReferenceProvider>>()
+  private readonly _implementationProviders = new Map<
+    string,
+    Set<monaco.languages.ImplementationProvider>
+  >()
+  private readonly _typeDefinitionProviders = new Map<
+    string,
+    Set<monaco.languages.TypeDefinitionProvider>
+  >()
+  private readonly _hoverProviders = new Map<string, Set<monaco.languages.HoverProvider>>()
+  private readonly _completionProviders = new Map<
+    string,
+    Set<monaco.languages.CompletionItemProvider>
+  >()
+  private readonly _signatureHelpProviders = new Map<
+    string,
+    Set<monaco.languages.SignatureHelpProvider>
+  >()
+  private readonly _renameProviders = new Map<string, Set<monaco.languages.RenameProvider>>()
 
   private readonly _onDidChangeDocumentSymbolProviders = this._register(
     new Emitter<IDocumentSymbolProvidersChangeEvent>(),
@@ -97,6 +133,81 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
       languageId,
       provider,
       (m) => m.languages.registerReferenceProvider(languageId, provider),
+      false,
+    )
+  }
+
+  registerImplementationProvider(
+    languageId: string,
+    provider: monaco.languages.ImplementationProvider,
+  ): IDisposable {
+    return this._add(
+      this._implementationProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerImplementationProvider(languageId, provider),
+      false,
+    )
+  }
+
+  registerTypeDefinitionProvider(
+    languageId: string,
+    provider: monaco.languages.TypeDefinitionProvider,
+  ): IDisposable {
+    return this._add(
+      this._typeDefinitionProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerTypeDefinitionProvider(languageId, provider),
+      false,
+    )
+  }
+
+  registerHoverProvider(languageId: string, provider: monaco.languages.HoverProvider): IDisposable {
+    return this._add(
+      this._hoverProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerHoverProvider(languageId, provider),
+      false,
+    )
+  }
+
+  registerCompletionProvider(
+    languageId: string,
+    provider: monaco.languages.CompletionItemProvider,
+  ): IDisposable {
+    return this._add(
+      this._completionProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerCompletionItemProvider(languageId, provider),
+      false,
+    )
+  }
+
+  registerSignatureHelpProvider(
+    languageId: string,
+    provider: monaco.languages.SignatureHelpProvider,
+  ): IDisposable {
+    return this._add(
+      this._signatureHelpProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerSignatureHelpProvider(languageId, provider),
+      false,
+    )
+  }
+
+  registerRenameProvider(
+    languageId: string,
+    provider: monaco.languages.RenameProvider,
+  ): IDisposable {
+    return this._add(
+      this._renameProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerRenameProvider(languageId, provider),
       false,
     )
   }

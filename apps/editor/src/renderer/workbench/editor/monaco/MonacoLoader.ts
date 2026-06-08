@@ -22,6 +22,11 @@ type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas
 
 let _extraSchemas: JsonSchemas = []
 
+// Monaco standalone keys overrideServices by the service-id *string* the
+// decorator was created with; IBulkEditService = createDecorator('IWorkspaceEditService').
+const BULK_EDIT_SERVICE_ID = 'IWorkspaceEditService'
+let _overrideServices: monaco.editor.IEditorOverrideServices = {}
+
 const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'schemas'> = {
   validate: true,
   allowComments: true,
@@ -72,7 +77,23 @@ function disableLanguageDiagnostics(): void {
   const { javascriptDefaults, typescriptDefaults } = _monaco.languages.typescript
   for (const defaults of [typescriptDefaults, javascriptDefaults]) {
     defaults.setDiagnosticsOptions(tsDiagnosticsOptions)
-    defaults.setModeConfiguration({ ...defaults.modeConfiguration, diagnostics: false })
+    // The TS/JS language features are served by the typescript-language-server
+    // (real tsserver, cross-file aware) via our LSP client — see the
+    // `typescript/` providers + `TypescriptLanguageFeaturesContribution`. Turn
+    // off every built-in ts-worker feature we now own so suggestions / hovers /
+    // outline don't double up; what's left (formatting, highlights, code
+    // actions, inlay hints) the LSP layer doesn't provide yet.
+    defaults.setModeConfiguration({
+      ...defaults.modeConfiguration,
+      diagnostics: false,
+      completionItems: false,
+      hovers: false,
+      signatureHelp: false,
+      definitions: false,
+      references: false,
+      documentSymbols: false,
+      rename: false,
+    })
   }
 
   const { cssDefaults, lessDefaults, scssDefaults } = _monaco.languages.css
@@ -153,6 +174,18 @@ export const MonacoLoader = {
   setJsonSchemas(schemas: JsonSchemas): void {
     _extraSchemas = schemas
     pushJsonDiagnostics()
+  },
+  /**
+   * Register the IBulkEditService override (our cross-file rename writer) used by
+   * every `editor.create` call. Must be called before the first editor is
+   * created — Monaco's standalone services lock in overrides on first init only.
+   */
+  setBulkEditService(service: object): void {
+    _overrideServices = { ..._overrideServices, [BULK_EDIT_SERVICE_ID]: service }
+  },
+  /** The shared override-services object threaded into all `editor.create` calls. */
+  getOverrideServices(): monaco.editor.IEditorOverrideServices {
+    return _overrideServices
   },
 }
 

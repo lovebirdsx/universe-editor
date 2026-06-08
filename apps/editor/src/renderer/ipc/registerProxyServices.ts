@@ -27,6 +27,7 @@ import {
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IMarkdownLanguageService } from '../../shared/ipc/markdownLanguageService.js'
+import { ITypescriptLanguageService } from '../../shared/ipc/typescriptLanguageService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { ITerminalService } from '../../shared/ipc/terminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
@@ -91,6 +92,12 @@ export function registerProxyChannelServices(
     IMarkdownLanguageService,
     ProxyChannel.toService<IMarkdownLanguageService>(
       ipc.getChannel(ServiceChannels.MarkdownLanguage),
+    ),
+  )
+  services.set(
+    ITypescriptLanguageService,
+    ProxyChannel.toService<ITypescriptLanguageService>(
+      ipc.getChannel(ServiceChannels.TypescriptLanguage),
     ),
   )
   services.set(

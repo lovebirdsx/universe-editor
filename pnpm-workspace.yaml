@@ -64,6 +64,14 @@ catalog:
   vscode-languageserver-types: ^3.17.2
   vscode-uri: ^3.0.8
 
+  # TS/JS language service: main spawns the vendored typescript-language-server
+  # (vendor/typescript-language-server, npm-managed, NOT a workspace package) and
+  # talks standard LSP to it over stdio via vscode-jsonrpc. The server version is
+  # pinned in that vendor's package-lock.json; the entry below is informational.
+  # vscode-jsonrpc is held at ^8.x to match vscode-languageserver-protocol@3.17.
+  typescript-language-server: ^5.3.0
+  vscode-jsonrpc: ^8.2.0
+
   # Archive extraction (on-demand claude binary download)
   tar: ^7.4.3
   '@vscode/ripgrep': ^1.18.0

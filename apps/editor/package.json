@@ -46,6 +46,9 @@
     "monaco-editor": "catalog:",
     "@vscode/ripgrep": "catalog:",
     "tar": "catalog:",
+    "vscode-jsonrpc": "catalog:",
+    "vscode-languageserver-protocol": "catalog:",
+    "vscode-languageserver-types": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
