@@ -41,6 +41,29 @@ export class ExplorerMenuContribution extends Disposable implements IWorkbenchCo
       }),
     )
 
+    // 3_copy group
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'workbench.files.action.copyName',
+        group: '3_copy',
+        order: 1,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'copyFilePath',
+        group: '3_copy',
+        order: 2,
+      }),
+    )
+    this._register(
+      MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+        command: 'copyRelativeFilePath',
+        group: '3_copy',
+        order: 3,
+      }),
+    )
+
     // 3_open group
     this._register(
       MenuRegistry.addMenuItem(MenuId.ExplorerContext, {

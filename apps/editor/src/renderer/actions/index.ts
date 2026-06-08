@@ -97,6 +97,11 @@ import {
 } from './fileOpenActions.js'
 import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from './revealActions.js'
 import {
+  CopyFileNameAction,
+  CopyFilePathAction,
+  CopyFileRelativePathAction,
+} from './fileCopyActions.js'
+import {
   NewTerminalAction,
   OpenInTerminalAction,
   ToggleTerminalAction,
@@ -277,6 +282,9 @@ registerAction2(OpenWithDefaultAppAction)
 registerAction2(RefreshExplorerAction)
 registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
+registerAction2(CopyFileNameAction)
+registerAction2(CopyFilePathAction)
+registerAction2(CopyFileRelativePathAction)
 
 // Window / Help
 registerAction2(NewWindowAction)
