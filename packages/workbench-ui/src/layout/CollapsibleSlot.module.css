@@ -40,7 +40,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--color-message-role-fg, #aaa);
-  font-size: var(--font-size-xs);
+  font-size: 0.917em;
 }
 
 .slotChevron {

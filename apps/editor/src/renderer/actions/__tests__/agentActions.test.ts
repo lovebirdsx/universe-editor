@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
+  ConfigurationService,
   ContextKeyService,
+  IConfigurationService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
@@ -14,6 +16,9 @@ import {
   FocusBottomAcpTimelineAction,
   FocusTopAcpTimelineAction,
   JumpToAcpPlanAction,
+  IncreaseAgentFontSizeAction,
+  DecreaseAgentFontSizeAction,
+  ResetAgentFontSizeAction,
 } from '../agentActions.js'
 import {
   IAcpChatWidgetService,
@@ -122,5 +127,62 @@ describe('Agent timeline navigation actions', () => {
     run(ScrollAcpTimelinePageDownAction.ID, pageDown.widget)
     expect(pageDown.scrollTimeline).toHaveBeenCalledWith('pageDown')
     expect(pageDown.moveTimeline).not.toHaveBeenCalled()
+  })
+})
+
+describe('Agent chat font zoom actions', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function focusedContext(): ContextKeyService {
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('acpChatFocused', true)
+    return ctx
+  }
+
+  function run(commandId: string, config: IConfigurationService): void {
+    const services = new ServiceCollection()
+    services.set(IConfigurationService, config)
+    const inst = new InstantiationService(services)
+    inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(commandId)!.handler(accessor)
+    })
+  }
+
+  it('binds zoom keybindings only while the chat is focused', () => {
+    disposables.push(registerAction2(IncreaseAgentFontSizeAction))
+    disposables.push(registerAction2(DecreaseAgentFontSizeAction))
+    disposables.push(registerAction2(ResetAgentFontSizeAction))
+    const ctx = focusedContext()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+=', ctx)).toBe(
+      IncreaseAgentFontSizeAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+-', ctx)).toBe(
+      DecreaseAgentFontSizeAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+0', ctx)).toBe(ResetAgentFontSizeAction.ID)
+  })
+
+  it('increases, decreases (clamped), and resets acp.fontSize', () => {
+    disposables.push(registerAction2(IncreaseAgentFontSizeAction))
+    disposables.push(registerAction2(DecreaseAgentFontSizeAction))
+    disposables.push(registerAction2(ResetAgentFontSizeAction))
+
+    const config = new ConfigurationService()
+
+    run(IncreaseAgentFontSizeAction.ID, config)
+    expect(config.get('acp.fontSize')).toBe(13)
+
+    run(ResetAgentFontSizeAction.ID, config)
+    expect(config.get('acp.fontSize')).toBe(12)
+
+    for (let i = 0; i < 10; i++) run(DecreaseAgentFontSizeAction.ID, config)
+    expect(config.get('acp.fontSize')).toBe(8)
+
+    for (let i = 0; i < 20; i++) run(IncreaseAgentFontSizeAction.ID, config)
+    expect(config.get('acp.fontSize')).toBe(24)
   })
 })

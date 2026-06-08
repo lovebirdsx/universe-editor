@@ -30,6 +30,7 @@ import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
+import { AgentFontContribution } from './AgentFontContribution.js'
 import { NotificationStatusContribution } from './NotificationStatusContribution.js'
 import { UpdateContribution } from './UpdateContribution.js'
 import { ReleaseNotesContribution } from './ReleaseNotesContribution.js'
@@ -149,6 +150,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.workbenchFont',
   WorkbenchFontContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Agent chat panel font (acp.fontSize / acp.fontFamily) → scoped CSS variables
+// consumed by `.chat`. BlockStartup so the panel paints at the configured size.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentFont',
+  AgentFontContribution,
   WorkbenchPhase.BlockStartup,
 )
 

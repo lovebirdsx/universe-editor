@@ -170,6 +170,9 @@ import {
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
   SwitchSessionAction,
+  IncreaseAgentFontSizeAction,
+  DecreaseAgentFontSizeAction,
+  ResetAgentFontSizeAction,
 } from './agentActions.js'
 
 // Layout
@@ -375,3 +378,6 @@ registerAction2(ScrollAcpTimelinePageDownAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
 registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
+registerAction2(IncreaseAgentFontSizeAction)
+registerAction2(DecreaseAgentFontSizeAction)
+registerAction2(ResetAgentFontSizeAction)

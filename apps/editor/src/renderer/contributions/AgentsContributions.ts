@@ -26,6 +26,7 @@ import {
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
+import { AGENT_FONT_SIZE_DEFAULT } from '../services/configuration/fontDefaults.js'
 
 export class AgentsConfigurationContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -133,6 +134,24 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             description: localize(
               'settings.acp.defaultCollapseModes',
               'Default timeline collapse mode for new sessions per agent ID. Possible values: "default" (smart per-kind folding), "collapsed" (all folded), "expanded" (all unfolded). Example: { "claude-code": "default", "codex": "collapsed" }.',
+            ),
+          },
+          'acp.fontSize': {
+            type: 'number',
+            default: AGENT_FONT_SIZE_DEFAULT,
+            minimum: 8,
+            maximum: 24,
+            description: localize(
+              'settings.acp.fontSize',
+              'Controls the base font size (in pixels) of the Agent chat panel. Code blocks and other content scale relative to this.',
+            ),
+          },
+          'acp.fontFamily': {
+            type: 'string',
+            default: '',
+            description: localize(
+              'settings.acp.fontFamily',
+              'Controls the font family of the Agent chat panel. Leave empty to inherit the workbench UI font.',
             ),
           },
         },
