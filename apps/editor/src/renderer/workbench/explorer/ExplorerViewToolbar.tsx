@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ChevronsDownUp, FilePlus, FolderPlus, RefreshCw } from 'lucide-react'
-import { ICommandService, localize } from '@universe-editor/platform'
+import { ICommandService, localize, markAsSingleton } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { IExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import styles from './ExplorerViewToolbar.module.css'
@@ -11,7 +11,7 @@ export function ExplorerViewToolbar() {
   const [hasRoot, setHasRoot] = useState(() => tree.root !== null)
 
   useEffect(() => {
-    const d = tree.onDidChangeStructure(() => setHasRoot(tree.root !== null))
+    const d = markAsSingleton(tree.onDidChangeStructure(() => setHasRoot(tree.root !== null)))
     return () => d.dispose()
   }, [tree])
 

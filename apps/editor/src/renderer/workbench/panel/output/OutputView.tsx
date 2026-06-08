@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { IConfigurationService, IOutputService } from '@universe-editor/platform'
+import { IConfigurationService, IOutputService, markAsSingleton } from '@universe-editor/platform'
 import {
   OUTPUT_FONT_FAMILY_DEFAULT,
   OUTPUT_FONT_SIZE_DEFAULT,
@@ -23,19 +23,21 @@ export function OutputView() {
   )
 
   useEffect(() => {
-    const d = configService.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('output.fontSize')) {
-        setFontSize(configService.get<number>('output.fontSize') ?? OUTPUT_FONT_SIZE_DEFAULT)
-      }
-      if (e.affectsConfiguration('output.fontFamily')) {
-        setFontFamily(
-          normalizeFontFamily(
-            configService.get<string>('output.fontFamily'),
-            OUTPUT_FONT_FAMILY_DEFAULT,
-          ),
-        )
-      }
-    })
+    const d = markAsSingleton(
+      configService.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('output.fontSize')) {
+          setFontSize(configService.get<number>('output.fontSize') ?? OUTPUT_FONT_SIZE_DEFAULT)
+        }
+        if (e.affectsConfiguration('output.fontFamily')) {
+          setFontFamily(
+            normalizeFontFamily(
+              configService.get<string>('output.fontFamily'),
+              OUTPUT_FONT_FAMILY_DEFAULT,
+            ),
+          )
+        }
+      }),
+    )
     return () => d.dispose()
   }, [configService])
 
