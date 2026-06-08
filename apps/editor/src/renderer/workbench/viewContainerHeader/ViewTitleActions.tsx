@@ -10,7 +10,7 @@ import { ICommandService, IContextKeyService, MenuId } from '@universe-editor/pl
 import { useService } from '../useService.js'
 import { useViewTitleActions } from './useViewTitleActions.js'
 import { resolveHeaderIcon } from './icon-map.js'
-import styles from './ViewContainerHeader.module.css'
+import styles from './ViewTitleActions.module.css'
 
 interface Props {
   menuId: MenuId

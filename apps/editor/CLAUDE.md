@@ -126,9 +126,9 @@ this._register(
 )
 ```
 
-**3. 组件映射**：在 `src/renderer/workbench/sidebar/SideBar.tsx` 的 `viewComponentMap` 加：
+**3. 组件映射**：在 `src/renderer/contributions/ViewComponentsContribution.ts` 里把 `componentKey` 绑到组件：
 ```ts
-viewComponentMap.set('myThing.main', MyThingView)
+this._register(ViewComponentRegistry.register('myThing.main', MyThingView))
 ```
 
 新建 `src/renderer/workbench/myThing/MyThingView.tsx` 写 React 组件，用 `useService(IFooService)` 拿服务。

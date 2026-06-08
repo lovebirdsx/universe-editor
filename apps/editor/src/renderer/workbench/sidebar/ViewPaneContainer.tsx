@@ -4,7 +4,7 @@ import 'allotment/dist/style.css'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import { ViewPane } from './ViewPane.js'
 import '../layout/allotment-theme.css'
-import styles from './SideBar.module.css'
+import styles from '../paneComposite/PaneComposite.module.css'
 
 const HEADER_H = 28
 const MIN_BODY = 60
@@ -12,7 +12,7 @@ const OPEN_MIN = HEADER_H + MIN_BODY
 
 interface Props {
   views: readonly IViewDescriptor[]
-  componentMap: ReadonlyMap<string, ComponentType>
+  resolve: (componentKey: string) => ComponentType | undefined
   toolbarMap?: ReadonlyMap<string, ComponentType>
   emptyMessage?: string
 }
@@ -24,7 +24,7 @@ interface Props {
  */
 export function ViewPaneContainer({
   views,
-  componentMap,
+  resolve,
   toolbarMap,
   emptyMessage = 'No views registered.',
 }: Props) {
@@ -66,7 +66,7 @@ export function ViewPaneContainer({
 
   if (views.length === 1) {
     const v = views[0]!
-    const Component = componentMap.get(v.componentKey)
+    const Component = resolve(v.componentKey)
     return (
       <div data-view-id={v.id} className={styles['viewBody']} style={{ flex: 1, minHeight: 0 }}>
         {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
@@ -84,7 +84,7 @@ export function ViewPaneContainer({
     >
       {views.map((v) => {
         const isCollapsed = collapsed.has(v.id)
-        const Component = componentMap.get(v.componentKey)
+        const Component = resolve(v.componentKey)
         return (
           <Allotment.Pane
             key={v.id}

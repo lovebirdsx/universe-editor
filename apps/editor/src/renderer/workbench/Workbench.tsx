@@ -13,10 +13,13 @@ import { useGlobalKeybindingHandler } from './useGlobalKeybindingHandler.js'
 import { WorkbenchLayout } from './layout/WorkbenchLayout.js'
 import { TitleBar } from './titlebar/TitleBar.js'
 import { ActivityBar } from './activitybar/ActivityBar.js'
-import { SideBar } from './sidebar/SideBar.js'
-import { SecondarySideBar } from './sidebar/SecondarySideBar.js'
+import { PaneCompositePart } from './paneComposite/PaneCompositePart.js'
+import {
+  sideBarConfig,
+  secondarySideBarConfig,
+  panelConfig,
+} from './paneComposite/paneCompositeConfigs.js'
 import { EditorArea } from './editor/EditorArea.js'
-import { Panel } from './panel/Panel.js'
 import { StatusBar } from './statusbar/StatusBar.js'
 import { QuickInputPortal } from './quickinput/QuickInput.js'
 import { DialogHost } from './dialog/DialogHost.js'
@@ -77,10 +80,12 @@ function WorkbenchShell() {
         onPanelResize={onPanelResize}
         titlebar={<TitleBar />}
         activitybar={<ActivityBar part={activityBarPart} />}
-        sidebar={<SideBar part={sideBarPart} />}
-        secondarySidebar={<SecondarySideBar part={secondarySideBarPart} />}
+        sidebar={<PaneCompositePart part={sideBarPart} config={sideBarConfig} />}
+        secondarySidebar={
+          <PaneCompositePart part={secondarySideBarPart} config={secondarySideBarConfig} />
+        }
         editor={<EditorArea part={editorAreaPart} />}
-        panel={<Panel part={panelPart} />}
+        panel={<PaneCompositePart part={panelPart} config={panelConfig} />}
         statusbar={<StatusBar part={statusBarPart} />}
       />
       <QuickInputPortal />

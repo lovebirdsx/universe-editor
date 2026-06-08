@@ -12,6 +12,7 @@ import '../actions/index.js'
 import { BuiltInEditorProvidersContribution } from './BuiltInEditorProvidersContribution.js'
 import { BuiltInViewContainersContribution } from './BuiltInViewContainersContribution.js'
 import { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
+import { ViewComponentsContribution } from './ViewComponentsContribution.js'
 import { ContextKeyContribution } from './ContextKeyContribution.js'
 import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
 import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
@@ -130,6 +131,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.builtInViews',
   BuiltInViewsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// Bind componentKey -> React component for every built-in view. BlockStartup so
+// the registry is populated before the first React paint resolves components.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.viewComponents',
+  ViewComponentsContribution,
   WorkbenchPhase.BlockStartup,
 )
 

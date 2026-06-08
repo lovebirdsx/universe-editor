@@ -1,17 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Compact 28-px header shared by Panel and Secondary Side Bar:
- *   - Left:   icon-only tabs for every ViewContainer at this location
- *             (click switches active container; tooltip shows the label)
- *   - Right:  for a single-view container, the lone view's title bar —
- *             an optional custom toolbar + MenuId.ViewTitle actions resolved
- *             through a per-view *scoped* ContextKeyService carrying `view`.
- *             Multi-view containers render nothing here; each view shows its
- *             own actions in its ViewPane header instead.
- *             + close button
+ *  Unified header for the PaneCompositePart, two forms selected by `mode`:
+ *   - 'label': a text title showing the active container's label (SideBar form;
+ *              container switching lives in the ActivityBar). For a single-view
+ *              container the lone view's actions sit on the right.
+ *   - 'tabs':  icon-only tabs for every ViewContainer at this location plus a
+ *              close button (Panel / Secondary Side Bar form; these have no
+ *              dedicated ActivityBar). Single-view actions sit on the right too.
+ *  Right-side actions in both forms = optional custom toolbar + MenuId.ViewTitle
+ *  actions resolved through a per-view scoped ContextKeyService carrying `view`.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ComponentType } from 'react'
 import { X } from 'lucide-react'
 import {
   ILayoutService,
@@ -20,38 +19,52 @@ import {
   PartId,
   ViewContainerLocation,
   ViewContainerRegistry,
-  ViewRegistry,
   localize,
 } from '@universe-editor/platform'
-import { useService, useObservable } from '../useService.js'
-import { resolveHeaderIcon } from './icon-map.js'
-import { ViewTitleActions } from './ViewTitleActions.js'
-import { useViewScopedContextKey } from './useViewScopedContextKey.js'
-import styles from './ViewContainerHeader.module.css'
+import type { IViewContainerDescriptor, IViewDescriptor } from '@universe-editor/platform'
+import { useService } from '../useService.js'
+import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
+import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
+import { viewToolbarMap } from '../viewRegistry/viewToolbarMap.js'
+import styles from './PaneComposite.module.css'
 
 interface Props {
+  mode: 'label' | 'tabs'
   location: ViewContainerLocation
   partId: PartId
-  /** viewId -> custom right-side React component (e.g. channel dropdown). */
-  customToolbarMap?: ReadonlyMap<string, ComponentType>
+  activeContainer: IViewContainerDescriptor | undefined
+  onlyView: IViewDescriptor | undefined
 }
 
-export function ViewContainerHeader({ location, partId, customToolbarMap }: Props) {
+export function PaneCompositeHeader({ mode, location, partId, activeContainer, onlyView }: Props) {
   const viewsService = useService(IViewsService)
   const layoutService = useService(ILayoutService)
-  const activeByLocation = useObservable(viewsService.activeContainerByLocation)
-  const activeId = activeByLocation[location]
-
-  const views = activeId ? ViewRegistry.getViewsForContainer(activeId) : []
-  const onlyView = views.length === 1 ? views[0] : undefined
   const ctx = useViewScopedContextKey(onlyView?.id)
-  const Custom = onlyView ? customToolbarMap?.get(onlyView.id) : undefined
+  const Custom = onlyView ? viewToolbarMap.get(onlyView.id) : undefined
 
+  const actions = onlyView ? (
+    <>
+      {Custom ? <Custom /> : null}
+      <ViewTitleActions menuId={MenuId.ViewTitle} contextKeyService={ctx} />
+    </>
+  ) : null
+
+  if (mode === 'label') {
+    return (
+      <div className={styles['labelHeader']}>
+        <span className={styles['headerLabel']}>{activeContainer?.label}</span>
+        {actions ? <div className={styles['headerActions']}>{actions}</div> : null}
+      </div>
+    )
+  }
+
+  const activeId = activeContainer?.id
   const containers = ViewContainerRegistry.getViewContainers(location)
   const isSingle = containers.length <= 1
 
   return (
-    <div className={styles['header']} role="tablist">
+    <div className={styles['tabsHeader']} role="tablist">
       <div className={styles['tabs']}>
         {containers.map((c) => {
           const Icon = resolveHeaderIcon(c.icon)
@@ -80,12 +93,7 @@ export function ViewContainerHeader({ location, partId, customToolbarMap }: Prop
         })}
       </div>
       <div className={styles['toolbar']}>
-        {onlyView ? (
-          <>
-            {Custom ? <Custom /> : null}
-            <ViewTitleActions menuId={MenuId.ViewTitle} contextKeyService={ctx} />
-          </>
-        ) : null}
+        {actions}
         <button
           className={styles['closeBtn']}
           onClick={() => layoutService.setVisible(partId, false)}

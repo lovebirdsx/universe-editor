@@ -1,0 +1,177 @@
+/* Shared styles for the unified PaneCompositePart (SideBar / SecondarySideBar / Panel). */
+
+/* ---- roots ---- */
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--color-sidebar-bg, #252526);
+  overflow: hidden;
+  outline: none;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  background: var(--color-panel-bg, #1a1a1c);
+  overflow: hidden;
+}
+
+/* ---- label header (SideBar) ---- */
+.labelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 4px 12px;
+  min-height: 28px;
+  flex-shrink: 0;
+}
+
+.headerLabel {
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-sidebar-section-header-fg, #bbbbbb);
+  user-select: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.sidebar[data-active-view='workbench.view.explorer.tree'] .headerActions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.sidebar[data-active-view='workbench.view.explorer.tree']:hover .headerActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ---- tabs header (Panel / SecondarySideBar) ---- */
+.tabsHeader {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  background: var(--color-panel-tab-bar-bg, #0f0f11);
+  border-bottom: 1px solid var(--color-border, #0f0f11);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-tab-inactive-fg, #8a8a92);
+  cursor: pointer;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.tab:hover:not(:disabled) {
+  color: var(--color-tab-inactive-fg-hover, #c8c8c8);
+  background: var(--color-tab-hover-bg, #1f1f22);
+}
+
+.tab.active {
+  color: var(--color-tab-active-fg, #ffffff);
+}
+
+.tab.active::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: var(--color-tab-active-border, #0070e0);
+}
+
+.tab:disabled {
+  cursor: default;
+}
+
+.tabFallback {
+  font-size: 10px;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  padding-right: 4px;
+  height: 100%;
+  flex-shrink: 0;
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 100%;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-tab-inactive-fg, #8a8a92);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.closeBtn:hover {
+  color: var(--color-tab-inactive-fg-hover, #c8c8c8);
+  background: var(--color-tab-hover-bg, #1f1f22);
+}
+
+/* ---- content areas ---- */
+.views {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.content {
+  flex: 1;
+  overflow: hidden;
+}
+
+.empty {
+  padding: 16px 12px;
+  color: var(--color-sidebar-fg, #888888);
+  font-size: 12px;
+}
+
+.viewBody {
+  display: contents;
+}

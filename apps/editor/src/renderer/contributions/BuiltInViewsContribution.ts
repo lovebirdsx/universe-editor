@@ -1,8 +1,8 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *
- *  Registers built-in IViewDescriptors. The companion file-tree component is
- *  bound to its componentKey from SideBar.tsx so this contribution stays
+ *  Registers built-in IViewDescriptors. The companion components are bound to
+ *  their componentKeys in ViewComponentsContribution so this contribution stays
  *  service-free.
  *--------------------------------------------------------------------------------------------*/
 

@@ -14,19 +14,13 @@ import {
 import { ILayoutService, IViewsService } from '@universe-editor/platform'
 import { OutputService } from '../../../services/output/OutputService.js'
 import { ViewsService } from '../../../services/views/ViewsService.js'
+import { ViewComponentRegistry } from '../../../services/views/ViewComponentRegistry.js'
 import { ServicesContext } from '../../useService.js'
-import { Panel } from '../Panel.js'
+import { PaneCompositePart } from '../../paneComposite/PaneCompositePart.js'
+import { panelConfig } from '../../paneComposite/paneCompositeConfigs.js'
 
-vi.mock('../output/OutputView.js', () => ({
-  OutputView: () => <div data-testid="output-view">Output Content</div>,
-}))
-
-vi.mock('../output/OutputViewToolbar.js', () => ({
-  OutputViewToolbar: () => <div data-testid="output-toolbar">Toolbar</div>,
-}))
-
-vi.mock('../../viewContainerHeader/ViewContainerHeader.js', () => ({
-  ViewContainerHeader: () => <div data-testid="view-container-header" />,
+vi.mock('../../paneComposite/PaneCompositeHeader.js', () => ({
+  PaneCompositeHeader: () => <div data-testid="view-container-header" />,
 }))
 
 function makeStorage(): IStorageService {
@@ -68,7 +62,7 @@ function renderPanel(activeContainerId: string | undefined) {
   const inst = new InstantiationService(services)
   return render(
     <ServicesContext.Provider value={inst}>
-      <Panel />
+      <PaneCompositePart part={undefined} config={panelConfig} />
     </ServicesContext.Provider>,
   )
 }
@@ -99,6 +93,11 @@ describe('Panel', () => {
         order: 1,
       }),
     )
+    disposables.push(
+      ViewComponentRegistry.register('output.main', () => (
+        <div data-testid="output-view">Output Content</div>
+      )),
+    )
   }
 
   it('renders the active container id on the part element', () => {
@@ -122,7 +121,7 @@ describe('Panel', () => {
     expect(screen.getByTestId('part-panel').getAttribute('data-active-view-container')).toBe('')
   })
 
-  it('always mounts the shared ViewContainerHeader', () => {
+  it('always mounts the shared header', () => {
     registerOutput()
     renderPanel('workbench.view.output')
     expect(screen.getByTestId('view-container-header')).toBeTruthy()
