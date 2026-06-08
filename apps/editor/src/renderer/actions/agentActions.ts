@@ -531,11 +531,19 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
       id: FocusNextAcpTimelineItemAction.ID,
       title: localize('action.agent.focusNextTimelineItem', 'Focus Next Timeline Item'),
       category: CATEGORY,
+      icon: 'timeline-next',
       keybinding: [
         { primary: 'alt+down', when: 'acpChatFocused' },
         { primary: 'alt+j', when: 'acpChatFocused' },
       ],
-      precondition: 'acpChatFocused',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 3,
+        },
+      ],
       f1: true,
     })
   }
@@ -551,11 +559,19 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
       id: FocusPreviousAcpTimelineItemAction.ID,
       title: localize('action.agent.focusPreviousTimelineItem', 'Focus Previous Timeline Item'),
       category: CATEGORY,
+      icon: 'timeline-prev',
       keybinding: [
         { primary: 'alt+up', when: 'acpChatFocused' },
         { primary: 'alt+k', when: 'acpChatFocused' },
       ],
-      precondition: 'acpChatFocused',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 2,
+        },
+      ],
       f1: true,
     })
   }
@@ -571,11 +587,19 @@ export class FocusTopAcpTimelineAction extends Action2 {
       id: FocusTopAcpTimelineAction.ID,
       title: localize('action.agent.focusTopTimelineItem', 'Focus Top Timeline Item'),
       category: CATEGORY,
+      icon: 'timeline-top',
       keybinding: [
         { primary: 'alt+home', when: 'acpChatFocused' },
         { primary: 'alt+a', when: 'acpChatFocused' },
       ],
-      precondition: 'acpChatFocused',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 4,
+        },
+      ],
       f1: true,
     })
   }
@@ -591,16 +615,49 @@ export class FocusBottomAcpTimelineAction extends Action2 {
       id: FocusBottomAcpTimelineAction.ID,
       title: localize('action.agent.focusBottomTimelineItem', 'Focus Bottom Timeline Item'),
       category: CATEGORY,
+      icon: 'timeline-bottom',
       keybinding: [
         { primary: 'alt+end', when: 'acpChatFocused' },
         { primary: 'alt+e', when: 'acpChatFocused' },
       ],
-      precondition: 'acpChatFocused',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 5,
+        },
+      ],
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
     accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('last')
+  }
+}
+
+export class JumpToAcpPlanAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.jumpToPlan'
+  constructor() {
+    super({
+      id: JumpToAcpPlanAction.ID,
+      title: localize('action.agent.jumpToPlan', 'Jump to Plan'),
+      category: CATEGORY,
+      icon: 'go-to-plan',
+      keybinding: { primary: 'alt+p', when: 'acpChatFocused' },
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 1,
+        },
+      ],
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.jumpToPlan()
   }
 }
 

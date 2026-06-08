@@ -573,6 +573,7 @@ describe('PromptInput — focus handoff', () => {
         move: () => {},
         scrollTimeline: () => {},
         focus: () => {},
+        jumpToPlan: () => {},
         toggleCollapse: () => {},
         cycleCollapseMode: () => {},
       },

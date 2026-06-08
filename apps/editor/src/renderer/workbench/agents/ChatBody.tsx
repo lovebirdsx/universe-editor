@@ -65,6 +65,7 @@ export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
   scrollTimeline: (target: AcpTimelineScrollTarget) => void
   focus: () => void
+  jumpToPlan: () => void
   toggleCollapse: () => void
   cycleCollapseMode: () => void
 }
@@ -75,6 +76,7 @@ const NOOP_HANDLE: WidgetHandle = {
   move: noop,
   scrollTimeline: noop,
   focus: noop,
+  jumpToPlan: noop,
   toggleCollapse: noop,
   cycleCollapseMode: noop,
 }
@@ -108,6 +110,7 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
       moveTimeline: (d) => handleRef.current.move(d),
       scrollTimeline: (t) => handleRef.current.scrollTimeline(t),
       focusInput: () => handleRef.current.focus(),
+      jumpToPlan: () => handleRef.current.jumpToPlan(),
       toggleCollapse: () => handleRef.current.toggleCollapse(),
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
     })
@@ -474,9 +477,41 @@ function ChatScroll({
     handle.cycleCollapseMode = () => {
       session.cycleCollapseMode()
     }
+    handle.jumpToPlan = () => {
+      const list = displayTimelineRef.current
+      // The agent's plan reaches the timeline as an ExitPlanMode tool call
+      // (kind 'switch_mode'). Jump to the most recent one — re-entering plan
+      // mode appends a fresh card, and the latest is what the user means.
+      let targetIndex = -1
+      for (let i = list.length - 1; i >= 0; i--) {
+        const it = list[i]
+        if (it && it.kind === 'toolCall' && it.call.kind === 'switch_mode') {
+          targetIndex = i
+          break
+        }
+      }
+      if (targetIndex < 0) return
+      const item = list[targetIndex]
+      if (!item) return
+      const nextKey = slotKey(item)
+      stickRef.current = false
+      setFocusedKey(nextKey)
+      focusedKeyRef.current = nextKey
+      const container = containerRef.current
+      const el = container?.querySelector<HTMLElement>(
+        `[data-timeline-key="${cssEscape(nextKey)}"]`,
+      )
+      if (el) {
+        el.scrollIntoView({ block: 'nearest' })
+      } else {
+        virtualizerRef.current?.scrollToIndex(targetIndex, { align: 'center' })
+      }
+      persist()
+    }
     return () => {
       handle.move = noop
       handle.scrollTimeline = noop
+      handle.jumpToPlan = noop
       handle.toggleCollapse = noop
       handle.cycleCollapseMode = noop
     }

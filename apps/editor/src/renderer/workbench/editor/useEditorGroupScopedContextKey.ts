@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Owns a per-group scoped ContextKeyService mirroring that group's active
- *  editor (language id, editor id, diff flag), so `MenuId.EditorTitle` actions
+ *  editor (language id, editor id, editor type, diff flag), so `MenuId.EditorTitle` actions
  *  resolve independently for each editor group — a split showing a markdown
  *  file and one showing a non-markdown file get the right buttons each.
  *--------------------------------------------------------------------------------------------*/
@@ -43,8 +43,13 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       s.set('activeEditorLanguageId', active instanceof FileEditorInput ? active.language : '')
       s.set('hasActiveEditor', active !== undefined)
       s.set('isInDiffEditor', active instanceof DiffEditorInput)
-      if (active) s.set('activeEditorId', active.id)
-      else s.remove('activeEditorId')
+      if (active) {
+        s.set('activeEditorId', active.id)
+        s.set('activeEditorType', active.typeId)
+      } else {
+        s.remove('activeEditorId')
+        s.remove('activeEditorType')
+      }
     }
     sync()
     const d = markAsSingleton(

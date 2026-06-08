@@ -31,6 +31,8 @@ export interface AcpChatWidget {
   moveTimeline(direction: AcpTimelineMoveDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
   focusInput(): void
+  /** Reveal the latest ExitPlanMode plan card (a `switch_mode` tool call). */
+  jumpToPlan(): void
   /** Toggle the collapsed state of the currently focused timeline item. */
   toggleCollapse(): void
   /** Cycle the whole timeline: by-kind default → all collapsed → all expanded. */

@@ -38,6 +38,7 @@ function makeWidget(
     moveTimeline: moveSpy,
     scrollTimeline: vi.fn(),
     focusInput: focusSpy,
+    jumpToPlan: vi.fn(),
     toggleCollapse: vi.fn(),
     cycleCollapseMode: vi.fn(),
   }
@@ -171,6 +172,7 @@ describe('AcpChatWidgetService', () => {
       moveTimeline: vi.fn(),
       scrollTimeline: vi.fn(),
       focusInput: vi.fn(),
+      jumpToPlan: vi.fn(),
       toggleCollapse: vi.fn(),
       cycleCollapseMode: vi.fn(),
     }

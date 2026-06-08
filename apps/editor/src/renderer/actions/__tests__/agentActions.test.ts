@@ -13,6 +13,7 @@ import {
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
   FocusTopAcpTimelineAction,
+  JumpToAcpPlanAction,
 } from '../agentActions.js'
 import {
   IAcpChatWidgetService,
@@ -36,17 +37,21 @@ describe('Agent timeline navigation actions', () => {
     widget: AcpChatWidget
     moveTimeline: ReturnType<typeof vi.fn>
     scrollTimeline: ReturnType<typeof vi.fn>
+    jumpToPlan: ReturnType<typeof vi.fn>
   } {
     const moveTimeline = vi.fn()
     const scrollTimeline = vi.fn()
+    const jumpToPlan = vi.fn()
     return {
       moveTimeline,
       scrollTimeline,
+      jumpToPlan,
       widget: {
         container: document.createElement('div'),
         moveTimeline,
         scrollTimeline,
         focusInput: vi.fn(),
+        jumpToPlan,
         toggleCollapse: vi.fn(),
         cycleCollapseMode: vi.fn(),
       },
@@ -84,6 +89,17 @@ describe('Agent timeline navigation actions', () => {
     run(FocusBottomAcpTimelineAction.ID, bottom.widget)
     expect(bottom.moveTimeline).toHaveBeenCalledWith('last')
     expect(bottom.scrollTimeline).not.toHaveBeenCalled()
+  })
+
+  it('binds Alt+P to jump to the plan card', () => {
+    disposables.push(registerAction2(JumpToAcpPlanAction))
+    const ctx = focusedContext()
+    expect(KeybindingsRegistry.resolveKeybinding('alt+p', ctx)).toBe(JumpToAcpPlanAction.ID)
+
+    const w = makeWidget()
+    run(JumpToAcpPlanAction.ID, w.widget)
+    expect(w.jumpToPlan).toHaveBeenCalledTimes(1)
+    expect(w.moveTimeline).not.toHaveBeenCalled()
   })
 
   it('binds Ctrl+Alt+PageUp/PageDown to page scroll without moving focus', () => {

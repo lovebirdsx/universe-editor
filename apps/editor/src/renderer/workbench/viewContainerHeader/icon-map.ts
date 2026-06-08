@@ -1,10 +1,14 @@
 import {
   Archive,
   ArrowDown,
+  ArrowDownToLine,
   ArrowUp,
+  ArrowUpToLine,
   Bug,
   Check,
+  ChevronDown,
   ChevronsDownUp,
+  ChevronUp,
   Cloud,
   Columns2,
   Download,
@@ -17,6 +21,7 @@ import {
   GitMerge,
   GitPullRequest,
   List,
+  ListChecks,
   ListMinus,
   ListPlus,
   ListTree,
@@ -82,6 +87,12 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // Editor title actions.
   'open-preview': Eye,
   'open-preview-side': Columns2,
+  // Agent session editor — timeline navigation.
+  'go-to-plan': ListChecks,
+  'timeline-prev': ChevronUp,
+  'timeline-next': ChevronDown,
+  'timeline-top': ArrowUpToLine,
+  'timeline-bottom': ArrowDownToLine,
 }
 
 export function resolveHeaderIcon(name: string | undefined): LucideIcon | undefined {
