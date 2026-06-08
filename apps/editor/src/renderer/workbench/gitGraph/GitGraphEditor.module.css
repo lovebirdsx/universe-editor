@@ -111,19 +111,6 @@
   border-radius: 3px;
 }
 
-.refresh {
-  padding: 2px 10px;
-  background: var(--color-button-bg);
-  color: var(--color-button-fg);
-  border: none;
-  border-radius: 3px;
-  cursor: pointer;
-}
-
-.refresh:hover {
-  background: var(--color-button-hover-bg);
-}
-
 .status,
 .error {
   padding: 12px;

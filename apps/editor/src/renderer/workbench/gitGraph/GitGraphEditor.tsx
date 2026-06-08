@@ -1108,8 +1108,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         >
           ⚙
         </button>
-        <button type="button" className={styles['refresh']} onClick={() => load()}>
-          Refresh
+        <button
+          type="button"
+          className={styles['toolBtn']}
+          onClick={() => load()}
+          title="Refresh"
+          aria-label="Refresh"
+        >
+          ↺
         </button>
         {showSettings && (
           <>
