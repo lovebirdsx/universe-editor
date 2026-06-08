@@ -175,7 +175,9 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
   // silently never appear in `pnpm dev` while the production build works.
   it('shows the ACP nav icons under StrictMode when the session becomes active after mount', async () => {
     registerNavActions()
-    disposables.push(EditorRegistry.registerEditorProvider({ typeId: 'fake', componentKey: 'fake' }))
+    disposables.push(
+      EditorRegistry.registerEditorProvider({ typeId: 'fake', componentKey: 'fake' }),
+    )
     disposables.push(
       EditorRegistry.registerEditorProvider({
         typeId: AcpSessionEditorInput.TYPE_ID,

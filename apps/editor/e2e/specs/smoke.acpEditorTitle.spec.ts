@@ -60,9 +60,12 @@ test.describe('@p1 agents — editor title nav icons', () => {
         (el as HTMLElement).dataset['testid']!.replace('view-title-action-', ''),
       ),
     )
-    const navOnly = renderedOrder.filter((id) =>
-      id.startsWith('workbench.action.agent.') &&
-      (id.includes('TimelineItem') || id.includes('Timeline') || id === 'workbench.action.agent.jumpToPlan'),
+    const navOnly = renderedOrder.filter(
+      (id) =>
+        id.startsWith('workbench.action.agent.') &&
+        (id.includes('TimelineItem') ||
+          id.includes('Timeline') ||
+          id === 'workbench.action.agent.jumpToPlan'),
     )
     expect(navOnly).toEqual(NAV_COMMANDS_IN_ORDER)
   })
