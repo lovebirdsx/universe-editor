@@ -65,6 +65,20 @@ describe('mdSymbolToMonaco', () => {
     expect(out.children?.[0]?.range.startLineNumber).toBe(3)
   })
 
+  it('strips the leading markdown heading markup from the name', () => {
+    const top = mdSymbolToMonaco({
+      name: '# Heading',
+      kind: 15,
+      range: range(0, 0, 1, 0),
+      selectionRange: range(0, 0, 0, 9),
+      children: [
+        { name: '## Sub', kind: 15, range: range(1, 0, 2, 0), selectionRange: range(1, 0, 1, 6) },
+      ],
+    })
+    expect(top.name).toBe('Heading')
+    expect(top.children?.[0]?.name).toBe('Sub')
+  })
+
   it('substitutes a placeholder name for empty headings', () => {
     const out = mdSymbolToMonaco({
       name: '',

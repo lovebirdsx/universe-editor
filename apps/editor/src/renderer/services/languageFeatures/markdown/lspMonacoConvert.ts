@@ -39,8 +39,11 @@ function mdSymbolKindToMonaco(kind: number): monaco.languages.SymbolKind {
 }
 
 export function mdSymbolToMonaco(s: MdDocumentSymbol): monaco.languages.DocumentSymbol {
+  // Strip the leading markdown heading markup ("# ", "## ", …); the level is
+  // already conveyed by the tree nesting, matching VSCode's plain-text labels.
+  const name = (s.name || '').replace(/^#+\s*/, '') || '(empty)'
   return {
-    name: s.name || '(empty)',
+    name,
     detail: s.detail ?? '',
     kind: mdSymbolKindToMonaco(s.kind),
     tags: [],

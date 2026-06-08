@@ -49,6 +49,7 @@ export function OutlineView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const rootsRef = useRef<OutlineNode[]>([])
   const idBySymbolRef = useRef<Map<monaco.languages.DocumentSymbol, string>>(new Map())
+  const activeIdRef = useRef<string | undefined>(undefined)
 
   const modelRef = useRef<TreeModel<OutlineNode> | null>(null)
   if (!modelRef.current) {
@@ -78,7 +79,23 @@ export function OutlineView() {
     model.refresh()
   }, [outline, model])
 
+  // When the tree gains focus without a focused row (e.g. via the
+  // `outline.focus` command), select the symbol under the editor cursor — or the
+  // first row — so keyboard navigation is usable immediately, VSCode-style.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const onFocus = () => {
+      if (model.focused != null) return
+      const targetId = activeIdRef.current ?? model.getVisibleNodes()[0]?.id
+      if (targetId != null) model.setSelection([targetId], targetId)
+    }
+    el.addEventListener('focus', onFocus)
+    return () => el.removeEventListener('focus', onFocus)
+  }, [model])
+
   const activeId = activeSymbol ? idBySymbolRef.current.get(activeSymbol) : undefined
+  activeIdRef.current = activeId
 
   if (!outline || outline.roots.length === 0) {
     return <div className={styles['empty']}>{localize('outline.empty', 'No symbols found.')}</div>

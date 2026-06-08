@@ -111,6 +111,24 @@ export class ToggleSecondarySidebarVisibilityAction extends Action2 {
   }
 }
 
+export class FocusOutlineAction extends Action2 {
+  static readonly ID = 'outline.focus'
+  constructor() {
+    super({
+      id: FocusOutlineAction.ID,
+      title: localize('action.focusOutline.title', 'Focus on Outline View'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+q' },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor
+      .get(ILayoutService)
+      .focusView('workbench.view.outline.main', { source: 'command' })
+  }
+}
+
 export class TogglePanelAction extends Action2 {
   static readonly ID = 'workbench.action.togglePanel'
   constructor() {

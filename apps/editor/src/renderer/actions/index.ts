@@ -14,6 +14,7 @@ import {
   ShowCommandsAction,
   ShowExplorerAction,
   ShowScmAction,
+  FocusOutlineAction,
   ToggleActivityBarVisibilityAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
@@ -188,6 +189,7 @@ registerAction2(TogglePanelAction)
 registerAction2(ShowCommandsAction)
 registerAction2(ShowExplorerAction)
 registerAction2(ShowScmAction)
+registerAction2(FocusOutlineAction)
 
 // Editor — view
 registerAction2(ToggleMinimapAction)
