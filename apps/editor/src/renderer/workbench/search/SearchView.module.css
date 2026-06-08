@@ -3,7 +3,7 @@
   flex-direction: column;
   gap: 6px;
   padding: 6px 8px;
-  color: var(--text-primary, #d4d4d4);
+  color: var(--color-foreground, #c8c8c8);
   font-size: 12px;
   height: 100%;
   overflow: hidden;
@@ -45,16 +45,16 @@
   box-sizing: border-box;
   height: 24px;
   padding: 2px 60px 2px 6px;
-  background: var(--input-bg, #3c3c3c);
-  color: inherit;
-  border: 1px solid var(--input-border, #3c3c3c);
+  background: var(--color-input-bg, #3c3c3c);
+  color: var(--color-input-fg, #d4d4d4);
+  border: 1px solid var(--color-input-border, #555);
   border-radius: 2px;
   outline: none;
   font: inherit;
 }
 
 .input:focus {
-  border-color: var(--focus-border, #007fd4);
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .toggles {
@@ -68,7 +68,7 @@
 
 .toggle {
   background: transparent;
-  color: var(--text-secondary, #9d9d9d);
+  color: var(--color-foreground-muted, #8a8a92);
   border: 1px solid transparent;
   border-radius: 2px;
   width: 18px;
@@ -80,13 +80,13 @@
 }
 
 .toggle:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }
 
 .toggleActive {
-  color: var(--accent, #e7e7e7);
-  background: rgba(0, 127, 212, 0.25);
-  border-color: var(--focus-border, #007fd4);
+  color: var(--color-foreground, #c8c8c8);
+  background: var(--color-accent-soft-bg, rgba(0, 127, 212, 0.25));
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .filterToggle {
@@ -96,7 +96,7 @@
   justify-content: center;
   height: 24px;
   background: transparent;
-  color: var(--text-secondary, #9d9d9d);
+  color: var(--color-foreground-muted, #8a8a92);
   border: 1px solid transparent;
   border-radius: 2px;
   cursor: pointer;
@@ -104,14 +104,14 @@
 }
 
 .filterToggle:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary, #d4d4d4);
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
 }
 
 .filterToggleActive {
-  color: var(--accent, #e7e7e7);
-  background: rgba(0, 127, 212, 0.25);
-  border-color: var(--focus-border, #007fd4);
+  color: var(--color-foreground, #c8c8c8);
+  background: var(--color-accent-soft-bg, rgba(0, 127, 212, 0.25));
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .toolbarBtn {
@@ -150,7 +150,7 @@
   display: flex;
   flex-direction: column;
   gap: 2px;
-  color: var(--text-secondary, #9d9d9d);
+  color: var(--color-foreground-muted, #8a8a92);
   font-size: 11px;
 }
 
@@ -160,13 +160,13 @@
 
 .error {
   margin: 0;
-  color: var(--error-fg, #f48771);
+  color: var(--color-error-fg, #f48771);
   font-size: 11px;
 }
 
 .summary {
   margin: 0;
-  color: var(--text-secondary, #9d9d9d);
+  color: var(--color-foreground-muted, #8a8a92);
   font-size: 11px;
 }
 
@@ -177,8 +177,8 @@
 }
 
 .replaceAllBtn {
-  background: var(--button-bg, #0e639c);
-  color: var(--button-fg, #ffffff);
+  background: var(--color-button-bg, #0e639c);
+  color: var(--color-button-fg, #ffffff);
   border: none;
   border-radius: 2px;
   padding: 2px 8px;
@@ -188,12 +188,12 @@
 }
 
 .replaceAllBtn:hover {
-  background: var(--button-bg-hover, #1177bb);
+  background: var(--color-button-hover-bg, #1177bb);
 }
 
 .hint {
   margin: 0;
-  color: var(--text-secondary, #858585);
+  color: var(--color-foreground-muted, #8a8a92);
   font-size: 11px;
 }
 
@@ -202,17 +202,17 @@
   align-items: center;
   gap: 8px;
   padding: 4px 6px;
-  background: rgba(229, 192, 123, 0.12);
-  border: 1px solid rgba(229, 192, 123, 0.3);
+  background: var(--color-warning-bg, rgba(229, 192, 123, 0.12));
+  border: 1px solid var(--color-warning-border, rgba(229, 192, 123, 0.3));
   border-radius: 2px;
   font-size: 11px;
-  color: var(--text-primary, #d4d4d4);
+  color: var(--color-foreground, #c8c8c8);
 }
 
 .rerunBtn {
   background: transparent;
   color: inherit;
-  border: 1px solid var(--button-border, rgba(255, 255, 255, 0.2));
+  border: 1px solid var(--color-border, rgba(255, 255, 255, 0.2));
   border-radius: 2px;
   padding: 1px 6px;
   font: inherit;
@@ -221,7 +221,7 @@
 }
 
 .rerunBtn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }
 
 .resultsTree {
@@ -244,15 +244,15 @@
 }
 
 .row:hover {
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.04));
 }
 
 .row.selected {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-list-active-bg, rgba(255, 255, 255, 0.08));
 }
 
 .row.focused {
-  outline: 1px solid var(--focus-border, #007fd4);
+  outline: 1px solid var(--color-focus-border, #0070e0);
   outline-offset: -1px;
 }
 
@@ -284,7 +284,7 @@
 
 .fileCount {
   margin-left: auto;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-badge-bg, rgba(255, 255, 255, 0.08));
   border-radius: 8px;
   padding: 0 6px;
   font-size: 10px;
@@ -296,7 +296,7 @@
 .replaceBtn {
   background: transparent;
   border: none;
-  color: var(--text-secondary, #9d9d9d);
+  color: var(--color-foreground-muted, #8a8a92);
   cursor: pointer;
   padding: 0 4px;
   font: inherit;
@@ -309,7 +309,7 @@
 }
 
 .lineNumber {
-  color: var(--text-secondary, #9d9d9d);
+  color: var(--color-foreground-muted, #8a8a92);
   font-size: 11px;
   min-width: 20px;
   text-align: right;
@@ -325,7 +325,7 @@
 }
 
 .match {
-  background: rgba(229, 192, 123, 0.35);
+  background: var(--color-search-match-bg, rgba(229, 192, 123, 0.35));
   color: inherit;
   border-radius: 2px;
 }

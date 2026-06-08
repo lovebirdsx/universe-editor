@@ -87,7 +87,7 @@
   border-radius: 4px;
   max-height: 60vh;
   overflow-y: auto;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 12px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
 }
 
 .sessionsPopover ul {
@@ -182,7 +182,7 @@
   border: 1px solid var(--color-border, #333);
   border-radius: 4px;
   background: var(--color-message-bg, #2a2a2a);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+  box-shadow: 0 2px 4px var(--color-shadow-card, rgba(0, 0, 0, 0.25));
   pointer-events: auto;
 }
 
@@ -353,7 +353,7 @@
 .codeBlock {
   margin: 4px 0;
   padding: 6px 8px;
-  background: var(--color-input-bg, #1a1a1a);
+  background: var(--color-code-block-bg, #1a1a1a);
   border: 1px solid var(--color-border, #333);
   border-radius: 4px;
   overflow-x: auto;
@@ -374,7 +374,7 @@
   gap: 6px;
   margin: 2px 0;
   padding: 3px 8px;
-  background: var(--color-input-bg, #2d2d2d);
+  background: var(--color-resource-link-bg, #2d2d2d);
   color: inherit;
   border: 1px solid var(--color-border, #444);
   border-radius: 4px;
@@ -436,7 +436,7 @@
   gap: 4px;
   margin: 2px 0;
   padding: 6px 8px;
-  background: var(--color-input-bg, #232333);
+  background: var(--color-command-badge-bg, #232333);
   border: 1px solid var(--color-border, #3a3a4a);
   border-left: 2px solid var(--color-badge-progress, #4fa6e2);
   border-radius: 4px;
@@ -594,14 +594,14 @@
   right: 0;
   bottom: 0;
   height: 28px;
-  background: linear-gradient(to bottom, transparent, var(--color-message-bg, #1f1f1f));
+  background: linear-gradient(to bottom, transparent, var(--color-terminal-bg, #1f1f1f));
   pointer-events: none;
 }
 
 .terminalOutputPre {
   margin: 0;
   padding: 4px 6px;
-  background: var(--color-message-bg, #1f1f1f);
+  background: var(--color-terminal-bg, #1f1f1f);
   border-radius: 3px;
   font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
   font-size: calc(var(--agent-font-size, 12px) * 0.917);
@@ -646,7 +646,7 @@
 .inlineDiff {
   border: 1px solid var(--color-border, #333);
   border-radius: 3px;
-  background: var(--color-message-bg, #1f1f1f);
+  background: var(--color-terminal-bg, #1f1f1f);
   overflow: hidden;
 }
 
@@ -697,14 +697,14 @@
 
 .diffLineAdd {
   display: block;
-  background: rgba(46, 160, 67, 0.18);
-  color: #b5e0bd;
+  background: var(--color-diff-add-bg, rgba(46, 160, 67, 0.18));
+  color: var(--color-diff-add-fg, #b5e0bd);
 }
 
 .diffLineDel {
   display: block;
-  background: rgba(248, 81, 73, 0.18);
-  color: #f1b0ab;
+  background: var(--color-diff-del-bg, rgba(248, 81, 73, 0.18));
+  color: var(--color-diff-del-fg, #f1b0ab);
 }
 
 .diffLineCtx {
@@ -814,14 +814,14 @@
 
 .sendButtonCirclePrimary {
   --acp-send-color: var(--color-badge-progress, #4fa6e2);
-  --acp-send-hover-color: #6fbaf5;
-  --acp-send-track-color: rgba(79, 166, 226, 0.36);
+  --acp-send-hover-color: var(--color-send-hover-color, #6fbaf5);
+  --acp-send-track-color: var(--color-send-track-color, rgba(79, 166, 226, 0.36));
   color: var(--acp-send-color);
   border-radius: 50%;
 }
 
 .sendButtonCirclePrimary:hover:not(:disabled) {
-  background: rgba(79, 166, 226, 0.12);
+  background: var(--color-send-hover-bg, rgba(79, 166, 226, 0.12));
   color: var(--acp-send-hover-color);
 }
 
@@ -872,7 +872,7 @@
   border-radius: 50%;
   background: var(--acp-send-color);
   color: var(--color-button-fg, #ffffff);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  box-shadow: 0 0 0 1px var(--color-send-icon-ring, rgba(255, 255, 255, 0.08));
 }
 
 .sendButtonCirclePrimary:hover:not(:disabled) .sendButtonIcon {
@@ -1332,7 +1332,7 @@
 }
 
 .permissionDeny {
-  background: var(--color-badge-error, #a1260d);
+  background: var(--color-danger-bg, #a1260d);
 }
 
 .questionCard {
@@ -1427,7 +1427,7 @@
   padding: 3px 6px;
   border: 1px solid var(--color-border, #333);
   border-radius: 3px;
-  background: var(--color-input-bg, #1e1e1e);
+  background: var(--color-question-input-bg, #1e1e1e);
   color: inherit;
 }
 
@@ -1442,7 +1442,7 @@
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;
-  background: var(--color-input-bg, #1e1e1e);
+  background: var(--color-question-input-bg, #1e1e1e);
   border: 1px solid var(--color-border, #333);
   border-radius: 3px;
 }
@@ -1455,7 +1455,7 @@
   padding: 3px 6px;
   border: 1px solid var(--color-border, #333);
   border-radius: 3px;
-  background: var(--color-input-bg, #1e1e1e);
+  background: var(--color-question-input-bg, #1e1e1e);
   color: inherit;
   resize: vertical;
 }
@@ -1543,7 +1543,7 @@
   background: var(--color-message-bg, #2a2a2a);
   border: 1px solid var(--color-border, #555);
   border-radius: 4px;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  box-shadow: 0 4px 12px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
   padding: 2px 0;
   font-size: 12px;
 }
@@ -1759,4 +1759,25 @@
   background: var(--color-badge-bg, #333);
   color: var(--color-message-role-fg, #aaa);
   font-weight: 600;
+}
+
+/* Light theme ANSI palette: terminal background becomes light, so bright/light
+   foreground colors must darken for readability (mirrors VSCode Light Modern). */
+:global(:root[data-theme='light']) .terminalOutput {
+  --acp-ansi-black: #1e1e1e;
+  --acp-ansi-red: #cd3131;
+  --acp-ansi-green: #14792f;
+  --acp-ansi-yellow: #b08500;
+  --acp-ansi-blue: #0451a5;
+  --acp-ansi-magenta: #bc05bc;
+  --acp-ansi-cyan: #0598bc;
+  --acp-ansi-white: #555555;
+  --acp-ansi-bright-black: #767676;
+  --acp-ansi-bright-red: #cd3131;
+  --acp-ansi-bright-green: #14792f;
+  --acp-ansi-bright-yellow: #b08500;
+  --acp-ansi-bright-blue: #0451a5;
+  --acp-ansi-bright-magenta: #bc05bc;
+  --acp-ansi-bright-cyan: #0598bc;
+  --acp-ansi-bright-white: #1e1e1e;
 }

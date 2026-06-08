@@ -1,7 +1,7 @@
 export const WORKBENCH_FONT_FAMILY_DEFAULT =
   "'Roboto', system-ui, -apple-system, 'Segoe UI', sans-serif"
 
-export const EDITOR_FONT_FAMILY_DEFAULT = "Consolas"
+export const EDITOR_FONT_FAMILY_DEFAULT = 'Consolas'
 
 export const AGENT_FONT_SIZE_DEFAULT = 14
 

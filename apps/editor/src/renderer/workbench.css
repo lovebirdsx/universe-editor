@@ -108,6 +108,57 @@ html, body, #root {
 
   /* Toolbar */
   --color-toolbar-hover-bg: rgba(255, 255, 255, 0.06);
+
+  /* === Agent Session (chat) === */
+  --color-message-bg: #2a2a2a;
+  --color-message-fg: #ddd;
+  --color-message-role-fg: #999;
+  --color-message-user-bg: #2a3550;
+  --color-message-thought-bg: #2a2a35;
+  --color-message-thought-accent: #7a7aa3;
+  --color-terminal-bg: #1f1f1f;
+
+  --color-code-block-bg: #1a1a1a;
+  --color-resource-link-bg: #2d2d2d;
+  --color-command-badge-bg: #232333;
+  --color-input-bg: #3c3c3c;
+  --color-question-input-bg: #1e1e1e;
+  --color-input-fg: #d4d4d4;
+  --color-input-border: #555;
+
+  --color-button-bg: #0e639c;
+  --color-button-fg: #ffffff;
+  --color-button-hover-bg: #1177bb;
+
+  --color-badge-progress: #4fa6e2;
+  --color-badge-success: #2c7d32;
+  --color-badge-warning: #d7ba7d;
+  --color-badge-error: #f14c4c;
+  --color-danger-bg: #a1260d;
+  --color-warning-fg: #d7ba7d;
+  --color-error-fg: #f48771;
+  --color-list-active-bg: #094771;
+
+  --color-diff-add-bg: rgba(46, 160, 67, 0.18);
+  --color-diff-add-fg: #b5e0bd;
+  --color-diff-del-bg: rgba(248, 81, 73, 0.18);
+  --color-diff-del-fg: #f1b0ab;
+
+  --color-send-hover-color: #6fbaf5;
+  --color-send-track-color: rgba(79, 166, 226, 0.36);
+  --color-send-hover-bg: rgba(79, 166, 226, 0.12);
+  --color-send-icon-ring: rgba(255, 255, 255, 0.08);
+
+  --color-shadow-popover: rgba(0, 0, 0, 0.5);
+  --color-shadow-card: rgba(0, 0, 0, 0.25);
+
+  /* === Search & SCM views === */
+  --color-list-active-fg: #ffffff;
+  --color-list-inactive-bg: rgba(58, 61, 65, 0.6);
+  --color-accent-soft-bg: rgba(0, 127, 212, 0.25);
+  --color-search-match-bg: rgba(229, 192, 123, 0.35);
+  --color-warning-bg: rgba(229, 192, 123, 0.12);
+  --color-warning-border: rgba(229, 192, 123, 0.3);
 }
 
 :root[data-theme='light'] {
@@ -182,6 +233,57 @@ html, body, #root {
   --color-badge-fg: #15395b;
 
   --color-toolbar-hover-bg: rgba(0, 0, 0, 0.06);
+
+  /* === Agent Session (chat) === */
+  --color-message-bg: #ffffff;
+  --color-message-fg: #20242b;
+  --color-message-role-fg: #6a707b;
+  --color-message-user-bg: #dceeff;
+  --color-message-thought-bg: #eef0f7;
+  --color-message-thought-accent: #7a6fb0;
+  --color-terminal-bg: #f3f3f3;
+
+  --color-code-block-bg: #f3f3f3;
+  --color-resource-link-bg: #eceef2;
+  --color-command-badge-bg: #eef0f7;
+  --color-input-bg: #ffffff;
+  --color-question-input-bg: #ffffff;
+  --color-input-fg: #20242b;
+  --color-input-border: #c7cbd3;
+
+  --color-button-bg: #0067c0;
+  --color-button-fg: #ffffff;
+  --color-button-hover-bg: #0e5aa6;
+
+  --color-badge-progress: #0067c0;
+  --color-badge-success: #1a7f37;
+  --color-badge-warning: #9a6700;
+  --color-badge-error: #d1242f;
+  --color-danger-bg: #c4351a;
+  --color-warning-fg: #9a6700;
+  --color-error-fg: #d1242f;
+  --color-list-active-bg: #cfe6ff;
+
+  --color-diff-add-bg: rgba(26, 127, 55, 0.14);
+  --color-diff-add-fg: #1a7f37;
+  --color-diff-del-bg: rgba(209, 36, 47, 0.12);
+  --color-diff-del-fg: #b3232b;
+
+  --color-send-hover-color: #0e5aa6;
+  --color-send-track-color: rgba(0, 103, 192, 0.3);
+  --color-send-hover-bg: rgba(0, 103, 192, 0.1);
+  --color-send-icon-ring: rgba(0, 0, 0, 0.1);
+
+  --color-shadow-popover: rgba(0, 0, 0, 0.18);
+  --color-shadow-card: rgba(0, 0, 0, 0.1);
+
+  /* === Search & SCM views === */
+  --color-list-active-fg: #20242b;
+  --color-list-inactive-bg: rgba(0, 0, 0, 0.06);
+  --color-accent-soft-bg: rgba(0, 103, 192, 0.14);
+  --color-search-match-bg: rgba(234, 134, 0, 0.28);
+  --color-warning-bg: rgba(154, 103, 0, 0.12);
+  --color-warning-border: rgba(154, 103, 0, 0.35);
 }
 
 /* Scrollbar */

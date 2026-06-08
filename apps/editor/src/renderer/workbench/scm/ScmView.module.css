@@ -8,7 +8,7 @@
 
 .empty {
   padding: 12px;
-  color: var(--vscode-descriptionForeground, #888);
+  color: var(--color-description-fg, #8a8a92);
   font-size: 12px;
 }
 
@@ -27,13 +27,13 @@
   border: none;
   border-radius: 3px;
   background: transparent;
-  color: var(--vscode-foreground, #ccc);
+  color: var(--color-foreground, #c8c8c8);
   cursor: pointer;
   font-size: 12px;
 }
 
 .repoSelector:hover {
-  background: var(--vscode-toolbar-hoverBackground, #5a5a5a55);
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }
 
 .repoSelectorLabel {
@@ -57,9 +57,9 @@
   padding: 4px 6px;
   font-family: inherit;
   font-size: 13px;
-  background: var(--vscode-input-background, #3c3c3c);
-  color: var(--vscode-input-foreground, #ccc);
-  border: 1px solid var(--vscode-input-border, transparent);
+  background: var(--color-input-bg, #3c3c3c);
+  color: var(--color-input-fg, #d4d4d4);
+  border: 1px solid var(--color-input-border, #555);
   border-radius: 2px;
 }
 
@@ -75,8 +75,8 @@
   border: none;
   border-radius: 2px 0 0 2px;
   cursor: pointer;
-  background: var(--vscode-button-background, #0e639c);
-  color: var(--vscode-button-foreground, #fff);
+  background: var(--color-button-bg, #0e639c);
+  color: var(--color-button-fg, #ffffff);
   font-size: 13px;
 }
 
@@ -85,14 +85,14 @@
 }
 
 .commitButton:hover:not(:disabled) {
-  background: var(--vscode-button-hoverBackground, #1177bb);
+  background: var(--color-button-hover-bg, #1177bb);
 }
 
 .commitButton:disabled {
   cursor: not-allowed;
   opacity: 0.45;
-  background: var(--vscode-button-secondaryBackground, #3a3d41);
-  color: var(--vscode-disabledForeground, #8a8a8a);
+  background: var(--color-surface, #3a3d41);
+  color: var(--color-foreground-muted, #8a8a92);
 }
 
 .commitDropdown {
@@ -101,13 +101,13 @@
   border: none;
   border-radius: 0 2px 2px 0;
   cursor: pointer;
-  background: var(--vscode-button-background, #0e639c);
-  color: var(--vscode-button-foreground, #fff);
+  background: var(--color-button-bg, #0e639c);
+  color: var(--color-button-fg, #ffffff);
   font-size: 11px;
 }
 
 .commitDropdown:hover {
-  background: var(--vscode-button-hoverBackground, #1177bb);
+  background: var(--color-button-hover-bg, #1177bb);
 }
 
 .group {
@@ -124,7 +124,7 @@
 }
 
 .groupHeader:hover {
-  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  background: var(--color-list-hover-bg, #2a2d2e);
 }
 
 .groupLabel {
@@ -138,8 +138,8 @@
   min-width: 16px;
   padding: 0 5px;
   border-radius: 8px;
-  background: var(--vscode-badge-background, #4d4d4d);
-  color: var(--vscode-badge-foreground, #fff);
+  background: var(--color-badge-bg, #2f2f35);
+  color: var(--color-badge-fg, #c8c8c8);
   font-size: 11px;
   line-height: 16px;
   text-align: center;
@@ -177,19 +177,19 @@
 .groupHeader.selected,
 .folder.selected,
 .resource.selected {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
-  color: var(--vscode-list-activeSelectionForeground, #fff);
+  background: var(--color-list-active-bg, #094771);
+  color: var(--color-list-active-fg, #ffffff);
 }
 
 .tree:not([data-focused='true']) .selected {
-  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
+  background: var(--color-list-inactive-bg, rgba(58, 61, 65, 0.6));
   color: inherit;
 }
 
 .groupHeader.focused,
 .folder.focused,
 .resource.focused {
-  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline: 1px solid var(--color-focus-border, #0070e0);
   outline-offset: -1px;
 }
 
@@ -202,7 +202,7 @@
   width: 12px;
   text-align: center;
   font-size: 10px;
-  color: var(--vscode-descriptionForeground, #888);
+  color: var(--color-description-fg, #8a8a92);
 }
 
 .fileIcon {
@@ -225,7 +225,7 @@
 
 .resource:hover,
 .folder:hover {
-  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  background: var(--color-list-hover-bg, #2a2d2e);
 }
 
 .folderLabel {
@@ -255,7 +255,7 @@
   white-space: nowrap;
   font-size: 11px;
   opacity: 0.7;
-  color: var(--vscode-descriptionForeground, #888);
+  color: var(--color-description-fg, #8a8a92);
 }
 
 .statusLetter {
@@ -264,7 +264,7 @@
   margin-left: auto;
   text-align: center;
   font-size: 12px;
-  color: var(--vscode-descriptionForeground, #888);
+  color: var(--color-description-fg, #8a8a92);
 }
 
 /* When a row carries a dir label it already grows; keep the status letter flush right. */
@@ -291,16 +291,16 @@
 
 .resource:hover .resourceActions,
 .folder:hover .resourceActions {
-  background: var(--vscode-list-hoverBackground, #2a2d2e);
+  background: var(--color-list-hover-bg, #2a2d2e);
 }
 
 .resource.selected .resourceActions,
 .folder.selected .resourceActions {
-  background: var(--vscode-list-activeSelectionBackground, #094771);
+  background: var(--color-list-active-bg, #094771);
 }
 
 .tree:not([data-focused='true']) .selected .resourceActions {
-  background: var(--vscode-list-inactiveSelectionBackground, rgba(58, 61, 65, 0.6));
+  background: var(--color-list-inactive-bg, rgba(58, 61, 65, 0.6));
 }
 
 .actionButton {
@@ -309,7 +309,7 @@
   justify-content: center;
   border: none;
   background: transparent;
-  color: var(--vscode-icon-foreground, var(--vscode-foreground, #ccc));
+  color: var(--color-foreground-muted, #8a8a92);
   cursor: pointer;
   font-size: 11px;
   padding: 2px;
@@ -317,7 +317,7 @@
 }
 
 .actionButton:hover {
-  background: var(--vscode-toolbar-hoverBackground, #5a5a5a55);
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
 }
 
 /* --- Title overflow menu --- */
@@ -329,11 +329,11 @@
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  background: var(--vscode-menu-background, #252526);
-  color: var(--vscode-menu-foreground, #ccc);
-  border: 1px solid var(--vscode-menu-border, #454545);
+  background: var(--color-dropdown-bg, #2f2f35);
+  color: var(--color-foreground, #c8c8c8);
+  border: 1px solid var(--color-border, #454545);
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.36);
+  box-shadow: 0 2px 8px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
 }
 
 .overflowItem {
@@ -360,8 +360,8 @@
 }
 
 .overflowItem:hover {
-  background: var(--vscode-menu-selectionBackground, #04395e);
-  color: var(--vscode-menu-selectionForeground, #fff);
+  background: var(--color-list-active-bg, #04395e);
+  color: var(--color-list-active-fg, #ffffff);
 }
 
 .overflowIconGap {
@@ -372,7 +372,7 @@
 .overflowSeparator {
   height: 1px;
   margin: 4px 8px;
-  background: var(--vscode-menu-separatorBackground, #454545);
+  background: var(--color-border, #454545);
 }
 
 .overflowSeparatorLabel {
@@ -381,5 +381,5 @@
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--vscode-descriptionForeground, #888);
+  color: var(--color-description-fg, #8a8a92);
 }
