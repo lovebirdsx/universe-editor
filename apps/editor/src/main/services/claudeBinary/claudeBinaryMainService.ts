@@ -68,6 +68,33 @@ async function pathExists(p: string): Promise<boolean> {
   }
 }
 
+async function resolveWindowsNpmClaudeNative(candidate: string): Promise<string | null> {
+  if (path.extname(candidate).toLowerCase() === '.exe') return candidate
+  const native = path.join(
+    path.dirname(candidate),
+    'node_modules',
+    '@anthropic-ai',
+    'claude-code',
+    'bin',
+    'claude.exe',
+  )
+  return (await pathExists(native)) ? native : null
+}
+
+export async function selectClaudeExecutable(
+  candidates: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): Promise<string | null> {
+  const nonEmpty = candidates.map((l) => l.trim()).filter((l) => l.length > 0)
+  if (platform !== 'win32') return nonEmpty[0] ?? null
+
+  for (const candidate of nonEmpty) {
+    const native = await resolveWindowsNpmClaudeNative(candidate)
+    if (native) return native
+  }
+  return null
+}
+
 interface RegistryDist {
   readonly tarball: string
   readonly integrity?: string
@@ -123,7 +150,14 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     if (!(await pathExists(customPath))) {
       throw new Error(`Claude binary not found at configured path: ${customPath}`)
     }
-    return { path: customPath }
+    const selected = await selectClaudeExecutable([customPath])
+    if (!selected) {
+      throw new Error(
+        `Claude binary path is not a native Windows executable: ${customPath}. ` +
+          'Point `acp.claude.executablePath` at the package bin claude.exe instead.',
+      )
+    }
+    return { path: selected }
   }
 
   private async _resolveSystem(): Promise<string> {
@@ -313,8 +347,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       proc.once('error', () => resolve(null))
       proc.once('exit', (code) => {
         if (code !== 0) return resolve(null)
-        const first = out.split(/\r?\n/).find((l) => l.trim().length > 0)
-        resolve(first ? first.trim() : null)
+        void selectClaudeExecutable(out.split(/\r?\n/)).then(resolve, () => resolve(null))
       })
     })
   }
