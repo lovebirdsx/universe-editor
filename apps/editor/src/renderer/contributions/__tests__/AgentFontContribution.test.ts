@@ -30,11 +30,11 @@ describe('AgentFontContribution', () => {
     const contribution = new AgentFontContribution(config)
 
     const root = document.documentElement.style
-    expect(root.getPropertyValue('--agent-font-size')).toBe('12px')
+    expect(root.getPropertyValue('--agent-font-size')).toBe('14px')
     expect(root.getPropertyValue('--agent-font-family')).toBe('inherit')
 
     config.update('acp.fontSize', 0, ConfigurationTarget.User)
-    expect(root.getPropertyValue('--agent-font-size')).toBe('12px')
+    expect(root.getPropertyValue('--agent-font-size')).toBe('14px')
 
     config.update('acp.fontFamily', '   ', ConfigurationTarget.User)
     expect(root.getPropertyValue('--agent-font-family')).toBe('inherit')

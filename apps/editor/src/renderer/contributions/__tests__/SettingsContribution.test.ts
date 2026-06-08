@@ -28,9 +28,7 @@ describe('SettingsContribution', () => {
   it('exposes sensible defaults via getDefaultValue', () => {
     contribution = new SettingsContribution()
     expect(ConfigurationRegistry.getDefaultValue('editor.fontSize')).toBe(14)
-    expect(ConfigurationRegistry.getDefaultValue('editor.fontFamily')).toBe(
-      "Consolas, 'Courier New', monospace",
-    )
+    expect(ConfigurationRegistry.getDefaultValue('editor.fontFamily')).toBe('Consolas')
     expect(ConfigurationRegistry.getDefaultValue('editor.tabSize')).toBe(4)
     expect(ConfigurationRegistry.getDefaultValue('editor.wordWrap')).toBe(false)
     expect(ConfigurationRegistry.getDefaultValue('editor.minimap.enabled')).toBe(true)

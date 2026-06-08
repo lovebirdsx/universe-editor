@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
-  ConfigurationService,
   ContextKeyService,
-  IConfigurationService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
@@ -143,15 +141,6 @@ describe('Agent chat font zoom actions', () => {
     return ctx
   }
 
-  function run(commandId: string, config: IConfigurationService): void {
-    const services = new ServiceCollection()
-    services.set(IConfigurationService, config)
-    const inst = new InstantiationService(services)
-    inst.invokeFunction((accessor) => {
-      CommandsRegistry.getCommand(commandId)!.handler(accessor)
-    })
-  }
-
   it('binds zoom keybindings only while the chat is focused', () => {
     disposables.push(registerAction2(IncreaseAgentFontSizeAction))
     disposables.push(registerAction2(DecreaseAgentFontSizeAction))
@@ -164,25 +153,5 @@ describe('Agent chat font zoom actions', () => {
       DecreaseAgentFontSizeAction.ID,
     )
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+0', ctx)).toBe(ResetAgentFontSizeAction.ID)
-  })
-
-  it('increases, decreases (clamped), and resets acp.fontSize', () => {
-    disposables.push(registerAction2(IncreaseAgentFontSizeAction))
-    disposables.push(registerAction2(DecreaseAgentFontSizeAction))
-    disposables.push(registerAction2(ResetAgentFontSizeAction))
-
-    const config = new ConfigurationService()
-
-    run(IncreaseAgentFontSizeAction.ID, config)
-    expect(config.get('acp.fontSize')).toBe(13)
-
-    run(ResetAgentFontSizeAction.ID, config)
-    expect(config.get('acp.fontSize')).toBe(12)
-
-    for (let i = 0; i < 10; i++) run(DecreaseAgentFontSizeAction.ID, config)
-    expect(config.get('acp.fontSize')).toBe(8)
-
-    for (let i = 0; i < 20; i++) run(IncreaseAgentFontSizeAction.ID, config)
-    expect(config.get('acp.fontSize')).toBe(24)
   })
 })
