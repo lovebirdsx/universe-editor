@@ -6,7 +6,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { StrictMode } from 'react'
+import { act, render, screen } from '@testing-library/react'
 import {
   ContextKeyService,
   EditorInput,
@@ -48,13 +49,14 @@ const stubCommand: ICommandServiceType = {
   },
 }
 
-function renderWithServices(node: React.ReactNode) {
+function renderWithServices(node: React.ReactNode, opts?: { strict?: boolean }) {
   const services = new ServiceCollection()
   services.set(IDialogService, stubDialog)
   services.set(ICommandService, stubCommand)
   services.set(IContextKeyService, new ContextKeyService())
   const inst = new InstantiationService(services)
-  return render(<ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>)
+  const tree = <ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>
+  return render(opts?.strict ? <StrictMode>{tree}</StrictMode> : tree)
 }
 
 class FakeEditor extends EditorInput {
@@ -163,6 +165,51 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
     await screen.findByTestId('fake-editor')
     for (const cmd of NAV_COMMANDS_IN_ORDER) {
       expect(screen.queryByTestId(`view-title-action-${cmd}`)).toBeNull()
+    }
+  })
+
+  // Regression for the dev-only bug: under React StrictMode the per-group scoped
+  // ContextKeyService is disposed by the mount→unmount→mount dry run. If the hook
+  // doesn't recreate it, `activeEditorType` is never set for an editor that
+  // becomes active *after* mount (exactly how ACP sessions open), so the icons
+  // silently never appear in `pnpm dev` while the production build works.
+  it('shows the ACP nav icons under StrictMode when the session becomes active after mount', async () => {
+    registerNavActions()
+    disposables.push(EditorRegistry.registerEditorProvider({ typeId: 'fake', componentKey: 'fake' }))
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: AcpSessionEditorInput.TYPE_ID,
+        componentKey: 'agents.session',
+      }),
+    )
+
+    const svc = new EditorGroupsService()
+    disposables.push(svc)
+    // Mount with a non-ACP editor active so the tab bar renders but no ACP icons.
+    svc.activeGroup.openEditor(new FakeEditor('plain', 'fake'))
+
+    renderWithServices(
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        componentMap={componentMap as never}
+      />,
+      { strict: true },
+    )
+
+    await screen.findByTestId('fake-editor')
+    expect(screen.queryByTestId(`view-title-action-${JumpToAcpPlanAction.ID}`)).toBeNull()
+
+    // The ACP session opens later and becomes active — this fires
+    // onDidActiveEditorChange, which only updates activeEditorType if the hook's
+    // subscription survived StrictMode against a live scoped service.
+    await act(async () => {
+      svc.activeGroup.openEditor(new FakeEditor('sess', AcpSessionEditorInput.TYPE_ID))
+    })
+
+    await screen.findByTestId(`view-title-action-${JumpToAcpPlanAction.ID}`)
+    for (const cmd of NAV_COMMANDS_IN_ORDER) {
+      expect(screen.getByTestId(`view-title-action-${cmd}`)).toBeTruthy()
     }
   })
 })

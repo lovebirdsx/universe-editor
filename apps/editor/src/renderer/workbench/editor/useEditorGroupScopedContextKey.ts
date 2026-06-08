@@ -6,7 +6,7 @@
  *  file and one showing a non-markdown file get the right buttons each.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useReducer, useRef } from 'react'
 import {
   combinedDisposable,
   IContextKeyService,
@@ -21,6 +21,7 @@ import { useService } from '../useService.js'
 export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKeyService {
   const rootCtx = useService(IContextKeyService)
   const scopedRef = useRef<IScopedContextKeyService | null>(null)
+  const [, forceUpdate] = useReducer((n: number) => n + 1, 0)
 
   if (scopedRef.current === null) {
     // beforeunload (reload / Restart Editor) fires before React teardown —
@@ -29,15 +30,17 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
   }
 
   useEffect(() => {
-    return () => {
-      scopedRef.current?.dispose()
-      scopedRef.current = null
+    // StrictMode's dev dry-run runs this effect's cleanup (disposing + nulling
+    // the scoped service) before the real mount. Recreate it here so the live
+    // mount always has a working instance, and re-render so consumers (which read
+    // the returned service during render) pick up the live one rather than the
+    // disposed throwaway. Without this, `activeEditorType` is never set on a live
+    // service and `MenuId.EditorTitle` actions silently vanish in dev.
+    if (scopedRef.current === null) {
+      scopedRef.current = markAsSingleton(rootCtx.createScoped())
+      forceUpdate()
     }
-  }, [])
-
-  useEffect(() => {
     const s = scopedRef.current
-    if (!s) return
     const sync = () => {
       const active = group.activeEditor
       s.set('activeEditorLanguageId', active instanceof FileEditorInput ? active.language : '')
@@ -55,8 +58,12 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
     const d = markAsSingleton(
       combinedDisposable(group.onDidActiveEditorChange(sync), group.onDidChangeModel(sync)),
     )
-    return () => d.dispose()
-  }, [group])
+    return () => {
+      d.dispose()
+      scopedRef.current?.dispose()
+      scopedRef.current = null
+    }
+  }, [group, rootCtx])
 
   return scopedRef.current
 }
