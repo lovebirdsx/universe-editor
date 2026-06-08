@@ -53,7 +53,9 @@
       { "command": "git.addRemote", "title": "Add Remote...", "category": "Git", "icon": "remote" },
       { "command": "git.removeRemote", "title": "Remove Remote...", "category": "Git", "icon": "remote" },
       { "command": "git.createTag", "title": "Create Tag...", "category": "Git", "icon": "tag" },
-      { "command": "git.deleteTag", "title": "Delete Tag...", "category": "Git", "icon": "tag" }
+      { "command": "git.deleteTag", "title": "Delete Tag...", "category": "Git", "icon": "tag" },
+      { "command": "git.submoduleUpdateInit", "title": "Update Submodules", "category": "Git", "icon": "git-submodule" },
+      { "command": "git.submoduleSync", "title": "Sync Submodule URLs", "category": "Git", "icon": "git-submodule" }
     ],
     "submenus": [
       { "id": "git.commitMenu", "label": "Commit", "icon": "git-commit" },
@@ -64,7 +66,8 @@
       { "id": "git.branchMenu", "label": "Branch", "icon": "checkout" },
       { "id": "git.stashMenu", "label": "Stash", "icon": "stash" },
       { "id": "git.remoteMenu", "label": "Remote", "icon": "remote" },
-      { "id": "git.tagsMenu", "label": "Tags", "icon": "tag" }
+      { "id": "git.tagsMenu", "label": "Tags", "icon": "tag" },
+      { "id": "git.submoduleMenu", "label": "Submodules", "icon": "git-submodule" }
     ],
     "menus": {
       "scm/title": [
@@ -79,7 +82,8 @@
         { "submenu": "git.branchMenu", "group": "4_branch@1" },
         { "submenu": "git.stashMenu", "group": "5_stash@1" },
         { "submenu": "git.remoteMenu", "group": "6_remote@1" },
-        { "submenu": "git.tagsMenu", "group": "6_remote@2" }
+        { "submenu": "git.tagsMenu", "group": "6_remote@2" },
+        { "submenu": "git.submoduleMenu", "group": "7_submodule@1" }
       ],
       "git.commitMenu": [
         { "command": "git.commit", "group": "1@1", "icon": "git-commit" },
@@ -129,6 +133,10 @@
       "git.tagsMenu": [
         { "command": "git.createTag", "group": "1@1", "icon": "tag" },
         { "command": "git.deleteTag", "group": "1@2", "icon": "tag" }
+      ],
+      "git.submoduleMenu": [
+        { "command": "git.submoduleUpdateInit", "group": "1@1", "icon": "git-submodule" },
+        { "command": "git.submoduleSync",       "group": "1@2", "icon": "git-submodule" }
       ],
       "scm/resourceState/context": [
         { "command": "git.stage", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "add" },

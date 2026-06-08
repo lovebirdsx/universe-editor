@@ -161,6 +161,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.createTag', () => repo.createTag()),
     commands.registerCommand('git.deleteTag', () => repo.deleteTag()),
 
+    commands.registerCommand('git.submoduleUpdateInit', () => repo.submoduleUpdateInit()),
+    commands.registerCommand('git.submoduleSync', () => repo.submoduleSync()),
+
     // Git Graph — read-only data source for the renderer's Git Graph editor.
     commands.registerCommand('git-graph.getRepos', () => getGitGraphRepos(repoRoot, log)),
     commands.registerCommand('git-graph.setRepo', (...args: unknown[]) => {

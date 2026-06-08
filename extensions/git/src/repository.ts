@@ -479,6 +479,17 @@ export class Repository {
     await this._run(['tag', '-d', tag], 'delete tag')
   }
 
+  async submoduleUpdateInit(): Promise<void> {
+    await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
+      text: 'Updating submodules…',
+      kind: 'spinning',
+    })
+  }
+
+  async submoduleSync(): Promise<void> {
+    await this._run(['submodule', 'sync', '--recursive'], 'submodule sync')
+  }
+
   async discard(path: string, untracked: boolean): Promise<void> {
     const args = untracked ? ['clean', '-f', '--', path] : ['checkout', '--', path]
     await this._run(args, 'discard')
