@@ -44,7 +44,7 @@ export class BuiltInViewContainersContribution
     this._register(
       ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.scm',
-        label: localize('viewContainer.scm', 'Source Control'),
+        label: localize('viewContainer.scm', 'SCM'),
         icon: 'source-control',
         order: 3,
         location: ViewContainerLocation.SideBar,

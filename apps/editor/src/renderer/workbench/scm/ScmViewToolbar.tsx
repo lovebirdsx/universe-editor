@@ -1,19 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  ScmViewToolbar — the Source Control view's title-bar actions, rendered in the
- *  SideBar header (single-view container) via viewToolbarMap. Hoists what used
- *  to live in each provider's inline header: navigation icons (for the lone
- *  provider) plus a `…` overflow with the view-mode toggle, collapse-all and
- *  each provider's non-navigation `scm/title` actions. With multiple providers
- *  the navigation icons stay inline in each provider section; the overflow then
- *  aggregates their actions under per-provider sub-headers.
+ *  SideBar header (single-view container) via viewToolbarMap. With more than one
+ *  repo it leads with a compact repo selector (the view shows one repo at a
+ *  time); the navigation icons and `…` overflow always target the selected repo.
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
-import { IScmService } from '../../services/extensions/ScmService.js'
+import { IScmService, type IScmSourceControlModel } from '../../services/extensions/ScmService.js'
 import {
   ActionButton,
   TitleOverflowMenu,
@@ -25,26 +22,37 @@ import {
 import { scmViewState } from './scmViewState.js'
 import styles from './ScmView.module.css'
 
+/** The repo's folder name (main → project dir, submodule → submodule dir). */
+function repoShortName(sc: IScmSourceControlModel): string {
+  const p = (sc.rootUri ?? sc.label).replace(/[\\/]+$/, '')
+  const i = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return i === -1 ? p : p.slice(i + 1)
+}
+
 export function ScmViewToolbar() {
   const scm = useService(IScmService)
   const commandService = useService(ICommandService)
   const sourceControls = useObservable(scm.sourceControls)
+  const selectedRootUri = useObservable(scmViewState.selectedRepo)
   const viewMode = useObservable(scmViewState.viewMode)
   const revision = useMenuRevision()
   const [overflow, setOverflow] = useState<{ x: number; y: number } | null>(null)
+  const [repoMenu, setRepoMenu] = useState<{ x: number; y: number } | null>(null)
 
-  const single = sourceControls.length === 1 ? sourceControls[0] : undefined
+  const selected = sourceControls.find((sc) => sc.rootUri === selectedRootUri) ?? sourceControls[0]
+  const multi = sourceControls.length > 1
 
   const navActions = useMemo(
-    () => (single ? menuActions(MenuId.ScmTitle, { scmProvider: single.id }, 'navigation') : []),
+    () =>
+      selected ? menuActions(MenuId.ScmTitle, { scmProvider: selected.id }, 'navigation') : [],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [single?.id, revision],
+    [selected?.id, revision],
   )
 
-  const runCommand = (command: string, providerId: string | undefined): void => {
+  const runCommand = (command: string): void => {
     void commandService.executeCommand(
       command,
-      providerId ? { sourceControlId: providerId } : undefined,
+      selected ? { rootUri: selected.rootUri, sourceControlId: selected.id } : undefined,
     )
   }
 
@@ -73,18 +81,30 @@ export function ScmViewToolbar() {
         run: () => scmViewState.requestCollapseAll(),
       },
     ]
-    const multi = sourceControls.length > 1
-    for (const sc of sourceControls) {
-      const scRows = menuToRows(MenuId.ScmTitle, { scmProvider: sc.id }, (cmd) =>
-        runCommand(cmd, sc.id),
+    if (selected) {
+      const scRows = menuToRows(MenuId.ScmTitle, { scmProvider: selected.id }, (cmd) =>
+        runCommand(cmd),
       )
-      if (scRows.length === 0) continue
-      rows.push({ kind: 'separator', id: `sep-${sc.id}`, ...(multi ? { label: sc.label } : {}) })
-      rows.push(...scRows)
+      if (scRows.length > 0) {
+        rows.push({ kind: 'separator', id: 'sep-provider' })
+        rows.push(...scRows)
+      }
     }
     return rows
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sourceControls, viewMode, revision])
+  }, [selected?.id, viewMode, revision])
+
+  const repoRows = useMemo<OverflowRow[]>(
+    () =>
+      sourceControls.map((sc) => ({
+        kind: 'item',
+        id: String(sc.handle),
+        label: repoShortName(sc),
+        ...(sc === selected ? { icon: 'check' } : {}),
+        run: () => scmViewState.setSelectedRepo(sc.rootUri),
+      })),
+    [sourceControls, selected],
+  )
 
   if (sourceControls.length === 0) return null
 
@@ -92,11 +112,26 @@ export function ScmViewToolbar() {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
     setOverflow({ x: rect.right - 220, y: rect.bottom + 2 })
   }
+  const openRepoMenu = (e: ReactMouseEvent): void => {
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+    setRepoMenu({ x: rect.left, y: rect.bottom + 2 })
+  }
 
   return (
     <>
+      {multi && selected && (
+        <button
+          type="button"
+          className={styles['repoSelector']}
+          title={selected.label}
+          onClick={openRepoMenu}
+        >
+          <span className={styles['repoSelectorLabel']}>{repoShortName(selected)}</span>
+          <span className={styles['repoSelectorChevron']}>▾</span>
+        </button>
+      )}
       {navActions.map((a) => (
-        <ActionButton key={a.id} action={a} onRun={() => runCommand(a.command, single?.id)} />
+        <ActionButton key={a.id} action={a} onRun={() => runCommand(a.command)} />
       ))}
       <button
         type="button"
@@ -115,6 +150,9 @@ export function ScmViewToolbar() {
           rows={overflowRows}
           onClose={() => setOverflow(null)}
         />
+      )}
+      {repoMenu && (
+        <TitleOverflowMenu anchor={repoMenu} rows={repoRows} onClose={() => setRepoMenu(null)} />
       )}
     </>
   )

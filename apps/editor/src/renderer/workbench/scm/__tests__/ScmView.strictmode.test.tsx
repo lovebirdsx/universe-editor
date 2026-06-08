@@ -117,7 +117,10 @@ describe('ScmView under StrictMode', () => {
     const button = (await screen.findByRole('button', { name: 'Pull Rebase' })) as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    expect(executeCommand).toHaveBeenCalledWith('git.pullRebase', { sourceControlId: 'git' })
+    expect(executeCommand).toHaveBeenCalledWith('git.pullRebase', {
+      rootUri: 'D:/repo',
+      sourceControlId: 'git',
+    })
   })
 
   it('shows Push when git has no local changes and only local commits exist', async () => {
@@ -134,7 +137,10 @@ describe('ScmView under StrictMode', () => {
     const button = (await screen.findByRole('button', { name: 'Push' })) as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    expect(executeCommand).toHaveBeenCalledWith('git.push', { sourceControlId: 'git' })
+    expect(executeCommand).toHaveBeenCalledWith('git.push', {
+      rootUri: 'D:/repo',
+      sourceControlId: 'git',
+    })
   })
 
   it('shows Pull when git has no local changes and only remote commits exist', async () => {
@@ -151,7 +157,10 @@ describe('ScmView under StrictMode', () => {
     const button = (await screen.findByRole('button', { name: 'Pull' })) as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    expect(executeCommand).toHaveBeenCalledWith('git.pull', { sourceControlId: 'git' })
+    expect(executeCommand).toHaveBeenCalledWith('git.pull', {
+      rootUri: 'D:/repo',
+      sourceControlId: 'git',
+    })
   })
 
   it('keeps Commit enabled when git has local changes', async () => {
@@ -171,6 +180,9 @@ describe('ScmView under StrictMode', () => {
     const button = (await screen.findByRole('button', { name: 'Commit' })) as HTMLButtonElement
     expect(button.disabled).toBe(false)
     fireEvent.click(button)
-    expect(executeCommand).toHaveBeenCalledWith('git.commit', { sourceControlId: 'git' })
+    expect(executeCommand).toHaveBeenCalledWith('git.commit', {
+      rootUri: 'D:/repo',
+      sourceControlId: 'git',
+    })
   })
 })

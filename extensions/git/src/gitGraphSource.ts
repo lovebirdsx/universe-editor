@@ -10,6 +10,7 @@
  */
 import { basename, join } from 'node:path'
 import { gitExec } from './gitService.js'
+import { discoverRepos } from './repoDiscovery.js'
 
 /** Field separator inside a record; record separator is NUL (`git -z`). */
 const FIELD = '\x1f'
@@ -242,23 +243,14 @@ export async function getCommits(
 
 /**
  * Repositories the Git Graph view can switch between: the main repo plus any
- * submodules registered in it. The workspace has a single root, so independent
- * sibling repos don't arise; submodules are the realistic multi-repo case.
+ * submodules registered in it. Thin wrapper over the shared `discoverRepos`.
  */
 export async function getRepos(
   mainRoot: string,
   log?: (msg: string) => void,
 ): Promise<GitGraphRepo[]> {
-  const repos: GitGraphRepo[] = [{ root: mainRoot, name: basename(mainRoot) }]
-  const res = await gitExec(['submodule', 'status'], mainRoot, log)
-  if (res.exitCode === 0) {
-    for (const line of res.stdout.split('\n')) {
-      // Format: " <sha> <path> (<describe>)"; the leading char may be -, +, or U.
-      const m = line.trim().match(/^[-+U ]?[0-9a-f]+\s+(.+?)(?:\s+\(.*\))?$/)
-      if (m && m[1]) repos.push({ root: join(mainRoot, m[1]), name: m[1] })
-    }
-  }
-  return repos
+  const repos = await discoverRepos(mainRoot, log)
+  return repos.map(({ root, name }) => ({ root, name }))
 }
 
 /** Count changed files in the working tree (one porcelain line per path). */

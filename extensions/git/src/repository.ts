@@ -103,12 +103,19 @@ function workingStates(
     .map((f) => toResourceState(root, f.path, f.workingTree))
 }
 
+interface RepositoryOptions {
+  /** Whether this repo owns branch / sync status-bar items. Only the main repo should. */
+  readonly statusBar?: boolean
+  /** SourceControl label shown in the SCM view header (e.g. `Git: <submodule>`). */
+  readonly label?: string
+}
+
 export class Repository {
   private readonly _sc: SourceControl
   private readonly _staged: SourceControlResourceGroup
   private readonly _working: SourceControlResourceGroup
-  private readonly _branchItem: StatusBarItem
-  private readonly _syncItem: StatusBarItem
+  private readonly _branchItem: StatusBarItem | undefined
+  private readonly _syncItem: StatusBarItem | undefined
   private readonly _watchers: FSWatcher[] = []
   private _debounce: ReturnType<typeof setTimeout> | undefined
   private _refreshing = false
@@ -127,8 +134,9 @@ export class Repository {
   constructor(
     readonly root: string,
     private readonly _log?: (msg: string) => void,
+    private readonly _opts: RepositoryOptions = {},
   ) {
-    this._sc = scm.createSourceControl('git', 'Git', root)
+    this._sc = scm.createSourceControl('git', _opts.label ?? 'Git', root)
     this._sc.inputBox.placeholder = 'Message (Ctrl+Enter to commit)'
     this._sc.acceptInputCommand = GIT_COMMIT_INPUT_COMMAND
 
@@ -136,14 +144,16 @@ export class Repository {
     this._staged.hideWhenEmpty = true
     this._working = this._sc.createResourceGroup('workingTree', 'Changes')
 
-    this._branchItem = window.createStatusBarItem(StatusBarAlignment.Left, 100)
-    this._branchItem.command = 'git.checkout'
-    this._branchItem.tooltip = 'Checkout branch'
-    this._branchItem.text = '$(git-branch) …'
-    this._branchItem.show()
+    if (_opts.statusBar !== false) {
+      this._branchItem = window.createStatusBarItem(StatusBarAlignment.Left, 100)
+      this._branchItem.command = 'git.checkout'
+      this._branchItem.tooltip = 'Checkout branch'
+      this._branchItem.text = '$(git-branch) …'
+      this._branchItem.show()
 
-    this._syncItem = window.createStatusBarItem(StatusBarAlignment.Left, 99)
-    this._syncItem.command = 'git.sync'
+      this._syncItem = window.createStatusBarItem(StatusBarAlignment.Left, 99)
+      this._syncItem.command = 'git.sync'
+    }
 
     this._startWatching()
     void this._startAutofetch()
@@ -195,10 +205,12 @@ export class Repository {
       behind: status.behind,
     })
     this._branch = status.branch
-    this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
+    if (this._branchItem) {
+      this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
+    }
 
     // While an operation is showing a spinner, leave the sync item alone.
-    if (this._busy === 0) {
+    if (this._busy === 0 && this._syncItem) {
       const { ahead, behind } = status
       if (ahead > 0 || behind > 0) {
         const parts: string[] = []
@@ -217,6 +229,7 @@ export class Repository {
   /** Show a spinner on the sync item for the duration of an operation. */
   private _beginProgress(text: string, kind: 'syncing' | 'spinning'): void {
     this._busy++
+    if (!this._syncItem) return
     this._syncItem.text = text
     this._syncItem.tooltip = text
     this._syncItem.showProgress = kind
@@ -225,7 +238,7 @@ export class Repository {
 
   private _endProgress(): void {
     this._busy = Math.max(0, this._busy - 1)
-    if (this._busy === 0) this._syncItem.showProgress = false
+    if (this._busy === 0 && this._syncItem) this._syncItem.showProgress = false
   }
 
   get hasStagedChanges(): boolean {
@@ -699,8 +712,8 @@ export class Repository {
         // ignore
       }
     }
-    this._branchItem.dispose()
-    this._syncItem.dispose()
+    this._branchItem?.dispose()
+    this._syncItem?.dispose()
     this._sc.dispose()
   }
 }

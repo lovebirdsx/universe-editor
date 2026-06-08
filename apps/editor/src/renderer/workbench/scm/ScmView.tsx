@@ -68,6 +68,7 @@ import styles from './ScmView.module.css'
 
 const VIEW_MODE_STORAGE_KEY = 'scm.viewMode'
 const COMMIT_ACTION_STORAGE_KEY = 'scm.commitAction'
+const SELECTED_REPO_STORAGE_KEY = 'scm.selectedRepo'
 
 interface CommitAction {
   readonly id: string
@@ -481,6 +482,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
   model,
   node,
   providerId,
+  rootUri,
   indentPadding,
   isSelected,
   isFocused,
@@ -490,6 +492,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'group' }>
   providerId: string
+  rootUri: string | undefined
   revision: number
 }) {
   const commandService = useService(ICommandService)
@@ -522,7 +525,10 @@ const ScmGroupRow = memo(function ScmGroupRow({
             action={a}
             onRun={(e) => {
               e.stopPropagation()
-              void commandService.executeCommand(a.command, { sourceControlId: providerId })
+              void commandService.executeCommand(a.command, {
+                rootUri,
+                sourceControlId: providerId,
+              })
             }}
           />
         ))}
@@ -534,17 +540,7 @@ const ScmGroupRow = memo(function ScmGroupRow({
 
 // --- Provider --------------------------------------------------------------
 
-function ScmProviderView({
-  model,
-  index,
-  showHeader,
-  revision,
-}: {
-  model: IScmSourceControlModel
-  index: number
-  showHeader: boolean
-  revision: number
-}) {
+function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; revision: number }) {
   const scm = useService(IScmService)
   const commandService = useService(ICommandService)
   const storage = useService(IStorageService)
@@ -618,10 +614,9 @@ function ScmProviderView({
   }, [snapshot, treeModel])
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
-  // Only the first provider claims the view's focus target so multiple repos
-  // don't fight over the same focusable id.
+  // Only one provider is mounted at a time, so it always owns the view's focus.
   useViewFocusable(
-    index === 0 ? 'workbench.view.scm.main' : `scm.provider.${model.handle}`,
+    'workbench.view.scm.main',
     useCallback(() => inputRef.current, []),
   )
 
@@ -656,15 +651,9 @@ function ScmProviderView({
     ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden'
   }, [inputValue])
 
-  const scope = useMemo(() => ({ scmProvider: model.id }), [model.id])
-  const navActions = useMemo(
-    () => menuActions(MenuId.ScmTitle, scope, 'navigation'),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [scope, revision],
-  )
   const runCommand = (command: ICommandDto | string): void => {
     const id = typeof command === 'string' ? command : command.command
-    void commandService.executeCommand(id, { sourceControlId: model.id })
+    void commandService.executeCommand(id, { rootUri: model.rootUri, sourceControlId: model.id })
   }
 
   const localChangeCount = useMemo(
@@ -719,7 +708,14 @@ function ScmProviderView({
     }
     if (n.kind === 'group')
       return (
-        <ScmGroupRow key={n.id} {...shared} node={n} providerId={model.id} revision={revision} />
+        <ScmGroupRow
+          key={n.id}
+          {...shared}
+          node={n}
+          providerId={model.id}
+          rootUri={model.rootUri}
+          revision={revision}
+        />
       )
     if (n.kind === 'folder')
       return (
@@ -763,17 +759,6 @@ function ScmProviderView({
 
   return (
     <section className={styles['provider']}>
-      {showHeader && (
-        <div className={styles['providerHeader']}>
-          <span className={styles['providerLabel']}>{model.label}</span>
-          <span className={styles['providerActions']}>
-            {navActions.map((a) => (
-              <ActionButton key={a.id} action={a} onRun={() => runCommand(a.command)} />
-            ))}
-          </span>
-        </div>
-      )}
-
       <textarea
         ref={inputRef}
         className={styles['commitInput']}
@@ -874,24 +859,35 @@ export function ScmView() {
     void storage.set(VIEW_MODE_STORAGE_KEY, viewMode, StorageScope.GLOBAL)
   }, [viewMode, storage])
 
-  const showHeader = sourceControls.length > 1
+  // Restore / persist the selected repo per workspace (repo sets differ per
+  // workspace). Guarded so the default value doesn't overwrite storage on mount.
+  const selectedRootUri = useObservable(scmViewState.selectedRepo)
+  const restoredRepoRef = useRef(false)
+  useEffect(() => {
+    let active = true
+    void storage.get<string>(SELECTED_REPO_STORAGE_KEY, StorageScope.WORKSPACE).then((stored) => {
+      if (active && stored) scmViewState.setSelectedRepo(stored)
+      if (active) restoredRepoRef.current = true
+    })
+    return () => {
+      active = false
+    }
+  }, [storage])
+  useEffect(() => {
+    if (!restoredRepoRef.current || selectedRootUri === undefined) return
+    void storage.set(SELECTED_REPO_STORAGE_KEY, selectedRootUri, StorageScope.WORKSPACE)
+  }, [selectedRootUri, storage])
+
+  const selected = sourceControls.find((sc) => sc.rootUri === selectedRootUri) ?? sourceControls[0]
 
   return (
     <div className={styles['scmView']} tabIndex={-1}>
-      {sourceControls.length === 0 ? (
+      {!selected ? (
         <div className={styles['empty']}>
           {localize('scm.empty', 'No source control providers registered.')}
         </div>
       ) : (
-        sourceControls.map((sc, i) => (
-          <ScmProviderView
-            key={sc.handle}
-            model={sc}
-            index={i}
-            showHeader={showHeader}
-            revision={revision}
-          />
-        ))
+        <ScmProviderView key={selected.handle} model={selected} revision={revision} />
       )}
     </div>
   )

@@ -13,6 +13,8 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { detectRepoRoot } from './gitService.js'
 import { Repository } from './repository.js'
+import { RepositoryManager } from './repositoryManager.js'
+import { discoverRepos } from './repoDiscovery.js'
 import {
   getCommits as getGitGraphCommits,
   getCommitDetails as getGitGraphCommitDetails,
@@ -53,9 +55,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(out)
   const log = (msg: string): void => out.appendLine(msg)
 
-  const repo = new Repository(repoRoot, log)
-  context.subscriptions.push(repo)
-  void repo.refresh({ fetch: true, silent: true })
+  // Surface the main repo plus every initialized submodule as its own SCM
+  // provider. Only the main repo owns the branch / sync status-bar items.
+  const mgr = new RepositoryManager(repoRoot, log)
+  context.subscriptions.push(mgr)
+  const discovered = await discoverRepos(repoRoot, log)
+  for (const { root, name, initialized } of discovered) {
+    const isMain = root === repoRoot
+    if (!isMain && !initialized) continue
+    mgr.add(root, { statusBar: isMain, label: isMain ? 'Git' : `Git: ${name}` })
+  }
+  for (const repo of mgr.all) void repo.refresh({ fetch: true, silent: true })
 
   // The repository the Git Graph view currently targets. Defaults to the main
   // repo; `git-graph.setRepo` switches it to a submodule. All Git Graph queries
@@ -69,12 +79,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
     if (!ok) {
       void window.showErrorMessage(`Git Graph: ${label} failed. See the Git output for details.`)
     }
-    await repo.refresh()
+    await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
     return ok
   }
 
   // Smart commit: with nothing staged, stage every change first (mirrors VSCode).
-  const commitSmart = async (): Promise<boolean> => {
+  const commitSmart = async (repo: Repository | undefined): Promise<boolean> => {
+    if (!repo) return false
     const message = repo.commitMessage.trim()
     if (!message) {
       await window.showWarningMessage('Type a commit message first.')
@@ -93,30 +104,35 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   context.subscriptions.push(
-    commands.registerCommand('git.refresh', () => repo.refresh({ fetch: true })),
+    commands.registerCommand('git.refresh', (arg) =>
+      mgr.resolveRepo(arg)?.refresh({ fetch: true }),
+    ),
 
-    commands.registerCommand('git.commit', () => commitSmart()),
-    commands.registerCommand('git.commitAndPush', async () => {
-      if (await commitSmart()) await repo.push()
+    commands.registerCommand('git.commit', (arg) => commitSmart(mgr.resolveRepo(arg))),
+    commands.registerCommand('git.commitAndPush', async (arg) => {
+      const repo = mgr.resolveRepo(arg)
+      if (await commitSmart(repo)) await repo?.push()
     }),
-    commands.registerCommand('git.commitAndSync', async () => {
-      if (await commitSmart()) await repo.sync()
+    commands.registerCommand('git.commitAndSync', async (arg) => {
+      const repo = mgr.resolveRepo(arg)
+      if (await commitSmart(repo)) await repo?.sync()
     }),
 
     commands.registerCommand('git.stage', (arg) => {
       const path = resourcePath(arg)
-      return path ? repo.stage([path]) : undefined
+      return path ? mgr.resolveRepo(arg)?.stage([path]) : undefined
     }),
     commands.registerCommand('git.unstage', (arg) => {
       const path = resourcePath(arg)
-      return path ? repo.unstage([path]) : undefined
+      return path ? mgr.resolveRepo(arg)?.unstage([path]) : undefined
     }),
-    commands.registerCommand('git.stageAll', () => repo.stageAll()),
-    commands.registerCommand('git.unstageAll', () => repo.unstageAll()),
+    commands.registerCommand('git.stageAll', (arg) => mgr.resolveRepo(arg)?.stageAll()),
+    commands.registerCommand('git.unstageAll', (arg) => mgr.resolveRepo(arg)?.unstageAll()),
 
     commands.registerCommand('git.discard', async (arg) => {
+      const repo = mgr.resolveRepo(arg)
       const path = resourcePath(arg)
-      if (!path) return
+      if (!repo || !path) return
       const confirm = await window.showWarningMessage(
         `Discard changes in ${repo.basename(path)}? This cannot be undone.`,
         'Discard Changes',
@@ -129,40 +145,44 @@ export async function activate(context: ExtensionContext): Promise<void> {
       }
     }),
 
-    commands.registerCommand('git.checkout', () => repo.checkout()),
-    commands.registerCommand('git.createBranch', () => repo.createBranch()),
-    commands.registerCommand('git.renameBranch', () => repo.renameBranch()),
-    commands.registerCommand('git.deleteBranch', () => repo.deleteBranch()),
-    commands.registerCommand('git.merge', () => repo.merge()),
-    commands.registerCommand('git.rebase', () => repo.rebase()),
-    commands.registerCommand('git.publishBranch', () => repo.publishBranch()),
+    commands.registerCommand('git.checkout', (arg) => mgr.resolveRepo(arg)?.checkout()),
+    commands.registerCommand('git.createBranch', (arg) => mgr.resolveRepo(arg)?.createBranch()),
+    commands.registerCommand('git.renameBranch', (arg) => mgr.resolveRepo(arg)?.renameBranch()),
+    commands.registerCommand('git.deleteBranch', (arg) => mgr.resolveRepo(arg)?.deleteBranch()),
+    commands.registerCommand('git.merge', (arg) => mgr.resolveRepo(arg)?.merge()),
+    commands.registerCommand('git.rebase', (arg) => mgr.resolveRepo(arg)?.rebase()),
+    commands.registerCommand('git.publishBranch', (arg) => mgr.resolveRepo(arg)?.publishBranch()),
 
-    commands.registerCommand('git.sync', () => repo.sync()),
-    commands.registerCommand('git.pull', () => repo.pull()),
-    commands.registerCommand('git.pullRebase', () => repo.pullRebase()),
-    commands.registerCommand('git.pullAutostash', () => repo.pullAutostash()),
-    commands.registerCommand('git.push', () => repo.push()),
-    commands.registerCommand('git.pushForce', () => repo.pushForce()),
-    commands.registerCommand('git.pushTo', () => repo.pushTo()),
-    commands.registerCommand('git.fetch', () => repo.fetch()),
-    commands.registerCommand('git.fetchPrune', () => repo.fetch({ prune: true })),
-    commands.registerCommand('git.undoLastCommit', () => repo.undoLastCommit()),
-    commands.registerCommand('git.discardAll', () => repo.discardAll()),
+    commands.registerCommand('git.sync', (arg) => mgr.resolveRepo(arg)?.sync()),
+    commands.registerCommand('git.pull', (arg) => mgr.resolveRepo(arg)?.pull()),
+    commands.registerCommand('git.pullRebase', (arg) => mgr.resolveRepo(arg)?.pullRebase()),
+    commands.registerCommand('git.pullAutostash', (arg) => mgr.resolveRepo(arg)?.pullAutostash()),
+    commands.registerCommand('git.push', (arg) => mgr.resolveRepo(arg)?.push()),
+    commands.registerCommand('git.pushForce', (arg) => mgr.resolveRepo(arg)?.pushForce()),
+    commands.registerCommand('git.pushTo', (arg) => mgr.resolveRepo(arg)?.pushTo()),
+    commands.registerCommand('git.fetch', (arg) => mgr.resolveRepo(arg)?.fetch()),
+    commands.registerCommand('git.fetchPrune', (arg) =>
+      mgr.resolveRepo(arg)?.fetch({ prune: true }),
+    ),
+    commands.registerCommand('git.undoLastCommit', (arg) => mgr.resolveRepo(arg)?.undoLastCommit()),
+    commands.registerCommand('git.discardAll', (arg) => mgr.resolveRepo(arg)?.discardAll()),
 
-    commands.registerCommand('git.stash', () => repo.stashPush()),
-    commands.registerCommand('git.stashIncludeUntracked', () => repo.stashPush(true)),
-    commands.registerCommand('git.stashApply', () => repo.stashApply()),
-    commands.registerCommand('git.stashPop', () => repo.stashApply(true)),
-    commands.registerCommand('git.stashDrop', () => repo.stashDrop()),
+    commands.registerCommand('git.stash', (arg) => mgr.resolveRepo(arg)?.stashPush()),
+    commands.registerCommand('git.stashIncludeUntracked', (arg) =>
+      mgr.resolveRepo(arg)?.stashPush(true),
+    ),
+    commands.registerCommand('git.stashApply', (arg) => mgr.resolveRepo(arg)?.stashApply()),
+    commands.registerCommand('git.stashPop', (arg) => mgr.resolveRepo(arg)?.stashApply(true)),
+    commands.registerCommand('git.stashDrop', (arg) => mgr.resolveRepo(arg)?.stashDrop()),
 
-    commands.registerCommand('git.addRemote', () => repo.addRemote()),
-    commands.registerCommand('git.removeRemote', () => repo.removeRemote()),
+    commands.registerCommand('git.addRemote', (arg) => mgr.resolveRepo(arg)?.addRemote()),
+    commands.registerCommand('git.removeRemote', (arg) => mgr.resolveRepo(arg)?.removeRemote()),
 
-    commands.registerCommand('git.createTag', () => repo.createTag()),
-    commands.registerCommand('git.deleteTag', () => repo.deleteTag()),
+    commands.registerCommand('git.createTag', (arg) => mgr.resolveRepo(arg)?.createTag()),
+    commands.registerCommand('git.deleteTag', (arg) => mgr.resolveRepo(arg)?.deleteTag()),
 
-    commands.registerCommand('git.submoduleUpdateInit', () => repo.submoduleUpdateInit()),
-    commands.registerCommand('git.submoduleSync', () => repo.submoduleSync()),
+    commands.registerCommand('git.submoduleUpdateInit', () => mgr.main?.submoduleUpdateInit()),
+    commands.registerCommand('git.submoduleSync', () => mgr.main?.submoduleSync()),
 
     // Git Graph — read-only data source for the renderer's Git Graph editor.
     commands.registerCommand('git-graph.getRepos', () => getGitGraphRepos(repoRoot, log)),
@@ -188,7 +208,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
     commands.registerCommand('git-graph.openWorkingTreeFile', (...args: unknown[]) => {
       const path = args[0] as string
-      return repo.openChange(join(gitGraphRoot, path))
+      return mgr.resolveRepo({ rootUri: gitGraphRoot })?.openChange(join(gitGraphRoot, path))
     }),
     commands.registerCommand('git-graph.openFileDiff', async (...args: unknown[]) => {
       const req = args[0] as GitGraphFileDiffRequest
@@ -286,7 +306,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
       ]
       const path = resourcePath(arg)
       return path
-        ? repo.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
+        ? mgr
+            .resolveRepo(arg)
+            ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
         : undefined
     }),
   )
