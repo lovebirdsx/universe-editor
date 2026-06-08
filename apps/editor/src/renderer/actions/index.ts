@@ -121,7 +121,7 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
-import { ViewGitGraphAction } from './gitGraphActions.js'
+import { ViewGitGraphAction, GitGraphFocusSearchAction } from './gitGraphActions.js'
 import { ShowStartupPerformanceAction } from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
@@ -318,6 +318,7 @@ registerAction2(ReopenWithAction)
 
 // Git Graph
 registerAction2(ViewGitGraphAction)
+registerAction2(GitGraphFocusSearchAction)
 
 // Developer
 registerAction2(ShowStartupPerformanceAction)

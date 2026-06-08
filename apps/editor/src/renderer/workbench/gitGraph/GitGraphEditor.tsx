@@ -348,12 +348,23 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const detailBodyRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
   // Selection key whose details/compareFiles are already loaded — skips refetch on remount.
   const fetchedKeyRef = useRef<string | null>(
     gitGraphViewState.details || gitGraphViewState.compareFiles
       ? selectionKey(gitGraphViewState.selection)
       : null,
   )
+
+  useEffect(() => {
+    gitGraphViewState.focusSearch = () => {
+      searchInputRef.current?.focus()
+      searchInputRef.current?.select()
+    }
+    return () => {
+      gitGraphViewState.focusSearch = null
+    }
+  }, [])
 
   // Mirror state into the module-level store so it survives unmount.
   useEffect(() => {
@@ -1078,6 +1089,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         )}
         <span className={styles['toolbarSpacer']} />
         <input
+          ref={searchInputRef}
           className={styles['searchInput']}
           type="search"
           placeholder="Search commits…"
