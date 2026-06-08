@@ -302,6 +302,17 @@ export class ExplorerTreeService extends Disposable {
     return { resource, name: basename(resource), isDirectory: true }
   }
 
+  /** Collapse all expanded directories, leaving only the workspace root visible. */
+  collapseAll(): void {
+    if (!this._root) return
+    const rootKey = this._root.toString()
+    for (const key of this._nodes.keys()) {
+      if (key !== rootKey && this._model.isExpanded(key)) {
+        this._model.collapse(this._dirEntry(URI.parse(key)))
+      }
+    }
+  }
+
   /** Force re-read of a directory's entries, keeping its expanded state. */
   async refresh(resource: URI): Promise<void> {
     const node = this._ensureNode(resource)

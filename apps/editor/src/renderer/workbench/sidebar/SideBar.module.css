@@ -36,6 +36,17 @@
   flex-shrink: 0;
 }
 
+.sidebar[data-active-view='workbench.view.explorer.tree'] .headerActions {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.sidebar[data-active-view='workbench.view.explorer.tree']:hover .headerActions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .views {
   flex: 1;
   min-height: 0;

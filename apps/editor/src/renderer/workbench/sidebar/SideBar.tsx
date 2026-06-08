@@ -60,6 +60,7 @@ export function SideBar({ part }: { part?: IPart | undefined } = {}) {
       className={styles['sidebar']}
       data-testid="part-sidebar"
       data-active-view-container={activeContainer.id}
+      data-active-view={onlyView?.id}
       tabIndex={-1}
     >
       <div className={styles['header']}>
