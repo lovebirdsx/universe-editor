@@ -23,11 +23,7 @@ export function defaultCollapsed(item: TimelineItem | AcpChildItem, mode: Collap
     case 'message':
       return item.message.role === 'thought'
     case 'toolCall':
-      return (
-        item.call.kind === 'read' ||
-        item.call.kind === 'search' ||
-        (item.call.children?.length ?? 0) > 0
-      )
+      return item.call.kind !== 'edit'
   }
 }
 
