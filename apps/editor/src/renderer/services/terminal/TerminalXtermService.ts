@@ -32,6 +32,11 @@ import {
   handleTerminalClipboardKey,
   pasteClipboardIntoTerminal,
 } from '../../workbench/panel/terminal/terminalClipboard.js'
+import {
+  TERMINAL_FONT_FAMILY_DEFAULT,
+  TERMINAL_FONT_SIZE_DEFAULT,
+  normalizeFontFamily,
+} from '../configuration/fontDefaults.js'
 
 const DEFAULT_SCROLLBACK = 5000
 
@@ -120,8 +125,12 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     // collapsing the terminal to 1 row on every toggle.
 
     this.term = new Terminal({
-      fontFamily: 'Consolas, "Courier New", monospace',
-      fontSize: 13,
+      fontFamily: normalizeFontFamily(
+        this._config.get<string>('terminal.integrated.fontFamily'),
+        TERMINAL_FONT_FAMILY_DEFAULT,
+      ),
+      fontSize:
+        this._config.get<number>('terminal.integrated.fontSize') ?? TERMINAL_FONT_SIZE_DEFAULT,
       cursorBlink: true,
       scrollback: this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK,
       theme: themeFor(isDarkTheme(this._config)),
@@ -153,6 +162,18 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
         if (e.affectsConfiguration('terminal.integrated.scrollback')) {
           this.term.options.scrollback =
             this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK
+        }
+        if (e.affectsConfiguration('terminal.integrated.fontSize')) {
+          this.term.options.fontSize =
+            this._config.get<number>('terminal.integrated.fontSize') ?? TERMINAL_FONT_SIZE_DEFAULT
+          this.scheduleFit()
+        }
+        if (e.affectsConfiguration('terminal.integrated.fontFamily')) {
+          this.term.options.fontFamily = normalizeFontFamily(
+            this._config.get<string>('terminal.integrated.fontFamily'),
+            TERMINAL_FONT_FAMILY_DEFAULT,
+          )
+          this.scheduleFit()
         }
       }),
     )

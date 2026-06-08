@@ -15,6 +15,10 @@ import {
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
+  OUTPUT_FONT_FAMILY_DEFAULT,
+  OUTPUT_FONT_SIZE_DEFAULT,
+  TERMINAL_FONT_FAMILY_DEFAULT,
+  TERMINAL_FONT_SIZE_DEFAULT,
   WORKBENCH_FONT_FAMILY_DEFAULT,
 } from '../services/configuration/fontDefaults.js'
 import {
@@ -299,6 +303,24 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Maximum number of lines kept in the terminal scrollback (history). Restored when switching back to a terminal editor. Set to 0 for unlimited.',
             ),
           },
+          'terminal.integrated.fontSize': {
+            type: 'number',
+            default: TERMINAL_FONT_SIZE_DEFAULT,
+            minimum: 6,
+            maximum: 32,
+            description: localize(
+              'settings.terminal.integrated.fontSize.description',
+              'Controls the font size (in pixels) of the terminal.',
+            ),
+          },
+          'terminal.integrated.fontFamily': {
+            type: 'string',
+            default: TERMINAL_FONT_FAMILY_DEFAULT,
+            description: localize(
+              'settings.terminal.integrated.fontFamily.description',
+              'Controls the font family of the terminal.',
+            ),
+          },
         },
       }),
     )
@@ -363,6 +385,33 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.performance.startupWarning.developmentThresholdMs.description',
               'Show a startup warning in development builds only when startup exceeds this many milliseconds.',
+            ),
+          },
+        },
+      }),
+    )
+
+    this._register(
+      ConfigurationRegistry.registerConfiguration({
+        id: 'output',
+        title: localize('settings.output', 'Output'),
+        properties: {
+          'output.fontSize': {
+            type: 'number',
+            default: OUTPUT_FONT_SIZE_DEFAULT,
+            minimum: 8,
+            maximum: 32,
+            description: localize(
+              'settings.output.fontSize.description',
+              'Controls the font size (in pixels) in the Output panel.',
+            ),
+          },
+          'output.fontFamily': {
+            type: 'string',
+            default: OUTPUT_FONT_FAMILY_DEFAULT,
+            description: localize(
+              'settings.output.fontFamily.description',
+              'Controls the font family in the Output panel.',
             ),
           },
         },

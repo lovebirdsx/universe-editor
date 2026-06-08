@@ -19,7 +19,7 @@ const mockConfigService: IConfigurationService = {
   loadLayer: vi.fn(),
   getLayerSnapshot: vi.fn().mockReturnValue({}),
   getValueOrigin: vi.fn().mockReturnValue(undefined),
-  onDidChangeConfiguration: { event: vi.fn(), dispose: vi.fn() } as never,
+  onDidChangeConfiguration: vi.fn().mockReturnValue({ dispose: vi.fn() }),
 }
 
 function makeStorage(): IStorageService {

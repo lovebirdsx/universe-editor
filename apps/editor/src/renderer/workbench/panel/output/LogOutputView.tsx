@@ -16,7 +16,17 @@ function isScrolledToBottom(editor: monaco.editor.IStandaloneCodeEditor): boolea
   return scrollTop + visibleHeight >= scrollHeight - 20
 }
 
-export function LogOutputView({ content, theme }: { content: string; theme: 'vs' | 'vs-dark' }) {
+export function LogOutputView({
+  content,
+  theme,
+  fontSize,
+  fontFamily,
+}: {
+  content: string
+  theme: 'vs' | 'vs-dark'
+  fontSize: number
+  fontFamily: string
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const modelRef = useRef<monaco.editor.ITextModel | null>(null)
@@ -28,6 +38,10 @@ export function LogOutputView({ content, theme }: { content: string; theme: 'vs'
   latestContentRef.current = content
   const latestThemeRef = useRef(theme)
   latestThemeRef.current = theme
+  const latestFontSizeRef = useRef(fontSize)
+  latestFontSizeRef.current = fontSize
+  const latestFontFamilyRef = useRef(fontFamily)
+  latestFontFamilyRef.current = fontFamily
 
   // Create the Monaco editor once
   useEffect(() => {
@@ -51,8 +65,8 @@ export function LogOutputView({ content, theme }: { content: string; theme: 'vs'
         glyphMargin: false,
         folding: false,
         renderLineHighlight: 'none',
-        fontSize: 12,
-        fontFamily: "'Cascadia Code', 'Consolas', 'Courier New', monospace",
+        fontSize: latestFontSizeRef.current,
+        fontFamily: latestFontFamilyRef.current,
       })
       editorRef.current = ed
       if (initial) ed.revealLine(model.getLineCount())
@@ -92,6 +106,10 @@ export function LogOutputView({ content, theme }: { content: string; theme: 'vs'
     prevContentRef.current = content
     if (atBottom || !prev) editor.revealLine(model.getLineCount())
   }, [content])
+
+  useEffect(() => {
+    editorRef.current?.updateOptions({ fontSize, fontFamily })
+  }, [fontSize, fontFamily])
 
   return <div ref={containerRef} className={styles['logOutput']} />
 }
