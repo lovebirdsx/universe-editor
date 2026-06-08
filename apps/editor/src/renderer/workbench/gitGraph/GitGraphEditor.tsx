@@ -430,6 +430,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
       .then((r) => {
         if (!r) return
+        setError(null)
         setResult(r)
         setSelection((prev) =>
           prev.filter((h) => h === UNCOMMITTED_HASH || r.commits.some((c) => c.hash === h)),
