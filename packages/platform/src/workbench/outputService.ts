@@ -27,6 +27,13 @@ export interface IOutputService {
   readonly activeChannel: IOutputChannel | undefined
   setActiveChannel(name: string): void
 
+  /**
+   * True while a persisted active-channel restore is still waiting for its
+   * target channel to be created. Callers that auto-switch the active channel
+   * (e.g. error auto-reveal) should defer to the restore while this holds.
+   */
+  readonly hasPendingRestoredChannel: boolean
+
   readonly channelNames: IObservable<readonly string[]>
   readonly activeChannelName: IObservable<string | undefined>
   /** Derived: content of the active channel (empty string when no channel active). */

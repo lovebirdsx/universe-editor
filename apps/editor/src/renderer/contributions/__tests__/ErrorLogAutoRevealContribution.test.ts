@@ -217,4 +217,38 @@ describe('ErrorLogAutoRevealContribution', () => {
     expect(layout.setVisible).toHaveBeenCalledWith(PartId.Panel, true)
     contribution.dispose()
   })
+
+  it('defers to a pending channel restore instead of stealing the active channel', async () => {
+    const storage = {
+      _serviceBrand: undefined,
+      get: vi.fn().mockResolvedValue('acp/claude/old-handle'),
+      set: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      onDidChangeWorkspaceScope: () => ({ dispose: () => {} }),
+    } as unknown as IStorageService
+    const out = new OutputService(storage)
+    await flush() // let _loadRestoredChannel arm the pending restore
+    expect(out.hasPendingRestoredChannel).toBe(true)
+    // Bootstrap creates the aggregated channel first, so it owns the active slot
+    // (mirrors main.tsx) — the pending restore waits for its real target.
+    out.createChannel('All')
+    expect(out.activeChannelName.get()).toBe('All')
+
+    const contribution = instantiate(out, logFiles, layout, views)
+    await flush()
+
+    fireAppend(logFiles, 'renderer', '[10:00:00] [error] boom\n', LogLevel.Error)
+    await flush()
+
+    expect(logFiles.readLogFile).not.toHaveBeenCalled()
+    expect(out.activeChannelName.get()).toBe('All')
+    expect(views.openViewContainer).not.toHaveBeenCalled()
+    expect(layout.setVisible).not.toHaveBeenCalled()
+
+    // Once the restore target is created the pending state clears and it activates.
+    out.createChannel('acp/claude/new-handle')
+    expect(out.hasPendingRestoredChannel).toBe(false)
+    expect(out.activeChannelName.get()).toBe('acp/claude/new-handle')
+    contribution.dispose()
+  })
 })

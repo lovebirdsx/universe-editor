@@ -366,6 +366,7 @@ class StubOutputService implements IOutputService {
   getChannels(): readonly IOutputChannel[] {
     return [...this.channels.values()]
   }
+  hasPendingRestoredChannel: boolean = false
   setActiveChannel(): void {}
 }
 

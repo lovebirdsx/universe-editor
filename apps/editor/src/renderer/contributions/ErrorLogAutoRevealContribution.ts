@@ -35,6 +35,10 @@ export class ErrorLogAutoRevealContribution extends Disposable implements IWorkb
   private _handleAppend(event: LogAppendEvent): void {
     if (this._hasRevealed || this._revealInProgress) return
     if (event.maxLevel < LogLevel.Error) return
+    // A persisted output channel is still being restored; don't steal the
+    // active channel out from under the restore. Once the restore settles
+    // (or there was none) errors auto-reveal as usual.
+    if (this._output.hasPendingRestoredChannel) return
 
     this._revealInProgress = true
     void this._revealErrorChannel(event)

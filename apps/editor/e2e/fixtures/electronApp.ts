@@ -21,6 +21,36 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 export const APP_ROOT = resolve(__dirname, '..', '..')
 export const MAIN_ENTRY = resolve(APP_ROOT, 'out', 'main', 'index.js')
 
+// `app.close()` waits for the Electron process to fully exit. node-pty children
+// (integrated terminal) can keep the main process's event loop alive on CI long
+// enough to blow past the test timeout during teardown — observed flaky only on
+// the terminal spec. Fall back to force-killing the underlying process if the
+// graceful close doesn't finish promptly.
+const CLOSE_TIMEOUT_MS = 10_000
+
+async function closeApp(app: ElectronApplication): Promise<void> {
+  let proc: ReturnType<ElectronApplication['process']>
+  try {
+    // workbench.action.quit already tore the process down; the Playwright
+    // handle is disposed and process() throws. Nothing left to close.
+    proc = app.process()
+  } catch {
+    return
+  }
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timedOut = await Promise.race([
+    app
+      .close()
+      .then(() => false)
+      .catch(() => false),
+    new Promise<boolean>((res) => {
+      timer = setTimeout(() => res(true), CLOSE_TIMEOUT_MS)
+    }),
+  ])
+  if (timer) clearTimeout(timer)
+  if (timedOut && proc.pid !== undefined && proc.exitCode === null) proc.kill('SIGKILL')
+}
+
 export type E2EFixtures = {
   electronApp: ElectronApplication
   page: Page
@@ -61,7 +91,7 @@ export const test = base.extend<E2EFixtures>({
       },
     })
     await use(app)
-    await app.close()
+    await closeApp(app)
   },
   page: async ({ electronApp }, use) => {
     const page = await electronApp.firstWindow()

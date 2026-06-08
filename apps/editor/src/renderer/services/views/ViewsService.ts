@@ -6,6 +6,7 @@
 import {
   Disposable,
   IStorageService,
+  IWorkspaceService,
   StorageScope,
   observableValue,
 } from '@universe-editor/platform'
@@ -14,6 +15,7 @@ import { ViewContainerLocation, ViewContainerRegistry } from '@universe-editor/p
 
 const STORAGE_KEY = 'workbench.views'
 const SAVE_DEBOUNCE_MS = 200
+const INITIAL_LOAD_TIMEOUT_MS = 500
 
 const ALL_LOCATIONS: readonly ViewContainerLocation[] = [
   ViewContainerLocation.SideBar,
@@ -34,11 +36,18 @@ export class ViewsService extends Disposable implements IViewsService {
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
+  private _initialLoadDone = false
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {
+  constructor(
+    @IStorageService private readonly _storage: IStorageService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
+  ) {
     super()
     this._register(
       this._storage.onDidChangeWorkspaceScope(() => {
+        // The first scope event on cold start is consumed by load()'s settle;
+        // only genuine runtime workspace switches (after initial load) reload.
+        if (!this._initialLoadDone) return
         void this._reload()
       }),
     )
@@ -75,6 +84,30 @@ export class ViewsService extends Disposable implements IViewsService {
   }
 
   async load(): Promise<void> {
+    // RendererWorkspaceService.current is null at construction and hydrated
+    // asynchronously; the storage layer fires onDidChangeWorkspaceScope once
+    // hydration lands. Wait for that first event (or a short timeout for the
+    // genuine empty-window case) so the cold-start event is consumed here
+    // instead of firing _reload and clobbering a runtime container selection.
+    if (!this._workspace.current) {
+      await new Promise<void>((resolve) => {
+        let resolved = false
+        const settle = () => {
+          if (resolved) return
+          resolved = true
+          subscription.dispose()
+          clearTimeout(timer)
+          resolve()
+        }
+        const subscription = this._register(this._storage.onDidChangeWorkspaceScope(settle))
+        const timer = setTimeout(settle, INITIAL_LOAD_TIMEOUT_MS)
+      })
+    }
+    await this._loadFromStorage()
+    this._initialLoadDone = true
+  }
+
+  private async _loadFromStorage(): Promise<void> {
     let data: PersistedViews | undefined
     try {
       data = await this._storage.get<PersistedViews>(STORAGE_KEY, StorageScope.WORKSPACE)
@@ -127,7 +160,7 @@ export class ViewsService extends Disposable implements IViewsService {
     } finally {
       this._suspendPersist = false
     }
-    await this.load()
+    await this._loadFromStorage()
   }
 
   private _schedulePersist(): void {

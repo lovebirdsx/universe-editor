@@ -127,6 +127,10 @@ export class OutputService extends Disposable implements IOutputService {
     return name === undefined ? undefined : this._channels.get(name)
   }
 
+  get hasPendingRestoredChannel(): boolean {
+    return this._pendingRestoredChannelName !== undefined
+  }
+
   setActiveChannel(name: string): void {
     if (!this._channels.has(name)) return
     if (this.activeChannelName.get() === name) return

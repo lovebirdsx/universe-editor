@@ -9,6 +9,7 @@ import {
   ViewContainerRegistry,
   ViewRegistry,
   type IStorageService,
+  type IWorkspaceService,
 } from '@universe-editor/platform'
 import { ILayoutService, IViewsService } from '@universe-editor/platform'
 import { OutputService } from '../../../services/output/OutputService.js'
@@ -49,9 +50,11 @@ const mockConfigService: IConfigurationService = {
   onDidChangeConfiguration: { event: vi.fn(), dispose: vi.fn() } as never,
 }
 
+const stubWorkspace = { current: {} } as unknown as IWorkspaceService
+
 function renderPanel(activeContainerId: string | undefined) {
   const services = new ServiceCollection()
-  const viewsService = new ViewsService(makeStorage())
+  const viewsService = new ViewsService(makeStorage(), stubWorkspace)
   if (activeContainerId) viewsService.openViewContainer(activeContainerId)
   services.set(IViewsService, viewsService)
   services.set(IOutputService, new OutputService(makeStorage()))
