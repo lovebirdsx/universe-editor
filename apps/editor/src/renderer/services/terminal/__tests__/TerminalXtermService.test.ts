@@ -187,4 +187,15 @@ describe('TerminalXtermService', () => {
     expect(h.attachDisposed).toBe(true)
     expect(svc.get('t1')).toBeUndefined()
   })
+
+  it('dispose() cascades to all acquired holders (registered on the service store)', async () => {
+    const svc = await makeService(makeHarness())
+    const a = svc.acquire('a').term as unknown as { disposed: boolean }
+    const b = svc.acquire('b').term as unknown as { disposed: boolean }
+
+    svc.dispose()
+
+    expect(a.disposed).toBe(true)
+    expect(b.disposed).toBe(true)
+  })
 })

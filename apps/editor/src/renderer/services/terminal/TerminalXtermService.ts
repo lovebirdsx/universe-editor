@@ -21,7 +21,6 @@ import {
   Emitter,
   IConfigurationService,
   InstantiationType,
-  markAsSingleton,
   registerSingleton,
   type Event,
   type URI,
@@ -133,42 +132,37 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     this.term.open(this.wrapper)
     this.term.attachCustomKeyEventHandler((event) => handleTerminalClipboardKey(event, this.term))
 
+    // These subscriptions live for the whole terminal-process lifetime and are
+    // disposed when the holder is released (onDidRemoveTerminal → release). The
+    // holder is registered on the singleton TerminalXtermService, so they root
+    // through it and aren't flagged as leaks while a terminal is still open.
     const store = this._register(new DisposableStore())
-    // markAsSingleton: these subscriptions live for the whole terminal-process
-    // lifetime (released via onDidRemoveTerminal → release), not per view. The
-    // leak tracker should not flag them when a host snapshots mid-mount.
-    store.add(markAsSingleton(manager.attach(id, (data) => this.term.write(data))))
-    store.add(markAsSingleton(this.term.onData((data) => manager.input(id, data))))
+    store.add(manager.attach(id, (data) => this.term.write(data)))
+    store.add(this.term.onData((data) => manager.input(id, data)))
     store.add(
-      markAsSingleton(
-        this.term.onSelectionChange(() => {
-          this._hasSelection = this.term.hasSelection()
-          this._onDidChangeSelection.fire()
-        }),
-      ),
+      this.term.onSelectionChange(() => {
+        this._hasSelection = this.term.hasSelection()
+        this._onDidChangeSelection.fire()
+      }),
     )
     store.add(
-      markAsSingleton(
-        this._config.onDidChangeConfiguration((e) => {
-          if (e.affectsConfiguration('workbench.colorTheme')) {
-            this.term.options.theme = themeFor(isDarkTheme(this._config))
-          }
-          if (e.affectsConfiguration('terminal.integrated.scrollback')) {
-            this.term.options.scrollback =
-              this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK
-          }
-        }),
-      ),
+      this._config.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('workbench.colorTheme')) {
+          this.term.options.theme = themeFor(isDarkTheme(this._config))
+        }
+        if (e.affectsConfiguration('terminal.integrated.scrollback')) {
+          this.term.options.scrollback =
+            this._config.get<number>('terminal.integrated.scrollback') ?? DEFAULT_SCROLLBACK
+        }
+      }),
     )
     store.add(
-      markAsSingleton(
-        this.term.registerLinkProvider(
-          createFileLinkProvider(
-            this.term,
-            (absPath) => this._handlers.resolveFile(absPath),
-            (uri, line, col) => this._handlers.openFile(uri, line, col),
-            () => this._handlers.getCwd(),
-          ),
+      this.term.registerLinkProvider(
+        createFileLinkProvider(
+          this.term,
+          (absPath) => this._handlers.resolveFile(absPath),
+          (uri, line, col) => this._handlers.openFile(uri, line, col),
+          () => this._handlers.getCwd(),
         ),
       ),
     )
@@ -258,7 +252,7 @@ export class TerminalXtermService extends Disposable implements ITerminalXtermSe
   acquire(id: string): ITerminalXtermHolder {
     let holder = this._holders.get(id)
     if (!holder) {
-      holder = new TerminalXtermHolder(id, this._manager, this._config)
+      holder = this._register(new TerminalXtermHolder(id, this._manager, this._config))
       this._holders.set(id, holder)
     }
     return holder
@@ -272,11 +266,12 @@ export class TerminalXtermService extends Disposable implements ITerminalXtermSe
     const holder = this._holders.get(id)
     if (!holder) return
     this._holders.delete(id)
-    holder.dispose()
+    // delete() both disposes the holder and removes it from this service's
+    // store, so closed terminals don't accumulate as dead refs over a session.
+    this._store.delete(holder)
   }
 
   override dispose(): void {
-    for (const holder of this._holders.values()) holder.dispose()
     this._holders.clear()
     super.dispose()
   }
