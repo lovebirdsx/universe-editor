@@ -11,9 +11,13 @@ import { Disposable, type IWorkbenchContribution } from '@universe-editor/platfo
 import { STARTUP_ACTIVATION, STARTUP_FINISHED_ACTIVATION } from '@universe-editor/extensions-common'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
+import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 
 export class ExtensionsContribution extends Disposable implements IWorkbenchContribution {
-  constructor(@IExtensionHostClientService private readonly _client: IExtensionHostClientService) {
+  constructor(
+    @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
+    @IUserKeybindingsService private readonly _userKeybindings: IUserKeybindingsService,
+  ) {
     super()
     void this._boot()
   }
@@ -28,6 +32,10 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
 
     const contributions = await this._client.getContributions()
     translator.translate(contributions)
+
+    // Extension commands are now in CommandsRegistry; re-apply VSCode/user
+    // keybindings so bindings to those commands (skipped at startup) take effect.
+    await this._userKeybindings.reload()
 
     await this._client.activateByEvent(STARTUP_ACTIVATION)
     await this._client.activateByEvent(STARTUP_FINISHED_ACTIVATION)

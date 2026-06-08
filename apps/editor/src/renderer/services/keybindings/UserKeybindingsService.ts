@@ -49,6 +49,7 @@ export interface IUserKeybindingsService {
   readonly onDidChange: Event<void>
   readonly userEntries: readonly IUserKeybindingEntry[]
   initialize(): Promise<void>
+  reload(): Promise<void>
   setKeybinding(command: string, key: string | null, when?: string): void
   resetKeybinding(command: string): void
   getUserEntry(command: string): IUserKeybindingEntry | undefined
@@ -185,6 +186,15 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
 
   get userEntries(): readonly IUserKeybindingEntry[] {
     return [...this._userEntries.values()]
+  }
+
+  // Re-evaluate VSCode + user bindings. Extension-contributed commands register
+  // into CommandsRegistry asynchronously (after the extension host boots), long
+  // after initialize() ran at startup — so VSCode bindings to those commands were
+  // skipped by the command-existence filter in _reloadVSCodeFile(). Callers invoke
+  // this once extension commands are present to pick those bindings back up.
+  async reload(): Promise<void> {
+    await this._reloadVSCodeAndUser()
   }
 
   getUserEntry(command: string): IUserKeybindingEntry | undefined {

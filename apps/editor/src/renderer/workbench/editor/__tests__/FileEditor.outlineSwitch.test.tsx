@@ -223,6 +223,7 @@ function makeServices() {
     onDidChange: () => ({ dispose() {} }),
     userEntries: [],
     initialize: async () => {},
+    reload: async () => {},
     setKeybinding: () => {},
     resetKeybinding: () => {},
     getUserEntry: () => undefined,

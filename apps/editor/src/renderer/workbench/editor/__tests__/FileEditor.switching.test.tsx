@@ -233,6 +233,7 @@ describe('FileEditor tab switching', () => {
       onDidChange: () => ({ dispose() {} }),
       userEntries: [],
       initialize: async () => {},
+      reload: async () => {},
       setKeybinding: () => {},
       resetKeybinding: () => {},
       getUserEntry: () => undefined,
