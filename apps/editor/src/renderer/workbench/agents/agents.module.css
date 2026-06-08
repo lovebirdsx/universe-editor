@@ -1184,18 +1184,17 @@
   border: 0;
   color: inherit;
   cursor: pointer;
-  font-size: 12px;
 }
 
 .planTitle {
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  font-size: 11px;
+  font-size: 0.917em;
 }
 
 .planCount {
-  font-size: 10px;
+  font-size: 0.833em;
   padding: 1px 5px;
   border-radius: 8px;
   background: var(--color-badge-bg, #333);
@@ -1204,12 +1203,11 @@
 
 .planChevron {
   margin-left: auto;
-  font-size: 10px;
+  font-size: 0.833em;
   color: var(--color-message-role-fg, #888);
 }
 
 .planSummaryActive {
-  font-size: 12px;
   color: var(--color-message-role-fg, #aaa);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1230,7 +1228,6 @@
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  font-size: 12px;
   line-height: 1.4;
 }
 
