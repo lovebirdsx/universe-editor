@@ -74,8 +74,8 @@ jobs:
           restore-keys: |
             turbo-${{ runner.os }}-
 
-      - name: Build (platform dist required for integration imports)
-        run: pnpm build --filter=@universe-editor/platform...
+      - name: Build (platform + workbench-ui dist required for integration imports)
+        run: pnpm build --filter=@universe-editor/platform... --filter=@universe-editor/workbench-ui...
 
       - name: Run integration tests
         run: pnpm --filter @universe-editor/editor test:integration
