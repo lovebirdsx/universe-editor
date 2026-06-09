@@ -121,6 +121,7 @@ import { CloseQuickInputAction } from './quickInputActions.js'
 import { FocusNextPartAction, FocusPreviousPartAction } from './focusActions.js'
 import { ClearHistoryAction, GoBackAction, GoForwardAction } from './historyActions.js'
 import { GoToWorkspaceSymbolAction, GoToFileSymbolAction } from './gotoSymbolActions.js'
+import { gotoLocationActions } from './gotoLocationActions.js'
 import {
   ClearAllNotificationsAction,
   TestNotificationAction,
@@ -247,6 +248,9 @@ registerAction2(ClearHistoryAction)
 // Go — symbol navigation
 registerAction2(GoToWorkspaceSymbolAction)
 registerAction2(GoToFileSymbolAction)
+
+// Go — location navigation (Monaco goto/peek definition, type, impl, references)
+for (const action of gotoLocationActions) registerAction2(action)
 
 // Editor — move editor to group
 registerAction2(MoveEditorToLeftGroupAction)

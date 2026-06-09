@@ -9,6 +9,7 @@ import type * as monaco from 'monaco-editor'
 import { NullLogger, type ILogger } from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
+import { monacoNavDefaultKeybindingCommandIds } from '../../../actions/gotoLocationActions.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 
@@ -152,6 +153,13 @@ async function loadMonaco(): Promise<typeof monaco> {
       // which provides the Go to Symbol quick pick. The command itself stays
       // registered (still triggerable via editor.trigger).
       monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-editor.action.quickOutline' })
+      // Same treatment for the goto/peek navigation commands we mirror as
+      // project Action2s (gotoLocationActions): drop monaco's built-in default
+      // keys so they don't double-fire alongside our global keybinding handler.
+      // The commands stay registered (still triggerable via editor.trigger).
+      for (const id of monacoNavDefaultKeybindingCommandIds) {
+        monacoMod.editor.addKeybindingRule({ keybinding: 0, command: `-${id}` })
+      }
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here
