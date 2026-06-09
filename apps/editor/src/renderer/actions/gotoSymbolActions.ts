@@ -161,7 +161,9 @@ export class GoToWorkspaceSymbolAction extends Action2 {
 
     const root = workspace.current?.folder
     const monacoNs = await MonacoLoader.ensureInitialized()
-    await Promise.all([md.ensureStarted(root?.fsPath), ts.ensureStarted(root?.fsPath)])
+    // Starting either server is best-effort: a missing/broken tsserver must not
+    // block the picker from opening — it falls back to markdown symbols.
+    await Promise.allSettled([md.ensureStarted(root?.fsPath), ts.ensureStarted(root?.fsPath)])
 
     const picker = quickInput.createQuickPick<IQuickPickItem>()
     picker.placeholder = localize(
