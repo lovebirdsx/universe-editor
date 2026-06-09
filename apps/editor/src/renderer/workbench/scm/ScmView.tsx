@@ -262,6 +262,25 @@ export function buildSnapshot(
   return { roots, childrenMap, parentMap, collapsibleIds }
 }
 
+/** Case-insensitive, separator-agnostic path key for matching SCM rows. */
+function pathKey(p: string): string {
+  return p.replace(/\\/g, '/').toLowerCase()
+}
+
+/** Find the first file row in the snapshot whose resource matches `fsPath`. */
+function findFileNode(
+  snapshot: ScmSnapshot,
+  fsPath: string,
+): Extract<ScmNode, { kind: 'file' }> | undefined {
+  const key = pathKey(fsPath)
+  for (const children of snapshot.childrenMap.values()) {
+    for (const node of children) {
+      if (node.kind === 'file' && pathKey(node.resource.resourceUri) === key) return node
+    }
+  }
+  return undefined
+}
+
 /** Shared click semantics: shift=range, ctrl/meta=toggle, plain=select (+onPlain). */
 function rowClick(
   model: TreeModel<ScmNode>,
@@ -614,11 +633,36 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   }, [snapshot, treeModel])
 
   const inputRef = useRef<HTMLTextAreaElement>(null)
+  const treeRef = useRef<HTMLDivElement>(null)
+  // Whether the last reveal request landed on a file row; decides whether
+  // focusView should focus the tree (a row is selected) or the commit box.
+  const revealHitRef = useRef(false)
   // Only one provider is mounted at a time, so it always owns the view's focus.
   useViewFocusable(
     'workbench.view.scm.main',
-    useCallback(() => inputRef.current, []),
+    useCallback(() => (revealHitRef.current ? treeRef.current : inputRef.current), []),
   )
+
+  // Reveal the file requested by the show-SCM command: select + scroll its row,
+  // then pull focus to the tree. `snapshot` is a dependency so a request issued
+  // before the tree is built retries once the data lands. `handledRevealRef`
+  // starts at 0 (ticks start at 1) so a request that arrived before this
+  // provider mounted — the SCM-was-closed case — is still picked up.
+  const revealRequest = useObservable(scmViewState.revealRequest)
+  const handledRevealRef = useRef<number>(0)
+  useEffect(() => {
+    if (!revealRequest || revealRequest.tick === handledRevealRef.current) return
+    if (revealRequest.fsPath === null) {
+      handledRevealRef.current = revealRequest.tick
+      revealHitRef.current = false
+      return
+    }
+    const node = findFileNode(snapshotRef.current, revealRequest.fsPath)
+    if (!node) return // snapshot not ready yet — retry when it next changes
+    handledRevealRef.current = revealRequest.tick
+    revealHitRef.current = true
+    void treeModel.reveal(node).then(() => treeRef.current?.focus())
+  }, [revealRequest, snapshot, treeModel])
 
   // Persist the commit message per repository so it survives a window reload.
   const inputStorageKey = `scm/input/${model.rootUri ?? model.id}`
@@ -803,6 +847,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       <Tree<ScmNode>
         model={treeModel}
         className={styles['tree'] ?? ''}
+        rootRef={treeRef}
         virtualizationThreshold={Number.MAX_SAFE_INTEGER}
         renderRow={renderRow}
         onActivate={(node, opts) => {

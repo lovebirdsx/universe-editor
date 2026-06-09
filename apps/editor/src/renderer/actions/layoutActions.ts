@@ -25,6 +25,9 @@ import {
   type MonacoCommandItem,
 } from '../services/quickInput/monacoCommandSource.js'
 import { resolveShortcut } from '../workbench/titlebar/keybindingFormat.js'
+import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { scmViewState } from '../workbench/scm/scmViewState.js'
 
 export class ShowExplorerAction extends Action2 {
   static readonly ID = 'workbench.view.explorer'
@@ -177,6 +180,16 @@ export class ShowScmAction extends Action2 {
       layoutService.setVisible(PartId.SideBar, false)
       return
     }
+    // Reveal the active file's row (if any) before focusing, so opening from an
+    // editor/diff lands on its change. The diff input maps back to its real file.
+    const active = accessor.get(IEditorGroupsService).activeGroup.activeEditor
+    const fileUri =
+      active instanceof FileEditorInput
+        ? active.resource
+        : active instanceof DiffEditorInput
+          ? active.originalUri
+          : undefined
+    scmViewState.requestReveal(fileUri?.scheme === 'file' ? fileUri.fsPath : null)
     await layoutService.focusView('workbench.view.scm.main', { source: 'command' })
   }
 }
