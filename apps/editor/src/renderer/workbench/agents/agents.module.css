@@ -33,7 +33,7 @@
   gap: 6px;
   padding: 4px 8px;
   border-bottom: 1px solid var(--color-border, #333);
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
   min-height: 28px;
   box-sizing: border-box;
 }
@@ -58,7 +58,7 @@
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   font-weight: 600;
   color: var(--color-message-role-fg, #aaa);
   min-width: 0;
@@ -537,7 +537,7 @@
 
 .toolCallChevron {
   flex: none;
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   color: var(--color-message-role-fg, #888);
 }
 
@@ -763,7 +763,7 @@
 }
 
 .sessionTimerInline {
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   color: var(--color-message-role-fg, #888);
   min-width: 38px;
   text-align: right;
@@ -903,7 +903,7 @@
   align-items: center;
   padding: 4px 6px;
   gap: 6px;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
   cursor: pointer;
   border-radius: 3px;
   border-left: 2px solid transparent;
@@ -948,7 +948,7 @@
 }
 
 .sessionRowMeta {
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   color: var(--color-message-role-fg, #888);
   display: flex;
   align-items: center;
@@ -965,7 +965,8 @@
   border: 0;
   color: inherit;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--agent-font-size, 12px);
+  font-family: var(--agent-font-family, var(--font-ui));
   padding: 0 4px;
   visibility: hidden;
 }
@@ -979,7 +980,7 @@
 .emptyChat {
   padding: 16px 12px;
   color: var(--color-sidebar-fg, #888);
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 .emptyChat {
@@ -995,7 +996,7 @@
   margin: auto;
   padding: 18px 0;
   color: var(--color-sidebar-fg, #888);
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1029,7 +1030,7 @@
 
 .emptyHintTitle {
   margin: 0;
-  font-size: 13px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.929);
   font-weight: 600;
   color: var(--color-editor-fg, #d4d4d4);
 }
@@ -1047,7 +1048,7 @@
 
 .emptyHintSectionTitle {
   color: var(--color-message-role-fg, #aaa);
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -1118,7 +1119,7 @@
   background: var(--color-message-bg, #2a2a2a);
   color: var(--color-editor-fg, #d4d4d4);
   font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -1147,7 +1148,7 @@
 
 .sessionLoadingMessage {
   margin: 0;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 .stickyUserBar {
@@ -1291,7 +1292,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 .permissionTitle {
@@ -1300,7 +1301,7 @@
 }
 
 .permissionKind {
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   text-transform: uppercase;
   padding: 1px 5px;
   border-radius: 2px;
@@ -1317,7 +1318,8 @@
 .permissionAllow,
 .permissionDeny {
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-family: var(--agent-font-family, var(--font-ui));
   border: 0;
   border-radius: 3px;
   cursor: pointer;
@@ -1353,11 +1355,11 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 .questionChip {
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   text-transform: uppercase;
   padding: 1px 5px;
   border-radius: 2px;
@@ -1386,39 +1388,61 @@
   margin: 0;
   padding: 0;
   display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.questionOption {
-  display: flex;
-  align-items: flex-start;
+  flex-direction: row;
+  flex-wrap: wrap;
   gap: 6px;
-  font-size: 12px;
-  cursor: pointer;
-  padding: 2px 0;
 }
 
-.questionOptionBody {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
+.questionOptionChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-family: var(--agent-font-family, var(--font-ui));
+  border: 1px solid var(--color-border, #333);
+  border-radius: 999px;
+  background: var(--color-badge-bg, #333);
+  color: inherit;
+  cursor: pointer;
+  user-select: none;
+}
+
+.questionOptionChip:hover {
+  border-color: var(--color-button-bg, #0e639c);
+}
+
+.questionOptionChipActive {
+  background: var(--color-button-bg, #0e639c);
+  border-color: var(--color-button-bg, #0e639c);
+  color: #fff;
+}
+
+.questionChipInput {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
 }
 
 .questionOptionLabel {
   font-weight: 500;
-}
-
-.questionOptionDesc {
-  font-size: 11px;
-  color: var(--color-message-role-fg, #aaa);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .questionFreeform {
-  margin: 4px 0 0 22px;
-  width: calc(100% - 22px);
-  font-size: 12px;
+  margin: 4px 0 0;
+  width: 100%;
+  box-sizing: border-box;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
   font-family: var(--agent-font-family, var(--font-ui));
   line-height: 1.4;
   padding: 3px 6px;
@@ -1436,7 +1460,7 @@
   margin: 0;
   padding: 6px 8px;
   font-family: var(--font-monospace, monospace);
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--color-question-input-bg, #1e1e1e);
@@ -1446,7 +1470,7 @@
 
 .questionNotes {
   width: 100%;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
   font-family: var(--agent-font-family, var(--font-ui));
   line-height: 1.4;
   padding: 3px 6px;
@@ -1492,7 +1516,7 @@
   border: 1px solid transparent;
   border-radius: 3px;
   cursor: pointer;
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   line-height: 1;
   max-width: 160px;
 }
@@ -1521,7 +1545,7 @@
 }
 
 .configTriggerValue {
-  font-size: 11px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.786);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1542,7 +1566,7 @@
   border-radius: 4px;
   box-shadow: 0 4px 12px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
   padding: 2px 0;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 .configPopoverGroup {
@@ -1552,7 +1576,7 @@
 
 .configPopoverGroupLabel {
   padding: 4px 8px 2px;
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--color-message-role-fg, #888);
@@ -1640,7 +1664,8 @@
   color: var(--color-button-fg, #ffffff);
   border: 1px solid transparent;
   border-radius: 3px;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-family: var(--agent-font-family, var(--font-ui));
   cursor: pointer;
 }
 
@@ -1675,7 +1700,7 @@
   gap: 8px;
   padding: 5px 8px;
   border-radius: 3px;
-  font-size: 12px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 .mcpRow:hover {
@@ -1727,7 +1752,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   color: var(--color-message-role-fg, #888);
 }
 
@@ -1742,13 +1767,13 @@
 
 .mcpStatusLabel {
   flex: none;
-  font-size: 10px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
   color: var(--color-message-role-fg, #aaa);
 }
 
 .mcpBadge {
   flex: none;
-  font-size: 9px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.643);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 1px 5px;

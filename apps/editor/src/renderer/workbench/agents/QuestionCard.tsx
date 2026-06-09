@@ -115,10 +115,14 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
               <ul className={styles['questionOptions']}>
                 {q.options.map((o) => {
                   const checked = d.selected.has(o.label)
+                  const chipClass = checked
+                    ? `${styles['questionOptionChip']} ${styles['questionOptionChipActive']}`
+                    : styles['questionOptionChip']
                   return (
                     <li key={o.label}>
                       <label
-                        className={styles['questionOption']}
+                        className={chipClass}
+                        {...(o.description ? { title: o.description } : {})}
                         onMouseEnter={
                           hasPreview ? () => patch(qi, { previewLabel: o.label }) : undefined
                         }
@@ -126,25 +130,28 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
                         <input
                           type={q.multiSelect ? 'checkbox' : 'radio'}
                           name={`acp-q-${qi}`}
+                          className={styles['questionChipInput']}
                           checked={checked}
                           onChange={() => toggleOption(qi, q, o.label)}
                           data-testid={`acp-question-${qi}-option-${o.label}`}
                         />
-                        <span className={styles['questionOptionBody']}>
-                          <span className={styles['questionOptionLabel']}>{o.label}</span>
-                          {o.description && (
-                            <span className={styles['questionOptionDesc']}>{o.description}</span>
-                          )}
-                        </span>
+                        <span className={styles['questionOptionLabel']}>{o.label}</span>
                       </label>
                     </li>
                   )
                 })}
                 <li>
-                  <label className={styles['questionOption']}>
+                  <label
+                    className={
+                      d.otherChecked
+                        ? `${styles['questionOptionChip']} ${styles['questionOptionChipActive']}`
+                        : styles['questionOptionChip']
+                    }
+                  >
                     <input
                       type={q.multiSelect ? 'checkbox' : 'radio'}
                       name={`acp-q-${qi}`}
+                      className={styles['questionChipInput']}
                       checked={d.otherChecked}
                       onChange={() =>
                         patch(qi, {
@@ -153,20 +160,8 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
                         })
                       }
                     />
-                    <span className={styles['questionOptionBody']}>
-                      <span className={styles['questionOptionLabel']}>Other…</span>
-                    </span>
+                    <span className={styles['questionOptionLabel']}>Other…</span>
                   </label>
-                  {d.otherChecked && (
-                    <input
-                      type="text"
-                      className={styles['questionFreeform']}
-                      value={d.otherText}
-                      placeholder="Type your answer"
-                      onChange={(e) => patch(qi, { otherText: e.target.value })}
-                      data-testid={`acp-question-${qi}-other`}
-                    />
-                  )}
                 </li>
               </ul>
               {hasPreview && (
@@ -178,6 +173,16 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
                 </pre>
               )}
             </div>
+            {d.otherChecked && (
+              <input
+                type="text"
+                className={styles['questionFreeform']}
+                value={d.otherText}
+                placeholder="Type your answer"
+                onChange={(e) => patch(qi, { otherText: e.target.value })}
+                data-testid={`acp-question-${qi}-other`}
+              />
+            )}
             <textarea
               className={styles['questionNotes']}
               value={d.notes}
