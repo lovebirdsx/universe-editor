@@ -10,8 +10,45 @@
  */
 
 import type { ScmApi, SourceControl } from './scm.js'
+import type {
+  CompletionItem,
+  CompletionList,
+  Definition,
+  DefinitionLink,
+  Diagnostic,
+  DocumentSymbol,
+  Hover,
+  Location,
+  Position,
+  SignatureHelp,
+  SymbolInformation,
+  WorkspaceEdit,
+  WorkspaceSymbol,
+} from 'vscode-languageserver-types'
 
 export * from './scm.js'
+
+/** Re-exported LSP types that appear in language-provider signatures, so plugin
+ *  authors get a self-contained API surface (the Universe equivalent of `vscode.d.ts`). */
+export type {
+  CompletionItem,
+  CompletionList,
+  Definition,
+  DefinitionLink,
+  Diagnostic,
+  DocumentSymbol,
+  Hover,
+  Location,
+  LocationLink,
+  MarkupContent,
+  Position,
+  Range,
+  SignatureHelp,
+  SymbolInformation,
+  TextEdit,
+  WorkspaceEdit,
+  WorkspaceSymbol,
+} from 'vscode-languageserver-types'
 
 /** Semantic version of this API surface. The host checks `engines.universe`. */
 export const version = '0.1.0'
@@ -116,6 +153,20 @@ export interface WindowApi {
   createOutputChannel(name: string): OutputChannel
 }
 
+/** A text document open in the editor. URIs/positions are LSP-shaped. */
+export interface TextDocument {
+  readonly uri: UriComponents
+  readonly languageId: string
+  /** Monotonic version, bumped on every edit. */
+  readonly version: number
+  getText(): string
+}
+
+/** Fired by `onDidChangeTextDocument`. Full-text sync, so only the document is carried. */
+export interface TextDocumentChangeEvent {
+  readonly document: TextDocument
+}
+
 /** The `workspace` namespace: the folder the editor currently has open. */
 export interface WorkspaceApi {
   /**
@@ -129,6 +180,11 @@ export interface WorkspaceApi {
    * touching disk — the only filesystem an external/restricted extension gets.
    */
   readonly fs: FileSystemApi
+  /** Documents currently open in the editor, mirrored from the renderer. */
+  readonly textDocuments: readonly TextDocument[]
+  readonly onDidOpenTextDocument: Event<TextDocument>
+  readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
+  readonly onDidCloseTextDocument: Event<TextDocument>
   /**
    * Read configuration values. `section` is an optional key prefix (e.g. `'git'`),
    * so `getConfiguration('git').get('autofetch', true)` reads `git.autofetch`.
@@ -164,6 +220,157 @@ export interface WorkspaceConfiguration {
   get<T>(key: string, defaultValue: T): Promise<T>
 }
 
+/** Structural URI matching the editor's `UriComponents`; JSON-serializable so it
+ *  crosses the host RPC verbatim. */
+export interface UriComponents {
+  scheme: string
+  authority?: string
+  path?: string
+  query?: string
+  fragment?: string
+}
+
+/** A provider result may be sync or async, and may be absent. */
+export type ProviderResult<T> = T | null | undefined | Promise<T | null | undefined>
+
+/** Language ids a provider applies to (e.g. `'typescript'` or `['typescript','javascript']`). */
+export type DocumentSelector = string | readonly string[]
+
+export interface DefinitionProvider {
+  provideDefinition(
+    document: TextDocument,
+    position: Position,
+  ): ProviderResult<Definition | DefinitionLink[]>
+}
+
+export interface ReferenceContext {
+  readonly includeDeclaration: boolean
+}
+
+export interface ReferenceProvider {
+  provideReferences(
+    document: TextDocument,
+    position: Position,
+    context: ReferenceContext,
+  ): ProviderResult<Location[]>
+}
+
+export interface ImplementationProvider {
+  provideImplementation(
+    document: TextDocument,
+    position: Position,
+  ): ProviderResult<Definition | DefinitionLink[]>
+}
+
+export interface TypeDefinitionProvider {
+  provideTypeDefinition(
+    document: TextDocument,
+    position: Position,
+  ): ProviderResult<Definition | DefinitionLink[]>
+}
+
+export interface HoverProvider {
+  provideHover(document: TextDocument, position: Position): ProviderResult<Hover>
+}
+
+/** How a completion was triggered (mirrors LSP `CompletionTriggerKind`). */
+export interface CompletionContext {
+  readonly triggerKind: 1 | 2 | 3
+  readonly triggerCharacter?: string
+}
+
+export interface CompletionItemProvider {
+  provideCompletionItems(
+    document: TextDocument,
+    position: Position,
+    context: CompletionContext,
+  ): ProviderResult<CompletionItem[] | CompletionList>
+  resolveCompletionItem?(item: CompletionItem): ProviderResult<CompletionItem>
+}
+
+/** How a signature-help session was triggered (mirrors LSP `SignatureHelpContext`). */
+export interface SignatureHelpContext {
+  readonly triggerKind: 1 | 2 | 3
+  readonly triggerCharacter?: string
+  readonly isRetrigger: boolean
+}
+
+export interface SignatureHelpProvider {
+  provideSignatureHelp(
+    document: TextDocument,
+    position: Position,
+    context: SignatureHelpContext,
+  ): ProviderResult<SignatureHelp>
+}
+
+export interface SignatureHelpProviderMetadata {
+  readonly triggerCharacters: readonly string[]
+  readonly retriggerCharacters: readonly string[]
+}
+
+export interface DocumentSymbolProvider {
+  provideDocumentSymbols(
+    document: TextDocument,
+  ): ProviderResult<DocumentSymbol[] | SymbolInformation[]>
+}
+
+export interface RenameProvider {
+  provideRenameEdits(
+    document: TextDocument,
+    position: Position,
+    newName: string,
+  ): ProviderResult<WorkspaceEdit>
+}
+
+export interface WorkspaceSymbolProvider {
+  provideWorkspaceSymbols(query: string): ProviderResult<WorkspaceSymbol[] | SymbolInformation[]>
+}
+
+/**
+ * Owns a set of diagnostics surfaced as editor markers. `set` replaces a URI's
+ * diagnostics (or clears it with `undefined`); the collection name is the marker
+ * owner, so multiple providers can mark the same file without clobbering.
+ */
+export interface DiagnosticCollection {
+  readonly name: string
+  set(uri: UriComponents, diagnostics: readonly Diagnostic[] | undefined): void
+  delete(uri: UriComponents): void
+  clear(): void
+  dispose(): void
+}
+
+/** The `languages` namespace: register language feature providers with the editor. */
+export interface LanguagesApi {
+  registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
+  registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable
+  registerImplementationProvider(
+    selector: DocumentSelector,
+    provider: ImplementationProvider,
+  ): Disposable
+  registerTypeDefinitionProvider(
+    selector: DocumentSelector,
+    provider: TypeDefinitionProvider,
+  ): Disposable
+  registerHoverProvider(selector: DocumentSelector, provider: HoverProvider): Disposable
+  registerCompletionItemProvider(
+    selector: DocumentSelector,
+    provider: CompletionItemProvider,
+    ...triggerCharacters: string[]
+  ): Disposable
+  registerSignatureHelpProvider(
+    selector: DocumentSelector,
+    provider: SignatureHelpProvider,
+    metadata: SignatureHelpProviderMetadata,
+  ): Disposable
+  registerDocumentSymbolProvider(
+    selector: DocumentSelector,
+    provider: DocumentSymbolProvider,
+  ): Disposable
+  registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable
+  registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable
+  createDiagnosticCollection(name?: string): DiagnosticCollection
+}
+
 /**
  * The host bridge contract installed on globalThis. KEEP IN SYNC with the
  * producer in `extension-host/src/apiFactory.ts` (same key, same shapes).
@@ -196,6 +403,38 @@ interface IExtensionHostBridge {
     defaultValue: unknown,
   ): Promise<unknown>
   createOutputChannel(name: string): OutputChannel
+  registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
+  registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable
+  registerImplementationProvider(
+    selector: DocumentSelector,
+    provider: ImplementationProvider,
+  ): Disposable
+  registerTypeDefinitionProvider(
+    selector: DocumentSelector,
+    provider: TypeDefinitionProvider,
+  ): Disposable
+  registerHoverProvider(selector: DocumentSelector, provider: HoverProvider): Disposable
+  registerCompletionItemProvider(
+    selector: DocumentSelector,
+    provider: CompletionItemProvider,
+    triggerCharacters: readonly string[],
+  ): Disposable
+  registerSignatureHelpProvider(
+    selector: DocumentSelector,
+    provider: SignatureHelpProvider,
+    metadata: SignatureHelpProviderMetadata,
+  ): Disposable
+  registerDocumentSymbolProvider(
+    selector: DocumentSelector,
+    provider: DocumentSymbolProvider,
+  ): Disposable
+  registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable
+  registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable
+  createDiagnosticCollection(name?: string): DiagnosticCollection
+  getTextDocuments(): readonly TextDocument[]
+  readonly onDidOpenTextDocument: Event<TextDocument>
+  readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
+  readonly onDidCloseTextDocument: Event<TextDocument>
 }
 
 /** Global key the host installs the bridge under. KEEP IN SYNC with the host. */
@@ -231,6 +470,28 @@ export const scm: ScmApi = {
   createSourceControl: (id, label, rootUri) => bridge().createSourceControl(id, label, rootUri),
 }
 
+export const languages: LanguagesApi = {
+  registerDefinitionProvider: (selector, provider) =>
+    bridge().registerDefinitionProvider(selector, provider),
+  registerReferenceProvider: (selector, provider) =>
+    bridge().registerReferenceProvider(selector, provider),
+  registerImplementationProvider: (selector, provider) =>
+    bridge().registerImplementationProvider(selector, provider),
+  registerTypeDefinitionProvider: (selector, provider) =>
+    bridge().registerTypeDefinitionProvider(selector, provider),
+  registerHoverProvider: (selector, provider) => bridge().registerHoverProvider(selector, provider),
+  registerCompletionItemProvider: (selector, provider, ...triggerCharacters) =>
+    bridge().registerCompletionItemProvider(selector, provider, triggerCharacters),
+  registerSignatureHelpProvider: (selector, provider, metadata) =>
+    bridge().registerSignatureHelpProvider(selector, provider, metadata),
+  registerDocumentSymbolProvider: (selector, provider) =>
+    bridge().registerDocumentSymbolProvider(selector, provider),
+  registerRenameProvider: (selector, provider) =>
+    bridge().registerRenameProvider(selector, provider),
+  registerWorkspaceSymbolProvider: (provider) => bridge().registerWorkspaceSymbolProvider(provider),
+  createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
+}
+
 export const workspace: WorkspaceApi = {
   get rootPath() {
     return bridge().getWorkspaceRoot()
@@ -243,6 +504,12 @@ export const workspace: WorkspaceApi = {
     createDirectory: (path) => bridge().fsCreateDirectory(path),
     delete: (path, options) => bridge().fsDelete(path, options?.recursive ?? false),
   },
+  get textDocuments() {
+    return bridge().getTextDocuments()
+  },
+  onDidOpenTextDocument: (listener) => bridge().onDidOpenTextDocument(listener),
+  onDidChangeTextDocument: (listener) => bridge().onDidChangeTextDocument(listener),
+  onDidCloseTextDocument: (listener) => bridge().onDidCloseTextDocument(listener),
   getConfiguration: (section) => ({
     get: <T>(key: string, defaultValue: T): Promise<T> =>
       bridge().getConfiguration(section, key, defaultValue) as Promise<T>,

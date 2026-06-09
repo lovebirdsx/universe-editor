@@ -10,6 +10,22 @@
  * Method names are dispatched verbatim by ProxyChannel; the `$` prefix marks
  * RPC-only surface that never appears in the public extension API.
  */
+import type { UriComponents } from '@universe-editor/platform'
+import type {
+  CompletionItem,
+  CompletionList,
+  Definition,
+  DefinitionLink,
+  Diagnostic,
+  DocumentSymbol,
+  Hover,
+  Location,
+  Position,
+  SignatureHelp,
+  SymbolInformation,
+  WorkspaceEdit,
+  WorkspaceSymbol,
+} from 'vscode-languageserver-types'
 import type { IExtensionDescriptionDto } from './manifest.js'
 
 export const ExtHostChannels = {
@@ -29,6 +45,12 @@ export const ExtHostChannels = {
   mainThreadFs: 'mainThreadFs',
   /** Ext host → renderer: output channels shown in the Output panel. */
   mainThreadOutput: 'mainThreadOutput',
+  /** Renderer → ext host: language `provide*` requests routed to a plugin's registered providers. */
+  extHostLanguages: 'extHostLanguages',
+  /** Renderer → ext host: text document open/change/close mirrored to the host's TextDocument model. */
+  extHostDocuments: 'extHostDocuments',
+  /** Ext host → renderer: provider registration + diagnostics fed into the editor. */
+  mainThreadLanguages: 'mainThreadLanguages',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -167,4 +189,147 @@ export interface IMainThreadOutput {
   $clearOutputChannel(handle: number): Promise<void>
   $showOutputChannel(handle: number): Promise<void>
   $disposeOutputChannel(handle: number): Promise<void>
+}
+
+/**
+ * The kinds of language feature a plugin can register. Crosses the wire as a
+ * plain string; the renderer's MainThreadLanguages uses it to pick the right
+ * Monaco provider factory.
+ */
+export type LanguageProviderType =
+  | 'definition'
+  | 'references'
+  | 'implementation'
+  | 'typeDefinition'
+  | 'hover'
+  | 'completion'
+  | 'signatureHelp'
+  | 'documentSymbol'
+  | 'rename'
+  | 'workspaceSymbol'
+
+/** Language ids a provider applies to. Empty for workspace-wide providers. */
+export type DocumentSelector = readonly string[]
+
+/** Extra registration data Monaco needs up front (trigger characters). */
+export interface ILanguageProviderMetadata {
+  readonly triggerCharacters?: readonly string[]
+  readonly signatureHelpTriggerCharacters?: readonly string[]
+  readonly signatureHelpRetriggerCharacters?: readonly string[]
+}
+
+export interface IReferenceContext {
+  readonly includeDeclaration: boolean
+}
+
+/** Mirrors LSP `CompletionContext` (triggerKind 1 = invoked, 2 = char, 3 = re-trigger). */
+export interface ICompletionContext {
+  readonly triggerKind: 1 | 2 | 3
+  readonly triggerCharacter?: string
+}
+
+/** Mirrors LSP `SignatureHelpContext`. */
+export interface ISignatureHelpContext {
+  readonly triggerKind: 1 | 2 | 3
+  readonly triggerCharacter?: string
+  readonly isRetrigger: boolean
+}
+
+/**
+ * Renderer → exposed to the ext host: language `provide*` requests routed to the
+ * providers a plugin registered via `languages.register*Provider`, addressed by
+ * the host-allocated `handle`. The renderer's Monaco provider shells call these;
+ * the host dispatches to the owning plugin handler. Positions are LSP 0-based;
+ * URIs cross as `UriComponents`, so LSP results return verbatim with no
+ * conversion on the wire.
+ */
+export interface IExtHostLanguages {
+  $provideDefinition(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+  ): Promise<Definition | DefinitionLink[] | null>
+  $provideReferences(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    context: IReferenceContext,
+  ): Promise<Location[] | null>
+  $provideImplementation(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+  ): Promise<Definition | DefinitionLink[] | null>
+  $provideTypeDefinition(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+  ): Promise<Definition | DefinitionLink[] | null>
+  $provideHover(handle: number, uri: UriComponents, position: Position): Promise<Hover | null>
+  $provideCompletion(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    context: ICompletionContext,
+  ): Promise<CompletionItem[] | CompletionList | null>
+  $resolveCompletionItem(handle: number, item: CompletionItem): Promise<CompletionItem>
+  $provideSignatureHelp(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    context: ISignatureHelpContext,
+  ): Promise<SignatureHelp | null>
+  $provideDocumentSymbols(
+    handle: number,
+    uri: UriComponents,
+  ): Promise<DocumentSymbol[] | SymbolInformation[] | null>
+  $provideRenameEdits(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+    newName: string,
+  ): Promise<WorkspaceEdit | null>
+  $provideWorkspaceSymbols(
+    handle: number,
+    query: string,
+  ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
+}
+
+/**
+ * Renderer → exposed to the ext host: open/change/close of the renderer's text
+ * models, mirrored into the host's TextDocument model so a plugin sees
+ * `workspace.textDocuments` and the `onDidChangeTextDocument` family. Full text
+ * each time (the framing carries no incremental edits).
+ */
+export interface IExtHostDocuments {
+  $acceptDocumentOpen(
+    uri: UriComponents,
+    languageId: string,
+    version: number,
+    text: string,
+  ): Promise<void>
+  $acceptDocumentChange(uri: UriComponents, version: number, text: string): Promise<void>
+  $acceptDocumentClose(uri: UriComponents): Promise<void>
+}
+
+/**
+ * Ext host → exposed to the renderer: a plugin registers/unregisters language
+ * providers (addressed by handle) and publishes diagnostics. The renderer builds
+ * the matching Monaco provider shells and feeds diagnostics into the editor as
+ * markers keyed by `owner` (the diagnostic collection name).
+ */
+export interface IMainThreadLanguages {
+  $registerProvider(
+    handle: number,
+    type: LanguageProviderType,
+    selector: DocumentSelector,
+    metadata?: ILanguageProviderMetadata,
+  ): Promise<void>
+  $unregisterProvider(handle: number): Promise<void>
+  $publishDiagnostics(
+    owner: string,
+    uri: UriComponents,
+    diagnostics: readonly Diagnostic[],
+  ): Promise<void>
+  $clearDiagnostics(owner: string, uri?: UriComponents): Promise<void>
 }

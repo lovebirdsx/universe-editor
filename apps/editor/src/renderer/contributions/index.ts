@@ -59,8 +59,7 @@ import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleCo
 import { ExtensionsContribution } from './ExtensionsContribution.js'
 import { LanguageFeaturesContribution } from './LanguageFeaturesContribution.js'
 import { MarkdownDocumentSyncContribution } from './MarkdownDocumentSyncContribution.js'
-import { TypescriptLanguageFeaturesContribution } from './TypescriptLanguageFeaturesContribution.js'
-import { TypescriptDocumentSyncContribution } from './TypescriptDocumentSyncContribution.js'
+import { DocumentSyncContribution } from './DocumentSyncContribution.js'
 import { MonacoOverrideServicesContribution } from './MonacoOverrideServicesContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
 import {
@@ -460,22 +459,16 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-// TS/JS language providers (definition / references / implementation / type
-// definition / hover / completion / signature help / document symbols / rename)
-// backed by the typescript-language-server. AfterRestore so the editor area +
-// Monaco are live before providers register.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.typescriptLanguageFeatures',
-  TypescriptLanguageFeaturesContribution,
-  WorkbenchPhase.AfterRestore,
-)
+// TS/JS language features (providers / document sync / diagnostics) now live in
+// the built-in `extensions/typescript` plugin, which self-spawns the
+// typescript-language-server and registers through the languages API.
 
-// Pushes open TS/JS models to the typescript-language-server (lazy-starts it) and
-// reflects server-pushed diagnostics as Monaco markers. AfterRestore so the
-// editor service + Monaco models are live.
+// Mirrors all open editor documents into the trusted extension host so language
+// plugins see workspace.textDocuments + onDidChangeTextDocument. AfterRestore so
+// the editor service + Monaco models are live.
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.typescriptDocumentSync',
-  TypescriptDocumentSyncContribution,
+  'workbench.contrib.documentSync',
+  DocumentSyncContribution,
   WorkbenchPhase.AfterRestore,
 )
 

@@ -5,18 +5,34 @@
  * are created at activation time.
  */
 import type {
+  CompletionItemProvider,
+  DefinitionProvider,
+  DiagnosticCollection,
   Disposable,
+  DocumentSelector,
+  DocumentSymbolProvider,
+  Event,
   ExtensionContext,
   FileStat,
   FileType,
+  HoverProvider,
+  ImplementationProvider,
   InputBoxOptions,
   Memento,
   OutputChannel,
   QuickPickItem,
   QuickPickOptions,
+  ReferenceProvider,
+  RenameProvider,
+  SignatureHelpProvider,
+  SignatureHelpProviderMetadata,
   SourceControl,
   StatusBarAlignment,
   StatusBarItem,
+  TextDocument,
+  TextDocumentChangeEvent,
+  TypeDefinitionProvider,
+  WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import type { IScannedExtension } from './extensionScanner.js'
 
@@ -55,6 +71,38 @@ export interface IExtensionHostBridge {
     defaultValue: unknown,
   ): Promise<unknown>
   createOutputChannel(name: string): OutputChannel
+  registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
+  registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable
+  registerImplementationProvider(
+    selector: DocumentSelector,
+    provider: ImplementationProvider,
+  ): Disposable
+  registerTypeDefinitionProvider(
+    selector: DocumentSelector,
+    provider: TypeDefinitionProvider,
+  ): Disposable
+  registerHoverProvider(selector: DocumentSelector, provider: HoverProvider): Disposable
+  registerCompletionItemProvider(
+    selector: DocumentSelector,
+    provider: CompletionItemProvider,
+    triggerCharacters: readonly string[],
+  ): Disposable
+  registerSignatureHelpProvider(
+    selector: DocumentSelector,
+    provider: SignatureHelpProvider,
+    metadata: SignatureHelpProviderMetadata,
+  ): Disposable
+  registerDocumentSymbolProvider(
+    selector: DocumentSelector,
+    provider: DocumentSymbolProvider,
+  ): Disposable
+  registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable
+  registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable
+  createDiagnosticCollection(name?: string): DiagnosticCollection
+  getTextDocuments(): readonly TextDocument[]
+  readonly onDidOpenTextDocument: Event<TextDocument>
+  readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
+  readonly onDidCloseTextDocument: Event<TextDocument>
 }
 
 export function installApiBridge(bridge: IExtensionHostBridge): void {

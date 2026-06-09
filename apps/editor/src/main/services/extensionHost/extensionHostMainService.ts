@@ -27,6 +27,7 @@ import type {
   ExtHostStdioChunk,
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
+import { resolveTsServerPaths } from './tsServerPaths.js'
 
 /** Spawner abstraction — injectable for tests so we don't launch real processes. */
 export type ExtHostSpawner = (
@@ -40,6 +41,9 @@ export type ExtHostEntryResolver = () => string
 
 /** Resolves the built-in extensions directory the host scans. Injectable for tests. */
 export type ExtHostExtensionsDirResolver = () => string
+
+/** Resolves the vendored TS language-server CLI + tsserver. Injectable for tests. */
+export type TsServerPathsResolver = () => { cli: string; tsserver: string }
 
 const defaultSpawner: ExtHostSpawner = (command, args, options) =>
   spawn(command, [...args], {
@@ -140,6 +144,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     private readonly _resolveEntry: ExtHostEntryResolver = defaultResolveEntry,
     private readonly _resolveExtensionsDir: ExtHostExtensionsDirResolver = defaultResolveExtensionsDir,
     private readonly _resolveUserExtensionsDir: ExtHostExtensionsDirResolver = defaultResolveUserExtensionsDir,
+    private readonly _resolveTsServerPaths: TsServerPathsResolver = resolveTsServerPaths,
     @ILoggerService loggerService?: ILoggerService,
   ) {
     super()
@@ -170,6 +175,11 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     } else {
       // Tell the host where to scan for built-in extensions (survives the denylist).
       env.UNIVERSE_BUILTIN_EXTENSIONS_DIR = spec?.extensionsDir ?? this._resolveExtensionsDir()
+      // The `typescript` built-in plugin spawns the LSP server itself; hand it the
+      // vendored CLI + tsserver paths (the only Electron-aware resolution).
+      const { cli, tsserver } = this._resolveTsServerPaths()
+      env.UNIVERSE_TSLS_CLI = cli
+      env.UNIVERSE_TSLS_TSSERVER = tsserver
     }
 
     // The open folder, surfaced to extensions as `workspace.rootPath`.

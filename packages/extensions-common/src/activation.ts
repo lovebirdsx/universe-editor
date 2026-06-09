@@ -15,6 +15,11 @@ export function commandActivationEvent(commandId: string): string {
   return `onCommand:${commandId}`
 }
 
+/** The activation event fired when a document of the given language is first opened. */
+export function languageActivationEvent(languageId: string): string {
+  return `onLanguage:${languageId}`
+}
+
 /**
  * True when an extension declaring `activationEvents` should wake for `event`.
  * `*` matches every event so a wildcard extension activates on any trigger.

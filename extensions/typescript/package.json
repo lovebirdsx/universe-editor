@@ -1,0 +1,41 @@
+{
+  "name": "@universe-editor/typescript",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "displayName": "TypeScript Language Features",
+  "description": "TS/JS language features (definition, references, hover, completion, signature help, document symbols, rename, diagnostics) backed by an in-process typescript-language-server.",
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": "^0.1.0"
+  },
+  "activationEvents": [
+    "onLanguage:typescript",
+    "onLanguage:javascript",
+    "onLanguage:typescriptreact",
+    "onLanguage:javascriptreact"
+  ],
+  "contributes": {},
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vscode-jsonrpc": "catalog:",
+    "vscode-languageserver-types": "catalog:",
+    "vscode-uri": "catalog:"
+  }
+}

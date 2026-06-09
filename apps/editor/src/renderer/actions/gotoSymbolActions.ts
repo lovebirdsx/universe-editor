@@ -38,7 +38,7 @@ import {
   IMarkdownLanguageService,
   type MdWorkspaceSymbol,
 } from '../../shared/ipc/markdownLanguageService.js'
-import { ITypescriptLanguageService } from '../../shared/ipc/typescriptLanguageService.js'
+import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
   type WorkspaceSymbolEntry,
@@ -156,14 +156,16 @@ export class GoToWorkspaceSymbolAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const md = accessor.get(IMarkdownLanguageService)
-    const ts = accessor.get(ITypescriptLanguageService)
+    const langFeatures = accessor.get(ILanguageFeaturesService)
     const host = accessor.get(IHostService)
 
     const root = workspace.current?.folder
     const monacoNs = await MonacoLoader.ensureInitialized()
-    // Starting either server is best-effort: a missing/broken tsserver must not
-    // block the picker from opening — it falls back to markdown symbols.
-    await Promise.allSettled([md.ensureStarted(root?.fsPath), ts.ensureStarted(root?.fsPath)])
+    // Starting markdown is best-effort: a missing/broken server must not block the
+    // picker. TS/JS workspace symbols come from whatever providers the typescript
+    // plugin already registered (it activates lazily on opening a TS/JS file).
+    await Promise.allSettled([md.ensureStarted(root?.fsPath)])
+    const wsProviders = langFeatures.getWorkspaceSymbolProviders()
 
     const picker = quickInput.createQuickPick<IQuickPickItem>()
     picker.placeholder = localize(
@@ -218,8 +220,8 @@ export class GoToWorkspaceSymbolAction extends Action2 {
       }
 
       // tsserver's `workspace/symbol` filters server-side and returns nothing for
-      // an empty query, so we only hit it once there's a query; markdown is
-      // cached and filtered locally so it can show everything on open.
+      // an empty query, so we only hit the providers once there's a query; markdown
+      // is cached and filtered locally so it can show everything on open.
       const refresh = (): void => {
         const query = currentValue.trim()
         const mdSymbols = rankSymbols(allMarkdown, query)
@@ -229,18 +231,19 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         }
         const mySeq = ++seq
         picker.busy = true
-        void ts
-          .provideWorkspaceSymbols(query)
-          .then((symbols) => {
-            if (didResolve || mySeq !== seq) return
-            picker.busy = false
-            render(mdSymbols, workspaceSymbolsToEntries(symbols, monacoNs), query)
-          })
-          .catch(() => {
-            if (didResolve || mySeq !== seq) return
-            picker.busy = false
-          })
-        // Show markdown immediately while the TS query is in flight.
+        void Promise.all(
+          wsProviders.map((p) =>
+            p
+              .provideWorkspaceSymbols(query)
+              .then((symbols) => workspaceSymbolsToEntries(symbols, monacoNs))
+              .catch(() => [] as WorkspaceSymbolEntry[]),
+          ),
+        ).then((perProvider) => {
+          if (didResolve || mySeq !== seq) return
+          picker.busy = false
+          render(mdSymbols, perProvider.flat(), query)
+        })
+        // Show markdown immediately while the provider queries are in flight.
         render(mdSymbols, [], query)
       }
 

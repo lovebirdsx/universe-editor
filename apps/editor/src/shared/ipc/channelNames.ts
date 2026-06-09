@@ -32,7 +32,6 @@ export const ServiceChannels = {
   Lifecycle: 'lifecycle',
   ExtensionHost: 'extensionHost',
   MarkdownLanguage: 'markdownLanguage',
-  TypescriptLanguage: 'typescriptLanguage',
   SessionSwitcher: 'sessionSwitcher',
   RendererSessions: 'rendererSessions',
 } as const

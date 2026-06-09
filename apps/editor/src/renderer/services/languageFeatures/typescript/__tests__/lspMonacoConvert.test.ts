@@ -14,7 +14,7 @@ import type {
   Location,
   SignatureHelp,
   WorkspaceEdit,
-} from '../../../../../shared/ipc/typescriptLanguageService.js'
+} from 'vscode-languageserver-types'
 import {
   completionItemToMonaco,
   definitionToMonaco,

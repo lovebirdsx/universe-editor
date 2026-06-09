@@ -81,11 +81,11 @@ function disableLanguageDiagnostics(): void {
   for (const defaults of [typescriptDefaults, javascriptDefaults]) {
     defaults.setDiagnosticsOptions(tsDiagnosticsOptions)
     // The TS/JS language features are served by the typescript-language-server
-    // (real tsserver, cross-file aware) via our LSP client — see the
-    // `typescript/` providers + `TypescriptLanguageFeaturesContribution`. Turn
-    // off every built-in ts-worker feature we now own so suggestions / hovers /
-    // outline don't double up; what's left (formatting, highlights, code
-    // actions, inlay hints) the LSP layer doesn't provide yet.
+    // (real tsserver, cross-file aware) spawned inside the built-in
+    // `extensions/typescript` plugin. Turn off every built-in ts-worker feature
+    // we now own so suggestions / hovers / outline don't double up; what's left
+    // (formatting, highlights, code actions, inlay hints) the LSP layer doesn't
+    // provide yet.
     defaults.setModeConfiguration({
       ...defaults.modeConfiguration,
       diagnostics: false,

@@ -21,10 +21,20 @@ import {
   type Event,
   type IDisposable,
 } from '@universe-editor/platform'
+import type { SymbolInformation, WorkspaceSymbol } from 'vscode-languageserver-types'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 export interface IDocumentSymbolProvidersChangeEvent {
   readonly languageId: string
+}
+
+/**
+ * Workspace symbols have no Monaco provider counterpart (Monaco only exposes
+ * per-document symbols), so the facade keeps them in its own table; the Ctrl+T
+ * picker enumerates them directly. Results stay LSP-shaped — the picker converts.
+ */
+export interface IWorkspaceSymbolProvider {
+  provideWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
 }
 
 export interface ILanguageFeaturesService {
@@ -60,7 +70,9 @@ export interface ILanguageFeaturesService {
     provider: monaco.languages.SignatureHelpProvider,
   ): IDisposable
   registerRenameProvider(languageId: string, provider: monaco.languages.RenameProvider): IDisposable
+  registerWorkspaceSymbolProvider(provider: IWorkspaceSymbolProvider): IDisposable
   getDocumentSymbolProviders(languageId: string): readonly monaco.languages.DocumentSymbolProvider[]
+  getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[]
 }
 
 export const ILanguageFeaturesService =
@@ -96,6 +108,7 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     Set<monaco.languages.SignatureHelpProvider>
   >()
   private readonly _renameProviders = new Map<string, Set<monaco.languages.RenameProvider>>()
+  private readonly _workspaceSymbolProviders = new Set<IWorkspaceSymbolProvider>()
 
   private readonly _onDidChangeDocumentSymbolProviders = this._register(
     new Emitter<IDocumentSymbolProvidersChangeEvent>(),
@@ -217,6 +230,17 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
   ): readonly monaco.languages.DocumentSymbolProvider[] {
     const set = this._symbolProviders.get(languageId)
     return set ? [...set] : []
+  }
+
+  registerWorkspaceSymbolProvider(provider: IWorkspaceSymbolProvider): IDisposable {
+    this._workspaceSymbolProviders.add(provider)
+    return toDisposable(() => {
+      this._workspaceSymbolProviders.delete(provider)
+    })
+  }
+
+  getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[] {
+    return [...this._workspaceSymbolProviders]
   }
 
   private _add<T>(

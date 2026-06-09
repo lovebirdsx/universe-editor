@@ -16,10 +16,13 @@ import {
   ExtHostChannels,
   StdioFramingProtocol,
   type IExtHostCommands,
+  type IExtHostDocuments,
   type IExtHostExtensions,
+  type IExtHostLanguages,
   type IExtHostScm,
   type IMainThreadCommands,
   type IMainThreadFs,
+  type IMainThreadLanguages,
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadWindow,
@@ -59,6 +62,9 @@ const mainThreadFs = ProxyChannel.toService<IMainThreadFs>(
 const mainThreadOutput = ProxyChannel.toService<IMainThreadOutput>(
   client.getChannel(ExtHostChannels.mainThreadOutput),
 )
+const mainThreadLanguages = ProxyChannel.toService<IMainThreadLanguages>(
+  client.getChannel(ExtHostChannels.mainThreadLanguages),
+)
 
 // Register channels synchronously so a renderer call that races the async scan
 // queues on `serviceReady` instead of hitting a "channel not found" error.
@@ -82,6 +88,41 @@ const extHostScm: IExtHostScm = {
     ;(await serviceReady).onInputBoxValueChange(handle, value)
   },
 }
+const extHostLanguages: IExtHostLanguages = {
+  $provideDefinition: async (handle, uri, position) =>
+    (await serviceReady).provideDefinition(handle, uri, position),
+  $provideReferences: async (handle, uri, position, context) =>
+    (await serviceReady).provideReferences(handle, uri, position, context),
+  $provideImplementation: async (handle, uri, position) =>
+    (await serviceReady).provideImplementation(handle, uri, position),
+  $provideTypeDefinition: async (handle, uri, position) =>
+    (await serviceReady).provideTypeDefinition(handle, uri, position),
+  $provideHover: async (handle, uri, position) =>
+    (await serviceReady).provideHover(handle, uri, position),
+  $provideCompletion: async (handle, uri, position, context) =>
+    (await serviceReady).provideCompletion(handle, uri, position, context),
+  $resolveCompletionItem: async (handle, item) =>
+    (await serviceReady).resolveCompletionItem(handle, item),
+  $provideSignatureHelp: async (handle, uri, position, context) =>
+    (await serviceReady).provideSignatureHelp(handle, uri, position, context),
+  $provideDocumentSymbols: async (handle, uri) =>
+    (await serviceReady).provideDocumentSymbols(handle, uri),
+  $provideRenameEdits: async (handle, uri, position, newName) =>
+    (await serviceReady).provideRenameEdits(handle, uri, position, newName),
+  $provideWorkspaceSymbols: async (handle, query) =>
+    (await serviceReady).provideWorkspaceSymbols(handle, query),
+}
+const extHostDocuments: IExtHostDocuments = {
+  $acceptDocumentOpen: async (uri, languageId, version, text) => {
+    ;(await serviceReady).acceptDocumentOpen(uri, languageId, version, text)
+  },
+  $acceptDocumentChange: async (uri, version, text) => {
+    ;(await serviceReady).acceptDocumentChange(uri, version, text)
+  },
+  $acceptDocumentClose: async (uri) => {
+    ;(await serviceReady).acceptDocumentClose(uri)
+  },
+}
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
 server.registerChannel(
@@ -89,6 +130,8 @@ server.registerChannel(
   ProxyChannel.fromService(extHostExtensions),
 )
 server.registerChannel(ExtHostChannels.extHostScm, ProxyChannel.fromService(extHostScm))
+server.registerChannel(ExtHostChannels.extHostLanguages, ProxyChannel.fromService(extHostLanguages))
+server.registerChannel(ExtHostChannels.extHostDocuments, ProxyChannel.fromService(extHostDocuments))
 
 async function main(): Promise<void> {
   const kind = process.env.UNIVERSE_EXT_HOST_KIND === 'restricted' ? 'restricted' : 'trusted'
@@ -116,6 +159,7 @@ async function main(): Promise<void> {
       mainThreadFs,
       kind,
       mainThreadOutput,
+      mainThreadLanguages,
     ),
   )
   console.error(`[ext-host] ready (${kind})`)

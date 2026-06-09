@@ -18,6 +18,7 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
+import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IScmService } from '../ScmService.js'
 
@@ -76,6 +77,7 @@ function makeService(host: IExtensionHostService) {
     {} as IFileService,
     {} as IAcpPathPolicy,
     {} as ICommandService,
+    {} as ILanguageFeaturesService,
   )
 }
 

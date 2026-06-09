@@ -1,0 +1,185 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Generic Monaco-provider factories whose bodies are serviced by a plugin in the
+ *  extension host, addressed by a host-allocated `handle`. Each provider call is
+ *  `monacoPositionToLsp` → `extHostLanguages.$provideXxx(handle, …)` → `xxxToMonaco`.
+ *  LSP types cross the wire verbatim; all conversion lives in lspMonacoConvert.ts.
+ *  MainThreadLanguages picks the right factory per LanguageProviderType.
+ *--------------------------------------------------------------------------------------------*/
+
+import type { IExtHostLanguages } from '@universe-editor/extensions-common'
+import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import type { IWorkspaceSymbolProvider } from './LanguageFeaturesService.js'
+import {
+  applyResolvedCompletion,
+  completionListToMonaco,
+  definitionToMonaco,
+  documentSymbolsToMonaco,
+  hoverToMonaco,
+  locationsToMonaco,
+  monacoPositionToLsp,
+  signatureHelpToMonaco,
+  workspaceEditToMonaco,
+  type MonacoCompletionItem,
+} from './typescript/lspMonacoConvert.js'
+
+export function createDefinitionProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.DefinitionProvider {
+  return {
+    provideDefinition: async (model, position) =>
+      definitionToMonaco(
+        await extHost.$provideDefinition(handle, model.uri, monacoPositionToLsp(position)),
+        MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createImplementationProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.ImplementationProvider {
+  return {
+    provideImplementation: async (model, position) =>
+      definitionToMonaco(
+        await extHost.$provideImplementation(handle, model.uri, monacoPositionToLsp(position)),
+        MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createTypeDefinitionProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.TypeDefinitionProvider {
+  return {
+    provideTypeDefinition: async (model, position) =>
+      definitionToMonaco(
+        await extHost.$provideTypeDefinition(handle, model.uri, monacoPositionToLsp(position)),
+        MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createReferenceProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.ReferenceProvider {
+  return {
+    provideReferences: async (model, position, context) =>
+      locationsToMonaco(
+        await extHost.$provideReferences(handle, model.uri, monacoPositionToLsp(position), {
+          includeDeclaration: context.includeDeclaration,
+        }),
+        MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createHoverProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.HoverProvider {
+  return {
+    provideHover: async (model, position) =>
+      hoverToMonaco(
+        await extHost.$provideHover(handle, model.uri, monacoPositionToLsp(position)),
+      ) ?? undefined,
+  }
+}
+
+export function createCompletionProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  triggerCharacters: readonly string[],
+): monaco.languages.CompletionItemProvider {
+  return {
+    triggerCharacters: [...triggerCharacters],
+    provideCompletionItems: async (model, position, context) => {
+      const monacoNs = MonacoLoader.get()
+      const word = model.getWordUntilPosition(position)
+      const defaultRange: monaco.IRange = {
+        startLineNumber: position.lineNumber,
+        startColumn: word.startColumn,
+        endLineNumber: position.lineNumber,
+        endColumn: word.endColumn,
+      }
+      const result = await extHost.$provideCompletion(
+        handle,
+        model.uri,
+        monacoPositionToLsp(position),
+        {
+          // Monaco CompletionTriggerKind (0-based) → LSP (1-based).
+          triggerKind: (context.triggerKind + 1) as 1 | 2 | 3,
+          ...(context.triggerCharacter ? { triggerCharacter: context.triggerCharacter } : {}),
+        },
+      )
+      return completionListToMonaco(result, defaultRange, monacoNs)
+    },
+    resolveCompletionItem: async (item) => {
+      const monacoItem = item as MonacoCompletionItem
+      if (!monacoItem._lspItem) return item
+      const resolved = await extHost.$resolveCompletionItem(handle, monacoItem._lspItem)
+      return applyResolvedCompletion(monacoItem, resolved)
+    },
+  }
+}
+
+export function createSignatureHelpProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+  triggerCharacters: readonly string[],
+  retriggerCharacters: readonly string[],
+): monaco.languages.SignatureHelpProvider {
+  return {
+    signatureHelpTriggerCharacters: [...triggerCharacters],
+    signatureHelpRetriggerCharacters: [...retriggerCharacters],
+    provideSignatureHelp: async (model, position, _token, context) =>
+      signatureHelpToMonaco(
+        await extHost.$provideSignatureHelp(handle, model.uri, monacoPositionToLsp(position), {
+          // Monaco and LSP SignatureHelpTriggerKind share the same 1/2/3 values.
+          triggerKind: context.triggerKind as 1 | 2 | 3,
+          ...(context.triggerCharacter ? { triggerCharacter: context.triggerCharacter } : {}),
+          isRetrigger: context.isRetrigger,
+        }),
+      ),
+  }
+}
+
+export function createDocumentSymbolProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.DocumentSymbolProvider {
+  return {
+    provideDocumentSymbols: async (model) =>
+      documentSymbolsToMonaco(await extHost.$provideDocumentSymbols(handle, model.uri)),
+  }
+}
+
+export function createRenameProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.RenameProvider {
+  return {
+    provideRenameEdits: async (model, position, newName) =>
+      workspaceEditToMonaco(
+        await extHost.$provideRenameEdits(
+          handle,
+          model.uri,
+          monacoPositionToLsp(position),
+          newName,
+        ),
+        MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createWorkspaceSymbolProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): IWorkspaceSymbolProvider {
+  return {
+    provideWorkspaceSymbols: (query) => extHost.$provideWorkspaceSymbols(handle, query),
+  }
+}

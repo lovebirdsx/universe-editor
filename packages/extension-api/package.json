@@ -21,6 +21,7 @@
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",
     "eslint": "catalog:",
-    "typescript": "catalog:"
+    "typescript": "catalog:",
+    "vscode-languageserver-types": "catalog:"
   }
 }

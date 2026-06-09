@@ -62,10 +62,6 @@ export function bootstrapWindowIpc(
     ServiceChannels.MarkdownLanguage,
     ProxyChannel.fromService(app.markdownLanguage),
   )
-  server.registerChannel(
-    ServiceChannels.TypescriptLanguage,
-    ProxyChannel.fromService(app.typescriptLanguage),
-  )
   server.registerChannel(ServiceChannels.AcpTerminal, ProxyChannel.fromService(app.acpTerminal))
   server.registerChannel(ServiceChannels.ClaudeBinary, ProxyChannel.fromService(app.claudeBinary))
   server.registerChannel(ServiceChannels.CodexBinary, ProxyChannel.fromService(app.codexBinary))

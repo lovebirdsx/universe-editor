@@ -19,7 +19,8 @@
     "clean": "tsc --build --clean"
   },
   "dependencies": {
-    "@universe-editor/platform": "workspace:*"
+    "@universe-editor/platform": "workspace:*",
+    "vscode-languageserver-types": "catalog:"
   },
   "devDependencies": {
     "@universe-editor/config-ts": "workspace:*",

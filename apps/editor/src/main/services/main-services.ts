@@ -25,7 +25,6 @@ import {
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IMarkdownLanguageService } from '../../shared/ipc/markdownLanguageService.js'
-import { ITypescriptLanguageService } from '../../shared/ipc/typescriptLanguageService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
@@ -44,7 +43,6 @@ import {
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
 import { MarkdownLanguageClientService } from './markdownLanguage/markdownLanguageClientService.js'
-import { TypescriptLanguageClientService } from './typescriptLanguage/typescriptLanguageClientService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
 import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
@@ -92,11 +90,11 @@ registerSingleton(
 )
 registerSingleton(
   IExtensionHostService,
-  // 4 leading static params (spawn, resolveEntry, resolveExtensionsDir,
-  // resolveUserExtensionsDir) before @ILoggerService.
+  // 5 leading static params (spawn, resolveEntry, resolveExtensionsDir,
+  // resolveUserExtensionsDir, resolveTsServerPaths) before @ILoggerService.
   new SyncDescriptor<IExtensionHostService>(
     ExtensionHostMainService,
-    [undefined, undefined, undefined, undefined],
+    [undefined, undefined, undefined, undefined, undefined],
     false,
   ),
 )
@@ -113,15 +111,6 @@ registerSingleton(
   // 2 leading static params (spawn, resolveEntry) before @ILoggerService.
   new SyncDescriptor<IMarkdownLanguageService>(
     MarkdownLanguageClientService,
-    [undefined, undefined],
-    false,
-  ),
-)
-registerSingleton(
-  ITypescriptLanguageService,
-  // 2 leading static params (spawn, resolveEntry) before @ILoggerService.
-  new SyncDescriptor<ITypescriptLanguageService>(
-    TypescriptLanguageClientService,
     [undefined, undefined],
     false,
   ),

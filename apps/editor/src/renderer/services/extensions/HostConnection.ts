@@ -32,7 +32,9 @@ import {
   ExtHostChannels,
   StdioFramingProtocol,
   type IExtHostCommands,
+  type IExtHostDocuments,
   type IExtHostExtensions,
+  type IExtHostLanguages,
   type IExtHostScm,
 } from '@universe-editor/extensions-common'
 import type {
@@ -42,8 +44,10 @@ import type {
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
 import { MainThreadFs } from './MainThreadFs.js'
+import { MainThreadLanguages } from './MainThreadLanguages.js'
 import { MainThreadOutput } from './MainThreadOutput.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
+import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
 
 export interface HostConnectionDeps {
@@ -57,6 +61,8 @@ export interface HostConnectionDeps {
   readonly commandService: ICommandService
   /** Wired only for the trusted connection — the SCM service is a singleton. */
   readonly scm?: IScmService
+  /** Wired only for the trusted connection — language plugins are trusted-only. */
+  readonly languageFeatures?: ILanguageFeaturesService
   readonly output: IOutputService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
@@ -66,6 +72,10 @@ export interface HostConnectionDeps {
 export class HostConnection extends Disposable {
   readonly commands: IExtHostCommands
   readonly extensions: IExtHostExtensions
+  /** The host's language RPC surface — only present on a trusted connection. */
+  readonly languages?: IExtHostLanguages
+  /** The host's document-mirror RPC surface — only present on a trusted connection. */
+  readonly documents?: IExtHostDocuments
   private _dead = false
 
   constructor(
@@ -129,6 +139,20 @@ export class HostConnection extends Disposable {
         ProxyChannel.toService<IExtHostScm>(client.getChannel(ExtHostChannels.extHostScm)),
       )
       server.registerChannel(ExtHostChannels.mainThreadScm, ProxyChannel.fromService(deps.scm))
+    }
+
+    if (deps.languageFeatures) {
+      this.languages = ProxyChannel.toService<IExtHostLanguages>(
+        client.getChannel(ExtHostChannels.extHostLanguages),
+      )
+      this.documents = ProxyChannel.toService<IExtHostDocuments>(
+        client.getChannel(ExtHostChannels.extHostDocuments),
+      )
+      const mainThreadLanguages = new MainThreadLanguages(this.languages, deps.languageFeatures)
+      server.registerChannel(
+        ExtHostChannels.mainThreadLanguages,
+        ProxyChannel.fromService(mainThreadLanguages),
+      )
     }
 
     const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)

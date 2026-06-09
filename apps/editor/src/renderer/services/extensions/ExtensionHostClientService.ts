@@ -30,6 +30,8 @@ import {
 import {
   STARTUP_ACTIVATION,
   STARTUP_FINISHED_ACTIVATION,
+  type IExtHostDocuments,
+  type IExtHostLanguages,
   type IExtensionDescriptionDto,
 } from '@universe-editor/extensions-common'
 import {
@@ -38,6 +40,7 @@ import {
   type ExtHostKind,
   type ExtHostStartSpec,
 } from '../../../shared/ipc/extensionHostService.js'
+import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { IScmService } from './ScmService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
@@ -52,6 +55,10 @@ export interface IExtensionHostClientService {
   activateByEvent(event: string): Promise<void>
   /** Execute a command contributed by an activated extension, via its owning tier. */
   executeContributedCommand(id: string, args: unknown[]): Promise<unknown>
+  /** The trusted host's language RPC proxy, once connected (trusted-only). */
+  getTrustedLanguages(): IExtHostLanguages | undefined
+  /** The trusted host's document-mirror RPC proxy, once connected (trusted-only). */
+  getTrustedDocuments(): IExtHostDocuments | undefined
 }
 
 export const IExtensionHostClientService = createDecorator<IExtensionHostClientService>(
@@ -101,6 +108,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IFileService private readonly _files: IFileService,
     @IAcpPathPolicy private readonly _pathPolicy: IAcpPathPolicy,
     @ICommandService private readonly _commandService: ICommandService,
+    @ILanguageFeaturesService private readonly _languageFeatures: ILanguageFeaturesService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -164,7 +172,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       files: this._files,
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
-      ...(kind === 'trusted' ? { scm: this._scm } : {}),
+      ...(kind === 'trusted' ? { scm: this._scm, languageFeatures: this._languageFeatures } : {}),
       output: this._output,
       stderr,
       logger: this._logger,
@@ -215,6 +223,14 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       throw new Error(`No extension host owns command "${id}"`)
     }
     return conn.commands.$executeContributedCommand(id, args)
+  }
+
+  getTrustedLanguages(): IExtHostLanguages | undefined {
+    return this._trusted?.languages
+  }
+
+  getTrustedDocuments(): IExtHostDocuments | undefined {
+    return this._trusted?.documents
   }
 
   private _liveConnections(): HostConnection[] {

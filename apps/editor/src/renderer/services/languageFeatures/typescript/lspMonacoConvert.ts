@@ -24,7 +24,7 @@ import type {
   TextEdit,
   WorkspaceEdit,
   WorkspaceSymbol,
-} from '../../../../shared/ipc/typescriptLanguageService.js'
+} from 'vscode-languageserver-types'
 
 /** LSP 0-based range → Monaco 1-based range. */
 export function rangeToMonaco(r: Range): monaco.IRange {
