@@ -232,8 +232,15 @@ export class TypescriptLanguageClientService
       this._onProcGone(proc, `error ${err.message}`)
     })
     proc.on('exit', (code, signal) => {
-      this._logger.info(`exit code=${code} signal=${signal}`)
-      this._onProcGone(proc, `exit code=${code} signal=${signal}`)
+      const msg = `exit code=${code} signal=${signal}`
+      // Normal shutdown (clean exit, or our own kill() → SIGTERM) stays info;
+      // a non-zero code or other signal means the server crashed → warn.
+      if (code === 0 || signal === 'SIGTERM') {
+        this._logger.info(msg)
+      } else {
+        this._logger.warn(msg)
+      }
+      this._onProcGone(proc, msg)
     })
 
     const conn = createMessageConnection(
@@ -254,8 +261,16 @@ export class TypescriptLanguageClientService
 
     try {
       await conn.sendRequest('initialize', this._initializeParams(tsserver))
-      conn.sendNotification('initialized', {})
+      this._notify(conn, 'initialized', {})
     } catch (err) {
+      // A concurrent ensureStarted (e.g. the workspace root settling during
+      // startup restore) may have stopped this process mid-handshake — the
+      // aborted stdin write surfaces here. That's expected: don't warn, and
+      // don't clear the replacement connection's state.
+      if (this._proc !== proc) {
+        this._logger.debug(`initialize aborted (superseded): ${(err as Error).message}`)
+        return
+      }
       this._logger.warn(`initialize failed: ${(err as Error).message}`)
       this._clearConnection()
       throw err as Error
@@ -364,6 +379,19 @@ export class TypescriptLanguageClientService
     return this._conn
   }
 
+  /** Fire-and-forget LSP notification. sendNotification can throw synchronously
+   *  (connection disposed) or reject async (stdin destroyed mid-teardown); either
+   *  way it must not surface as an unhandled rejection. */
+  private _notify(conn: MessageConnection, method: string, params: object): void {
+    try {
+      void conn.sendNotification(method, params).catch((err) => {
+        this._logger.debug(`notify ${method} failed: ${(err as Error).message}`)
+      })
+    } catch (err) {
+      this._logger.debug(`notify ${method} failed: ${(err as Error).message}`)
+    }
+  }
+
   /** UriComponents (from the renderer over IPC) → file: URI string. */
   private _str(uri: UriComponents): string {
     return (URI.revive(uri) as URI).toString()
@@ -380,14 +408,14 @@ export class TypescriptLanguageClientService
     text: string,
   ): Promise<void> {
     const conn = await this._ready()
-    conn.sendNotification('textDocument/didOpen', {
+    this._notify(conn, 'textDocument/didOpen', {
       textDocument: { uri: this._str(uri), languageId, version, text },
     })
   }
 
   async didChange(uri: UriComponents, version: number, text: string): Promise<void> {
     const conn = await this._ready()
-    conn.sendNotification('textDocument/didChange', {
+    this._notify(conn, 'textDocument/didChange', {
       textDocument: { uri: this._str(uri), version },
       contentChanges: [{ text }],
     })
@@ -395,7 +423,7 @@ export class TypescriptLanguageClientService
 
   async didClose(uri: UriComponents): Promise<void> {
     const conn = await this._ready()
-    conn.sendNotification('textDocument/didClose', this._doc(uri))
+    this._notify(conn, 'textDocument/didClose', this._doc(uri))
   }
 
   async provideDefinition(

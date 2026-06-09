@@ -120,7 +120,7 @@ export class TypescriptDocumentSyncContribution
     const root = this._workspace.current?.folder
     void this._ts.ensureStarted(root ? root.fsPath : undefined).then(() => {
       if (model.isDisposed()) return
-      void this._ts.didOpen(model.uri, languageId, model.getVersionId(), model.getValue())
+      this._ignore(this._ts.didOpen(model.uri, languageId, model.getVersionId(), model.getValue()))
     })
 
     store.add(
@@ -128,7 +128,7 @@ export class TypescriptDocumentSyncContribution
         if (entry.timer) clearTimeout(entry.timer)
         entry.timer = setTimeout(() => {
           entry.timer = undefined
-          void this._pushChange(model)
+          this._ignore(this._pushChange(model))
         }, DIDCHANGE_DEBOUNCE_MS)
       }),
     )
@@ -140,12 +140,20 @@ export class TypescriptDocumentSyncContribution
     await this._ts.didChange(model.uri, model.getVersionId(), model.getValue())
   }
 
+  /** Swallow IPC rejections on fire-and-forget notifications (e.g. the channel
+   *  closing during shutdown) so they never surface as unhandled rejections. */
+  private _ignore(p: Promise<unknown>): void {
+    void p.catch(() => undefined)
+  }
+
   /** Re-push every open document after a server respawn (it lost its overlay). */
   private _resyncAll(): void {
     for (const entry of this._open.values()) {
       const model = entry.model
       if (model.isDisposed()) continue
-      void this._ts.didOpen(model.uri, entry.languageId, model.getVersionId(), model.getValue())
+      this._ignore(
+        this._ts.didOpen(model.uri, entry.languageId, model.getVersionId(), model.getValue()),
+      )
     }
   }
 
@@ -157,7 +165,7 @@ export class TypescriptDocumentSyncContribution
     if (!entry.model.isDisposed()) {
       MonacoLoader.get().editor.setModelMarkers(entry.model, MARKER_OWNER, [])
     }
-    void this._ts.didClose(entry.model.uri)
+    this._ignore(this._ts.didClose(entry.model.uri))
     entry.store.dispose()
   }
 
