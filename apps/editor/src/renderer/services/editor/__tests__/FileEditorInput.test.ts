@@ -139,6 +139,26 @@ describe('FileEditorInput', () => {
     input.dispose()
   })
 
+  it('uses a BOM-free editor baseline but preserves an existing BOM on save', async () => {
+    const bomUri = URI.file('/tmp/bom.txt')
+    fs.store[bomUri.toString()] = '\uFEFFhello'
+    const input = inst.createInstance(FileEditorInput, bomUri)
+    const text = await input.resolve()
+    expect(text).toBe('hello')
+    expect(input.backupContent).toBe('hello')
+
+    const model = MonacoModelRegistry.acquire(input.resource, input.backupContent)
+    model.setValue('hello!')
+    input.setDirty(true)
+    await input.save()
+
+    expect(fs.writes).toContainEqual({ path: bomUri.toString(), content: '\uFEFFhello!' })
+    expect(input.backupContent).toBe('hello!')
+    expect(input.isDirty).toBe(false)
+    MonacoModelRegistry.release(input.resource)
+    input.dispose()
+  })
+
   it('revert restores backupContent into the model and clears dirty', async () => {
     const input = inst.createInstance(FileEditorInput, uri)
     await input.resolve()

@@ -24,10 +24,18 @@ interface ISerializedFileEditor {
   readonly isReadonly?: boolean
 }
 
+const UTF8_BOM = '\uFEFF'
+
+function splitLeadingBom(text: string): { text: string; hadBom: boolean } {
+  return text.startsWith(UTF8_BOM)
+    ? { text: text.slice(UTF8_BOM.length), hadBom: true }
+    : { text, hadBom: false }
+}
+
 export class FileEditorInput extends EditorInput {
   static readonly TYPE_ID = 'file'
 
-  /** Last-known on-disk text. Updated by `resolve()` and `save()`. */
+  /** Last-known clean editor text. Updated by `resolve()` and `save()`. */
   private _backupContent = ''
   private _resolved = false
   /** Last-known on-disk mtime in epoch ms. Used to detect external changes. */
@@ -36,6 +44,7 @@ export class FileEditorInput extends EditorInput {
   /** Dirty content pending application on next resolve() (hot exit restore). */
   private _pendingDirtyContent: string | undefined
   private _isReadonly = false
+  private _hasLeadingBom = false
   private _modelRefAcquired = false
 
   constructor(
@@ -76,13 +85,15 @@ export class FileEditorInput extends EditorInput {
   }
 
   /**
-   * Read the file from disk, capture the backup content, and return it. The
+   * Read the file from disk, capture the clean backup content, and return it. The
    * FileEditor component invokes this on mount before acquiring the Monaco
    * model so the model's initial buffer matches disk.
    */
   async resolve(): Promise<string> {
-    const text = await this._fileService.readFileText(this._resource)
-    this._backupContent = text
+    const diskText = await this._fileService.readFileText(this._resource)
+    const content = splitLeadingBom(diskText)
+    this._hasLeadingBom = content.hadBom
+    this._backupContent = content.text
     this._resolved = true
     await this._refreshMtime()
     if (this._pendingDirtyContent !== undefined) {
@@ -90,7 +101,7 @@ export class FileEditorInput extends EditorInput {
       this._pendingDirtyContent = undefined
       return dirty
     }
-    return text
+    return content.text
   }
 
   async resolveModel(): Promise<monaco.editor.ITextModel> {
@@ -119,7 +130,7 @@ export class FileEditorInput extends EditorInput {
     const model = MonacoModelRegistry.peek(this._resource)
     if (!model) return true
     const text = model.getValue()
-    await this._fileService.writeFile(this._resource, text)
+    await this._fileService.writeFile(this._resource, this._hasLeadingBom ? UTF8_BOM + text : text)
     this._backupContent = text
     this.setDirty(false)
     await this._refreshMtime()
@@ -152,13 +163,15 @@ export class FileEditorInput extends EditorInput {
     }
     if (stat.mtime === this._lastKnownMtime) return 'unchanged'
 
-    const text = await this._fileService.readFileText(this._resource)
+    const diskText = await this._fileService.readFileText(this._resource)
+    const content = splitLeadingBom(diskText)
     const model = MonacoModelRegistry.peek(this._resource)
 
     if (!this.isDirty) {
-      this._backupContent = text
+      this._hasLeadingBom = content.hadBom
+      this._backupContent = content.text
       this._lastKnownMtime = stat.mtime
-      if (model && model.getValue() !== text) model.setValue(text)
+      if (model && model.getValue() !== content.text) model.setValue(content.text)
       return 'reloaded'
     }
 
@@ -170,9 +183,10 @@ export class FileEditorInput extends EditorInput {
       type: 'warning',
     })
     if (result.confirmed) {
-      this._backupContent = text
+      this._hasLeadingBom = content.hadBom
+      this._backupContent = content.text
       this._lastKnownMtime = stat.mtime
-      if (model) model.setValue(text)
+      if (model) model.setValue(content.text)
       this.setDirty(false)
       return 'reloaded'
     }

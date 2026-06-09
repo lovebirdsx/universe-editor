@@ -11,11 +11,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 const monacoMockState = vi.hoisted(() => ({
   createOptions: undefined as Record<string, unknown> | undefined,
   updateOptionsCalls: [] as Record<string, unknown>[],
+  registerCount: 0,
 }))
 
 vi.mock('../monaco/MonacoLoader.js', () => {
   const makeModel = (initial: string, language: string, uri: unknown) => {
-    let value = initial
+    let value = initial.startsWith('\uFEFF') ? initial.slice(1) : initial
     const listeners = new Set<() => void>()
     return {
       uri,
@@ -75,7 +76,9 @@ vi.mock('../monaco/MonacoLoader.js', () => {
 vi.mock('../../../services/editor/FileEditorRegistry.js', () => {
   return {
     FileEditorRegistry: {
-      register: () => {},
+      register: () => {
+        monacoMockState.registerCount++
+      },
       unregister: () => {},
     },
   }
@@ -113,14 +116,14 @@ function makeOutlineStub() {
   }
 }
 
-function makeFs(): IFileServiceType {
+function makeFs(text = ''): IFileServiceType {
   return {
     _serviceBrand: undefined,
     async readFile() {
       return new Uint8Array()
     },
     async readFileText() {
-      return ''
+      return text
     },
     async writeFile() {},
     async exists() {
@@ -209,9 +212,38 @@ afterEach(() => {
   MonacoModelRegistry._resetForTests()
   monacoMockState.createOptions = undefined
   monacoMockState.updateOptionsCalls = []
+  monacoMockState.registerCount = 0
 })
 
 describe('FileEditor — auto-pin on first edit', () => {
+  it('does not mark a UTF-8 BOM file dirty on open', async () => {
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs('\uFEFFbody'))
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: async () => undefined,
+    } as never)
+    services.set(IConfigurationService, new FakeConfigurationService() as never)
+    services.set(IContextKeyService, new ContextKeyService())
+    const inst = new InstantiationService(services)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/bom.txt'))
+    services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
+    services.set(IOutlineService, makeOutlineStub() as never)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <FileEditor input={input} />
+      </ServicesContext.Provider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(monacoMockState.registerCount).toBeGreaterThan(0)
+    })
+    expect(MonacoModelRegistry.peek(input.resource)?.getValue()).toBe('body')
+    expect(input.backupContent).toBe('body')
+    expect(input.isDirty).toBe(false)
+  })
+
   it('calls pinEditor on the group that owns the input when content changes', async () => {
     const services = new ServiceCollection()
     services.set(IFileService, makeFs())
