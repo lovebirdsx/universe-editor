@@ -243,19 +243,19 @@ async function bootstrapWorkbench(): Promise<void> {
   }
 
   // Logger: route renderer logs to the main process for file-based aggregation.
-  // Use a stable per-session integer so renderer-<id>.log files are unique.
-  const windowId = Date.now()
+  // The source window is the authoritative BrowserWindow id held by the main
+  // receiver; the renderer no longer needs to supply one.
   const logChannelProxy = ProxyChannel.toService<ILogChannelService>(
     ipcService.getChannel(ServiceChannels.Log),
   )
-  const loggerService = workbenchStore.add(new RendererLoggerService(logChannelProxy, windowId))
+  const loggerService = workbenchStore.add(new RendererLoggerService(logChannelProxy))
   services.set(ILoggerService, loggerService)
   window.addEventListener('beforeunload', () => {
     void loggerService.flush()
   })
   // Update the global unexpected-error handler to also send to the file logger.
   const rootLogger = loggerService.createLogger({ id: 'renderer', name: 'Renderer' })
-  rootLogger.info(`bootstrap start windowId=${windowId}`)
+  rootLogger.info('bootstrap start')
 
   // Route console.* through the log system so ad-hoc console output and
   // third-party library noise reach the Console channel and Output panel

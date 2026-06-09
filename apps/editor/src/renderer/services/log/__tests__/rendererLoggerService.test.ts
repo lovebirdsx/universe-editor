@@ -21,7 +21,7 @@ function makeProxy(): ILogChannelService & {
 describe('RendererLoggerService batching', () => {
   it('coalesces many synchronous log entries into a single IPC call', async () => {
     const proxy = makeProxy()
-    const svc = new RendererLoggerService(proxy, 1)
+    const svc = new RendererLoggerService(proxy)
     const logger = svc.createLogger({ id: 'editor', name: 'Editor' })
 
     for (let i = 0; i < 100; i++) logger.info(`entry-${i}`)
@@ -29,8 +29,7 @@ describe('RendererLoggerService batching', () => {
 
     expect(proxy.append).not.toHaveBeenCalled()
     expect(proxy.appendBatch).toHaveBeenCalledTimes(1)
-    const [windowId, entries] = proxy.appendBatch.mock.calls[0] as [number, readonly LogEntry[]]
-    expect(windowId).toBe(1)
+    const [entries] = proxy.appendBatch.mock.calls[0] as [readonly LogEntry[]]
     expect(entries).toHaveLength(100)
     expect(entries[0]?.message).toBe('entry-0')
     expect(entries[99]?.message).toBe('entry-99')
@@ -38,7 +37,7 @@ describe('RendererLoggerService batching', () => {
 
   it('captures a fire-time timestamp on each entry', async () => {
     const proxy = makeProxy()
-    const svc = new RendererLoggerService(proxy, 2)
+    const svc = new RendererLoggerService(proxy)
     const logger = svc.createLogger({ id: 'editor', name: 'Editor' })
 
     const before = Date.now()
@@ -46,7 +45,7 @@ describe('RendererLoggerService batching', () => {
     const after = Date.now()
     await svc.flush()
 
-    const [, entries] = proxy.appendBatch.mock.calls[0] as [number, readonly LogEntry[]]
+    const [entries] = proxy.appendBatch.mock.calls[0] as [readonly LogEntry[]]
     expect(entries[0]?.level).toBe(LogLevel.Warning)
     expect(entries[0]?.timestamp).toBeGreaterThanOrEqual(before)
     expect(entries[0]?.timestamp).toBeLessThanOrEqual(after)
@@ -61,7 +60,7 @@ describe('RendererLoggerService batching', () => {
           resolveBatch = resolve
         }),
     )
-    const svc = new RendererLoggerService(proxy, 3)
+    const svc = new RendererLoggerService(proxy)
     const logger = svc.createLogger({ id: 'editor', name: 'Editor' })
     logger.info('hello')
 

@@ -28,10 +28,7 @@ class WindowLogBatcher implements IpcBatcher {
   private _flushScheduled = false
   private _inFlight: Promise<void> | null = null
 
-  constructor(
-    private readonly _proxy: ILogChannelService,
-    private readonly _windowId: number,
-  ) {}
+  constructor(private readonly _proxy: ILogChannelService) {}
 
   enqueue(entry: LogEntry): void {
     this._pending.push(entry)
@@ -57,7 +54,7 @@ class WindowLogBatcher implements IpcBatcher {
     if (this._pending.length === 0) return
     const batch = this._pending
     this._pending = []
-    const work = this._proxy.appendBatch(this._windowId, batch).catch((err) => {
+    const work = this._proxy.appendBatch(batch).catch((err) => {
       // Critical: bypass the console interceptor so an IPC failure here cannot
       // recurse through the interceptor into this same batcher.
       getOriginalConsole().error('[RendererLogger] failed to forward log batch:', err)
@@ -106,9 +103,9 @@ export class RendererLoggerService extends Disposable implements ILoggerServiceT
   private readonly _loggers = new Map<string, ILogger>()
   private readonly _batcher: WindowLogBatcher
 
-  constructor(logChannelProxy: ILogChannelService, windowId: number) {
+  constructor(logChannelProxy: ILogChannelService) {
     super()
-    this._batcher = new WindowLogBatcher(logChannelProxy, windowId)
+    this._batcher = new WindowLogBatcher(logChannelProxy)
   }
 
   createLogger(channel: ILogChannel): ILogger {

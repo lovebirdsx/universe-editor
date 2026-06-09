@@ -44,7 +44,6 @@ export interface ApplicationServices {
   readonly textSearch: ITextSearchMainService
   readonly fileWatcher: IFileWatcherService
   readonly recentWorkspaces: RecentWorkspacesMainService
-  readonly logFiles: ILogFilesService
   readonly acpHost: IAcpHostService
   readonly extensionHost: IExtensionHostService
   readonly markdownLanguage: IMarkdownLanguageService
@@ -72,6 +71,7 @@ export interface ApplicationServices {
 export interface WindowScopedServices {
   readonly host: IHostServiceWire
   readonly logChannel: ILogChannelService
+  readonly logFiles: ILogFilesService
   readonly storage: IStorageService
   readonly workspace: IWorkspaceServiceWire
   readonly userData: IUserDataFilesService

@@ -44,7 +44,11 @@ const decoratorTsconfigRaw = {
 
 export default defineConfig({
   main: {
-    plugins: [jsToTsResolvePlugin(), mainHmrPlugin(), devRuntimeWatchPlugin({ repoRoot: REPO_ROOT })],
+    plugins: [
+      jsToTsResolvePlugin(),
+      mainHmrPlugin(),
+      devRuntimeWatchPlugin({ repoRoot: REPO_ROOT }),
+    ],
     resolve: {
       alias: {
         '@universe-editor/platform': platformSrc,

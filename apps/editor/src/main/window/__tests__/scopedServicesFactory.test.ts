@@ -14,7 +14,6 @@ describe('ApplicationServices type', () => {
       textSearch: {} as ApplicationServices['textSearch'],
       fileWatcher: {} as ApplicationServices['fileWatcher'],
       recentWorkspaces: {} as ApplicationServices['recentWorkspaces'],
-      logFiles: {} as ApplicationServices['logFiles'],
       acpHost: {} as ApplicationServices['acpHost'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
       extensionHost: {} as ApplicationServices['extensionHost'],
@@ -28,7 +27,7 @@ describe('ApplicationServices type', () => {
       performance: {} as ApplicationServices['performance'],
       sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],
     }
-    expect(Object.keys(svc)).toHaveLength(19)
+    expect(Object.keys(svc)).toHaveLength(18)
   })
 })
 
@@ -37,12 +36,13 @@ describe('WindowScopedServices type', () => {
     const svc: WindowScopedServices = {
       host: {} as WindowScopedServices['host'],
       logChannel: {} as WindowScopedServices['logChannel'],
+      logFiles: {} as WindowScopedServices['logFiles'],
       storage: {} as WindowScopedServices['storage'],
       workspace: {} as WindowScopedServices['workspace'],
       userData: {} as WindowScopedServices['userData'],
       terminal: {} as WindowScopedServices['terminal'],
     }
-    expect(Object.keys(svc)).toHaveLength(6)
+    expect(Object.keys(svc)).toHaveLength(7)
   })
 })
 
@@ -57,20 +57,20 @@ describe('service layer separation', () => {
       'textSearch',
       'fileWatcher',
       'recentWorkspaces',
-      'logFiles',
     ]
-    expect(appKeys).toHaveLength(7)
+    expect(appKeys).toHaveLength(6)
   })
 
   it('WindowScopedServices holds the per-window workspace stack', () => {
     const windowKeys: (keyof WindowScopedServices)[] = [
       'host',
       'logChannel',
+      'logFiles',
       'storage',
       'workspace',
       'userData',
       'terminal',
     ]
-    expect(windowKeys).toHaveLength(6)
+    expect(windowKeys).toHaveLength(7)
   })
 })

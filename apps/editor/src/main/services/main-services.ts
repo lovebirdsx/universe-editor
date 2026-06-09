@@ -19,7 +19,6 @@ import { IFileSearchService } from '@universe-editor/platform'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
   IDisposableLeakService,
-  ILogFilesService,
   IPerformanceMarksService,
   IPingService,
 } from '../../shared/ipc/services.js'
@@ -42,7 +41,6 @@ import {
   IRecentWorkspacesService,
   RecentWorkspacesMainService,
 } from './workspace/recentWorkspacesMainService.js'
-import { LogFilesMainService } from './log/logFilesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
 import { MarkdownLanguageClientService } from './markdownLanguage/markdownLanguageClientService.js'
@@ -81,10 +79,6 @@ registerSingleton(
 registerSingleton(
   IRecentWorkspacesService,
   new SyncDescriptor<RecentWorkspacesMainService>(RecentWorkspacesMainService, [], false),
-)
-registerSingleton(
-  ILogFilesService,
-  new SyncDescriptor<ILogFilesService>(LogFilesMainService, [], false),
 )
 registerSingleton(
   IAcpHostService,

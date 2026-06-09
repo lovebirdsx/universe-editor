@@ -1,14 +1,16 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Read-only log file browser for renderer actions. Only files from the
- *  current session are surfaced; historical sessions remain on disk under
- *  <userData>/logs/<sessionId>/ and can be inspected via "Open Logs Folder".
+ *  Read-only log file browser for renderer actions. Scoped to a single window:
+ *  it surfaces the shared main-process channels (session root) plus this
+ *  window's private renderer channels (window-<id>/), and filters the live
+ *  append stream the same way, so one window never sees another window's logs.
+ *  Historical sessions remain on disk under <userData>/logs/<sessionId>/.
  *--------------------------------------------------------------------------------------------*/
 
 import { shell } from 'electron'
 import { promises as fs } from 'node:fs'
-import { basename, extname, isAbsolute, relative, resolve } from 'node:path'
-import { LogLevel, type Event } from '@universe-editor/platform'
+import { basename, extname, isAbsolute, join, relative, resolve } from 'node:path'
+import { Event, LogLevel } from '@universe-editor/platform'
 import type {
   ILogFilesService,
   LogAppendEvent,
@@ -20,6 +22,7 @@ import { humanizeChannelId } from '../../../shared/log/logLabels.js'
 const DEFAULT_MAX_BYTES = 1024 * 1024
 const MAX_READ_BYTES = 10 * 1024 * 1024
 const LOG_FILE_RE = /^[A-Za-z0-9._-]+\.log$/
+const WINDOW_DIR_RE = /^window-(\d+)$/
 
 function normalizeMaxBytes(maxBytes: number | undefined): number {
   if (maxBytes === undefined) return DEFAULT_MAX_BYTES
@@ -44,18 +47,59 @@ export class LogFilesMainService implements ILogFilesService {
 
   readonly onDidAppendEntry: Event<LogAppendEvent>
 
-  constructor(@ILogMainService private readonly _logService: LogMainService) {
-    this.onDidAppendEntry = _logService.onDidAppendEntry
+  constructor(
+    @ILogMainService private readonly _logService: LogMainService,
+    private readonly _windowId: number,
+  ) {
+    // Only the shared main-process entries (no windowId) and this window's own
+    // renderer entries reach the panel; other windows' entries are dropped.
+    this.onDidAppendEntry = Event.filter(
+      _logService.onDidAppendEntry,
+      (e) => e.windowId === undefined || e.windowId === this._windowId,
+    )
   }
 
   async listLogFiles(): Promise<LogFileDescriptor[]> {
-    const sessionDir = this._logService.getSessionDir()
     const sessionId = this._logService.getSessionId()
     const sessionStartedAt = this._logService.getSessionStartedAt()
+    const sessionDir = this._logService.getSessionDir()
+    const windowDir = this._logService.getWindowDir(this._windowId)
 
+    const shared = await this._readDir(sessionDir, sessionId, sessionStartedAt, undefined)
+    const priv = await this._readDir(
+      windowDir,
+      `${sessionId}/window-${this._windowId}`,
+      sessionStartedAt,
+      this._windowId,
+    )
+
+    // A channelId present in both directories (e.g. `console`, written by both
+    // main and this window's renderer) collides on `name`, which the renderer's
+    // OutputService keys by. Disambiguate the shared one with a "(Main)" suffix
+    // so both rows survive in the dropdown.
+    const privChannelIds = new Set(priv.map((d) => d.channelId))
+    const result = [
+      ...shared.map((d) =>
+        privChannelIds.has(d.channelId) ? { ...d, name: `${d.name} (Main)` } : d,
+      ),
+      ...priv,
+    ]
+
+    return result.sort((a, b) => {
+      if (b.modifiedTime !== a.modifiedTime) return b.modifiedTime - a.modifiedTime
+      return a.name.localeCompare(b.name)
+    })
+  }
+
+  private async _readDir(
+    dir: string,
+    idPrefix: string,
+    sessionStartedAt: string,
+    windowId: number | undefined,
+  ): Promise<LogFileDescriptor[]> {
     let entries
     try {
-      entries = await fs.readdir(sessionDir, { withFileTypes: true })
+      entries = await fs.readdir(dir, { withFileTypes: true })
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw err
@@ -64,29 +108,24 @@ export class LogFilesMainService implements ILogFilesService {
     const result: LogFileDescriptor[] = []
     for (const file of entries) {
       if (!file.isFile() || !LOG_FILE_RE.test(file.name)) continue
-      const fullPath = this._resolveInSession(sessionId, file.name)
-      const stat = await fs.stat(fullPath)
+      const stat = await fs.stat(join(dir, file.name))
       const channelId = basename(file.name, '.log')
       const registered = this._logService.getChannel(channelId)
       result.push({
-        id: `${sessionId}/${file.name}`,
+        id: `${idPrefix}/${file.name}`,
         name: registered?.name ?? humanizeChannelId(channelId),
         channelId,
         sessionStartedAt,
         size: stat.size,
         modifiedTime: stat.mtimeMs,
+        ...(windowId === undefined ? {} : { windowId }),
       })
     }
-
-    return result.sort((a, b) => {
-      if (b.modifiedTime !== a.modifiedTime) return b.modifiedTime - a.modifiedTime
-      return a.name.localeCompare(b.name)
-    })
+    return result
   }
 
   async readLogFile(id: string, maxBytes?: number): Promise<string> {
-    const { sessionId, fileName } = this._parseId(id)
-    const target = this._resolveInSession(sessionId, fileName)
+    const target = this._resolveId(id)
     const stat = await fs.stat(target)
     if (!stat.isFile() || extname(target) !== '.log') {
       throw new Error(`Invalid log file id: ${id}`)
@@ -120,8 +159,7 @@ export class LogFilesMainService implements ILogFilesService {
   }
 
   async resolveLogPath(id: string): Promise<string> {
-    const { sessionId, fileName } = this._parseId(id)
-    return this._resolveInSession(sessionId, fileName)
+    return this._resolveId(id)
   }
 
   async setLogLevel(level: LogLevel): Promise<void> {
@@ -144,24 +182,34 @@ export class LogFilesMainService implements ILogFilesService {
     return resolve(this._logService.getLogRoot())
   }
 
-  private _parseId(id: string): { sessionId: string; fileName: string } {
+  /**
+   * Resolve a descriptor id to an absolute path under the log root. Accepts
+   * `<session>/<file>.log` (shared) and `<session>/window-<id>/<file>.log`
+   * (window-private), validating every segment and guarding against traversal.
+   */
+  private _resolveId(id: string): string {
     const parts = id.split('/')
-    const sessionId = parts[0]
-    const fileName = parts[1]
-    if (parts.length !== 2 || !sessionId || !fileName) {
+    const file = parts[parts.length - 1]
+    if (file === undefined || !LOG_FILE_RE.test(file)) {
       throw new Error(`Invalid log file id: ${id}`)
     }
-    if (!SESSION_DIR_RE.test(sessionId) || !LOG_FILE_RE.test(fileName)) {
-      throw new Error(`Invalid log file id: ${id}`)
-    }
-    return { sessionId, fileName }
-  }
 
-  private _resolveInSession(sessionId: string, fileName: string): string {
-    const root = this._root()
-    const target = resolve(root, sessionId, fileName)
-    if (!isInside(root, target)) {
-      throw new Error(`Invalid log file id: ${sessionId}/${fileName}`)
+    const sessionId = parts[0]
+    if (sessionId === undefined || !SESSION_DIR_RE.test(sessionId)) {
+      throw new Error(`Invalid log file id: ${id}`)
+    }
+
+    let target: string
+    if (parts.length === 2) {
+      target = resolve(this._root(), sessionId, file)
+    } else if (parts.length === 3 && parts[1] !== undefined && WINDOW_DIR_RE.test(parts[1])) {
+      target = resolve(this._root(), sessionId, parts[1], file)
+    } else {
+      throw new Error(`Invalid log file id: ${id}`)
+    }
+
+    if (!isInside(this._root(), target)) {
+      throw new Error(`Invalid log file id: ${id}`)
     }
     return target
   }

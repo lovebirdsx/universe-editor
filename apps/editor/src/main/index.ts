@@ -25,7 +25,6 @@ import type { SessionSwitcherMainService } from './services/sessionSwitcher/sess
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
-  ILogFilesService,
   IPingService,
   IPerformanceMarksService,
 } from '../shared/ipc/services.js'
@@ -194,7 +193,6 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       textSearch: accessor.get(ITextSearchMainService),
       fileWatcher: accessor.get(IFileWatcherService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
-      logFiles: accessor.get(ILogFilesService),
       acpHost: accessor.get(IAcpHostService),
       extensionHost: accessor.get(IExtensionHostService),
       markdownLanguage: accessor.get(IMarkdownLanguageService),

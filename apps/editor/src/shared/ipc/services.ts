@@ -36,18 +36,14 @@ export interface LogEntry {
 
 /**
  * Wire-only IPC contract for renderer-side logging.
- * Each renderer window sends structured log entries; the main process writes them to disk.
+ * Each renderer window sends structured log entries; the main process writes
+ * them to disk. The source window is the authoritative BrowserWindow id the main
+ * receiver already holds, so it is never sent over the wire.
  */
 export interface ILogChannelService {
   readonly _serviceBrand: undefined
-  append(
-    windowId: number,
-    channel: string,
-    level: LogLevel,
-    message: string,
-    timestamp: number,
-  ): Promise<void>
-  appendBatch(windowId: number, entries: readonly LogEntry[]): Promise<void>
+  append(channel: string, level: LogLevel, message: string, timestamp: number): Promise<void>
+  appendBatch(entries: readonly LogEntry[]): Promise<void>
 }
 
 export const ILogChannelService = createDecorator<ILogChannelService>('logChannelService')
@@ -62,12 +58,16 @@ export interface LogFileDescriptor {
   readonly sessionStartedAt: string
   readonly size: number
   readonly modifiedTime: number
+  /** Source window for private renderer logs; absent for shared main-process channels. */
+  readonly windowId?: number
 }
 
 export interface LogAppendEvent {
   readonly channelId: string
   readonly chunk: string
   readonly maxLevel: LogLevel
+  /** Source window for renderer entries; absent for shared main-process entries. */
+  readonly windowId?: number
 }
 
 export interface ILogFilesService {

@@ -239,16 +239,16 @@ describe('MainLogChannelService', () => {
 
   it('routes append calls to the channel-named log file with renderer provenance prefix', async () => {
     const logSvc = new LogMainService()
-    const channelSvc = new MainLogChannelService(logSvc)
+    const channelSvc = new MainLogChannelService(logSvc, 42)
 
     const fireTime = Date.now()
-    await channelSvc.append(42, 'editor', LogLevel.Info, 'renderer log entry', fireTime)
+    await channelSvc.append('editor', LogLevel.Info, 'renderer log entry', fireTime)
 
     await new Promise((r) => setTimeout(r, 200))
     logSvc.createLogger({ id: 'editor', name: 'Editor' }).flush()
     await new Promise((r) => setTimeout(r, 200))
 
-    const logFile = join(tmpDir, 'logs', logSvc.getSessionId(), 'editor.log')
+    const logFile = join(tmpDir, 'logs', logSvc.getSessionId(), 'window-42', 'editor.log')
     const content = await fs.readFile(logFile, 'utf8')
     expect(content).toContain('[renderer:42] renderer log entry')
     expect(content).toContain(formatLogTimestamp(new Date(fireTime), LOG_TIMESTAMP_FORMAT_DEFAULT))
@@ -256,10 +256,10 @@ describe('MainLogChannelService', () => {
 
   it('appendBatch routes each entry to its channel with provenance prefix', async () => {
     const logSvc = new LogMainService()
-    const channelSvc = new MainLogChannelService(logSvc)
+    const channelSvc = new MainLogChannelService(logSvc, 7)
 
     const ts = Date.now()
-    await channelSvc.appendBatch(7, [
+    await channelSvc.appendBatch([
       { channel: 'editor', level: LogLevel.Info, message: 'one', timestamp: ts },
       { channel: 'workspace', level: LogLevel.Warning, message: 'two', timestamp: ts },
     ])
@@ -270,11 +270,9 @@ describe('MainLogChannelService', () => {
     await new Promise((r) => setTimeout(r, 200))
 
     const sessionId = logSvc.getSessionId()
-    const editorContent = await fs.readFile(join(tmpDir, 'logs', sessionId, 'editor.log'), 'utf8')
-    const workspaceContent = await fs.readFile(
-      join(tmpDir, 'logs', sessionId, 'workspace.log'),
-      'utf8',
-    )
+    const windowDir = join(tmpDir, 'logs', sessionId, 'window-7')
+    const editorContent = await fs.readFile(join(windowDir, 'editor.log'), 'utf8')
+    const workspaceContent = await fs.readFile(join(windowDir, 'workspace.log'), 'utf8')
     expect(editorContent).toContain('[renderer:7] one')
     expect(workspaceContent).toContain('[renderer:7] two')
   })

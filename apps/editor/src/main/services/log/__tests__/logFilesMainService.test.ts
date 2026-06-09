@@ -38,12 +38,13 @@ describe('LogFilesMainService', () => {
   let logService: InstanceType<typeof LogMainService>
   let service: InstanceType<typeof LogFilesMainService>
   let sessionId: string
+  const WINDOW_ID = 7
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(join(tmpdir(), 'ue-log-files-test-'))
     mockGetPath.mockReturnValue(tmpDir)
     logService = new LogMainService()
-    service = new LogFilesMainService(logService)
+    service = new LogFilesMainService(logService, WINDOW_ID)
     sessionId = logService.getSessionId()
   })
 
@@ -180,7 +181,77 @@ describe('LogFilesMainService', () => {
     await expect(service.resolveLogPath('../etc/passwd')).rejects.toThrow(/Invalid log file id/)
   })
 
-  it('forwards LogMainService.onDidAppendEntry as its own onDidAppendEntry', () => {
-    expect(service.onDidAppendEntry).toBe(logService.onDidAppendEntry)
+  it('forwards shared and own-window entries but drops other windows', async () => {
+    const seen: number[] = []
+    const sub = service.onDidAppendEntry((e) => {
+      seen.push(e.windowId ?? -1)
+    })
+
+    logService.appendToChannel({ id: 'console', name: 'Console' }, LogLevel.Info, 'shared', 0)
+    logService.appendToChannel(
+      { id: 'console', name: 'Console' },
+      LogLevel.Info,
+      'mine',
+      0,
+      WINDOW_ID,
+    )
+    logService.appendToChannel(
+      { id: 'console', name: 'Console' },
+      LogLevel.Info,
+      'theirs',
+      0,
+      WINDOW_ID + 1,
+    )
+
+    await new Promise((r) => setTimeout(r, 300))
+    sub.dispose()
+    expect(seen.sort()).toEqual([-1, WINDOW_ID])
+  })
+
+  it('lists this window-private channels alongside shared ones', async () => {
+    await writeLog(tmpDir, sessionId, 'main.log', 'shared')
+    const windowDir = join(tmpDir, 'logs', sessionId, `window-${WINDOW_ID}`)
+    await fs.mkdir(windowDir, { recursive: true })
+    await fs.writeFile(join(windowDir, 'console.log'), 'priv', 'utf8')
+
+    const files = await service.listLogFiles()
+
+    const ids = files.map((f) => f.id).sort()
+    expect(ids).toContain(`${sessionId}/main.log`)
+    expect(ids).toContain(`${sessionId}/window-${WINDOW_ID}/console.log`)
+  })
+
+  it('does not list other windows private channels', async () => {
+    const otherDir = join(tmpDir, 'logs', sessionId, `window-${WINDOW_ID + 1}`)
+    await fs.mkdir(otherDir, { recursive: true })
+    await fs.writeFile(join(otherDir, 'console.log'), 'theirs', 'utf8')
+
+    const files = await service.listLogFiles()
+
+    expect(files).toEqual([])
+  })
+
+  it('suffixes the shared row with (Main) when a channelId collides with a private one', async () => {
+    await writeLog(tmpDir, sessionId, 'console.log', 'shared')
+    const windowDir = join(tmpDir, 'logs', sessionId, `window-${WINDOW_ID}`)
+    await fs.mkdir(windowDir, { recursive: true })
+    await fs.writeFile(join(windowDir, 'console.log'), 'priv', 'utf8')
+
+    const files = await service.listLogFiles()
+
+    const shared = files.find((f) => f.id === `${sessionId}/console.log`)
+    const priv = files.find((f) => f.id === `${sessionId}/window-${WINDOW_ID}/console.log`)
+    expect(shared?.name).toMatch(/\(Main\)$/)
+    expect(priv?.name).not.toMatch(/\(Main\)$/)
+  })
+
+  it('reads and resolves a window-private log file by its 3-segment id', async () => {
+    const windowDir = join(tmpDir, 'logs', sessionId, `window-${WINDOW_ID}`)
+    await fs.mkdir(windowDir, { recursive: true })
+    await fs.writeFile(join(windowDir, 'console.log'), 'private body\n', 'utf8')
+
+    const id = `${sessionId}/window-${WINDOW_ID}/console.log`
+    await expect(service.readLogFile(id)).resolves.toBe('private body\n')
+    await expect(service.resolveLogPath(id)).resolves.toBe(join(windowDir, 'console.log'))
   })
 })

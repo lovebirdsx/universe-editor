@@ -23,9 +23,7 @@ const repoRoot = path.resolve(__dirname, '..')
 const monacoEsm = path.join(repoRoot, 'node_modules/monaco-editor/esm/vs')
 const outDir = path.join(repoRoot, 'src/renderer/vendor/monaco-nls')
 
-const LOCALES = [
-  { source: 'zh-hans', out: 'zh-cn' },
-]
+const LOCALES = [{ source: 'zh-hans', out: 'zh-cn' }]
 
 function findVscodeLocRoot() {
   const candidates = [

@@ -28,6 +28,13 @@ export interface LogAppendEvent {
   readonly channelId: string
   readonly chunk: string
   readonly maxLevel: LogLevel
+  /**
+   * Source window for renderer-originated entries. `undefined` means the entry
+   * came from the main process itself (shared across all windows). Per-window
+   * LogFilesMainService instances filter on this so a window only sees its own
+   * renderer logs plus the shared main-process channels.
+   */
+  readonly windowId?: number
 }
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -69,7 +76,13 @@ class FileLogger extends AbstractLogger {
   private readonly _logPath: string
   private readonly _sessionDir: string
   private readonly _channelId: string
-  private readonly _onChunk: (channelId: string, chunk: string, maxLevel: LogLevel) => void
+  private readonly _windowId: number | undefined
+  private readonly _onChunk: (
+    channelId: string,
+    chunk: string,
+    maxLevel: LogLevel,
+    windowId: number | undefined,
+  ) => void
   private _writeQueue: Array<{ readonly level: LogLevel; readonly line: string }> = []
   private _pendingFlush: ReturnType<typeof setTimeout> | null = null
   private _estimatedSize = 0
@@ -79,13 +92,23 @@ class FileLogger extends AbstractLogger {
     sessionDir: string,
     channelId: string,
     level: LogLevel,
-    onChunk: (channelId: string, chunk: string, maxLevel: LogLevel) => void,
+    onChunk: (
+      channelId: string,
+      chunk: string,
+      maxLevel: LogLevel,
+      windowId: number | undefined,
+    ) => void,
+    windowId: number | undefined,
   ) {
     super(level)
-    this._sessionDir = sessionDir
+    // Renderer-originated channels are written under window-<id>/ so each
+    // window's logs stay physically separate; main-process channels stay at the
+    // session root and remain visible to every window.
+    this._sessionDir = windowId === undefined ? sessionDir : join(sessionDir, `window-${windowId}`)
     this._channelId = channelId
+    this._windowId = windowId
     this._onChunk = onChunk
-    this._logPath = join(sessionDir, `${channelId}.log`)
+    this._logPath = join(this._sessionDir, `${channelId}.log`)
   }
 
   setTimestampFormat(format: string): void {
@@ -149,7 +172,7 @@ class FileLogger extends AbstractLogger {
         await this._rotate()
       }
       await fs.appendFile(this._logPath, content, 'utf8')
-      this._onChunk(this._channelId, content, maxLevel)
+      this._onChunk(this._channelId, content, maxLevel, this._windowId)
     } catch (err) {
       // Critical: use the pre-interceptor console so a logging failure cannot
       // recurse through the console interceptor back into this same logger.
@@ -237,37 +260,43 @@ export class LogMainService implements ILoggerService {
     return Array.from(this._channels.values())
   }
 
-  createLogger(channel: ILogChannel): ILogger {
-    this._channels.set(channel.id, channel)
-    let logger = this._loggers.get(channel.id)
+  /** Directory holding a window's private renderer logs, or the session root for main. */
+  getWindowDir(windowId: number): string {
+    return join(this._sessionDir, `window-${windowId}`)
+  }
+
+  private _getLogger(channelId: string, windowId: number | undefined): FileLogger {
+    const key = windowId === undefined ? channelId : `${windowId}:${channelId}`
+    let logger = this._loggers.get(key)
     if (!logger) {
-      logger = new FileLogger(this._sessionDir, channel.id, this._level, this._fireAppend)
+      logger = new FileLogger(this._sessionDir, channelId, this._level, this._fireAppend, windowId)
       logger.setTimestampFormat(this._timestampFormat)
-      this._loggers.set(channel.id, logger)
+      this._loggers.set(key, logger)
     }
     return logger
+  }
+
+  createLogger(channel: ILogChannel): ILogger {
+    this._channels.set(channel.id, channel)
+    return this._getLogger(channel.id, undefined)
   }
 
   /**
    * Append a pre-formatted message to a channel using a caller-supplied
    * timestamp. Used by MainLogChannelService when forwarding renderer entries
    * so the recorded time reflects when the renderer fired, not when main
-   * received the IPC.
+   * received the IPC. `windowId` routes the entry to that window's private log
+   * directory and tags the append event so only that window's panel shows it.
    */
   appendToChannel(
     channel: ILogChannel,
     level: LogLevel,
     message: string,
     timestampMs: number,
+    windowId?: number,
   ): void {
     this._channels.set(channel.id, channel)
-    let logger = this._loggers.get(channel.id)
-    if (!logger) {
-      logger = new FileLogger(this._sessionDir, channel.id, this._level, this._fireAppend)
-      logger.setTimestampFormat(this._timestampFormat)
-      this._loggers.set(channel.id, logger)
-    }
-    logger.logWithTimestamp(level, message, timestampMs)
+    this._getLogger(channel.id, windowId).logWithTimestamp(level, message, timestampMs)
   }
 
   setLevel(level: LogLevel): void {
@@ -342,7 +371,16 @@ export class LogMainService implements ILoggerService {
     this._onDidAppendEntry.dispose()
   }
 
-  private readonly _fireAppend = (channelId: string, chunk: string, maxLevel: LogLevel): void => {
-    this._onDidAppendEntry.fire({ channelId, chunk, maxLevel })
+  private readonly _fireAppend = (
+    channelId: string,
+    chunk: string,
+    maxLevel: LogLevel,
+    windowId: number | undefined,
+  ): void => {
+    this._onDidAppendEntry.fire(
+      windowId === undefined
+        ? { channelId, chunk, maxLevel }
+        : { channelId, chunk, maxLevel, windowId },
+    )
   }
 }

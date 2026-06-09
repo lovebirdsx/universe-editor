@@ -91,7 +91,6 @@ function makeOpts() {
       textSearch: {} as never,
       fileWatcher: {} as never,
       recentWorkspaces: {} as never,
-      logFiles: {} as never,
       acpHost: {} as never,
       acpTerminal: {} as never,
       extensionHost: {} as never,

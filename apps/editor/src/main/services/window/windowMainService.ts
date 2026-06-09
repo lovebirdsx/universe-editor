@@ -27,6 +27,7 @@ import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleSer
 import { MainHostService } from '../host/hostMainService.js'
 import { MainWindowsService } from './windowsMainService.js'
 import { MainLogChannelService } from '../log/mainLogChannelService.js'
+import { LogFilesMainService } from '../log/logFilesMainService.js'
 import { type LogMainService } from '../log/logMainService.js'
 import { MainStorageService } from '../storage/storageMainService.js'
 import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
@@ -207,11 +208,13 @@ export class WindowMainService implements IWindowMainService {
         },
       ),
     )
-    const logChannel = new MainLogChannelService(logService)
+    const logChannel = new MainLogChannelService(logService, win.id)
+    const logFiles = new LogFilesMainService(logService, win.id)
     const terminal = disposables.add(new TerminalMainService(undefined, logService))
     const windowServices: WindowScopedServices = {
       host,
       logChannel,
+      logFiles,
       storage: windowStorage,
       workspace,
       userData,

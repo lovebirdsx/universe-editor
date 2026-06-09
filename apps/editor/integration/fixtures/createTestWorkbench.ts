@@ -44,7 +44,7 @@ export async function createTestWorkbench(): Promise<TestWorkbench> {
   vi.mocked(app.getPath).mockReturnValue(userDataDir)
 
   const logService = new LogMainService()
-  const logFiles = new LogFilesMainService(logService)
+  const logFiles = new LogFilesMainService(logService, 1)
   // Pass an explicit Storage to avoid the module-level singleton in storage.ts.
   // The GLOBAL backend is shared between MainStorageService (state.json) and the
   // recent-workspaces singleton, mirroring production wiring.

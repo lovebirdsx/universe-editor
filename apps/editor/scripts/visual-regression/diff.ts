@@ -48,7 +48,10 @@ async function readPng(path: string): Promise<PNG> {
     const stream = createReadStream(path)
     stream.on('error', reject)
     const png = new PNG()
-    stream.pipe(png).on('parsed', () => resolve(png)).on('error', reject)
+    stream
+      .pipe(png)
+      .on('parsed', () => resolve(png))
+      .on('error', reject)
   })
 }
 
@@ -97,7 +100,13 @@ async function run(): Promise<void> {
     )
     if (!exists) {
       console.warn(`  MISSING  ${file} — no current screenshot found`)
-      results.push({ name: file, diffPixels: 0, totalPixels: 0, diffFraction: 1, status: 'missing' })
+      results.push({
+        name: file,
+        diffPixels: 0,
+        totalPixels: 0,
+        diffFraction: 1,
+        status: 'missing',
+      })
       anyFailed = true
       continue
     }
@@ -110,7 +119,13 @@ async function run(): Promise<void> {
       console.warn(
         `  SIZE MISMATCH  ${file}: baseline ${width}×${height} vs current ${current.width}×${current.height}`,
       )
-      results.push({ name: file, diffPixels: -1, totalPixels: width * height, diffFraction: 1, status: 'fail' })
+      results.push({
+        name: file,
+        diffPixels: -1,
+        totalPixels: width * height,
+        diffFraction: 1,
+        status: 'fail',
+      })
       anyFailed = true
       continue
     }
@@ -142,7 +157,8 @@ async function run(): Promise<void> {
   console.log(`${'File'.padEnd(40)} ${'Diff px'.padStart(8)} ${'% diff'.padStart(8)}  Status`)
   console.log('─'.repeat(68))
   for (const r of results) {
-    const pct = r.totalPixels > 0 ? ((r.diffFraction * 100).toFixed(2) + '%').padStart(8) : '      N/A'
+    const pct =
+      r.totalPixels > 0 ? ((r.diffFraction * 100).toFixed(2) + '%').padStart(8) : '      N/A'
     const px = r.diffPixels >= 0 ? String(r.diffPixels).padStart(8) : '     N/A'
     const icon = r.status === 'pass' ? '✓' : '✗'
     console.log(`${r.name.padEnd(40)} ${px} ${pct}  ${icon} ${r.status.toUpperCase()}`)
