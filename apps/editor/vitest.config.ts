@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url'
 
 const monacoStub = fileURLToPath(new URL('./test-stubs/monaco-editor.ts', import.meta.url))
 const workerStub = fileURLToPath(new URL('./test-stubs/monaco-worker.ts', import.meta.url))
+const standaloneServicesStub = fileURLToPath(
+  new URL('./test-stubs/monaco-standalone-services.ts', import.meta.url),
+)
 
 export default defineConfig({
   test: {
@@ -22,6 +25,10 @@ export default defineConfig({
             {
               find: /^monaco-editor\/esm\/.+\?worker$/,
               replacement: workerStub,
+            },
+            {
+              find: 'monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js',
+              replacement: standaloneServicesStub,
             },
             { find: /^monaco-editor$/, replacement: monacoStub },
           ],

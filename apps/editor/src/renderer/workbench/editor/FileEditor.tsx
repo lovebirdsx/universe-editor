@@ -337,7 +337,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       scrollSub?.dispose()
       if (registeredEditor) FileEditorRegistry.unregister(fileInput, registeredEditor)
     }
-  }, [monacoNs, contextKeyService, fileInput, groupsService, group])
+  }, [monacoNs, contextKeyService, fileInput, groupsService, group, configService])
 
   useEffect(() => {
     if (activeGroup !== group) return

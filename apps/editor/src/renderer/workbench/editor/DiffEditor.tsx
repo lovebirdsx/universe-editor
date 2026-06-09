@@ -207,7 +207,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       originalModel.dispose()
       modifiedModel.dispose()
     }
-  }, [monacoNs, diffInput, group])
+  }, [monacoNs, diffInput, group, configService])
 
   // Refresh both sides in place when the input's content changes (e.g. the file
   // is reverted via SCM discard). The diffInput instance is mutated, so the

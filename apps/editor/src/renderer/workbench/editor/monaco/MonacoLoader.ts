@@ -138,6 +138,18 @@ async function loadMonaco(): Promise<typeof monaco> {
         },
       }
       _monaco = monacoMod
+      // Lock our override services (FileTextModelService / FileBulkEditService)
+      // in *before* anything resolves a standalone service. Monaco's
+      // StandaloneServices applies overrides only on first init, and the very
+      // first `StandaloneServices.get()` (which setTheme/createModel below would
+      // trigger) silently inits with an empty override set — permanently
+      // wedging Monaco's defaults. Without this, the references peek tree calls
+      // the standalone ITextModelService and throws "Model not found" for files
+      // the user hasn't opened. editor.create()'s own initialize(overrides) is
+      // then a no-op since init already happened, so we must do it here.
+      const { StandaloneServices } =
+        await import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js')
+      StandaloneServices.initialize(_overrideServices)
       registerLogLanguage(_monaco)
       // colorize() (markdown code blocks) and any render before the first
       // FileEditor rely on Monaco's global active theme. Align it with the

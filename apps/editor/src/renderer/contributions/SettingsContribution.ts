@@ -103,7 +103,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
           'editor.languageFonts': {
             type: 'object',
             default: {
-              markdown: { "fontFamily": "Inconsolata,'Microsoft YaHei UI'", "fontSize": 15 },
+              markdown: { fontFamily: "Inconsolata,'Microsoft YaHei UI'", fontSize: 15 },
             },
             additionalProperties: {
               type: 'object',
