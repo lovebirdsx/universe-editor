@@ -148,6 +148,11 @@ async function loadMonaco(): Promise<typeof monaco> {
         document.documentElement.dataset.theme === 'light' ? 'output-light' : 'output-dark'
       _monaco.editor.setTheme(workbenchTheme)
       disableLanguageDiagnostics()
+      // JSON 是唯一没有 basic-languages Monarch 语法的常见语言：它的着色 tokenizer 只在
+      // onLanguage('json')（创建 json model 时）通过 setupMode 注册，而 Markdown 内嵌代码块
+      // 走的是 onLanguageEncountered/getOrCreate，二者错配会导致 ```json 块不着色。
+      // 主动建一个 json model 触发 onLanguage，把 tokens provider 提前注册上。
+      monacoMod.editor.createModel('', 'json').dispose()
       // Drop monaco's built-in Ctrl+Shift+O (quickOutline) default key so it
       // doesn't double-fire alongside our own `workbench.action.gotoSymbol`,
       // which provides the Go to Symbol quick pick. The command itself stays
