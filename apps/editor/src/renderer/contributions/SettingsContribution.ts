@@ -100,6 +100,20 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
               'Controls the editor font family.',
             ),
           },
+          'editor.languageFonts': {
+            type: 'object',
+            default: {
+              markdown: { "fontFamily": "Inconsolata,'Microsoft YaHei UI'", "fontSize": 15 },
+            },
+            additionalProperties: {
+              type: 'object',
+              additionalProperties: false,
+            },
+            description: localize(
+              'settings.editor.languageFonts.description',
+              'Per-language font overrides. Keys are Monaco language ids (e.g. "markdown", "typescript"). Each value may have "fontFamily" (string) and/or "fontSize" (number).',
+            ),
+          },
           'editor.tabSize': {
             type: 'number',
             default: 4,

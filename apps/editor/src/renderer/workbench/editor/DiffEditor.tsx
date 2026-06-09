@@ -24,16 +24,26 @@ import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { DiffEditorToolbar } from './DiffEditorToolbar.js'
 import { diffModelUri } from './diffModelUri.js'
+import {
+  EDITOR_FONT_FAMILY_DEFAULT,
+  type LanguageFontsMap,
+  normalizeFontFamily,
+  resolveLanguageFonts,
+} from '../../services/configuration/fontDefaults.js'
 import styles from './DiffEditor.module.css'
 
-function getEditorFontSize(configService: IConfigurationService): number {
-  const fontSize = configService.get<number>('editor.fontSize')
-  return typeof fontSize === 'number' ? fontSize : 14
-}
-
-function getEditorFontFamily(configService: IConfigurationService): string {
-  const raw = configService.get<string>('editor.fontFamily')
-  return typeof raw === 'string' && raw.trim() ? raw : "'Fira Code', Consolas, monospace"
+function getEditorFontOptions(
+  configService: IConfigurationService,
+  languageId: string,
+): { fontFamily: string; fontSize: number } {
+  const raw = configService.get<number>('editor.fontSize')
+  const globalSize = typeof raw === 'number' ? raw : 14
+  const globalFamily = normalizeFontFamily(
+    configService.get('editor.fontFamily'),
+    EDITOR_FONT_FAMILY_DEFAULT,
+  )
+  const map = configService.getMerged<LanguageFontsMap>('editor.languageFonts') ?? {}
+  return resolveLanguageFonts(globalFamily, globalSize, map, languageId)
 }
 
 function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
@@ -54,6 +64,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
   const originalModelRef = useRef<monaco.editor.ITextModel | null>(null)
   const modifiedModelRef = useRef<monaco.editor.ITextModel | null>(null)
+  const diffLanguageRef = useRef<string>('plaintext')
   const [monacoNs, setMonacoNs] = useState<typeof monaco | null>(null)
 
   // Load Monaco on demand.
@@ -73,8 +84,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const ed = monacoNs.editor.createDiffEditor(containerRef.current, {
       theme: getEditorTheme(configService),
       automaticLayout: true,
-      fontSize: getEditorFontSize(configService),
-      fontFamily: getEditorFontFamily(configService),
+      ...getEditorFontOptions(configService, diffLanguageRef.current),
       wordWrap: getEditorWordWrap(configService),
       readOnly: true,
       originalEditable: false,
@@ -96,11 +106,17 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   useEffect(() => {
     const disposable = configService.onDidChangeConfiguration((e) => {
       const options: monaco.editor.IDiffEditorOptions = {}
-      if (e.affectsConfiguration('editor.fontSize')) {
-        options.fontSize = getEditorFontSize(configService)
-      }
-      if (e.affectsConfiguration('editor.fontFamily')) {
-        options.fontFamily = getEditorFontFamily(configService)
+      if (
+        e.affectsConfiguration('editor.fontSize') ||
+        e.affectsConfiguration('editor.fontFamily') ||
+        e.affectsConfiguration('editor.languageFonts')
+      ) {
+        const { fontFamily, fontSize } = getEditorFontOptions(
+          configService,
+          diffLanguageRef.current,
+        )
+        options.fontFamily = fontFamily
+        options.fontSize = fontSize
       }
       if (e.affectsConfiguration('editor.wordWrap')) {
         options.wordWrap = getEditorWordWrap(configService)
@@ -116,6 +132,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const ed = diffEditorRef.current
 
     const language = languageForResource(diffInput.originalUri)
+    diffLanguageRef.current = language
     const originalModel = monacoNs.editor.createModel(
       diffInput.originalContent,
       language,
@@ -127,6 +144,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       monacoNs.Uri.parse(diffModelUri(diffInput.originalUri, 'modified').toString()),
     )
     ed.setModel({ original: originalModel, modified: modifiedModel })
+    ed.updateOptions(getEditorFontOptions(configService, language))
     originalModelRef.current = originalModel
     modifiedModelRef.current = modifiedModel
     DiffEditorRegistry.register(diffInput, ed, group?.id)

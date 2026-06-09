@@ -198,6 +198,10 @@ class FakeConfigurationService {
     return { dispose: () => this._listeners.delete(listener) }
   }
 
+  getMerged<T = Record<string, unknown>>(key: string): T {
+    return (this._values[key] ?? {}) as T
+  }
+
   fire(...keys: string[]): void {
     for (const listener of this._listeners) {
       listener({
@@ -346,10 +350,12 @@ describe('FileEditor — auto-pin on first edit', () => {
     config.update('editor.fontFamily', "'JetBrains Mono', monospace", ConfigurationTarget.User)
     config.update('editor.wordWrap', true, ConfigurationTarget.User)
 
-    expect(monacoMockState.updateOptionsCalls).toContainEqual({ fontSize: 18 })
-    expect(monacoMockState.updateOptionsCalls).toContainEqual({
-      fontFamily: "'JetBrains Mono', monospace",
-    })
+    expect(monacoMockState.updateOptionsCalls).toContainEqual(
+      expect.objectContaining({ fontSize: 18 }),
+    )
+    expect(monacoMockState.updateOptionsCalls).toContainEqual(
+      expect.objectContaining({ fontFamily: "'JetBrains Mono', monospace" }),
+    )
     expect(monacoMockState.updateOptionsCalls).toContainEqual({ wordWrap: 'on' })
   })
 })

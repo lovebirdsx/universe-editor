@@ -36,17 +36,24 @@ import { focusStandaloneEditor, syncEditorFocusContext } from '../../services/ed
 import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
+  type LanguageFontsMap,
   normalizeFontFamily,
+  resolveLanguageFonts,
 } from '../../services/configuration/fontDefaults.js'
 import styles from './FileEditor.module.css'
 
-function getEditorFontSize(configService: IConfigurationService): number {
-  const fontSize = configService.get<number>('editor.fontSize')
-  return typeof fontSize === 'number' ? fontSize : 14
-}
-
-function getEditorFontFamily(configService: IConfigurationService): string {
-  return normalizeFontFamily(configService.get('editor.fontFamily'), EDITOR_FONT_FAMILY_DEFAULT)
+function getEditorFontOptions(
+  configService: IConfigurationService,
+  languageId: string,
+): { fontFamily: string; fontSize: number } {
+  const raw = configService.get<number>('editor.fontSize')
+  const globalSize = typeof raw === 'number' ? raw : 14
+  const globalFamily = normalizeFontFamily(
+    configService.get('editor.fontFamily'),
+    EDITOR_FONT_FAMILY_DEFAULT,
+  )
+  const map = configService.getMerged<LanguageFontsMap>('editor.languageFonts') ?? {}
+  return resolveLanguageFonts(globalFamily, globalSize, map, languageId)
 }
 
 function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
@@ -121,8 +128,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       {
         theme: getEditorTheme(configService),
         automaticLayout: true,
-        fontSize: getEditorFontSize(configService),
-        fontFamily: getEditorFontFamily(configService),
+        ...getEditorFontOptions(configService, fileInput.language),
         wordWrap: getEditorWordWrap(configService),
         minimap: { enabled: minimapEnabled },
         scrollBeyondLastLine: false,
@@ -226,11 +232,17 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     const disposable = markAsSingleton(
       configService.onDidChangeConfiguration((e) => {
         const options: monaco.editor.IEditorOptions = {}
-        if (e.affectsConfiguration('editor.fontSize')) {
-          options.fontSize = getEditorFontSize(configService)
-        }
-        if (e.affectsConfiguration('editor.fontFamily')) {
-          options.fontFamily = getEditorFontFamily(configService)
+        if (
+          e.affectsConfiguration('editor.fontSize') ||
+          e.affectsConfiguration('editor.fontFamily') ||
+          e.affectsConfiguration('editor.languageFonts')
+        ) {
+          const { fontFamily, fontSize } = getEditorFontOptions(
+            configService,
+            fileInputRef.current.language,
+          )
+          options.fontFamily = fontFamily
+          options.fontSize = fontSize
         }
         if (e.affectsConfiguration('editor.wordWrap')) {
           options.wordWrap = getEditorWordWrap(configService)
@@ -275,7 +287,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       editorRef.current?.setModel(model)
       // The editor instance is reused across tabs; keep readOnly in sync with
       // the current input (the create-effect only set it for the first input).
-      editorRef.current?.updateOptions({ readOnly: fileInput.isReadonly })
+      editorRef.current?.updateOptions({
+        readOnly: fileInput.isReadonly,
+        ...getEditorFontOptions(configService, fileInput.language),
+      })
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.

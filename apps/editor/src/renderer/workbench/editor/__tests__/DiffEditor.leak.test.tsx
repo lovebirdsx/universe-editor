@@ -105,6 +105,10 @@ class CountingConfigService {
       },
     }
   }
+
+  getMerged<T = Record<string, unknown>>(_key: string): T {
+    return {} as T
+  }
 }
 
 function createInstantiationService(config: CountingConfigService): InstantiationService {

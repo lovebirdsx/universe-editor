@@ -16,3 +16,26 @@ export function normalizeFontFamily(value: unknown, fallback: string): string {
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : fallback
 }
+
+export interface ILanguageFontOverride {
+  fontFamily?: string
+  fontSize?: number
+}
+
+export type LanguageFontsMap = Record<string, ILanguageFontOverride>
+
+export function resolveLanguageFonts(
+  globalFamily: string,
+  globalSize: number,
+  map: LanguageFontsMap,
+  languageId: string,
+): { fontFamily: string; fontSize: number } {
+  const override = map[languageId]
+  return {
+    fontFamily: normalizeFontFamily(override?.fontFamily, globalFamily),
+    fontSize:
+      typeof override?.fontSize === 'number' && override.fontSize > 0
+        ? override.fontSize
+        : globalSize,
+  }
+}

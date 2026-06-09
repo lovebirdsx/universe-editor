@@ -167,6 +167,10 @@ class FakeConfigurationService {
   onDidChangeConfiguration(_listener: (e: IConfigurationChangeEvent) => void) {
     return { dispose() {} }
   }
+
+  getMerged<T = Record<string, unknown>>(_key: string): T {
+    return {} as T
+  }
 }
 
 class FakeGroup {
