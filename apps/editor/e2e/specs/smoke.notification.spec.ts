@@ -24,7 +24,14 @@ test.describe('@p0 notification service', () => {
 
     // 3. Toast auto-reads after 3 s and disappears. Poll instead of a fixed
     //    sleep so a slightly delayed renderer timer can't race the assertion.
-    await expect(workbench.page.locator('[data-testid="notification-toast-item"]')).toHaveCount(0, {
+    //    Filter by text so a transient background toast (e.g. an extension host
+    //    crash/restart warning that CI occasionally emits) can't keep the global
+    //    count above 0 and flake this assertion.
+    await expect(
+      workbench.page
+        .locator('[data-testid="notification-toast-item"]')
+        .filter({ hasText: 'This is a test notification.' }),
+    ).toHaveCount(0, {
       timeout: 8_000,
     })
 

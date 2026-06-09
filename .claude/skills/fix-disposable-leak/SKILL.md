@@ -1,7 +1,7 @@
 ---
 name: fix-disposable-leak
 description: 诊断并修复本仓库（VSCode 范式内核）的 Disposable 内存泄漏。当用户提到“内存泄漏 / memory leak / 未释放的 Disposable / Disposable leak(s) detected / DisposableTracker 报告了泄漏”，或贴出带 `trackDisposable` / `lifecycle.ts` / `computeLeakingDisposables` 的泄漏堆栈时使用。聚焦通用排查与修复流程；具体哪个类泄漏由 agent 当场判断。
-version: 1.0.0
+disable-model-invocation: true
 ---
 
 # 修复 Disposable 内存泄漏
@@ -73,3 +73,7 @@ pnpm --filter @universe-editor/editor lint
 4. 根服务在单例下不被报——所以“没被报”不代表“被释放”。
 5. 堆栈路径/行号要对上当前 checkout，否则在改一份没运行的代码。
 6. 横向对比同类创建路径，漏 `_register` 的那条就是 bug。
+
+## 其它
+
+- 后续用skill，发现有新的经验，可以自动更新本SKILL.md
