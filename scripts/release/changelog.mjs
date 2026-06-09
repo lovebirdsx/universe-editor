@@ -6,9 +6,9 @@
  *  Each git tag `vX.Y.Z` is one released version; commits in `<prevTag>..<tag>`
  *  are collected and grouped by Conventional-Commit type. Pass
  *  `--pending-version X.Y.Z` before creating the tag to prepend notes for the
- *  unreleased `<latestTag>..HEAD` range. Only user-facing types (feat/fix/perf/security)
- *  are included by default; any other type may opt in by marking the commit
- *  breaking with `!` (e.g. `refactor(core)!: …`). See docs/development/git-commit-msg-rule.md.
+ *  unreleased `<latestTag>..HEAD` range. Only commits marked with `!`
+ *  (e.g. `feat!: …` or `fix(scope)!: …`) are included; commits without `!`
+ *  are always excluded regardless of type.
  *
  *  Zero deps — Node built-ins + system git only (matches upload.mjs).
  *--------------------------------------------------------------------------------------------*/
@@ -22,9 +22,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '../..')
 const OUT_FILE = resolve(REPO_ROOT, 'apps/editor/resources/release-notes.json')
 
-/** Types shown in release notes by default (others need a `!` breaking marker). */
-const DEFAULT_TYPES = new Set(['feat', 'fix', 'perf', 'security'])
-/** Group order + localized headings. Non-default breaking commits land in `other`. */
+/** Known types used for grouping; `!` commits of other types land in `other`. */
+const KNOWN_TYPES = new Set(['feat', 'fix', 'perf', 'security'])
+/** Group order + localized headings. */
 const GROUP_ORDER = [
   ['feat', '新功能'],
   ['fix', 'Bug 修复'],
@@ -34,18 +34,15 @@ const GROUP_ORDER = [
 ]
 
 /**
- * Parse a commit subject. Returns `{ type, group, breaking, summary }` when the
- * commit qualifies for release notes, or `null` when it doesn't (wrong format or
- * an excluded type without `!`).
+ * Parse a commit subject. Returns `{ type, group, summary }` when the
+ * commit qualifies for release notes (must have `!`), or `null` otherwise.
  */
 export function parseCommit(subject) {
-  const m = /^(\w+)(?:\([^)]*\))?(!)?:\s*(.+)$/.exec(subject.trim())
+  const m = /^(\w+)(?:\([^)]*\))?!:\s*(.+)$/.exec(subject.trim())
   if (!m) return null
-  const [, type, bang, summary] = m
-  const breaking = bang === '!'
-  if (!DEFAULT_TYPES.has(type) && !breaking) return null
-  const group = DEFAULT_TYPES.has(type) ? type : 'other'
-  return { type, group, breaking, summary: summary.trim() }
+  const [, type, summary] = m
+  const group = KNOWN_TYPES.has(type) ? type : 'other'
+  return { type, group, summary: summary.trim() }
 }
 
 /** Build the `groups` array for one version from its commit subjects. */
