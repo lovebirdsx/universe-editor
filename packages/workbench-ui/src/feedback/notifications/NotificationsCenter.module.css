@@ -149,14 +149,14 @@
 
 .progressBar {
   height: 100%;
-  background: #007acc;
+  background: var(--color-accent);
   animation: indeterminate 1.4s ease infinite;
   transform-origin: left;
 }
 
 .progressBarDeterminate {
   height: 100%;
-  background: #007acc;
+  background: var(--color-accent);
   width: 0;
   transition: width 120ms ease-out;
 }

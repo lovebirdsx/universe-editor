@@ -159,6 +159,29 @@ html, body, #root {
   --color-search-match-bg: rgba(229, 192, 123, 0.35);
   --color-warning-bg: rgba(229, 192, 123, 0.12);
   --color-warning-border: rgba(229, 192, 123, 0.3);
+
+  /* Dialog / Notification */
+  --color-dialog-bg: #252526;
+  --color-dialog-fg: #cccccc;
+  --color-dialog-border: #454545;
+  --color-dialog-detail-fg: #aaaaaa;
+
+  /* Secondary button */
+  --color-button-secondary-bg: #3a3d41;
+  --color-button-secondary-fg: #cccccc;
+  --color-button-secondary-border: #3a3d41;
+  --color-button-secondary-hover-bg: #45494e;
+
+  /* Context menu */
+  --workbench-menu-bg: #252526;
+  --workbench-menu-border: #454545;
+  --workbench-menu-fg: #cccccc;
+  --workbench-menu-hover-bg: #094771;
+  --workbench-menu-separator: #3c3c3c;
+
+  /* Generic hover / subtle border */
+  --color-hover: rgba(255, 255, 255, 0.08);
+  --color-border-subtle: rgba(255, 255, 255, 0.06);
 }
 
 :root[data-theme='light'] {
@@ -284,6 +307,29 @@ html, body, #root {
   --color-search-match-bg: rgba(234, 134, 0, 0.28);
   --color-warning-bg: rgba(154, 103, 0, 0.12);
   --color-warning-border: rgba(154, 103, 0, 0.35);
+
+  /* Dialog / Notification */
+  --color-dialog-bg: #ffffff;
+  --color-dialog-fg: #24262b;
+  --color-dialog-border: #c7cbd3;
+  --color-dialog-detail-fg: #666b76;
+
+  /* Secondary button */
+  --color-button-secondary-bg: #e8e9ec;
+  --color-button-secondary-fg: #24262b;
+  --color-button-secondary-border: #c7cbd3;
+  --color-button-secondary-hover-bg: #dde0e5;
+
+  /* Context menu */
+  --workbench-menu-bg: #ffffff;
+  --workbench-menu-border: #c7cbd3;
+  --workbench-menu-fg: #24262b;
+  --workbench-menu-hover-bg: #e8f2ff;
+  --workbench-menu-separator: #d6d8de;
+
+  /* Generic hover / subtle border */
+  --color-hover: rgba(0, 0, 0, 0.06);
+  --color-border-subtle: rgba(0, 0, 0, 0.06);
 }
 
 /* Scrollbar */
