@@ -191,4 +191,10 @@ export const EN_US_MESSAGES: MessageMap = {
   'window.untitled': 'Untitled (Window {id})',
   'workspace.recent.opened': 'Opened',
   'workspace.recent.openedSuffix': ' (Opened)',
+  'command.category.diffEditor': 'Diff Editor',
+  'action.diffEditor.nextChange.title': 'Go to Next Difference',
+  'action.diffEditor.previousChange.title': 'Go to Previous Difference',
+  'diffEditor.openFile': 'Open File ({key})',
+  'diffEditor.previousChange': 'Previous Change ({key})',
+  'diffEditor.nextChange': 'Next Change ({key})',
 } as const

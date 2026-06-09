@@ -187,4 +187,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'window.untitled': '未命名（窗口 {id}）',
   'workspace.recent.opened': '已打开',
   'workspace.recent.openedSuffix': '（已打开）',
+  'command.category.diffEditor': '差异编辑器',
+  'action.diffEditor.nextChange.title': '转到下一处更改',
+  'action.diffEditor.previousChange.title': '转到上一处更改',
+  'diffEditor.openFile': '打开文件 ({key})',
+  'diffEditor.previousChange': '上一处更改 ({key})',
+  'diffEditor.nextChange': '下一处更改 ({key})',
 } as const

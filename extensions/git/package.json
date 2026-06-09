@@ -36,6 +36,7 @@
       { "command": "git.rebase", "title": "Rebase Branch...", "category": "Git", "icon": "merge" },
       { "command": "git.publishBranch", "title": "Publish Branch", "category": "Git", "icon": "push" },
       { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
+      { "command": "git.openFile", "title": "Open File", "category": "Git" },
       { "command": "git.pull", "title": "Pull", "category": "Git", "icon": "pull" },
       { "command": "git.pullRebase", "title": "Pull (Rebase)", "category": "Git", "icon": "pull" },
       { "command": "git.pullAutostash", "title": "Pull (Autostash)", "category": "Git", "icon": "pull" },
@@ -155,6 +156,16 @@
       {
         "command": "git.refresh",
         "key": "ctrl+alt+g"
+      },
+      {
+        "command": "git.openChange",
+        "key": "shift+alt+y",
+        "when": "!isInDiffEditor"
+      },
+      {
+        "command": "git.openFile",
+        "key": "shift+alt+y",
+        "when": "isInDiffEditor"
       }
     ],
     "configuration": {

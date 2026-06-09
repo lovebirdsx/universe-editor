@@ -308,17 +308,31 @@ export async function activate(context: ExtensionContext): Promise<void> {
       return getBlame(repo.root, path, { ignoreWhitespace }, log)
     }),
 
-    commands.registerCommand('git.openChange', (...args: unknown[]) => {
+    commands.registerCommand('git.openChange', async (...args: unknown[]) => {
       const [arg, options] = args as [
         unknown,
         ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
       ]
-      const path = resourcePath(arg)
+      let path = resourcePath(arg)
+      let repoArg: unknown = arg
+      // Invoked without a SCM resource (keybinding / toolbar): fall back to the
+      // active editor's file, which the host surfaces via this internal command.
+      if (!path) {
+        path = await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile')
+        repoArg = path ? { resourceUri: path } : undefined
+      }
       return path
         ? mgr
-            .resolveRepo(arg)
+            .resolveRepo(repoArg)
             ?.openChange(path, options?.pinned ?? false, options?.preserveFocus ?? false)
         : undefined
+    }),
+
+    commands.registerCommand('git.openFile', async (...args: unknown[]) => {
+      const path =
+        resourcePath(args[0]) ??
+        (await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile'))
+      if (path) await commands.executeCommand('_workbench.openFile', path)
     }),
   )
 }

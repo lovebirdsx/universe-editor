@@ -1,5 +1,5 @@
-import { ArrowDown, ArrowUp } from 'lucide-react'
-import { ICommandService } from '@universe-editor/platform'
+import { ArrowDown, ArrowUp, FileText } from 'lucide-react'
+import { ICommandService, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import styles from './DiffEditorToolbar.module.css'
 
@@ -11,7 +11,17 @@ export function DiffEditorToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title="上一处更改 (Shift+Alt+F5)"
+        title={localize('diffEditor.openFile', 'Open File ({key})', { key: 'Shift+Alt+Y' })}
+        onClick={() => void commandService.executeCommand('git.openFile')}
+      >
+        <FileText size={14} />
+      </button>
+      <button
+        type="button"
+        className={styles['iconBtn']}
+        title={localize('diffEditor.previousChange', 'Previous Change ({key})', {
+          key: 'Shift+Alt+F5',
+        })}
         onClick={() =>
           void commandService.executeCommand('workbench.action.compareEditor.previousChange')
         }
@@ -21,7 +31,7 @@ export function DiffEditorToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title="下一处更改 (Alt+F5)"
+        title={localize('diffEditor.nextChange', 'Next Change ({key})', { key: 'Alt+F5' })}
         onClick={() =>
           void commandService.executeCommand('workbench.action.compareEditor.nextChange')
         }
