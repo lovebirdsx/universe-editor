@@ -136,6 +136,14 @@ async function loadMonaco(): Promise<typeof monaco> {
       }
       _monaco = monacoMod
       registerLogLanguage(_monaco)
+      // colorize() (markdown code blocks) and any render before the first
+      // FileEditor rely on Monaco's global active theme. Align it with the
+      // workbench theme the moment Monaco loads — ThemeContribution's startup
+      // setTheme runs before Monaco exists, so without this the global theme
+      // stays at standalone's default `vs` (light) until a FileEditor is opened.
+      const workbenchTheme =
+        document.documentElement.dataset.theme === 'light' ? 'output-light' : 'output-dark'
+      _monaco.editor.setTheme(workbenchTheme)
       disableLanguageDiagnostics()
       // Drop monaco's built-in Ctrl+Shift+O (quickOutline) default key so it
       // doesn't double-fire alongside our own `workbench.action.gotoSymbol`,
