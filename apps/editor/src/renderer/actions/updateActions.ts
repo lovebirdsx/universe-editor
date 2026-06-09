@@ -7,6 +7,7 @@
 import {
   Action2,
   INotificationService,
+  MenuId,
   Severity,
   localize,
   type ServicesAccessor,
@@ -20,6 +21,7 @@ export class CheckForUpdatesAction extends Action2 {
       id: CheckForUpdatesAction.ID,
       title: localize('update.check', 'Check for Updates'),
       category: localize('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: 'm_updates', order: 1 },
       f1: true,
     })
   }
