@@ -227,11 +227,17 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         }
         const mySeq = ++seq
         picker.busy = true
-        void ts.provideWorkspaceSymbols(query).then((symbols) => {
-          if (didResolve || mySeq !== seq) return
-          picker.busy = false
-          render(mdSymbols, workspaceSymbolsToEntries(symbols, monacoNs), query)
-        })
+        void ts
+          .provideWorkspaceSymbols(query)
+          .then((symbols) => {
+            if (didResolve || mySeq !== seq) return
+            picker.busy = false
+            render(mdSymbols, workspaceSymbolsToEntries(symbols, monacoNs), query)
+          })
+          .catch(() => {
+            if (didResolve || mySeq !== seq) return
+            picker.busy = false
+          })
         // Show markdown immediately while the TS query is in flight.
         render(mdSymbols, [], query)
       }

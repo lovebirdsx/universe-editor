@@ -474,7 +474,14 @@ export class TypescriptLanguageClientService
     query: string,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null> {
     const conn = await this._ready()
-    return conn.sendRequest('workspace/symbol', { query })
+    try {
+      return await conn.sendRequest('workspace/symbol', { query })
+    } catch (err) {
+      // tsserver throws "No Project" for navto until a TS/JS file has been opened
+      // (projects are created lazily). Degrade to no results instead of surfacing.
+      this._logger.debug(`workspace/symbol failed: ${(err as Error).message}`)
+      return null
+    }
   }
 
   async provideRenameEdits(
