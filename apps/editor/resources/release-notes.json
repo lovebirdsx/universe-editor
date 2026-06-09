@@ -1,5 +1,47 @@
 [
   {
+    "version": "0.1.11",
+    "date": "2026-06-09",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "加入右键菜单，支持拷贝消息和针对session相关操作",
+          "初步加入ts/js语言服务支持",
+          "terminal和output加入设定字体功能",
+          "优化outline的体验",
+          "Session默认会展开Plan",
+          "Explorer右上角加入快捷操作按钮",
+          "文件的右键菜单加入拷贝路径和名字的支持",
+          "Session界面支持设定字体大小和种类"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复发布版打开 TS 文件时的 ERRSTREAMDESTROYED 崩溃",
+          "修复e2e报错",
+          "修复ts没有启动时，跳转symbol的报错",
+          "修复内存泄漏",
+          "修复内存泄漏",
+          "修正plan字体没有跟随设定变化的bug",
+          "修复test报错",
+          "修复light主题的表现",
+          "修复ci偶发的e2e失败"
+        ]
+      },
+      {
+        "type": "other",
+        "title": "其他变更",
+        "items": [
+          "优化dev启动逻辑，确保vendor都已编译ok"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.10",
     "date": "2026-06-08",
     "groups": [
