@@ -4,17 +4,20 @@
  *  Generate apps/editor/resources/release-notes.json from git history.
  *
  *  Each git tag `vX.Y.Z` is one released version; commits in `<prevTag>..<tag>`
- *  are collected and grouped by Conventional-Commit type. Pass
- *  `--pending-version X.Y.Z` before creating the tag to prepend notes for the
- *  unreleased `<latestTag>..HEAD` range. Only commits marked with `!`
+ *  are collected and grouped by Conventional-Commit type. Only commits marked with `!`
  *  (e.g. `feat!: …` or `fix(scope)!: …`) are included; commits without `!`
  *  are always excluded regardless of type.
+ *
+ *  Two modes:
+ *    --version X.Y.Z   Incremental: recompute only that version and merge into existing JSON.
+ *                      If the tag exists, uses prevTag..tag; otherwise uses lastTag..HEAD.
+ *    (no args)         Full rebuild: regenerate all versions from scratch.
  *
  *  Zero deps — Node built-ins + system git only (matches upload.mjs).
  *--------------------------------------------------------------------------------------------*/
 
 import { execFileSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, realpathSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync, realpathSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -89,36 +92,46 @@ function parseArgs(argv) {
   const out = {}
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
-    if (a === '--pending-version') {
+    if (a === '--version') {
       const next = argv[i + 1]
-      if (!next || next.startsWith('--')) throw new Error('缺少 --pending-version 的版本号')
-      out.pendingVersion = next
+      if (!next || next.startsWith('--')) throw new Error('缺少 --version 的版本号')
+      out.version = next
       i++
     }
   }
   return out
 }
 
+function computeVersionEntry(version, tags) {
+  const tag = `v${version}`
+  const idx = tags.indexOf(tag)
+  if (idx >= 0) {
+    const prev = idx > 0 ? tags[idx - 1] : ''
+    return { version, date: tagDate(tag), groups: buildGroups(commitSubjects(prev, tag)) }
+  }
+  const lastTag = tags.at(-1) ?? ''
+  return { version, date: today(), groups: buildGroups(commitSubjects(lastTag, 'HEAD')) }
+}
+
 export function generateNotes(options = {}) {
-  const { pendingVersion } = options
   const tags = listTags()
+  if (options.version) {
+    let notes = []
+    try {
+      notes = JSON.parse(readFileSync(OUT_FILE, 'utf8'))
+    } catch {}
+    const entry = computeVersionEntry(options.version, tags)
+    const idx = notes.findIndex((n) => n.version === options.version)
+    if (idx >= 0) notes[idx] = entry
+    else notes.unshift(entry)
+    return notes
+  }
   const notes = tags.map((tag, i) => ({
     version: tag.replace(/^v/, ''),
     date: tagDate(tag),
     groups: buildGroups(commitSubjects(i > 0 ? tags[i - 1] : '', tag)),
   }))
-  if (pendingVersion) {
-    const pendingTag = `v${pendingVersion}`
-    if (!tags.includes(pendingTag)) {
-      const lastTag = tags.at(-1) ?? ''
-      notes.push({
-        version: pendingVersion,
-        date: today(),
-        groups: buildGroups(commitSubjects(lastTag, 'HEAD')),
-      })
-    }
-  }
-  notes.reverse() // newest first
+  notes.reverse()
   return notes
 }
 

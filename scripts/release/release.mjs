@@ -285,7 +285,7 @@ function updateEditorVersion(version, dryRun) {
 }
 
 function generateReleaseNotes(version, dryRun) {
-  run(process.execPath, ['scripts/release/changelog.mjs', '--pending-version', version], { dryRun })
+  run(process.execPath, ['scripts/release/changelog.mjs', '--version', version], { dryRun })
   if (dryRun) return
   const top = releaseNotesTopVersion()
   if (top !== version) die(`release-notes.json 顶部版本是 ${top || '(空)'}，期望 ${version}`)
