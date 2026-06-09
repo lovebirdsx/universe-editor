@@ -5,7 +5,7 @@
  *   - activityBarVisible / sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
  *   - activeEditorLanguageId                                     (active file language id)
- *   - isInDiffEditor                                             (active editor is a diff)
+ *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
@@ -73,6 +73,10 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     const hasActiveEditor = contextKeyService.createKey<boolean>('hasActiveEditor', false)
     const activeEditorLanguageId = contextKeyService.createKey<string>('activeEditorLanguageId', '')
     const isInDiffEditor = contextKeyService.createKey<boolean>('isInDiffEditor', false)
+    const textCompareEditorVisible = contextKeyService.createKey<boolean>(
+      'textCompareEditorVisible',
+      false,
+    )
     this._register(
       autorun((reader) => {
         const editor = editorService.activeEditor.read(reader)
@@ -84,7 +88,9 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
           hasActiveEditor.set(false)
         }
         activeEditorLanguageId.set(editor instanceof FileEditorInput ? editor.language : '')
-        isInDiffEditor.set(editor instanceof DiffEditorInput)
+        const isDiff = editor instanceof DiffEditorInput
+        isInDiffEditor.set(isDiff)
+        textCompareEditorVisible.set(isDiff)
       }),
     )
 
