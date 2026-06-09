@@ -12,7 +12,6 @@ describe('ApplicationServices type', () => {
       fileSystem: {} as ApplicationServices['fileSystem'],
       fileSearch: {} as ApplicationServices['fileSearch'],
       textSearch: {} as ApplicationServices['textSearch'],
-      fileWatcher: {} as ApplicationServices['fileWatcher'],
       recentWorkspaces: {} as ApplicationServices['recentWorkspaces'],
       acpHost: {} as ApplicationServices['acpHost'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
@@ -26,7 +25,7 @@ describe('ApplicationServices type', () => {
       performance: {} as ApplicationServices['performance'],
       sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],
     }
-    expect(Object.keys(svc)).toHaveLength(17)
+    expect(Object.keys(svc)).toHaveLength(16)
   })
 })
 
@@ -40,8 +39,9 @@ describe('WindowScopedServices type', () => {
       workspace: {} as WindowScopedServices['workspace'],
       userData: {} as WindowScopedServices['userData'],
       terminal: {} as WindowScopedServices['terminal'],
+      fileWatcher: {} as WindowScopedServices['fileWatcher'],
     }
-    expect(Object.keys(svc)).toHaveLength(7)
+    expect(Object.keys(svc)).toHaveLength(8)
   })
 })
 
@@ -54,10 +54,9 @@ describe('service layer separation', () => {
       'fileSystem',
       'fileSearch',
       'textSearch',
-      'fileWatcher',
       'recentWorkspaces',
     ]
-    expect(appKeys).toHaveLength(6)
+    expect(appKeys).toHaveLength(5)
   })
 
   it('WindowScopedServices holds the per-window workspace stack', () => {
@@ -69,7 +68,8 @@ describe('service layer separation', () => {
       'workspace',
       'userData',
       'terminal',
+      'fileWatcher',
     ]
-    expect(windowKeys).toHaveLength(7)
+    expect(windowKeys).toHaveLength(8)
   })
 })

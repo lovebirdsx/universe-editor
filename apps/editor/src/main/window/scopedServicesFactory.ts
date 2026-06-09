@@ -41,7 +41,6 @@ export interface ApplicationServices {
   readonly fileSystem: IFileService
   readonly fileSearch: IFileSearchService
   readonly textSearch: ITextSearchMainService
-  readonly fileWatcher: IFileWatcherService
   readonly recentWorkspaces: RecentWorkspacesMainService
   readonly acpHost: IAcpHostService
   readonly extensionHost: IExtensionHostService
@@ -65,6 +64,8 @@ export interface ApplicationServices {
  * WindowMainService. `storage` / `workspace` / `userData` are per-window so
  * opening a folder in one window does not affect others; their GLOBAL state
  * (state.json, recent list) is still shared via the app-singleton backends.
+ * `fileWatcher` is per-window too: it watches the window's own workspace root,
+ * so a shared singleton would let one window's watch() tear down another's.
  */
 export interface WindowScopedServices {
   readonly host: IHostServiceWire
@@ -74,4 +75,5 @@ export interface WindowScopedServices {
   readonly workspace: IWorkspaceServiceWire
   readonly userData: IUserDataFilesService
   readonly terminal: ITerminalService
+  readonly fileWatcher: IFileWatcherService
 }

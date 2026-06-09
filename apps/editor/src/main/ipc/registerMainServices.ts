@@ -50,7 +50,7 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.FileSystem, ProxyChannel.fromService(app.fileSystem))
   server.registerChannel(ServiceChannels.FileSearch, ProxyChannel.fromService(app.fileSearch))
   server.registerChannel(ServiceChannels.TextSearch, ProxyChannel.fromService(app.textSearch))
-  server.registerChannel(ServiceChannels.FileWatcher, ProxyChannel.fromService(app.fileWatcher))
+  server.registerChannel(ServiceChannels.FileWatcher, ProxyChannel.fromService(window.fileWatcher))
   server.registerChannel(ServiceChannels.Workspace, ProxyChannel.fromService(window.workspace))
   server.registerChannel(ServiceChannels.UserData, ProxyChannel.fromService(window.userData))
   server.registerChannel(ServiceChannels.Terminal, ProxyChannel.fromService(window.terminal))

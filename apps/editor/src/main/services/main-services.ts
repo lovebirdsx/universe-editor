@@ -14,7 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { registerSingleton, SyncDescriptor } from '@universe-editor/platform'
-import { IFileService, IFileWatcherService } from '@universe-editor/platform'
+import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
@@ -35,7 +35,6 @@ import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
 import { FileSearchMainService } from './fileSearch/fileSearchMainService.js'
 import { TextSearchMainService } from './textSearch/textSearchMainService.js'
-import { FileWatcherMainService } from './fileWatcher/fileWatcherMainService.js'
 import {
   IRecentWorkspacesService,
   RecentWorkspacesMainService,
@@ -69,10 +68,6 @@ registerSingleton(
 registerSingleton(
   ITextSearchMainService,
   new SyncDescriptor<ITextSearchMainService>(TextSearchMainService, [], false),
-)
-registerSingleton(
-  IFileWatcherService,
-  new SyncDescriptor<IFileWatcherService>(FileWatcherMainService, [], false),
 )
 registerSingleton(
   IRecentWorkspacesService,

@@ -13,7 +13,6 @@ import {
   ILoggerService,
   IFileSearchService,
   IFileService,
-  IFileWatcherService,
   mark,
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
@@ -190,7 +189,6 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       fileSystem: accessor.get(IFileService),
       fileSearch: accessor.get(IFileSearchService),
       textSearch: accessor.get(ITextSearchMainService),
-      fileWatcher: accessor.get(IFileWatcherService),
       recentWorkspaces: accessor.get(IRecentWorkspacesService),
       acpHost: accessor.get(IAcpHostService),
       extensionHost: accessor.get(IExtensionHostService),

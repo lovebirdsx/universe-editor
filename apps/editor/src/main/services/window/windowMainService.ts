@@ -33,6 +33,7 @@ import { MainStorageService } from '../storage/storageMainService.js'
 import { WorkspaceMainService } from '../workspace/workspaceMainService.js'
 import { UserDataMainService } from '../userData/userDataMainService.js'
 import { TerminalMainService } from '../terminal/terminalMainService.js'
+import { FileWatcherMainService } from '../fileWatcher/fileWatcherMainService.js'
 import { ElectronFolderDialog } from '../workspace/electronFolderDialog.js'
 import {
   applyWindowState,
@@ -211,6 +212,7 @@ export class WindowMainService implements IWindowMainService {
     const logChannel = new MainLogChannelService(logService, win.id)
     const logFiles = new LogFilesMainService(logService, win.id)
     const terminal = disposables.add(new TerminalMainService(undefined, logService))
+    const fileWatcher = disposables.add(new FileWatcherMainService(logService))
     const windowServices: WindowScopedServices = {
       host,
       logChannel,
@@ -219,6 +221,7 @@ export class WindowMainService implements IWindowMainService {
       workspace,
       userData,
       terminal,
+      fileWatcher,
     }
 
     const windowsService = disposables.add(new MainWindowsService(this, isFirstWindow))
