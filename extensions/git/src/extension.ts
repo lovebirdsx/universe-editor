@@ -26,6 +26,7 @@ import {
   type GitGraphFileDiffRequest,
 } from './gitGraphSource.js'
 import * as gga from './gitGraphActions.js'
+import { getBlame } from './blameSource.js'
 
 function resourcePath(arg: unknown): string | undefined {
   return (arg as { resourceUri?: string } | undefined)?.resourceUri
@@ -298,6 +299,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git-graph.stashDrop', (...a: unknown[]) =>
       finishOp('stash drop', gga.stashDrop(gitGraphRoot, a[0] as string, log)),
     ),
+
+    commands.registerCommand('git.getBlame', (...args: unknown[]) => {
+      const path = args[0] as string
+      const ignoreWhitespace = args[1] === true
+      const repo = mgr.resolveRepo({ resourceUri: path })
+      if (!repo || !path) return null
+      return getBlame(repo.root, path, { ignoreWhitespace }, log)
+    }),
 
     commands.registerCommand('git.openChange', (...args: unknown[]) => {
       const [arg, options] = args as [

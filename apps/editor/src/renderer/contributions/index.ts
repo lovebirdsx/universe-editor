@@ -21,6 +21,7 @@ import { AcpInitContribution } from './AcpInitContribution.js'
 import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
 import { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
+import { GitBlameContribution } from './GitBlameContribution.js'
 import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
 import { WorkspaceRecentMenuContribution } from './WorkspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from './WorkspaceRestoreContribution.js'
@@ -198,6 +199,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.fileEditorStatus',
   FileEditorStatusContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Inline git blame on the cursor line + status-bar entry + hover. AfterRestore so
+// the editor area, status bar and Monaco are live; blame data is fetched lazily
+// from the `git` extension's contributed command once it activates.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.gitBlame',
+  GitBlameContribution,
   WorkbenchPhase.AfterRestore,
 )
 

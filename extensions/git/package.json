@@ -55,7 +55,9 @@
       { "command": "git.createTag", "title": "Create Tag...", "category": "Git", "icon": "tag" },
       { "command": "git.deleteTag", "title": "Delete Tag...", "category": "Git", "icon": "tag" },
       { "command": "git.submoduleUpdateInit", "title": "Update Submodules", "category": "Git", "icon": "git-submodule" },
-      { "command": "git.submoduleSync", "title": "Sync Submodule URLs", "category": "Git", "icon": "git-submodule" }
+      { "command": "git.submoduleSync", "title": "Sync Submodule URLs", "category": "Git", "icon": "git-submodule" },
+      { "command": "git.blame.toggleEditorDecoration", "title": "Toggle Git Blame Editor Decoration", "category": "Git" },
+      { "command": "git.blame.toggleStatusBarItem", "title": "Toggle Git Blame Status Bar Item", "category": "Git" }
     ],
     "submenus": [
       { "id": "git.commitMenu", "label": "Commit", "icon": "git-commit" },
@@ -173,6 +175,36 @@
           "default": 180,
           "minimum": 30,
           "description": "Interval (in seconds) between automatic fetches when git.autofetch is enabled."
+        },
+        "git.blame.editorDecoration.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the blame information for the line the cursor is on at the end of the line."
+        },
+        "git.blame.editorDecoration.template": {
+          "type": "string",
+          "default": "${subject}, ${authorName} (${authorDateAgo})",
+          "description": "Template for the inline blame annotation. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}."
+        },
+        "git.blame.editorDecoration.disableHover": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable the hover that shows full commit info when pointing at the inline blame annotation."
+        },
+        "git.blame.statusBarItem.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the blame information for the line the cursor is on in the status bar."
+        },
+        "git.blame.statusBarItem.template": {
+          "type": "string",
+          "default": "${authorName} (${authorDateAgo})",
+          "description": "Template for the blame information status bar item. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}."
+        },
+        "git.blame.ignoreWhitespace": {
+          "type": "boolean",
+          "default": false,
+          "description": "Ignore whitespace changes when computing blame information."
         }
       }
     }

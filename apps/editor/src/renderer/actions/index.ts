@@ -128,6 +128,10 @@ import {
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
 import { ViewGitGraphAction, GitGraphFocusSearchAction } from './gitGraphActions.js'
+import {
+  ToggleBlameEditorDecorationAction,
+  ToggleBlameStatusBarItemAction,
+} from './gitBlameActions.js'
 import { ShowStartupPerformanceAction } from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
@@ -334,6 +338,10 @@ registerAction2(ReopenWithAction)
 // Git Graph
 registerAction2(ViewGitGraphAction)
 registerAction2(GitGraphFocusSearchAction)
+
+// Git Blame
+registerAction2(ToggleBlameEditorDecorationAction)
+registerAction2(ToggleBlameStatusBarItemAction)
 
 // Developer
 registerAction2(ShowStartupPerformanceAction)
