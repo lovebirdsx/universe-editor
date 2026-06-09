@@ -23,8 +23,10 @@ type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas
 let _extraSchemas: JsonSchemas = []
 
 // Monaco standalone keys overrideServices by the service-id *string* the
-// decorator was created with; IBulkEditService = createDecorator('IWorkspaceEditService').
+// decorator was created with; IBulkEditService = createDecorator('IWorkspaceEditService'),
+// ITextModelService = createDecorator('textModelService').
 const BULK_EDIT_SERVICE_ID = 'IWorkspaceEditService'
+const TEXT_MODEL_SERVICE_ID = 'textModelService'
 let _overrideServices: monaco.editor.IEditorOverrideServices = {}
 
 const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'schemas'> = {
@@ -190,6 +192,16 @@ export const MonacoLoader = {
    */
   setBulkEditService(service: object): void {
     _overrideServices = { ..._overrideServices, [BULK_EDIT_SERVICE_ID]: service }
+  },
+  /**
+   * Register the ITextModelService override (resolves references to files the
+   * user hasn't opened by reading them from disk) used by every `editor.create`
+   * call. The standalone default rejects with "Model not found" for any
+   * unopened resource, breaking the references peek tree. Must be called before
+   * the first editor is created — overrides lock in on first init only.
+   */
+  setTextModelService(service: object): void {
+    _overrideServices = { ..._overrideServices, [TEXT_MODEL_SERVICE_ID]: service }
   },
   /** The shared override-services object threaded into all `editor.create` calls. */
   getOverrideServices(): monaco.editor.IEditorOverrideServices {

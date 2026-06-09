@@ -60,19 +60,20 @@ import { LanguageFeaturesContribution } from './LanguageFeaturesContribution.js'
 import { MarkdownDocumentSyncContribution } from './MarkdownDocumentSyncContribution.js'
 import { TypescriptLanguageFeaturesContribution } from './TypescriptLanguageFeaturesContribution.js'
 import { TypescriptDocumentSyncContribution } from './TypescriptDocumentSyncContribution.js'
-import { BulkEditServiceContribution } from './BulkEditServiceContribution.js'
+import { MonacoOverrideServicesContribution } from './MonacoOverrideServicesContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
 import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
 } from './ActivityBarBadgeContributions.js'
 
-// Install the cross-file rename writer (IBulkEditService override) on MonacoLoader
-// before any editor is created — Monaco standalone locks overrides in on first
-// init. BlockStartup runs well ahead of the first editor.create during restore.
+// Install the Monaco standalone override services (cross-file rename writer +
+// references text-model resolver) on MonacoLoader before any editor is created —
+// Monaco standalone locks overrides in on first init. BlockStartup runs well
+// ahead of the first editor.create during restore.
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.bulkEditService',
-  BulkEditServiceContribution,
+  'workbench.contrib.monacoOverrideServices',
+  MonacoOverrideServicesContribution,
   WorkbenchPhase.BlockStartup,
 )
 
