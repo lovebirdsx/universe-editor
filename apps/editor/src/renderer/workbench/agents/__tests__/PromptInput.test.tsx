@@ -576,6 +576,7 @@ describe('PromptInput — focus handoff', () => {
         jumpToPlan: () => {},
         toggleCollapse: () => {},
         cycleCollapseMode: () => {},
+        getFocusedText: () => undefined,
       },
     }
     renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)

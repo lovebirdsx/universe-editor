@@ -47,6 +47,7 @@ export class NewAgentSessionAction extends Action2 {
       title: localize('action.agent.newSession', 'New Agent Session'),
       keybinding: { primary: 'ctrl+alt+n' },
       category: CATEGORY,
+      menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 1 }],
       f1: true,
     })
   }
@@ -165,6 +166,7 @@ export class SelectAgentAction extends Action2 {
       id: SelectAgentAction.ID,
       title: localize('action.agent.selectAgent', 'Choose Agent Then New Session…'),
       category: CATEGORY,
+      menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 2 }],
       f1: true,
     })
   }
@@ -812,6 +814,24 @@ interface SessionSwitchPickItem extends IQuickPickItem {
   readonly sessionId: string
 }
 
+export class CopyFocusedAcpMessageAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copyFocusedMessage'
+  constructor() {
+    super({
+      id: CopyFocusedAcpMessageAction.ID,
+      title: localize('action.agent.copyFocusedMessage', 'Copy Message'),
+      category: CATEGORY,
+      precondition: 'acpChatFocused',
+      menu: [{ id: MenuId.AcpChatContext, group: '1_copy', order: 1 }],
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const text = accessor.get(IAcpChatWidgetService).lastFocusedWidget?.getFocusedText()
+    if (text) await navigator.clipboard.writeText(text)
+  }
+}
+
 export class SwitchSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.switchSession'
   constructor() {
@@ -820,6 +840,7 @@ export class SwitchSessionAction extends Action2 {
       title: localize('action.agent.switchSession', 'Switch Session…'),
       category: CATEGORY,
       keybinding: { primary: 'alt+s' },
+      menu: [{ id: MenuId.AcpChatContext, group: '3_switch', order: 1 }],
       f1: true,
     })
   }

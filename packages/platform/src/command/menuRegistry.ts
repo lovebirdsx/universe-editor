@@ -17,6 +17,8 @@ export const enum MenuId {
   EditorContext = 'editorContext',
   EditorTabContext = 'editorTabContext',
   ExplorerContext = 'explorerContext',
+  /** ACP chat timeline right-click menu. */
+  AcpChatContext = 'acpChatContext',
   TitleBar = 'titleBar',
   StatusBar = 'statusBar',
   SideBarTitle = 'sideBarTitle',

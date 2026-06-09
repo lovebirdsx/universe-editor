@@ -41,6 +41,7 @@ function makeWidget(
     jumpToPlan: vi.fn(),
     toggleCollapse: vi.fn(),
     cycleCollapseMode: vi.fn(),
+    getFocusedText: vi.fn(),
   }
   return { container, child, widget, moveSpy, focusSpy }
 }
@@ -175,6 +176,7 @@ describe('AcpChatWidgetService', () => {
       jumpToPlan: vi.fn(),
       toggleCollapse: vi.fn(),
       cycleCollapseMode: vi.fn(),
+      getFocusedText: vi.fn(),
     }
     svc.register(widget)
     expect(cks.get('acpChatFocused')).toBe(true)

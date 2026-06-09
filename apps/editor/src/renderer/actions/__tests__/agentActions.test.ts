@@ -57,6 +57,7 @@ describe('Agent timeline navigation actions', () => {
         jumpToPlan,
         toggleCollapse: vi.fn(),
         cycleCollapseMode: vi.fn(),
+        getFocusedText: vi.fn(),
       },
     }
   }

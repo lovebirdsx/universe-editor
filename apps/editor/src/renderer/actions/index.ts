@@ -176,6 +176,7 @@ import {
   ScrollAcpTimelineUpAction,
   ScrollAcpTimelineDownAction,
   SwitchSessionAction,
+  CopyFocusedAcpMessageAction,
   IncreaseAgentFontSizeAction,
   DecreaseAgentFontSizeAction,
   ResetAgentFontSizeAction,
@@ -388,6 +389,7 @@ registerAction2(ScrollAcpTimelinePageDownAction)
 registerAction2(ToggleAcpTimelineItemCollapseAction)
 registerAction2(CycleAcpTimelineCollapseAction)
 registerAction2(SwitchSessionAction)
+registerAction2(CopyFocusedAcpMessageAction)
 registerAction2(IncreaseAgentFontSizeAction)
 registerAction2(DecreaseAgentFontSizeAction)
 registerAction2(ResetAgentFontSizeAction)

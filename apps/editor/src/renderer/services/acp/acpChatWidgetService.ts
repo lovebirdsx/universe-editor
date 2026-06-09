@@ -37,6 +37,8 @@ export interface AcpChatWidget {
   toggleCollapse(): void
   /** Cycle the whole timeline: by-kind default → all collapsed → all expanded. */
   cycleCollapseMode(): void
+  /** Plain text of the currently focused timeline message; undefined when none. */
+  getFocusedText(): string | undefined
 }
 
 export interface IAcpChatWidgetService {

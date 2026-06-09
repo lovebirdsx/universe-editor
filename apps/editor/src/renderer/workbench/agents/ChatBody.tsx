@@ -29,7 +29,7 @@ import {
 } from 'react'
 import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
 import { Bot, History, Plus } from 'lucide-react'
-import { IConfigurationService, localize } from '@universe-editor/platform'
+import { IConfigurationService, ICommandService, localize } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable, useService } from '../useService.js'
 import {
   IAcpSessionService,
@@ -54,6 +54,7 @@ import { PromptInput } from './PromptInput.js'
 import { ToolCallCard } from './ToolCallCard.js'
 import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
+import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
@@ -68,6 +69,7 @@ export interface WidgetHandle {
   jumpToPlan: () => void
   toggleCollapse: () => void
   cycleCollapseMode: () => void
+  getFocusedText: () => string | undefined
 }
 
 const noop = (): void => {}
@@ -79,6 +81,7 @@ const NOOP_HANDLE: WidgetHandle = {
   jumpToPlan: noop,
   toggleCollapse: noop,
   cycleCollapseMode: noop,
+  getFocusedText: () => undefined,
 }
 
 export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
@@ -113,6 +116,7 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
       jumpToPlan: () => handleRef.current.jumpToPlan(),
       toggleCollapse: () => handleRef.current.toggleCollapse(),
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
+      getFocusedText: () => handleRef.current.getFocusedText(),
     })
     return () => sub.dispose()
   }, [widgetService, session.id])
@@ -157,6 +161,8 @@ function ChatScroll({
   const [focusedKey, setFocusedKey] = useState<string | null>(saved?.focusedKey ?? null)
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
+  const [menu, setMenu] = useState<AgentChatContextMenuState | null>(null)
+  const commandService = useService(ICommandService)
 
   const mode = useObservable(session.collapseMode)
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
@@ -258,14 +264,27 @@ function ChatScroll({
     const el = (e.target as HTMLElement).closest<HTMLElement>('[data-timeline-key]')
     const key = el?.getAttribute('data-timeline-key')
     if (!key) return
+    focusSlot(key)
+  }
+
+  // Set the focused slot and pull keyboard focus into the scroll container so
+  // Alt+J/K — gated on the `acpChatFocused` contextKey, which the widget service
+  // drives off focusin — fire without the user first clicking the input. focusin
+  // bubbles up to the registered ChatBody container. preventScroll keeps the
+  // click position put.
+  const focusSlot = (key: string): void => {
     setFocusedKey(key)
     focusedKeyRef.current = key
     persist()
-    // Pull keyboard focus into the scroll container so Alt+J/K — gated on the
-    // `acpChatFocused` contextKey, which the widget service drives off focusin —
-    // fire without the user first clicking the input. focusin bubbles up to the
-    // registered ChatBody container. preventScroll keeps the click position put.
     containerRef.current?.focus({ preventScroll: true })
+  }
+
+  const handleContextMenu = (e: ReactMouseEvent) => {
+    const el = (e.target as HTMLElement).closest<HTMLElement>('[data-timeline-key]')
+    const key = el?.getAttribute('data-timeline-key')
+    if (key) focusSlot(key)
+    e.preventDefault()
+    setMenu({ x: e.clientX, y: e.clientY })
   }
 
   // Pin to the very bottom. A single `scrollTop = scrollHeight` lands short in
@@ -477,6 +496,12 @@ function ChatScroll({
     handle.cycleCollapseMode = () => {
       session.cycleCollapseMode()
     }
+    handle.getFocusedText = () => {
+      const key = focusedKeyRef.current
+      if (!key) return undefined
+      const item = timelineRef.current.find((it) => slotKey(it) === key)
+      return item?.kind === 'message' ? item.message.text : undefined
+    }
     handle.jumpToPlan = () => {
       const list = displayTimelineRef.current
       // The agent's plan reaches the timeline as an ExitPlanMode tool call
@@ -514,6 +539,7 @@ function ChatScroll({
       handle.jumpToPlan = noop
       handle.toggleCollapse = noop
       handle.cycleCollapseMode = noop
+      handle.getFocusedText = () => undefined
     }
   }, [handleRef, handleToggleCollapse, persist, scrollToBottomStable, session])
 
@@ -524,6 +550,7 @@ function ChatScroll({
       tabIndex={-1}
       onScroll={handleScroll}
       onClick={handleClick}
+      onContextMenu={handleContextMenu}
     >
       <StickyScrollOverlay
         containerRef={containerRef}
@@ -595,6 +622,13 @@ function ChatScroll({
             )
           })}
         </ol>
+      )}
+      {menu && (
+        <AgentChatContextMenu
+          state={menu}
+          commandService={commandService}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   )
