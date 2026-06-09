@@ -120,6 +120,8 @@ html, body, #root {
   --color-terminal-bg: #1f1f1f;
 
   --color-code-block-bg: #1a1a1a;
+  --color-inline-code-bg: #2a2a2e;
+  --color-inline-code-fg: #e0a878;
   --color-resource-link-bg: #2d2d2d;
   --color-command-badge-bg: #232333;
   --color-input-bg: #3c3c3c;
@@ -269,6 +271,8 @@ html, body, #root {
   --color-terminal-bg: #f3f3f3;
 
   --color-code-block-bg: #f3f3f3;
+  --color-inline-code-bg: #f0ede8;
+  --color-inline-code-fg: #b35a1f;
   --color-resource-link-bg: #eceef2;
   --color-command-badge-bg: #eef0f7;
   --color-input-bg: #ffffff;
