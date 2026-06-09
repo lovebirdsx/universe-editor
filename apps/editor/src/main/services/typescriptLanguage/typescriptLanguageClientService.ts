@@ -19,6 +19,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import * as path from 'node:path'
+import { Writable } from 'node:stream'
 import { app } from 'electron'
 import {
   createNamedLogger,
@@ -86,6 +87,24 @@ const CLI_PACKAGED_REL =
 /** tsserver.js sits beside the CLI's node_modules (…/node_modules/typescript/lib/tsserver.js). */
 function tsserverFor(cli: string): string {
   return path.resolve(path.dirname(cli), '../../typescript/lib/tsserver.js')
+}
+
+/**
+ * Wraps the child's stdin so jsonrpc writes that land after the process has died
+ * are dropped instead of throwing ERR_STREAM_DESTROYED. Covers writes we don't
+ * control (jsonrpc's internal $/cancelRequest, responses). Mirrors the markdown
+ * server's `if (!stdin.destroyed && stdin.writable)` guard.
+ */
+function guardedWritable(stdin: Writable): Writable {
+  return new Writable({
+    write(chunk, encoding, callback) {
+      if (stdin.destroyed || !stdin.writable) {
+        callback()
+        return
+      }
+      stdin.write(chunk, encoding, callback)
+    },
+  })
 }
 
 /**
@@ -245,7 +264,7 @@ export class TypescriptLanguageClientService
 
     const conn = createMessageConnection(
       new StreamMessageReader(proc.stdout),
-      new StreamMessageWriter(proc.stdin),
+      new StreamMessageWriter(guardedWritable(proc.stdin)),
     )
     store.add({ dispose: () => conn.dispose() })
     this._conn = conn
