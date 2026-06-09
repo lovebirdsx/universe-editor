@@ -1083,6 +1083,43 @@ export function blocksToText(blocks: readonly ContentBlock[] | undefined): strin
 }
 
 /**
+ * Serialize a tool call into copyable plain text — title, diffs, output, and any
+ * nested sub-agent items — so the right-click "Copy Message" works on tool-call
+ * cards, not just plain messages (mirrors VSCode's chat tool-invocation repr).
+ */
+export function toolCallToText(call: AcpToolCall): string {
+  const parts: string[] = []
+  parts.push(call.mcpServer !== undefined ? `${call.title} (MCP · ${call.mcpServer})` : call.title)
+
+  for (const d of call.diffs) {
+    const label = d.oldText.length === 0 ? `[new file: ${d.path}]` : `[diff: ${d.path}]`
+    parts.push(`${label}\n${d.newText}`)
+  }
+
+  const body = call.kind === 'execute' ? call.text : blocksToText(call.blocks)
+  if (body.trim().length > 0) parts.push(body)
+
+  for (const child of call.children ?? []) {
+    const childText = timelineItemToText(child)
+    if (childText.trim().length > 0) {
+      parts.push(
+        childText
+          .split('\n')
+          .map((line) => `  ${line}`)
+          .join('\n'),
+      )
+    }
+  }
+
+  return parts.join('\n\n')
+}
+
+/** Plain-text representation of any timeline slot, suitable for clipboard copy. */
+export function timelineItemToText(item: TimelineItem | AcpChildItem): string {
+  return item.kind === 'message' ? item.message.text : toolCallToText(item.call)
+}
+
+/**
  * Split the SDK's ToolCallContent[] (a discriminated union of content / diff /
  * terminal wrappers) into a flat ContentBlock[] plus structured diff entries.
  * - `content` items are unwrapped into the block list.

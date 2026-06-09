@@ -36,7 +36,7 @@ import {
   type IAcpSession,
   type TimelineItem,
 } from '../../services/acp/acpSessionService.js'
-import { hasVisibleMessageContent } from '../../services/acp/acpSession.js'
+import { hasVisibleMessageContent, timelineItemToText } from '../../services/acp/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   IAcpChatWidgetService,
@@ -500,7 +500,7 @@ function ChatScroll({
       const key = focusedKeyRef.current
       if (!key) return undefined
       const item = timelineRef.current.find((it) => slotKey(it) === key)
-      return item?.kind === 'message' ? item.message.text : undefined
+      return item ? timelineItemToText(item) : undefined
     }
     handle.jumpToPlan = () => {
       const list = displayTimelineRef.current
