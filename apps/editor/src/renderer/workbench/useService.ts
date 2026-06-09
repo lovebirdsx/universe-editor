@@ -65,14 +65,32 @@ export function useOptionalService<T>(id: ServiceIdentifier<T>): T | undefined {
  * Concurrent-safe: backed by useSyncExternalStore.
  */
 export function useObservable<T>(obs: IObservable<T>): T {
+  // Cache the snapshot in a ref. `derived` observables recompute on every `.get()`
+  // while they have no active observer, returning a fresh object reference each
+  // time — which violates useSyncExternalStore's contract that getSnapshot return
+  // a stable reference between store changes (it would otherwise warn "getSnapshot
+  // should be cached" and loop). We seed the ref on render and refresh it only from
+  // the autorun subscription, during which the observable stays observed (cached).
+  const cacheRef = useRef<{ obs: IObservable<T>; value: T } | null>(null)
+  if (cacheRef.current === null || cacheRef.current.obs !== obs) {
+    cacheRef.current = { obs, value: obs.get() }
+  }
+
   const subscribe = useCallback(
     (onStoreChange: () => void) => {
       let firstRun = true
       const d = markAsSingleton(
         autorun((r) => {
-          obs.read(r)
-          if (!firstRun) onStoreChange()
-          firstRun = false
+          const value = obs.read(r)
+          // On the first run the subscription is just being established; keep the
+          // render-phase snapshot reference unless the value actually changed in
+          // the gap between render and subscribe.
+          if (firstRun) {
+            firstRun = false
+            if (cacheRef.current && cacheRef.current.value === value) return
+          }
+          cacheRef.current = { obs, value }
+          onStoreChange()
         }),
       )
       return () => d.dispose()
@@ -80,7 +98,7 @@ export function useObservable<T>(obs: IObservable<T>): T {
     [obs],
   )
 
-  const getSnapshot = useCallback(() => obs.get(), [obs])
+  const getSnapshot = useCallback(() => cacheRef.current!.value, [])
 
   return useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
 }

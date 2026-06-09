@@ -148,7 +148,9 @@ export class HostConnection extends Disposable {
       this.documents = ProxyChannel.toService<IExtHostDocuments>(
         client.getChannel(ExtHostChannels.extHostDocuments),
       )
-      const mainThreadLanguages = new MainThreadLanguages(this.languages, deps.languageFeatures)
+      const mainThreadLanguages = store.add(
+        new MainThreadLanguages(this.languages, deps.languageFeatures),
+      )
       server.registerChannel(
         ExtHostChannels.mainThreadLanguages,
         ProxyChannel.fromService(mainThreadLanguages),

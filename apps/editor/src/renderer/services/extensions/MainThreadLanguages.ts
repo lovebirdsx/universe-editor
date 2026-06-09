@@ -8,6 +8,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Disposable,
+  DisposableMap,
   DisposableStore,
   URI,
   type IDisposable,
@@ -38,13 +40,15 @@ import {
   createWorkspaceSymbolProxy,
 } from '../languageFeatures/languageProviderProxy.js'
 
-export class MainThreadLanguages implements IMainThreadLanguages {
-  private readonly _providers = new Map<number, IDisposable>()
+export class MainThreadLanguages extends Disposable implements IMainThreadLanguages {
+  private readonly _providers = this._register(new DisposableMap<number>())
 
   constructor(
     private readonly _extHost: IExtHostLanguages,
     private readonly _languageFeatures: ILanguageFeaturesService,
-  ) {}
+  ) {
+    super()
+  }
 
   $registerProvider(
     handle: number,
@@ -52,14 +56,12 @@ export class MainThreadLanguages implements IMainThreadLanguages {
     selector: DocumentSelector,
     metadata?: ILanguageProviderMetadata,
   ): Promise<void> {
-    this._providers.get(handle)?.dispose()
-    this._providers.set(handle, this._register(handle, type, selector, metadata))
+    this._providers.set(handle, this._createProvider(handle, type, selector, metadata))
     return Promise.resolve()
   }
 
   $unregisterProvider(handle: number): Promise<void> {
-    this._providers.get(handle)?.dispose()
-    this._providers.delete(handle)
+    this._providers.deleteAndDispose(handle)
     return Promise.resolve()
   }
 
@@ -78,7 +80,7 @@ export class MainThreadLanguages implements IMainThreadLanguages {
     return Promise.resolve()
   }
 
-  private _register(
+  private _createProvider(
     handle: number,
     type: LanguageProviderType,
     selector: DocumentSelector,
