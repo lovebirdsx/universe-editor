@@ -115,6 +115,10 @@ import {
   IExtensionHostClientService,
 } from './services/extensions/ExtensionHostClientService.js'
 import { IScmService, ScmService } from './services/extensions/ScmService.js'
+import {
+  IScmDecorationsService,
+  ScmDecorationsService,
+} from './services/scm/ScmDecorationsService.js'
 import { IActivityService, ActivityService } from './services/activity/ActivityService.js'
 import {
   IRendererDisposableLeakService,
@@ -446,6 +450,11 @@ async function bootstrapWorkbench(): Promise<void> {
   // ExtensionsContribution can inject it; it starts the host on an idle phase.
   const scmService = workbenchStore.add(new ScmService())
   services.set(IScmService, scmService)
+
+  // Git status decorations derived from the SCM model; colours Explorer rows and
+  // editor tabs by file change state.
+  const scmDecorationsService = workbenchStore.add(new ScmDecorationsService(scmService))
+  services.set(IScmDecorationsService, scmDecorationsService)
 
   // Activity Bar badges (unsaved files on Explorer, changed files on SCM).
   // Pure renderer state, no deps; contributions push counts into it.

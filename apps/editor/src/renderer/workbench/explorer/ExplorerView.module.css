@@ -113,6 +113,17 @@
   text-overflow: ellipsis;
 }
 
+/* Git status letter (M / A / D / U …); inherits the row's deco colour. */
+.scmBadge {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding-right: 2px;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: center;
+  min-width: 12px;
+}
+
 /* Compact folder ("a/b/c"): each segment is independently hoverable so the
    active directory under the cursor is highlighted (drag / right-click / new). */
 .segment {

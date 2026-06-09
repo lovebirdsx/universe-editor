@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
-import { useService } from '../useService.js'
+import { useService, useObservable, useOptionalService } from '../useService.js'
 import {
   IConfigurationService,
   ICommandService,
@@ -17,6 +17,8 @@ import {
   IFileService,
   IWorkspaceService,
   markAsSingleton,
+  observableValue,
+  type IObservable,
   type URI,
 } from '@universe-editor/platform'
 import {
@@ -28,11 +30,21 @@ import {
   IExplorerTreeService,
   type IExplorerEntry,
 } from '../../services/explorer/ExplorerTreeService.js'
+import {
+  IScmDecorationsService,
+  scmPathKey,
+  type IScmDecorationsSnapshot,
+} from '../../services/scm/ScmDecorationsService.js'
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
 import { confirmLargeFile } from '../../services/editor/largeFileGuard.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import styles from './ExplorerView.module.css'
+
+const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
+  'emptyScmDecorations',
+  { files: new Map(), folders: new Map() },
+)
 
 export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
@@ -42,6 +54,8 @@ export function ExplorerView() {
   const dialogService = useService(IDialogService)
   const configService = useService(IConfigurationService)
   const tree = useService(IExplorerTreeService)
+  const scmDecorations = useOptionalService(IScmDecorationsService)
+  const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
 
   // Re-render when selection / active-editor change so renderRow closes over a
   // fresh active-editor key. Structure changes are handled inside <Tree>.
@@ -102,6 +116,9 @@ export function ExplorerView() {
   const renderRow = (ctx: ITreeRowRenderContext<IExplorerEntry>) => {
     const entry = ctx.node.element
     const key = ctx.node.id
+    const deco = entry.isDirectory
+      ? decorations.folders.get(scmPathKey(entry.resource.fsPath))
+      : decorations.files.get(scmPathKey(entry.resource.fsPath))
     return (
       <ExplorerTreeNode
         key={key}
@@ -115,6 +132,10 @@ export function ExplorerView() {
         isSelected={ctx.isSelected}
         isFocused={ctx.isFocused}
         isActiveEditor={activeKey === key}
+        {...(deco?.color !== undefined ? { decoColor: deco.color } : {})}
+        {...(deco?.letter !== undefined ? { decoLetter: deco.letter } : {})}
+        {...(deco?.strikeThrough ? { decoStrike: true } : {})}
+        {...(deco?.tooltip !== undefined ? { decoTooltip: deco.tooltip } : {})}
         tree={tree}
         fileService={fileService}
         onOpenFile={openFile}

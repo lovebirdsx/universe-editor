@@ -22,6 +22,7 @@ import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
 import { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
 import { GitBlameContribution } from './GitBlameContribution.js'
+import { DirtyDiffContribution } from './DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
 import { WorkspaceRecentMenuContribution } from './WorkspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from './WorkspaceRestoreContribution.js'
@@ -207,6 +208,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.gitBlame',
   GitBlameContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// VSCode-style dirty diff: gutter bars + overview-ruler marks for lines changed
+// vs git HEAD. AfterRestore so the editor area, Monaco and SCM model are live;
+// HEAD content is fetched lazily from the `git` extension's contributed command.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.dirtyDiff',
+  DirtyDiffContribution,
   WorkbenchPhase.AfterRestore,
 )
 

@@ -308,6 +308,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
       return getBlame(repo.root, path, { ignoreWhitespace }, log)
     }),
 
+    commands.registerCommand('git.getHeadContent', (...args: unknown[]) => {
+      const path = args[0] as string
+      const repo = mgr.resolveRepo({ resourceUri: path })
+      if (!repo || !path) return null
+      return repo.getHeadContent(path)
+    }),
+
     commands.registerCommand('git.openChange', async (...args: unknown[]) => {
       const [arg, options] = args as [
         unknown,

@@ -551,6 +551,13 @@ export class Repository {
     await this._run(['checkout', '-b', name.trim()], 'create branch')
   }
 
+  /** The file's content at HEAD, or null when it has no HEAD revision (new / untracked). */
+  async getHeadContent(absPath: string): Promise<string | null> {
+    const rel = relative(this.root, absPath).replace(/\\/g, '/')
+    const head = await gitExec(['show', `HEAD:${rel}`], this.root, this._log)
+    return head.exitCode === 0 ? head.stdout : null
+  }
+
   /** Open a diff of the file's HEAD revision against its current working-tree content. */
   async openChange(absPath: string, pinned = false, preserveFocus = false): Promise<void> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')

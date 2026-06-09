@@ -28,9 +28,11 @@ import {
   IDialogService,
   markAsSingleton,
   MenuId,
+  observableValue,
   type IEditorGroup,
   type IEditorGroupsService,
   type IEditorInput,
+  type IObservable,
   URI,
 } from '@universe-editor/platform'
 import {
@@ -39,14 +41,24 @@ import {
   useDragHandle,
   useDropTarget,
 } from '@universe-editor/workbench-ui'
-import { useService } from '../useService.js'
+import { useService, useObservable, useOptionalService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
+import {
+  IScmDecorationsService,
+  scmPathKey,
+  type IScmDecorationsSnapshot,
+} from '../../services/scm/ScmDecorationsService.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import styles from './EditorArea.module.css'
+
+const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
+  'emptyScmDecorations',
+  { files: new Map(), folders: new Map() },
+)
 
 interface TabMenuState {
   readonly x: number
@@ -173,6 +185,20 @@ function EditorTab({
   const languageId =
     'language' in input && typeof input.language === 'string' ? input.language : undefined
 
+  const scmDecorations = useOptionalService(IScmDecorationsService)
+  const decorations = useObservable(scmDecorations?.decorations ?? EMPTY_DECORATIONS)
+  const deco =
+    resource && resource.scheme === 'file'
+      ? decorations.files.get(scmPathKey(resource.fsPath))
+      : undefined
+  const labelStyle =
+    deco?.color !== undefined || deco?.strikeThrough
+      ? {
+          ...(deco.color !== undefined ? { color: deco.color } : {}),
+          ...(deco.strikeThrough ? { textDecoration: 'line-through' } : {}),
+        }
+      : undefined
+
   const { dragHandleProps } = useDragHandle<{ editor: EditorInput; sourceGroupId: number }>({
     editor: input,
     sourceGroupId: groupId,
@@ -215,7 +241,9 @@ function EditorTab({
               size={14}
             />
           )}
-      <span className={styles['tabLabel']}>{input.label}</span>
+      <span className={styles['tabLabel']} style={labelStyle} title={deco?.tooltip}>
+        {input.label}
+      </span>
       <button
         className={styles['closeBtn']}
         onClick={(e) => {

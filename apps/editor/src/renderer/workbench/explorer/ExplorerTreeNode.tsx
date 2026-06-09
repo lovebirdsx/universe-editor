@@ -39,6 +39,11 @@ interface Props {
     target: { resource: URI; isDirectory: boolean } | null,
   ) => void
   readonly fileService?: IFileService
+  /** Git status colour for the name; letter shown as a trailing badge. */
+  readonly decoColor?: string
+  readonly decoLetter?: string
+  readonly decoStrike?: boolean
+  readonly decoTooltip?: string
   readonly style?: CSSProperties
 }
 
@@ -56,6 +61,10 @@ function ExplorerTreeNodeImpl({
   onOpenFile,
   onContextMenu,
   fileService,
+  decoColor,
+  decoLetter,
+  decoStrike,
+  decoTooltip,
   style,
 }: Props) {
   const indent = { paddingLeft: `${indentPadding}px` }
@@ -128,6 +137,14 @@ function ExplorerTreeNodeImpl({
     },
   )
 
+  const labelStyle: CSSProperties | undefined =
+    decoColor !== undefined || decoStrike
+      ? {
+          ...(decoColor !== undefined ? { color: decoColor } : {}),
+          ...(decoStrike ? { textDecoration: 'line-through' } : {}),
+        }
+      : undefined
+
   return (
     <div
       data-row-key={key}
@@ -151,7 +168,7 @@ function ExplorerTreeNodeImpl({
         <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />
       </span>
       {segments ? (
-        <span className={styles['label']}>
+        <span className={styles['label']} style={labelStyle} title={decoTooltip}>
           {segments.map((s, i) => (
             <Fragment key={i}>
               {i > 0 && (
@@ -187,7 +204,18 @@ function ExplorerTreeNodeImpl({
           ))}
         </span>
       ) : (
-        <span className={styles['label']}>{name}</span>
+        <span className={styles['label']} style={labelStyle} title={decoTooltip}>
+          {name}
+        </span>
+      )}
+      {decoLetter && (
+        <span
+          className={styles['scmBadge']}
+          style={decoColor !== undefined ? { color: decoColor } : undefined}
+          aria-hidden="true"
+        >
+          {decoLetter}
+        </span>
       )}
     </div>
   )

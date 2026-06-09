@@ -364,3 +364,25 @@ html, body, #root {
   opacity: 0.85;
 }
 
+/* Dirty-diff gutter bars (current document vs git HEAD). Painted in Monaco's
+   line-decorations margin; added/modified are a vertical bar, deleted a triangle. */
+.dirty-diff-gutter {
+  margin-left: 3px;
+  width: 3px !important;
+}
+.dirty-diff-gutter-added {
+  background-color: #2ea043;
+}
+.dirty-diff-gutter-modified {
+  background-color: #0c7d9d;
+}
+.dirty-diff-gutter-deleted {
+  background-color: transparent;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 4px solid #c74e39;
+  width: 0 !important;
+  margin-left: 2px;
+}
+
+
