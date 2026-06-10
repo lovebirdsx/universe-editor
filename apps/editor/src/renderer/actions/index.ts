@@ -145,7 +145,11 @@ import {
 import { ShowStartupPerformanceAction } from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
 import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
-import { OpenMarkdownPreviewAction, OpenMarkdownPreviewToSideAction } from './markdownActions.js'
+import {
+  OpenMarkdownPreviewAction,
+  OpenMarkdownPreviewToSideAction,
+  OpenMarkdownSourceAction,
+} from './markdownActions.js'
 import {
   CheckForUpdatesAction,
   DownloadUpdateAction,
@@ -365,6 +369,7 @@ registerAction2(ToggleKeybindingsTroubleshootingAction)
 // Markdown
 registerAction2(OpenMarkdownPreviewAction)
 registerAction2(OpenMarkdownPreviewToSideAction)
+registerAction2(OpenMarkdownSourceAction)
 
 // Diff (internal, invoked by the extension host)
 registerAction2(OpenDiffAction)

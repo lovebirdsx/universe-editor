@@ -4,7 +4,7 @@
  *   - isWindows / isMac / isLinux  (platform identity)
  *   - activityBarVisible / sideBarVisible / secondarySideBarVisible / panelVisible  (Part visibility)
  *   - activeEditorId / hasActiveEditor                          (editor state)
- *   - activeEditorLanguageId                                     (active file language id)
+ *   - activeEditorLanguageId / activeEditorTypeId                (active editor attributes)
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorPartMultipleEditorGroups / editorIsOpen
@@ -20,6 +20,7 @@
 import {
   autorun,
   Disposable,
+  EditorInput,
   IContextKeyService,
   IEditorGroupsService,
   IEditorService,
@@ -72,6 +73,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     const activeEditorId = contextKeyService.createKey<string>('activeEditorId', undefined)
     const hasActiveEditor = contextKeyService.createKey<boolean>('hasActiveEditor', false)
     const activeEditorLanguageId = contextKeyService.createKey<string>('activeEditorLanguageId', '')
+    const activeEditorTypeId = contextKeyService.createKey<string>('activeEditorTypeId', '')
     const isInDiffEditor = contextKeyService.createKey<boolean>('isInDiffEditor', false)
     const textCompareEditorVisible = contextKeyService.createKey<boolean>(
       'textCompareEditorVisible',
@@ -88,6 +90,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
           hasActiveEditor.set(false)
         }
         activeEditorLanguageId.set(editor instanceof FileEditorInput ? editor.language : '')
+        activeEditorTypeId.set(editor instanceof EditorInput ? editor.typeId : '')
         const isDiff = editor instanceof DiffEditorInput
         isInDiffEditor.set(isDiff)
         textCompareEditorVisible.set(isDiff)
