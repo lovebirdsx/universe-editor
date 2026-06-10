@@ -62,6 +62,7 @@ import { ExtensionsContribution } from './ExtensionsContribution.js'
 import { DocumentSyncContribution } from './DocumentSyncContribution.js'
 import { MonacoOverrideServicesContribution } from './MonacoOverrideServicesContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
+import { PeekNavigationContribution } from './PeekNavigationContribution.js'
 import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
@@ -480,6 +481,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.editorOpener',
   EditorOpenerContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Make keyboard Enter inside the references peek follow to the target file
+// (VSCode parity); standalone monaco only previews. AfterRestore so monaco +
+// the editor opener handler it relies on are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.peekNavigation',
+  PeekNavigationContribution,
   WorkbenchPhase.AfterRestore,
 )
 

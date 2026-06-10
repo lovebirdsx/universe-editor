@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as monaco from 'monaco-editor'
-import { NullLogger, type ILogger } from '@universe-editor/platform'
+import { NullLogger, type IDisposable, type ILogger } from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { monacoNavDefaultKeybindingCommandIds } from '../../../actions/gotoLocationActions.js'
@@ -14,6 +14,25 @@ import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 
 export type { monaco }
+
+/** The resource-open request monaco hands a code-editor open handler. */
+export interface ICodeEditorOpenInput {
+  readonly resource: monaco.Uri
+  readonly options?: { readonly selection?: monaco.IRange | monaco.IPosition }
+}
+
+/**
+ * A handler for `ICodeEditorService.openCodeEditor`. Returning a non-null editor
+ * tells monaco the open succeeded *and which editor now shows the target* — the
+ * references peek compares this against the source editor to decide whether to
+ * stay (same editor) or close the peek and follow to the new file (different
+ * editor). Returning null falls through to monaco's default handler.
+ */
+export type CodeEditorOpenHandler = (
+  input: ICodeEditorOpenInput,
+  source: monaco.editor.ICodeEditor | null,
+  sideBySide?: boolean,
+) => Promise<monaco.editor.ICodeEditor | null>
 
 let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
@@ -231,6 +250,68 @@ export const MonacoLoader = {
   /** The shared override-services object threaded into all `editor.create` calls. */
   getOverrideServices(): monaco.editor.IEditorOverrideServices {
     return _overrideServices
+  },
+
+  /**
+   * Register a cross-file open handler on monaco's resolved ICodeEditorService.
+   * Handlers are tried before monaco's standalone default (which can only move
+   * the cursor within the already-open model), so this is how "Go to Definition /
+   * References" navigates to another file and how the references peek follows the
+   * user to the target editor. Resolves after monaco has initialized.
+   */
+  async registerCodeEditorOpenHandler(handler: CodeEditorOpenHandler): Promise<IDisposable> {
+    await loadMonaco()
+    const [{ StandaloneServices }, { ICodeEditorService }] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'),
+      import('monaco-editor/esm/vs/editor/browser/services/codeEditorService.js'),
+    ])
+    const service = StandaloneServices.get<{
+      registerCodeEditorOpenHandler(h: CodeEditorOpenHandler): IDisposable
+    }>(ICodeEditorService)
+    return service.registerCodeEditorOpenHandler(handler)
+  },
+
+  /**
+   * Resolve monaco's standalone ICommandService so the workbench can invoke
+   * monaco-internal commands that have no public `monaco.*` API — notably the
+   * references-peek `openReference` (PeekNavigationContribution drives keyboard
+   * Enter through it). Resolves after monaco has initialized.
+   */
+  async getCommandService(): Promise<{
+    executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T>
+  }> {
+    await loadMonaco()
+    const [{ StandaloneServices }, { ICommandService }] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'),
+      import('monaco-editor/esm/vs/platform/commands/common/commands.js'),
+    ])
+    return StandaloneServices.get<{
+      executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T>
+    }>(ICommandService)
+  },
+
+  /**
+   * Resolve monaco's standalone IListService. We reach `lastFocusedList` to
+   * mirror keyboard focus onto the selection inside the references peek so arrow
+   * keys preview the focused reference (PeekNavigationContribution); standalone
+   * monaco lacks the workbench list keybindings that normally do this. Resolves
+   * after monaco has initialized.
+   */
+  async getListService(): Promise<{
+    readonly lastFocusedList:
+      | { getFocus(): unknown[]; setSelection(items: unknown[], browserEvent?: unknown): void }
+      | undefined
+  }> {
+    await loadMonaco()
+    const [{ StandaloneServices }, { IListService }] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'),
+      import('monaco-editor/esm/vs/platform/list/browser/listService.js'),
+    ])
+    return StandaloneServices.get<{
+      readonly lastFocusedList:
+        | { getFocus(): unknown[]; setSelection(items: unknown[], browserEvent?: unknown): void }
+        | undefined
+    }>(IListService)
   },
 }
 
