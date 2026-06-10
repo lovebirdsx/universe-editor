@@ -1,5 +1,29 @@
 [
   {
+    "version": "0.1.13",
+    "date": "2026-06-10",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "统一git graph的视觉表达，危险操作加二次确认",
+          "优化git blame的表达，避免对现有视图的干扰",
+          "Explorer和Editor加入文件修改状态指示",
+          "支持根据语言来设定font"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复外部文件修改，工作区无法正常检测的bug",
+          "修复因为monaco初始化不对造成查找引用报错的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.12",
     "date": "2026-06-09",
     "groups": [
