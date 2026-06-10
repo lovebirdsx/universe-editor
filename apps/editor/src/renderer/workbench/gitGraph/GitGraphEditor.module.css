@@ -442,27 +442,32 @@
 
 .menu {
   position: fixed;
-  z-index: 1000;
+  z-index: 9999;
   min-width: 200px;
   margin: 0;
   padding: 4px 0;
   list-style: none;
-  background: var(--color-menu-bg, var(--color-editor-bg));
-  color: var(--color-menu-fg, var(--color-editor-fg));
-  border: 1px solid var(--color-border);
+  background: var(--workbench-menu-bg, #252526);
+  color: var(--workbench-menu-fg, #cccccc);
+  border: 1px solid var(--workbench-menu-border, #454545);
   border-radius: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  font-size: 13px;
 }
 
 .menuItem {
+  display: flex;
+  align-items: center;
   padding: 4px 16px;
   cursor: pointer;
+  color: var(--workbench-menu-fg, #cccccc);
   white-space: nowrap;
+  user-select: none;
 }
 
 .menuItem:hover {
-  background: var(--color-list-active-bg, var(--color-accent));
-  color: var(--color-list-active-fg, var(--color-button-fg));
+  background: var(--workbench-menu-hover-bg, #094771);
+  outline: none;
 }
 
 .menuItemDanger {
@@ -475,7 +480,7 @@
 }
 
 .menuSep {
-  height: 1px;
   margin: 4px 0;
-  background: var(--color-border);
+  border: none;
+  border-top: 1px solid var(--workbench-menu-separator, #3c3c3c);
 }

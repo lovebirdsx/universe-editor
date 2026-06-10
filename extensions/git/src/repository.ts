@@ -333,6 +333,11 @@ export class Repository {
   }
 
   async pushForce(): Promise<void> {
+    const confirm = await window.showWarningMessage(
+      'Force push to the remote? This overwrites the remote branch history and can discard others’ commits.',
+      'Force Push',
+    )
+    if (confirm !== 'Force Push') return
     await this._run(['push', '--force-with-lease'], 'push (force)', {
       text: 'Pushing…',
       kind: 'syncing',

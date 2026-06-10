@@ -62,8 +62,10 @@ export const pushBranch = (
   root: string,
   name: string,
   remote: string,
+  force: boolean,
   log: Log,
-): Promise<boolean> => run(root, ['push', remote, name], log)
+): Promise<boolean> =>
+  run(root, force ? ['push', '--force-with-lease', remote, name] : ['push', remote, name], log)
 
 export const checkoutRemote = (
   root: string,

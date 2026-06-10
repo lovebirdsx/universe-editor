@@ -263,7 +263,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git-graph.pushBranch', (...a: unknown[]) =>
       finishOp(
         'push branch',
-        gga.pushBranch(gitGraphRoot, a[0] as string, (a[1] as string) || 'origin', log),
+        gga.pushBranch(
+          gitGraphRoot,
+          a[0] as string,
+          (a[1] as string) || 'origin',
+          a[2] === true,
+          log,
+        ),
       ),
     ),
     commands.registerCommand('git-graph.checkoutRemote', (...a: unknown[]) =>

@@ -827,6 +827,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           label: 'Push…',
           run: () => runOp(GitGraphCommands.pushBranch, name, 'origin'),
         },
+        {
+          kind: 'item',
+          label: 'Push (Force)…',
+          danger: true,
+          run: async () => {
+            const r = await dialog.confirm({
+              message: `Force push '${name}' to origin?`,
+              detail: 'This overwrites the remote branch history and can discard others’ commits.',
+              primaryButton: 'Force Push',
+              type: 'warning',
+            })
+            if (r.confirmed) runOp(GitGraphCommands.pushBranch, name, 'origin', true)
+          },
+        },
         { kind: 'sep' },
         {
           kind: 'item',
