@@ -27,6 +27,8 @@ import { findSymbolAtLine } from './symbolTree.js'
 export interface OutlineModel {
   readonly uri: string
   readonly roots: readonly monaco.languages.DocumentSymbol[]
+  /** Language id of the model, so consumers can special-case symbol icons (e.g. markdown headings). */
+  readonly languageId: string
   /** Monotonic counter; lets consumers detect a fresh tree even if roots is []. */
   readonly version: number
 }
@@ -230,11 +232,15 @@ export class OutlineService extends Disposable implements IOutlineService {
 
     const providers = this._languageFeatures.getDocumentSymbolProviders(model.getLanguageId())
     const provider = providers[0]
+    const languageId = model.getLanguageId()
     if (!provider) {
       // The provider may simply not be registered yet (language plugins activate
       // lazily). Publish empty for now but keep retrying so the outline fills in
       // once the provider appears, instead of staying blank until re-activation.
-      this._publish({ uri: model.uri.toString(), roots: [], version: ++this._version }, undefined)
+      this._publish(
+        { uri: model.uri.toString(), roots: [], languageId, version: ++this._version },
+        undefined,
+      )
       this._maybeRetry([], retry)
       return
     }
@@ -243,7 +249,10 @@ export class OutlineService extends Disposable implements IOutlineService {
       // Discard if the model was swapped or disposed while we awaited.
       if (this._currentModel !== model || model.isDisposed()) return
       const roots = result ?? []
-      this._outline.set({ uri: model.uri.toString(), roots, version: ++this._version }, undefined)
+      this._outline.set(
+        { uri: model.uri.toString(), roots, languageId, version: ++this._version },
+        undefined,
+      )
       this._recomputeActiveSymbol()
       this._maybeRetry(roots, retry)
     })

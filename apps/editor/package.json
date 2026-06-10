@@ -37,6 +37,7 @@
     "@lydell/node-pty": "catalog:",
     "@react-aria/focus": "catalog:",
     "@tanstack/react-virtual": "catalog:",
+    "@vscode/codicons": "catalog:",
     "@xterm/addon-fit": "catalog:",
     "@xterm/addon-web-links": "catalog:",
     "@xterm/xterm": "catalog:",

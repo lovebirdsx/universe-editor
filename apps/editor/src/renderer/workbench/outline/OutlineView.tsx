@@ -7,7 +7,6 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
-import { Hash } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import {
   Tree,
@@ -19,6 +18,7 @@ import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { type monaco } from '../editor/monaco/MonacoLoader.js'
 import { IOutlineService } from '../../services/languageFeatures/OutlineService.js'
+import { SymbolIcon } from '../symbols/symbolIcon.js'
 import styles from './OutlineView.module.css'
 
 interface OutlineNode {
@@ -149,7 +149,11 @@ export function OutlineView() {
               {node.hasChildren ? (node.expanded ? '▾' : '▸') : ''}
             </span>
             <span className={styles['icon']} aria-hidden="true">
-              <Hash size={14} />
+              <SymbolIcon
+                kind={node.element.symbol.kind}
+                languageId={outline.languageId}
+                size={14}
+              />
             </span>
             <span className={styles['label']}>{node.element.symbol.name}</span>
           </div>

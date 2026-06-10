@@ -35,6 +35,7 @@ import { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import { flattenOutline } from '../services/languageFeatures/outlineFlatten.js'
 import { type monaco, MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
+import { symbolIconId } from '../workbench/symbols/symbolIcon.js'
 import {
   workspaceSymbolsToEntries,
   type WorkspaceSymbolEntry,
@@ -179,10 +180,11 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         picker.items = merged.slice(0, MAX_RESULTS).map((symbol, i) => {
           const id = String(i)
           byId.set(id, symbol)
+          const languageId = symbol.uri.path.endsWith('.md') ? 'markdown' : undefined
           return {
             id,
             label: symbol.name,
-            iconId: `symbol-kind-${symbol.iconKind}`,
+            iconId: symbolIconId(symbol.iconKind, languageId),
             description: symbol.description,
             highlights: { label: fuzzyHighlights(symbol.name, query) },
           }
@@ -322,13 +324,14 @@ export class GoToFileSymbolAction extends Action2 {
         autorun((r) => {
           const model = outline.outline.read(r)
           const flat = model ? flattenOutline(model.roots) : []
+          const languageId = model?.languageId
           byId.clear()
           picker.items = flat.map((entry) => {
             byId.set(entry.id, entry.symbol)
             return {
               id: entry.id,
               label: `${'  '.repeat(entry.depth)}${entry.symbol.name}`,
-              iconId: `symbol-kind-${entry.symbol.kind}`,
+              iconId: symbolIconId(entry.symbol.kind, languageId),
             }
           })
         }),

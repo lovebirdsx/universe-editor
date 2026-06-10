@@ -15,15 +15,15 @@ import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { parseResourceIconId } from '../../services/quickInput/quickPickResourceIcon.js'
-import { resolveSymbolKindIcon } from './symbolKindIcon.js'
+import { renderSymbolIconById } from '../symbols/symbolIcon.js'
 import {
   QuickInputService,
   type QuickPickState,
 } from '../../services/quickInput/QuickInputService.js'
 import styles from './QuickInput.module.css'
 
-function resolveQuickInputIcon(iconId: string) {
-  return resolveSymbolKindIcon(iconId) ?? resolveHeaderIcon(iconId) ?? resolveAgentIcon(iconId)
+function resolveFallbackIcon(iconId: string) {
+  return resolveHeaderIcon(iconId) ?? resolveAgentIcon(iconId)
 }
 
 /** Portal that renders Quick Pick / Input Box over the entire workbench. */
@@ -61,7 +61,9 @@ export function QuickInputPortal() {
                   />
                 )
               }
-              const Icon = resolveQuickInputIcon(id)
+              const symbolIcon = renderSymbolIconById(id, size)
+              if (symbolIcon) return symbolIcon
+              const Icon = resolveFallbackIcon(id)
               return <Icon size={size} className={className} />
             }}
             renderStatusIcon={(id, size, className) => {

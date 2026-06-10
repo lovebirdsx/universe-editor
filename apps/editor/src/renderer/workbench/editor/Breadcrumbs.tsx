@@ -11,6 +11,7 @@ import type { IEditorInput } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
 import { IOutlineService } from '../../services/languageFeatures/OutlineService.js'
 import { symbolAncestryPath } from '../../services/languageFeatures/symbolTree.js'
+import { SymbolIcon } from '../symbols/symbolIcon.js'
 import type { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import styles from './Breadcrumbs.module.css'
 
@@ -35,6 +36,9 @@ export function Breadcrumbs({ input }: { input: IEditorInput }) {
             className={styles['segment']}
             onClick={() => outlineService.revealSymbol(symbol)}
           >
+            <span className={styles['segmentIcon']} aria-hidden="true">
+              <SymbolIcon kind={symbol.kind} languageId={outline?.languageId} size={14} />
+            </span>
             {symbol.name}
           </button>
         </Fragment>

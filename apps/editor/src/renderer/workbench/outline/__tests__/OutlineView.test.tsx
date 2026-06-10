@@ -73,7 +73,10 @@ describe('OutlineView', () => {
     // The language server finishes analysing and the outline fills in — without
     // any remount the view must now show the symbols.
     act(() => {
-      outline.set({ uri: 'file:///x.ts', roots: [makeSymbol('Alpha')], version: 1 }, undefined)
+      outline.set(
+        { uri: 'file:///x.ts', roots: [makeSymbol('Alpha')], languageId: 'typescript', version: 1 },
+        undefined,
+      )
     })
 
     expect(screen.queryByText('No symbols found.')).toBeNull()
@@ -84,6 +87,7 @@ describe('OutlineView', () => {
     const { outline, instantiation } = setup({
       uri: 'file:///a.ts',
       roots: [makeSymbol('Alpha')],
+      languageId: 'typescript',
       version: 1,
     })
 
@@ -96,7 +100,10 @@ describe('OutlineView', () => {
     expect(screen.getByText('Alpha')).toBeTruthy()
 
     act(() => {
-      outline.set({ uri: 'file:///b.ts', roots: [makeSymbol('Beta')], version: 2 }, undefined)
+      outline.set(
+        { uri: 'file:///b.ts', roots: [makeSymbol('Beta')], languageId: 'typescript', version: 2 },
+        undefined,
+      )
     })
 
     expect(screen.queryByText('Alpha')).toBeNull()
@@ -107,6 +114,7 @@ describe('OutlineView', () => {
     const { outline, instantiation } = setup({
       uri: 'file:///a.ts',
       roots: [makeSymbol('Alpha')],
+      languageId: 'typescript',
       version: 1,
     })
 
@@ -123,7 +131,10 @@ describe('OutlineView', () => {
 
     // The new file's symbols arrive — must show WITHOUT a remount.
     act(() => {
-      outline.set({ uri: 'file:///b.ts', roots: [makeSymbol('Beta')], version: 2 }, undefined)
+      outline.set(
+        { uri: 'file:///b.ts', roots: [makeSymbol('Beta')], languageId: 'typescript', version: 2 },
+        undefined,
+      )
     })
     expect(screen.queryByText('No symbols found.')).toBeNull()
     expect(screen.getByText('Beta')).toBeTruthy()

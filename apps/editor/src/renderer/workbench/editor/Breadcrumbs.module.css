@@ -33,6 +33,12 @@ button.segment:hover {
   color: var(--color-sidebar-fg, #cccccc);
 }
 
+.segmentIcon {
+  display: inline-flex;
+  align-items: center;
+  margin-right: 4px;
+}
+
 .separator {
   display: inline-flex;
   align-items: center;

@@ -92,6 +92,13 @@ html, body, #root {
   --color-input-placeholder-fg: #5a5a5e;
   --color-description-fg: #8a8a92;
 
+  /* Symbol icons (Outline / Breadcrumbs / Go to Symbol). Grouped after VSCode
+     Dark+ symbolIcon colors: callable = purple, data = blue, type = orange. */
+  --color-symbol-default: #8a8a92;
+  --color-symbol-callable: #b180d7;
+  --color-symbol-variable: #75beff;
+  --color-symbol-type: #ee9d28;
+
   /* Tooltip */
   --color-tooltip-bg: #2f2f35;
   --color-tooltip-fg: #c8c8c8;
@@ -247,6 +254,11 @@ html, body, #root {
   --color-list-focus-outline: #0067c0;
   --color-input-placeholder-fg: #7b818c;
   --color-description-fg: #666b76;
+
+  --color-symbol-default: #5e6572;
+  --color-symbol-callable: #652d90;
+  --color-symbol-variable: #0070c1;
+  --color-symbol-type: #a5760b;
 
   --color-tooltip-bg: #ffffff;
   --color-tooltip-fg: #24262b;

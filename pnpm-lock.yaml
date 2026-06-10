@@ -54,6 +54,9 @@ catalogs:
     '@vitejs/plugin-react':
       specifier: ^4.3.0
       version: 4.7.0
+    '@vscode/codicons':
+      specifier: ^0.0.45
+      version: 0.0.45
     '@vscode/ripgrep':
       specifier: ^1.18.0
       version: 1.18.0
@@ -212,6 +215,9 @@ importers:
       '@tanstack/react-virtual':
         specifier: 'catalog:'
         version: 3.13.24(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@vscode/codicons':
+        specifier: 'catalog:'
+        version: 0.0.45
       '@vscode/ripgrep':
         specifier: 'catalog:'
         version: 1.18.0
@@ -1908,6 +1914,9 @@ packages:
 
   '@vitest/utils@3.2.6':
     resolution: {integrity: sha512-lI23nIs4bnT3T8NIoh+vFaz5s2/DdP0Jgt2jxwgWljvwn82cLJtyi/If+fjFyoLMGIOz0U/fKvWE0d4jsNQEfg==}
+
+  '@vscode/codicons@0.0.45':
+    resolution: {integrity: sha512-1KAZ7XCMagp5Gdrlr4bbbcAqgcIL623iO1wW6rfcSVGAVUQvR0WP7bQx1SbJ11gmV3fdQTSEFIJQ/5C+HuVasw==}
 
   '@vscode/l10n@0.0.18':
     resolution: {integrity: sha512-KYSIHVmslkaCDyw013pphY+d7x1qV8IZupYfeIfzNA+nsaWHbn5uPuQRvdRFsa9zFzGeudPuoGoZ1Op4jrJXIQ==}
@@ -5729,6 +5738,8 @@ snapshots:
       '@vitest/pretty-format': 3.2.6
       loupe: 3.2.1
       tinyrainbow: 2.0.0
+
+  '@vscode/codicons@0.0.45': {}
 
   '@vscode/l10n@0.0.18': {}
 

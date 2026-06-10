@@ -127,6 +127,7 @@ import { RendererLifecycleService } from './services/lifecycle/RendererLifecycle
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
 import '@universe-editor/workbench-ui/tokens.css'
+import '@vscode/codicons/dist/codicon.css'
 import './workbench.css'
 import './services/index.js'
 import { installE2EProbeIfEnabled } from './e2e/probe.js'

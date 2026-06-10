@@ -3,10 +3,12 @@
  *
  *  Verifies the two VSCode-style symbol pickers use OUR quick pick:
  *    1. Go to Symbol in Editor (Ctrl+Shift+O) — replaces monaco's quickOutline,
- *       opens exactly one quick pick, shows symbol-kind icons, and jumps the cursor.
- *    2. Go to Symbol in Workspace (Ctrl+T) — shows symbol-kind icons in results.
+ *       opens exactly one quick pick, shows symbol icons, and jumps the cursor.
+ *    2. Go to Symbol in Workspace (Ctrl+T) — shows symbol icons in results.
  *
- *  Both back onto the out-of-process markdown LSP, so assertions poll.
+ *  The fixtures are markdown, whose headings carry the `symbol-heading` icon id;
+ *  other kinds use `symbol-kind-<n>`. Both back onto the out-of-process markdown
+ *  LSP, so assertions poll.
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdtempSync, writeFileSync } from 'node:fs'
@@ -26,8 +28,7 @@ test.describe('@p1 go to symbol', () => {
   test('Go to Symbol in Editor opens one quick pick with kind icons and jumps the cursor', async ({
     page,
     workbench,
-  }) => {
-    await workbench.waitForRestored()
+  }) => {    await workbench.waitForRestored()
 
     const { dir, aPath } = writeWorkspace()
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
@@ -52,12 +53,12 @@ test.describe('@p1 go to symbol', () => {
     // Exactly one quick pick — monaco's quickOutline default key was unbound.
     expect(await page.getByTestId('quick-input').count()).toBe(1)
 
-    // Items carry symbol-kind icons.
+    // Items carry symbol icons (markdown headings → symbol-heading).
     await expect
       .poll(() =>
         page.getByTestId('quick-input-item-icon-slot').first().getAttribute('data-icon-id'),
       )
-      .toMatch(/^symbol-kind-/)
+      .toMatch(/^(symbol-kind-|symbol-heading$)/)
 
     // Move to the second symbol (## Beta, line 3) and accept.
     await workbench.quickInput.input.press('ArrowDown')
@@ -96,7 +97,7 @@ test.describe('@p1 go to symbol', () => {
         () => page.getByTestId('quick-input-item-icon-slot').first().getAttribute('data-icon-id'),
         { timeout: 10000 },
       )
-      .toMatch(/^symbol-kind-/)
+      .toMatch(/^(symbol-kind-|symbol-heading$)/)
   })
 
   test('Go to Symbol in Workspace lists symbols with no query typed', async ({
