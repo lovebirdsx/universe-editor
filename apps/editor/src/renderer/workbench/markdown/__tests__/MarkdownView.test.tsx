@@ -5,13 +5,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
+  IConfigurationService,
   IEditorResolverService,
   InstantiationService,
   ServiceCollection,
 } from '@universe-editor/platform'
-import type { IEditorResolverService as IEditorResolverServiceType } from '@universe-editor/platform'
+import type {
+  IConfigurationService as IConfigurationServiceType,
+  IEditorResolverService as IEditorResolverServiceType,
+} from '@universe-editor/platform'
 import { MarkdownView } from '../MarkdownView.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -22,8 +26,18 @@ vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
   },
 }))
 
+// mermaid can't render real SVG under happy-dom; drive the two branches via a mock.
+const { renderMock } = vi.hoisted(() => ({ renderMock: vi.fn() }))
+vi.mock('../mermaidLoader.js', () => ({
+  MermaidLoader: {
+    ensureInitialized: () => Promise.resolve({}),
+    render: renderMock,
+  },
+}))
+
 afterEach(() => {
   cleanup()
+  renderMock.mockReset()
 })
 
 function makeResolver(): IEditorResolverServiceType {
@@ -35,9 +49,18 @@ function makeResolver(): IEditorResolverServiceType {
   } as unknown as IEditorResolverServiceType
 }
 
+function makeConfig(): IConfigurationServiceType {
+  return {
+    _serviceBrand: undefined,
+    get: () => 'dark',
+    onDidChangeConfiguration: () => ({ dispose: () => {} }),
+  } as unknown as IConfigurationServiceType
+}
+
 function renderMarkdown(text: string, testId?: string) {
   const services = new ServiceCollection()
   services.set(IEditorResolverService, makeResolver())
+  services.set(IConfigurationService, makeConfig())
   const inst = new InstantiationService(services)
   return render(
     <ServicesContext.Provider value={inst}>
@@ -79,5 +102,22 @@ describe('MarkdownView', () => {
   it('drops links with unsafe schemes', () => {
     renderMarkdown('[evil](javascript:alert(1))')
     expect(screen.queryByRole('link')).toBeNull()
+  })
+
+  it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {
+    renderMock.mockResolvedValue('<svg id="rendered"><g /></svg>')
+    renderMarkdown('```mermaid\ngraph TD; A-->B\n```')
+    const diagram = await screen.findByTestId('mermaid-diagram')
+    expect(diagram.querySelector('svg')).toBeTruthy()
+    expect(renderMock).toHaveBeenCalledWith(expect.any(String), 'graph TD; A-->B', 'dark')
+  })
+
+  it('falls back to a code block when mermaid rendering fails', async () => {
+    renderMock.mockRejectedValue(new Error('syntax error'))
+    const { container } = renderMarkdown('```mermaid\nnot a diagram\n```')
+    await waitFor(() => expect(renderMock).toHaveBeenCalled())
+    expect(screen.queryByTestId('mermaid-diagram')).toBeNull()
+    const pre = container.querySelector('pre[data-lang="mermaid"]')
+    expect(pre?.textContent).toContain('not a diagram')
   })
 })

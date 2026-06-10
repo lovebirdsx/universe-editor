@@ -119,3 +119,16 @@
 .mdLink:hover {
   text-decoration: underline;
 }
+
+.mermaidBlock {
+  display: flex;
+  justify-content: center;
+  margin: 4px 0;
+  padding: 8px;
+  overflow: auto;
+}
+
+.mermaidBlock svg {
+  max-width: 100%;
+  height: auto;
+}

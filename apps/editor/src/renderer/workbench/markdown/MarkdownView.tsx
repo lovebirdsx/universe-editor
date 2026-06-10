@@ -16,6 +16,7 @@ import {
   type TableAlign,
 } from '../../services/acp/markdownRenderer.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
+import { MermaidBlock } from './MermaidBlock.js'
 import { useService } from '../useService.js'
 import styles from './markdown.module.css'
 
@@ -49,7 +50,9 @@ function Block({ node }: { node: MdNode }): ReactNode {
       return <Tag {...lineAttr}>{renderInline(node.children)}</Tag>
     }
     case 'code_fence':
-      return (
+      return node.lang?.toLowerCase() === 'mermaid' ? (
+        <MermaidBlock code={node.code} />
+      ) : (
         <CodeBlock
           code={node.code}
           lang={node.lang}

@@ -44,6 +44,7 @@
     "electron-updater": "^6.3.0",
     "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",
+    "mermaid": "catalog:",
     "monaco-editor": "catalog:",
     "@vscode/ripgrep": "catalog:",
     "tar": "catalog:",
