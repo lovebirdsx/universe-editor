@@ -287,7 +287,7 @@ export class GoToFileSymbolAction extends Action2 {
       id: GoToFileSymbolAction.ID,
       title: localize('action.gotoSymbol.title', 'Go to Symbol in Editor…'),
       category: localize('command.category.go', 'Go'),
-      keybinding: { primary: 'ctrl+shift+o' },
+      keybinding: [{ primary: 'ctrl+r' }],
       f1: true,
     })
   }
