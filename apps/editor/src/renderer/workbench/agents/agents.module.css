@@ -1002,7 +1002,7 @@
   margin: auto;
   padding: 18px 0;
   color: var(--color-sidebar-fg, #888);
-  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-size: var(--agent-font-size, 14px);
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1022,7 +1022,7 @@
 
 .chatEmptySession .promptForm {
   align-self: center;
-  width: min(100%, 560px);
+  width: min(100%, 800px);
   padding: 0 12px 4px;
   border-top: 0;
   box-sizing: border-box;
@@ -1036,7 +1036,7 @@
 
 .emptyHintTitle {
   margin: 0;
-  font-size: calc(var(--agent-font-size, 12px) * 0.929);
+  font-size: calc(var(--agent-font-size, 14px) * 1.5);
   font-weight: 600;
   color: var(--color-editor-fg, #d4d4d4);
 }
@@ -1054,7 +1054,7 @@
 
 .emptyHintSectionTitle {
   color: var(--color-message-role-fg, #aaa);
-  font-size: calc(var(--agent-font-size, 12px) * 0.786);
+  font-size: calc(var(--agent-font-size, 14px) * 1.25);
   font-weight: 600;
   text-transform: uppercase;
 }
@@ -1125,7 +1125,7 @@
   background: var(--color-message-bg, #2a2a2a);
   color: var(--color-editor-fg, #d4d4d4);
   font-family: var(--font-mono, 'Fira Code', Consolas, monospace);
-  font-size: calc(var(--agent-font-size, 12px) * 0.786);
+  font-size: calc(var(--agent-font-size, 14px) * 1.1);
   line-height: 1.2;
   white-space: nowrap;
 }
@@ -1154,7 +1154,7 @@
 
 .sessionLoadingMessage {
   margin: 0;
-  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-size: calc(var(--agent-font-size, 14px) * 1.2);
 }
 
 .stickyUserBar {
