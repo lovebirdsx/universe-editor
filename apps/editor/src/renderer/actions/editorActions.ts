@@ -31,6 +31,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IClosedEditorsService } from '../services/editor/ClosedEditorsService.js'
 import { IRecentEditorsService } from '../services/editor/RecentEditorsService.js'
+import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
 import { resolveTargetEditor } from './editorActionHelpers.js'
 
 // ---------------------------------------------------------------------------
@@ -307,10 +308,13 @@ const PICK_ID_DELIMITER = '::'
 function buildRecentEditorPickItems(recentService: IRecentEditorsService): IQuickPickItem[] {
   const items: IQuickPickItem[] = []
   for (const { editor, group } of recentService.getRecentEditors()) {
+    const iconId =
+      editor.getIconId?.() ?? (editor.resource ? resourceIconId(editor.resource) : undefined)
     items.push({
       id: `${group.id}${PICK_ID_DELIMITER}${editor.id}`,
       label: editor.label,
       description: localize('quickOpenRecentEditor.group', 'Group {id}', { id: group.id }),
+      ...(iconId ? { iconId } : {}),
     })
   }
   return items

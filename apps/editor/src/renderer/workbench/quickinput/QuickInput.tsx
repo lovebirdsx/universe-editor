@@ -13,6 +13,8 @@ import { useService } from '../useService.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
 import { resolveSessionStatusIcon } from '../agents/sessionStatusIcon.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
+import { FileIcon } from '../files/fileIconTheme.js'
+import { parseResourceIconId } from '../../services/quickInput/quickPickResourceIcon.js'
 import { resolveSymbolKindIcon } from './symbolKindIcon.js'
 import {
   QuickInputService,
@@ -48,6 +50,17 @@ export function QuickInputPortal() {
             state={panelState}
             onClose={close}
             renderIcon={(id, size, className) => {
+              const resource = parseResourceIconId(id)
+              if (resource) {
+                return (
+                  <FileIcon
+                    resource={resource}
+                    isDirectory={false}
+                    size={size}
+                    className={className}
+                  />
+                )
+              }
               const Icon = resolveQuickInputIcon(id)
               return <Icon size={size} className={className} />
             }}

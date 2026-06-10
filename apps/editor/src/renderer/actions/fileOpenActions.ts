@@ -22,6 +22,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
+import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
@@ -85,6 +86,7 @@ export class OpenRecentFilesAction extends Action2 {
       id: f.uri.toString(),
       label: f.name,
       description: f.uri.fsPath,
+      iconId: resourceIconId(f.uri),
     }))
 
     const pick = await quickInput.pick(pickItems, {
@@ -165,7 +167,7 @@ function workspaceRelativePath(root: URI, uri: URI): string {
 function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
   const rel = workspaceRelativePath(root, uri)
   const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? uri.fsPath
-  return { id: uri.toString(), label, description: rel }
+  return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
 }
 
 function isUriInsideRoot(root: URI, uri: URI): boolean {
@@ -206,6 +208,7 @@ export class GoToFileAction extends Action2 {
         id: f.uri.toString(),
         label: f.name,
         description: f.uri.fsPath,
+        iconId: resourceIconId(f.uri),
       }))
       const pick = await quickInput.pick(items, {
         id: 'workbench.recentFiles',
@@ -298,11 +301,15 @@ export class GoToFileAction extends Action2 {
             includeExactPathMatches: true,
           })
           if (seq !== requestSeq) return
-          picker.items = complete.results.map((match) => ({
-            id: URI.revive(match.resource)!.toString(),
-            label: match.basename,
-            description: match.relativePath,
-          }))
+          picker.items = complete.results.map((match) => {
+            const resource = URI.revive(match.resource)!
+            return {
+              id: resource.toString(),
+              label: match.basename,
+              description: match.relativePath,
+              iconId: resourceIconId(resource),
+            }
+          })
         } finally {
           if (seq === requestSeq) picker.busy = false
         }
