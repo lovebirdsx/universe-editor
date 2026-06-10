@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { IpcRendererEvent } from 'electron'
 import { IPC_PROTOCOL_CHANNEL } from '../shared/ipc/channelNames.js'
 import { E2E_PROBE_ARGV_FLAG, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
@@ -25,6 +25,11 @@ const bridge = {
   },
   platform: process.platform as NodeJS.Platform,
   home,
+  // Electron 33 removed `File.path`; the supported way to map a dragged-in
+  // File back to an absolute filesystem path is webUtils.getPathForFile.
+  getPathForFile(file: File): string {
+    return webUtils.getPathForFile(file)
+  },
 }
 
 contextBridge.exposeInMainWorld('ipc', bridge)

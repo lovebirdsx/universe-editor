@@ -24,6 +24,7 @@ import { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
 import { GitBlameContribution } from './GitBlameContribution.js'
 import { DirtyDiffContribution } from './DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
+import { GlobalDragAndDropContribution } from './GlobalDragAndDropContribution.js'
 import { WorkspaceRecentMenuContribution } from './WorkspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from './WorkspaceRestoreContribution.js'
 import { WorkspaceExplorerRevealContribution } from './WorkspaceExplorerRevealContribution.js'
@@ -224,6 +225,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.externalChangeWatcher',
   ExternalChangeWatcher,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Window-level safety net: preventDefault file/resource drags so dropping over
+// any unhandled gap never makes Electron navigate to the file. AfterRestore so
+// it installs once the workbench UI (and its drop targets) are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.globalDragAndDrop',
+  GlobalDragAndDropContribution,
   WorkbenchPhase.AfterRestore,
 )
 

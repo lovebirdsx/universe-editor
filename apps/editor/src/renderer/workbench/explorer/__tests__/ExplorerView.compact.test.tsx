@@ -76,6 +76,7 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
     async rename(src: URI, dest: URI) {
       renameCalls.push({ src: src.toString(), dest: dest.toString() })
     },
+    async copy() {},
     async listRecursive() {
       return []
     },

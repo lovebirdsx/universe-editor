@@ -70,6 +70,12 @@ export interface IFileService {
   rename(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void>
 
   /**
+   * Copies `source` to `target` (recursively for directories). Without
+   * `overwrite: true`, an existing target throws `FileSystemError('EEXIST')`.
+   */
+  copy(source: URI, target: URI, opts?: { overwrite?: boolean }): Promise<void>
+
+  /**
    * Recursively lists all files under `root`, skipping directories named in
    * `ignore`. Returns absolute fsPath strings to avoid URI serialization over IPC.
    */

@@ -26,6 +26,7 @@ import {
   ICommandService,
   IContextKeyService,
   IDialogService,
+  IEditorResolverService,
   markAsSingleton,
   MenuId,
   observableValue,
@@ -38,12 +39,14 @@ import {
 import {
   ContextMenu,
   DragSessionContext,
+  dragContainsResources,
   useDragHandle,
   useDropTarget,
 } from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
+import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import {
   IScmDecorationsService,
   scmPathKey,
@@ -199,10 +202,15 @@ function EditorTab({
         }
       : undefined
 
-  const { dragHandleProps } = useDragHandle<{ editor: EditorInput; sourceGroupId: number }>({
-    editor: input,
-    sourceGroupId: groupId,
-  })
+  const { dragHandleProps } = useDragHandle<{ editor: EditorInput; sourceGroupId: number }>(
+    {
+      editor: input,
+      sourceGroupId: groupId,
+    },
+    {
+      uriList: () => (resource && resource.scheme === 'file' ? [resource.toString()] : []),
+    },
+  )
 
   const fullyActive = isActive && isGroupActive && hasInputFocus
   const tabClass = [
@@ -270,6 +278,7 @@ export function EditorGroupView({
   const dialogService = useService(IDialogService)
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
+  const editorResolverService = useService(IEditorResolverService)
   const dragSession = useContext(DragSessionContext)
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
@@ -284,7 +293,12 @@ export function EditorGroupView({
   const [hasInputFocus, setHasInputFocus] = useState(false)
 
   const { dropTargetProps } = useDropTarget<{ editor: EditorInput; sourceGroupId: number }>(
-    ({ editor, sourceGroupId }) => {
+    (payload, e) => {
+      if (!payload) {
+        openDroppedResources(e)
+        return
+      }
+      const { editor, sourceGroupId } = payload
       if (sourceGroupId === group.id) {
         // Within same group: compute insertion index from the drop event's last known x.
         const tabBar = tabBarRef.current
@@ -303,11 +317,16 @@ export function EditorGroupView({
   const { dropTargetProps: bodyDropProps } = useDropTarget<{
     editor: EditorInput
     sourceGroupId: number
-  }>(({ editor, sourceGroupId }) => {
+  }>((payload, e) => {
     const rect = bodyRef.current?.getBoundingClientRect()
     const pos = bodyDropPosRef.current
     setBodyZone(null)
     bodyDropPosRef.current = null
+    if (!payload) {
+      openDroppedResources(e)
+      return
+    }
+    const { editor, sourceGroupId } = payload
     if (!rect || !pos) return
     const sourceGroup = groupsService.getGroup(sourceGroupId)
     if (!sourceGroup) return
@@ -325,6 +344,12 @@ export function EditorGroupView({
     groupsService.moveEditor(editor, newGroup)
   })
 
+  const openDroppedResources = (e: ReactDragEvent): void => {
+    for (const resource of readDroppedResources(e)) {
+      void editorResolverService.openEditor(resource)
+    }
+  }
+
   const handleBodyDragOver = (e: ReactDragEvent<HTMLDivElement>) => {
     bodyDropProps.onDragOver(e)
     const rect = bodyRef.current?.getBoundingClientRect()
@@ -335,6 +360,13 @@ export function EditorGroupView({
     const payload = dragSession?.payload as
       | { editor: EditorInput; sourceGroupId: number }
       | undefined
+    if (!payload) {
+      // OS-external / cross-region resource: a single "open" highlight, no split.
+      if (dragContainsResources(e.dataTransfer)) {
+        if (bodyZone !== 'center') setBodyZone('center')
+      }
+      return
+    }
     const onlyEditorSelfDrop = payload?.sourceGroupId === group.id && group.editors.length === 1
     if (onlyEditorSelfDrop) {
       if (bodyZone !== null) setBodyZone(null)

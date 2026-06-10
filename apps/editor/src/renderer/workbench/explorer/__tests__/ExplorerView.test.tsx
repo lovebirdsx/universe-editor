@@ -61,6 +61,7 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
     async createDirectory() {},
     async delete() {},
     async rename() {},
+    async copy() {},
     async listRecursive() {
       return []
     },

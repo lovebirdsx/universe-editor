@@ -13,8 +13,8 @@ function DragSource({ payload }: { payload: string }) {
   )
 }
 
-function DropTarget({ onDrop }: { onDrop: (p: string) => void }) {
-  const { dropTargetProps } = useDropTarget<string>(onDrop)
+function DropTarget({ onDrop }: { onDrop: (p: string | undefined) => void }) {
+  const { dropTargetProps } = useDropTarget<string>((payload) => onDrop(payload))
   return (
     <div data-testid="target" {...dropTargetProps}>
       drop here
@@ -55,7 +55,7 @@ describe('DnD hooks', () => {
     expect(onDrop).toHaveBeenCalledWith('world')
   })
 
-  it('dragend clears payload so subsequent drop without drag does nothing', () => {
+  it('dragend clears payload so a later drop reports no in-tree payload', () => {
     const onDrop = vi.fn()
     render(
       <DragSessionProvider>
@@ -67,9 +67,10 @@ describe('DnD hooks', () => {
     fireEvent.dragStart(screen.getByTestId('source'))
     fireEvent.dragEnd(screen.getByTestId('source'))
 
-    // Drop without a preceding dragStart — payload is cleared.
+    // Drop without a preceding dragStart — the in-tree payload is cleared, so
+    // the target receives `undefined` (and would fall back to the DataTransfer).
     fireEvent.drop(screen.getByTestId('target'))
 
-    expect(onDrop).not.toHaveBeenCalled()
+    expect(onDrop).toHaveBeenCalledWith(undefined)
   })
 })

@@ -13,6 +13,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import { type IFileService, type URI } from '@universe-editor/platform'
@@ -39,6 +40,8 @@ interface Props {
     target: { resource: URI; isDirectory: boolean } | null,
   ) => void
   readonly fileService?: IFileService
+  /** Invoked when OS-external / cross-panel resources are dropped onto a directory row. */
+  readonly onDropResources?: (destDir: URI, e: ReactDragEvent) => void
   /** Git status colour for the name; letter shown as a trailing badge. */
   readonly decoColor?: string
   readonly decoLetter?: string
@@ -61,6 +64,7 @@ function ExplorerTreeNodeImpl({
   onOpenFile,
   onContextMenu,
   fileService,
+  onDropResources,
   decoColor,
   decoLetter,
   decoStrike,
@@ -121,19 +125,38 @@ function ExplorerTreeNodeImpl({
     if (!isDirectory) onOpenFile(resource, { preview: false })
   }
 
-  const { dragHandleProps } = useDragHandle<{ resource: URI; isDirectory: boolean }>({
-    resource: compactRoot ?? resource,
-    isDirectory,
-  })
+  const { dragHandleProps } = useDragHandle<{ resource: URI; isDirectory: boolean }>(
+    {
+      resource: compactRoot ?? resource,
+      isDirectory,
+    },
+    {
+      uriList: () => {
+        const self = compactRoot ?? resource
+        const selfKey = self.toString()
+        const selection = tree.selection
+        if (selection.length > 1 && selection.some((u) => u.toString() === selfKey)) {
+          return selection.map((u) => u.toString())
+        }
+        return [selfKey]
+      },
+    },
+  )
 
   const { dropTargetProps } = useDropTarget<{ resource: URI; isDirectory: boolean }>(
-    ({ resource: src }) => {
-      if (!fileService || !isDirectory) return
-      const srcName = src.path.split('/').pop()
-      if (!srcName) return
+    (payload, e) => {
+      if (!isDirectory) return
       const destDir = dropDirRef.current
-      const dest = destDir.with({ path: `${destDir.path}/${srcName}` })
-      void fileService.rename(src, dest)
+      if (payload) {
+        if (!fileService) return
+        const src = payload.resource
+        const srcName = src.path.split('/').pop()
+        if (!srcName) return
+        const dest = destDir.with({ path: `${destDir.path}/${srcName}` })
+        void fileService.rename(src, dest)
+        return
+      }
+      onDropResources?.(destDir, e)
     },
   )
 

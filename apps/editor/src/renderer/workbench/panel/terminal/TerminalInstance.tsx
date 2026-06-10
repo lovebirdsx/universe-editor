@@ -7,6 +7,11 @@ import {
   type ITerminalXtermHolder,
 } from '../../../services/terminal/TerminalXtermService.js'
 import { useService } from '../../useService.js'
+import { dragContainsResources } from '@universe-editor/workbench-ui'
+import {
+  formatPathForTerminal,
+  readDroppedResources,
+} from '../../../services/dnd/resourceDropTransfer.js'
 import styles from './TerminalInstance.module.css'
 
 export interface TerminalInstanceProps {
@@ -39,6 +44,7 @@ export function TerminalInstance({
 
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null)
   const [hasSelection, setHasSelection] = useState(false)
+  const [dropActive, setDropActive] = useState(false)
 
   // Reparent the persistent xterm wrapper into this host; never dispose the
   // holder here — it outlives the view and is released on process exit.
@@ -125,13 +131,49 @@ export function TerminalInstance({
     setContextMenu(null)
   }
 
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!dragContainsResources(e.dataTransfer)) return
+    e.preventDefault()
+    // Stop the editor group body from also reacting (it would show an "open"
+    // overlay) when a terminal is hosted inside an editor group.
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+    if (!dropActive) setDropActive(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    if (!hostRef.current?.contains(e.relatedTarget as Node | null)) setDropActive(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    setDropActive(false)
+    const resources = readDroppedResources(e)
+    if (resources.length === 0) return
+    e.preventDefault()
+    // Prevent the drop from bubbling to the editor group body, which would
+    // otherwise open the dropped files as editors in addition to inserting them.
+    e.stopPropagation()
+    const text = resources.map((r) => formatPathForTerminal(r.fsPath)).join(' ')
+    manager.input(id, `${text} `)
+    holderRef.current?.focus()
+  }
+
   return (
     <>
       <div
         ref={hostRef}
-        className={active ? `${styles['instance']} ${styles['visible']}` : styles['instance']}
+        className={[
+          styles['instance'],
+          active && styles['visible'],
+          dropActive && styles['dropActive'],
+        ]
+          .filter(Boolean)
+          .join(' ')}
         data-terminal-id={id}
         onContextMenu={handleContextMenu}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
       />
       {contextMenu && (
         <>

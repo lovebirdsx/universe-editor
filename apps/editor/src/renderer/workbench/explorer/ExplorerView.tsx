@@ -7,7 +7,14 @@
  *  row rendering, file-open behaviour and the context menu.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type DragEvent as ReactDragEvent,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import {
   IConfigurationService,
@@ -24,6 +31,7 @@ import {
 import {
   DragSessionProvider,
   Tree,
+  dragContainsResources,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
 import {
@@ -38,6 +46,8 @@ import {
 import { ExplorerTreeNode } from './ExplorerTreeNode.js'
 import { ExplorerContextMenu, type ContextMenuState } from './ExplorerContextMenu.js'
 import { confirmLargeFile } from '../../services/editor/largeFileGuard.js'
+import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
+import { importDroppedResources } from '../../services/dnd/importDroppedFiles.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import styles from './ExplorerView.module.css'
 
@@ -92,6 +102,15 @@ export function ExplorerView() {
     [],
   )
 
+  const onDropResources = useCallback(
+    (destDir: URI, e: ReactDragEvent) => {
+      const sources = readDroppedResources(e)
+      if (sources.length === 0) return
+      void importDroppedResources(sources, destDir, fileService, dialogService)
+    },
+    [fileService, dialogService],
+  )
+
   const root = tree.root
   if (!root) {
     return (
@@ -140,37 +159,51 @@ export function ExplorerView() {
         fileService={fileService}
         onOpenFile={openFile}
         onContextMenu={onRowContextMenu}
+        onDropResources={onDropResources}
       />
     )
   }
 
   return (
     <DragSessionProvider>
-      <Tree<IExplorerEntry>
-        model={tree.model}
-        rootRef={containerRef}
-        className={styles['view'] ?? ''}
-        virtualListClassName={styles['virtualList'] ?? ''}
-        virtualizationThreshold={threshold}
-        renderRow={renderRow}
-        onActivate={(node, opts) => openFile(node.element.resource, { preview: opts.preview })}
-        onRowKeyDown={(e, node) => {
-          if (node.id === rootKey) return
-          if (e.key === 'F2') {
-            e.preventDefault()
-            void commandService.executeCommand('workbench.files.action.rename', {
-              target: node.element.resource,
-            })
-          } else if (e.key === 'Delete') {
-            e.preventDefault()
-            void commandService.executeCommand('workbench.files.action.delete', {
-              target: node.element.resource,
-              isDirectory: node.element.isDirectory,
-            })
-          }
+      <div
+        style={{ display: 'contents' }}
+        onDragOver={(e) => {
+          if (dragContainsResources(e.dataTransfer)) e.preventDefault()
         }}
-        onContextMenu={(e) => onRowContextMenu(e, null)}
-      />
+        onDrop={(e) => {
+          // Skip when a row already handled the drop (e.g. import onto a folder).
+          if (e.defaultPrevented) return
+          e.preventDefault()
+          onDropResources(root, e)
+        }}
+      >
+        <Tree<IExplorerEntry>
+          model={tree.model}
+          rootRef={containerRef}
+          className={styles['view'] ?? ''}
+          virtualListClassName={styles['virtualList'] ?? ''}
+          virtualizationThreshold={threshold}
+          renderRow={renderRow}
+          onActivate={(node, opts) => openFile(node.element.resource, { preview: opts.preview })}
+          onRowKeyDown={(e, node) => {
+            if (node.id === rootKey) return
+            if (e.key === 'F2') {
+              e.preventDefault()
+              void commandService.executeCommand('workbench.files.action.rename', {
+                target: node.element.resource,
+              })
+            } else if (e.key === 'Delete') {
+              e.preventDefault()
+              void commandService.executeCommand('workbench.files.action.delete', {
+                target: node.element.resource,
+                isDirectory: node.element.isDirectory,
+              })
+            }
+          }}
+          onContextMenu={(e) => onRowContextMenu(e, null)}
+        />
+      </div>
       {menu && (
         <ExplorerContextMenu
           state={menu}

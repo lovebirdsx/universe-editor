@@ -755,6 +755,12 @@
   overflow-y: hidden;
 }
 
+.promptTextarea.dropActive {
+  border-color: var(--color-list-active-bar, #007acc);
+  outline: 1px solid var(--color-list-active-bar, #007acc);
+  outline-offset: -2px;
+}
+
 .promptActions {
   display: flex;
   align-items: center;

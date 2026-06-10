@@ -99,7 +99,10 @@ test.describe('@p1 go to symbol', () => {
       .toMatch(/^symbol-kind-/)
   })
 
-  test('Go to Symbol in Workspace lists symbols with no query typed', async ({ page, workbench }) => {
+  test('Go to Symbol in Workspace lists symbols with no query typed', async ({
+    page,
+    workbench,
+  }) => {
     await workbench.waitForRestored()
 
     const { dir, aPath } = writeWorkspace()

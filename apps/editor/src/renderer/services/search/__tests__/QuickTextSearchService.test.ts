@@ -163,6 +163,7 @@ function fakeFileService(): IFileService {
     async createDirectory() {},
     async delete() {},
     async rename() {},
+    async copy() {},
   }
 }
 

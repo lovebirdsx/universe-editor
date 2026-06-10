@@ -213,6 +213,34 @@ export class FileSystemMainService implements IFileService {
     }
   }
 
+  async copy(source: RawUri, target: RawUri, opts?: { overwrite?: boolean }): Promise<void> {
+    const src = ensureFile(reviveUri(source))
+    const dst = ensureFile(reviveUri(target))
+    const overwrite = opts?.overwrite === true
+    try {
+      if (!overwrite) {
+        let exists = true
+        try {
+          await fs.access(dst.fsPath)
+        } catch {
+          exists = false
+        }
+        if (exists) {
+          throw new FileSystemError(`Target already exists: ${dst.fsPath}`, 'EEXIST')
+        }
+      }
+      await fs.cp(src.fsPath, dst.fsPath, { recursive: true, force: overwrite })
+      this._logger.info(`copy ${src.fsPath} -> ${dst.fsPath} overwrite=${overwrite}`)
+    } catch (err) {
+      const mapped = err instanceof FileSystemError ? err : mapError(err, 'copy failed')
+      this._logger.warn(
+        `copy failed ${src.fsPath} -> ${dst.fsPath} code=${mapped.code}`,
+        mapped.message,
+      )
+      throw mapped
+    }
+  }
+
   async listRecursive(
     resource: RawUri,
     options?: { ignore?: readonly string[]; maxFiles?: number; maxDepth?: number },

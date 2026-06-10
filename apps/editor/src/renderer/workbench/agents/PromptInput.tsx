@@ -28,6 +28,8 @@ import {
   type MutableRefObject,
 } from 'react'
 import { IFileSearchService, IWorkspaceService, localize } from '@universe-editor/platform'
+import { dragContainsResources } from '@universe-editor/workbench-ui'
+import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
 import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
 import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
@@ -68,6 +70,7 @@ export function PromptInput({
 }) {
   const [text, setText] = useState(() => AcpPromptDraftCache.load(session.id)?.text ?? '')
   const [caret, setCaret] = useState(() => AcpPromptDraftCache.load(session.id)?.caret ?? 0)
+  const [dropActive, setDropActive] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
   // User-driven dismissal of the popover for the current token. Reset
@@ -311,6 +314,49 @@ export function PromptInput({
     setCaret(t.selectionStart ?? t.value.length)
   }
 
+  const onPromptDragOver = (e: React.DragEvent<HTMLTextAreaElement>): void => {
+    if (!dragContainsResources(e.dataTransfer)) return
+    e.preventDefault()
+    // Stop the editor group body from also reacting when the chat input is
+    // hosted inside an editor group (full-screen session).
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'copy'
+    if (!dropActive) setDropActive(true)
+  }
+
+  const onPromptDragLeave = (): void => {
+    if (dropActive) setDropActive(false)
+  }
+
+  const onPromptDrop = (e: React.DragEvent<HTMLTextAreaElement>): void => {
+    setDropActive(false)
+    const resources = readDroppedResources(e)
+    if (resources.length === 0) return
+    e.preventDefault()
+    // Prevent the drop from bubbling to the editor group body, which would
+    // otherwise open the dropped files as editors instead of @-mentioning them.
+    e.stopPropagation()
+    const picks = resources.map((uri) => toMentionName(uri, workspaceRoot))
+    let next = text
+    let pos = textareaRef.current?.selectionStart ?? caret
+    for (const p of picks) {
+      const insert = `@${p.name} `
+      next = next.slice(0, pos) + insert + next.slice(pos)
+      pos += insert.length
+    }
+    setText(next)
+    setCaret(pos)
+    setMentions((prev) => picks.reduce((acc, p) => mergeMention(acc, p), prev))
+    setMentionDismissed(true)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(pos, pos)
+      }
+    })
+  }
+
   return (
     <form className={styles['promptForm']} onSubmit={submit}>
       <div className={styles['promptComposer']}>
@@ -332,7 +378,9 @@ export function PromptInput({
         ) : null}
         <textarea
           ref={textareaRef}
-          className={styles['promptTextarea']}
+          className={[styles['promptTextarea'], dropActive && styles['dropActive']]
+            .filter(Boolean)
+            .join(' ')}
           value={text}
           onChange={(e) => {
             const v = e.target.value
@@ -348,6 +396,9 @@ export function PromptInput({
           onKeyUp={syncCaretFromEvent}
           onClick={syncCaretFromEvent}
           onFocus={syncCaretFromEvent}
+          onDragOver={onPromptDragOver}
+          onDragLeave={onPromptDragLeave}
+          onDrop={onPromptDrop}
           placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
           rows={3}
           spellCheck={false}

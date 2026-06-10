@@ -166,4 +166,53 @@ describe('FileSystemMainService', () => {
       code: 'ENOENT',
     })
   })
+
+  // -------- copy --------
+
+  it('copy duplicates a file, leaving the source in place', async () => {
+    const src = URI.file(join(root, 'a.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await service.writeFile(src, 'hi')
+    await service.copy(src, dst)
+    await expect(service.readFileText(src)).resolves.toBe('hi')
+    await expect(service.readFileText(dst)).resolves.toBe('hi')
+  })
+
+  it('copy recursively duplicates a directory tree', async () => {
+    await service.createDirectory(URI.file(join(root, 'src', 'nested')))
+    await service.writeFile(URI.file(join(root, 'src', 'nested', 'a.txt')), 'a')
+    await service.copy(URI.file(join(root, 'src')), URI.file(join(root, 'dst')))
+    await expect(
+      service.readFileText(URI.file(join(root, 'dst', 'nested', 'a.txt'))),
+    ).resolves.toBe('a')
+  })
+
+  it('copy to an existing target without overwrite throws EEXIST', async () => {
+    const src = URI.file(join(root, 'a.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await service.writeFile(src, 'hi')
+    await service.writeFile(dst, 'taken')
+    await expect(service.copy(src, dst)).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'EEXIST',
+    })
+  })
+
+  it('copy with overwrite replaces an existing target', async () => {
+    const src = URI.file(join(root, 'a.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await service.writeFile(src, 'fresh')
+    await service.writeFile(dst, 'stale')
+    await service.copy(src, dst, { overwrite: true })
+    await expect(service.readFileText(dst)).resolves.toBe('fresh')
+  })
+
+  it('copy of a missing source throws ENOENT', async () => {
+    const src = URI.file(join(root, 'missing.txt'))
+    const dst = URI.file(join(root, 'b.txt'))
+    await expect(service.copy(src, dst)).rejects.toMatchObject({
+      name: 'FileSystemError',
+      code: 'ENOENT',
+    })
+  })
 })

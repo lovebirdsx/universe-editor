@@ -93,6 +93,7 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFs {
         dirs.set(target.toString(), d)
       }
     },
+    async copy() {},
     async listRecursive() {
       return []
     },
