@@ -135,7 +135,13 @@ async function refreshCommandFor(repoPath: string): Promise<FakeCommand | undefi
 
 afterEach(async () => {
   extensionApiMock.reset()
-  await Promise.all(tmpRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+  // On Windows a just-finished `git` child can still hold a handle on its repo
+  // dir, so rmdir hits EBUSY/EPERM; retry to let the OS release it.
+  await Promise.all(
+    tmpRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })),
+  )
 })
 
 describe('gitPrimaryInputCommand', () => {

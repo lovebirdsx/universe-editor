@@ -69,7 +69,13 @@ function rootSet(result: { repos: { root: string }[] }): Set<string> {
 
 afterEach(async () => {
   vi.restoreAllMocks()
-  await Promise.all(tmpRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
+  // On Windows a just-finished `git` child can still hold a handle on its repo
+  // dir, so rmdir hits EBUSY/EPERM; retry to let the OS release it.
+  await Promise.all(
+    tmpRoots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })),
+  )
 })
 
 describe('discoverRepos', () => {
