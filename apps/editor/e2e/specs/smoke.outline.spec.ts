@@ -37,6 +37,10 @@ function writeWorkspace(): { dir: string; aPath: string; bPath: string } {
 
 test.describe('@p1 outline view', () => {
   test('keeps showing symbols after switching files', async ({ page, workbench }) => {
+    // Cold tsserver start on CI can exceed the 30s default — the spec already
+    // polls with a 20s budget per step (and OutlineService retries for 180s).
+    // Triple the test timeout so a slow cold start doesn't kill it mid-poll.
+    test.slow()
     await workbench.waitForRestored()
 
     const { dir, aPath, bPath } = writeWorkspace()

@@ -89,6 +89,26 @@ pnpm e2e
   - 失败 2 机制：`ErrorLogAutoRevealContribution`（`_hasRevealed` 一次性标志）
 - **教训**：当噪音污染的是**全局单值 / 一次性内部状态**（而非可过滤的列表），spec 层无法在不削弱被测断言的前提下隔离它——这时正解是**从源头消除噪音**（e2e 禁用与被测功能无关的子系统），而不是改 spec。先 grep 确认该子系统无 spec 依赖，再门控。
 
+### 案例 3：LSP 冷启动类 spec 被 30s test 级超时击穿（outline 硬失败 + 一组冷启动 flaky）
+- **现象**：一轮 CI 里 `smoke.outline.spec.ts` `@p1`（切文件后符号消失回归测）**硬失败**——`retries:1` 重试仍挂；同轮另有 3 个 flaky（重试救回）：`smoke.editor.spec.ts` `@p0`（newUntitledFile 挂 Monaco）、`smoke.editorResolver.spec.ts` `Reopen With…`、`smoke.peekNavigation.spec.ts`。本地稳过。
+- **判定关键——重试能否救回是分水岭**：retry 救得回的是瞬时竞态（flake）；**救不回的 outline 是结构性超时**，每次都撞同一堵墙。看失败形态：outline 是**超时**（poll 到一半 test 被 kill），不是符号拿到 `[]`（后者才是 LSP 真挂/回归）。
+- **根因**：
+  1. **outline 硬失败**：`playwright.config.ts` 全局 `timeout:30_000`（每 test 30s），但 outline spec 自己写了累计约 115s 的 poll 预算（单 poll 20s，`OutlineService` retry budget 甚至 180s，注释明说 “cold tsserver start can take a minute or more”）。**作者意图给宽预算，却被 30s test 上限拦腰截断**——CI 上 tsserver 冷启动 + 4 Electron 抢 2 核,30s 内出不来符号,test 在第一个 poll 就被杀,后面 20s poll 根本用不上。本地 tsserver 热/机器快,30s 够,故本地不复现。
+  2. **3 个 flaky**：冷启动竞态被默认 5s `expect` 超时甩开（@p0 是 Monaco 首次懒加载首帧 >5s）；editorResolver 是 `keyboard.type('File')` 后立刻 `Enter`,与 QuickPick 异步过滤渲染抢时序,旧列表还在就回车选错项。
+  3. **放大器**：`workers:4` 在 2 核 runner 上,4 个 Electron 互相饿死冷启动,把"勉强够"推过临界,Windows 尤甚。
+- **修法（均不削弱被测断言）**：
+  1. 给 LSP 冷启动 spec 加 `test.slow()`（×3 → 90s test 超时），匹配 spec 里已有的 20s poll 和 service 的 180s retry 预算：`smoke.outline` / `smoke.peekNavigation` / `smoke.markdownLsp` 在 test body 首行调 `test.slow()`；`smoke.gotoSymbol` 三个 case 在 `describe` 内顶部调一次 `test.slow()` 覆盖全部。
+  2. CI 上抬 expect 默认超时：`expect.timeout = process.env['CI'] ? 10_000 : 5_000`（对齐冷启动首帧,本地仍 5s 抓真延迟）。
+  3. CI 上降并行：`workers = process.env['CI'] ? 2 : 4`（牺牲墙钟换稳定,缓解 2 核争抢）。
+  4. editorResolver QuickPick：把 `type+Enter` 改成**先 poll 到目标项可见再确认**——`await expect(page.getByRole('option',{name:'File Editor'})).toBeVisible()` 后再 `Enter`,对齐 peek 的 poll-press 范式。
+- **本地验证产物坑（重要）**：本地直接在 `apps/editor` 里 `electron-vite build` + `playwright test` 会让所有 LSP 类 spec 拿到空符号 `[]`/`getOutlineSymbols is not a function`——因为**绕过了 LSP 产物链**。e2e 跑的是 `out/` 产物 + 从源 `extensions/*/dist` 加载内置扩展;正确链路是根 `pnpm e2e`（= `turbo build` + editor e2e）。若手动跑单 spec,先确保 `pnpm ext:build`（生成 `extensions/{typescript,markdown}/dist`）与 `packages/extension-host/dist`、`vendor/typescript-language-server` 都在,否则 typescript 扩展因缺 `UNIVERSE_TSLS_CLI` 对应产物而不注册 provider,outline/gotoSymbol 全空。`.runtime-resources/` 仅打包需要,dev/e2e 非打包模式从源 dist 加载。
+- **锚点**：
+  - 配置：`apps/editor/e2e/playwright.config.ts`（`timeout` / `expect.timeout` / `workers`）
+  - spec：`apps/editor/e2e/specs/smoke.{outline,peekNavigation,markdownLsp,gotoSymbol,editorResolver}.spec.ts`
+  - service 预算：`apps/editor/src/renderer/services/languageFeatures/OutlineService.ts`（`PULL_RETRY_BUDGET_MS=180_000`）
+  - LSP 产物链：`apps/editor` `ext:build` / `runtime:stage` 脚本；`extensions/typescript/src/extension.ts`（缺 `UNIVERSE_TSLS_CLI` 即不激活）
+- **教训**：spec 内 poll 预算（20s×N）与 service retry 预算（180s）远大于全局 test `timeout`（30s）时,**test 级超时才是真正的天花板**,宽 poll 是摆设——CI 冷启动会精准命中这条缝。对依赖子进程冷启动的 spec,test 超时要显式抬到匹配其 poll 预算（`test.slow()` 或 `setTimeout`）。retry 能救回=瞬时竞态,救不回=结构性问题（超时/真回归）,这是第一个该看的信号。
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -98,6 +118,9 @@ pnpm e2e
 6. CI 堆栈路径是 runner 路径（`D:\a\...`），与本地工作目录语义对齐即可，别因路径不同误判改错 checkout。
 7. 本地无法复现 CI 噪音是常态；本地验证目标是”没破坏 happy path”。
 8. 噪音污染**列表**（可按文案过滤）→ 改 spec 收敛断言；噪音污染**全局单值 / 一次性内部状态**（bell badge、`_hasRevealed`）→ spec 层无法隔离，从源头禁用噪音子系统（先 grep 确认无 spec 依赖）。同一噪音源（extension host 崩溃）可同时打挂多个看似无关的 spec。
+9. **retry 救得回 = 瞬时竞态（flake）；救不回 = 结构性问题（test 超时被击穿 / 真回归）**。这是分类第一信号,先看这个再读 call log。
+10. spec 内 poll/service retry 预算（20s、180s）远大于全局 test `timeout`（30s）时,**test 超时才是真天花板**,宽 poll 是摆设。依赖子进程冷启动的 spec 要 `test.slow()` 把 test 超时抬到匹配其 poll 预算。CI 资源紧（2 核跑 4 worker）会放大冷启动,可 `workers/expect.timeout` 按 `process.env['CI']` 分档。
+11. 本地手跑单 LSP spec 前确保产物链齐：`pnpm ext:build`（生成 `extensions/*/dist`）+ `extension-host/dist` + `vendor/typescript-language-server`。少了 → 符号全空 `[]` 或探针方法缺失,**是产物问题不是回归**。正规跑法是根 `pnpm e2e`。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

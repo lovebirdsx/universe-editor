@@ -68,8 +68,13 @@ test.describe('@p1 editorResolver', () => {
 
     await workbench.quickInput.waitForVisible()
 
-    // Type "File" to filter down to "File Editor", then confirm.
+    // Type "File" to filter down to "File Editor". Wait for the filtered option
+    // to actually render+focus before confirming — typing then pressing Enter
+    // immediately races the async filter on a slow CI runner (the old list may
+    // still be showing, so Enter picks the wrong item or a stale one).
     await page.keyboard.type('File')
+    const fileOption = page.getByRole('option', { name: 'File Editor' })
+    await expect(fileOption).toBeVisible()
     await page.keyboard.press('Enter')
 
     await workbench.quickInput.waitForHidden()

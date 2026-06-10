@@ -30,6 +30,8 @@ test.describe('@p1 peek keyboard navigation', () => {
     page,
     workbench,
   }) => {
+    // Out-of-process LSP warmup is slow on CI; give the cold start headroom.
+    test.slow()
     await workbench.waitForRestored()
 
     const { dir, aPath } = writeWorkspace()

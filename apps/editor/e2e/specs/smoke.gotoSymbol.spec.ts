@@ -25,10 +25,15 @@ function writeWorkspace(): { dir: string; aPath: string } {
 }
 
 test.describe('@p1 go to symbol', () => {
+  // All cases back onto the out-of-process markdown LSP; cold start is slow on
+  // contended CI runners and can blow the 30s default. Give every case headroom.
+  test.slow()
+
   test('Go to Symbol in Editor opens one quick pick with kind icons and jumps the cursor', async ({
     page,
     workbench,
-  }) => {    await workbench.waitForRestored()
+  }) => {
+    await workbench.waitForRestored()
 
     const { dir, aPath } = writeWorkspace()
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)

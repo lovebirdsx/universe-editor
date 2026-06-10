@@ -29,6 +29,8 @@ test.describe('@p1 markdown language server', () => {
     page,
     workbench,
   }) => {
+    // Spawns a real LSP subprocess; cold start is slow on contended CI runners.
+    test.slow()
     await workbench.waitForRestored()
 
     const { dir, aPath } = writeWorkspace()
