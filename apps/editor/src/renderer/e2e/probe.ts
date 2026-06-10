@@ -34,6 +34,7 @@ import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
+import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -69,6 +70,7 @@ export interface E2EProbeServices {
   readonly terminalService: ITerminalService
   readonly scmService: IScmService
   readonly languageFeaturesService: ILanguageFeaturesService
+  readonly outlineService: IOutlineService
 }
 
 const NONE_TOKEN = {
@@ -357,6 +359,19 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         startLineNumber: m.startLineNumber,
       }))
     },
+    getOutlineSymbols: (): readonly string[] => {
+      const roots = services.outlineService.outline.get()?.roots ?? []
+      const names: string[] = []
+      const walk = (list: readonly { name: string; children?: readonly unknown[] }[]): void => {
+        for (const s of list) {
+          names.push(s.name)
+          if (s.children) walk(s.children as typeof list)
+        }
+      }
+      walk(roots as readonly { name: string; children?: readonly unknown[] }[])
+      return names
+    },
+    getOutlineUri: (): string | undefined => services.outlineService.outline.get()?.uri,
   }
 
   window[E2E_PROBE_KEY] = probe

@@ -502,6 +502,7 @@ async function bootstrapWorkbench(): Promise<void> {
     terminalService: services.get(ITerminalService) as ITerminalService,
     scmService,
     languageFeaturesService: services.get(ILanguageFeaturesService) as ILanguageFeaturesService,
+    outlineService,
   })
   workbenchStore.add(d)
 

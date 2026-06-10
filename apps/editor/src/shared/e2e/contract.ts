@@ -255,6 +255,16 @@ export interface E2EProbe {
   getMarkdownDefinition(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
   /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
   getMarkdownMarkers(uri: string): readonly E2EMarker[]
+  // -- Outline probe --------------------------------------------------------
+  /**
+   * Flattened symbol names from `IOutlineService.outline` — the SAME observable the
+   * Outline view renders, after going through OutlineService's attach/re-pull
+   * logic. Differs from getMarkdownDocumentSymbols (which pulls the provider
+   * directly): this catches the "Outline empties after switching files" bug.
+   */
+  getOutlineSymbols(): readonly string[]
+  /** The URI the current outline was computed for, or undefined when empty. */
+  getOutlineUri(): string | undefined
 }
 
 declare global {

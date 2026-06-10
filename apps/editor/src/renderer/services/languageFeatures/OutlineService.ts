@@ -17,7 +17,7 @@ import {
   transaction,
   type IObservable,
 } from '@universe-editor/platform'
-import { type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
@@ -56,6 +56,19 @@ export const IOutlineService = createDecorator<IOutlineService>('outlineService'
 
 const SYMBOL_RECOMPUTE_DEBOUNCE_MS = 200
 
+// A just-opened (or restored) file's language server may not have analysed it yet
+// — a cold tsserver start on a large project can take a minute or more, and a
+// clean file with no diagnostics never fires a marker change to re-trigger a pull.
+// The first pull then returns [] and, without a re-pull, the outline stays blank
+// permanently (which is why a restored editor's outline could be stuck empty, and
+// why toggling the view didn't fix it — the service value never became non-empty).
+// Keep re-pulling with exponential backoff (250 → 500 → 1000 → 2000, then 2000
+// each) for as long as the outline is still empty, up to a generous total budget
+// so it fills in once the server finally answers.
+const INITIAL_PULL_RETRY_MS = 250
+const MAX_PULL_RETRY_MS = 2000
+const PULL_RETRY_BUDGET_MS = 180_000
+
 const NONE_TOKEN = {
   isCancellationRequested: false,
   onCancellationRequested: () => ({ dispose: () => {} }),
@@ -82,6 +95,9 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _currentModel: monaco.editor.ITextModel | undefined
   private _version = 0
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined
+  private _retryTimer: ReturnType<typeof setTimeout> | undefined
+  /** Bumped on every (re)attach; pending retries from a superseded attach bail. */
+  private _attachGeneration = 0
   /** Active live-preview highlight, owned by whichever editor it was set on. */
   private _previewDecorations: monaco.editor.IEditorDecorationsCollection | undefined
 
@@ -108,63 +124,118 @@ export class OutlineService extends Disposable implements IOutlineService {
     )
 
     // Providers register at AfterRestore — possibly after the first editor is
-    // already active — so recompute when the provider set changes.
+    // already active — and a freshly-registered server still needs a moment to
+    // analyse the file, so its first pull may be empty. Recompute WITH retries.
     this._register(
-      this._languageFeatures.onDidChangeDocumentSymbolProviders(() => this._recomputeSymbols()),
+      this._languageFeatures.onDidChangeDocumentSymbolProviders(() =>
+        this._recomputeSymbols({
+          generation: this._attachGeneration,
+          delay: INITIAL_PULL_RETRY_MS,
+          elapsed: 0,
+        }),
+      ),
     )
   }
 
   private _attachActiveEditor(): void {
     const input = this._editorService.activeEditor.get()
     const fileInput = input instanceof FileEditorInput ? input : undefined
+    const sameInput = fileInput !== undefined && fileInput === this._currentInput
 
     this._attachListeners.clear()
     this._clearDebounce()
     this._clearPreviewDecorations()
+
+    // Switching to a DIFFERENT file invalidates the old file's in-flight retries
+    // (bump generation) and clears its timer. A SAME-file re-attach — the editor
+    // re-mounting / re-registering while the language server is still analysing —
+    // must NOT cancel the running retry chain, or the outline can stay stuck empty
+    // as repeated re-registrations keep killing each scheduled retry.
+    if (!sameInput) {
+      this._clearRetry()
+      this._attachGeneration++
+    }
+    const generation = this._attachGeneration
     this._currentInput = fileInput
 
     if (!fileInput) {
       this._currentModel = undefined
+      this._clearRetry()
       this._publish(undefined, undefined)
       return
     }
 
     const editor = FileEditorRegistry.get(fileInput)
     const model = editor?.getModel() ?? MonacoModelRegistry.peek(fileInput.resource)
-    this._currentModel = model ?? undefined
 
     if (!model) {
       // Editor not mounted yet; FileEditorRegistry.onDidChange will re-attach.
-      this._publish(undefined, undefined)
+      // On a same-file re-attach the editor is just transiently unmounted (e.g. a
+      // re-layout): keep the previous model + any in-flight retry so the outline
+      // doesn't blank out and the retry can still fill it once the editor is back.
+      if (!sameInput) {
+        this._currentModel = undefined
+        this._publish(undefined, undefined)
+      }
       return
     }
+    this._currentModel = model
 
-    this._attachListeners.add(
-      model.onDidChangeContent(() => {
-        this._clearDebounce()
-        this._debounceTimer = setTimeout(() => {
-          this._debounceTimer = undefined
-          this._recomputeSymbols()
-        }, SYMBOL_RECOMPUTE_DEBOUNCE_MS)
-      }),
-    )
+    this._attachListeners.add(model.onDidChangeContent(() => this._scheduleRecompute()))
+    // Symbols are pulled, but a language server (e.g. tsserver) isn't ready when a
+    // file first opens — that first pull returns []. A diagnostics push means the
+    // server has now parsed this file, so re-pull when its markers change;
+    // otherwise the outline stays empty until the editor is re-activated.
+    const monacoNs = MonacoLoader.peek()
+    if (monacoNs) {
+      this._attachListeners.add(
+        monacoNs.editor.onDidChangeMarkers((resources) => {
+          const uri = model.uri.toString()
+          if (resources.some((r) => r.toString() === uri)) this._scheduleRecompute()
+        }),
+      )
+    }
     if (editor) {
       this._attachListeners.add(
         editor.onDidChangeCursorPosition(() => this._recomputeActiveSymbol()),
       )
     }
 
-    this._recomputeSymbols()
+    // Start the initial pull + retry chain. On a same-file re-attach, leave an
+    // already-running retry alone (and don't re-pull when we already have this
+    // file's symbols) — only (re)start when nothing is working on it yet.
+    const current = this._outline.get()
+    const haveSymbols =
+      current !== undefined && current.uri === model.uri.toString() && current.roots.length > 0
+    if (!sameInput || (!haveSymbols && this._retryTimer === undefined)) {
+      this._recomputeSymbols({
+        generation,
+        delay: INITIAL_PULL_RETRY_MS,
+        elapsed: 0,
+      })
+    }
   }
 
-  private _recomputeSymbols(): void {
+  private _scheduleRecompute(): void {
+    this._clearDebounce()
+    this._debounceTimer = setTimeout(() => {
+      this._debounceTimer = undefined
+      this._recomputeSymbols()
+    }, SYMBOL_RECOMPUTE_DEBOUNCE_MS)
+  }
+
+  private _recomputeSymbols(retry?: { generation: number; delay: number; elapsed: number }): void {
     const model = this._currentModel
     if (!model || model.isDisposed()) return
 
     const providers = this._languageFeatures.getDocumentSymbolProviders(model.getLanguageId())
     const provider = providers[0]
     if (!provider) {
+      // The provider may simply not be registered yet (language plugins activate
+      // lazily). Publish empty for now but keep retrying so the outline fills in
+      // once the provider appears, instead of staying blank until re-activation.
       this._publish({ uri: model.uri.toString(), roots: [], version: ++this._version }, undefined)
+      this._maybeRetry([], retry)
       return
     }
 
@@ -174,7 +245,33 @@ export class OutlineService extends Disposable implements IOutlineService {
       const roots = result ?? []
       this._outline.set({ uri: model.uri.toString(), roots, version: ++this._version }, undefined)
       this._recomputeActiveSymbol()
+      this._maybeRetry(roots, retry)
     })
+  }
+
+  /** Schedule another pull (with exponential backoff) while the outline is still empty and the time budget remains. */
+  private _maybeRetry(
+    roots: readonly monaco.languages.DocumentSymbol[],
+    retry: { generation: number; delay: number; elapsed: number } | undefined,
+  ): void {
+    if (
+      roots.length > 0 ||
+      !retry ||
+      retry.elapsed >= PULL_RETRY_BUDGET_MS ||
+      retry.generation !== this._attachGeneration
+    ) {
+      return
+    }
+    this._clearRetry()
+    this._retryTimer = setTimeout(() => {
+      this._retryTimer = undefined
+      if (retry.generation !== this._attachGeneration) return
+      this._recomputeSymbols({
+        generation: retry.generation,
+        delay: Math.min(retry.delay * 2, MAX_PULL_RETRY_MS),
+        elapsed: retry.elapsed + retry.delay,
+      })
+    }, retry.delay)
   }
 
   private _recomputeActiveSymbol(): void {
@@ -259,8 +356,16 @@ export class OutlineService extends Disposable implements IOutlineService {
     }
   }
 
+  private _clearRetry(): void {
+    if (this._retryTimer !== undefined) {
+      clearTimeout(this._retryTimer)
+      this._retryTimer = undefined
+    }
+  }
+
   override dispose(): void {
     this._clearDebounce()
+    this._clearRetry()
     this._clearPreviewDecorations()
     super.dispose()
   }

@@ -220,6 +220,10 @@ export const MonacoLoader = {
     }
     return _monaco
   },
+  /** Like `get()` but returns undefined instead of throwing when monaco hasn't loaded yet. */
+  peek(): typeof monaco | undefined {
+    return _monaco
+  },
   /**
    * Replace the JSON schemas Monaco's JSON language service uses. Bridges that
    * derive schemas from platform registries call this whenever the source data

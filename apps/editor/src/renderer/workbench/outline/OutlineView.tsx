@@ -9,7 +9,12 @@
 import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
 import { Hash } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import { Tree, TreeModel, type ITreeDataSource } from '@universe-editor/workbench-ui'
+import {
+  Tree,
+  TreeModel,
+  useOwnedTreeModel,
+  type ITreeDataSource,
+} from '@universe-editor/workbench-ui'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { type monaco } from '../editor/monaco/MonacoLoader.js'
@@ -51,19 +56,15 @@ export function OutlineView() {
   const idBySymbolRef = useRef<Map<monaco.languages.DocumentSymbol, string>>(new Map())
   const activeIdRef = useRef<string | undefined>(undefined)
 
-  const modelRef = useRef<TreeModel<OutlineNode> | null>(null)
-  if (!modelRef.current) {
+  const model = useOwnedTreeModel<OutlineNode>(() => {
     const dataSource: ITreeDataSource<OutlineNode> = {
       getId: (n) => n.id,
       hasChildren: (n) => n.children.length > 0,
       getChildren: (n) => n.children,
       getRoots: () => rootsRef.current,
     }
-    modelRef.current = new TreeModel<OutlineNode>({ dataSource, defaultExpanded: () => true })
-  }
-  const model = modelRef.current
-
-  useEffect(() => () => model.dispose(), [model])
+    return new TreeModel<OutlineNode>({ dataSource, defaultExpanded: () => true })
+  })
 
   useViewFocusable(
     'workbench.view.outline.main',
