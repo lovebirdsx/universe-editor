@@ -1,5 +1,30 @@
 [
   {
+    "version": "0.1.14",
+    "date": "2026-06-10",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "git graph加入是否显示远程分支的功能",
+          "git支持扫描内嵌的repo",
+          "markdown加入mermaid预览支持",
+          "给 Quick Open 跳转列表项加上文件类型/提供商图标",
+          "跳转工作区符号体验加速",
+          "优化scm中树的操作体验"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复跳转工作区符号到当前文件内符号必报错"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.13",
     "date": "2026-06-10",
     "groups": [
