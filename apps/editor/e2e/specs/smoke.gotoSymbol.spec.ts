@@ -98,4 +98,31 @@ test.describe('@p1 go to symbol', () => {
       )
       .toMatch(/^symbol-kind-/)
   })
+
+  test('Go to Symbol in Workspace lists symbols with no query typed', async ({ page, workbench }) => {
+    await workbench.waitForRestored()
+
+    const { dir, aPath } = writeWorkspace()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .toBe('markdown')
+
+    // Warm the server so the empty (match-all) query has symbols to return.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.queryMarkdownWorkspaceSymbols('Alpha')), {
+        timeout: 10000,
+      })
+      .toEqual(expect.arrayContaining(['# Alpha']))
+
+    await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.showAllSymbols'))
+    await workbench.quickInput.waitForVisible()
+
+    // Nothing typed: the picker should still populate (VSCode-style match-all).
+    await expect
+      .poll(() => page.getByTestId('quick-input-item-icon-slot').count(), { timeout: 10000 })
+      .toBeGreaterThan(0)
+  })
 })

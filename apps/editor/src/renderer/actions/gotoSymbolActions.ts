@@ -43,6 +43,16 @@ import {
 const MAX_RESULTS = 512
 const WORKSPACE_SYMBOL_DEBOUNCE_MS = 150
 
+/**
+ * Last successful match-all (empty query) result, replayed instantly on the next
+ * open so the picker is never blank while the fresh query is in flight
+ * (stale-while-revalidate). Keyed by workspace root so one folder never shows
+ * another's symbols.
+ */
+let emptyQueryCache:
+  | { readonly rootKey: string; readonly entries: readonly WorkspaceSymbolEntry[] }
+  | undefined
+
 function relativePath(root: URI | undefined, uri: URI, platform: HostPlatform): string {
   if (!root) return uri.fsPath
   return relativePathUnder(root.fsPath, uri.fsPath, platform) ?? uri.fsPath
@@ -120,6 +130,7 @@ export class GoToWorkspaceSymbolAction extends Action2 {
     const host = accessor.get(IHostService)
 
     const root = workspace.current?.folder
+    const rootKey = root?.toString() ?? ''
     const monacoNs = await MonacoLoader.ensureInitialized()
     // Workspace symbols come from whatever providers the language plugins have
     // registered; each activates lazily on opening a file of its language.
@@ -155,6 +166,16 @@ export class GoToWorkspaceSymbolAction extends Action2 {
       const render = (entries: readonly WorkspaceSymbolEntry[], query: string): void => {
         byId.clear()
         const merged = entries.map((e) => tsEntryToUnified(e, root, host.platform))
+        // A real query keeps each server's relevance ranking. An empty (match-all)
+        // query has no ranking and concatenates multiple providers, so sort by
+        // name (then path) for a stable, predictable list — and so the leading
+        // MAX_RESULTS slice keeps an alphabetical head instead of an arbitrary,
+        // provider-ordered cut. Mirrors VSCode's symbols quick access.
+        if (!query) {
+          merged.sort(
+            (a, b) => a.name.localeCompare(b.name) || a.description.localeCompare(b.description),
+          )
+        }
         picker.items = merged.slice(0, MAX_RESULTS).map((symbol, i) => {
           const id = String(i)
           byId.set(id, symbol)
@@ -168,14 +189,11 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         })
       }
 
-      // Language servers filter `workspace/symbol` server-side and return nothing
-      // for an empty query, so we only hit the providers once there's a query.
+      // An empty query means "show everything": the language servers' `navto`
+      // treats it as match-all, and (like VSCode's symbols quick access) we skip
+      // fuzzy scoring for it and render whatever the providers return.
       const refresh = (): void => {
         const query = currentValue.trim()
-        if (!query) {
-          render([], query)
-          return
-        }
         const mySeq = ++seq
         picker.busy = true
         void Promise.all(
@@ -188,7 +206,10 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         ).then((perProvider) => {
           if (didResolve || mySeq !== seq) return
           picker.busy = false
-          render(perProvider.flat(), query)
+          const flat = perProvider.flat()
+          // Seed the next open with this match-all result.
+          if (!query) emptyQueryCache = { rootKey, entries: flat }
+          render(flat, query)
         })
       }
 
@@ -236,6 +257,16 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         }),
       )
 
+      // Replay the previous match-all result instantly (stale-while-revalidate)
+      // so the picker shows content immediately instead of a blank list.
+      if (emptyQueryCache && emptyQueryCache.rootKey === rootKey) {
+        render(emptyQueryCache.entries, '')
+      }
+      // Populate/refresh on open (empty value → match-all). Route it through the
+      // same debounce so that if the user starts typing right away, this heavy
+      // match-all query is cancelled before it's ever sent — LSP requests are
+      // serialized, and an in-flight match-all would stall the real query.
+      debounce = setTimeout(refresh, WORKSPACE_SYMBOL_DEBOUNCE_MS)
       picker.show()
     })
   }
