@@ -357,6 +357,14 @@ html, body, #root {
   background: rgba(255, 255, 255, 0.28);
 }
 
+:root[data-theme='light'] ::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+:root[data-theme='light'] ::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.35);
+}
+
 /* Inline git blame annotation. Rendered as a CSS ::after pseudo-element (not
    Monaco injected text) so the annotation never participates in word-wrap line
    breaking — the text is supplied via the --git-blame-content custom property
