@@ -176,6 +176,23 @@
           "default": true,
           "description": "Whether git source control is enabled."
         },
+        "git.autoRepositoryDetection": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan workspace subfolders for nested git repositories. When false, only the workspace root is used."
+        },
+        "git.repositoryScanMaxDepth": {
+          "type": "number",
+          "default": 3,
+          "minimum": -1,
+          "description": "Maximum subfolder depth to scan for nested git repositories. -1 means unlimited."
+        },
+        "git.repositoryScanIgnoredFolders": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": ["node_modules"],
+          "description": "Folder names skipped while scanning for nested git repositories."
+        },
         "git.autofetch": {
           "type": "boolean",
           "default": true,

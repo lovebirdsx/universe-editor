@@ -11,10 +11,10 @@
 import { commands, workspace, window, type ExtensionContext } from '@universe-editor/extension-api'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { detectRepoRoot } from './gitService.js'
 import { Repository } from './repository.js'
 import { RepositoryManager } from './repositoryManager.js'
-import { discoverRepos } from './repoDiscovery.js'
+import { discoverRepos, type DiscoverOptions, type DiscoveredRepo } from './repoDiscovery.js'
+import { norm } from './pathUtil.js'
 import {
   getCommits as getGitGraphCommits,
   getCommitDetails as getGitGraphCommitDetails,
@@ -40,15 +40,27 @@ function isDirectoryArg(arg: unknown): boolean {
   return (arg as { isDirectory?: boolean } | undefined)?.isDirectory === true
 }
 
+async function readScanConfig(): Promise<DiscoverOptions> {
+  const cfg = workspace.getConfiguration('git')
+  const auto = await cfg.get('autoRepositoryDetection', true)
+  const maxDepth = auto ? await cfg.get('repositoryScanMaxDepth', 3) : 0
+  const ignoredFolders = await cfg.get('repositoryScanIgnoredFolders', ['node_modules'])
+  return { maxDepth, ignoredFolders }
+}
+
+/**
+ * When the workspace folder itself isn't a repo there's no natural "main", so
+ * pick the discovered repo whose normalized root sorts first — deterministic and
+ * stable across launches, so the status-bar owner doesn't jump around.
+ */
+export function pickStatusBarRoot(repos: readonly DiscoveredRepo[]): string {
+  return [...repos].sort((a, b) => norm(a.root).localeCompare(norm(b.root)))[0]!.root
+}
+
 export async function activate(context: ExtensionContext): Promise<void> {
   const root = workspace.rootPath
   if (!root) {
     console.error('[git] no workspace folder open; git source control disabled')
-    return
-  }
-  const repoRoot = await detectRepoRoot(root)
-  if (!repoRoot) {
-    console.error(`[git] ${root} is not inside a git repository; source control disabled`)
     return
   }
 
@@ -56,23 +68,33 @@ export async function activate(context: ExtensionContext): Promise<void> {
   context.subscriptions.push(out)
   const log = (msg: string): void => out.appendLine(msg)
 
-  // Surface the main repo plus every initialized submodule as its own SCM
-  // provider. Only the main repo owns the branch / sync status-bar items.
-  const mgr = new RepositoryManager(repoRoot, log)
+  const scanOpts = await readScanConfig()
+  const { repos, mainRoot } = await discoverRepos(root, scanOpts, log)
+  if (repos.length === 0) {
+    console.error(`[git] no git repository found under ${root}; source control disabled`)
+    return
+  }
+
+  // The status-bar owner is the workspace-root repo when there is one; otherwise
+  // a deterministically chosen repo. Only it owns the branch / sync status-bar
+  // items, and the Git Graph view defaults to it.
+  const statusBarRoot = mainRoot ?? pickStatusBarRoot(repos)
+
+  // Surface every discovered (initialized) repo as its own SCM provider.
+  const mgr = new RepositoryManager(statusBarRoot, log)
   context.subscriptions.push(mgr)
-  const discovered = await discoverRepos(repoRoot, log)
-  for (const { root, name, initialized } of discovered) {
-    const isMain = root === repoRoot
+  for (const { root: repoRoot, name, initialized } of repos) {
+    const isMain = norm(repoRoot) === norm(statusBarRoot)
     if (!isMain && !initialized) continue
-    mgr.add(root, { statusBar: isMain, label: isMain ? 'Git' : `Git: ${name}` })
+    mgr.add(repoRoot, { statusBar: isMain, label: isMain ? 'Git' : `Git: ${name}` })
   }
   for (const repo of mgr.all) void repo.refresh({ fetch: true, silent: true })
 
-  // The repository the Git Graph view currently targets. Defaults to the main
-  // repo; `git-graph.setRepo` switches it to a submodule. All Git Graph queries
-  // and operations below run against this root, so switching needs no per-command
-  // argument changes.
-  let gitGraphRoot = repoRoot
+  // The repository the Git Graph view currently targets. Defaults to the
+  // status-bar repo; `git-graph.setRepo` switches it to another discovered repo.
+  // All Git Graph queries and operations below run against this root, so
+  // switching needs no per-command argument changes.
+  let gitGraphRoot = statusBarRoot
 
   // Run a Git Graph mutating op: report failure, refresh SCM, return ok.
   const finishOp = async (label: string, p: Promise<boolean>): Promise<boolean> => {
@@ -186,7 +208,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.submoduleSync', () => mgr.main?.submoduleSync()),
 
     // Git Graph — read-only data source for the renderer's Git Graph editor.
-    commands.registerCommand('git-graph.getRepos', () => getGitGraphRepos(repoRoot, log)),
+    commands.registerCommand('git-graph.getRepos', () => getGitGraphRepos(root, scanOpts, log)),
     commands.registerCommand('git-graph.setRepo', (...args: unknown[]) => {
       const next = args[0] as string
       if (next) gitGraphRoot = next

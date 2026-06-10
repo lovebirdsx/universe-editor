@@ -9,13 +9,7 @@
  * (a submodule root is a sub-path of the main root, so longest wins).
  */
 import { Repository } from './repository.js'
-
-/** Normalize for comparison: forward slashes, no trailing slash, lower-cased Windows drive. */
-function norm(p: string): string {
-  let s = p.replace(/\\/g, '/').replace(/\/+$/, '')
-  if (/^[a-zA-Z]:/.test(s)) s = s[0]!.toLowerCase() + s.slice(1)
-  return s
-}
+import { norm } from './pathUtil.js'
 
 interface RepoArg {
   readonly rootUri?: string

@@ -10,7 +10,7 @@
  */
 import { basename, join } from 'node:path'
 import { gitExec } from './gitService.js'
-import { discoverRepos } from './repoDiscovery.js'
+import { discoverRepos, type DiscoverOptions } from './repoDiscovery.js'
 
 /** Field separator inside a record; record separator is NUL (`git -z`). */
 const FIELD = '\x1f'
@@ -242,14 +242,16 @@ export async function getCommits(
 }
 
 /**
- * Repositories the Git Graph view can switch between: the main repo plus any
- * submodules registered in it. Thin wrapper over the shared `discoverRepos`.
+ * Repositories the Git Graph view can switch between: the root repo plus any
+ * submodules, plus independent repos nested in subfolders. Thin wrapper over
+ * the shared `discoverRepos`.
  */
 export async function getRepos(
-  mainRoot: string,
+  workspaceRoot: string,
+  opts: DiscoverOptions,
   log?: (msg: string) => void,
 ): Promise<GitGraphRepo[]> {
-  const repos = await discoverRepos(mainRoot, log)
+  const { repos } = await discoverRepos(workspaceRoot, opts, log)
   return repos.map(({ root, name }) => ({ root, name }))
 }
 
