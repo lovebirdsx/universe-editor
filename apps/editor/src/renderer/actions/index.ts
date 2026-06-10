@@ -132,7 +132,11 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
-import { ViewGitGraphAction, GitGraphFocusSearchAction } from './gitGraphActions.js'
+import {
+  ViewGitGraphAction,
+  GitGraphFocusSearchAction,
+  GitGraphToggleRemoteBranchesAction,
+} from './gitGraphActions.js'
 import {
   ToggleBlameEditorDecorationAction,
   ToggleBlameStatusBarItemAction,
@@ -346,6 +350,7 @@ registerAction2(ReopenWithAction)
 // Git Graph
 registerAction2(ViewGitGraphAction)
 registerAction2(GitGraphFocusSearchAction)
+registerAction2(GitGraphToggleRemoteBranchesAction)
 
 // Git Blame
 registerAction2(ToggleBlameEditorDecorationAction)

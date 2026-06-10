@@ -37,6 +37,8 @@ export interface GitGraphColumnWidths {
 export interface GitGraphViewState {
   /** Callback registered by the mounted editor to focus the search input. */
   focusSearch: (() => void) | null
+  /** Callback registered by the mounted editor to toggle remote-branch visibility. */
+  toggleRemoteBranches: (() => void) | null
   /** Last loaded commit list, or null if never loaded. */
   result: GitGraphLoadResult | null
   /** Selected commit hash(es): one to expand details, two to compare. */
@@ -70,6 +72,7 @@ export const GIT_GRAPH_PAGE_SIZE = 500
 
 export const gitGraphViewState: GitGraphViewState = {
   focusSearch: null,
+  toggleRemoteBranches: null,
   result: null,
   selection: [],
   details: null,

@@ -68,6 +68,11 @@
   background: var(--color-list-hover-bg);
 }
 
+.toolBtnActive {
+  background: var(--color-list-hover-bg);
+  border-color: var(--color-border);
+}
+
 .settingsBackdrop {
   position: fixed;
   inset: 0;

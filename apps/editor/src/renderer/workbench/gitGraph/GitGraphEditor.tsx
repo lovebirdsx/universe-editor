@@ -26,7 +26,13 @@ import {
   type UIEvent,
 } from 'react'
 import { type IEditorInput } from '@universe-editor/platform'
-import { autorun, ICommandService, IDialogService } from '@universe-editor/platform'
+import {
+  autorun,
+  ICommandService,
+  IDialogService,
+  IStorageService,
+  StorageScope,
+} from '@universe-editor/platform'
 import {
   GitGraphCommands,
   type GitGraphCommitDto,
@@ -298,6 +304,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
   const scm = useService(IScmService)
+  const storage = useService(IStorageService)
   const [result, setResult] = useState<GitGraphLoadResult | null>(() => gitGraphViewState.result)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => gitGraphViewState.result === null)
@@ -365,6 +372,29 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       gitGraphViewState.focusSearch = null
     }
   }, [])
+
+  useEffect(() => {
+    gitGraphViewState.toggleRemoteBranches = () =>
+      setSettings((s) => ({ ...s, includeRemotes: !s.includeRemotes }))
+    return () => {
+      gitGraphViewState.toggleRemoteBranches = null
+    }
+  }, [])
+
+  const settingsLoadedRef = useRef(false)
+  useEffect(() => {
+    void storage
+      .get<Partial<GitGraphSettings>>('gitGraph.settings', StorageScope.GLOBAL)
+      .then((stored) => {
+        if (stored) setSettings((s) => ({ ...s, ...stored }))
+        settingsLoadedRef.current = true
+      })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  useEffect(() => {
+    if (!settingsLoadedRef.current) return
+    void storage.set('gitGraph.settings', settings, StorageScope.GLOBAL)
+  }, [settings, storage])
 
   // Mirror state into the module-level store so it survives unmount.
   useEffect(() => {
@@ -1126,6 +1156,15 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             ))}
           </select>
         )}
+        <button
+          type="button"
+          className={`${styles['toolBtn']} ${settings.includeRemotes ? styles['toolBtnActive'] : ''}`}
+          onClick={() => setSettings((s) => ({ ...s, includeRemotes: !s.includeRemotes }))}
+          title={settings.includeRemotes ? 'Hide remote branches' : 'Show remote branches'}
+          aria-pressed={settings.includeRemotes}
+        >
+          ⎇
+        </button>
         <button
           type="button"
           className={styles['toolBtn']}

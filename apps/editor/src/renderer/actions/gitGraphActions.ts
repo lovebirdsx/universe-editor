@@ -42,3 +42,20 @@ export class GitGraphFocusSearchAction extends Action2 {
     gitGraphViewState.focusSearch?.()
   }
 }
+
+export class GitGraphToggleRemoteBranchesAction extends Action2 {
+  static readonly ID = 'git-graph.toggleRemoteBranches'
+
+  constructor() {
+    super({
+      id: GitGraphToggleRemoteBranchesAction.ID,
+      title: 'Toggle Remote Branches',
+      category: 'Git Graph',
+      f1: true,
+    })
+  }
+
+  override run(): void {
+    gitGraphViewState.toggleRemoteBranches?.()
+  }
+}
