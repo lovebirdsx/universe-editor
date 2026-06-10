@@ -279,27 +279,43 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     if (!editor || !collection) return
     if (!blame || !this._decorationsEnabled) {
       collection.clear()
+      this._setBlameContent(undefined)
       return
     }
     const position = editor.getPosition()
     if (!position) {
       collection.clear()
+      this._setBlameContent(undefined)
       return
     }
     const line = position.lineNumber
     const m = MonacoLoader.get()
+    // The annotation is painted by a CSS ::after pseudo-element (see
+    // .git-blame-inline-decoration in workbench.css) fed via a custom property,
+    // not Monaco injected text: injected text counts as real content and wraps
+    // when word-wrap is on, whereas a pseudo-element never does.
+    this._setBlameContent(`   ${blame.decorationText}`)
     collection.set([
       {
         range: new m.Range(line, Number.MAX_SAFE_INTEGER, line, Number.MAX_SAFE_INTEGER),
         options: {
-          after: {
-            content: `   ${blame.decorationText}`,
-            inlineClassName: 'git-blame-inline-decoration',
-          },
+          afterContentClassName: 'git-blame-inline-decoration',
           showIfCollapsed: true,
         },
       },
     ])
+  }
+
+  private _setBlameContent(text: string | undefined): void {
+    const node = this._activeEditor?.getContainerDomNode()
+    if (!node) return
+    if (text === undefined) {
+      node.style.removeProperty('--git-blame-content')
+      return
+    }
+    // CSS string literal: escape backslash and double-quote, drop newlines.
+    const escaped = text.replace(/[\\"]/g, (c) => '\\' + c).replace(/\r?\n/g, ' ')
+    node.style.setProperty('--git-blame-content', `"${escaped}"`)
   }
 
   private _renderStatusBar(blame: ResolvedLineBlame | undefined): void {
@@ -346,6 +362,7 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
     this._registryStore.clear()
     this._decorations?.clear()
     this._decorations = undefined
+    this._setBlameContent(undefined)
     this._entry?.dispose()
     this._entry = undefined
     this._activeEditor = undefined

@@ -357,11 +357,15 @@ html, body, #root {
   background: rgba(255, 255, 255, 0.28);
 }
 
-/* Inline git blame annotation (Monaco injected after-text on the cursor line). */
-.git-blame-inline-decoration {
+/* Inline git blame annotation. Rendered as a CSS ::after pseudo-element (not
+   Monaco injected text) so the annotation never participates in word-wrap line
+   breaking — the text is supplied via the --git-blame-content custom property
+   set on the editor container by GitBlameContribution. */
+.git-blame-inline-decoration::after {
+  content: var(--git-blame-content, '');
   color: var(--git-blame-decoration-fg, #7a7a80);
-  font-style: italic;
-  opacity: 0.85;
+  opacity: 0.55;
+  white-space: nowrap;
 }
 
 /* Dirty-diff gutter bars (current document vs git HEAD). Painted in Monaco's
