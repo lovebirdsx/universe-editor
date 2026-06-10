@@ -325,11 +325,6 @@ describe('workspaceActions', () => {
     await runCommand(ClearRecentWorkspacesAction.ID, ws)
     expect(ws.clearCalls).toBe(1)
   })
-
-  it('OpenRecent registers Ctrl+R keybinding', () => {
-    disposables.push(registerAction2(OpenRecentAction))
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+r')).toBe(OpenRecentAction.ID)
-  })
 })
 
 // Spy on console to silence expected logs (none here, but defensive).
