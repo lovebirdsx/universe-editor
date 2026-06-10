@@ -375,3 +375,53 @@ export class OpenWorkspaceSettingsJsonAction extends Action2 {
     )
   }
 }
+
+const COLOR_THEME_SETTING_KEY = 'workbench.colorTheme'
+type WorkbenchColorTheme = 'dark' | 'light'
+
+interface ColorThemePickItem extends IQuickPickItem {
+  readonly value: WorkbenchColorTheme
+}
+
+export class SelectColorThemeAction extends Action2 {
+  static readonly ID = 'workbench.action.selectTheme'
+  constructor() {
+    super({
+      id: SelectColorThemeAction.ID,
+      title: localize('action.selectTheme.title', 'Color Theme'),
+      category: localize('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const quickInput = accessor.get(IQuickInputService)
+    const configuration = accessor.get(IConfigurationService)
+
+    const current = configuration.get<WorkbenchColorTheme>(COLOR_THEME_SETTING_KEY) ?? 'dark'
+
+    const currentLabel = localize('colorTheme.current', '(current)')
+    const items: ColorThemePickItem[] = [
+      {
+        id: 'dark',
+        label: localize('colorTheme.dark', 'Dark'),
+        ...(current === 'dark' && { description: currentLabel }),
+        value: 'dark',
+      },
+      {
+        id: 'light',
+        label: localize('colorTheme.light', 'Light'),
+        ...(current === 'light' && { description: currentLabel }),
+        value: 'light',
+      },
+    ]
+
+    const selected = await quickInput.pick(items, {
+      id: 'workbench.colorTheme',
+      placeholder: localize('quickInput.colorTheme.placeholder', 'Select Color Theme'),
+    })
+    if (!selected) return
+
+    configuration.update(COLOR_THEME_SETTING_KEY, selected.value, ConfigurationTarget.User)
+  }
+}

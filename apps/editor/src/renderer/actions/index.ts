@@ -61,15 +61,16 @@ import {
   ToggleMinimapAction,
   ToggleWordWrapAction,
 } from './editorActions.js'
-import { OpenSettingsAction } from './preferencesActions.js'
 import {
   ConfigureDisplayLanguageAction,
   OpenKeybindingsEditorAction,
   OpenKeybindingsJsonAction,
+  OpenSettingsAction,
   OpenSettingsJsonAction,
   OpenVSCodeKeybindingsJsonAction,
   OpenWorkspaceSettingsAction,
   OpenWorkspaceSettingsJsonAction,
+  SelectColorThemeAction,
 } from './preferencesActions.js'
 import {
   AboutAction,
@@ -277,6 +278,7 @@ registerAction2(OpenVSCodeKeybindingsJsonAction)
 registerAction2(ConfigureDisplayLanguageAction)
 registerAction2(OpenWorkspaceSettingsAction)
 registerAction2(OpenWorkspaceSettingsJsonAction)
+registerAction2(SelectColorThemeAction)
 
 // Workspace
 registerAction2(OpenFolderAction)
