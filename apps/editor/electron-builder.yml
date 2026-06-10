@@ -29,9 +29,8 @@ extraResources:
   # Contains every resource that must live beside app.asar:
   # - claude-agent-acp/dist
   # - extension-host/dist
-  # - markdown-language-server/dist
   # - typescript-language-server/node_modules (tsls CLI + tsserver)
-  # - built-in extensions from extensions/*
+  # - built-in extensions from extensions/* (markdown bundles its language server)
   # - release-notes.json
   - from: .runtime-resources
     to: .

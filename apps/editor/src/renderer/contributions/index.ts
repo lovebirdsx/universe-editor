@@ -58,8 +58,6 @@ import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
 import { ExtensionsContribution } from './ExtensionsContribution.js'
-import { LanguageFeaturesContribution } from './LanguageFeaturesContribution.js'
-import { MarkdownDocumentSyncContribution } from './MarkdownDocumentSyncContribution.js'
 import { DocumentSyncContribution } from './DocumentSyncContribution.js'
 import { MonacoOverrideServicesContribution } from './MonacoOverrideServicesContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
@@ -451,22 +449,6 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.extensions',
   ExtensionsContribution,
   WorkbenchPhase.Eventually,
-)
-
-// Markdown language providers (document symbols / definition / references).
-// AfterRestore so the editor area + Monaco are live before providers register.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.languageFeatures',
-  LanguageFeaturesContribution,
-  WorkbenchPhase.AfterRestore,
-)
-
-// Pushes open markdown models to the language server (lazy-starts it). AfterRestore
-// so the editor service + Monaco models are live.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.markdownDocumentSync',
-  MarkdownDocumentSyncContribution,
-  WorkbenchPhase.AfterRestore,
 )
 
 // TS/JS language features (providers / document sync / diagnostics) now live in

@@ -84,6 +84,35 @@ describe('ChannelClient / ChannelServer', () => {
     server.dispose()
   })
 
+  it('round-trips Uint8Array payloads through the JSON envelope', async () => {
+    const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
+
+    const server = new ChannelServer(serverProto)
+    const client = new ChannelClient(clientProto)
+
+    const bytes = new Uint8Array([0, 35, 32, 71, 250, 0, 13, 10])
+    server.registerChannel(
+      'fs',
+      createChannelFromObject({
+        read: () => bytes,
+        echo: (arg: unknown) => arg,
+      }),
+    )
+
+    const ch = client.getChannel('fs')
+    const read = await ch.call<Uint8Array>('read')
+    expect(read).toBeInstanceOf(Uint8Array)
+    expect(Array.from(read)).toEqual(Array.from(bytes))
+
+    // Also survives nested in an argument, in both directions.
+    const echoed = await ch.call<{ data: Uint8Array }>('echo', { data: bytes })
+    expect(echoed.data).toBeInstanceOf(Uint8Array)
+    expect(Array.from(echoed.data)).toEqual(Array.from(bytes))
+
+    client.dispose()
+    server.dispose()
+  })
+
   it('errors from server are propagated to client as rejected promises', async () => {
     const [clientProto, serverProto] = InMemoryMessagePassingProtocol.createPair()
 

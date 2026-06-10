@@ -10,7 +10,7 @@ import { ChevronRight } from 'lucide-react'
 import type { IEditorInput } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
 import { IOutlineService } from '../../services/languageFeatures/OutlineService.js'
-import { symbolAncestryPath } from '../../services/languageFeatures/markdown/markdownSymbols.js'
+import { symbolAncestryPath } from '../../services/languageFeatures/symbolTree.js'
 import type { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import styles from './Breadcrumbs.module.css'
 

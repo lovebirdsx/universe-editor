@@ -1,12 +1,13 @@
 /**
  * IWorkspace implementation backing the markdown language service. Open documents
  * come from the {@link DocumentStore} overlay; everything else is read from disk
- * by calling back to the main process over the MdClient channel (IMdClient).
+ * via the filesystem port (IMdClient), which the plugin backs with the gated
+ * `workspace.fs`.
  */
 import type { Event } from 'vscode-languageserver-protocol'
 import { URI } from 'vscode-uri'
 import type { FileStat, ITextDocument, IWorkspace } from 'vscode-markdown-languageservice'
-import type { IMdClient } from './protocol.js'
+import type { IMdClient } from './types.js'
 import { DocumentStore, makeDoc } from './documentStore.js'
 
 export class LspWorkspace implements IWorkspace {

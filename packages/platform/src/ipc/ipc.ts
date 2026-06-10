@@ -117,12 +117,47 @@ type IpcMessage =
   | SubscribeMessage
   | UnsubscribeMessage
 
+// Binary payloads (file contents, etc.) must survive the JSON envelope: a raw
+// `Uint8Array` would stringify to `{"0":..,"1":..}` and revive as a plain object
+// (no `.length`/`.subarray`), silently corrupting binary IPC. Tag every byte
+// array as base64 on the way out and rebuild it on the way in. `Buffer` is a
+// `Uint8Array`, so this covers main-process reads too.
+const U8_TAG = '$u8'
+const B64_CHUNK = 0x8000
+
+function bytesToBase64(bytes: Uint8Array): string {
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += B64_CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + B64_CHUNK))
+  }
+  return btoa(binary)
+}
+
+function base64ToBytes(base64: string): Uint8Array {
+  const binary = atob(base64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+  return bytes
+}
+
+function replacer(_key: string, value: unknown): unknown {
+  return value instanceof Uint8Array ? { [U8_TAG]: bytesToBase64(value) } : value
+}
+
+function reviver(_key: string, value: unknown): unknown {
+  if (value !== null && typeof value === 'object') {
+    const tagged = (value as Record<string, unknown>)[U8_TAG]
+    if (typeof tagged === 'string') return base64ToBytes(tagged)
+  }
+  return value
+}
+
 function encode(msg: IpcMessage): Uint8Array {
-  return new TextEncoder().encode(JSON.stringify(msg))
+  return new TextEncoder().encode(JSON.stringify(msg, replacer))
 }
 
 function decode(data: Uint8Array): IpcMessage {
-  return JSON.parse(new TextDecoder().decode(data)) as IpcMessage
+  return JSON.parse(new TextDecoder().decode(data), reviver) as IpcMessage
 }
 
 /**

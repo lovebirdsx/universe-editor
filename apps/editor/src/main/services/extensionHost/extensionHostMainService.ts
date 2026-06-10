@@ -9,7 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
-import { readdirSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
 import { app } from 'electron'
@@ -55,24 +55,39 @@ const defaultSpawner: ExtHostSpawner = (command, args, options) =>
     shell: false,
   })
 
-/** Bootstrap entry relative to `app.getAppPath()` in the dev tree (apps/editor → repo root). */
-const ENTRY_DEV = '../../packages/extension-host/dist/bootstrap.js'
+/** Bootstrap entry relative to the repo root in the dev tree. */
+const ENTRY_DEV = 'packages/extension-host/dist/bootstrap.js'
 /** Bootstrap entry under `resourcesPath` in a packaged build. */
 const ENTRY_PACKAGED = 'extension-host/dist/bootstrap.js'
 
+/**
+ * Walk up from `app.getAppPath()` looking for a repo-relative path. Tolerates
+ * both `electron .` (appPath = apps/editor) and the e2e `electron out/main/index.js`
+ * layout (appPath points deeper), same approach as `resolveTsServerPaths`.
+ */
+function resolveFromRepo(relative: string): string {
+  let dir = app.getAppPath()
+  for (let i = 0; i < 6; i++) {
+    const candidate = path.join(dir, relative)
+    if (existsSync(candidate)) return candidate
+    const parent = path.dirname(dir)
+    if (parent === dir) break
+    dir = parent
+  }
+  return path.resolve(app.getAppPath(), '../..', relative)
+}
+
 const defaultResolveEntry: ExtHostEntryResolver = () =>
-  app.isPackaged
-    ? path.join(process.resourcesPath, ENTRY_PACKAGED)
-    : path.resolve(app.getAppPath(), ENTRY_DEV)
+  app.isPackaged ? path.join(process.resourcesPath, ENTRY_PACKAGED) : resolveFromRepo(ENTRY_DEV)
 
 /** Built-in extensions tree: repo `extensions/` in dev, `resources/extensions/` when packaged. */
-const EXTENSIONS_DEV = '../../extensions'
+const EXTENSIONS_DEV = 'extensions'
 const EXTENSIONS_PACKAGED = 'extensions'
 
 const defaultResolveExtensionsDir: ExtHostExtensionsDirResolver = () =>
   app.isPackaged
     ? path.join(process.resourcesPath, EXTENSIONS_PACKAGED)
-    : path.resolve(app.getAppPath(), EXTENSIONS_DEV)
+    : resolveFromRepo(EXTENSIONS_DEV)
 
 /** External (user-installed) extensions live under the user-data directory. */
 const defaultResolveUserExtensionsDir: ExtHostExtensionsDirResolver = () =>

@@ -1,12 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Tree queries over a Monaco DocumentSymbol list, used by the Outline view and
- *  Breadcrumbs to locate the active symbol and its ancestry. The symbol tree
- *  itself now comes from the markdown language server; these helpers only walk
- *  it. Kept free of any runtime Monaco dependency (only `import type`).
+ *  Breadcrumbs to locate the active symbol and its ancestry. These helpers only
+ *  walk the tree and stay free of any runtime Monaco dependency (only `import type`).
  *--------------------------------------------------------------------------------------------*/
 
-import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
+import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 /** Deepest symbol whose range contains the 1-based line number, if any. */
 export function findSymbolAtLine(

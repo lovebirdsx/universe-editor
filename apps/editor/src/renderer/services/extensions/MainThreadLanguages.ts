@@ -24,7 +24,6 @@ import type {
 } from '@universe-editor/extensions-common'
 import type { Diagnostic } from 'vscode-languageserver-types'
 import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
-import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { diagnosticToMarker } from '../languageFeatures/typescript/lspMonacoConvert.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import {
@@ -152,9 +151,12 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
   private _setMarkers(owner: string, uri: UriComponents, diagnostics: readonly Diagnostic[]): void {
     const resource = URI.revive(uri)
     if (!resource) return
-    const model = MonacoModelRegistry.peek(resource)
-    if (!model || model.isDisposed()) return
     const monacoNs = MonacoLoader.get()
+    // Resolve through Monaco's own registry: it canonicalizes the Windows drive
+    // letter (lowercases it), so a platform URI carrying an uppercase drive still
+    // matches the model created from the lowercased Monaco uri.
+    const model = monacoNs.editor.getModel(monacoNs.Uri.parse(resource.toString()))
+    if (!model || model.isDisposed()) return
     monacoNs.editor.setModelMarkers(
       model,
       owner,

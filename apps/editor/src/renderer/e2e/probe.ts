@@ -33,7 +33,7 @@ import {
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
-import type { IMarkdownLanguageService } from '../../shared/ipc/markdownLanguageService.js'
+import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -68,8 +68,13 @@ export interface E2EProbeServices {
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
   readonly scmService: IScmService
-  readonly markdownLanguageService: IMarkdownLanguageService
+  readonly languageFeaturesService: ILanguageFeaturesService
 }
+
+const NONE_TOKEN = {
+  isCancellationRequested: false,
+  onCancellationRequested: () => ({ dispose: () => {} }),
+} as import('../workbench/editor/monaco/MonacoLoader.js').monaco.CancellationToken
 
 class DummyEditorInput extends EditorInput {
   constructor(
@@ -297,7 +302,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
     getMarkdownDocumentSymbols: async (uri: string): Promise<readonly string[]> => {
-      const symbols = await services.markdownLanguageService.provideDocumentSymbols(URI.parse(uri))
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const provider = services.languageFeaturesService.getDocumentSymbolProviders('markdown')[0]
+      if (!provider) return []
+      const symbols = (await provider.provideDocumentSymbols(model, NONE_TOKEN)) ?? []
       const names: string[] = []
       const walk = (list: readonly { name: string; children?: readonly unknown[] }[]): void => {
         for (const s of list) {
@@ -305,23 +315,36 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           if (s.children) walk(s.children as typeof list)
         }
       }
-      walk(symbols)
+      walk(symbols as readonly { name: string; children?: readonly unknown[] }[])
       return names
     },
     queryMarkdownWorkspaceSymbols: async (query: string): Promise<readonly string[]> => {
-      const symbols = await services.markdownLanguageService.provideWorkspaceSymbols(query)
-      return symbols.map((s) => s.name)
+      const providers = services.languageFeaturesService.getWorkspaceSymbolProviders()
+      const names: string[] = []
+      for (const provider of providers) {
+        const symbols = (await provider.provideWorkspaceSymbols(query)) ?? []
+        for (const s of symbols) names.push(s.name)
+      }
+      return names
     },
     getMarkdownDefinition: async (
       uri: string,
       lineNumber: number,
       column: number,
     ): Promise<readonly string[]> => {
-      const locations = await services.markdownLanguageService.provideDefinition(URI.parse(uri), {
-        line: lineNumber - 1,
-        character: column - 1,
-      })
-      return locations.map((l) => l.uri)
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const provider = services.languageFeaturesService.getDefinitionProviders('markdown')[0]
+      if (!provider) return []
+      const result = await provider.provideDefinition(
+        model,
+        new monacoNs.Position(lineNumber, column),
+        NONE_TOKEN,
+      )
+      if (!result) return []
+      const links = Array.isArray(result) ? result : [result]
+      return links.map((l) => l.uri.toString())
     },
     getMarkdownMarkers: (uri: string) => {
       const markers = MonacoLoader.get().editor.getModelMarkers({

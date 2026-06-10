@@ -31,7 +31,6 @@ export const ServiceChannels = {
   Performance: 'performance',
   Lifecycle: 'lifecycle',
   ExtensionHost: 'extensionHost',
-  MarkdownLanguage: 'markdownLanguage',
   SessionSwitcher: 'sessionSwitcher',
   RendererSessions: 'rendererSessions',
 } as const

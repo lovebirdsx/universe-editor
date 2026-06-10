@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Symbol navigation pickers backed by our own quick pick:
  *    - Go to Symbol in Workspace (Ctrl+T) — aggregates workspace symbols from the
- *      markdown and TS/JS language servers. Mirrors VSCode's
+ *      language feature providers (TS/JS, markdown, …). Mirrors VSCode's
  *      `workbench.action.showAllSymbols`.
  *    - Go to Symbol in Editor (Ctrl+Shift+O) — the active editor's document
  *      symbols from IOutlineService, with live preview. Mirrors VSCode's
@@ -28,16 +28,11 @@ import {
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IOutlineService } from '../services/languageFeatures/OutlineService.js'
 import { flattenOutline } from '../services/languageFeatures/outlineFlatten.js'
 import { type monaco, MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
-import {
-  IMarkdownLanguageService,
-  type MdWorkspaceSymbol,
-} from '../../shared/ipc/markdownLanguageService.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import {
   workspaceSymbolsToEntries,
@@ -74,24 +69,6 @@ function fuzzyHighlights(text: string, query: string): readonly IQuickItemHighli
   return qi === q.length ? out : []
 }
 
-/**
- * VSCode-style ranking over a cached symbol set: an empty query keeps the
- * original order (so the picker shows everything on open), otherwise symbols
- * are scored by name and sorted by relevance. Only the symbol name is matched.
- */
-function rankSymbols(
-  allSymbols: readonly MdWorkspaceSymbol[],
-  query: string,
-): readonly MdWorkspaceSymbol[] {
-  if (!query) return allSymbols.slice(0, MAX_RESULTS)
-  return allSymbols
-    .map((symbol) => ({ symbol, score: scoreFuzzyMatch(symbol.name, query) }))
-    .filter((entry) => entry.score >= 0)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, MAX_RESULTS)
-    .map((entry) => entry.symbol)
-}
-
 /** A workspace symbol from any language server, normalized for the picker. */
 interface UnifiedWorkspaceSymbol {
   readonly name: string
@@ -102,23 +79,6 @@ interface UnifiedWorkspaceSymbol {
   readonly column: number
   /** Workspace-relative path shown as the item description. */
   readonly description: string
-}
-
-function mdSymbolToUnified(
-  symbol: MdWorkspaceSymbol,
-  root: URI | undefined,
-  platform: HostPlatform,
-): UnifiedWorkspaceSymbol {
-  const uri = URI.parse(symbol.location.uri)
-  return {
-    name: symbol.name,
-    // MdWorkspaceSymbol.kind is LSP 1-based; the icon resolver expects Monaco 0-based.
-    iconKind: symbol.kind - 1,
-    uri,
-    lineNumber: symbol.location.range.start.line + 1,
-    column: symbol.location.range.start.character + 1,
-    description: relativePath(root, uri, platform),
-  }
 }
 
 function tsEntryToUnified(
@@ -155,16 +115,13 @@ export class GoToWorkspaceSymbolAction extends Action2 {
     const workspace = accessor.get(IWorkspaceService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
-    const md = accessor.get(IMarkdownLanguageService)
     const langFeatures = accessor.get(ILanguageFeaturesService)
     const host = accessor.get(IHostService)
 
     const root = workspace.current?.folder
     const monacoNs = await MonacoLoader.ensureInitialized()
-    // Starting markdown is best-effort: a missing/broken server must not block the
-    // picker. TS/JS workspace symbols come from whatever providers the typescript
-    // plugin already registered (it activates lazily on opening a TS/JS file).
-    await Promise.allSettled([md.ensureStarted(root?.fsPath)])
+    // Workspace symbols come from whatever providers the language plugins have
+    // registered; each activates lazily on opening a file of its language.
     const wsProviders = langFeatures.getWorkspaceSymbolProviders()
 
     const picker = quickInput.createQuickPick<IQuickPickItem>()
@@ -176,8 +133,6 @@ export class GoToWorkspaceSymbolAction extends Action2 {
 
     /** Pick id → symbol, so onDidAccept can recover the target location. */
     const byId = new Map<string, UnifiedWorkspaceSymbol>()
-    /** Markdown symbols fetched once on open; filtered locally per keystroke. */
-    let allMarkdown: readonly MdWorkspaceSymbol[] = []
 
     await new Promise<void>((resolve) => {
       const store = new DisposableStore()
@@ -196,16 +151,9 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         resolve()
       }
 
-      const render = (
-        mdSymbols: readonly MdWorkspaceSymbol[],
-        tsEntries: readonly WorkspaceSymbolEntry[],
-        query: string,
-      ): void => {
+      const render = (entries: readonly WorkspaceSymbolEntry[], query: string): void => {
         byId.clear()
-        const merged: UnifiedWorkspaceSymbol[] = [
-          ...mdSymbols.map((s) => mdSymbolToUnified(s, root, host.platform)),
-          ...tsEntries.map((e) => tsEntryToUnified(e, root, host.platform)),
-        ]
+        const merged = entries.map((e) => tsEntryToUnified(e, root, host.platform))
         picker.items = merged.slice(0, MAX_RESULTS).map((symbol, i) => {
           const id = String(i)
           byId.set(id, symbol)
@@ -219,14 +167,12 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         })
       }
 
-      // tsserver's `workspace/symbol` filters server-side and returns nothing for
-      // an empty query, so we only hit the providers once there's a query; markdown
-      // is cached and filtered locally so it can show everything on open.
+      // Language servers filter `workspace/symbol` server-side and return nothing
+      // for an empty query, so we only hit the providers once there's a query.
       const refresh = (): void => {
         const query = currentValue.trim()
-        const mdSymbols = rankSymbols(allMarkdown, query)
         if (!query) {
-          render(mdSymbols, [], query)
+          render([], query)
           return
         }
         const mySeq = ++seq
@@ -241,10 +187,8 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         ).then((perProvider) => {
           if (didResolve || mySeq !== seq) return
           picker.busy = false
-          render(mdSymbols, perProvider.flat(), query)
+          render(perProvider.flat(), query)
         })
-        // Show markdown immediately while the provider queries are in flight.
-        render(mdSymbols, [], query)
       }
 
       const openSymbol = (symbol: UnifiedWorkspaceSymbol): void => {
@@ -294,14 +238,7 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         }),
       )
 
-      picker.busy = true
       picker.show()
-      void md.provideWorkspaceSymbols('').then((symbols) => {
-        if (didResolve) return
-        allMarkdown = symbols
-        picker.busy = false
-        refresh()
-      })
     })
   }
 }

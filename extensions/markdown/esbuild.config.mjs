@@ -1,0 +1,55 @@
+import { build, context } from 'esbuild'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { createRequire } from 'node:module'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = dirname(fileURLToPath(import.meta.url))
+const outFile = resolve(root, 'dist/extension.js')
+const watch = process.argv.includes('--watch')
+
+// vscode-markdown-languageservice does `import uri from 'vscode-uri'` (default
+// import), but vscode-uri's ESM entry only has named exports, so esbuild can't
+// bundle the ESM build. Force vscode-uri to its CJS entry — esbuild then
+// synthesizes both the default and named exports from the CommonJS module.
+const require = createRequire(import.meta.url)
+const vscodeUriCjs = require.resolve('vscode-uri')
+
+const buildOptions = {
+  entryPoints: [resolve(root, 'src/extension.ts')],
+  outfile: outFile,
+  bundle: true,
+  platform: 'node',
+  format: 'esm',
+  target: 'node20',
+  minify: false,
+  sourcemap: true,
+  logLevel: 'info',
+  alias: {
+    'vscode-uri': vscodeUriCjs,
+  },
+  banner: {
+    js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
+  },
+}
+
+if (watch) {
+  await mkdir(resolve(root, 'dist'), { recursive: true })
+} else {
+  await rm(resolve(root, 'dist'), { recursive: true, force: true })
+  await mkdir(resolve(root, 'dist'), { recursive: true })
+}
+
+await writeFile(
+  resolve(root, 'dist/package.json'),
+  JSON.stringify({ type: 'module' }, null, 2) + '\n',
+)
+
+if (watch) {
+  const ctx = await context(buildOptions)
+  await ctx.watch()
+  console.log('[markdown] watching...')
+} else {
+  await build(buildOptions)
+  console.log('markdown extension bundled → dist/extension.js')
+}

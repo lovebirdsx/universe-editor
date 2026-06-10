@@ -4,8 +4,8 @@
  *  plugins see `workspace.textDocuments` and the `onDidChangeTextDocument` family.
  *  Pushes full text (debounced) on open/change/close for the active editor, and
  *  fires `onLanguage:<id>` activation so a plugin lazily starts on first touch.
- *  Generic counterpart to VSCode's ExtHostDocuments wiring; markdown keeps its own
- *  direct-to-LSP sync, so the two paths coexist.
+ *  Generic counterpart to VSCode's ExtHostDocuments wiring; every built-in
+ *  language plugin (typescript, markdown, …) consumes this single path.
  *--------------------------------------------------------------------------------------------*/
 
 import {

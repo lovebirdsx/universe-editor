@@ -1,0 +1,44 @@
+{
+  "name": "@universe-editor/markdown",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "displayName": "Markdown Language Features",
+  "description": "Markdown language features (document symbols, definition, references, workspace symbols, broken-link diagnostics) backed by an in-process vscode-markdown-languageservice.",
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": "^0.1.0"
+  },
+  "activationEvents": [
+    "onLanguage:markdown"
+  ],
+  "contributes": {},
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@types/markdown-it": "catalog:",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "markdown-it": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:",
+    "vscode-languageserver-protocol": "catalog:",
+    "vscode-languageserver-textdocument": "catalog:",
+    "vscode-languageserver-types": "catalog:",
+    "vscode-markdown-languageservice": "catalog:",
+    "vscode-uri": "catalog:"
+  }
+}

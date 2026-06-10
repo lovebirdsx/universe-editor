@@ -14,7 +14,7 @@
     "check:full": "turbo run lint typecheck test build",
     "dev": "pnpm --filter=@universe-editor/editor dev",
     "agent:build": "node scripts/release/vendor-install.mjs && npm --prefix vendor/claude-agent-acp run build",
-    "ext:build": "turbo run build --filter=@universe-editor/extension-host --filter=@universe-editor/markdown-language-server --filter=\"./extensions/*\"",
+    "ext:build": "turbo run build --filter=@universe-editor/extension-host --filter=\"./extensions/*\"",
     "runtime:stage": "pnpm -w run agent:build && pnpm -w run ext:build && node scripts/release/runtime-resources.mjs stage",
     "runtime:verify:source": "node scripts/release/runtime-resources.mjs verify-source",
     "runtime:verify:packaged": "node scripts/release/runtime-resources.mjs verify-packaged",

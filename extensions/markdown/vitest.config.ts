@@ -1,8 +1,8 @@
-// Vitest config for the markdown language server package. Mirrors the esbuild
-// alias: vscode-markdown-languageservice does `import uri from 'vscode-uri'`
-// (default import), but vscode-uri's ESM entry only has named exports, so the
-// language service fails to load under Node ESM. Alias vscode-uri to its CJS
-// entry — Vite then synthesizes both the default and named exports.
+// Vitest config for the markdown extension's in-process language server. Mirrors
+// the esbuild alias: vscode-markdown-languageservice does `import uri from
+// 'vscode-uri'` (default import), but vscode-uri's ESM entry only has named
+// exports, so the language service fails to load under Node ESM. Alias vscode-uri
+// to its CJS entry — Vite then synthesizes both the default and named exports.
 import { createRequire } from 'node:module'
 import { defineConfig } from 'vitest/config'
 

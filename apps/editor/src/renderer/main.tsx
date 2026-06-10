@@ -54,7 +54,6 @@ import { PerfMarks } from '../shared/perf/marks.js'
 import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
-import { IMarkdownLanguageService } from '../shared/ipc/markdownLanguageService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -502,7 +501,7 @@ async function bootstrapWorkbench(): Promise<void> {
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,
     scmService,
-    markdownLanguageService: services.get(IMarkdownLanguageService) as IMarkdownLanguageService,
+    languageFeaturesService: services.get(ILanguageFeaturesService) as ILanguageFeaturesService,
   })
   workbenchStore.add(d)
 

@@ -24,7 +24,6 @@ import {
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
-import { IMarkdownLanguageService } from '../../shared/ipc/markdownLanguageService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
@@ -41,7 +40,6 @@ import {
 } from './workspace/recentWorkspacesMainService.js'
 import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
-import { MarkdownLanguageClientService } from './markdownLanguage/markdownLanguageClientService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
 import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
@@ -100,15 +98,6 @@ registerSingleton(
 registerSingleton(
   ICodexBinaryService,
   new SyncDescriptor<ICodexBinaryService>(CodexBinaryMainService, [], false),
-)
-registerSingleton(
-  IMarkdownLanguageService,
-  // 2 leading static params (spawn, resolveEntry) before @ILoggerService.
-  new SyncDescriptor<IMarkdownLanguageService>(
-    MarkdownLanguageClientService,
-    [undefined, undefined],
-    false,
-  ),
 )
 registerSingleton(
   IDisposableLeakService,

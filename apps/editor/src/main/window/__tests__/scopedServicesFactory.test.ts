@@ -16,7 +16,6 @@ describe('ApplicationServices type', () => {
       acpHost: {} as ApplicationServices['acpHost'],
       acpTerminal: {} as ApplicationServices['acpTerminal'],
       extensionHost: {} as ApplicationServices['extensionHost'],
-      markdownLanguage: {} as ApplicationServices['markdownLanguage'],
       claudeBinary: {} as ApplicationServices['claudeBinary'],
       codexBinary: {} as ApplicationServices['codexBinary'],
       disposableLeak: {} as ApplicationServices['disposableLeak'],
@@ -25,7 +24,7 @@ describe('ApplicationServices type', () => {
       performance: {} as ApplicationServices['performance'],
       sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],
     }
-    expect(Object.keys(svc)).toHaveLength(16)
+    expect(Object.keys(svc)).toHaveLength(15)
   })
 })
 

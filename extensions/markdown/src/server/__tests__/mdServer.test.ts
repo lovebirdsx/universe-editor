@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { URI } from 'vscode-uri'
 import { createMdServer } from '../mdServer.js'
-import type { IMdClient } from '../protocol.js'
+import type { IMdClient } from '../types.js'
 
 const stubClient: IMdClient = {
   $readFile: () => Promise.resolve(undefined),

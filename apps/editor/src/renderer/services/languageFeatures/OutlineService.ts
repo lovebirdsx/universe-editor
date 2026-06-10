@@ -22,7 +22,7 @@ import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRe
 import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 import { ILanguageFeaturesService } from './LanguageFeaturesService.js'
-import { findSymbolAtLine } from './markdown/markdownSymbols.js'
+import { findSymbolAtLine } from './symbolTree.js'
 
 export interface OutlineModel {
   readonly uri: string

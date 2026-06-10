@@ -40,11 +40,6 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'extension-host/dist/bootstrap.js',
   },
   {
-    label: 'markdown language server',
-    source: join(repoRoot, 'packages/markdown-language-server/dist/bootstrap.js'),
-    packaged: 'markdown-language-server/dist/bootstrap.js',
-  },
-  {
     label: 'typescript-language-server cli',
     source: join(
       repoRoot,
@@ -168,10 +163,6 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
 
   copyPath(join(repoRoot, 'vendor/claude-agent-acp/dist'), join(stageDir, 'claude-agent-acp/dist'))
   copyPath(join(repoRoot, 'packages/extension-host/dist'), join(stageDir, 'extension-host/dist'))
-  copyPath(
-    join(repoRoot, 'packages/markdown-language-server/dist'),
-    join(stageDir, 'markdown-language-server/dist'),
-  )
   // The TS/JS language server is a prebuilt third-party CLI that needs its own
   // node_modules at runtime (typescript-language-server + tsserver). Stage the
   // whole tree — do NOT prune `typescript`, tsserver lives inside it.

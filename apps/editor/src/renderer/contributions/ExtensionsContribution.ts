@@ -12,7 +12,6 @@ import { STARTUP_ACTIVATION, STARTUP_FINISHED_ACTIVATION } from '@universe-edito
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
-import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 export class ExtensionsContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -24,14 +23,6 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
   }
 
   private async _boot(): Promise<void> {
-    // E2E: the extension host is a child process whose occasional spawn/crash
-    // under CI emits background notifications + error logs that pollute unrelated
-    // smoke assertions (the notification bell badge, Output auto-reveal). No
-    // smoke spec exercises extensions, so skip the host entirely — equivalent to
-    // VSCode's `--disable-extensions` test convention.
-    const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
-    if (isE2E) return
-
     const translator = this._register(
       new ExtensionPointTranslator(
         (event) => this._client.activateByEvent(event),
