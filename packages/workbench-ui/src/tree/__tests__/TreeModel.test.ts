@@ -51,6 +51,18 @@ describe('TreeModel', () => {
     expect(ids(model)).toEqual(['a', 'a1'])
   })
 
+  it('collapses a default-expanded node on the first toggle/collapse', async () => {
+    const root: N = { id: 'a', children: [{ id: 'a1' }] }
+    const model = new TreeModel({ dataSource: eagerSource([root]), defaultExpanded: () => true })
+    // Render once so the default-expanded state is materialised, matching the UI.
+    expect(ids(model)).toEqual(['a', 'a1'])
+    expect(model.isExpanded('a')).toBe(true)
+    await model.toggle(root)
+    expect(ids(model)).toEqual(['a'])
+    model.collapse(root)
+    expect(ids(model)).toEqual(['a'])
+  })
+
   it('caches visible nodes until a structure change invalidates it', async () => {
     const root: N = { id: 'a', children: [{ id: 'a1' }] }
     const model = new TreeModel({ dataSource: eagerSource([root]) })

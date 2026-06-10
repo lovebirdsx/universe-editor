@@ -110,10 +110,15 @@ export class TreeModel<T> extends Disposable {
   private _collect(element: T, depth: number, acc: IVisibleNode<T>[]): void {
     const id = this._dataSource.getId(element)
     const hasChildren = this._dataSource.hasChildren(element)
-    const state = this._state.get(id)
-    const expanded = hasChildren
-      ? (state?.expanded ?? this._defaultExpanded?.(element, depth) ?? false)
-      : false
+    let state = this._state.get(id)
+    // Materialise a default-expanded node's state the first time it becomes
+    // visible, so isExpanded / collapse / toggle agree with what's rendered —
+    // otherwise the first click / ArrowLeft on such a row is a no-op.
+    if (!state && hasChildren && this._defaultExpanded?.(element, depth)) {
+      state = this._ensureState(id)
+      state.expanded = true
+    }
+    const expanded = hasChildren ? (state?.expanded ?? false) : false
     acc.push({
       element,
       id,

@@ -817,6 +817,15 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
               runCommand(primaryCommitAction.command)
             }
           }
+          if (e.key === 'Tab' && !e.shiftKey) {
+            e.preventDefault()
+            treeRef.current?.focus()
+            // Give keyboard navigation an anchor: select the first row if none focused.
+            if (!treeModel.focused) {
+              const first = treeModel.getVisibleNodes()[0]
+              if (first) treeModel.setSelection([first.id], first.id)
+            }
+          }
         }}
       />
       {primaryCommitAction && (
