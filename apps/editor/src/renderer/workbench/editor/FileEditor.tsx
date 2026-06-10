@@ -172,6 +172,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         syncEditorFocusContext(contextKeyService)
       })
     })
+    // Bridge: `editorTextFocus` tracks focus on the code input area itself (the
+    // textarea), distinct from `editorFocus` which is true for any monaco widget
+    // (find box, IntelliSense). Mirrors VSCode's EditorContextKeys split.
+    const textFocusSub = ed.onDidFocusEditorText(() => {
+      contextKeyService.set('editorTextFocus', true)
+    })
+    const textBlurSub = ed.onDidBlurEditorText(() => {
+      contextKeyService.set('editorTextFocus', false)
+    })
     const modelChangeSub = ed.onDidChangeModel(() => {
       const lang = ed.getModel()?.getLanguageId()
       ed.updateOptions({
@@ -206,6 +215,8 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     return () => {
       focusSub.dispose()
       blurSub.dispose()
+      textFocusSub.dispose()
+      textBlurSub.dispose()
       modelChangeSub.dispose()
       container.removeEventListener('keydown', bridgeHandler, true)
       ed.dispose()

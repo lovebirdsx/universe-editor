@@ -7,6 +7,10 @@
  *   - activeEditorLanguageId / activeEditorTypeId                (active editor attributes)
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
+ *   - editorTextFocus                                            (Monaco text input focus)
+ *   - editorLangId / editorReadonly                              (active editor attributes, monaco parity)
+ *   - editorHasImplementationProvider                           (impl provider for active lang)
+ *   - editorHasCodeActionsProvider / isInEmbeddedEditor / inReferenceSearchEditor (seeded false)
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
  *   - activeEditorIsFirstInGroup / activeEditorIsLastInGroup / activeEditorIsDirty
@@ -33,6 +37,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 
 export class ContextKeyContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -42,6 +47,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     @IEditorService editorService: IEditorService,
     @IEditorGroupsService editorGroupsService: IEditorGroupsService,
     @ILifecycleService lifecycleService: ILifecycleService,
+    @ILanguageFeaturesService languageFeaturesService: ILanguageFeaturesService,
   ) {
     super()
 
@@ -97,11 +103,57 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       }),
     )
 
+    // -- VSCode-parity editor keys, mirroring monaco's EditorContextKeys. We
+    // derive them from the active FileEditorInput rather than monaco's internal
+    // context-key service so when-clauses resolve the same whether or not monaco
+    // has loaded yet.
+    //   editorLangId      — active editor language (monaco: editorLangId)
+    //   editorReadonly    — active editor is read-only (monaco: editorReadonly)
+    //   editorHasImplementationProvider — a provider is registered for the lang
+    //   editorHasCodeActionsProvider    — seeded false; the project has no code-
+    //     action provider layer yet, so no data source exists to flip it on.
+    //   isInEmbeddedEditor / inReferenceSearchEditor — always false in the main
+    //     editor; both are only true inside monaco's embedded/peek widgets, which
+    //     maintain their own scoped context-key service.
+    const editorLangId = contextKeyService.createKey<string>('editorLangId', '')
+    const editorReadonly = contextKeyService.createKey<boolean>('editorReadonly', false)
+    const editorHasImplementationProvider = contextKeyService.createKey<boolean>(
+      'editorHasImplementationProvider',
+      false,
+    )
+    contextKeyService.createKey<boolean>('editorHasCodeActionsProvider', false)
+    contextKeyService.createKey<boolean>('isInEmbeddedEditor', false)
+    contextKeyService.createKey<boolean>('inReferenceSearchEditor', false)
+
+    const syncLanguageFeatureKeys = () => {
+      const editor = editorService.activeEditor.get()
+      const lang = editor instanceof FileEditorInput ? editor.language : ''
+      editorLangId.set(lang)
+      editorReadonly.set(editor instanceof FileEditorInput ? editor.isReadonly : false)
+      editorHasImplementationProvider.set(
+        lang !== '' && languageFeaturesService.hasImplementationProvider(lang),
+      )
+    }
+    this._register(
+      autorun((reader) => {
+        editorService.activeEditor.read(reader)
+        syncLanguageFeatureKeys()
+      }),
+    )
+    // Provider registrations land asynchronously (LSP spin-up); re-evaluate when
+    // the set of providers changes even if the active editor did not.
+    this._register(languageFeaturesService.onDidChangeProviders(syncLanguageFeatureKeys))
+
     // True when a Monaco widget (textarea / find widget / IntelliSense / snippet input)
     // holds DOM focus. Drives ESC routing: when true the global ESC binding bows out
     // so Monaco's own ESC handling (cancel multi-cursor, close find widget, etc.) can
     // fire via natural event bubbling. Written by FileEditor through onDidFocus/BlurEditorWidget.
     contextKeyService.createKey<boolean>('editorFocus', false)
+
+    // True when the code input area (textarea) holds focus, distinct from
+    // editorFocus which covers any monaco widget. Written by FileEditor through
+    // onDidFocus/BlurEditorText.
+    contextKeyService.createKey<boolean>('editorTextFocus', false)
 
     // True when an xterm.js terminal instance holds DOM focus (panel or editor tab).
     // Written by TerminalInstance via xterm's onFocus/onBlur events.

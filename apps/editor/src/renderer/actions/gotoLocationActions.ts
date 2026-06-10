@@ -20,6 +20,7 @@ import {
   Action2,
   IEditorGroupsService,
   localize,
+  type IAction2Keybinding,
   type IAction2Options,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -30,10 +31,16 @@ interface NavCommandDef {
   /** Monaco/VSCode command id, reused verbatim as our Action2 id. */
   readonly id: string
   readonly title: string
-  /** Project default keybinding, mirroring Monaco's. Omitted when none. */
-  readonly keybinding?: string
+  /**
+   * Project default keybinding, mirroring Monaco's. A 2-element tuple expresses a
+   * chord (e.g. Ctrl+K F12). Omitted when Monaco has no default key.
+   */
+  readonly keybinding?: string | readonly [string, string]
 }
 
+// Command ids / default keys mirror VSCode's goToCommands.js verbatim. Definition,
+// Declaration, Type Definition, Implementation and References each get a Go-to +
+// Peek pair; Definition additionally has "Open to the Side" (Ctrl+K F12).
 const NAVIGATION_COMMANDS: readonly NavCommandDef[] = [
   {
     id: 'editor.action.revealDefinition',
@@ -41,9 +48,22 @@ const NAVIGATION_COMMANDS: readonly NavCommandDef[] = [
     keybinding: 'f12',
   },
   {
+    id: 'editor.action.revealDefinitionAside',
+    title: localize('action.revealDefinitionAside.title', 'Open Definition to the Side'),
+    keybinding: ['ctrl+k', 'f12'],
+  },
+  {
     id: 'editor.action.peekDefinition',
     title: localize('action.peekDefinition.title', 'Peek Definition'),
     keybinding: 'alt+f12',
+  },
+  {
+    id: 'editor.action.revealDeclaration',
+    title: localize('action.revealDeclaration.title', 'Go to Declaration'),
+  },
+  {
+    id: 'editor.action.peekDeclaration',
+    title: localize('action.peekDeclaration.title', 'Peek Declaration'),
   },
   {
     id: 'editor.action.goToTypeDefinition',
@@ -100,7 +120,9 @@ function createNavAction(def: NavCommandDef): new () => Action2 {
     category: localize('command.category.go', 'Go'),
     precondition: 'hasActiveEditor',
     f1: true,
-    ...(def.keybinding !== undefined ? { keybinding: { primary: def.keybinding } } : {}),
+    ...(def.keybinding !== undefined
+      ? { keybinding: { primary: def.keybinding } as IAction2Keybinding }
+      : {}),
   }
   return class extends Action2 {
     constructor() {

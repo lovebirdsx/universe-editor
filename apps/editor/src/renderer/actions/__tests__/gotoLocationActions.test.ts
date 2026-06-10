@@ -107,6 +107,18 @@ describe('gotoLocationActions', () => {
     )
   })
 
+  it('binds Open Definition to the Side as a Ctrl+K F12 chord', () => {
+    for (const ctor of gotoLocationActions) disposables.push(registerAction2(ctor))
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toEqual({
+      kind: 'enter-chord',
+      pending: ['ctrl+k'],
+    })
+    expect(KeybindingsRegistry.resolveKeystroke('f12', undefined, ['ctrl+k'])).toEqual({
+      kind: 'execute',
+      command: 'editor.action.revealDefinitionAside',
+    })
+  })
+
   it('run() focuses then triggers the matching Monaco command id', async () => {
     const revealCtor = gotoLocationActions.find(
       (c) => new c().desc.id === 'editor.action.revealDefinition',
@@ -142,6 +154,7 @@ describe('gotoLocationActions', () => {
   it('exposes only the keybound ids for MonacoLoader to unbind', () => {
     expect(monacoNavDefaultKeybindingCommandIds).toEqual([
       'editor.action.revealDefinition',
+      'editor.action.revealDefinitionAside',
       'editor.action.peekDefinition',
       'editor.action.goToImplementation',
       'editor.action.peekImplementation',

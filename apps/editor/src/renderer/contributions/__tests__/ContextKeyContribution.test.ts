@@ -32,6 +32,15 @@ function makeHostStub(platform: HostPlatform) {
   return { platform }
 }
 
+function makeLanguageFeaturesStub() {
+  const onDidChangeProviders = new Emitter<void>()
+  return {
+    onDidChangeProviders: onDidChangeProviders.event,
+    hasImplementationProvider: () => false,
+    _providersEmitter: onDidChangeProviders,
+  }
+}
+
 interface FakeEditor {
   id: string
   isDirty?: boolean
@@ -118,6 +127,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       makeGroupsStub() as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('isWindows')).toBe(false)
     expect(ctx.get('isMac')).toBe(true)
@@ -134,6 +144,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       makeGroupsStub() as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('activityBarVisible')).toBe(true)
     expect(ctx.get('sideBarVisible')).toBe(true)
@@ -151,6 +162,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       makeGroupsStub() as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('activityBarVisible')).toBe(true)
     layout.visible.set({ ...layout.visible.get(), [PartId.ActivityBar]: false }, undefined)
@@ -168,6 +180,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       makeGroupsStub() as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('sideBarVisible')).toBe(true)
     layout.visible.set({ ...layout.visible.get(), [PartId.SideBar]: false }, undefined)
@@ -185,12 +198,34 @@ describe('ContextKeyContribution', () => {
       editor as never,
       makeGroupsStub() as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('hasActiveEditor')).toBe(false)
     expect(ctx.get('activeEditorId')).toBeUndefined()
     editor.activeEditor.set({ id: 'file:///a.lua' }, undefined)
     expect(ctx.get('hasActiveEditor')).toBe(true)
     expect(ctx.get('activeEditorId')).toBe('file:///a.lua')
+    ctx.dispose()
+  })
+
+  it('seeds VSCode-parity editor keys with defaults', () => {
+    const ctx = new ContextKeyService()
+    contribution = new ContextKeyContribution(
+      ctx,
+      makeHostStub('win32') as never,
+      makeLayoutStub() as never,
+      makeEditorStub() as never,
+      makeGroupsStub() as never,
+      new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
+    )
+    expect(ctx.get('editorTextFocus')).toBe(false)
+    expect(ctx.get('editorLangId')).toBe('')
+    expect(ctx.get('editorReadonly')).toBe(false)
+    expect(ctx.get('editorHasImplementationProvider')).toBe(false)
+    expect(ctx.get('editorHasCodeActionsProvider')).toBe(false)
+    expect(ctx.get('isInEmbeddedEditor')).toBe(false)
+    expect(ctx.get('inReferenceSearchEditor')).toBe(false)
     ctx.dispose()
   })
 
@@ -204,6 +239,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       makeGroupsStub() as never,
       lifecycle,
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('workbenchReady')).toBe(false)
     lifecycle.setPhase(LifecyclePhase.Ready)
@@ -222,6 +258,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       makeGroupsStub() as never,
       lifecycle,
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('workbenchRestored')).toBe(false)
     lifecycle.setPhase(LifecyclePhase.Restored)
@@ -243,6 +280,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       groups as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('editorPartMultipleEditorGroups')).toBe(false)
     groups.groups.push(makeGroup(1, []))
@@ -262,6 +300,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       groups as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('editorIsOpen')).toBe(false)
     g0.editors.push({ id: 'a' })
@@ -281,6 +320,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       groups as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('groupEditorsCount')).toBe(2)
     ctx.dispose()
@@ -298,6 +338,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       groups as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('activeEditorGroupIndex')).toBe(0)
     groups.setActive(g1)
@@ -317,6 +358,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       groups as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('activeEditorIsFirstInGroup')).toBe(true)
     expect(ctx.get('activeEditorIsLastInGroup')).toBe(true)
@@ -335,6 +377,7 @@ describe('ContextKeyContribution', () => {
       makeEditorStub() as never,
       groups as never,
       new LifecycleService(),
+      makeLanguageFeaturesStub() as never,
     )
     expect(ctx.get('activeEditorIsDirty')).toBe(true)
     ctx.dispose()

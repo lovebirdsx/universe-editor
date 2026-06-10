@@ -40,6 +40,8 @@ export interface IWorkspaceSymbolProvider {
 export interface ILanguageFeaturesService {
   readonly _serviceBrand: undefined
   readonly onDidChangeDocumentSymbolProviders: Event<IDocumentSymbolProvidersChangeEvent>
+  /** Fires on every provider registration/disposal of any kind. */
+  readonly onDidChangeProviders: Event<void>
   registerDocumentSymbolProvider(
     languageId: string,
     provider: monaco.languages.DocumentSymbolProvider,
@@ -73,6 +75,7 @@ export interface ILanguageFeaturesService {
   registerWorkspaceSymbolProvider(provider: IWorkspaceSymbolProvider): IDisposable
   getDocumentSymbolProviders(languageId: string): readonly monaco.languages.DocumentSymbolProvider[]
   getDefinitionProviders(languageId: string): readonly monaco.languages.DefinitionProvider[]
+  hasImplementationProvider(languageId: string): boolean
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[]
 }
 
@@ -115,6 +118,9 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     new Emitter<IDocumentSymbolProvidersChangeEvent>(),
   )
   readonly onDidChangeDocumentSymbolProviders = this._onDidChangeDocumentSymbolProviders.event
+
+  private readonly _onDidChangeProviders = this._register(new Emitter<void>())
+  readonly onDidChangeProviders = this._onDidChangeProviders.event
 
   registerDocumentSymbolProvider(
     languageId: string,
@@ -238,6 +244,11 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     return set ? [...set] : []
   }
 
+  hasImplementationProvider(languageId: string): boolean {
+    const set = this._implementationProviders.get(languageId)
+    return set !== undefined && set.size > 0
+  }
+
   registerWorkspaceSymbolProvider(provider: IWorkspaceSymbolProvider): IDisposable {
     this._workspaceSymbolProviders.add(provider)
     return toDisposable(() => {
@@ -263,6 +274,7 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     }
     set.add(provider)
     if (fireSymbolChange) this._onDidChangeDocumentSymbolProviders.fire({ languageId })
+    this._onDidChangeProviders.fire()
 
     const monacoDisposable = registerOnMonaco(MonacoLoader.get())
 
@@ -274,6 +286,7 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
         if (current.size === 0) map.delete(languageId)
       }
       if (fireSymbolChange) this._onDidChangeDocumentSymbolProviders.fire({ languageId })
+      this._onDidChangeProviders.fire()
     })
   }
 }

@@ -11,6 +11,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/electronApp.js'
+import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
+import type { Page } from '@playwright/test'
+
+// Move DOM focus out of the editor onto a real focusable element (an activity
+// bar item). The project's Ctrl+K chord navigation is only authoritative while
+// no editor widget holds focus — when an editor is focused, Monaco parses Ctrl+K
+// first (focus-gated dual listener). Focusing a non-editor element makes
+// editorFocus settle false; we focus a real element rather than document.body so
+// FileEditor's blur-reclaim (which only fires when focus fell to body) bows out.
+async function defocusEditor(page: Page, workbench: WorkbenchPO): Promise<void> {
+  await page.focus('[data-testid="activitybar-item-workbench.view.explorer"]')
+  await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(false)
+}
 
 test.describe('@p0 editor group focus — Ctrl+K chord navigation', () => {
   test('Ctrl+K Ctrl+Left and Ctrl+K Ctrl+Right switch focus between horizontal groups', async ({
@@ -37,12 +50,13 @@ test.describe('@p0 editor group focus — Ctrl+K chord navigation', () => {
 
     // Ctrl+K Ctrl+Left → focus moves to the left group (editor A).
     await page.bringToFront()
-    await page.focus('body')
+    await defocusEditor(page, workbench)
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+ArrowLeft')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriA)
 
     // Ctrl+K Ctrl+Right → focus returns to the right group (editor B).
+    await defocusEditor(page, workbench)
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+ArrowRight')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
@@ -72,12 +86,13 @@ test.describe('@p0 editor group focus — Ctrl+K chord navigation', () => {
 
     // Ctrl+K Ctrl+Up → focus moves to the top group (editor A).
     await page.bringToFront()
-    await page.focus('body')
+    await defocusEditor(page, workbench)
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+ArrowUp')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriA)
 
     // Ctrl+K Ctrl+Down → focus returns to the bottom group (editor B).
+    await defocusEditor(page, workbench)
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+ArrowDown')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)
@@ -100,7 +115,7 @@ test.describe('@p0 editor group focus — Ctrl+K chord navigation', () => {
 
     // Navigate left; after the switch editorFocus must be true (Monaco focused).
     await page.bringToFront()
-    await page.focus('body')
+    await defocusEditor(page, workbench)
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+ArrowLeft')
     await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
@@ -244,7 +259,7 @@ test.describe('@p1 editor group move — MoveEditorToNextGroup', () => {
     // Navigate to the left group so it is active, with B as the active editor
     // (B was active in the left group before the split).
     await page.bringToFront()
-    await page.focus('body')
+    await defocusEditor(page, workbench)
     await page.keyboard.press('Control+k')
     await page.keyboard.press('Control+ArrowLeft')
     await expect.poll(() => workbench.getActiveEditorUri()).toBe(uriB)

@@ -168,12 +168,19 @@ export function useGlobalKeybindingHandler(): void {
       pendingRef.current = { key, entry, timer }
     }
 
-    // Registered on document in capture phase so we intercept keydown events
-    // before any inner-element handler (including Monaco's chord dispatcher)
-    // can call stopPropagation() and hide the event from a window-level bubble
-    // listener. Capture phase fires outer→inner, so document fires before any
-    // Monaco container element.
-    const handler = (e: KeyboardEvent) => {
+    // Focus-gated dual listener. The same resolution runs from one of two
+    // listeners depending on whether a Monaco editor widget currently holds focus:
+    //
+    //  - Editor NOT focused → capture phase (document, outer→inner). The project
+    //    parses first, before any inner handler can stopPropagation() and hide the
+    //    event. This is the status quo and keeps global shortcuts authoritative.
+    //
+    //  - Editor focused → Monaco parses first. Monaco's dispatcher runs in the
+    //    bubble phase on its container and stopPropagation()s the keys it consumes,
+    //    so only keys Monaco leaves unhandled reach the document bubble listener
+    //    and fall through to the project. Cost: the project's own Ctrl+K chords
+    //    yield to Monaco while the editor is focused (they still work outside it).
+    const runResolution = (e: KeyboardEvent) => {
       const dbg = keyboardDebugService.enabled
       if (isModifierOnly(e.key)) {
         if (dbg) {
@@ -322,9 +329,25 @@ export function useGlobalKeybindingHandler(): void {
       }
     }
 
-    document.addEventListener('keydown', handler, true)
+    // Capture path: only active when no editor widget is focused. Fires
+    // outer→inner so the project resolves before any inner stopPropagation().
+    const captureHandler = (e: KeyboardEvent) => {
+      if (contextKeyService.get('editorFocus') === true) return
+      runResolution(e)
+    }
+    // Bubble path: only active when an editor widget is focused, and only for
+    // keys Monaco left unhandled (defaultPrevented marks the ones it consumed).
+    const bubbleHandler = (e: KeyboardEvent) => {
+      if (contextKeyService.get('editorFocus') !== true) return
+      if (e.defaultPrevented) return
+      runResolution(e)
+    }
+
+    document.addEventListener('keydown', captureHandler, true)
+    document.addEventListener('keydown', bubbleHandler, false)
     return () => {
-      document.removeEventListener('keydown', handler, true)
+      document.removeEventListener('keydown', captureHandler, true)
+      document.removeEventListener('keydown', bubbleHandler, false)
       clearChord()
     }
   }, [commandService, contextKeyService, statusBarService, keyboardDebugService])
