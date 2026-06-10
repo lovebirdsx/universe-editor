@@ -109,6 +109,24 @@ pnpm e2e
   - LSP 产物链：`apps/editor` `ext:build` / `runtime:stage` 脚本；`extensions/typescript/src/extension.ts`（缺 `UNIVERSE_TSLS_CLI` 即不激活）
 - **教训**：spec 内 poll 预算（20s×N）与 service retry 预算（180s）远大于全局 test `timeout`（30s）时,**test 级超时才是真正的天花板**,宽 poll 是摆设——CI 冷启动会精准命中这条缝。对依赖子进程冷启动的 spec,test 超时要显式抬到匹配其 poll 预算（`test.slow()` 或 `setTimeout`）。retry 能救回=瞬时竞态,救不回=结构性问题（超时/真回归）,这是第一个该看的信号。
 
+### 案例 4：outline 在 CI「每次必挂 + 拿到空符号 []」——根因是 CI 漏装非 workspace 的 vendor 依赖（伪 flake，实为产物缺口）
+- **现象**：`smoke.outline.spec.ts` `@p1`「keeps showing symbols after switching files」在 **Windows + Ubuntu 都总是失败**（retry 救不回），`expect.poll(20s)` 拿到 `Received: []`（符号恒空）。本地稳过。同轮 Ubuntu 另有 `smoke.peekNavigation` Enter-follow 偶发 flaky（这个才是真竞态）。
+- **判定关键——"总是挂 + received 空 + retry 救不回" 三连 = 不是 flake 是结构性缺口**：按速记 9,救不回先排除瞬时竞态；按速记 1,received 稳定为 `[]`（而非波动）指向"被测对象自身没就位",更像真问题。再按速记 11 顺产物链查,而不是去 spec 层加超时（加了也没用，provider 根本没注册）。
+- **根因（产物链断在 CI 配置，不在产品代码）**：
+  1. outline 是**唯一依赖 typescript LSP** 的 e2e spec（gotoSymbol/peekNav/markdownLsp 全走 **markdown** LSP）。
+  2. typescript 扩展激活硬依赖 `UNIVERSE_TSLS_CLI`/`UNIVERSE_TSLS_TSSERVER`（`extensions/typescript/src/extension.ts:53` 缺失即 `return`，不注册任何 provider），二者由 main 的 `resolveTsServerPaths()` 指向 `vendor/typescript-language-server/node_modules/.../cli.mjs`+`tsserver.js`。
+  3. `vendor/typescript-language-server/node_modules` **不在 pnpm workspace 内**（npm 子项目，`node_modules` 被 .gitignore），只由 `scripts/release/vendor-install.mjs` 装，而该脚本仅 `agent:build`/`runtime:stage`/`package:win` 调用。
+  4. CI 的 e2e job 只跑 `pnpm install --frozen-lockfile` + `pnpm build`，**从未装这个 vendor**（`git log -S vendor-install -- .github/workflows/ci.yml` 为空 = 该 spec 自 `4a1443f` 引入起在 CI 就 100% 挂，只是被误当 flake）。
+  5. 对照：markdown 扩展 deps 为 `{}`，进程内直接 `createMdServer`，无需 vendor → 所以 markdown 系 spec 在 CI 能跑、typescript outline 全空。这个"一个 LSP 能跑一个不能"的不对称是最强信号。
+- **修法**：在 e2e job 的 Build 步骤前加一步 `npm --prefix vendor/typescript-language-server ci`。**不能**直接调完整 `vendor-install.mjs`/`agent:build`——它还遍历 `claude-agent-acp` submodule，而 e2e job 的 checkout 没有 `submodules: recursive`（只有 package-windows 有），submodule 为空时脚本 `exit(1)`。故只精准装 typescript-language-server 这一个 vendor。Linux/Windows 共用该步（不加 `if:`）。被测断言一字未改。
+- **同轮 peekNavigation flake**：是真竞态——Enter-follow 那步 `expect.poll` 的 10s 窗口在 CI 冷启动下被甩开，而 `test.slow()` 已给 90s test 预算，poll 窗口才是真天花板（速记 10）。把窗口按 CI 分档 `process.env['CI'] ? 20000 : 10000`，poll-press 范式不变。
+- **锚点**：
+  - CI 修复点：`.github/workflows/ci.yml`（e2e job，Build 前加 vendor `npm ci`）
+  - 产物依赖链：`extensions/typescript/src/extension.ts:53`（缺 env 即不激活）→ `apps/editor/src/main/services/extensionHost/{extensionHostMainService.ts:195,tsServerPaths.ts}` → `scripts/release/vendor-install.mjs`（`VENDOR_DIRS`）
+  - vendor tracked 面：`vendor/typescript-language-server/{package.json,package-lock.json}` 入库、`node_modules` ignore
+  - peek 窗口分档：`apps/editor/e2e/specs/smoke.peekNavigation.spec.ts`
+- **教训**：本地稳过 + CI **每次必挂** + received **空** + retry **救不回**，这是"伪 flake"——根因往往是 CI 漏装某个运行时产物（尤其**非 pnpm workspace 的 vendor**：`pnpm install`/`pnpm build` 不会碰它）。别去 spec 层加超时（provider 没注册，等多久都是空）。鉴别捷径：**同类功能里"A 能跑 B 不能"的不对称**（md LSP ✓ / ts LSP ✗）——差异处就是缺的那环。修 CI 时注意 vendor-install 可能连带 submodule 依赖，按需只装用得到的那个 vendor，别引入 e2e job 没 checkout 的 submodule。
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -121,6 +139,7 @@ pnpm e2e
 9. **retry 救得回 = 瞬时竞态（flake）；救不回 = 结构性问题（test 超时被击穿 / 真回归）**。这是分类第一信号,先看这个再读 call log。
 10. spec 内 poll/service retry 预算（20s、180s）远大于全局 test `timeout`（30s）时,**test 超时才是真天花板**,宽 poll 是摆设。依赖子进程冷启动的 spec 要 `test.slow()` 把 test 超时抬到匹配其 poll 预算。CI 资源紧（2 核跑 4 worker）会放大冷启动,可 `workers/expect.timeout` 按 `process.env['CI']` 分档。
 11. 本地手跑单 LSP spec 前确保产物链齐：`pnpm ext:build`（生成 `extensions/*/dist`）+ `extension-host/dist` + `vendor/typescript-language-server`。少了 → 符号全空 `[]` 或探针方法缺失,**是产物问题不是回归**。正规跑法是根 `pnpm e2e`。
+12. **本地稳过 + CI 每次必挂 + received 空 + retry 救不回 = 伪 flake**（CI 漏装运行时产物,尤其**非 pnpm workspace 的 vendor**——`pnpm install`/`pnpm build` 不碰它）。别去 spec 层加超时,provider 没注册等多久都是空。鉴别捷径:**同类功能"A 能跑 B 不能"的不对称**(md LSP ✓ / ts LSP ✗),差异处就是缺的那环。修 CI 时:`vendor-install.mjs` 可能连带 submodule(claude-agent-acp),e2e job 没 `submodules: recursive`,只精准 `npm --prefix vendor/<x> ci` 装用得到的那个,别引入没 checkout 的 submodule。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

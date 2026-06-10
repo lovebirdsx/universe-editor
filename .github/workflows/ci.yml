@@ -119,6 +119,15 @@ jobs:
         if: runner.os == 'Linux'
         run: pnpm --filter @universe-editor/editor exec playwright install-deps
 
+      # The `typescript` built-in extension spawns the vendored
+      # typescript-language-server, whose node_modules live OUTSIDE the pnpm
+      # workspace (installed via npm, not `pnpm install`). Without it the TS
+      # plugin never activates and the outline e2e sees empty symbols. Install
+      # just this vendor — NOT the full vendor-install/agent:build, which also
+      # needs the claude-agent-acp submodule (not checked out in this job).
+      - name: Install vendored typescript-language-server (TS LSP for outline e2e)
+        run: npm --prefix vendor/typescript-language-server ci
+
       - name: Build
         run: pnpm build
 

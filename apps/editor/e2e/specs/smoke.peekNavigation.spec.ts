@@ -58,13 +58,18 @@ test.describe('@p1 peek keyboard navigation', () => {
 
     // The peek opens asynchronously and focuses its reference tree; pressing
     // Enter there must follow to other.md. Poll-press to avoid racing the open.
+    // CI cold start (LSP warmup + peek mount) can outlast 10s; widen the poll
+    // window there — test.slow() already grants the headroom.
     await expect
       .poll(
         async () => {
           await page.keyboard.press('Enter')
           return page.evaluate(() => window.__E2E__!.getActiveEditorUri())
         },
-        { timeout: 10000, intervals: [250, 250, 500, 500, 1000] },
+        {
+          timeout: process.env['CI'] ? 20000 : 10000,
+          intervals: [250, 250, 500, 500, 1000],
+        },
       )
       .toContain('other.md')
   })
