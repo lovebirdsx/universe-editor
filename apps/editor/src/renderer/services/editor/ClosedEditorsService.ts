@@ -12,6 +12,7 @@ import {
   IEditorGroupsService,
   URI,
   createDecorator,
+  isEqualResource,
   type IDisposable,
   type IEditorGroup,
 } from '@universe-editor/platform'
@@ -64,7 +65,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
       const entry = this._stack.pop()!
       // Skip entries whose editor is already open somewhere (e.g. after detach/move).
       const alreadyOpen = this._groups.groups.some((g) =>
-        g.editors.some((e) => e.resource?.toString() === entry.resource.toString()),
+        g.editors.some((e) => isEqualResource(e.resource, entry.resource)),
       )
       if (!alreadyOpen) return entry
     }

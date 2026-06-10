@@ -13,6 +13,7 @@ import {
   InstantiationType,
   URI,
   createDecorator,
+  isEqualResource,
   localize,
   registerSingleton,
   type IFileMatch,
@@ -418,10 +419,9 @@ export class QuickTextSearchService implements IQuickTextSearchService {
   }
 
   private _openFile(resource: URI, pinned: boolean): FileEditorInput {
-    const target = resource.toString()
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && editor.resource.toString() === target) {
+        if (editor instanceof FileEditorInput && isEqualResource(editor.resource, resource)) {
           this._groups.activateGroup(group)
           group.setActive(editor)
           if (pinned) group.pinEditor(editor)

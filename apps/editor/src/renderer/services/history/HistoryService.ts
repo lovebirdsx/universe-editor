@@ -15,12 +15,13 @@ import {
   type IHistoryService,
   type IHistorySelection,
   URI,
+  isEqualResource,
 } from '@universe-editor/platform'
 
 const MAX_DEPTH = 50
 
 function sameFile(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolean {
-  return a.resource.toString() === b.resource.toString()
+  return isEqualResource(a.resource, b.resource)
 }
 
 function sameLine(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolean {

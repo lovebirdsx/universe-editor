@@ -18,6 +18,7 @@ import {
   IFileService,
   IInstantiationService,
   URI,
+  isEqualResource,
   type IFileMatch,
   type ITextSearchMatch,
 } from '@universe-editor/platform'
@@ -129,9 +130,7 @@ export function useSearchActions(
 
   const onReplaceFile = useCallback(
     (resource: URI) => {
-      const fm = results.find(
-        (r) => (URI.revive(r.resource) as URI).toString() === resource.toString(),
-      )
+      const fm = results.find((r) => isEqualResource(URI.revive(r.resource) as URI, resource))
       if (fm) replaceFileMatch(fm)
     },
     [results, replaceFileMatch],

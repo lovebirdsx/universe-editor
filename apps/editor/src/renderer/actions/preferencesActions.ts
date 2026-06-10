@@ -18,6 +18,7 @@ import {
   Severity,
   URI,
   UserDataFile,
+  isEqualResource,
   localize,
   type IQuickPickItem,
   type ServicesAccessor,
@@ -76,7 +77,7 @@ async function openUserDataFile(
   // De-dupe: if already open, reactivate.
   for (const group of groups.groups) {
     for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+      if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
         groups.activateGroup(group)
         group.setActive(editor)
         return

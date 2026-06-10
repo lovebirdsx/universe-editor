@@ -11,6 +11,7 @@
 import { useEffect, type RefObject } from 'react'
 import {
   IEditorGroupsService,
+  isEqualResource,
   markAsSingleton,
   type IDisposable,
   type URI,
@@ -120,10 +121,9 @@ export function useMarkdownSyncScroll(
     let suppressEditorUntil = 0
 
     const findEditor = (): monaco.editor.IStandaloneCodeEditor | undefined => {
-      const key = sourceUri.toString()
       for (const group of groupsService.groups) {
         for (const editor of group.editors) {
-          if (editor instanceof FileEditorInput && editor.resource.toString() === key) {
+          if (editor instanceof FileEditorInput && isEqualResource(editor.resource, sourceUri)) {
             const inst = FileEditorRegistry.get(editor)
             if (inst) return inst
           }

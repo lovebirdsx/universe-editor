@@ -9,6 +9,7 @@ import {
   IEditorResolverService,
   IQuickInputService,
   URI,
+  isEqualResource,
   localize,
   type ServicesAccessor,
   type UriComponents,
@@ -48,7 +49,7 @@ export class ReopenWithAction extends Action2 {
     if (!pick) return
 
     const group = groups.activeGroup
-    const existing = group.editors.find((e) => e.resource?.toString() === uri.toString())
+    const existing = group.editors.find((e) => isEqualResource(e.resource, uri))
     if (existing) group.closeEditor(existing)
 
     await resolver.openEditor(uri, { preferredTypeId: pick.id, pinned: true })

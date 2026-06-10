@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { URI } from '../../base/uri.js'
+import { URI, canonicalResourceKey, isEqualResource } from '../../base/uri.js'
 
 describe('URI — parse', () => {
   it('parses scheme + authority + path + query + fragment', () => {
@@ -194,5 +194,37 @@ describe('URI — isUri', () => {
     expect(URI.isUri(null)).toBe(false)
     expect(URI.isUri('string')).toBe(false)
     expect(URI.isUri(42)).toBe(false)
+  })
+})
+
+describe('URI — isEqualResource', () => {
+  it('treats the Windows drive letter case-insensitively', () => {
+    // The editor keeps the uppercase drive; a value round-tripped through Monaco
+    // arrives lower-cased + percent-encoded — both must compare equal.
+    expect(
+      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///d%3A/x/Foo.ts')),
+    ).toBe(true)
+  })
+
+  it('still distinguishes different paths', () => {
+    expect(
+      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///D:/x/Bar.ts')),
+    ).toBe(false)
+  })
+
+  it('keeps the rest of the path case-sensitive', () => {
+    expect(
+      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///d:/X/Foo.ts')),
+    ).toBe(false)
+  })
+
+  it('is undefined-safe', () => {
+    expect(isEqualResource(undefined, undefined)).toBe(true)
+    expect(isEqualResource(URI.parse('file:///D:/x'), undefined)).toBe(false)
+  })
+
+  it('canonicalResourceKey lower-cases only the leading drive letter', () => {
+    expect(canonicalResourceKey(URI.parse('file:///D:/x/Foo.ts'))).toBe('file:///d:/x/Foo.ts')
+    expect(canonicalResourceKey(URI.parse('file:///usr/Bin'))).toBe('file:///usr/Bin')
   })
 })

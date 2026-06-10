@@ -15,6 +15,7 @@ import {
   IWorkspaceService,
   MenuId,
   URI,
+  isEqualResource,
   localize,
   DisposableStore,
   type IQuickPickItem,
@@ -98,7 +99,7 @@ export class OpenRecentFilesAction extends Action2 {
     // Activate if already open in any group.
     for (const group of groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+        if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
           groups.activateGroup(group)
           group.setActive(editor)
           return
@@ -215,7 +216,7 @@ export class GoToFileAction extends Action2 {
       const uri = URI.parse(pick.id)
       for (const group of groups.groups) {
         for (const editor of group.editors) {
-          if (editor instanceof FileEditorInput && editor.resource.toString() === uri.toString()) {
+          if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
             groups.activateGroup(group)
             group.setActive(editor)
             return
@@ -266,10 +267,7 @@ export class GoToFileAction extends Action2 {
         recentFiles.add(uri, pick.label)
         for (const group of groups.groups) {
           for (const editor of group.editors) {
-            if (
-              editor instanceof FileEditorInput &&
-              editor.resource.toString() === uri.toString()
-            ) {
+            if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
               groups.activateGroup(group)
               group.setActive(editor)
               return

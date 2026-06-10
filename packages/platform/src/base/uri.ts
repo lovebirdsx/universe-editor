@@ -233,6 +233,25 @@ export class URI implements UriComponents {
   }
 }
 
+/**
+ * A comparison key for a resource with the Windows drive letter lower-cased, so
+ * `/D:/x` and `/d:/x` collapse to one value. The platform keeps the drive letter
+ * as written (`D:`), while values that round-tripped through Monaco's URI arrive
+ * lower-cased (`d:`); this reconciles the two.
+ */
+export function canonicalResourceKey(uri: URI): string {
+  const path = uri.path.replace(/^\/([A-Za-z]):/, (_m, drive: string) => `/${drive.toLowerCase()}:`)
+  return uri.with({ path }).toString()
+}
+
+/** Whether two URIs address the same resource, treating the Windows drive
+ *  letter case-insensitively (see {@link canonicalResourceKey}). */
+export function isEqualResource(a: URI | undefined, b: URI | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  return canonicalResourceKey(a) === canonicalResourceKey(b)
+}
+
 function decodeURIComponentSafe(value: string): string {
   if (!value || value.indexOf('%') === -1) return value
   try {

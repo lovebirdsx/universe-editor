@@ -45,4 +45,21 @@ describe('MonacoModelRegistry', () => {
     expect(model.getLanguageId()).toBe('json')
     MonacoModelRegistry.release(uri)
   })
+
+  it('dedupes URIs differing only by Windows drive case (workspace-symbol jump regression)', () => {
+    // The editor opens with an uppercase-drive platform URI; a workspace-symbol
+    // jump produces the same file as a lowercased URI (round-tripped through
+    // Monaco). Both must resolve to one model — historically the second threw
+    // "Cannot add model because it already exists!".
+    const upper = URI.parse('file:///D:/x/Foo.ts')
+    const lower = URI.parse('file:///d%3A/x/Foo.ts')
+    const m1 = MonacoModelRegistry.acquire(upper, 'content')
+    const m2 = MonacoModelRegistry.acquire(lower, 'IGNORED')
+    expect(m2).toBe(m1)
+    // The refcount is shared across both casings.
+    MonacoModelRegistry.release(upper)
+    expect(MonacoModelRegistry.peek(lower)).toBeDefined()
+    MonacoModelRegistry.release(lower)
+    expect(MonacoModelRegistry.peek(upper)).toBeUndefined()
+  })
 })

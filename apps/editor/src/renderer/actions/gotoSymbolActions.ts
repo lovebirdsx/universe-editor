@@ -21,6 +21,7 @@ import {
   IWorkspaceService,
   URI,
   autorun,
+  isEqualResource,
   localize,
   relativePathUnder,
   type HostPlatform,
@@ -196,10 +197,7 @@ export class GoToWorkspaceSymbolAction extends Action2 {
         let input: FileEditorInput | undefined
         for (const group of groups.groups) {
           for (const editor of group.editors) {
-            if (
-              editor instanceof FileEditorInput &&
-              editor.resource.toString() === uri.toString()
-            ) {
+            if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
               groups.activateGroup(group)
               group.setActive(editor)
               input = editor
