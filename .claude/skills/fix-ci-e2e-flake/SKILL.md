@@ -162,6 +162,17 @@ pnpm e2e
   - 被盖掉的全局分档：`apps/editor/e2e/playwright.config.ts:11`（`expect.timeout = CI ? 10_000 : 5_000`）
 - **教训**：config 已按 `process.env['CI']` 给 `expect.timeout` 做了冷启动分档时，**spec 里任何硬编码 `{ timeout: 5000 }` 都会把 CI 分档盖回本地值**（5000===本地默认，等于分档失效）。对「等编辑器/Monaco 首帧就位」这类冷启动敏感步骤，**别在 poll 里写死超时，让它继承 config 默认**，CI 才能吃到加宽窗口。与案例 3 的 `test.slow()` 互补：`test.slow()` 抬 test 级天花板，去掉局部 `timeout` 让 expect 级吃到 CI 分档——二者都是「让真正的天花板匹配冷启动预算」。
 
+### 案例 8：editorTabDnD「`EBUSY: resource busy or locked, rmdir` in finally」——清理竞态，非断言失败，`fs.rm` 缺 Windows 重试
+- **现象**：`smoke.editorTabDnD.spec.ts` `@p1`「drag tab to another group moves the editor」在本地 Windows 偶发挂，报 `Error: EBUSY: resource busy or locked, rmdir 'C:\...\Temp\ue2-tabdnd-XXX'`。栈顶在 spec **末尾 `finally` 的 `fs.rm(tmpDir)`**（line 120），而被测断言（tab 移动到另一 group，line 113-118）此前已全部通过。
+- **判定关键——报错是 Node `fs` 的 `EBUSY rmdir`、栈在 `finally` 清理步，不是被测断言失败**：和案例 6（context destroyed）同类——失败的是 harness/清理基础设施，不是 `expect`。被测行为正确，flake 在 teardown。
+- **根因（Windows 文件锁清理竞态，产品无 bug）**：spec 自建 tmp workspace（`mkdtemp` + 写 alpha/beta 两文件）→ `openWorkspace(tmpDir)`。测试体结束后**fixture 才 `closeApp`**（`electronApp.ts` 的 `await use(app)` 之后），所以 spec 自己的 `finally` 删 tmpDir 时 **Electron app 仍打开着这个 workspace**：编辑器打开的两个 pinned 文件句柄 + chokidar 目录 watcher 在瞬时窗口内仍占着目录，Windows 上 rmdir 即 `EBUSY`。`force: true` 只吞 ENOENT，**不重试 EBUSY**。本地快/句柄释放及时则不复现。为何独此 spec 偶发：它 split 两个 group、同时开 alpha/beta 两 pinned 文件，结束时占用句柄最多、释放最慢，EBUSY 窗口被放大（兄弟 spel 如 explorerDnD 仅开一个目录、句柄少）。
+- **修法（不削弱被测断言）**：给该 `fs.rm` 加 `maxRetries: 10, retryDelay: 200`——Node `fs.rm`/`rm` 自带的、专为 Windows `EBUSY/EPERM/ENOTEMPTY` 设计的重试退避，骑过句柄释放窗口。被测断言一字未改。本地 `--repeat-each=5` 全绿，e2e typecheck + eslint 干净。**同型裸清理已一并对齐**：`grep "fs\.rm\(|rmSync\("` 全量排查后，把所有 openWorkspace/tmp-workspace 类的裸 `{ recursive, force }`（无重试）都补上同款 `maxRetries`/`retryDelay`——`smoke.{explorerDnD,explorerExternalWatch(×3),explorerRowHeight,layoutPersistence}.spec.ts`。**例外**：`smoke.update.spec.ts` 删的是单个配置文件（非 recursive、非 app 打开的 workspace 目录），不属此锁竞态，保持裸 `force`。多数 `rmSync` 早已带 `maxRetries`（restore 类 spec），本次只补齐漏网的裸清理。
+- **锚点**：
+  - 修复点：`apps/editor/e2e/specs/smoke.editorTabDnD.spec.ts`（`finally` 的 `fs.rm` 加 `maxRetries`/`retryDelay`）
+  - 关闭时序：`apps/editor/e2e/fixtures/electronApp.ts`（`electronApp` fixture：`await use(app)` 后才 `closeApp`，故 spec 的 `finally` 早于 app 关闭）
+  - 同型裸清理（潜在隐患，暂不动）：`smoke.{explorerDnD,explorerRowHeight,explorerExternalWatch,...}.spec.ts` 的 `fs.rm(..., { recursive, force })`
+- **教训**：报错是 **Node `fs` 的 `EBUSY/EPERM rmdir` 且栈在 `finally`/teardown 清理步** = Windows 文件锁清理竞态，不是被测 bug 也不是断言 flake。根因是 spec 的 `finally` 删 tmp workspace 时 Electron app 还没被 fixture 关闭（句柄/watcher 仍占目录），`force: true` 不重试 EBUSY。正解是 `fs.rm` 加 `maxRetries`/`retryDelay`（Node 内建 Windows 重试），别移到别处删或 sleep 硬等。只改触发 flake 的 spec。
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -178,6 +189,7 @@ pnpm e2e
 13. **`expect.poll` 里"盲按按键"(`keyboard.press`)是危险范式**:按键落到**当前 DOM 焦点**,被测 UI 未异步就位时会打进别的控件(如编辑器 `TEXTAREA`),**污染被测对象自身**(改文档→破坏 fixture→连锁让被测功能无法触发)。慢速 CI 把"按键落点"竞态放大,且**加宽 poll 窗口无效**(多按几次只会污染更多,received 稳定卡在初值)。正解:把按键**门控在"目标已聚焦/就位"前置条件**上(探针读状态,如 `isReferencePeekFocused()`),只在就位时才按。诊断捷径:fire 后盲按几次并打印 `document.activeElement` + 光标位置,看光标是否随 Enter 递增=实锤自污染(本地即可复现机制)。
 14. **报错是 `page.evaluate: Execution context was destroyed, most likely because of a navigation` = harness 时序 flake,不是被测断言失败**。凡"fire 后页面会 reload/导航,再 `page.evaluate(__E2E__...)`"的 PO 步骤,evaluate 都要对此鲁棒(捕获该错→重等 `domcontentloaded`+`__E2E__`→重试),因为慢速 CI 上导航 commit 会与评估重合。若同文件已有兄弟方法(如 `waitForRestored`)做过该加固,新/遗留同类步骤**必须对齐复用**,别留裸 evaluate(并入速记 5)。reload 类 PO 见 `WorkbenchPO._evaluateWhenRestored`。
 15. **config 已按 `process.env['CI']` 分档 `expect.timeout` 时,spec 里硬编码 `{ timeout: 5000 }` 会把 CI 分档盖回本地值**(5000===本地默认=分档失效)。received 稳定空 `""` + 这步等的是"编辑器/Monaco 首帧就位"(冷启动敏感) → 查这步是否钉死了局部 `timeout`。修法:删掉该 poll 的显式 `{ timeout: 5000 }` 让它继承 config 默认,断言不动,CI 自动吃到加宽窗口。与速记 10 的 `test.slow()` 互补(一个抬 test 级天花板,一个让 expect 级吃 CI 分档)。**只改触发 flake 的那个谓词,别无差别批量改稳过用例的 5000**(过度修改)。
+16. **报错是 Node `fs` 的 `EBUSY/EPERM/ENOTEMPTY rmdir`、栈在 `finally`/teardown 清理步 = Windows 文件锁清理竞态,不是被测断言失败**(同案例 6 的 harness flake 家族)。根因:spec 自建 tmp workspace→`openWorkspace`,测试体 `finally` 删 tmpDir 时 **Electron app 还没被 fixture 关闭**(`electronApp` fixture `await use(app)` 之后才 `closeApp`),打开的文件句柄 + chokidar watcher 仍占目录;`force: true` 只吞 ENOENT **不重试 EBUSY**。修法:`fs.rm` 加 `maxRetries: 10, retryDelay: 200`(Node 内建的 Windows 重试退避),断言不动。split/多 pinned 文件的 spec 句柄最多、窗口最大,故独此偶发。只改触发 flake 的 spec,别无差别改其它裸 `force:true` 清理。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

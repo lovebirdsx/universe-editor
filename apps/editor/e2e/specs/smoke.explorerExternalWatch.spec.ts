@@ -48,7 +48,7 @@ test.describe('@p1 explorer external file detection', () => {
       workbench.page.locator('[role="treeitem"]', { hasText: 'created-externally.txt' }),
     ).toBeVisible({ timeout: 8000 })
 
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
   test('both windows keep detecting their own external files', async ({
@@ -88,7 +88,7 @@ test.describe('@p1 explorer external file detection', () => {
       timeout: 8000,
     })
 
-    await fs.rm(dirA, { recursive: true, force: true })
-    await fs.rm(dirB, { recursive: true, force: true })
+    await fs.rm(dirA, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    await fs.rm(dirB, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 })

@@ -117,7 +117,12 @@ test.describe('@p1 editor tab drag-and-drop', () => {
       const betaTabInFirst = firstTabBar.locator('[role="tab"]', { hasText: 'beta.txt' })
       await expect(betaTabInFirst).toBeVisible({ timeout: 3000 })
     } finally {
-      await fs.rm(tmpDir, { recursive: true, force: true })
+      // The Electron app is still holding this workspace open here (the fixture
+      // closes it only after the test returns): the two opened files plus the
+      // chokidar directory watcher keep transient handles on tmpDir, so on
+      // Windows rmdir can hit EBUSY. maxRetries/retryDelay rides out that window
+      // (force only swallows ENOENT, not EBUSY).
+      await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
     }
   })
 })

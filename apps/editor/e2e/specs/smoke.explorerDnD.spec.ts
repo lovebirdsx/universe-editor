@@ -46,7 +46,8 @@ test.describe('@p1 explorer drag-and-drop', () => {
     expect(rootExists).toBe(false)
     expect(subdirExists).toBe(true)
 
-    // Cleanup.
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    // Cleanup. The app still holds this workspace open (the fixture closes it
+    // after the test returns), so on Windows rmdir can hit EBUSY — retry it.
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 })

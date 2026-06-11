@@ -49,6 +49,6 @@ test.describe('@p1 explorer row height', () => {
       ).toBeGreaterThanOrEqual(ROW_HEIGHT - 1)
     }
 
-    await fs.rm(tmpDir, { recursive: true, force: true })
+    await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 })
