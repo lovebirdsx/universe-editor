@@ -239,6 +239,7 @@
   padding: 1px 6px 1px 0;
   cursor: pointer;
   height: 22px;
+  flex-shrink: 0;
   box-sizing: border-box;
   overflow: hidden;
 }
