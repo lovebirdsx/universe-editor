@@ -7,28 +7,33 @@
  *  session never blocks another.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useObservable } from '../useService.js'
 import type {
   AskUserQuestion,
   AskUserQuestionResult,
   IAcpSession,
 } from '../../services/acp/acpSessionService.js'
+import {
+  AcpQuestionDraftCache,
+  emptyQuestionDraft as emptyDraft,
+  type QuestionDraft,
+} from '../../services/acp/acpQuestionDraftCache.js'
 import styles from './agents.module.css'
 
-interface QuestionDraft {
-  /** Selected option labels (single-select keeps at most one). */
-  readonly selected: Set<string>
-  /** Whether the free-form "Other" choice is active. */
-  readonly otherChecked: boolean
-  readonly otherText: string
-  readonly notes: string
-  /** Label whose preview is currently shown in the side panel. */
-  readonly previewLabel: string | null
-}
-
-function emptyDraft(): QuestionDraft {
-  return { selected: new Set(), otherChecked: false, otherText: '', notes: '', previewLabel: null }
+// Restore the saved drafts for a (session, question) pair, cloning each Set so a
+// restored draft never shares its mutable `selected` with the cached snapshot.
+// Falls back to one empty draft per question when nothing is cached.
+function loadDrafts(
+  sessionId: string,
+  toolCallId: string,
+  questions: readonly AskUserQuestion[],
+): QuestionDraft[] {
+  const saved = AcpQuestionDraftCache.load(sessionId, toolCallId)
+  if (saved && saved.length === questions.length) {
+    return saved.map((d) => ({ ...d, selected: new Set(d.selected) }))
+  }
+  return questions.map(() => emptyDraft())
 }
 
 function isAnswered(q: AskUserQuestion, d: QuestionDraft): boolean {
@@ -50,13 +55,22 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
 
   // Reset the drafts whenever a new question carousel arrives. Setting state
   // during render of the same component (keyed by toolCallId) is the canonical
-  // "reset state on prop change" pattern — no effect needed.
+  // "reset state on prop change" pattern — no effect needed. Drafts come from the
+  // per-session cache so switching tabs / sessions and coming back restores them.
   const [stateKey, setStateKey] = useState(key)
-  const [drafts, setDrafts] = useState<QuestionDraft[]>(() => questions.map(() => emptyDraft()))
+  const [drafts, setDrafts] = useState<QuestionDraft[]>(() =>
+    loadDrafts(session.id, key, questions),
+  )
   if (key !== stateKey) {
     setStateKey(key)
-    setDrafts(questions.map(() => emptyDraft()))
+    setDrafts(loadDrafts(session.id, key, questions))
   }
+
+  // Persist the in-progress answers per (session, question) so switching tabs /
+  // sessions and coming back restores them (mirrors AcpPromptDraftCache).
+  useEffect(() => {
+    if (pending) AcpQuestionDraftCache.save(session.id, key, drafts)
+  }, [drafts, session.id, key, pending])
 
   if (!pending) return null
 
@@ -93,6 +107,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
     })
     const result: AskUserQuestionResult =
       Object.keys(annotations).length > 0 ? { answers, annotations } : { answers }
+    AcpQuestionDraftCache.clear(session.id, key)
     pending.resolve(result)
   }
 
@@ -207,7 +222,10 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
         <button
           type="button"
           className={styles['permissionDeny']}
-          onClick={() => pending.cancel()}
+          onClick={() => {
+            AcpQuestionDraftCache.clear(session.id, key)
+            pending.cancel()
+          }}
           data-testid="acp-question-dismiss"
         >
           Dismiss

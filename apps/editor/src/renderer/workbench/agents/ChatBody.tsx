@@ -130,7 +130,7 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
       <StickyPlanBar key={`plan:${session.id}`} session={session} />
       <ChatScroll key={session.id} session={session} handleRef={handleRef} />
       <PermissionCard session={session} />
-      <QuestionCard session={session} />
+      <QuestionCard key={`question:${session.id}`} session={session} />
       <PromptInput
         key={`prompt:${session.id}`}
         session={session}
