@@ -202,6 +202,10 @@ import {
   SelectPreviousAcpPromptSuggestionAction,
   AcceptAcpPromptSuggestionAction,
   HideAcpPromptSuggestionAction,
+  ChatFindAction,
+  ChatFindNextAction,
+  ChatFindPreviousAction,
+  ChatFindCloseAction,
 } from './agentActions.js'
 
 // Layout
@@ -434,3 +438,10 @@ registerAction2(SelectNextAcpPromptSuggestionAction)
 registerAction2(SelectPreviousAcpPromptSuggestionAction)
 registerAction2(AcceptAcpPromptSuggestionAction)
 registerAction2(HideAcpPromptSuggestionAction)
+// In-session find — registered last so its `f3` / `shift+f3` / `escape` bindings
+// win the newest-wins tie-break over global shortcuts whenever
+// `acpChatFindVisible` is set (`ctrl+f` to open gates on `acpChatFocused`).
+registerAction2(ChatFindAction)
+registerAction2(ChatFindNextAction)
+registerAction2(ChatFindPreviousAction)
+registerAction2(ChatFindCloseAction)

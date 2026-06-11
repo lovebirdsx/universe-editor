@@ -894,6 +894,84 @@ export class HideAcpPromptSuggestionAction extends Action2 {
   }
 }
 
+// ---------------------------------------------------------------------------
+// In-session find (Ctrl+F). Modeled on Monaco's find widget so the keys match:
+// Ctrl+F opens, F3 / Shift+F3 step through matches, Escape closes. Open gates on
+// `acpChatFocused` (Ctrl+F from anywhere in the chat); the navigation / close
+// commands gate on `acpChatFindVisible` (true only when the *focused* widget's
+// find bar is open) so they don't shadow F3 / Escape elsewhere.
+// ---------------------------------------------------------------------------
+
+export class ChatFindAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.find'
+  constructor() {
+    super({
+      id: ChatFindAction.ID,
+      title: localize('action.agent.find', 'Find in Session'),
+      category: CATEGORY,
+      icon: 'search',
+      keybinding: { primary: 'ctrl+f', when: 'acpChatFocused' },
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 0,
+        },
+      ],
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.openFind()
+  }
+}
+
+export class ChatFindNextAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.findNext'
+  constructor() {
+    super({
+      id: ChatFindNextAction.ID,
+      title: localize('action.agent.findNext', 'Find Next'),
+      category: CATEGORY,
+      keybinding: { primary: 'f3', when: 'acpChatFindVisible' },
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.findNext()
+  }
+}
+
+export class ChatFindPreviousAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.findPrevious'
+  constructor() {
+    super({
+      id: ChatFindPreviousAction.ID,
+      title: localize('action.agent.findPrevious', 'Find Previous'),
+      category: CATEGORY,
+      keybinding: { primary: 'shift+f3', when: 'acpChatFindVisible' },
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.findPrev()
+  }
+}
+
+export class ChatFindCloseAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.findClose'
+  constructor() {
+    super({
+      id: ChatFindCloseAction.ID,
+      title: localize('action.agent.findClose', 'Close Find'),
+      category: CATEGORY,
+      keybinding: { primary: 'escape', when: 'acpChatFindVisible' },
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.closeFind()
+  }
+}
+
 interface SessionSwitchPickItem extends IQuickPickItem {
   readonly windowId: number
   readonly sessionId: string

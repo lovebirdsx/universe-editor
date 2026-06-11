@@ -46,6 +46,10 @@ function makeWidget(
     popoverSelectPrev: vi.fn(),
     popoverAccept: vi.fn(),
     popoverHide: vi.fn(),
+    openFind: vi.fn(),
+    closeFind: vi.fn(),
+    findNext: vi.fn(),
+    findPrev: vi.fn(),
   }
   return { container, child, widget, moveSpy, focusSpy }
 }
@@ -185,6 +189,10 @@ describe('AcpChatWidgetService', () => {
       popoverSelectPrev: vi.fn(),
       popoverAccept: vi.fn(),
       popoverHide: vi.fn(),
+      openFind: vi.fn(),
+      closeFind: vi.fn(),
+      findNext: vi.fn(),
+      findPrev: vi.fn(),
     }
     svc.register(widget)
     expect(cks.get('acpChatFocused')).toBe(true)

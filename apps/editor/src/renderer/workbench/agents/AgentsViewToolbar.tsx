@@ -42,6 +42,13 @@ export function AgentsViewToolbar() {
     return (
       <span className={styles['viewToolbar']}>
         <IconButton
+          label={localize('acp.find.open', 'Find in session (Ctrl+F)')}
+          onClick={() => void commands.executeCommand('workbench.action.agent.find')}
+          data-testid="acp-find-open"
+        >
+          <Search size={14} strokeWidth={1.75} />
+        </IconButton>
+        <IconButton
           label={localize('acp.sessions.toggle', 'Sessions')}
           onClick={() => setSessionsOpen((v) => !v)}
           aria-expanded={sessionsOpen}

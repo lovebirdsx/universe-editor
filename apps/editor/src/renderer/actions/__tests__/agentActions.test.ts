@@ -78,6 +78,10 @@ describe('Agent timeline navigation actions', () => {
         popoverSelectPrev,
         popoverAccept,
         popoverHide,
+        openFind: vi.fn(),
+        closeFind: vi.fn(),
+        findNext: vi.fn(),
+        findPrev: vi.fn(),
       },
     }
   }
@@ -191,6 +195,10 @@ describe('Agent prompt suggestion popover actions', () => {
         popoverSelectPrev,
         popoverAccept,
         popoverHide,
+        openFind: vi.fn(),
+        closeFind: vi.fn(),
+        findNext: vi.fn(),
+        findPrev: vi.fn(),
       },
     }
   }

@@ -15,6 +15,11 @@
  *  via `setPopoverOpen` and aggregated against focus the same way as
  *  `acpChatFocused`. The SelectNext/Prev/Accept/Hide suggestion commands gate
  *  their keybindings on it (mirroring VSCode's `suggestWidgetVisible`).
+ *
+ *  And `acpChatFindVisible`: true iff the *focused* widget's in-session find
+ *  widget is open. Pushed via `setFindVisible`, aggregated like the popover key;
+ *  the FindNext/FindPrevious/FindClose commands (F3 / Shift+F3 / Escape) gate on
+ *  it (mirroring VSCode's `findWidgetVisible`).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -53,6 +58,14 @@ export interface AcpChatWidget {
   popoverAccept(): void
   /** Dismiss the open slash/mention popover. */
   popoverHide(): void
+  /** Open the in-session find widget (focuses its input). */
+  openFind(): void
+  /** Close the in-session find widget and clear highlights. */
+  closeFind(): void
+  /** Move to the next find match. */
+  findNext(): void
+  /** Move to the previous find match. */
+  findPrev(): void
 }
 
 export interface IAcpChatWidgetService {
@@ -63,6 +76,9 @@ export interface IAcpChatWidgetService {
   /** Push a widget's popover open/closed state; the service flips
    *  `acpPromptPopupVisible` on iff the *focused* widget's popover is open. */
   setPopoverOpen(widget: AcpChatWidget, open: boolean): void
+  /** Push a widget's find open/closed state; the service flips
+   *  `acpChatFindVisible` on iff the *focused* widget's find widget is open. */
+  setFindVisible(widget: AcpChatWidget, open: boolean): void
 }
 
 export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acpChatWidgetService')
@@ -71,6 +87,7 @@ interface Entry {
   widget: AcpChatWidget
   focused: boolean
   popoverOpen: boolean
+  findVisible: boolean
   onFocusIn: (e: FocusEvent) => void
   onFocusOut: (e: FocusEvent) => void
 }
@@ -82,6 +99,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private _lastFocusedWidget: AcpChatWidget | undefined
   private readonly _key: IContextKey<boolean>
   private readonly _popupKey: IContextKey<boolean>
+  private readonly _findKey: IContextKey<boolean>
 
   // Roots every registration's cleanup under this (singleton-rooted) service so
   // the leak detector doesn't report a still-mounted ChatBody's registration
@@ -92,6 +110,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     super()
     this._key = contextKeyService.createKey<boolean>('acpChatFocused', false)
     this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
+    this._findKey = contextKeyService.createKey<boolean>('acpChatFindVisible', false)
   }
 
   get lastFocusedWidget(): AcpChatWidget | undefined {
@@ -112,7 +131,14 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       if (next instanceof Node && widget.container.contains(next)) return
       this._setFocused(widget, false)
     }
-    const entry: Entry = { widget, focused: false, popoverOpen: false, onFocusIn, onFocusOut }
+    const entry: Entry = {
+      widget,
+      focused: false,
+      popoverOpen: false,
+      findVisible: false,
+      onFocusIn,
+      onFocusOut,
+    }
     widget.container.addEventListener('focusin', onFocusIn)
     widget.container.addEventListener('focusout', onFocusOut)
     this._entries.set(widget, entry)
@@ -150,6 +176,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._recomputePopupKey()
   }
 
+  // Same plumbing as the popover key: gates the find navigation commands on the
+  // *focused* widget's find visibility, so a blurred-but-still-open find widget
+  // doesn't steal F3 from another chat.
+  setFindVisible(widget: AcpChatWidget, open: boolean): void {
+    const entry = this._entries.get(widget)
+    if (!entry || entry.findVisible === open) return
+    entry.findVisible = open
+    this._recomputeFindKey()
+  }
+
   private _unregister(widget: AcpChatWidget): void {
     const entry = this._entries.get(widget)
     if (!entry) return
@@ -161,6 +197,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     }
     this._recomputeKey()
     this._recomputePopupKey()
+    this._recomputeFindKey()
   }
 
   private _setFocused(widget: AcpChatWidget, focused: boolean): void {
@@ -173,6 +210,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     }
     this._recomputeKey()
     this._recomputePopupKey()
+    this._recomputeFindKey()
   }
 
   private _recomputeKey(): void {
@@ -195,5 +233,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       }
     }
     this._popupKey.set(visible)
+  }
+
+  private _recomputeFindKey(): void {
+    let visible = false
+    for (const entry of this._entries.values()) {
+      if (entry.focused && entry.findVisible) {
+        visible = true
+        break
+      }
+    }
+    this._findKey.set(visible)
   }
 }

@@ -59,6 +59,8 @@ import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentCha
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
+import { ChatFindWidget } from './ChatFindWidget.js'
+import { useChatFind } from './useChatFind.js'
 import styles from './agents.module.css'
 
 const STICK_THRESHOLD_PX = 32
@@ -75,6 +77,10 @@ export interface WidgetHandle {
   popoverSelectPrev: () => void
   popoverAccept: () => void
   popoverHide: () => void
+  openFind: () => void
+  closeFind: () => void
+  findNext: () => void
+  findPrev: () => void
 }
 
 const noop = (): void => {}
@@ -91,6 +97,10 @@ const NOOP_HANDLE: WidgetHandle = {
   popoverSelectPrev: noop,
   popoverAccept: noop,
   popoverHide: noop,
+  openFind: noop,
+  closeFind: noop,
+  findNext: noop,
+  findPrev: noop,
 }
 
 export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
@@ -131,6 +141,10 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
       popoverSelectPrev: () => handleRef.current.popoverSelectPrev(),
       popoverAccept: () => handleRef.current.popoverAccept(),
       popoverHide: () => handleRef.current.popoverHide(),
+      openFind: () => handleRef.current.openFind(),
+      closeFind: () => handleRef.current.closeFind(),
+      findNext: () => handleRef.current.findNext(),
+      findPrev: () => handleRef.current.findPrev(),
     }
     widgetRef.current = widget
     const sub = widgetService.register(widget)
@@ -151,6 +165,17 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
     [widgetService],
   )
 
+  // Same plumbing for the in-session find widget: ChatScroll reports open/closed
+  // up so the service flips `acpChatFindVisible` for the focused widget (gates
+  // the F3 / Shift+F3 / Escape find-navigation commands).
+  const handleFindVisibleChange = useCallback(
+    (open: boolean) => {
+      const widget = widgetRef.current
+      if (widget) widgetService.setFindVisible(widget, open)
+    },
+    [widgetService],
+  )
+
   const chatClassName = hasTimelineContent
     ? styles['chat']
     : `${styles['chat']} ${styles['chatEmptySession']}`
@@ -158,7 +183,12 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
     <div ref={containerRef} className={chatClassName} data-testid="acp-chat">
       <StickyUserMessageBar key={`user:${session.id}`} session={session} />
       <StickyPlanBar key={`plan:${session.id}`} session={session} />
-      <ChatScroll key={session.id} session={session} handleRef={handleRef} />
+      <ChatScroll
+        key={session.id}
+        session={session}
+        handleRef={handleRef}
+        onFindVisibleChange={handleFindVisibleChange}
+      />
       <PermissionCard session={session} />
       <QuestionCard key={`question:${session.id}`} session={session} />
       <PromptInput
@@ -175,9 +205,11 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
 function ChatScroll({
   session,
   handleRef,
+  onFindVisibleChange,
 }: {
   session: IAcpSession
   handleRef: MutableRefObject<WidgetHandle>
+  onFindVisibleChange: (open: boolean) => void
 }) {
   const timeline = useObservable(session.timeline)
   const status = useObservable(session.status)
@@ -216,7 +248,16 @@ function ChatScroll({
   // `containerRef.scrollTop` need no branching — only keyboard reveal does.
   const configService = useService(IConfigurationService)
   const threshold = configService.get<number>('workbench.chat.virtualizationThreshold')!
-  const virtualize = timeline.length > threshold
+
+  // In-session find. While the find bar is open we force the plain <ol> (below)
+  // so the whole session is in the DOM — the TreeWalker, scrollIntoView reveal
+  // and highlight ranges then cover messages that virtualization would unmount.
+  const find = useChatFind(
+    containerRef,
+    `${timeline.length}:${tailContentSignature(timeline)}`,
+    onFindVisibleChange,
+  )
+  const virtualize = timeline.length > threshold && !find.visible
 
   const firstUserIdx = timeline.findIndex(
     (it) => it.kind === 'message' && it.message.role === 'user',
@@ -574,6 +615,29 @@ function ChatScroll({
     }
   }, [handleRef, handleToggleCollapse, persist, scrollToBottomStable, session])
 
+  // Find commands bind separately: the callbacks come from useChatFind and are
+  // stable, so this effect only re-runs if one identity actually changes — it
+  // doesn't share the timeline-navigation effect's dependency churn.
+  const { open: openFind, close: closeFind, next: nextFind, prev: prevFind } = find
+  useEffect(() => {
+    const handle = handleRef.current
+    handle.openFind = openFind
+    handle.findNext = nextFind
+    handle.findPrev = prevFind
+    // Closing returns keyboard focus to the scroll container so subsequent
+    // Alt+J/K keep working without a click (the input had stolen focus).
+    handle.closeFind = () => {
+      closeFind()
+      containerRef.current?.focus({ preventScroll: true })
+    }
+    return () => {
+      handle.openFind = noop
+      handle.closeFind = noop
+      handle.findNext = noop
+      handle.findPrev = noop
+    }
+  }, [handleRef, openFind, closeFind, nextFind, prevFind])
+
   return (
     <div
       ref={containerRef}
@@ -583,6 +647,17 @@ function ChatScroll({
       onClick={handleClick}
       onContextMenu={handleContextMenu}
     >
+      {find.visible && (
+        <ChatFindWidget
+          query={find.query}
+          count={find.count}
+          currentIndex={find.currentIndex}
+          onQueryChange={find.setQuery}
+          onNext={find.next}
+          onPrev={find.prev}
+          onClose={() => handleRef.current.closeFind()}
+        />
+      )}
       <StickyScrollOverlay
         containerRef={containerRef}
         timeline={displayTimeline}

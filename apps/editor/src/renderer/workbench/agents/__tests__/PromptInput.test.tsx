@@ -132,6 +132,10 @@ function makeHandleRef(): { current: WidgetHandle } {
       popoverSelectPrev: () => {},
       popoverAccept: () => {},
       popoverHide: () => {},
+      openFind: () => {},
+      closeFind: () => {},
+      findNext: () => {},
+      findPrev: () => {},
     },
   }
 }
