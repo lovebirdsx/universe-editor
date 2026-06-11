@@ -86,14 +86,10 @@
   border: 1px solid var(--color-border, #555);
   border-radius: 4px;
   max-height: 60vh;
-  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
   box-shadow: 0 4px 12px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
-}
-
-.sessionsPopover ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
 }
 
 .chatBody {
@@ -907,20 +903,54 @@
 .sessionList {
   display: flex;
   flex-direction: column;
-  padding: 4px;
+  height: 100%;
+  min-height: 0;
 }
 
-.sessionListToolbar {
+.sessionListBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+.sessionsPopoverToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 2px 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
+.sessionFindWidget {
+  position: absolute;
+  top: 4px;
+  right: 6px;
+  z-index: 6;
   display: flex;
   align-items: center;
   gap: 4px;
-  padding: 2px 0 6px;
+  padding: 3px 4px;
+  background: var(--color-message-bg, #2a2a2a);
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--color-shadow-popover, rgba(0, 0, 0, 0.4));
 }
 
-.sessionList ul {
+.sessionFindInput {
+  width: 160px;
+}
+
+.sessionRows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 4px;
 }
 
 .sessionRow {
@@ -1670,13 +1700,6 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.sessionsPopoverToolbar {
-  display: flex;
-  justify-content: flex-end;
-  padding: 2px 4px;
-  border-bottom: 1px solid var(--color-border, #333);
 }
 
 @keyframes acpSpin {

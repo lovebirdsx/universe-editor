@@ -9,12 +9,13 @@
 
 import { useState } from 'react'
 import { ICommandService, localize } from '@universe-editor/platform'
-import { ArrowLeftRight, Plus, RefreshCw } from 'lucide-react'
+import { ArrowLeftRight, Plus, RefreshCw, Search } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
+import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { AgentIcon } from './agentIcon.js'
 import { SessionsPopover } from './SessionsPopover.js'
 import styles from './agents.module.css'
@@ -24,7 +25,9 @@ export function AgentsViewToolbar() {
   const registry = useService(IAcpAgentRegistry)
   const commands = useService(ICommandService)
   const location = useService(IAcpChatLocationService)
+  const filterService = useService(IAcpSessionFilterService)
   const loc = useObservable(location.location)
+  const searchOpen = useObservable(filterService.searchOpen)
   const defaultAgentId = useObservable(registry.defaultAgentIdObs)
   const [refreshing, setRefreshing] = useState(false)
   const [sessionsOpen, setSessionsOpen] = useState(false)
@@ -68,6 +71,14 @@ export function AgentsViewToolbar() {
 
   return (
     <span className={styles['viewToolbar']}>
+      <IconButton
+        label={localize('acp.sessions.search', 'Search sessions')}
+        active={searchOpen}
+        onClick={() => filterService.toggleSearch()}
+        data-testid="acp-session-search"
+      >
+        <Search size={14} strokeWidth={1.75} />
+      </IconButton>
       <IconButton
         label={localize('acp.newSession', 'New session')}
         onClick={() => void service.createSession(registry.defaultAgentId())}

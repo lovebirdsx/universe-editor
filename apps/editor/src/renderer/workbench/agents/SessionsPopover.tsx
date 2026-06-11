@@ -7,10 +7,11 @@
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { localize } from '@universe-editor/platform'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Search } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
-import { useService } from '../useService.js'
+import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
+import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { SessionListBody } from './SessionListBody.js'
 import styles from './agents.module.css'
 
@@ -21,6 +22,8 @@ export interface SessionsPopoverProps {
 export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
   const service = useService(IAcpSessionService)
+  const filterService = useService(IAcpSessionFilterService)
+  const searchOpen = useObservable(filterService.searchOpen)
   const [refreshing, setRefreshing] = useState(false)
 
   const handleRefresh = (e: ReactMouseEvent) => {
@@ -62,6 +65,14 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
       aria-label={localize('acp.sessions.popover', 'Sessions')}
     >
       <div className={styles['sessionsPopoverToolbar']}>
+        <IconButton
+          label={localize('acp.sessions.search', 'Search sessions')}
+          active={searchOpen}
+          onClick={() => filterService.toggleSearch()}
+          data-testid="acp-session-search-popover"
+        >
+          <Search size={14} strokeWidth={1.75} />
+        </IconButton>
         <IconButton
           label={localize('acp.refreshSessions', 'Refresh session list')}
           onClick={handleRefresh}

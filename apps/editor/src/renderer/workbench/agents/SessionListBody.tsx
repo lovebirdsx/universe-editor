@@ -9,16 +9,39 @@
  *  can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
+import { useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { localize } from '@universe-editor/platform'
+import { X } from 'lucide-react'
+import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
 } from '../../services/acp/acpSessionHistory.js'
+import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { AgentIcon } from './agentIcon.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import styles from './agents.module.css'
+
+function scoreSession(entry: AcpSessionHistoryEntry, query: string): number {
+  const titleScore = scoreFuzzyMatch(entry.title, query)
+  if (titleScore >= 0) return 10_000 + titleScore
+  return fuzzyMatchField(entry.agentId, query) ? 0 : -1
+}
+
+function filterSessions(
+  entries: readonly AcpSessionHistoryEntry[],
+  query: string,
+): readonly AcpSessionHistoryEntry[] {
+  const q = query.trim()
+  if (!q) return entries
+  return entries
+    .map((entry, index) => ({ entry, index, score: scoreSession(entry, q) }))
+    .filter((s) => s.score >= 0)
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((s) => s.entry)
+}
 
 function relativeTime(timestamp: number): string {
   const diff = Date.now() - timestamp
@@ -107,10 +130,22 @@ function SessionRow({
 export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
+  const filterService = useService(IAcpSessionFilterService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
   const activeId = useObservable(service.activeSessionId)
+
+  const searchOpen = useObservable(filterService.searchOpen)
+  const query = useObservable(filterService.query)
+  const filtered = useMemo(() => filterSessions(entries, query), [entries, query])
+
+  const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation()
+      filterService.closeSearch()
+    }
+  }
 
   if (entries.length === 0) {
     if (hideEmptyState) return null
@@ -118,39 +153,66 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   }
 
   return (
-    <ul>
-      {entries.map((entry) => {
-        const live = service.getById(entry.id)
-        const liveSession = live && live.status.get() !== 'closed' ? live : undefined
-        const isActive = liveSession !== undefined && liveSession.id === activeId
-        return (
-          <SessionRow
-            key={entry.id}
-            entry={entry}
-            liveSession={liveSession}
-            isActive={isActive}
-            onActivate={() => {
-              const fresh = service.getById(entry.id)
-              const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
-              if (liveNow) {
-                service.setActive(liveNow.id)
-              } else {
-                service.resumeSession(entry.id).catch(() => {
-                  // resumeSession publishes its own notification.
-                })
-              }
-              onPick?.(entry)
-            }}
-            onRemove={() => {
-              void (async () => {
-                if (liveSession) await service.closeSession(liveSession.id)
-                await service.deleteOnAgent(entry.id)
-                history.remove(entry.id)
-              })()
-            }}
+    <div className={styles['sessionListBody']}>
+      {searchOpen ? (
+        <div className={styles['sessionFindWidget']} role="search">
+          <Input
+            autoFocus
+            value={query}
+            onChange={(e) => filterService.setQuery(e.target.value)}
+            onKeyDown={onSearchKeyDown}
+            placeholder={localize('acp.sessions.search', 'Search sessions')}
+            className={styles['sessionFindInput']}
+            data-testid="acp-session-search-input"
           />
-        )
-      })}
-    </ul>
+          <IconButton
+            label={localize('acp.sessions.searchClose', 'Close search')}
+            onClick={() => filterService.closeSearch()}
+          >
+            <X size={14} strokeWidth={1.75} />
+          </IconButton>
+        </div>
+      ) : null}
+      {filtered.length === 0 ? (
+        <p className={styles['empty']}>
+          {localize('acp.sessions.noMatch', 'No matching sessions.')}
+        </p>
+      ) : (
+        <ul className={styles['sessionRows']}>
+          {filtered.map((entry) => {
+            const live = service.getById(entry.id)
+            const liveSession = live && live.status.get() !== 'closed' ? live : undefined
+            const isActive = liveSession !== undefined && liveSession.id === activeId
+            return (
+              <SessionRow
+                key={entry.id}
+                entry={entry}
+                liveSession={liveSession}
+                isActive={isActive}
+                onActivate={() => {
+                  const fresh = service.getById(entry.id)
+                  const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
+                  if (liveNow) {
+                    service.setActive(liveNow.id)
+                  } else {
+                    service.resumeSession(entry.id).catch(() => {
+                      // resumeSession publishes its own notification.
+                    })
+                  }
+                  onPick?.(entry)
+                }}
+                onRemove={() => {
+                  void (async () => {
+                    if (liveSession) await service.closeSession(liveSession.id)
+                    await service.deleteOnAgent(entry.id)
+                    history.remove(entry.id)
+                  })()
+                }}
+              />
+            )
+          })}
+        </ul>
+      )}
+    </div>
   )
 }

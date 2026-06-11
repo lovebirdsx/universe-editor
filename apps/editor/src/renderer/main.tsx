@@ -108,6 +108,9 @@ import { IOutlineService, OutlineService } from './services/languageFeatures/Out
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
+// Side-effect import: registers IAcpSessionFilterService before the
+// getSingletonServiceDescriptors() snapshot below picks it up.
+import './services/acp/acpSessionFilterService.js'
 import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
 import {
   ExtensionHostClientService,
