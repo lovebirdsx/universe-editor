@@ -46,6 +46,12 @@ const SELF_WRITE_SUPPRESS_MS = 250
 const FLUSH_DEBOUNCE_MS = 50
 
 function defaultVSCodeKeybindingsPath(): string {
+  // Test hook: let E2E specs point the read-only VSCode keybindings layer at a
+  // tmp file instead of the real `%APPDATA%/Code/User/keybindings.json`, so they
+  // can exercise VSCode-compat keybinding resolution without touching the host's
+  // actual VSCode config. Consistent with this function's other direct env reads.
+  const override = process.env['UNIVERSE_VSCODE_KEYBINDINGS_PATH']
+  if (override) return override
   if (process.platform === 'win32') {
     const appdata = process.env['APPDATA'] ?? join(os.homedir(), 'AppData', 'Roaming')
     return join(appdata, 'Code', 'User', 'keybindings.json')

@@ -59,6 +59,7 @@ import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
 import { ExtensionsContribution } from './ExtensionsContribution.js'
+import { MonacoKeybindingSyncContribution } from './MonacoKeybindingSyncContribution.js'
 import { DocumentSyncContribution } from './DocumentSyncContribution.js'
 import { MonacoOverrideServicesContribution } from './MonacoOverrideServicesContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
@@ -450,6 +451,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.terminalEditorLifecycle',
   TerminalEditorLifecycleContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Re-apply VSCode/user keybindings bound to monaco command ids once the monaco
+// action bridge has run (those commands register lazily on monaco load, after
+// the startup keybinding pass already skipped them). AfterRestore so the
+// keybinding service is live; the actual reload waits on the bridge signal.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.monacoKeybindingSync',
+  MonacoKeybindingSyncContribution,
   WorkbenchPhase.AfterRestore,
 )
 

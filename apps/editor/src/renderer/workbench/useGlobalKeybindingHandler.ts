@@ -18,6 +18,8 @@ import {
 import { useService } from './useService.js'
 import { formatChord } from './titlebar/keybindingFormat.js'
 import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
+import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
+import { MonacoLoader } from './editor/monaco/MonacoLoader.js'
 import {
   formatGuardStop,
   formatKeystrokeTrace,
@@ -146,6 +148,7 @@ export function useGlobalKeybindingHandler(): void {
   const contextKeyService = useService(IContextKeyService)
   const statusBarService = useService(IStatusBarService)
   const keyboardDebugService = useService(IKeyboardDebugService)
+  const userKeybindings = useService(IUserKeybindingsService)
   const pendingRef = useRef<PendingChord | null>(null)
 
   useEffect(() => {
@@ -290,6 +293,24 @@ export function useGlobalKeybindingHandler(): void {
       if (dbg && diag) {
         const trace = KeybindingsRegistry.traceKeystroke(key, contextKeyService, undefined)
         keyboardDebugService.append(formatKeystrokeTrace(diag, trace))
+        if (result.kind === 'no-match') {
+          const all = KeybindingsRegistry.getAllKeybindings()
+          const sameKey = all.filter(
+            (kb) => (kb.chords ? kb.chords[0] : kb.key)?.toLowerCase() === key,
+          )
+          const d = userKeybindings.diagnostics
+          const cmds = CommandsRegistry.getCommands()
+          let editorActionCmds = 0
+          for (const id of cmds.keys()) if (id.startsWith('editor.action.')) editorActionCmds++
+          const hasCopy = cmds.has('editor.action.copyLinesDownAction')
+          keyboardDebugService.append(
+            `  diag: registry=${all.length} bindings | same-key(ignoring when)=${sameKey.length}` +
+              ` | monaco bridged=${MonacoLoader.actionsBridged}` +
+              ` | cmds total=${cmds.size} editor.action.*=${editorActionCmds} hasCopyLinesDown=${hasCopy}` +
+              ` | vscode-keybindings: parsed=${d.vscodeParsedCount} registered=${d.vscodeRegisteredCount}` +
+              ` path=${d.vscodeFilePath ?? '<unresolved>'}`,
+          )
+        }
       }
       if (result.kind === 'no-match') return
 
@@ -350,5 +371,5 @@ export function useGlobalKeybindingHandler(): void {
       document.removeEventListener('keydown', bubbleHandler, false)
       clearChord()
     }
-  }, [commandService, contextKeyService, statusBarService, keyboardDebugService])
+  }, [commandService, contextKeyService, statusBarService, keyboardDebugService, userKeybindings])
 }

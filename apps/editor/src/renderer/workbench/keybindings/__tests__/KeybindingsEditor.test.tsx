@@ -41,6 +41,7 @@ function mount() {
     resetKeybinding: vi.fn(),
     getUserEntry: () => undefined,
     getDefaultKey: () => undefined,
+    diagnostics: { vscodeFilePath: undefined, vscodeParsedCount: 0, vscodeRegisteredCount: 0 },
   }
 
   const services = new ServiceCollection()

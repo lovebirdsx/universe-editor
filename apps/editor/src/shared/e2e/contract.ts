@@ -273,6 +273,29 @@ export interface E2EProbe {
   getOutlineSymbols(): readonly string[]
   /** The URI the current outline was computed for, or undefined when empty. */
   getOutlineUri(): string | undefined
+  // -- Keybindings probe ----------------------------------------------------
+  /**
+   * Resolve a single keystroke against KeybindingsRegistry (no when-clause
+   * context). `no-match` means no binding for that key is registered at all —
+   * the same condition the in-app key handler reports as "no binding registered
+   * for this key". Backs the VSCode-compat keybinding reproduction spec.
+   */
+  resolveKeybinding(key: string): { kind: string; command?: string }
+  /**
+   * True once a command id is present in CommandsRegistry. Used to await the
+   * extension host boot (e.g. `git.commit` from the built-in Git extension) so
+   * the one-shot ExtensionsContribution keybinding reload has already run.
+   */
+  hasCommand(id: string): boolean
+  /**
+   * Command ids of every keybinding whose first chord equals `key`, ignoring the
+   * `when` clause (so a binding present-but-context-gated still shows up). This is
+   * the registration-level check: a binding to a lazily-registered monaco command
+   * (e.g. editor.action.copyLinesDownAction) must end up here once the monaco
+   * action bridge has run. resolveKeybinding() can't be used for when-claused
+   * bindings since it evaluates `when` against the (unfocused) current context.
+   */
+  getKeybindingCommandsForKey(key: string): string[]
 }
 
 declare global {

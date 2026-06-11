@@ -6,7 +6,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as monaco from 'monaco-editor'
-import { NullLogger, type IDisposable, type ILogger } from '@universe-editor/platform'
+import {
+  Emitter,
+  NullLogger,
+  type Event,
+  type IDisposable,
+  type ILogger,
+} from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { monacoNavDefaultKeybindingCommandIds } from '../../../actions/gotoLocationActions.js'
@@ -37,6 +43,14 @@ export type CodeEditorOpenHandler = (
 let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
 let _logger: ILogger = new NullLogger()
+
+// Fires once monaco's EditorActions have been mirrored into CommandsRegistry by
+// bridgeAllMonacoActions(). Those commands register lazily (only when monaco
+// loads), so anything that depends on them existing — e.g. re-applying VSCode/
+// user keybindings bound to monaco command ids — waits on this signal.
+// Subscribing does NOT force a monaco load.
+const _onDidBridgeActions = new Emitter<void>()
+let _actionsBridged = false
 
 type JsonSchemas = NonNullable<monaco.json.DiagnosticsOptions['schemas']>
 
@@ -201,9 +215,14 @@ async function loadMonaco(): Promise<typeof monaco> {
       // editor can list and rebind them. Fire-and-forget — failure here
       // would only mean the shortcuts editor shows fewer entries, the
       // editor itself still works.
-      void bridgeAllMonacoActions().catch((err) => {
-        _logger.error('bridgeAllMonacoActions failed', err)
-      })
+      void bridgeAllMonacoActions()
+        .then(() => {
+          _actionsBridged = true
+          _onDidBridgeActions.fire()
+        })
+        .catch((err) => {
+          _logger.error('bridgeAllMonacoActions failed', err)
+        })
       return monacoMod
     })()
   }
@@ -224,6 +243,12 @@ export const MonacoLoader = {
   peek(): typeof monaco | undefined {
     return _monaco
   },
+  /** True once monaco's EditorActions have been mirrored into CommandsRegistry. */
+  get actionsBridged(): boolean {
+    return _actionsBridged
+  },
+  /** Fires once after the monaco action bridge completes. Does not force a load. */
+  onDidBridgeActions: _onDidBridgeActions.event as Event<void>,
   /**
    * Replace the JSON schemas Monaco's JSON language service uses. Bridges that
    * derive schemas from platform registries call this whenever the source data

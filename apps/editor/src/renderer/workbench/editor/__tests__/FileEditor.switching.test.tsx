@@ -249,6 +249,7 @@ describe('FileEditor tab switching', () => {
       resetKeybinding: () => {},
       getUserEntry: () => undefined,
       getDefaultKey: () => undefined,
+      diagnostics: { vscodeFilePath: undefined, vscodeParsedCount: 0, vscodeRegisteredCount: 0 },
     })
     const instantiation = new InstantiationService(services)
     const inputA = instantiation.createInstance(FileEditorInput, uriA)

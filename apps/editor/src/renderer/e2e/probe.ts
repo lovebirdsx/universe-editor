@@ -9,10 +9,12 @@
 
 import {
   ConfigurationTarget,
+  CommandsRegistry,
   DisposableStore,
   EditorInput,
   EditorRegistry,
   IDisposable,
+  KeybindingsRegistry,
   LifecyclePhase,
   StatusBarAlignment,
   URI,
@@ -376,6 +378,20 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return names
     },
     getOutlineUri: (): string | undefined => services.outlineService.outline.get()?.uri,
+    resolveKeybinding: (key: string): { kind: string; command?: string } => {
+      const r = KeybindingsRegistry.resolveKeystroke(key)
+      return r.kind === 'execute' ? { kind: r.kind, command: r.command } : { kind: r.kind }
+    },
+    hasCommand: (id: string): boolean => CommandsRegistry.getCommand(id) !== undefined,
+    getKeybindingCommandsForKey: (key: string): string[] => {
+      const normalized = key.trim().toLowerCase()
+      return KeybindingsRegistry.getAllKeybindings()
+        .filter((kb) => {
+          const first = (kb.chords ? kb.chords[0] : kb.key)?.trim().toLowerCase()
+          return first === normalized && !kb.isNegated
+        })
+        .map((kb) => kb.command)
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

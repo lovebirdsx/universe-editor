@@ -90,4 +90,77 @@ describe('UserKeybindingsService', () => {
       command: 'git.sync',
     })
   })
+
+  it('re-applies VSCode bindings to commands registered after initialize() once reload() runs', async () => {
+    const lazyCommand = 'test.lazy.copyLinesDown'
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.VSCodeKeybindings,
+      `[{ "key": "ctrl+shift+d", "command": "${lazyCommand}" }]`,
+    )
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+
+    await service.initialize()
+
+    // Command not registered yet → binding skipped by the command-existence filter.
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d').kind).toBe('no-match')
+
+    // Command registers lazily (mirrors the monaco action bridge), then reload picks it up.
+    disposables.push(CommandsRegistry.registerCommand({ id: lazyCommand, handler: () => {} }))
+    await service.reload()
+
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d')).toEqual({
+      kind: 'execute',
+      command: lazyCommand,
+    })
+  })
+
+  it('keeps every VSCode binding when one command has multiple entries', async () => {
+    const cmd = 'editor.action.copyLinesDownAction'
+    disposables.push(CommandsRegistry.registerCommand({ id: cmd, handler: () => {} }))
+
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.VSCodeKeybindings,
+      JSON.stringify([
+        { key: 'ctrl+shift+d', command: cmd, when: 'editorTextFocus && !editorReadonly' },
+        { key: 'shift+alt+down', command: cmd, when: 'editorTextFocus && !editorReadonly' },
+      ]),
+    )
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+
+    await service.initialize()
+
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d')).toEqual({
+      kind: 'execute',
+      command: cmd,
+    })
+    expect(KeybindingsRegistry.resolveKeystroke('shift+alt+down')).toEqual({
+      kind: 'execute',
+      command: cmd,
+    })
+  })
+
+  it('serializes concurrent reload() calls without duplicating registrations', async () => {
+    const lazyCommand = 'test.lazy.serialized'
+    disposables.push(CommandsRegistry.registerCommand({ id: lazyCommand, handler: () => {} }))
+
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.VSCodeKeybindings,
+      `[{ "key": "ctrl+alt+j", "command": "${lazyCommand}" }]`,
+    )
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+
+    await service.initialize()
+    await Promise.all([service.reload(), service.reload()])
+
+    const bound = KeybindingsRegistry.getAllKeybindings().filter(
+      (kb) => kb.command === lazyCommand && !kb.isNegated,
+    )
+    expect(bound).toHaveLength(1)
+  })
 })

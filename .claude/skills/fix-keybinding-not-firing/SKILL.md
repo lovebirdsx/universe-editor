@@ -1,0 +1,117 @@
+---
+name: fix-keybinding-not-firing
+description: 排查「快捷键不生效」——按键后命令没执行，或快捷键编辑器/日志显示 NO MATCH / no binding registered。当用户说 “某快捷键按了没反应 / VSCode keybindings.json 里配的 key 不工作 / 日志报 NO MATCH no binding registered / 我改了键但还是触发旧的 / 同一个命令配了两个键只有一个生效 / when 子句明明满足却不执行” 时使用。聚焦“读诊断行 → 判别是没注册进 registry 还是注册了但运行期被拦 → 沿决策树定位到具体一层 → 先写复现测试再修”的通用流程；具体哪个键/命令由 agent 当场判断。区别于 register-monaco-command（那个是“把命令接进来”，本 skill 是“键已配但不触发”的诊断）。
+disable-model-invocation: true
+---
+
+# 排查快捷键不生效（NO MATCH / 按了没反应 / 改键无效）
+
+本仓库的快捷键最终都汇入同一个 `KeybindingsRegistry`，运行期由 `useGlobalKeybindingHandler` 解析并执行。一个键「不生效」可能断在**注册期**（绑定根本没进 registry，或进了但被同 command 的另一条覆盖），也可能断在**运行期**（进了 registry 但被分发层的某道 guard 拦下）。核心套路：**开键盘调试日志读诊断行 → 用 `same-key` 判别是「没注册」还是「when/运行期问题」→ 沿决策树定位到具体一层 → 先写最小复现（优先单测，端到端守护再补 e2e）再修 → 验证不双触发/不覆盖**。
+
+> ⚠️ 第一原则：**先用诊断行判别断在哪一层，别凭症状猜**。「没反应」可能是没注册、也可能 when 不满足、也可能被可编辑目标 guard 吃掉——三者修法完全不同，判错会改错地方。
+
+## 第 0 步：开诊断、读那一行
+
+命令面板 → `Developer: Toggle Keyboard Shortcuts Troubleshooting`（`workbench.action.toggleKeybindingsLog`，`actions/developerActions.ts`），会打开 Output 面板的键盘调试 channel。按下目标键，每次按键输出一条 `traceKeystroke`；**当结果是 `no-match` 时**额外打一行 `diag`（`useGlobalKeybindingHandler.ts:296-313`）：
+
+```
+diag: registry=<N> bindings | same-key(ignoring when)=<M> | monaco bridged=<bool>
+    | cmds total=<..> editor.action.*=<..> hasCopyLinesDown=<bool>
+    | vscode-keybindings: parsed=<P> registered=<R> path=<...>
+```
+
+逐字段含义：
+- **`same-key(ignoring when)=M`** —— 忽略 when，registry 里有多少条候选键等于你按的键。**这是最关键的判别位**。
+- **`monaco bridged`** —— `bridgeAllMonacoActions()` 是否已把 Monaco EditorAction 镜像进 `CommandsRegistry`（即编辑器是否已加载过）。
+- **`cmds total / editor.action.* / hasCopyLinesDown`** —— 目标命令是否存在于项目 `CommandsRegistry`（`hasCopyLinesDown` 是 Monaco 懒注册的探针样本）。
+- **`vscode-keybindings: parsed / registered`** —— 只读 VSCode 兼容层这次 reload 解析出几条、实际注册了几条（差值 = 被命令存在性过滤跳过的条数）。`path` 是该层指向的真实文件。
+
+## 判别与决策树
+
+### 分叉 A：`same-key == 0` —— 绑定根本没进 registry
+按的键在 registry 里一条候选都没有。往「为什么没注册」走：
+
+1. **目标命令存在吗？**（看 `hasCopyLinesDown` / 自己确认 `CommandsRegistry.getCommand(id)`）
+   - **命令不存在** → 多半是**懒注册命令 + VSCode 兼容层的命令存在性过滤**。只读 VSCode 层（`UserKeybindingsService._reloadVSCodeFile`，`UserKeybindingsService.ts:263-278`）在启动期就读完，遇到当时不存在的命令会 `if (!CommandsRegistry.getCommand) continue` 跳过：
+     - **Monaco 命令**（`editor.action.*`）：只在 Monaco 加载、`bridgeAllMonacoActions()` 后才存在。需要「桥接完成后再 reload 一次」补上——见 **案例 2**（`MonacoKeybindingSyncContribution`）。诊断特征：`monaco bridged=false`（没开过编辑器）或 bridged 后仍 0（reload 触发缺失）。
+     - **扩展贡献命令**：扩展宿主异步注册，`ExtensionsContribution` 在宿主起来后调 `reload()` 补上（`ExtensionsContribution.ts`）。
+     - **命令 id 拼错 / 与 VSCode 不一致**：对标 VSCode 的功能 id 必须一致（apps/editor/CLAUDE.md 末条）。
+   - **命令存在但键仍缺** → 看 `vscode-keybindings: parsed=P registered=R`：
+     - **`R < P`** 且差的就是你这条 → 注册阶段把它丢了。**头号嫌疑：同一 command 多条 VSCode 条目互相覆盖**——见 **案例 1**（曾按 command id 去重，后一条 dispose 掉前一条）。
+     - 也可能是 **key 字符串规范化不匹配**：`KeybindingsRegistry.normalizeKey`（`keybindingRegistry.ts`）把修饰键按**字母序**排序（alt < ctrl < meta < shift），`shift+alt+down` 实际存成 `alt+shift+down`。注册侧会规范化，但**探针/断言侧若原样比较**就会“查不到”——见 **案例 3**（这是测试假象，不是产品 bug，但同样表现为“同一个键查不到”）。
+
+2. 应用自己的 `keybindings.json`（`_reloadFromFile`，`UserKeybindingsService.ts:288-303`）**没有**命令存在性过滤——所以同一条绑定放这里能生效、放 VSCode 兼容层不行，正是「VSCode 的 key settings 不工作」的典型分界。
+
+### 分叉 B：`same-key > 0` 但仍 `no-match` —— when 子句没过
+有候选键，但 when 表达式在当前上下文求值为 false。看 `traceKeystroke` 里每条候选的 when 求值：
+- **ContextKey 没 seed / 值不对** → 表达式里的 key 必须已在 `ContextKeyContribution` seed，否则恒 false。
+- **当前确实不该触发** → 如 `when: editorTextFocus` 要求焦点在编辑器内；日志里 `target=DIV editable=false` 说明编辑器没聚焦，属预期，先点进编辑器再验。
+- **表达式写错** → `contextKeyParser.parse()` 对非法输入返回 `undefined`（**不抛异常**），该条绑定被静默忽略；核对表达式语法。
+
+### 分叉 C：`result.kind === 'execute'` 但命令没跑 —— 运行期被 guard 拦
+registry 解析出来了，但 `useGlobalKeybindingHandler` 的某道闸把它挡了（日志会打 `formatGuardStop` 说明原因）：
+- **可编辑目标保留可打印键**：单字符键 + 无 ctrl/alt/meta + 焦点在 input/textarea/contentEditable → 让位文本输入（`isPrintableTyping`，`useGlobalKeybindingHandler.ts:321-333`）。
+- **Quick Input 打开**：只放行 Escape，其余键归 Quick Input（`useGlobalKeybindingHandler.ts:213-247`）。
+- **模态对话框内**：dialog 自己处理键，整体不拦截（`isInsideRendererDialog`）。
+- **命令未注册兜底**：解析到 execute 但 `CommandsRegistry.getCommand(result.command)` 为空 → 静默 return（`useGlobalKeybindingHandler.ts:335-342`）。
+- **editorFocus 决定 capture/bubble**：编辑器聚焦时走 bubble 且 `e.defaultPrevented` 的键已被 Monaco 吃掉（Monaco 先 `stopPropagation`）；编辑器未聚焦走 capture。若“编辑器内不触发、编辑器外触发”或反之，多半是这层焦点门——本应用故意把编辑器聚焦时的优先权让给 Monaco（`useGlobalKeybindingHandler.ts:353-365`）。
+- **chord 未完成**：两段式（如 `ctrl+k ctrl+s`）第二段没在超时内按或不匹配 → chord 取消。
+
+## 修复纪律：先复现再修
+
+定位到分叉后，**先写最小复现测试，红了再改**（用户的标准要求：“先构造用例复现，再尝试解决”）。
+
+- **单测优先**（确定性、快）：`UserKeybindingsService.test.ts` 用 `FakeUserData` 往 `UserDataFile.VSCodeKeybindings` 注入条目，`initialize()` / `reload()` 后断言 `KeybindingsRegistry.resolveKeystroke(key)` 等于 `{kind:'execute', command}`。注册期的 bug（分叉 A）几乎都能在这里确定性复现+判别。
+- **e2e 端到端守护**（补，不替代单测）：`smoke.vscodeKeybindings.spec.ts` 用 `UNIVERSE_VSCODE_KEYBINDINGS_PATH` 把只读层指到 tmp 文件，开真编辑器、等扩展宿主与 monaco 桥接就绪，再用 `window.__E2E__.getKeybindingCommandsForKey(key)` 断言绑定落到 registry。**注意 e2e 跑 `out/` 产物**，且受启动期时序影响（monaco 桥接常抢先于 ext-reload），它守护“整条链跑通”，**不适合隔离单条修复路径**——隔离判别交给单测。
+- **断言用规范化后的键**：e2e 探针 `getKeybindingCommandsForKey` 原样字符串比较，断言里写规范序（修饰键字母序，如 `alt+shift+down` 而非 `shift+alt+down`），否则会假阴性。
+- 手动验证：开键盘调试日志，复刻用户场景（注意 when 要求的焦点），确认从 `NO MATCH` 变 `EXECUTE <command>`，且**不双触发**。
+
+## 案例库
+
+> 每条：症状/诊断特征 → 断在哪层 → 根因 → 修法 → 文件锚点。新经验往下追加。
+
+### 案例 1：同一 command 配多条键，只有一条生效（注册期覆盖）
+- **症状/诊断**：用户给 `editor.action.copyLinesDownAction` 同时配了 `ctrl+shift+d` 和 `shift+alt+down`，按下其中一个 `NO MATCH`；`same-key=0`、命令存在（`hasCopyLinesDown=true`）、`monaco bridged=true`、`vscode-keybindings registered < parsed`。
+- **断在**：分叉 A——命令存在但键缺。
+- **根因**：`_applyEntryToStore` 按 `entry.command` 在 disposables map 里去重，后一条同 command 的注册会 `dispose` 掉前一条 → 用户自定义键被“同命令的另一条绑定”悄悄顶掉。
+- **修法**：VSCode 只读层**逐条注册不去重**——抽出 `_registerEntry`（纯注册，无 command 级去重），`_reloadVSCodeFile` 直接对每条调它（store 每次整体 clear，无泄漏）；`_applyEntryToStore` 仅给用户层保留“一命令一绑定”的去重。
+- **锚点**：`apps/editor/src/renderer/services/keybindings/UserKeybindingsService.ts`（`_reloadVSCodeFile` / `_registerEntry` / `_applyEntryToStore`）、其单测 `keeps every VSCode binding when one command has multiple entries`、`e2e/specs/smoke.vscodeKeybindings.spec.ts` 的多条目守护用例。
+
+### 案例 2：VSCode 层绑定到「懒注册 Monaco 命令」永远缺失（注册期时序）
+- **症状/诊断**：VSCode keybindings.json 里 `ctrl+shift+d → editor.action.copyLinesDownAction` 完全不触发；`same-key=0`，且命令在启动期不存在（开编辑器前 `monaco bridged=false`）。
+- **断在**：分叉 A——命令不存在（懒注册）+ VSCode 层命令存在性过滤。
+- **根因**：只读 VSCode 层启动期就读完并过滤掉当时不存在的命令；Monaco EditorAction 要到首个编辑器打开、`bridgeAllMonacoActions()` 才进 `CommandsRegistry`，而**没有任何东西触发桥接后重新注册** → 永久缺失。对照扩展命令有 `ExtensionsContribution` 的 reload，Monaco 侧原本缺这个等价触发。
+- **修法**：`MonacoLoader` 暴露 `actionsBridged` 标志 + `onDidBridgeActions` 事件（桥接 promise resolve 后 fire）；新增 `MonacoKeybindingSyncContribution`（`WorkbenchPhase.AfterRestore`），桥接完成后调 `userKeybindings.reload()`；`reload()` 用 `_reloadChain` promise 串行化，防它与 `ExtensionsContribution` 并发交错 clear/register。
+- **锚点**：`workbench/editor/monaco/MonacoLoader.ts`（`actionsBridged` / `onDidBridgeActions`）、`contributions/MonacoKeybindingSyncContribution.ts`、`contributions/index.ts`（注册）、`UserKeybindingsService.ts`（`reload` 串行化）、参考范式 `contributions/ExtensionsContribution.ts`。
+
+### 案例 3：键“查不到”其实是修饰键顺序（测试假象，非产品 bug）
+- **症状**：单测/e2e 里写 `shift+alt+down` 断言查不到，但产品里该键正常工作。
+- **根因**：`KeybindingsRegistry.normalizeKey` 把修饰键按字母序排序存储（alt < ctrl < meta < shift），`shift+alt+down` 规范化成 `alt+shift+down`；原样比较的探针/断言匹配不上。
+- **修法**：断言写规范序键。记住规范形是字母序，不是“ctrl→alt→shift→meta”的直觉序。
+- **锚点**：`packages/platform/src/command/keybindingRegistry.ts`（`normalizeKey`）、`e2e/specs/smoke.vscodeKeybindings.spec.ts` 的 `SECOND_KEY` 注释。
+
+## 易踩坑速记
+1. **`no-match` 先看 `same-key`**：`0` = 没注册（分叉 A）；`>0` = when/运行期问题（分叉 B/C）。别一上来就改 when。
+2. **只有 VSCode 兼容层有命令存在性过滤**，应用自己的 keybindings.json 没有——“VSCode 配的不灵、放本应用配置灵”就是这条分界。
+3. **Monaco 命令是懒注册**，启动期不存在；缺“桥接后 reload”就永久丢绑定（案例 2）。
+4. **同 command 多条键别按 command 去重**（案例 1）；用户层一命令一绑定、VSCode 层逐条注册，两套语义不同。
+5. **修饰键规范化是字母序**（alt/ctrl/meta/shift），断言/探针比较要用规范形（案例 3）。
+6. **`contextKeyParser.parse()` 不抛异常**，非法 when 返回 `undefined` 被静默忽略——表达式写错不会报错，只会“这条不生效”。
+7. **运行期 guard 会吞键**：可编辑目标保留可打印键、Quick Input 只放 Escape、dialog 自管、editorFocus 切 capture/bubble 把优先权让给 Monaco——`formatGuardStop` 会写明原因。
+8. **先复现再修**：注册期 bug 用 `UserKeybindingsService` 单测确定性复现；e2e 是整链守护、不隔离单条路径；e2e 跑 `out/` 产物。
+
+## 关键参考路径
+- `apps/editor/src/renderer/services/keybindings/UserKeybindingsService.ts` —— 三层汇入点：`_reloadVSCodeFile`（VSCode 只读层，有命令过滤、逐条注册）/ `_reloadFromFile`（应用层，无过滤）/ `_registerEntry` / `reload` 串行化 / `diagnostics`
+- `apps/editor/src/renderer/workbench/useGlobalKeybindingHandler.ts` —— 运行期分发 + 全部 guard + `no-match` 时的 `diag` 行（分叉 C 全在这）
+- `apps/editor/src/renderer/services/keybinding/keyboardDebugService.ts` / `keyboardDebugFormat.ts` —— 键盘调试日志（`traceKeystroke` / `formatGuardStop` / `formatKeystrokeTrace`）
+- `apps/editor/src/renderer/actions/developerActions.ts` —— `Developer: Toggle Keyboard Shortcuts Troubleshooting`（开诊断）
+- `packages/platform/src/command/keybindingRegistry.ts` —— `KeybindingsRegistry`：`normalizeKey`（字母序）/ `resolveKeystroke` / `traceKeystroke` / `registerKeybinding`
+- `packages/platform/src/command/contextKeyParser.ts` —— when 表达式解析（非法返回 `undefined` 不抛）
+- `apps/editor/src/renderer/contributions/MonacoKeybindingSyncContribution.ts` + `ExtensionsContribution.ts` —— 懒注册命令的“桥接/宿主就绪后 reload”范式
+- `apps/editor/src/renderer/workbench/editor/monaco/MonacoLoader.ts` / `monacoActionsBridge.ts` —— Monaco 桥接、`actionsBridged` / `onDidBridgeActions`、默认键侧表
+- `apps/editor/src/renderer/services/keybindings/__tests__/UserKeybindingsService.test.ts` —— 注册期复现/判别单测范式
+- `apps/editor/e2e/specs/smoke.vscodeKeybindings.spec.ts` —— 端到端守护范式（`UNIVERSE_VSCODE_KEYBINDINGS_PATH` + `getKeybindingCommandsForKey`）
+- 姊妹 skill `register-monaco-command` —— 当结论是“命令压根没接进来”（命令面板都搜不到）时转去那个
+
+## 其它
+- 后续用本 skill，发现新断点/新坑（新的 guard、新的注册层、新的命令来源时序），追加到**案例库**并更新本 SKILL.md。

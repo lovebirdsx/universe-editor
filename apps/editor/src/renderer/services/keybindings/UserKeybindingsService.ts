@@ -27,6 +27,7 @@ import {
   KeybindingsRegistry,
   type IKeybindingItem,
   registerSingleton,
+  URI,
   UserDataFile,
 } from '@universe-editor/platform'
 import { formatKey, formatChord } from '../../workbench/titlebar/keybindingFormat.js'
@@ -48,12 +49,23 @@ export interface IUserKeybindingsService {
   readonly _serviceBrand: undefined
   readonly onDidChange: Event<void>
   readonly userEntries: readonly IUserKeybindingEntry[]
+  /** Synchronous snapshot of the last VSCode-layer reload, for keyboard-debug diagnostics. */
+  readonly diagnostics: IUserKeybindingsDiagnostics
   initialize(): Promise<void>
   reload(): Promise<void>
   setKeybinding(command: string, key: string | null, when?: string): void
   resetKeybinding(command: string): void
   getUserEntry(command: string): IUserKeybindingEntry | undefined
   getDefaultKey(command: string): string | undefined
+}
+
+export interface IUserKeybindingsDiagnostics {
+  /** Resolved fs path of the read-only VSCode keybindings layer (best-effort). */
+  vscodeFilePath: string | undefined
+  /** Entries parsed out of the VSCode keybindings file on the last reload. */
+  vscodeParsedCount: number
+  /** Of those, how many actually registered (the rest were dropped by the command-existence filter). */
+  vscodeRegisteredCount: number
 }
 
 export const IUserKeybindingsService =
@@ -137,11 +149,24 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   private readonly _registrationStore = this._register(new DisposableStore())
   private readonly _registrationDisposables = new Map<string, IDisposable>()
   private readonly _vscodeRegistrationStore = this._register(new DisposableStore())
-  private readonly _vscodeRegistrationDisposables = new Map<string, IDisposable>()
   private readonly _defaultSnapshot = new Map<string, string>()
 
   /** Suspend file write-back while we apply an external file change. */
   private _suspendWriteBack = false
+
+  /** Serializes reload() calls so concurrent callers (ExtensionsContribution +
+   *  the monaco action bridge) never interleave store clears/re-registrations. */
+  private _reloadChain: Promise<void> = Promise.resolve()
+
+  private readonly _diagnostics: IUserKeybindingsDiagnostics = {
+    vscodeFilePath: undefined,
+    vscodeParsedCount: 0,
+    vscodeRegisteredCount: 0,
+  }
+
+  get diagnostics(): IUserKeybindingsDiagnostics {
+    return this._diagnostics
+  }
 
   constructor(
     @IStorageService private readonly _storage: IStorageService,
@@ -152,6 +177,10 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     // synchronously when their modules were imported, which happens before
     // bootstrapWorkbench() runs.
     this._takeDefaultSnapshot()
+    void this._files.getFileUri(UserDataFile.VSCodeKeybindings).then((uri) => {
+      const revived = uri ? URI.revive(uri) : undefined
+      if (revived) this._diagnostics.vscodeFilePath = revived.fsPath
+    })
   }
 
   private _takeDefaultSnapshot(): void {
@@ -194,7 +223,11 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   // skipped by the command-existence filter in _reloadVSCodeFile(). Callers invoke
   // this once extension commands are present to pick those bindings back up.
   async reload(): Promise<void> {
-    await this._reloadVSCodeAndUser()
+    this._reloadChain = this._reloadChain.then(
+      () => this._reloadVSCodeAndUser(),
+      () => this._reloadVSCodeAndUser(),
+    )
+    return this._reloadChain
   }
 
   getUserEntry(command: string): IUserKeybindingEntry | undefined {
@@ -231,15 +264,17 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     const text = await this._files.read(UserDataFile.VSCodeKeybindings)
     const entries = parseKeybindingsFile(text)
     this._vscodeRegistrationStore.clear()
-    this._vscodeRegistrationDisposables.clear()
+    let registered = 0
     for (const entry of entries) {
       if (!CommandsRegistry.getCommand(entry.command)) continue
-      this._applyEntryToStore(
-        entry,
-        this._vscodeRegistrationStore,
-        this._vscodeRegistrationDisposables,
-      )
+      // No per-command dedup here: a single command may legitimately have several
+      // VSCode bindings (e.g. the user's custom key plus the kept default). The
+      // store is cleared wholesale each reload, so every entry registers fresh.
+      this._registerEntry(entry, this._vscodeRegistrationStore)
+      registered++
     }
+    this._diagnostics.vscodeParsedCount = entries.length
+    this._diagnostics.vscodeRegisteredCount = registered
   }
 
   private async _reloadVSCodeAndUser(): Promise<void> {
@@ -272,23 +307,35 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     this._userEntries.set(entry.command, entry)
   }
 
+  // User-layer registration: one binding per command (the Keyboard Shortcuts
+  // editor manages a single override per command, so re-applying a command
+  // replaces its previous binding).
   private _applyEntryToStore(
     entry: IUserKeybindingEntry,
     store: DisposableStore,
     disposables: Map<string, IDisposable>,
   ): void {
-    // Remove previous registration for this command first.
     const prev = disposables.get(entry.command)
     if (prev) {
       store.delete(prev)
       disposables.delete(entry.command)
     }
+    const d = this._registerEntry(entry, store)
+    if (d) disposables.set(entry.command, d)
+  }
 
+  // Registers a single entry into `store` and returns its disposable (undefined
+  // when the entry yields no binding). No command-level dedup — callers that
+  // need at-most-one-per-command go through _applyEntryToStore.
+  private _registerEntry(
+    entry: IUserKeybindingEntry,
+    store: DisposableStore,
+  ): IDisposable | undefined {
     if (entry.key === null) {
       const toNegate: IKeybindingItem[] = KeybindingsRegistry.getAllKeybindings().filter(
         (kb) => kb.command === entry.command && !kb.isNegated,
       )
-      if (toNegate.length === 0) return
+      if (toNegate.length === 0) return undefined
 
       const ds: IDisposable[] = toNegate.map((kb) => {
         if (kb.chords) {
@@ -307,14 +354,14 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
 
       const combined = combinedDisposable(...ds)
       store.add(combined)
-      disposables.set(entry.command, combined)
-    } else {
-      const item = keyToKeybindingItem(entry)
-      if (!item) return
-      const d = KeybindingsRegistry.registerKeybinding(item)
-      store.add(d)
-      disposables.set(entry.command, d)
+      return combined
     }
+
+    const item = keyToKeybindingItem(entry)
+    if (!item) return undefined
+    const d = KeybindingsRegistry.registerKeybinding(item)
+    store.add(d)
+    return d
   }
 
   private async _writeFile(): Promise<void> {
