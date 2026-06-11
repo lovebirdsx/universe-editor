@@ -420,6 +420,39 @@ describe('QuickPickPanel item removal', () => {
     expect(onClose).not.toHaveBeenCalled()
     expect(screen.queryByText('Format Document')).toBeNull()
   })
+
+  it('x on the focused item removes it in quick-navigate mode', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          quickNavigate: { modifier: 'ctrl', initialSelectionIndex: 0 },
+          onItemRemove,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'x', ctrlKey: true })
+    expect(onItemRemove).toHaveBeenCalledWith(items[0])
+    expect(screen.queryByText('Format Document')).toBeNull()
+    expect(screen.getByText('Go to Line')).toBeTruthy()
+  })
+
+  it('x does not remove items outside quick-navigate mode', () => {
+    const onItemRemove = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, onItemRemove })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'x' })
+    expect(onItemRemove).not.toHaveBeenCalled()
+    expect(screen.getByText('Format Document')).toBeTruthy()
+  })
 })
 
 describe('QuickPickPanel active item (live preview)', () => {

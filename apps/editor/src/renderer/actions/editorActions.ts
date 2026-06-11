@@ -320,6 +320,21 @@ function buildRecentEditorPickItems(recentService: IRecentEditorsService): IQuic
   return items
 }
 
+function resolveRecentEditorPick(
+  groups: IEditorGroupsService,
+  id: string,
+): { group: IEditorGroup; editor: EditorInput } | undefined {
+  const sepIdx = id.indexOf(PICK_ID_DELIMITER)
+  if (sepIdx === -1) return undefined
+  const groupId = Number(id.slice(0, sepIdx))
+  const editorId = id.slice(sepIdx + PICK_ID_DELIMITER.length)
+  const group = groups.getGroup(groupId)
+  if (!group) return undefined
+  const editor = group.editors.find((e) => e.id === editorId)
+  if (!editor) return undefined
+  return { group, editor }
+}
+
 async function runQuickOpenRecentEditor(
   accessor: ServicesAccessor,
   reverse: boolean,
@@ -328,6 +343,7 @@ async function runQuickOpenRecentEditor(
   const recentService = accessor.get(IRecentEditorsService)
   const quickInput = accessor.get(IQuickInputService)
   const focusStack = accessor.get(IFocusStackService)
+  const dialogService = accessor.get(IDialogService)
 
   const items = buildRecentEditorPickItems(recentService)
   if (items.length <= 1) return
@@ -336,21 +352,19 @@ async function runQuickOpenRecentEditor(
   const picked = await quickInput.pick(items, {
     placeholder: localize('quickOpenRecentEditor.placeholder', 'Recently Used Editors'),
     quickNavigate: { modifier: 'ctrl', initialSelectionIndex },
+    onItemRemove: (item) => {
+      const target = resolveRecentEditorPick(groups, item.id)
+      if (target) void closeEditorWithConfirm(target.editor, target.group, dialogService)
+    },
   })
   if (!picked) return
 
-  const sepIdx = picked.id.indexOf(PICK_ID_DELIMITER)
-  if (sepIdx === -1) return
-  const groupId = Number(picked.id.slice(0, sepIdx))
-  const editorId = picked.id.slice(sepIdx + PICK_ID_DELIMITER.length)
-  const group = groups.getGroup(groupId)
-  if (!group) return
-  const editor = group.editors.find((e) => e.id === editorId)
-  if (!editor) return
+  const target = resolveRecentEditorPick(groups, picked.id)
+  if (!target) return
 
-  groups.activateGroup(group)
-  group.setActive(editor)
-  activateGroupAndFocus(groups, group, focusStack)
+  groups.activateGroup(target.group)
+  target.group.setActive(target.editor)
+  activateGroupAndFocus(groups, target.group, focusStack)
 }
 
 export class QuickOpenRecentEditorAction extends Action2 {

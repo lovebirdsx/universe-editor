@@ -385,6 +385,13 @@ export function QuickPickPanel({
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
       if (isSelectable(item)) removeItem(item)
+    } else if (quickNavigate && onItemRemove && e.key.toLowerCase() === 'x') {
+      // In quick-navigate mode (e.g. Ctrl+Tab editor switcher) the input box is
+      // not used for typing, so `x` can act as a remove shortcut. Scoped to
+      // quickNavigate so ordinary quick picks keep `x` as a search character.
+      e.preventDefault()
+      const item = sortedFiltered[focusedIdx]
+      if (isSelectable(item)) removeItem(item)
     } else if (e.key === 'Enter') {
       // preventDefault stops the native keydown from leaking to whichever element
       // receives focus after the panel closes (typically the Monaco editor), which
