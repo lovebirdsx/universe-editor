@@ -1,5 +1,6 @@
 import {
   Disposable,
+  IFileService,
   IStorageService,
   StorageScope,
   URI,
@@ -37,7 +38,10 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
   private _items: IRecentFile[] = []
   private _loadPromise: Promise<void> | null = null
 
-  constructor(@IStorageService private readonly _storage: IStorageService) {
+  constructor(
+    @IStorageService private readonly _storage: IStorageService,
+    @IFileService private readonly _fileService: IFileService,
+  ) {
     super()
     this._register(this._storage.onDidChangeWorkspaceScope(() => this._reset()))
   }
@@ -76,6 +80,19 @@ export class RecentFilesService extends Disposable implements IRecentFilesServic
 
   async getAll(): Promise<readonly IRecentFile[]> {
     await this._ensureLoaded()
+    if (this._items.length === 0) return this._items
+
+    const snapshot = this._items
+    const checks = await Promise.all(
+      // exists 出错时保守保留，避免临时 IO 错误误删
+      snapshot.map((i) => this._fileService.exists(i.uri).catch(() => true)),
+    )
+    const dead = new Set(snapshot.filter((_, idx) => !checks[idx]).map((i) => i.uri.toString()))
+    if (dead.size > 0) {
+      // 基于 uri 集合移除，而非索引：检查期间若有 add() prepend 新项不会被误删
+      this._items = this._items.filter((i) => !dead.has(i.uri.toString()))
+      void this._persist()
+    }
     return this._items
   }
 

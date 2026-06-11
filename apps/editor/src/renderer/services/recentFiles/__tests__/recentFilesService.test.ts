@@ -16,6 +16,7 @@ import {
   type EditorInput,
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
+  type IFileService as IFileServiceType,
   type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import { IRecentFilesService, RecentFilesService } from '../recentFilesService.js'
@@ -168,12 +169,42 @@ function makeFakeFileService() {
 }
 
 // ---------------------------------------------------------------------------
+// Fake IFileService for RecentFilesService (getAll() existence filtering)
+// ---------------------------------------------------------------------------
+
+function makeRecentFilesFileService(exists?: (uri: URI) => boolean): IFileServiceType {
+  return {
+    _serviceBrand: undefined,
+    async exists(uri: URI) {
+      return exists ? exists(uri) : true
+    },
+    async readFileText() {
+      return ''
+    },
+    async readFile() {
+      return new Uint8Array()
+    },
+    async writeFile() {},
+    async stat() {
+      throw new Error('stat not used')
+    },
+    async list() {
+      return []
+    },
+    async createDirectory() {},
+    async delete() {},
+    async rename() {},
+  } as unknown as IFileServiceType
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function buildService(storage: FakeStorage): RecentFilesService {
+function buildService(storage: FakeStorage, fileService?: IFileServiceType): RecentFilesService {
   const services = new ServiceCollection()
   services.set(IStorageService, storage)
+  services.set(IFileService, fileService ?? makeRecentFilesFileService())
   const inst = new InstantiationService(services)
   return inst.createInstance(RecentFilesService)
 }
@@ -279,6 +310,43 @@ describe('RecentFilesService', () => {
     const items = await svc.getAll()
     expect(items.some((i) => i.name === 'b.txt')).toBe(true)
     expect(items.some((i) => i.name === 'a.txt')).toBe(true)
+  })
+
+  it('getAll() drops files that no longer exist and rewrites storage', async () => {
+    const storage = new FakeStorage()
+    storage.seed('workbench.recentFiles', [
+      { uri: URI.file('/gone.txt').toJSON(), name: 'gone.txt', lastOpened: 1000 },
+      { uri: URI.file('/here.txt').toJSON(), name: 'here.txt', lastOpened: 2000 },
+    ])
+    const fileService = makeRecentFilesFileService(
+      (uri) => uri.fsPath !== URI.file('/gone.txt').fsPath,
+    )
+    const svc = buildService(storage, fileService)
+
+    const items = await svc.getAll()
+    expect(items).toHaveLength(1)
+    expect(items[0]?.name).toBe('here.txt')
+
+    await Promise.resolve()
+    const persisted = await storage.get<Array<{ name: string }>>('workbench.recentFiles')
+    expect(persisted?.map((p) => p.name)).toEqual(['here.txt'])
+  })
+
+  it('getAll() keeps items when existence check throws', async () => {
+    const storage = new FakeStorage()
+    storage.seed('workbench.recentFiles', [
+      { uri: URI.file('/a.txt').toJSON(), name: 'a.txt', lastOpened: 1 },
+    ])
+    const fileService = {
+      _serviceBrand: undefined,
+      async exists() {
+        throw new Error('io error')
+      },
+    } as unknown as IFileServiceType
+    const svc = buildService(storage, fileService)
+    const items = await svc.getAll()
+    expect(items).toHaveLength(1)
+    expect(items[0]?.name).toBe('a.txt')
   })
 })
 
