@@ -23,6 +23,11 @@ function toJsonSchemaNode(prop: IConfigurationPropertySchema): IJSONSchema {
   if (prop.minimum !== undefined) node.minimum = prop.minimum
   if (prop.maximum !== undefined) node.maximum = prop.maximum
   if (prop.items !== undefined) node.items = toJsonSchemaNode(prop.items)
+  if (prop.properties !== undefined) {
+    node.properties = Object.fromEntries(
+      Object.entries(prop.properties).map(([k, v]) => [k, toJsonSchemaNode(v)]),
+    )
+  }
   if (prop.additionalProperties !== undefined) {
     node.additionalProperties =
       typeof prop.additionalProperties === 'boolean'

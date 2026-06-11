@@ -1200,6 +1200,10 @@
   background: var(--color-message-bg, #2a2a2a);
 }
 
+.stickyUserBar .planCard {
+  background: var(--color-message-user-bg, #2a3550);
+}
+
 .planHeader {
   width: 100%;
   display: flex;

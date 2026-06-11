@@ -18,6 +18,8 @@ export interface IConfigurationPropertySchema {
   minimum?: number
   maximum?: number
   items?: IConfigurationPropertySchema
+  /** For object-typed settings: schema of explicitly named properties. */
+  properties?: Record<string, IConfigurationPropertySchema>
   /** For object-typed settings (e.g. `files.exclude`): schema of free-form values. */
   additionalProperties?: boolean | IConfigurationPropertySchema
 }
