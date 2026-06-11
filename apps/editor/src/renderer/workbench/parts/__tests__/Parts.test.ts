@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
+  IContextKeyService,
+  IEditorGroupsService,
   IFocusableRegistry,
   ILayoutService,
   InstantiationService,
@@ -57,6 +59,15 @@ function makeContainer() {
   services.set(IViewsService, makeViewsService())
   services.set(IFocusableRegistry, makeFocusableRegistry())
   services.set(IViewContainerMemoryService, new ViewContainerMemoryService())
+  services.set(IEditorGroupsService, {
+    _serviceBrand: undefined,
+    activeGroup: { id: 0, activeEditor: undefined },
+  } as unknown as IEditorGroupsService)
+  services.set(IContextKeyService, {
+    _serviceBrand: undefined,
+    set: vi.fn(),
+    get: vi.fn(),
+  } as unknown as IContextKeyService)
   const instantiation = new InstantiationService(services, true)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)

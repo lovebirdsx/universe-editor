@@ -6,6 +6,8 @@
 import {
   Disposable,
   Emitter,
+  IContextKeyService,
+  IEditorGroupsService,
   IFocusableRegistry,
   IStorageService,
   IViewsService,
@@ -26,6 +28,7 @@ import type {
 } from '@universe-editor/platform'
 import { PartId } from '@universe-editor/platform'
 import { IViewContainerMemoryService } from '../focus/ViewContainerMemoryService.js'
+import { focusEditorInput } from '../editor/editorFocus.js'
 
 const STORAGE_KEY = 'workbench.layout'
 const SAVE_DEBOUNCE_MS = 200
@@ -72,6 +75,8 @@ export class LayoutService extends Disposable implements ILayoutService {
     @IFocusableRegistry private readonly _focusableRegistry: IFocusableRegistry,
     @IViewContainerMemoryService
     private readonly _viewContainerMemory: IViewContainerMemoryService,
+    @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
+    @IContextKeyService private readonly _contextKeyService: IContextKeyService,
   ) {
     super()
     // Reload from the new workspace's storage whenever the WORKSPACE scope swaps.
@@ -88,8 +93,20 @@ export class LayoutService extends Disposable implements ILayoutService {
 
   setVisible(part: PartId, visible: boolean): void {
     if (this.visible.get()[part] === visible) return
+    // Pass focus back to the editor if we're hiding a part that currently owns it,
+    // so subsequent keybindings see the right focus context (mirrors VSCode's
+    // setPartHidden). Snapshot before the state flips since the DOM changes after.
+    const hadFocus = !visible && (this._parts.get(part)?.isFocused() ?? false)
     this.visible.set({ ...this.visible.get(), [part]: visible }, undefined)
     this._schedulePersist()
+    if (hadFocus) this._passFocusToEditor()
+  }
+
+  private _passFocusToEditor(): void {
+    const group = this._editorGroups.activeGroup
+    const active = group.activeEditor
+    if (active && focusEditorInput(active, this._contextKeyService, group.id)) return
+    void this.focusPart(PartId.EditorArea)
   }
 
   toggleVisible(part: PartId): void {

@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
+  type IContextKeyService,
+  type IEditorGroupsService,
   type IFocusableRegistry,
   type IPart,
   type IStorageService,
@@ -44,12 +46,29 @@ function makeViewContainerMemory(): IViewContainerMemoryService {
   return new ViewContainerMemoryService()
 }
 
+function makeEditorGroups(): IEditorGroupsService {
+  return {
+    _serviceBrand: undefined,
+    activeGroup: { id: 0, activeEditor: undefined },
+  } as unknown as IEditorGroupsService
+}
+
+function makeContextKeyService(): IContextKeyService {
+  return {
+    _serviceBrand: undefined,
+    set: vi.fn(),
+    get: vi.fn(),
+  } as unknown as IContextKeyService
+}
+
 function newSvc(storage: IStorageService = makeStorage()): LayoutService {
   return new LayoutService(
     storage,
     makeViewsService(),
     makeFocusableRegistry(),
     makeViewContainerMemory(),
+    makeEditorGroups(),
+    makeContextKeyService(),
   )
 }
 
