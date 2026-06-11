@@ -462,6 +462,23 @@ export function EditorGroupView({
     tabBarRef.current?.scrollBy({ left: direction === 'left' ? -150 : 150, behavior: 'smooth' })
   }
 
+  // Translate vertical wheel scrolling into horizontal tab scrolling (VSCode parity).
+  // React's onWheel is passive and can't preventDefault; use a native listener so the
+  // wheel doesn't bubble up and scroll an ancestor instead.
+  useEffect(() => {
+    const el = tabBarRef.current
+    if (!el) return
+    const onWheel = (e: WheelEvent) => {
+      if (e.deltaX !== 0) return
+      if (e.deltaY === 0) return
+      if (el.scrollWidth <= el.clientWidth) return
+      el.scrollLeft += e.deltaY
+      e.preventDefault()
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [])
+
   // When this group becomes active (e.g. user returns from sidebar without changing file),
   // focus the Monaco editor so keyboard input goes to the editor immediately — unless the
   // open explicitly asked to keep focus elsewhere (Space-preview from a list).
