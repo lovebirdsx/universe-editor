@@ -35,6 +35,7 @@ function mount() {
     _serviceBrand: undefined,
     onDidChange: onDidChangeEmitter.event,
     userEntries: [],
+    disabledCommands: [],
     initialize: async () => undefined,
     reload: async () => undefined,
     setKeybinding: vi.fn(),

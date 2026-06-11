@@ -49,6 +49,8 @@ export interface IUserKeybindingsService {
   readonly _serviceBrand: undefined
   readonly onDidChange: Event<void>
   readonly userEntries: readonly IUserKeybindingEntry[]
+  /** Commands disabled via a `-command` entry in either layer (deduped). */
+  readonly disabledCommands: readonly string[]
   /** Synchronous snapshot of the last VSCode-layer reload, for keyboard-debug diagnostics. */
   readonly diagnostics: IUserKeybindingsDiagnostics
   initialize(): Promise<void>
@@ -151,6 +153,9 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   private readonly _vscodeRegistrationStore = this._register(new DisposableStore())
   private readonly _defaultSnapshot = new Map<string, string>()
 
+  /** Commands disabled (`-command`) by the read-only VSCode layer, last reload. */
+  private readonly _vscodeDisabledCommands = new Set<string>()
+
   /** Suspend file write-back while we apply an external file change. */
   private _suspendWriteBack = false
 
@@ -217,6 +222,14 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     return [...this._userEntries.values()]
   }
 
+  get disabledCommands(): readonly string[] {
+    const set = new Set(this._vscodeDisabledCommands)
+    for (const entry of this._userEntries.values()) {
+      if (entry.key === null) set.add(entry.command)
+    }
+    return [...set]
+  }
+
   // Re-evaluate VSCode + user bindings. Extension-contributed commands register
   // into CommandsRegistry asynchronously (after the extension host boots), long
   // after initialize() ran at startup — so VSCode bindings to those commands were
@@ -264,8 +277,10 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     const text = await this._files.read(UserDataFile.VSCodeKeybindings)
     const entries = parseKeybindingsFile(text)
     this._vscodeRegistrationStore.clear()
+    this._vscodeDisabledCommands.clear()
     let registered = 0
     for (const entry of entries) {
+      if (entry.key === null) this._vscodeDisabledCommands.add(entry.command)
       if (!CommandsRegistry.getCommand(entry.command)) continue
       // No per-command dedup here: a single command may legitimately have several
       // VSCode bindings (e.g. the user's custom key plus the kept default). The

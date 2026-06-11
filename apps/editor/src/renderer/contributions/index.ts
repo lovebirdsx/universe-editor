@@ -60,6 +60,7 @@ import { StartupPerformanceStatusContribution } from './StartupPerformanceStatus
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
 import { ExtensionsContribution } from './ExtensionsContribution.js'
 import { MonacoKeybindingSyncContribution } from './MonacoKeybindingSyncContribution.js'
+import { MonacoDefaultKeybindingOverrideContribution } from './MonacoDefaultKeybindingOverrideContribution.js'
 import { DocumentSyncContribution } from './DocumentSyncContribution.js'
 import { MonacoOverrideServicesContribution } from './MonacoOverrideServicesContribution.js'
 import { EditorOpenerContribution } from './EditorOpenerContribution.js'
@@ -461,6 +462,17 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.monacoKeybindingSync',
   MonacoKeybindingSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Mirror `-command` disable entries (keybindings.json) onto Monaco's internal
+// keybinding dispatch, so disabling a Monaco built-in default key (e.g.
+// `-editor.action.insertCursorAbove`) actually frees the key instead of leaving
+// Monaco's own dispatcher to consume it while the editor is focused. AfterRestore
+// alongside the sync contribution; the actual work waits on the bridge signal.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.monacoDefaultKeybindingOverride',
+  MonacoDefaultKeybindingOverrideContribution,
   WorkbenchPhase.AfterRestore,
 )
 

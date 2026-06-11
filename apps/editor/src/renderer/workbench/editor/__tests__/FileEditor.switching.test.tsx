@@ -243,6 +243,7 @@ describe('FileEditor tab switching', () => {
       _serviceBrand: undefined,
       onDidChange: () => ({ dispose() {} }),
       userEntries: [],
+      disabledCommands: [],
       initialize: async () => {},
       reload: async () => {},
       setKeybinding: () => {},

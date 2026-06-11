@@ -143,6 +143,38 @@ describe('UserKeybindingsService', () => {
     })
   })
 
+  it('collects disabled commands from both layers, deduped', async () => {
+    const cmd = 'editor.action.insertCursorAbove'
+    disposables.push(CommandsRegistry.registerCommand({ id: cmd, handler: () => {} }))
+
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.VSCodeKeybindings,
+      JSON.stringify([{ command: `-${cmd}`, when: 'editorTextFocus' }, { command: '-foo.bar' }]),
+    )
+    files.files.set(UserDataFile.Keybindings, JSON.stringify([{ command: '-foo.bar' }]))
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+
+    await service.initialize()
+
+    expect([...service.disabledCommands].sort()).toEqual([cmd, 'foo.bar'])
+  })
+
+  it('clears disabled commands when the disable entry is removed', async () => {
+    const files = new FakeUserData()
+    files.files.set(UserDataFile.VSCodeKeybindings, JSON.stringify([{ command: '-foo.bar' }]))
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+
+    await service.initialize()
+    expect(service.disabledCommands).toContain('foo.bar')
+
+    files.files.set(UserDataFile.VSCodeKeybindings, '[]')
+    await service.reload()
+    expect(service.disabledCommands).not.toContain('foo.bar')
+  })
+
   it('serializes concurrent reload() calls without duplicating registrations', async () => {
     const lazyCommand = 'test.lazy.serialized'
     disposables.push(CommandsRegistry.registerCommand({ id: lazyCommand, handler: () => {} }))
