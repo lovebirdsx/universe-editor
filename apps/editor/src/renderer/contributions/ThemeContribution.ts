@@ -8,6 +8,10 @@ import {
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import {
+  defineOutputThemes,
+  type LineHighlightOverrides,
+} from '../workbench/panel/output/monacoLogLanguage.js'
 
 type WorkbenchColorTheme = 'dark' | 'light'
 
@@ -15,8 +19,15 @@ function getWorkbenchColorTheme(config: IConfigurationService): WorkbenchColorTh
   return config.get<string>('workbench.colorTheme') === 'light' ? 'light' : 'dark'
 }
 
-function getMonacoTheme(theme: WorkbenchColorTheme): 'vs' | 'vs-dark' {
-  return theme === 'light' ? 'vs' : 'vs-dark'
+function getMonacoTheme(theme: WorkbenchColorTheme): 'output-light' | 'output-dark' {
+  return theme === 'light' ? 'output-light' : 'output-dark'
+}
+
+function getLineHighlightOverrides(config: IConfigurationService): LineHighlightOverrides {
+  return {
+    background: config.get<string>('editor.lineHighlightBackground') ?? '',
+    border: config.get<string>('editor.lineHighlightBorder') ?? '',
+  }
 }
 
 export class ThemeContribution extends Disposable implements IWorkbenchContribution {
@@ -24,9 +35,19 @@ export class ThemeContribution extends Disposable implements IWorkbenchContribut
     super()
 
     this._applyTheme()
+    // Monaco is lazy-loaded by FileEditor; once it resolves, re-apply so any
+    // user-configured line-highlight colors (read here, not in registerLogLanguage)
+    // take effect on the global theme.
+    void MonacoLoader.ensureInitialized().then(() => this._applyTheme())
     this._register(
       this._configuration.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration('workbench.colorTheme')) this._applyTheme()
+        if (
+          e.affectsConfiguration('workbench.colorTheme') ||
+          e.affectsConfiguration('editor.lineHighlightBackground') ||
+          e.affectsConfiguration('editor.lineHighlightBorder')
+        ) {
+          this._applyTheme()
+        }
       }),
     )
   }
@@ -40,9 +61,11 @@ export class ThemeContribution extends Disposable implements IWorkbenchContribut
 
   private _applyMonacoThemeIfLoaded(theme: WorkbenchColorTheme): void {
     try {
-      MonacoLoader.get().editor.setTheme(getMonacoTheme(theme))
+      const m = MonacoLoader.get()
+      defineOutputThemes(m, getLineHighlightOverrides(this._configuration))
+      m.editor.setTheme(getMonacoTheme(theme))
     } catch {
-      // Monaco is lazy-loaded by FileEditor; initial editor creation reads the same setting.
+      // Monaco not loaded yet; the ensureInitialized() callback re-applies once ready.
     }
   }
 }

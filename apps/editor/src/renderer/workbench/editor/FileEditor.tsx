@@ -37,8 +37,11 @@ import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindi
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
   EDITOR_FONT_WEIGHT_DEFAULT,
+  EDITOR_DISABLE_MONOSPACE_OPTIMIZATIONS_DEFAULT,
   EDITOR_LETTER_SPACING_DEFAULT,
   EDITOR_LINE_HEIGHT_DEFAULT,
+  EDITOR_RENDER_LINE_HIGHLIGHT_DEFAULT,
+  EDITOR_OCCURRENCES_HIGHLIGHT_DEFAULT,
   type LanguageFontsMap,
   normalizeFontFamily,
   resolveLanguageFonts,
@@ -54,6 +57,9 @@ function getEditorTypographyOptions(
   lineHeight: number
   letterSpacing: number
   fontWeight: string
+  disableMonospaceOptimizations: boolean
+  renderLineHighlight: NonNullable<monaco.editor.IEditorOptions['renderLineHighlight']>
+  occurrencesHighlight: NonNullable<monaco.editor.IEditorOptions['occurrencesHighlight']>
 } {
   const raw = configService.get<number>('editor.fontSize')
   const globalSize = typeof raw === 'number' ? raw : 14
@@ -69,6 +75,17 @@ function getEditorTypographyOptions(
     letterSpacing:
       configService.get<number>('editor.letterSpacing') ?? EDITOR_LETTER_SPACING_DEFAULT,
     fontWeight: configService.get<string>('editor.fontWeight') ?? EDITOR_FONT_WEIGHT_DEFAULT,
+    disableMonospaceOptimizations:
+      configService.get<boolean>('editor.disableMonospaceOptimizations') ??
+      EDITOR_DISABLE_MONOSPACE_OPTIMIZATIONS_DEFAULT,
+    renderLineHighlight: (configService.get<string>('editor.renderLineHighlight') ??
+      EDITOR_RENDER_LINE_HIGHLIGHT_DEFAULT) as NonNullable<
+      monaco.editor.IEditorOptions['renderLineHighlight']
+    >,
+    occurrencesHighlight: (configService.get<string>('editor.occurrencesHighlight') ??
+      EDITOR_OCCURRENCES_HIGHLIGHT_DEFAULT) as NonNullable<
+      monaco.editor.IEditorOptions['occurrencesHighlight']
+    >,
   }
 }
 
@@ -265,15 +282,29 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           e.affectsConfiguration('editor.languageFonts') ||
           e.affectsConfiguration('editor.lineHeight') ||
           e.affectsConfiguration('editor.letterSpacing') ||
-          e.affectsConfiguration('editor.fontWeight')
+          e.affectsConfiguration('editor.fontWeight') ||
+          e.affectsConfiguration('editor.disableMonospaceOptimizations') ||
+          e.affectsConfiguration('editor.renderLineHighlight') ||
+          e.affectsConfiguration('editor.occurrencesHighlight')
         ) {
-          const { fontFamily, fontSize, lineHeight, letterSpacing, fontWeight } =
-            getEditorTypographyOptions(configService, fileInputRef.current.language)
+          const {
+            fontFamily,
+            fontSize,
+            lineHeight,
+            letterSpacing,
+            fontWeight,
+            disableMonospaceOptimizations,
+            renderLineHighlight,
+            occurrencesHighlight,
+          } = getEditorTypographyOptions(configService, fileInputRef.current.language)
           options.fontFamily = fontFamily
           options.fontSize = fontSize
           options.lineHeight = lineHeight
           options.letterSpacing = letterSpacing
           options.fontWeight = fontWeight
+          options.disableMonospaceOptimizations = disableMonospaceOptimizations
+          options.renderLineHighlight = renderLineHighlight
+          options.occurrencesHighlight = occurrencesHighlight
         }
         if (e.affectsConfiguration('editor.wordWrap')) {
           options.wordWrap = getEditorWordWrap(configService)

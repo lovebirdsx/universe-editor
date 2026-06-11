@@ -16,8 +16,13 @@ import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
   EDITOR_FONT_WEIGHT_DEFAULT,
+  EDITOR_DISABLE_MONOSPACE_OPTIMIZATIONS_DEFAULT,
   EDITOR_LETTER_SPACING_DEFAULT,
   EDITOR_LINE_HEIGHT_DEFAULT,
+  EDITOR_RENDER_LINE_HIGHLIGHT_DEFAULT,
+  EDITOR_OCCURRENCES_HIGHLIGHT_DEFAULT,
+  EDITOR_LINE_HIGHLIGHT_BACKGROUND_DEFAULT,
+  EDITOR_LINE_HIGHLIGHT_BORDER_DEFAULT,
   OUTPUT_FONT_FAMILY_DEFAULT,
   OUTPUT_FONT_SIZE_DEFAULT,
   TERMINAL_FONT_FAMILY_DEFAULT,
@@ -130,6 +135,48 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.editor.fontWeight.description',
               'Controls the font weight. Accepts "normal", "bold", or a number between 100 and 900.',
+            ),
+          },
+          'editor.disableMonospaceOptimizations': {
+            type: 'boolean',
+            default: EDITOR_DISABLE_MONOSPACE_OPTIMIZATIONS_DEFAULT,
+            description: localize(
+              'settings.editor.disableMonospaceOptimizations.description',
+              'Disables Monaco monospace rendering optimizations, forcing exact per-character width measurement on every line. Lines containing CJK (e.g. Chinese) text already use exact measurement, so leave this off (the default) unless you see horizontal jitter on pure-ASCII lines. Enabling it can make the current line look bolder/darker during IME composition.',
+            ),
+          },
+          'editor.renderLineHighlight': {
+            type: 'string',
+            default: EDITOR_RENDER_LINE_HIGHLIGHT_DEFAULT,
+            enum: ['none', 'gutter', 'line', 'all'],
+            description: localize(
+              'settings.editor.renderLineHighlight.description',
+              'Controls how the current line is highlighted. "line" fills the whole line, "gutter" highlights only the line-number area, "all" does both, "none" disables it.',
+            ),
+          },
+          'editor.occurrencesHighlight': {
+            type: 'string',
+            default: EDITOR_OCCURRENCES_HIGHLIGHT_DEFAULT,
+            enum: ['off', 'singleFile', 'multiFile'],
+            description: localize(
+              'settings.editor.occurrencesHighlight.description',
+              'Controls whether occurrences of the word under the cursor are highlighted automatically (without a selection). "off" disables it.',
+            ),
+          },
+          'editor.lineHighlightBackground': {
+            type: 'string',
+            default: EDITOR_LINE_HIGHLIGHT_BACKGROUND_DEFAULT,
+            description: localize(
+              'settings.editor.lineHighlightBackground.description',
+              'Background color of the current line highlight (CSS color, supports 8-digit alpha). Leave empty to use the theme default.',
+            ),
+          },
+          'editor.lineHighlightBorder': {
+            type: 'string',
+            default: EDITOR_LINE_HIGHLIGHT_BORDER_DEFAULT,
+            description: localize(
+              'settings.editor.lineHighlightBorder.description',
+              'Border color of the current line highlight. Leave empty to use the theme default (transparent, i.e. no border).',
             ),
           },
           'editor.languageFonts': {

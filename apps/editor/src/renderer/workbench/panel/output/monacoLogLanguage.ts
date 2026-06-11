@@ -6,6 +6,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type * as monaco from 'monaco-editor'
+import {
+  OUTPUT_LINE_HIGHLIGHT_DARK,
+  OUTPUT_LINE_HIGHLIGHT_LIGHT,
+} from '../../../services/configuration/fontDefaults.js'
+
+export interface LineHighlightOverrides {
+  background?: string
+  border?: string
+}
 
 // Exported for unit tests (regex-only, no Monaco runtime required)
 export const LOG_LEVEL_RULES: Array<[RegExp, string]> = [
@@ -63,21 +72,42 @@ function buildRules(colors: typeof LOG_COLORS_DARK): monaco.editor.ITokenThemeRu
   ]
 }
 
-export function registerLogLanguage(m: typeof monaco): void {
-  m.languages.register({ id: 'log' })
-  m.languages.setMonarchTokensProvider('log', logMonarch)
+function buildOutputThemeColors(
+  variant: 'dark' | 'light',
+  overrides?: LineHighlightOverrides,
+): Record<string, string> {
+  const base = variant === 'light' ? OUTPUT_LINE_HIGHLIGHT_LIGHT : OUTPUT_LINE_HIGHLIGHT_DARK
+  const background =
+    overrides?.background !== undefined && overrides.background.length > 0
+      ? overrides.background
+      : base.background
+  const border =
+    overrides?.border !== undefined && overrides.border.length > 0 ? overrides.border : base.border
+  return {
+    'editor.lineHighlightBackground': background,
+    'editor.lineHighlightBorder': border,
+  }
+}
 
+export function defineOutputThemes(m: typeof monaco, overrides?: LineHighlightOverrides): void {
   m.editor.defineTheme('output-dark', {
     base: 'vs-dark',
     inherit: true,
     rules: buildRules(LOG_COLORS_DARK),
-    colors: {},
+    colors: buildOutputThemeColors('dark', overrides),
   })
 
   m.editor.defineTheme('output-light', {
     base: 'vs',
     inherit: true,
     rules: buildRules(LOG_COLORS_LIGHT),
-    colors: {},
+    colors: buildOutputThemeColors('light', overrides),
   })
+}
+
+export function registerLogLanguage(m: typeof monaco): void {
+  m.languages.register({ id: 'log' })
+  m.languages.setMonarchTokensProvider('log', logMonarch)
+
+  defineOutputThemes(m)
 }

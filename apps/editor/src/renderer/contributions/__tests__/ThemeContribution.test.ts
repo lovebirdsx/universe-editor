@@ -4,20 +4,25 @@ import { ThemeContribution } from '../ThemeContribution.js'
 
 const monacoMock = vi.hoisted(() => ({
   setTheme: vi.fn(),
+  defineTheme: vi.fn(),
 }))
 
-vi.mock('../../workbench/editor/monaco/MonacoLoader.js', () => ({
-  MonacoLoader: {
-    get: () => ({
-      editor: {
-        setTheme: monacoMock.setTheme,
-      },
-    }),
-  },
-}))
+vi.mock('../../workbench/editor/monaco/MonacoLoader.js', () => {
+  const editor = {
+    setTheme: monacoMock.setTheme,
+    defineTheme: monacoMock.defineTheme,
+  }
+  return {
+    MonacoLoader: {
+      get: () => ({ editor }),
+      ensureInitialized: () => Promise.resolve({ editor }),
+    },
+  }
+})
 
 afterEach(() => {
   monacoMock.setTheme.mockReset()
+  monacoMock.defineTheme.mockReset()
   delete document.documentElement.dataset.theme
   document.documentElement.style.colorScheme = ''
 })
@@ -31,13 +36,13 @@ describe('ThemeContribution', () => {
 
     expect(document.documentElement.dataset.theme).toBe('light')
     expect(document.documentElement.style.colorScheme).toBe('light')
-    expect(monacoMock.setTheme).toHaveBeenLastCalledWith('vs')
+    expect(monacoMock.setTheme).toHaveBeenLastCalledWith('output-light')
 
     config.update('workbench.colorTheme', 'dark', ConfigurationTarget.User)
 
     expect(document.documentElement.dataset.theme).toBe('dark')
     expect(document.documentElement.style.colorScheme).toBe('dark')
-    expect(monacoMock.setTheme).toHaveBeenLastCalledWith('vs-dark')
+    expect(monacoMock.setTheme).toHaveBeenLastCalledWith('output-dark')
 
     contribution.dispose()
   })
