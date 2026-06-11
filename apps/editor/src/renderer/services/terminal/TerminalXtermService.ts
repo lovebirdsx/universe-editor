@@ -10,7 +10,7 @@
  *  terminal process is closed or exits (driven by onDidRemoveTerminal).
  *--------------------------------------------------------------------------------------------*/
 
-import { Terminal } from '@xterm/xterm'
+import { Terminal, type ITheme } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
@@ -79,10 +79,58 @@ function isDarkTheme(config: IConfigurationService): boolean {
   return config.get<string>('workbench.colorTheme') !== 'light'
 }
 
-function themeFor(isDark: boolean) {
-  return isDark
-    ? { background: '#1a1a1c', foreground: '#cccccc', cursor: '#cccccc' }
-    : { background: '#ffffff', foreground: '#333333', cursor: '#333333' }
+// xterm 需要具体 hex 值（不能用 CSS var()），所以 ANSI 16 色在此硬编码一份。
+// 这两套调色板与 agents.module.css 的 `--acp-ansi-*`（agent 输出，对标 VSCode
+// Dark/Light Modern）保持同步——介质不同（xterm 吃 hex、agent 输出吃 CSS 变量），
+// 无法共享同一份定义，改其一时请同步另一处。
+const DARK_THEME: ITheme = {
+  background: '#1a1a1c',
+  foreground: '#cccccc',
+  cursor: '#cccccc',
+  selectionBackground: 'rgba(255,255,255,0.18)',
+  black: '#3b3b3b',
+  red: '#cd3131',
+  green: '#0dbc79',
+  yellow: '#e5e510',
+  blue: '#2472c8',
+  magenta: '#bc3fbc',
+  cyan: '#11a8cd',
+  white: '#e5e5e5',
+  brightBlack: '#666666',
+  brightRed: '#f14c4c',
+  brightGreen: '#23d18b',
+  brightYellow: '#f5f543',
+  brightBlue: '#3b8eea',
+  brightMagenta: '#d670d6',
+  brightCyan: '#29b8db',
+  brightWhite: '#ffffff',
+}
+
+const LIGHT_THEME: ITheme = {
+  background: '#ffffff',
+  foreground: '#333333',
+  cursor: '#333333',
+  selectionBackground: '#add6ff',
+  black: '#1e1e1e',
+  red: '#cd3131',
+  green: '#14792f',
+  yellow: '#b08500',
+  blue: '#0451a5',
+  magenta: '#bc05bc',
+  cyan: '#0598bc',
+  white: '#555555',
+  brightBlack: '#767676',
+  brightRed: '#cd3131',
+  brightGreen: '#14792f',
+  brightYellow: '#b08500',
+  brightBlue: '#0451a5',
+  brightMagenta: '#bc05bc',
+  brightCyan: '#0598bc',
+  brightWhite: '#1e1e1e',
+}
+
+function themeFor(isDark: boolean): ITheme {
+  return isDark ? DARK_THEME : LIGHT_THEME
 }
 
 const noopHandlers: ITerminalLinkHandlers = {
