@@ -3,6 +3,10 @@ export const WORKBENCH_FONT_FAMILY_DEFAULT =
 
 export const EDITOR_FONT_FAMILY_DEFAULT = 'Consolas'
 
+export const EDITOR_LINE_HEIGHT_DEFAULT = 0 // 0 = 按字号自动
+export const EDITOR_LETTER_SPACING_DEFAULT = 0
+export const EDITOR_FONT_WEIGHT_DEFAULT = 'normal'
+
 export const AGENT_FONT_SIZE_DEFAULT = 14
 
 export const OUTPUT_FONT_SIZE_DEFAULT = 14

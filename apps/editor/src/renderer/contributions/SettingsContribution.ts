@@ -15,6 +15,9 @@ import {
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
+  EDITOR_FONT_WEIGHT_DEFAULT,
+  EDITOR_LETTER_SPACING_DEFAULT,
+  EDITOR_LINE_HEIGHT_DEFAULT,
   OUTPUT_FONT_FAMILY_DEFAULT,
   OUTPUT_FONT_SIZE_DEFAULT,
   TERMINAL_FONT_FAMILY_DEFAULT,
@@ -98,6 +101,35 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             description: localize(
               'settings.editor.fontFamily.description',
               'Controls the editor font family.',
+            ),
+          },
+          'editor.lineHeight': {
+            type: 'number',
+            default: EDITOR_LINE_HEIGHT_DEFAULT,
+            minimum: 0,
+            maximum: 150,
+            description: localize(
+              'settings.editor.lineHeight.description',
+              'Controls the line height. Use 0 to compute from font size; values 0–8 are a multiplier of the font size; values ≥ 8 are used as pixels.',
+            ),
+          },
+          'editor.letterSpacing': {
+            type: 'number',
+            default: EDITOR_LETTER_SPACING_DEFAULT,
+            minimum: -5,
+            maximum: 20,
+            description: localize(
+              'settings.editor.letterSpacing.description',
+              'Controls the letter spacing in pixels.',
+            ),
+          },
+          'editor.fontWeight': {
+            type: 'string',
+            default: EDITOR_FONT_WEIGHT_DEFAULT,
+            enum: ['normal', 'bold', '100', '200', '300', '400', '500', '600', '700', '800', '900'],
+            description: localize(
+              'settings.editor.fontWeight.description',
+              'Controls the font weight. Accepts "normal", "bold", or a number between 100 and 900.',
             ),
           },
           'editor.languageFonts': {

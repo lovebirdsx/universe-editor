@@ -36,16 +36,25 @@ import { focusStandaloneEditor, syncEditorFocusContext } from '../../services/ed
 import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
+  EDITOR_FONT_WEIGHT_DEFAULT,
+  EDITOR_LETTER_SPACING_DEFAULT,
+  EDITOR_LINE_HEIGHT_DEFAULT,
   type LanguageFontsMap,
   normalizeFontFamily,
   resolveLanguageFonts,
 } from '../../services/configuration/fontDefaults.js'
 import styles from './FileEditor.module.css'
 
-function getEditorFontOptions(
+function getEditorTypographyOptions(
   configService: IConfigurationService,
   languageId: string,
-): { fontFamily: string; fontSize: number } {
+): {
+  fontFamily: string
+  fontSize: number
+  lineHeight: number
+  letterSpacing: number
+  fontWeight: string
+} {
   const raw = configService.get<number>('editor.fontSize')
   const globalSize = typeof raw === 'number' ? raw : 14
   const globalFamily = normalizeFontFamily(
@@ -53,7 +62,14 @@ function getEditorFontOptions(
     EDITOR_FONT_FAMILY_DEFAULT,
   )
   const map = configService.getMerged<LanguageFontsMap>('editor.languageFonts') ?? {}
-  return resolveLanguageFonts(globalFamily, globalSize, map, languageId)
+  const font = resolveLanguageFonts(globalFamily, globalSize, map, languageId)
+  return {
+    ...font,
+    lineHeight: configService.get<number>('editor.lineHeight') ?? EDITOR_LINE_HEIGHT_DEFAULT,
+    letterSpacing:
+      configService.get<number>('editor.letterSpacing') ?? EDITOR_LETTER_SPACING_DEFAULT,
+    fontWeight: configService.get<string>('editor.fontWeight') ?? EDITOR_FONT_WEIGHT_DEFAULT,
+  }
 }
 
 function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
@@ -128,7 +144,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       {
         theme: getEditorTheme(configService),
         automaticLayout: true,
-        ...getEditorFontOptions(configService, fileInput.language),
+        ...getEditorTypographyOptions(configService, fileInput.language),
         wordWrap: getEditorWordWrap(configService),
         minimap: { enabled: minimapEnabled },
         scrollBeyondLastLine: false,
@@ -246,14 +262,18 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         if (
           e.affectsConfiguration('editor.fontSize') ||
           e.affectsConfiguration('editor.fontFamily') ||
-          e.affectsConfiguration('editor.languageFonts')
+          e.affectsConfiguration('editor.languageFonts') ||
+          e.affectsConfiguration('editor.lineHeight') ||
+          e.affectsConfiguration('editor.letterSpacing') ||
+          e.affectsConfiguration('editor.fontWeight')
         ) {
-          const { fontFamily, fontSize } = getEditorFontOptions(
-            configService,
-            fileInputRef.current.language,
-          )
+          const { fontFamily, fontSize, lineHeight, letterSpacing, fontWeight } =
+            getEditorTypographyOptions(configService, fileInputRef.current.language)
           options.fontFamily = fontFamily
           options.fontSize = fontSize
+          options.lineHeight = lineHeight
+          options.letterSpacing = letterSpacing
+          options.fontWeight = fontWeight
         }
         if (e.affectsConfiguration('editor.wordWrap')) {
           options.wordWrap = getEditorWordWrap(configService)
@@ -300,7 +320,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       // the current input (the create-effect only set it for the first input).
       editorRef.current?.updateOptions({
         readOnly: fileInput.isReadonly,
-        ...getEditorFontOptions(configService, fileInput.language),
+        ...getEditorTypographyOptions(configService, fileInput.language),
       })
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
