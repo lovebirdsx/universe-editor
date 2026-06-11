@@ -38,7 +38,7 @@ test.describe('@p1 markdown language server', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     const uri = await page.evaluate(() => window.__E2E__!.getActiveEditorUri())

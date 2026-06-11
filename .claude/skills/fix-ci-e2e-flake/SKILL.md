@@ -152,6 +152,16 @@ pnpm e2e
 - **教训**：**凡是"fire 后页面会导航/reload，再 `page.evaluate` 探针"的 PO 步骤，evaluate 都要对 `Execution context was destroyed` 鲁棒（重等探针就绪后重试）**，因为慢速 CI 上导航 commit 时机会与评估重合。若同文件已有兄弟方法（如 `waitForRestored`）针对此做过加固，**新/遗留的同类步骤必须对齐复用**——别留裸 evaluate（速记 5）。这类失败的标志：报错是 Playwright 的 "context destroyed/navigation" 而非被测断言本身。
 
 
+### 案例 7：gotoSymbol「activeEditorLanguageId poll 5s 超时，received 恒空 ""」——根因是 spec 硬编码 `{ timeout: 5000 }` 盖掉了 config 的 CI expect 分档
+- **现象**：`smoke.gotoSymbol.spec.ts` `@p1`「opens one quick pick…jumps the cursor」在 Windows CI 偶发挂，第一步 `expect.poll(() => getContextKey('activeEditorLanguageId'), { timeout: 5000 }).toBe('markdown')` 超时，received 稳定为 `""`（context key 初值）。本地稳过。
+- **判定关键——received 稳定空（非波动）+ 这一步等的是「编辑器/Monaco 首帧就位」而非 LSP**：按速记 1，received 稳定 `""` 指向被测对象自身没就位；这步只是等打开 .md 后语言 id 被设上（Monaco 懒加载首帧），是案例 3「@p0 newUntitledFile 挂 Monaco 首帧 >5s」同型的冷启动首帧问题，不是符号/LSP。
+- **根因（spec 局部超时盖掉全局 CI 分档）**：`playwright.config.ts:11` 已**特意**把 CI 的 `expect.timeout` 分档为 `10_000`（注释明说为 Monaco lazy-load / LSP warmup 的 cold first-frame 留余量），但这些 spec 在这一步**硬编码了 `{ timeout: 5000 }`**，把 config 的 CI 值盖回 5s——而 5000 恰好等于本地默认，等于 CI 分档对这步**完全失效**。CI 上 2 核抢 4(降档后 2) worker，Monaco 首帧 >5s 时被甩开。这是 config 加 CI 分档**之前**留下的遗留局部超时（速记 5：同类断言里别处已享受全局分档，这步还钉死 5s = 遗留薄弱点）。同型散落在 4 个 spec：gotoSymbol(×3)、peekNavigation、markdownLsp、markdownPreview。
+- **修法（不削弱被测断言）**：删掉这 4 个 spec 里 `activeEditorLanguageId` poll 的显式 `{ timeout: 5000 }`，让它走 config 默认（CI 10s / 本地 5s）。断言 `.toBe('markdown')` 一字不改；本地仍 5s 抓真延迟，CI 自动享受 10s 冷启动余量。**刻意只改触发 flake 的这个谓词**——specs 里还有大量其它 `{ timeout: 5000 }`（editorTabDnD/explorer/history 等稳过用例），无差别批量改属过度修改，违反最小鲁棒化原则，留作潜在隐患不动。本地 gotoSymbol 3 case 全绿，e2e tsconfig typecheck + eslint 干净。
+- **锚点**：
+  - 修复点：`apps/editor/e2e/specs/smoke.{gotoSymbol,peekNavigation,markdownLsp,markdownPreview}.spec.ts`（删 `activeEditorLanguageId` poll 的 `{ timeout: 5000 }`）
+  - 被盖掉的全局分档：`apps/editor/e2e/playwright.config.ts:11`（`expect.timeout = CI ? 10_000 : 5_000`）
+- **教训**：config 已按 `process.env['CI']` 给 `expect.timeout` 做了冷启动分档时，**spec 里任何硬编码 `{ timeout: 5000 }` 都会把 CI 分档盖回本地值**（5000===本地默认，等于分档失效）。对「等编辑器/Monaco 首帧就位」这类冷启动敏感步骤，**别在 poll 里写死超时，让它继承 config 默认**，CI 才能吃到加宽窗口。与案例 3 的 `test.slow()` 互补：`test.slow()` 抬 test 级天花板，去掉局部 `timeout` 让 expect 级吃到 CI 分档——二者都是「让真正的天花板匹配冷启动预算」。
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -167,6 +177,7 @@ pnpm e2e
 12. **本地稳过 + CI 每次必挂 + received 空 + retry 救不回 = 伪 flake**（CI 漏装运行时产物,尤其**非 pnpm workspace 的 vendor**——`pnpm install`/`pnpm build` 不碰它）。别去 spec 层加超时,provider 没注册等多久都是空。鉴别捷径:**同类功能"A 能跑 B 不能"的不对称**(md LSP ✓ / ts LSP ✗),差异处就是缺的那环。修 CI 时:`vendor-install.mjs` 可能连带 submodule(claude-agent-acp),e2e job 没 `submodules: recursive`,只精准 `npm --prefix vendor/<x> ci` 装用得到的那个,别引入没 checkout 的 submodule。
 13. **`expect.poll` 里"盲按按键"(`keyboard.press`)是危险范式**:按键落到**当前 DOM 焦点**,被测 UI 未异步就位时会打进别的控件(如编辑器 `TEXTAREA`),**污染被测对象自身**(改文档→破坏 fixture→连锁让被测功能无法触发)。慢速 CI 把"按键落点"竞态放大,且**加宽 poll 窗口无效**(多按几次只会污染更多,received 稳定卡在初值)。正解:把按键**门控在"目标已聚焦/就位"前置条件**上(探针读状态,如 `isReferencePeekFocused()`),只在就位时才按。诊断捷径:fire 后盲按几次并打印 `document.activeElement` + 光标位置,看光标是否随 Enter 递增=实锤自污染(本地即可复现机制)。
 14. **报错是 `page.evaluate: Execution context was destroyed, most likely because of a navigation` = harness 时序 flake,不是被测断言失败**。凡"fire 后页面会 reload/导航,再 `page.evaluate(__E2E__...)`"的 PO 步骤,evaluate 都要对此鲁棒(捕获该错→重等 `domcontentloaded`+`__E2E__`→重试),因为慢速 CI 上导航 commit 会与评估重合。若同文件已有兄弟方法(如 `waitForRestored`)做过该加固,新/遗留同类步骤**必须对齐复用**,别留裸 evaluate(并入速记 5)。reload 类 PO 见 `WorkbenchPO._evaluateWhenRestored`。
+15. **config 已按 `process.env['CI']` 分档 `expect.timeout` 时,spec 里硬编码 `{ timeout: 5000 }` 会把 CI 分档盖回本地值**(5000===本地默认=分档失效)。received 稳定空 `""` + 这步等的是"编辑器/Monaco 首帧就位"(冷启动敏感) → 查这步是否钉死了局部 `timeout`。修法:删掉该 poll 的显式 `{ timeout: 5000 }` 让它继承 config 默认,断言不动,CI 自动吃到加宽窗口。与速记 10 的 `test.slow()` 互补(一个抬 test 级天花板,一个让 expect 级吃 CI 分档)。**只改触发 flake 的那个谓词,别无差别批量改稳过用例的 5000**(过度修改)。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

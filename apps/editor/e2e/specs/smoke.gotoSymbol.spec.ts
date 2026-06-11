@@ -40,7 +40,7 @@ test.describe('@p1 go to symbol', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     const uri = (await page.evaluate(() => window.__E2E__!.getActiveEditorUri())) as string
@@ -83,7 +83,7 @@ test.describe('@p1 go to symbol', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     // Warm the server so workspace search returns results.
@@ -116,7 +116,7 @@ test.describe('@p1 go to symbol', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     // Warm the server so the empty (match-all) query has symbols to return.

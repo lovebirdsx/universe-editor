@@ -28,7 +28,7 @@ test.describe('@p1 markdown preview', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     await workbench.runCommand('workbench.action.markdown.openPreview')
@@ -50,7 +50,7 @@ test.describe('@p1 markdown preview', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     await workbench.runCommand('workbench.action.markdown.openPreview')
@@ -62,7 +62,7 @@ test.describe('@p1 markdown preview', () => {
     await workbench.runCommand('workbench.action.markdown.showSource')
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     // Preview tab must be gone — only the source remains
@@ -78,7 +78,7 @@ test.describe('@p1 markdown preview', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
 
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
       .toBe('markdown')
 
     await workbench.runCommand('workbench.action.markdown.openPreviewToSide')
