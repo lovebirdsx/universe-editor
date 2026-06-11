@@ -130,6 +130,10 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getContextKey: (key) => services.contextKeyService.get(key),
     runCommand: (id, ...args) => services.commandService.executeCommand(id, ...args),
     getActiveEditorUri: () => services.editorService.activeEditorId.get(),
+    isReferencePeekFocused: () => {
+      const active = document.activeElement
+      return active instanceof HTMLElement && active.closest('.ref-tree') != null
+    },
     getStatusBarEntries: (): E2EStatusBarEntry[] =>
       services.statusBarService.entries.get().map(({ id, entry }) => ({
         id: String(id),

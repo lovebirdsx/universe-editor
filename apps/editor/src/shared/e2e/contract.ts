@@ -74,6 +74,14 @@ export interface E2EProbe {
   runCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T | undefined>
   /** Active editor URI string, or undefined if none. */
   getActiveEditorUri(): string | undefined
+  /**
+   * True when the references peek (Peek Definition / References) tree currently
+   * holds DOM focus — the precondition for Enter to follow a reference. Mirrors
+   * how PeekNavigationContribution detects the focused tree. Lets specs gate the
+   * Enter press on the peek being open + focused instead of blindly poll-pressing
+   * into the editor (which would corrupt the doc before the peek mounts).
+   */
+  isReferencePeekFocused(): boolean
   /** Snapshot of currently visible status bar entries. */
   getStatusBarEntries(): E2EStatusBarEntry[]
   /** Current auto-update state (status machine + versions). */

@@ -57,13 +57,19 @@ test.describe('@p1 peek keyboard navigation', () => {
     await page.evaluate(() => void window.__E2E__!.runCommand('editor.action.peekDefinition'))
 
     // The peek opens asynchronously and focuses its reference tree; pressing
-    // Enter there must follow to other.md. Poll-press to avoid racing the open.
+    // Enter there must follow to other.md. Gate the press on the tree actually
+    // holding focus — pressing Enter before the peek mounts lands in the editor
+    // textarea and inserts a newline at the cursor, splitting the link and
+    // wedging the (already in-flight) definition resolution so the peek never
+    // opens. On slow CI the peek mounts later, so the blind press was racing it.
     // CI cold start (LSP warmup + peek mount) can outlast 10s; widen the poll
     // window there — test.slow() already grants the headroom.
     await expect
       .poll(
         async () => {
-          await page.keyboard.press('Enter')
+          if (await page.evaluate(() => window.__E2E__!.isReferencePeekFocused())) {
+            await page.keyboard.press('Enter')
+          }
           return page.evaluate(() => window.__E2E__!.getActiveEditorUri())
         },
         {

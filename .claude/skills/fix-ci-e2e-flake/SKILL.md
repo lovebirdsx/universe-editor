@@ -127,6 +127,19 @@ pnpm e2e
   - peek 窗口分档：`apps/editor/e2e/specs/smoke.peekNavigation.spec.ts`
 - **教训**：本地稳过 + CI **每次必挂** + received **空** + retry **救不回**，这是"伪 flake"——根因往往是 CI 漏装某个运行时产物（尤其**非 pnpm workspace 的 vendor**：`pnpm install`/`pnpm build` 不会碰它）。别去 spec 层加超时（provider 没注册，等多久都是空）。鉴别捷径：**同类功能里"A 能跑 B 不能"的不对称**（md LSP ✓ / ts LSP ✗）——差异处就是缺的那环。修 CI 时注意 vendor-install 可能连带 submodule 依赖，按需只装用得到的那个 vendor，别引入 e2e job 没 checkout 的 submodule。
 
+### 案例 5：peekNavigation「20s 窗口仍超时，停在 a.md」——根因是 poll-press 盲按 Enter 污染被测对象自身（测试设计缺陷，非产品 bug）
+- **现象**：`smoke.peekNavigation.spec.ts` `@p1`「Enter follows the reference to the target file」在 Ubuntu CI 偶发挂，`expect.poll` 20s 超时，received 稳定为 `…/a.md`（期望含 `other.md`）。本地 Windows 稳过（每次 ~3.2s）。**注意这是案例 4「同轮 peekNavigation flake」那条的续集**——案例 4 当时只把 poll 窗口从 10s 抬到 20s，但**没根治**，现在 20s 仍挂，说明不是单纯时序。
+- **判定关键——窗口已加宽仍超时 + received 稳定（非波动）= 不是"等不够"，是被测对象进不去就位状态**：按速记 1，received 稳定 `a.md`（非波动）指向"被测对象自身没就位"，更像结构性问题而非背景噪音。按速记 13，先怀疑 spec 自己的 poll-press 范式有没有副作用。
+- **根因（测试自污染，产品无 bug）**：spec 用 `expect.poll` **盲按** `page.keyboard.press('Enter')` 来"避免 racing the open"。但 peek 是 `peekDefinition` fire 后**异步**打开的；按键落到**当前 DOM 焦点**：peek 没开时焦点在编辑器 `TEXTAREA.inputarea`。于是早期的 Enter **被打进编辑器**，在光标 (5,12)（链接 `[cross](other.md#gamma)` 内）插入换行（诊断实测：3 次 Enter 后光标从 (5,12) → (8,1)，live model 被改），**打断链接**；而 `peekDefinition` 的异步解析读到的是已损坏的 live model → 解析为空 → peek **永不打开** → 引用树永不聚焦 → Enter 永远在编辑器里空转 → 活动编辑器恒为 a.md。本地快、peek 在第一次 Enter 前就开好并聚焦（诊断：iter#0 即 `inRefTree=true`），故不复现；慢速 CI（xvfb + 2 核抢 4 worker）peek 开得慢，污染抢先。
+- **判定捷径（诊断脚本）**：写一次性 diag spec，fire peek 后**盲按几次 Enter**并打印 `document.activeElement` 类名 + `getActiveEditorCursor()`。看到"未聚焦 peek 时 activeElement=TEXTAREA + 光标随 Enter 递增行号" = 实锤自污染。本地即可复现机制（无需复现 CI flake 本身）。
+- **修法（不削弱被测断言）**：**把 Enter 按键门控在"引用树已聚焦"上**——只有 peek 树持有 DOM 焦点时才按 Enter，否则只轮询不按，杜绝编辑器污染。按套路 F「spec 通过探针调，不戳 DOM」加探针 `isReferencePeekFocused()`（`document.activeElement?.closest('.ref-tree')`，复用产品 `PeekNavigationContribution` 同款 `.ref-tree` 检测）。最终断言仍是 `getActiveEditorUri()` toContain `other.md`，被测行为（聚焦的 peek 里 Enter→跳转）覆盖强度不变。本地 `--repeat-each=5` 全绿，typecheck+lint 干净。
+- **锚点**：
+  - spec：`apps/editor/e2e/specs/smoke.peekNavigation.spec.ts`（poll 谓词内先 `isReferencePeekFocused()` 再 `press('Enter')`）
+  - 新探针：`apps/editor/src/shared/e2e/contract.ts`（`isReferencePeekFocused`）+ `apps/editor/src/renderer/e2e/probe.ts`（实现）
+  - 产品检测同款选择器：`apps/editor/src/renderer/contributions/PeekNavigationContribution.ts`（`active.closest('.ref-tree')`）
+- **教训**：**`expect.poll` 里"盲按按键"是危险范式**——按键落到当前焦点，被测 UI 未就位时会打进别的控件（这里是编辑器），**污染被测对象自身的状态**（改文档→破坏 fixture→连锁让被测功能根本无法触发）。慢速 CI 把"按键落点"的竞态放大。正解是**把按键门控在"目标已就位/聚焦"的前置条件上**（探针读状态），而不是盲按 + 加宽窗口。加宽窗口对自污染型失败无效（多按几次只会污染更多）。
+
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -140,6 +153,7 @@ pnpm e2e
 10. spec 内 poll/service retry 预算（20s、180s）远大于全局 test `timeout`（30s）时,**test 超时才是真天花板**,宽 poll 是摆设。依赖子进程冷启动的 spec 要 `test.slow()` 把 test 超时抬到匹配其 poll 预算。CI 资源紧（2 核跑 4 worker）会放大冷启动,可 `workers/expect.timeout` 按 `process.env['CI']` 分档。
 11. 本地手跑单 LSP spec 前确保产物链齐：`pnpm ext:build`（生成 `extensions/*/dist`）+ `extension-host/dist` + `vendor/typescript-language-server`。少了 → 符号全空 `[]` 或探针方法缺失,**是产物问题不是回归**。正规跑法是根 `pnpm e2e`。
 12. **本地稳过 + CI 每次必挂 + received 空 + retry 救不回 = 伪 flake**（CI 漏装运行时产物,尤其**非 pnpm workspace 的 vendor**——`pnpm install`/`pnpm build` 不碰它）。别去 spec 层加超时,provider 没注册等多久都是空。鉴别捷径:**同类功能"A 能跑 B 不能"的不对称**(md LSP ✓ / ts LSP ✗),差异处就是缺的那环。修 CI 时:`vendor-install.mjs` 可能连带 submodule(claude-agent-acp),e2e job 没 `submodules: recursive`,只精准 `npm --prefix vendor/<x> ci` 装用得到的那个,别引入没 checkout 的 submodule。
+13. **`expect.poll` 里"盲按按键"(`keyboard.press`)是危险范式**:按键落到**当前 DOM 焦点**,被测 UI 未异步就位时会打进别的控件(如编辑器 `TEXTAREA`),**污染被测对象自身**(改文档→破坏 fixture→连锁让被测功能无法触发)。慢速 CI 把"按键落点"竞态放大,且**加宽 poll 窗口无效**(多按几次只会污染更多,received 稳定卡在初值)。正解:把按键**门控在"目标已聚焦/就位"前置条件**上(探针读状态,如 `isReferencePeekFocused()`),只在就位时才按。诊断捷径:fire 后盲按几次并打印 `document.activeElement` + 光标位置,看光标是否随 Enter 递增=实锤自污染(本地即可复现机制)。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
