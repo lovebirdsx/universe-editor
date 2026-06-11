@@ -151,11 +151,38 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
 
     const groupId = group?.id
     const resourceUri = diffInput.resource.toString()
+    const fileUri = diffInput.originalUri.toString()
 
     const flushViewState = () => {
       if (groupId === undefined) return
       const state = diffEditorRef.current?.saveViewState()
       if (state) EditorViewStateCache.save(groupId, resourceUri, state)
+      // Share the modified-side cursor under the real file URI so a switch to the
+      // plain file editor for the same file lands on it. The original side is old
+      // content, so it never drives the shared cursor.
+      const pos = diffEditorRef.current?.getModifiedEditor().getPosition()
+      if (pos) {
+        EditorViewStateCache.saveCursor(groupId, fileUri, {
+          lineNumber: pos.lineNumber,
+          column: pos.column,
+        })
+      }
+    }
+
+    // Apply a cursor written by another editor (the plain file editor) for the
+    // same file to the modified side. Returns whether it moved the cursor.
+    const applySharedCursor = (): boolean => {
+      if (groupId === undefined) return false
+      const sharedCursor = EditorViewStateCache.loadCursor(groupId, fileUri)
+      if (!sharedCursor) return false
+      const modified = ed.getModifiedEditor()
+      const cur = modified.getPosition()
+      if (cur && cur.lineNumber === sharedCursor.lineNumber && cur.column === sharedCursor.column) {
+        return false
+      }
+      modified.setPosition(sharedCursor)
+      modified.revealLineInCenter(sharedCursor.lineNumber)
+      return true
     }
 
     // Snapshot the persisted view state up front. The cursor/scroll listeners
@@ -182,7 +209,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       updateDiffSub?.dispose()
       updateDiffSub = undefined
       if (savedViewState) ed.restoreViewState(savedViewState)
-      else ed.revealFirstDiff()
+      // A more recent cursor from the plain file editor wins over the diff's own
+      // (stale) viewState and over the default first-change reveal.
+      const applied = applySharedCursor()
+      if (!savedViewState && !applied) ed.revealFirstDiff()
     })
 
     const original = ed.getOriginalEditor()

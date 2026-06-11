@@ -339,8 +339,16 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // Flush current viewState into cache — called on cursor/scroll change and on cleanup.
     const flushViewState = () => {
       if (groupId === undefined) return
-      const state = editorRef.current?.saveViewState()
+      const ed = editorRef.current
+      const state = ed?.saveViewState()
       if (state) EditorViewStateCache.save(groupId, resourceUri, state)
+      const pos = ed?.getPosition()
+      if (pos) {
+        EditorViewStateCache.saveCursor(groupId, resourceUri, {
+          lineNumber: pos.lineNumber,
+          column: pos.column,
+        })
+      }
     }
 
     void (async () => {
@@ -360,9 +368,25 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
       // Restore previously saved viewState (cursor, selection, scroll).
       if (groupId !== undefined && editorRef.current) {
+        const ed = editorRef.current
         const saved = EditorViewStateCache.load(groupId, resourceUri)
         if (saved) {
-          editorRef.current.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
+          ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
+        }
+        // A more recent cursor written by the diff editor for the same file wins
+        // over our own (possibly stale) viewState, so switching diff -> file
+        // lands on the position last seen in the diff's modified side.
+        const sharedCursor = EditorViewStateCache.loadCursor(groupId, resourceUri)
+        if (sharedCursor) {
+          const cur = ed.getPosition()
+          if (
+            !cur ||
+            cur.lineNumber !== sharedCursor.lineNumber ||
+            cur.column !== sharedCursor.column
+          ) {
+            ed.setPosition(sharedCursor)
+            ed.revealPositionInCenter(sharedCursor)
+          }
         }
       }
 
