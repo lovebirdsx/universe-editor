@@ -58,6 +58,7 @@ export function LogOutputView({
         {
           model,
           readOnly: true,
+          editContext: true,
           theme: latestThemeRef.current === 'vs' ? 'output-light' : 'output-dark',
           automaticLayout: true,
           scrollBeyondLastLine: false,

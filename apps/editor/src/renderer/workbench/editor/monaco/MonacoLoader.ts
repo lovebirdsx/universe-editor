@@ -38,7 +38,7 @@ let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
 let _logger: ILogger = new NullLogger()
 
-type JsonSchemas = NonNullable<monaco.languages.json.DiagnosticsOptions['schemas']>
+type JsonSchemas = NonNullable<monaco.json.DiagnosticsOptions['schemas']>
 
 let _extraSchemas: JsonSchemas = []
 
@@ -49,7 +49,7 @@ const BULK_EDIT_SERVICE_ID = 'IWorkspaceEditService'
 const TEXT_MODEL_SERVICE_ID = 'textModelService'
 let _overrideServices: monaco.editor.IEditorOverrideServices = {}
 
-const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'schemas'> = {
+const BASE_JSON_DIAGNOSTICS: Omit<monaco.json.DiagnosticsOptions, 'schemas'> = {
   validate: true,
   allowComments: true,
   trailingCommas: 'ignore',
@@ -62,7 +62,7 @@ const BASE_JSON_DIAGNOSTICS: Omit<monaco.languages.json.DiagnosticsOptions, 'sch
 
 function pushJsonDiagnostics(): void {
   if (!_monaco) return
-  _monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+  _monaco.json.jsonDefaults.setDiagnosticsOptions({
     ...BASE_JSON_DIAGNOSTICS,
     schemas: _extraSchemas,
   })
@@ -82,7 +82,7 @@ function disableLanguageDiagnostics(): void {
   // field; the jsonMode adapter then mis-detects them as flat SymbolInformation
   // and dereferences a missing `.location`, throwing on open. We don't surface
   // a JSON outline anyway, so disabling it sidesteps the crash.
-  const { jsonDefaults } = _monaco.languages.json
+  const { jsonDefaults } = _monaco.json
   jsonDefaults.setModeConfiguration({
     ...jsonDefaults.modeConfiguration,
     diagnostics: true,
@@ -90,13 +90,13 @@ function disableLanguageDiagnostics(): void {
   })
   pushJsonDiagnostics()
 
-  const tsDiagnosticsOptions: monaco.languages.typescript.DiagnosticsOptions = {
+  const tsDiagnosticsOptions: monaco.typescript.DiagnosticsOptions = {
     noSemanticValidation: true,
     noSyntaxValidation: true,
     noSuggestionDiagnostics: true,
     onlyVisible: false,
   }
-  const { javascriptDefaults, typescriptDefaults } = _monaco.languages.typescript
+  const { javascriptDefaults, typescriptDefaults } = _monaco.typescript
   for (const defaults of [typescriptDefaults, javascriptDefaults]) {
     defaults.setDiagnosticsOptions(tsDiagnosticsOptions)
     // The TS/JS language features are served by the typescript-language-server
@@ -118,13 +118,13 @@ function disableLanguageDiagnostics(): void {
     })
   }
 
-  const { cssDefaults, lessDefaults, scssDefaults } = _monaco.languages.css
+  const { cssDefaults, lessDefaults, scssDefaults } = _monaco.css
   for (const defaults of [cssDefaults, lessDefaults, scssDefaults]) {
     defaults.setOptions({ ...defaults.options, validate: false })
     defaults.setModeConfiguration({ ...defaults.modeConfiguration, diagnostics: false })
   }
 
-  const { handlebarDefaults, htmlDefaults, razorDefaults } = _monaco.languages.html
+  const { handlebarDefaults, htmlDefaults, razorDefaults } = _monaco.html
   for (const defaults of [htmlDefaults, handlebarDefaults, razorDefaults]) {
     defaults.setModeConfiguration({ ...defaults.modeConfiguration, diagnostics: false })
   }

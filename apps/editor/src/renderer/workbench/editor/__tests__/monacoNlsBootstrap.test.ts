@@ -1,9 +1,12 @@
 /*---------------------------------------------------------------------------------------------
- *  Verify the Monaco NLS bootstrap end-to-end:
- *   1. `applyMonacoNls('zh-CN')` populates `globalThis.__MONACO_NLS__`
- *   2. The Vite-plugin patch applied to monaco's `nls.js` honours that table for
- *      both `localize('key', fallback)` and `localize2(...)` calls, which is the
- *      whole point — the unpatched ESM build ignores them entirely.
+ *  Verify the Monaco NLS bootstrap end-to-end for the ≥0.55 index-based ESM build:
+ *   1. `applyMonacoNls('zh-CN')` populates `globalThis.__MONACO_NLS__` with an
+ *      English→中文 table.
+ *   2. The Vite-plugin patch applied to monaco's `nls.js` makes index-based
+ *      `localize(index, fallback)` / `localize2(…)` substitute that table's
+ *      translation for the inline English fallback — the whole point, since the
+ *      unpatched bundle just returns the English fallback when no
+ *      `_VSCODE_NLS_MESSAGES` entry exists.
  *--------------------------------------------------------------------------------------------*/
 
 import fs from 'node:fs'
@@ -20,32 +23,30 @@ function clearGlobals(): void {
 }
 
 interface PatchedNls {
-  localize: (data: string | { key: string }, message: string, ...args: unknown[]) => string
+  localize: (index: number, message: string, ...args: unknown[]) => string
   localize2: (
-    data: string | { key: string },
+    index: number,
     originalMessage: string,
     ...args: unknown[]
   ) => { value: string; original: string }
 }
 
-function loadPatchedNls(): PatchedNls {
+// Loads the real monaco nls.js, applies our patch, and evaluates it with a stub
+// `getNLSMessages` so the test controls whether an index-based message exists.
+function loadPatchedNls(nlsMessages: (string | undefined)[] | undefined = undefined): PatchedNls {
   const nlsPath = path.resolve(__dirname, '../../../../../node_modules/monaco-editor/esm/vs/nls.js')
   const original = fs.readFileSync(nlsPath, 'utf8')
   const patched = patchNlsSource(original)
-  // Strip ESM syntax so the source can run inside `new Function`. Stub the two
-  // helpers monaco imports from `./nls.messages.js` — neither matters here:
-  // `getNLSLanguage()` only feeds the pseudo-locale check at module load, and
-  // `getNLSMessages()` is only consulted when a *numeric* index is passed (the
-  // AMD path, which our patch short-circuits in favour of the global table).
   const stripped = patched
     .replace(/^import [^\n]*\n/gm, '')
     .replace(/^export \{[^}]*\}[^\n]*\n/gm, '')
     .replace(/export function/g, 'function')
   const factory = new Function(
     'globalThis',
-    `const getNLSLanguage = () => 'en'; const getNLSMessages = () => undefined;\n${stripped}\nreturn { localize, localize2 };`,
-  ) as (g: typeof globalThis) => PatchedNls
-  return factory(globalThis)
+    'nlsMessages',
+    `const getNLSLanguage = () => 'en'; const getNLSMessages = () => nlsMessages;\n${stripped}\nreturn { localize, localize2 };`,
+  ) as (g: typeof globalThis, m: (string | undefined)[] | undefined) => PatchedNls
+  return factory(globalThis, nlsMessages)
 }
 
 describe('monacoNlsBootstrap — globalThis side effects', () => {
@@ -55,14 +56,14 @@ describe('monacoNlsBootstrap — globalThis side effects', () => {
   })
   afterEach(clearGlobals)
 
-  it('populates globalThis.__MONACO_NLS__ with the zh-CN dictionary', () => {
+  it('populates globalThis.__MONACO_NLS__ with the English→中文 table', () => {
     applyMonacoNls('zh-CN')
     const table = (globalThis as NlsGlobals).__MONACO_NLS__
     expect(table).toBeDefined()
     expect(Object.keys(table ?? {}).length).toBeGreaterThan(1000)
-    expect(table?.['caseDescription']).toBe('区分大小写')
-    expect(table?.['wordsDescription']).toBe('全字匹配')
-    expect(table?.['regexDescription']).toBe('使用正则表达式')
+    expect(table?.['Match Case']).toBe('区分大小写')
+    expect(table?.['Match Whole Word']).toBe('全字匹配')
+    expect(table?.['Use Regular Expression']).toBe('使用正则表达式')
   })
 
   it('leaves the global untouched when locale=en-US', () => {
@@ -77,51 +78,51 @@ describe('monacoNlsBootstrap — globalThis side effects', () => {
   })
 })
 
-describe('monaco nls patch — string-key localize now consults the table', () => {
-  let nls: PatchedNls
-
+describe('monaco nls patch — index-based localize consults the English→中文 table', () => {
   beforeEach(() => {
     clearGlobals()
     resetMonacoNlsForTests()
-    nls = loadPatchedNls()
   })
   afterEach(clearGlobals)
 
-  it('string-key localize returns the translation when __MONACO_NLS__ has it', () => {
+  it('translates the English fallback when __MONACO_NLS__ has it', () => {
+    const nls = loadPatchedNls()
     applyMonacoNls('zh-CN')
-    expect(nls.localize('caseDescription', 'Match Case')).toBe('区分大小写')
-    expect(nls.localize('wordsDescription', 'Match Whole Word')).toBe('全字匹配')
-    expect(nls.localize('regexDescription', 'Use Regular Expression')).toBe('使用正则表达式')
+    expect(nls.localize(0, 'Match Case')).toBe('区分大小写')
+    expect(nls.localize(1, 'Match Whole Word')).toBe('全字匹配')
+    expect(nls.localize(2, 'Use Regular Expression')).toBe('使用正则表达式')
   })
 
-  it('object-key form { key, comment } also consults the table', () => {
+  it('an installed _VSCODE_NLS_MESSAGES entry still wins over the fallback table', () => {
+    const nls = loadPatchedNls(['原生索引消息'])
     applyMonacoNls('zh-CN')
-    expect(
-      nls.localize(
-        { key: 'caseDescription', comment: ['Match Case'] } as { key: string },
-        'Match Case',
-      ),
-    ).toBe('区分大小写')
+    expect(nls.localize(0, 'Match Case')).toBe('原生索引消息')
   })
 
-  it('falls back to the inline English message when the key is missing', () => {
+  it('falls back to the inline English message when the fallback is not in the table', () => {
+    const nls = loadPatchedNls()
     applyMonacoNls('zh-CN')
-    expect(nls.localize('nonexistent_key_xyzzy', 'Original Text')).toBe('Original Text')
+    expect(nls.localize(0, 'Original Text Not In Any Dictionary')).toBe(
+      'Original Text Not In Any Dictionary',
+    )
   })
 
   it('falls back to the inline English message when no table is installed', () => {
-    expect(nls.localize('caseDescription', 'Match Case')).toBe('Match Case')
+    const nls = loadPatchedNls()
+    expect(nls.localize(0, 'Match Case')).toBe('Match Case')
   })
 
   it('localize2 returns { value: <translated>, original: <english> }', () => {
+    const nls = loadPatchedNls()
     applyMonacoNls('zh-CN')
-    const r = nls.localize2('caseDescription', 'Match Case')
+    const r = nls.localize2(0, 'Match Case')
     expect(r.value).toBe('区分大小写')
     expect(r.original).toBe('Match Case')
   })
 
   it('format args interpolate correctly after translation', () => {
-    ;(globalThis as NlsGlobals).__MONACO_NLS__ = { greet: '你好，{0}！' }
-    expect(nls.localize('greet', 'Hello, {0}!', 'World')).toBe('你好，World！')
+    const nls = loadPatchedNls()
+    ;(globalThis as NlsGlobals).__MONACO_NLS__ = { 'Hello, {0}!': '你好，{0}！' }
+    expect(nls.localize(0, 'Hello, {0}!', 'World')).toBe('你好，World！')
   })
 })

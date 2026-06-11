@@ -161,6 +161,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       {
         theme: getEditorTheme(configService),
         automaticLayout: true,
+        editContext: true,
         ...getEditorTypographyOptions(configService, fileInput.language),
         wordWrap: getEditorWordWrap(configService),
         minimap: { enabled: minimapEnabled },

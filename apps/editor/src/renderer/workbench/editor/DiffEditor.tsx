@@ -84,6 +84,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     const ed = monacoNs.editor.createDiffEditor(containerRef.current, {
       theme: getEditorTheme(configService),
       automaticLayout: true,
+      editContext: true,
       ...getEditorFontOptions(configService, diffLanguageRef.current),
       wordWrap: getEditorWordWrap(configService),
       readOnly: true,

@@ -1,17 +1,29 @@
 /*---------------------------------------------------------------------------------------------
- *  Build flat NLS dictionaries for the monaco-editor ESM bundle.
+ *  Build the English→Chinese NLS dictionary consumed by the monaco-editor ESM bundle.
  *
- *  Background: monaco-editor 0.52 ESM keeps string-keyed `localize('caseDescription',
- *  'Match Case')` calls, so the upstream `_VSCODE_NLS_MESSAGES` index-array shim
- *  (which only services the AMD build path) has no effect. We instead patch
- *  monaco's `nls.js` at build time to look up `globalThis.__MONACO_NLS__[key]`,
- *  and that table is produced here.
+ *  Background: monaco-editor ≥0.55 ships a *prebuilt* ESM bundle whose `localize`
+ *  calls are index-based — `localize(786, "Developer: Inspect Tokens")` — and look
+ *  the message up in `globalThis._VSCODE_NLS_MESSAGES[index]`, falling back to the
+ *  inline English string. The old string-key path (`localize('inspectTokens', …)`)
+ *  is gone, so a `key → 中文` table can no longer be matched against monaco at all.
  *
- *  Source data: microsoft/vscode-loc (clone or sparse-checkout at the path below).
- *  Strategy: scan every `localize|localize2` call in monaco's ESM bundle, collect
- *  the keys monaco actually references, then look each up in vscode-loc.
- *  Collisions pick the most popular translation. ~98% of monaco's keys are
- *  globally unique in vscode-loc, so this is safe in practice.
+ *  Strategy (zero external repos): the inline fallback in every monaco call IS the
+ *  English source text. We bridge it to Chinese via the VS Code source tree, whose
+ *  `localize('key', "English")` calls still carry both the key and the English text:
+ *
+ *    monaco index  →(inline fallback)  English text
+ *    English text  ←(VS Code source)   key            (key → English)
+ *    key           →(zh-cn.json)        中文           (key → 中文, existing snapshot)
+ *    ⇒ English text → 中文   (this script's output)
+ *
+ *  The patched `nls.js` (see monacoNlsPatch.ts) then looks the English fallback up
+ *  in `globalThis.__MONACO_NLS__` before returning it untranslated.
+ *
+ *  Inputs:
+ *    - src/renderer/vendor/monaco-nls/zh-cn.json   (key → 中文, kept as the source dict)
+ *    - VS Code source tree (key → English), located via VSCODE_SRC_ROOT or defaults
+ *  Output:
+ *    - src/renderer/vendor/monaco-nls/zh-cn.messages.json   (English → 中文, runtime)
  *--------------------------------------------------------------------------------------------*/
 
 import fs from 'node:fs'
@@ -21,91 +33,107 @@ import { fileURLToPath } from 'node:url'
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const repoRoot = path.resolve(__dirname, '..')
 const monacoEsm = path.join(repoRoot, 'node_modules/monaco-editor/esm/vs')
-const outDir = path.join(repoRoot, 'src/renderer/vendor/monaco-nls')
+const nlsDir = path.join(repoRoot, 'src/renderer/vendor/monaco-nls')
+const keysDictPath = path.join(nlsDir, 'zh-cn.json')
+const outPath = path.join(nlsDir, 'zh-cn.messages.json')
 
-const LOCALES = [{ source: 'zh-hans', out: 'zh-cn' }]
-
-function findVscodeLocRoot() {
+function findVscodeSrcRoot() {
   const candidates = [
-    process.env.VSCODE_LOC_ROOT,
-    path.resolve(repoRoot, '../../tools/vscode-loc'),
-    'D:/tmp_vscode_loc',
+    process.env.VSCODE_SRC_ROOT,
+    'D:/git_project/vscode',
+    path.resolve(repoRoot, '../../../vscode'),
+    path.resolve(repoRoot, '../../vscode'),
   ].filter(Boolean)
   for (const c of candidates) {
-    if (
-      fs.existsSync(path.join(c, 'i18n/vscode-language-pack-zh-hans/translations/main.i18n.json'))
-    ) {
-      return c
-    }
+    if (fs.existsSync(path.join(c, 'src/vs/nls.ts'))) return c
   }
   throw new Error(
-    'vscode-loc not found. Clone https://github.com/microsoft/vscode-loc and set VSCODE_LOC_ROOT to its directory.',
+    'VS Code source tree not found. Clone microsoft/vscode and set VSCODE_SRC_ROOT to its directory.',
   )
 }
 
-function collectUsedKeys() {
-  const used = new Set()
-  const re1 = /\blocalize2?\(\s*['"`]([\w][\w.\-]*)['"`]/g
-  const re2 = /\blocalize2?\(\s*\{\s*key\s*:\s*['"`]([\w][\w.\-]*)['"`]/g
-  const walk = (dir) => {
-    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
-      const p = path.join(dir, ent.name)
-      if (ent.isDirectory()) walk(p)
-      else if (ent.name.endsWith('.js')) {
-        const src = fs.readFileSync(p, 'utf8')
-        let m
-        while ((m = re1.exec(src))) used.add(m[1])
-        while ((m = re2.exec(src))) used.add(m[1])
+function walk(dir, ext, cb) {
+  for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, ent.name)
+    if (ent.isDirectory()) walk(p, ext, cb)
+    else if (ent.name.endsWith(ext)) cb(p)
+  }
+}
+
+// key → English, scanned from the VS Code source tree's string-keyed localize calls.
+function collectKeyToEnglish(vsRoot) {
+  const key2en = new Map()
+  const re = /\blocalize2?\(\s*['"]([\w][\w.\/-]*)['"]\s*,\s*"((?:[^"\\]|\\.)*)"/g
+  walk(path.join(vsRoot, 'src/vs'), '.ts', (p) => {
+    const src = fs.readFileSync(p, 'utf8')
+    let m
+    while ((m = re.exec(src))) {
+      try {
+        key2en.set(m[1], JSON.parse('"' + m[2] + '"'))
+      } catch {
+        // Skip strings whose escapes JSON.parse rejects (rare template edge cases).
       }
     }
-  }
-  walk(monacoEsm)
-  return used
+  })
+  return key2en
 }
 
-function buildDict(localePackName, usedKeys, vscodeLocRoot) {
-  const file = path.join(
-    vscodeLocRoot,
-    `i18n/vscode-language-pack-${localePackName}/translations/main.i18n.json`,
-  )
-  const data = JSON.parse(fs.readFileSync(file, 'utf8'))
-  const tally = new Map()
-  for (const mod in data.contents) {
-    for (const k in data.contents[mod]) {
-      if (!usedKeys.has(k)) continue
-      if (!tally.has(k)) tally.set(k, new Map())
-      const t = data.contents[mod][k]
-      tally.get(k).set(t, (tally.get(k).get(t) || 0) + 1)
+// The English fallbacks monaco actually references, for a coverage report.
+function collectMonacoEnglish() {
+  const en = new Set()
+  const re = /\blocalize2?\(\s*\d+\s*,\s*"((?:[^"\\]|\\.)*)"/g
+  walk(monacoEsm, '.js', (p) => {
+    const src = fs.readFileSync(p, 'utf8')
+    let m
+    while ((m = re.exec(src))) {
+      try {
+        en.add(JSON.parse('"' + m[1] + '"'))
+      } catch {
+        // ignore
+      }
     }
-  }
-  const out = {}
-  let missing = 0
-  for (const k of usedKeys) {
-    const t = tally.get(k)
-    if (!t) {
-      missing++
-      continue
-    }
-    const [winner] = [...t.entries()].sort((a, b) => b[1] - a[1])[0]
-    out[k] = winner
-  }
-  return { dict: out, missing }
+  })
+  return en
 }
 
 function main() {
-  const vscodeLocRoot = findVscodeLocRoot()
-  const usedKeys = collectUsedKeys()
-  fs.mkdirSync(outDir, { recursive: true })
-  console.log(`monaco ESM references ${usedKeys.size} distinct NLS keys`)
-  for (const { source, out } of LOCALES) {
-    const { dict, missing } = buildDict(source, usedKeys, vscodeLocRoot)
-    const outPath = path.join(outDir, `${out}.json`)
-    fs.writeFileSync(outPath, JSON.stringify(dict))
-    const size = fs.statSync(outPath).size
-    console.log(
-      `  ${out}: ${Object.keys(dict).length} entries (${missing} missing) → ${outPath} (${size} bytes)`,
-    )
+  const vsRoot = findVscodeSrcRoot()
+  const keysDict = JSON.parse(fs.readFileSync(keysDictPath, 'utf8'))
+  const key2en = collectKeyToEnglish(vsRoot)
+
+  const en2zh = {}
+  let bridged = 0
+  let noEnglish = 0
+  for (const key of Object.keys(keysDict)) {
+    const english = key2en.get(key)
+    if (typeof english !== 'string') {
+      noEnglish++
+      continue
+    }
+    // Last write wins on the rare English-text collision; conflicts are few.
+    en2zh[english] = keysDict[key]
+    bridged++
   }
+
+  fs.mkdirSync(nlsDir, { recursive: true })
+  fs.writeFileSync(outPath, JSON.stringify(en2zh))
+  const size = fs.statSync(outPath).size
+
+  // Coverage report against the English strings monaco really uses.
+  const monacoEn = collectMonacoEnglish()
+  let hit = 0
+  for (const e of monacoEn) if (e in en2zh) hit++
+
+  console.log(`VS Code source: ${key2en.size} key→English entries (from ${vsRoot})`)
+  console.log(`zh-cn.json: ${Object.keys(keysDict).length} key→中文 entries`)
+  console.log(`Bridged: ${bridged} English→中文 (${noEnglish} keys had no English match)`)
+  console.log(
+    `monaco 0.55 references ${monacoEn.size} English strings; covered ${hit} = ${(
+      (hit / monacoEn.size) *
+      100
+    ).toFixed(1)}%`,
+  )
+  console.log(`→ ${outPath} (${size} bytes)`)
 }
 
 main()

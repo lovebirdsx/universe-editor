@@ -1,17 +1,18 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  monacoNlsBootstrap — install a translation dictionary onto
+ *  monacoNlsBootstrap — install an English→中文 translation table onto
  *  `globalThis.__MONACO_NLS__` before monaco-editor is imported. The companion
- *  Vite plugin (`build/plugins/monacoNlsPlugin.ts`) patches monaco's `nls.js`
- *  so that string-keyed `localize(key, fallback, …)` and `localize2(…)` calls
- *  consult this table before falling back to the inline English message.
+ *  Vite plugin (`build/plugins/monacoNlsPlugin.ts`) patches monaco's `nls.js` so
+ *  that index-based `localize(index, fallback, …)` / `localize2(…)` calls look the
+ *  inline English `fallback` up in this table before returning it untranslated.
  *
- *  Why not `_VSCODE_NLS_MESSAGES`? That global is an *index* array consumed by
- *  monaco's AMD/legacy build pipeline. The ESM bundle keeps string keys, so the
- *  array is never indexed — see the bug test in __tests__/monacoNlsBootstrap.test.ts.
+ *  The table is keyed by English source text (not message key): monaco's ≥0.55
+ *  prebuilt ESM bundle no longer carries string keys — only numeric indices into
+ *  `_VSCODE_NLS_MESSAGES` plus the inline English fallback — so the fallback is the
+ *  only stable join column. See build-monaco-nls.mjs for how it's produced.
  *--------------------------------------------------------------------------------------------*/
 
-import zhCnRaw from '../../../vendor/monaco-nls/zh-cn.json?raw'
+import zhCnRaw from '../../../vendor/monaco-nls/zh-cn.messages.json?raw'
 import type { SupportedLocale } from '../../../../shared/i18n/availableLocales.js'
 
 type Dict = Readonly<Record<string, string>>

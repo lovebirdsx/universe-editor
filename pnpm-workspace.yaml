@@ -46,7 +46,7 @@ catalog:
   lucide-react: ^0.460.0
   '@vscode/codicons': ^0.0.45
   '@fontsource/roboto': ^5.1.0
-  monaco-editor: ^0.52.0
+  monaco-editor: ^0.55.0
   '@floating-ui/react': ^0.27.0
   '@tanstack/react-virtual': ^3.13.0
   '@react-aria/focus': ^3.20.0

@@ -46,20 +46,20 @@ vi.mock('monaco-editor', () => {
   const languages = {
     register: () => {},
     setMonarchTokensProvider: () => ({ dispose: () => {} }),
-    json: { jsonDefaults: makeDefaults() },
-    typescript: { typescriptDefaults: makeDefaults(), javascriptDefaults: makeDefaults() },
-    css: {
-      cssDefaults: makeDefaults(),
-      lessDefaults: makeDefaults(),
-      scssDefaults: makeDefaults(),
-    },
-    html: {
-      htmlDefaults: makeDefaults(),
-      handlebarDefaults: makeDefaults(),
-      razorDefaults: makeDefaults(),
-    },
   }
-  return { editor, languages }
+  const json = { jsonDefaults: makeDefaults() }
+  const typescript = { typescriptDefaults: makeDefaults(), javascriptDefaults: makeDefaults() }
+  const css = {
+    cssDefaults: makeDefaults(),
+    lessDefaults: makeDefaults(),
+    scssDefaults: makeDefaults(),
+  }
+  const html = {
+    htmlDefaults: makeDefaults(),
+    handlebarDefaults: makeDefaults(),
+    razorDefaults: makeDefaults(),
+  }
+  return { editor, languages, json, typescript, css, html }
 })
 
 vi.mock('monaco-editor/esm/vs/editor/editor.worker?worker', () => ({ default: class {} }))

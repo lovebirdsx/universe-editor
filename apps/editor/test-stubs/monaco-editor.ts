@@ -84,23 +84,29 @@ function makeDefaults() {
 export const languages = {
   register: () => {},
   setMonarchTokensProvider: () => ({ dispose: () => {} }),
-  json: {
-    jsonDefaults: makeDefaults(),
-  },
-  typescript: {
-    typescriptDefaults: makeDefaults(),
-    javascriptDefaults: makeDefaults(),
-  },
-  css: {
-    cssDefaults: makeDefaults(),
-    lessDefaults: makeDefaults(),
-    scssDefaults: makeDefaults(),
-  },
-  html: {
-    htmlDefaults: makeDefaults(),
-    handlebarDefaults: makeDefaults(),
-    razorDefaults: makeDefaults(),
-  },
 }
 
-export default { Uri, Range, editor, languages }
+// monaco 0.55 moved these language-service namespaces from `monaco.languages.*`
+// up to the package top level (`monaco.json` / `monaco.typescript` / ...).
+export const json = {
+  jsonDefaults: makeDefaults(),
+}
+
+export const typescript = {
+  typescriptDefaults: makeDefaults(),
+  javascriptDefaults: makeDefaults(),
+}
+
+export const css = {
+  cssDefaults: makeDefaults(),
+  lessDefaults: makeDefaults(),
+  scssDefaults: makeDefaults(),
+}
+
+export const html = {
+  htmlDefaults: makeDefaults(),
+  handlebarDefaults: makeDefaults(),
+  razorDefaults: makeDefaults(),
+}
+
+export default { Uri, Range, editor, languages, json, typescript, css, html }
