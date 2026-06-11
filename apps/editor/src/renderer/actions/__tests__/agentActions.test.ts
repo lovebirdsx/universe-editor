@@ -17,6 +17,10 @@ import {
   IncreaseAgentFontSizeAction,
   DecreaseAgentFontSizeAction,
   ResetAgentFontSizeAction,
+  SelectNextAcpPromptSuggestionAction,
+  SelectPreviousAcpPromptSuggestionAction,
+  AcceptAcpPromptSuggestionAction,
+  HideAcpPromptSuggestionAction,
 } from '../agentActions.js'
 import {
   IAcpChatWidgetService,
@@ -41,14 +45,26 @@ describe('Agent timeline navigation actions', () => {
     moveTimeline: ReturnType<typeof vi.fn>
     scrollTimeline: ReturnType<typeof vi.fn>
     jumpToPlan: ReturnType<typeof vi.fn>
+    popoverSelectNext: ReturnType<typeof vi.fn>
+    popoverSelectPrev: ReturnType<typeof vi.fn>
+    popoverAccept: ReturnType<typeof vi.fn>
+    popoverHide: ReturnType<typeof vi.fn>
   } {
     const moveTimeline = vi.fn()
     const scrollTimeline = vi.fn()
     const jumpToPlan = vi.fn()
+    const popoverSelectNext = vi.fn()
+    const popoverSelectPrev = vi.fn()
+    const popoverAccept = vi.fn()
+    const popoverHide = vi.fn()
     return {
       moveTimeline,
       scrollTimeline,
       jumpToPlan,
+      popoverSelectNext,
+      popoverSelectPrev,
+      popoverAccept,
+      popoverHide,
       widget: {
         container: document.createElement('div'),
         moveTimeline,
@@ -58,6 +74,10 @@ describe('Agent timeline navigation actions', () => {
         toggleCollapse: vi.fn(),
         cycleCollapseMode: vi.fn(),
         getFocusedText: vi.fn(),
+        popoverSelectNext,
+        popoverSelectPrev,
+        popoverAccept,
+        popoverHide,
       },
     }
   }
@@ -126,6 +146,130 @@ describe('Agent timeline navigation actions', () => {
     run(ScrollAcpTimelinePageDownAction.ID, pageDown.widget)
     expect(pageDown.scrollTimeline).toHaveBeenCalledWith('pageDown')
     expect(pageDown.moveTimeline).not.toHaveBeenCalled()
+  })
+})
+
+describe('Agent prompt suggestion popover actions', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function popupVisibleContext(): ContextKeyService {
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('acpPromptPopupVisible', true)
+    return ctx
+  }
+
+  function makeWidget(): {
+    widget: AcpChatWidget
+    popoverSelectNext: ReturnType<typeof vi.fn>
+    popoverSelectPrev: ReturnType<typeof vi.fn>
+    popoverAccept: ReturnType<typeof vi.fn>
+    popoverHide: ReturnType<typeof vi.fn>
+  } {
+    const popoverSelectNext = vi.fn()
+    const popoverSelectPrev = vi.fn()
+    const popoverAccept = vi.fn()
+    const popoverHide = vi.fn()
+    return {
+      popoverSelectNext,
+      popoverSelectPrev,
+      popoverAccept,
+      popoverHide,
+      widget: {
+        container: document.createElement('div'),
+        moveTimeline: vi.fn(),
+        scrollTimeline: vi.fn(),
+        focusInput: vi.fn(),
+        jumpToPlan: vi.fn(),
+        toggleCollapse: vi.fn(),
+        cycleCollapseMode: vi.fn(),
+        getFocusedText: vi.fn(),
+        popoverSelectNext,
+        popoverSelectPrev,
+        popoverAccept,
+        popoverHide,
+      },
+    }
+  }
+
+  function run(commandId: string, widget: AcpChatWidget): void {
+    const services = new ServiceCollection()
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      lastFocusedWidget: widget,
+      register: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    const inst = new InstantiationService(services)
+    inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(commandId)!.handler(accessor)
+    })
+  }
+
+  it('binds navigation/accept/hide keys only while the popover is visible', () => {
+    disposables.push(registerAction2(SelectNextAcpPromptSuggestionAction))
+    disposables.push(registerAction2(SelectPreviousAcpPromptSuggestionAction))
+    disposables.push(registerAction2(AcceptAcpPromptSuggestionAction))
+    disposables.push(registerAction2(HideAcpPromptSuggestionAction))
+    const ctx = popupVisibleContext()
+
+    expect(KeybindingsRegistry.resolveKeybinding('down', ctx)).toBe(
+      SelectNextAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+n', ctx)).toBe(
+      SelectNextAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+j', ctx)).toBe(
+      SelectNextAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('up', ctx)).toBe(
+      SelectPreviousAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+p', ctx)).toBe(
+      SelectPreviousAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('tab', ctx)).toBe(
+      AcceptAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('enter', ctx)).toBe(
+      AcceptAcpPromptSuggestionAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBe(
+      HideAcpPromptSuggestionAction.ID,
+    )
+  })
+
+  it('does not bind navigation keys when the popover is hidden', () => {
+    disposables.push(registerAction2(SelectNextAcpPromptSuggestionAction))
+    disposables.push(registerAction2(HideAcpPromptSuggestionAction))
+    const ctx = new ContextKeyService()
+    expect(KeybindingsRegistry.resolveKeybinding('down', ctx)).toBeUndefined()
+    expect(KeybindingsRegistry.resolveKeybinding('escape', ctx)).toBeUndefined()
+  })
+
+  it('routes each command to the focused widget popover handle', () => {
+    disposables.push(registerAction2(SelectNextAcpPromptSuggestionAction))
+    disposables.push(registerAction2(SelectPreviousAcpPromptSuggestionAction))
+    disposables.push(registerAction2(AcceptAcpPromptSuggestionAction))
+    disposables.push(registerAction2(HideAcpPromptSuggestionAction))
+
+    const next = makeWidget()
+    run(SelectNextAcpPromptSuggestionAction.ID, next.widget)
+    expect(next.popoverSelectNext).toHaveBeenCalledTimes(1)
+
+    const prev = makeWidget()
+    run(SelectPreviousAcpPromptSuggestionAction.ID, prev.widget)
+    expect(prev.popoverSelectPrev).toHaveBeenCalledTimes(1)
+
+    const accept = makeWidget()
+    run(AcceptAcpPromptSuggestionAction.ID, accept.widget)
+    expect(accept.popoverAccept).toHaveBeenCalledTimes(1)
+
+    const hide = makeWidget()
+    run(HideAcpPromptSuggestionAction.ID, hide.widget)
+    expect(hide.popoverHide).toHaveBeenCalledTimes(1)
   })
 })
 

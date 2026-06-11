@@ -553,6 +553,64 @@ describe('useGlobalKeybindingHandler — QuickInput isolation', () => {
   })
 })
 
+describe('useGlobalKeybindingHandler — popover nav routing by contextKey', () => {
+  let disposables: IDisposable[] = []
+
+  afterEach(() => {
+    disposables.forEach((d) => d.dispose())
+    disposables = []
+    document.body.innerHTML = ''
+  })
+
+  function mountHost(instantiation: InstantiationService) {
+    return render(
+      <ServicesContext.Provider value={instantiation}>
+        <TestHost />
+      </ServicesContext.Provider>,
+    )
+  }
+
+  // The prompt suggestion commands register their navigation keys (Ctrl+J/N/P,
+  // arrows, Tab, Enter, Escape) with `when: acpPromptPopupVisible`, last, so the
+  // newest-wins resolver routes those keys to them while the popover is open and
+  // lets any global binding win otherwise. There is no hardcoded handler
+  // special-case (the old `isNavPopupOwnedKey` pass-through is gone).
+  it('routes Ctrl+N to the popover command only while acpPromptPopupVisible is true', () => {
+    const { executeCommand, instantiation } = createHarness()
+    const contextKeyService = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    const popupVisible = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
+
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'ctrl+n', command: 'test.global' }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+n',
+        command: 'test.popoverNext',
+        when: 'acpPromptPopupVisible',
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('test.global', () => {}))
+    disposables.push(CommandsRegistry.registerCommand('test.popoverNext', () => {}))
+    const ta = document.createElement('textarea')
+    document.body.appendChild(ta)
+    mountHost(instantiation)
+
+    // Popover open → routes to the suggestion command, consuming the key so the
+    // textarea never sees it.
+    popupVisible.set(true)
+    const open = dispatch({ ctrlKey: true, key: 'n', from: ta })
+    expect(executeCommand).toHaveBeenLastCalledWith('test.popoverNext')
+    expect(open.preventDefault).toHaveBeenCalled()
+    expect(open.stopPropagation).toHaveBeenCalled()
+
+    // Popover closed → the global binding wins again.
+    popupVisible.set(false)
+    dispatch({ ctrlKey: true, key: 'n', from: ta })
+    expect(executeCommand).toHaveBeenLastCalledWith('test.global')
+  })
+})
+
 describe('useGlobalKeybindingHandler — ctrl+k ctrl+s end-to-end', () => {
   const disposables: IDisposable[] = []
 

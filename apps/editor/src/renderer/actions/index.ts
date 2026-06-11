@@ -198,6 +198,10 @@ import {
   IncreaseAgentFontSizeAction,
   DecreaseAgentFontSizeAction,
   ResetAgentFontSizeAction,
+  SelectNextAcpPromptSuggestionAction,
+  SelectPreviousAcpPromptSuggestionAction,
+  AcceptAcpPromptSuggestionAction,
+  HideAcpPromptSuggestionAction,
 } from './agentActions.js'
 
 // Layout
@@ -423,3 +427,10 @@ registerAction2(CopyFocusedAcpMessageAction)
 registerAction2(IncreaseAgentFontSizeAction)
 registerAction2(DecreaseAgentFontSizeAction)
 registerAction2(ResetAgentFontSizeAction)
+// Prompt suggestion popover — registered last so its `escape` / `enter` / `tab`
+// / `ctrl+j` / `ctrl+n` / `ctrl+p` bindings win the newest-wins tie-break over
+// global shortcuts whenever `acpPromptPopupVisible` is set.
+registerAction2(SelectNextAcpPromptSuggestionAction)
+registerAction2(SelectPreviousAcpPromptSuggestionAction)
+registerAction2(AcceptAcpPromptSuggestionAction)
+registerAction2(HideAcpPromptSuggestionAction)

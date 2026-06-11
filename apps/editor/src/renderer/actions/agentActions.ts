@@ -809,6 +809,91 @@ export class CycleAcpTimelineCollapseAction extends Action2 {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Prompt suggestion popover navigation (slash-command + @-mention lists).
+//
+// These mirror VSCode's SuggestWidget commands: navigation / accept / hide are
+// real keybindings gated on `acpPromptPopupVisible` (owned by the focused
+// PromptInput via IAcpChatWidgetService), routed to the focused widget. The
+// PromptInput no longer hand-rolls these keys in onKeyDown — the global handler
+// resolves them through the registry like any other command.
+//
+// `ctrl+k` is deliberately absent: it is the app's chord leader (ctrl+k ctrl+s,
+// …), and resolveKeystroke checks chord prefixes before single strokes, so a
+// single-stroke ctrl+k here would be shadowed. ctrl+n/ctrl+p (the keys VSCode's
+// own suggest widget uses) plus arrows cover navigation cleanly.
+// ---------------------------------------------------------------------------
+
+export class SelectNextAcpPromptSuggestionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.prompt.selectNextSuggestion'
+  constructor() {
+    super({
+      id: SelectNextAcpPromptSuggestionAction.ID,
+      title: localize('action.agent.prompt.selectNextSuggestion', 'Select Next Suggestion'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'down', when: 'acpPromptPopupVisible' },
+        { primary: 'ctrl+n', when: 'acpPromptPopupVisible' },
+        { primary: 'ctrl+j', when: 'acpPromptPopupVisible' },
+      ],
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.popoverSelectNext()
+  }
+}
+
+export class SelectPreviousAcpPromptSuggestionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.prompt.selectPreviousSuggestion'
+  constructor() {
+    super({
+      id: SelectPreviousAcpPromptSuggestionAction.ID,
+      title: localize('action.agent.prompt.selectPreviousSuggestion', 'Select Previous Suggestion'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'up', when: 'acpPromptPopupVisible' },
+        { primary: 'ctrl+p', when: 'acpPromptPopupVisible' },
+      ],
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.popoverSelectPrev()
+  }
+}
+
+export class AcceptAcpPromptSuggestionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.prompt.acceptSuggestion'
+  constructor() {
+    super({
+      id: AcceptAcpPromptSuggestionAction.ID,
+      title: localize('action.agent.prompt.acceptSuggestion', 'Accept Suggestion'),
+      category: CATEGORY,
+      keybinding: [
+        { primary: 'tab', when: 'acpPromptPopupVisible' },
+        { primary: 'enter', when: 'acpPromptPopupVisible' },
+      ],
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.popoverAccept()
+  }
+}
+
+export class HideAcpPromptSuggestionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.prompt.hideSuggestion'
+  constructor() {
+    super({
+      id: HideAcpPromptSuggestionAction.ID,
+      title: localize('action.agent.prompt.hideSuggestion', 'Hide Suggestions'),
+      category: CATEGORY,
+      keybinding: [{ primary: 'escape', when: 'acpPromptPopupVisible' }],
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.popoverHide()
+  }
+}
+
 interface SessionSwitchPickItem extends IQuickPickItem {
   readonly windowId: number
   readonly sessionId: string

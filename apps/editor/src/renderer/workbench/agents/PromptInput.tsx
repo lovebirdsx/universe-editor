@@ -59,14 +59,31 @@ import styles from './agents.module.css'
 const MIN_PROMPT_ROWS = 3
 const MAX_PROMPT_ROWS = 16
 
+// Snapshot of the live popover state + accept callbacks, kept in a ref so the
+// WidgetHandle popover methods (bound once) act on current data when a
+// suggestion command fires.
+interface PopoverHandleState {
+  slashOpen: boolean
+  mentionOpen: boolean
+  slashMatches: readonly AvailableCommand[]
+  mentionMatches: readonly MentionFileEntry[]
+  slashIndex: number
+  mentionIndex: number
+  mentionQuery: ActiveMentionQuery | null
+  acceptSlash: (cmd: AvailableCommand) => void
+  acceptMention: (entry: MentionFileEntry, q: ActiveMentionQuery) => void
+}
+
 export function PromptInput({
   session,
   autoFocus = false,
   handleRef,
+  onPopoverOpenChange,
 }: {
   session: IAcpSession
   autoFocus?: boolean
   handleRef?: MutableRefObject<WidgetHandle>
+  onPopoverOpenChange?: (open: boolean) => void
 }) {
   const [text, setText] = useState(() => AcpPromptDraftCache.load(session.id)?.text ?? '')
   const [caret, setCaret] = useState(() => AcpPromptDraftCache.load(session.id)?.caret ?? 0)
@@ -84,6 +101,9 @@ export function PromptInput({
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  // Latest popover state + accept callbacks, read by the WidgetHandle methods
+  // (bound once) when a suggestion command fires. Refreshed every render.
+  const popoverStateRef = useRef<PopoverHandleState | null>(null)
 
   useLayoutEffect(() => {
     resizePromptTextarea(textareaRef.current)
@@ -100,16 +120,58 @@ export function PromptInput({
   const collapseMode = useObservable(session.collapseMode)
   const totalRunningMs = useSessionTimer(session)
 
-  // Expose `focus()` to the AcpChatWidget handle so the registered widget can
-  // serve Ctrl+Alt+I (Focus Agent Input) without a global event bus.
+  // Expose `focus()` plus the popover navigation methods to the AcpChatWidget
+  // handle. The widget service routes the suggestion commands (Select Next/Prev,
+  // Accept, Hide — gated on `acpPromptPopupVisible`) and Ctrl+Alt+I here without
+  // a global event bus. The methods read `popoverStateRef` so they always act on
+  // the live state without re-binding every render.
   useEffect(() => {
     if (!handleRef) return
     const ref = handleRef
     ref.current.focus = () => {
       textareaRef.current?.focus()
     }
+    ref.current.popoverSelectNext = () => {
+      const s = popoverStateRef.current
+      if (!s) return
+      if (s.mentionOpen && s.mentionMatches.length > 0) {
+        setMentionIndex((i) => (i + 1) % s.mentionMatches.length)
+      } else if (s.slashOpen && s.slashMatches.length > 0) {
+        setSlashIndex((i) => (i + 1) % s.slashMatches.length)
+      }
+    }
+    ref.current.popoverSelectPrev = () => {
+      const s = popoverStateRef.current
+      if (!s) return
+      if (s.mentionOpen && s.mentionMatches.length > 0) {
+        setMentionIndex((i) => (i - 1 + s.mentionMatches.length) % s.mentionMatches.length)
+      } else if (s.slashOpen && s.slashMatches.length > 0) {
+        setSlashIndex((i) => (i - 1 + s.slashMatches.length) % s.slashMatches.length)
+      }
+    }
+    ref.current.popoverAccept = () => {
+      const s = popoverStateRef.current
+      if (!s) return
+      if (s.mentionOpen && s.mentionQuery !== null && s.mentionMatches.length > 0) {
+        const target = s.mentionMatches[s.mentionIndex] ?? s.mentionMatches[0]
+        if (target) s.acceptMention(target, s.mentionQuery)
+      } else if (s.slashOpen && s.slashMatches.length > 0) {
+        const target = s.slashMatches[s.slashIndex] ?? s.slashMatches[0]
+        if (target) s.acceptSlash(target)
+      }
+    }
+    ref.current.popoverHide = () => {
+      const s = popoverStateRef.current
+      if (!s) return
+      if (s.mentionOpen) setMentionDismissed(true)
+      else if (s.slashOpen) setSlashDismissed(true)
+    }
     return () => {
       ref.current.focus = () => {}
+      ref.current.popoverSelectNext = () => {}
+      ref.current.popoverSelectPrev = () => {}
+      ref.current.popoverAccept = () => {}
+      ref.current.popoverHide = () => {}
     }
   }, [handleRef])
 
@@ -151,7 +213,7 @@ export function PromptInput({
     else AcpPromptDraftCache.clear(session.id)
   }, [text, mentions, caret, session.id])
 
-  const slashQuery = useMemo(() => extractSlashQuery(text), [text])
+  const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
     () => (slashQuery === null ? [] : filterCommands(commands, slashQuery)),
     [commands, slashQuery],
@@ -189,14 +251,35 @@ export function PromptInput({
   // and "No matching files" states) would be pure noise.
   const mentionOpen = mentionQuery !== null && !mentionDismissed && workspaceRoot !== undefined
 
+  // Report popover open/closed up to the widget service, which flips
+  // `acpPromptPopupVisible` for the focused widget. The suggestion commands
+  // (Select Next/Prev, Accept, Hide) gate their keybindings on that contextKey.
+  const popoverOpen = slashOpen || mentionOpen
+  useEffect(() => {
+    onPopoverOpenChange?.(popoverOpen)
+  }, [onPopoverOpenChange, popoverOpen])
+
   const acceptSlash = (cmd: AvailableCommand): void => {
     // ACP schema 规定 name 不带 `/`（例如 `create_plan`），但部分实现会带上 —
     // 两种形态都要还原成 `/<name>`，否则提交给 agent 时丢掉 `/`，被当作普通文本。
     const name = cmd.name.startsWith('/') ? cmd.name : `/${cmd.name}`
-    setText(`${name} `)
+    // 只替换开头的命令名 token，保留其后已写的正文（用户可能先写内容再补 `/cmd`）。
+    let end = 1
+    while (end < text.length && !/\s/.test(text[end]!)) end++
+    const after = text.slice(end)
+    const needsSpace = after.length === 0 || !/\s/.test(after[0]!)
+    const insert = `${name}${needsSpace ? ' ' : ''}`
+    setText(insert + after)
+    setCaret(insert.length)
     setSlashDismissed(true)
     setSlashIndex(0)
-    // Caret will be re-synced by the next textarea event.
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) {
+        el.focus()
+        el.setSelectionRange(insert.length, insert.length)
+      }
+    })
   }
 
   const acceptMention = (entry: MentionFileEntry, q: ActiveMentionQuery): void => {
@@ -217,6 +300,18 @@ export function PromptInput({
     })
   }
 
+  popoverStateRef.current = {
+    slashOpen,
+    mentionOpen,
+    slashMatches,
+    mentionMatches,
+    slashIndex,
+    mentionIndex,
+    mentionQuery,
+    acceptSlash,
+    acceptMention,
+  }
+
   const submit = (e?: FormEvent | KeyboardEvent): void => {
     e?.preventDefault()
     if (!text.trim()) return
@@ -233,70 +328,11 @@ export function PromptInput({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Mention popover has priority over slash popover for keyboard handling
-    // since the caret-aware mention parser only fires when the user is
-    // actively in a `@` token.
-    if (mentionOpen && mentionMatches.length > 0 && mentionQuery !== null) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setMentionIndex((i) => (i + 1) % mentionMatches.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setMentionIndex((i) => (i - 1 + mentionMatches.length) % mentionMatches.length)
-        return
-      }
-      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-        e.preventDefault()
-        const target = mentionMatches[mentionIndex] ?? mentionMatches[0]
-        if (target) acceptMention(target, mentionQuery)
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setMentionDismissed(true)
-        return
-      }
-    }
-    if (slashOpen && slashMatches.length > 0) {
-      if (e.key === 'ArrowDown') {
-        e.preventDefault()
-        setSlashIndex((i) => (i + 1) % slashMatches.length)
-        return
-      }
-      if (e.key === 'ArrowUp') {
-        e.preventDefault()
-        setSlashIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length)
-        return
-      }
-      if (e.key === 'Tab') {
-        e.preventDefault()
-        const target = slashMatches[slashIndex] ?? slashMatches[0]
-        if (target) acceptSlash(target)
-        return
-      }
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault()
-        const target = slashMatches[slashIndex] ?? slashMatches[0]
-        if (target) acceptSlash(target)
-        return
-      }
-      if (e.key === 'Escape') {
-        e.preventDefault()
-        setSlashDismissed(true)
-        return
-      }
-    }
-    // Esc interrupts the running turn — but only when neither popover is open
-    // (those branches above consume Esc and return first to close themselves).
-    if (e.key === 'Escape') {
-      if (running) {
-        e.preventDefault()
-        void session.cancelTurn()
-      }
-      return
-    }
+    // Popover navigation / accept / hide is handled by global commands gated on
+    // `acpPromptPopupVisible` (see agentActions). When a popover is open the
+    // global handler consumes those keys before they reach here. We only own the
+    // plain-Enter submit while no popover is open.
+    if (popoverOpen) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       submit(e)
@@ -384,11 +420,12 @@ export function PromptInput({
           value={text}
           onChange={(e) => {
             const v = e.target.value
+            const c = e.target.selectionStart ?? v.length
             setText(v)
-            setCaret(e.target.selectionStart ?? v.length)
-            if (extractSlashQuery(v) === null) setSlashDismissed(false)
+            setCaret(c)
+            if (extractSlashQuery(v, c) === null) setSlashDismissed(false)
             // Reset mention dismissal as soon as the `@` token disappears.
-            const next = extractMentionQuery(v, e.target.selectionStart ?? v.length)
+            const next = extractMentionQuery(v, c)
             if (next === null) setMentionDismissed(false)
             setSlashIndex(0)
             setMentionIndex(0)
@@ -427,16 +464,24 @@ export function PromptInput({
 }
 
 /**
- * If the buffer represents an in-progress slash command (starts with `/`,
- * and the cursor still sits inside the command name — i.e. no whitespace
- * yet), return the substring after the slash for filtering. Otherwise null
- * to signal "not a slash command", which collapses the popover.
+ * If the buffer represents an in-progress slash command (starts with `/` and
+ * the caret still sits inside the leading command-name token), return the
+ * substring after the slash for filtering. Otherwise null to signal "not a
+ * slash command", which collapses the popover.
+ *
+ * Caret-aware (mirrors {@link extractMentionQuery}): the command name is the
+ * run from `/` up to the first whitespace. As long as the caret is within that
+ * token the popover stays open — even when the user has already typed body
+ * text after a space — so one can prepend `/<cmd>` to an existing prompt.
+ * Once the caret moves past the whitespace the user is editing the body, and
+ * we collapse.
  */
-export function extractSlashQuery(text: string): string | null {
+export function extractSlashQuery(text: string, caret: number): string | null {
   if (!text.startsWith('/')) return null
-  const rest = text.slice(1)
-  if (/\s/.test(rest)) return null
-  return rest
+  let end = 1
+  while (end < text.length && !/\s/.test(text[end]!)) end++
+  if (caret > end) return null
+  return text.slice(1, end)
 }
 
 function resizePromptTextarea(el: HTMLTextAreaElement | null): void {

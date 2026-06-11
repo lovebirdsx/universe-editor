@@ -118,6 +118,24 @@ function makeFileSearch(paths: readonly string[]): IFileSearchServiceType {
   }
 }
 
+function makeHandleRef(): { current: WidgetHandle } {
+  return {
+    current: {
+      move: () => {},
+      scrollTimeline: () => {},
+      focus: () => {},
+      jumpToPlan: () => {},
+      toggleCollapse: () => {},
+      cycleCollapseMode: () => {},
+      getFocusedText: () => undefined,
+      popoverSelectNext: () => {},
+      popoverSelectPrev: () => {},
+      popoverAccept: () => {},
+      popoverHide: () => {},
+    },
+  }
+}
+
 function renderWithServices(
   node: React.ReactNode,
   opts: {
@@ -206,18 +224,24 @@ function getTextarea(): HTMLTextAreaElement {
 
 describe('extractSlashQuery', () => {
   it('returns the substring after the leading slash', () => {
-    expect(extractSlashQuery('/diff')).toBe('diff')
-    expect(extractSlashQuery('/')).toBe('')
+    expect(extractSlashQuery('/diff', 5)).toBe('diff')
+    expect(extractSlashQuery('/', 1)).toBe('')
   })
 
   it('returns null when text does not start with slash', () => {
-    expect(extractSlashQuery('hello')).toBeNull()
-    expect(extractSlashQuery(' /diff')).toBeNull()
+    expect(extractSlashQuery('hello', 5)).toBeNull()
+    expect(extractSlashQuery(' /diff', 6)).toBeNull()
   })
 
-  it('returns null once whitespace has been typed (command name closed)', () => {
-    expect(extractSlashQuery('/diff foo')).toBeNull()
-    expect(extractSlashQuery('/diff ')).toBeNull()
+  it('returns null once the caret moves past the command-name token', () => {
+    expect(extractSlashQuery('/diff foo', 9)).toBeNull()
+    expect(extractSlashQuery('/diff ', 6)).toBeNull()
+  })
+
+  it('keeps the command name while the caret stays inside it, even with body text', () => {
+    // 已有正文，光标停在开头命令名内 → 仍返回命令名（需求：先写内容再补 `/cmd`）
+    expect(extractSlashQuery('/diff review the code', 5)).toBe('diff')
+    expect(extractSlashQuery('/di review the code', 3)).toBe('di')
   })
 })
 
@@ -243,69 +267,92 @@ describe('PromptInput — slash popover gating', () => {
     expect(options[0]?.textContent).toContain('/diff')
   })
 
-  it('hides the popover once whitespace closes the command token', () => {
+  it('hides the popover once the caret leaves the command token', () => {
     renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />)
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: '/diff' } })
+    ta.setSelectionRange(5, 5)
+    fireEvent.keyUp(ta, { key: 'f' })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+    // Type a trailing space and move the caret past it → user is now editing
+    // the body, so the popover collapses.
     fireEvent.change(ta, { target: { value: '/diff ' } })
+    ta.setSelectionRange(6, 6)
+    fireEvent.keyUp(ta, { key: ' ' })
     expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
   })
 })
 
-describe('PromptInput — slash keyboard navigation', () => {
-  it('ArrowDown advances the active item, wrapping at the end', () => {
-    renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />)
+describe('PromptInput — slash popover navigation (via widget handle)', () => {
+  // Navigation / accept / hide are no longer hand-rolled in onKeyDown. They are
+  // real commands (gated on `acpPromptPopupVisible`) routed to the focused
+  // widget, which forwards them to these handle methods. Unit tests drive the
+  // handle directly since no global keybinding handler is mounted here.
+  function renderWithHandle(commands: readonly AvailableCommand[] = COMMANDS) {
+    const handleRef = makeHandleRef()
+    const session = makeSession({ commands })
+    renderWithServices(<PromptInput session={session} handleRef={handleRef} />)
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: '/' } })
+    return { handleRef, session, ta }
+  }
+
+  it('popoverSelectNext advances the active item, wrapping at the end', () => {
+    const { handleRef } = renderWithHandle()
     expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
-    fireEvent.keyDown(ta, { key: 'ArrowDown' })
+    act(() => handleRef.current.popoverSelectNext())
     expect(screen.getAllByRole('option')[1]?.getAttribute('aria-selected')).toBe('true')
-    fireEvent.keyDown(ta, { key: 'ArrowDown' })
+    act(() => handleRef.current.popoverSelectNext())
     expect(screen.getAllByRole('option')[2]?.getAttribute('aria-selected')).toBe('true')
-    fireEvent.keyDown(ta, { key: 'ArrowDown' })
+    act(() => handleRef.current.popoverSelectNext())
     // wraps back to 0
     expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
   })
 
-  it('ArrowUp moves backwards, wrapping at the start', () => {
-    renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />)
-    const ta = getTextarea()
-    fireEvent.change(ta, { target: { value: '/' } })
-    fireEvent.keyDown(ta, { key: 'ArrowUp' })
+  it('popoverSelectPrev moves backwards, wrapping at the start', () => {
+    const { handleRef } = renderWithHandle()
+    act(() => handleRef.current.popoverSelectPrev())
     expect(screen.getAllByRole('option')[2]?.getAttribute('aria-selected')).toBe('true')
   })
 
-  it('Enter on the active item inserts the command name (does not submit)', () => {
-    const session = makeSession({ commands: COMMANDS })
-    renderWithServices(<PromptInput session={session} />)
-    const ta = getTextarea()
-    fireEvent.change(ta, { target: { value: '/' } })
-    fireEvent.keyDown(ta, { key: 'ArrowDown' }) // /diff
-    fireEvent.keyDown(ta, { key: 'Enter' })
+  it('popoverAccept inserts the active command name without submitting', () => {
+    const { handleRef, session, ta } = renderWithHandle()
+    act(() => handleRef.current.popoverSelectNext()) // move to /diff
+    act(() => handleRef.current.popoverAccept())
     expect(ta.value).toBe('/diff ')
     expect(session.sendPrompt).not.toHaveBeenCalled()
-    // popover hides because user dismissed it; new value still has no space yet would
-    // re-open, but we set the trailing space so query == null and popover stays closed.
     expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
   })
 
-  it('Tab accepts the active item just like Enter', () => {
-    renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />)
-    const ta = getTextarea()
-    fireEvent.change(ta, { target: { value: '/' } })
-    fireEvent.keyDown(ta, { key: 'Tab' })
-    expect(ta.value).toBe('/help ')
-  })
-
-  it('Escape dismisses the popover without clearing the input', () => {
-    renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />)
+  it('popoverHide dismisses the popover without clearing the input', () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(
+      <PromptInput session={makeSession({ commands: COMMANDS })} handleRef={handleRef} />,
+    )
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: '/d' } })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
-    fireEvent.keyDown(ta, { key: 'Escape' })
+    act(() => handleRef.current.popoverHide())
     expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
     expect(ta.value).toBe('/d')
+  })
+
+  it('popoverAccept on `/` prepended to body text replaces only the command token', () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(
+      <PromptInput session={makeSession({ commands: COMMANDS })} handleRef={handleRef} />,
+    )
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '/di review the code' } })
+    ta.setSelectionRange(3, 3) // caret inside `/di`
+    fireEvent.keyUp(ta, { key: 'i' })
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]?.textContent).toContain('/diff')
+    // Accepting replaces only the leading command token, keeping the body.
+    act(() => handleRef.current.popoverAccept())
+    expect(ta.value).toBe('/diff review the code')
+    expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
   })
 
   it('mouse-clicking a row inserts that command', () => {
@@ -317,13 +364,16 @@ describe('PromptInput — slash keyboard navigation', () => {
     expect(ta.value).toBe('/clear ')
   })
 
-  it('accepts a command name that already has a leading slash without doubling it', () => {
+  it('popoverAccept on a name that already has a leading slash does not double it', () => {
     // 部分 agent 实现会把 `/` 写进 name 字段（schema 推荐不带）。两种形态都要还原成 `/<name> `。
     const prefixed: readonly AvailableCommand[] = [{ name: '/diff', description: 'show diff' }]
-    renderWithServices(<PromptInput session={makeSession({ commands: prefixed })} />)
+    const handleRef = makeHandleRef()
+    renderWithServices(
+      <PromptInput session={makeSession({ commands: prefixed })} handleRef={handleRef} />,
+    )
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: '/' } })
-    fireEvent.keyDown(ta, { key: 'Enter' })
+    act(() => handleRef.current.popoverAccept())
     expect(ta.value).toBe('/diff ')
   })
 
@@ -339,6 +389,21 @@ describe('PromptInput — slash keyboard navigation', () => {
     expect(options[1]?.textContent).toContain('/diff')
     // 不能出现 //
     expect(options[1]?.textContent).not.toContain('//')
+  })
+
+  it('reports popover open/closed via onPopoverOpenChange', () => {
+    const changes: boolean[] = []
+    renderWithServices(
+      <PromptInput
+        session={makeSession({ commands: COMMANDS })}
+        onPopoverOpenChange={(open) => changes.push(open)}
+      />,
+    )
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '/d' } })
+    expect(changes.at(-1)).toBe(true)
+    fireEvent.change(ta, { target: { value: 'plain text' } })
+    expect(changes.at(-1)).toBe(false)
   })
 })
 
@@ -390,22 +455,16 @@ describe('PromptInput — submit and cancel', () => {
     expect(ta.value).toBe('')
   })
 
-  it('Escape interrupts the running turn when no popover is open', () => {
-    const session = makeSession({ status: 'running' })
-    renderWithServices(<PromptInput session={session} />)
-    fireEvent.keyDown(getTextarea(), { key: 'Escape' })
-    expect(session.cancelTurn).toHaveBeenCalledTimes(1)
-  })
-
-  it('Escape only closes the slash popover and does not cancel while running', () => {
-    const session = makeSession({ status: 'running', commands: COMMANDS })
+  it('does not submit on Enter while a popover is open', () => {
+    // The popover's Accept command (gated on `acpPromptPopupVisible`) owns Enter
+    // while open; the textarea bails out so the prompt isn't sent underneath it.
+    const session = makeSession({ commands: COMMANDS })
     renderWithServices(<PromptInput session={session} />)
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: '/d' } })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
-    fireEvent.keyDown(ta, { key: 'Escape' })
-    expect(screen.queryByTestId('acp-slash-popover')).toBeNull()
-    expect(session.cancelTurn).not.toHaveBeenCalled()
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).not.toHaveBeenCalled()
   })
 
   it('re-renders when commands arrive after mount', () => {
@@ -503,9 +562,10 @@ describe('PromptInput — @-mention popover', () => {
     expect(options[0]?.textContent).toContain('main.ts')
   })
 
-  it('Enter inserts the relative path and records the mention for send', async () => {
+  it('accepting a mention inserts the relative path and records it for send', async () => {
     const session = makeSession()
-    renderWithServices(<PromptInput session={session} />, {
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={session} handleRef={handleRef} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
       fileSearch: makeFileSearch(FILES),
     })
@@ -515,7 +575,7 @@ describe('PromptInput — @-mention popover', () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     typeAt(ta, '@main')
-    fireEvent.keyDown(ta, { key: 'Enter' })
+    act(() => handleRef.current.popoverAccept())
     // PromptInput inserts the relative path with a trailing space.
     expect(ta.value).toContain('@src/main.ts')
     // The popover collapses (we dismissed it on accept).
@@ -530,8 +590,9 @@ describe('PromptInput — @-mention popover', () => {
     ])
   })
 
-  it('Escape dismisses the mention popover without clearing the text', async () => {
-    renderWithServices(<PromptInput session={makeSession()} />, {
+  it('popoverHide dismisses the mention popover without clearing the text', async () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
       fileSearch: makeFileSearch(FILES),
     })
@@ -541,7 +602,7 @@ describe('PromptInput — @-mention popover', () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     expect(screen.getByTestId('acp-mention-popover')).toBeTruthy()
-    fireEvent.keyDown(ta, { key: 'Escape' })
+    act(() => handleRef.current.popoverHide())
     expect(screen.queryByTestId('acp-mention-popover')).toBeNull()
     expect(ta.value).toBe('@')
   })
@@ -568,17 +629,7 @@ describe('PromptInput — @-mention popover', () => {
 
 describe('PromptInput — focus handoff', () => {
   it('exposes focus() on the widget handle to focus the textarea', () => {
-    const handleRef: { current: WidgetHandle } = {
-      current: {
-        move: () => {},
-        scrollTimeline: () => {},
-        focus: () => {},
-        jumpToPlan: () => {},
-        toggleCollapse: () => {},
-        cycleCollapseMode: () => {},
-        getFocusedText: () => undefined,
-      },
-    }
+    const handleRef = makeHandleRef()
     renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
     const ta = getTextarea()
     expect(document.activeElement).not.toBe(ta)
@@ -639,14 +690,15 @@ describe('PromptInput — draft persistence', () => {
       workspace: makeWorkspaceService(URI.file('/repo')),
       fileSearch: makeFileSearch(['/repo/src/main.ts']),
     }
-    renderWithServices(<PromptInput session={session} />, opts)
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={session} handleRef={handleRef} />, opts)
     const ta = getTextarea()
     typeAt(ta, '@')
     await act(async () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     typeAt(ta, '@main')
-    fireEvent.keyDown(ta, { key: 'Enter' }) // accept mention → records it
+    act(() => handleRef.current.popoverAccept()) // accept mention → records it
     expect(ta.value).toContain('@src/main.ts')
 
     cleanup() // switch away: PromptInput unmounts, draft + mention cached

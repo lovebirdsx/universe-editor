@@ -9,6 +9,12 @@
  *  Owns the root `acpChatFocused` contextKey: true iff any registered widget
  *  currently contains DOM focus. Action `when` clauses gate on this so Alt+J
  *  doesn't fire from the Explorer.
+ *
+ *  Also owns the `acpPromptPopupVisible` contextKey: true iff the *focused*
+ *  widget has its slash/mention popover open. Per-widget popover state is pushed
+ *  via `setPopoverOpen` and aggregated against focus the same way as
+ *  `acpChatFocused`. The SelectNext/Prev/Accept/Hide suggestion commands gate
+ *  their keybindings on it (mirroring VSCode's `suggestWidgetVisible`).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -39,6 +45,14 @@ export interface AcpChatWidget {
   cycleCollapseMode(): void
   /** Plain text of the currently focused timeline message; undefined when none. */
   getFocusedText(): string | undefined
+  /** Move selection to the next item in the open slash/mention popover. */
+  popoverSelectNext(): void
+  /** Move selection to the previous item in the open slash/mention popover. */
+  popoverSelectPrev(): void
+  /** Accept the highlighted slash/mention popover item. */
+  popoverAccept(): void
+  /** Dismiss the open slash/mention popover. */
+  popoverHide(): void
 }
 
 export interface IAcpChatWidgetService {
@@ -46,6 +60,9 @@ export interface IAcpChatWidgetService {
   readonly lastFocusedWidget: AcpChatWidget | undefined
   register(widget: AcpChatWidget): IDisposable
   focusSessionInput(sessionId: string): boolean
+  /** Push a widget's popover open/closed state; the service flips
+   *  `acpPromptPopupVisible` on iff the *focused* widget's popover is open. */
+  setPopoverOpen(widget: AcpChatWidget, open: boolean): void
 }
 
 export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acpChatWidgetService')
@@ -53,6 +70,7 @@ export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acp
 interface Entry {
   widget: AcpChatWidget
   focused: boolean
+  popoverOpen: boolean
   onFocusIn: (e: FocusEvent) => void
   onFocusOut: (e: FocusEvent) => void
 }
@@ -63,6 +81,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _entries = new Map<AcpChatWidget, Entry>()
   private _lastFocusedWidget: AcpChatWidget | undefined
   private readonly _key: IContextKey<boolean>
+  private readonly _popupKey: IContextKey<boolean>
 
   // Roots every registration's cleanup under this (singleton-rooted) service so
   // the leak detector doesn't report a still-mounted ChatBody's registration
@@ -72,6 +91,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   constructor(@IContextKeyService contextKeyService: IContextKeyService) {
     super()
     this._key = contextKeyService.createKey<boolean>('acpChatFocused', false)
+    this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
   }
 
   get lastFocusedWidget(): AcpChatWidget | undefined {
@@ -92,7 +112,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       if (next instanceof Node && widget.container.contains(next)) return
       this._setFocused(widget, false)
     }
-    const entry: Entry = { widget, focused: false, onFocusIn, onFocusOut }
+    const entry: Entry = { widget, focused: false, popoverOpen: false, onFocusIn, onFocusOut }
     widget.container.addEventListener('focusin', onFocusIn)
     widget.container.addEventListener('focusout', onFocusOut)
     this._entries.set(widget, entry)
@@ -120,6 +140,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     return true
   }
 
+  // The popover gates its commands on the *focused* widget, so a blurred input
+  // that still has its popover open (state survives blur) does not steal the
+  // keys — only when it regains focus does `acpPromptPopupVisible` flip back on.
+  setPopoverOpen(widget: AcpChatWidget, open: boolean): void {
+    const entry = this._entries.get(widget)
+    if (!entry || entry.popoverOpen === open) return
+    entry.popoverOpen = open
+    this._recomputePopupKey()
+  }
+
   private _unregister(widget: AcpChatWidget): void {
     const entry = this._entries.get(widget)
     if (!entry) return
@@ -130,6 +160,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       this._lastFocusedWidget = undefined
     }
     this._recomputeKey()
+    this._recomputePopupKey()
   }
 
   private _setFocused(widget: AcpChatWidget, focused: boolean): void {
@@ -141,6 +172,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       this._lastFocusedWidget = widget
     }
     this._recomputeKey()
+    this._recomputePopupKey()
   }
 
   private _recomputeKey(): void {
@@ -152,5 +184,16 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
       }
     }
     this._key.set(any)
+  }
+
+  private _recomputePopupKey(): void {
+    let visible = false
+    for (const entry of this._entries.values()) {
+      if (entry.focused && entry.popoverOpen) {
+        visible = true
+        break
+      }
+    }
+    this._popupKey.set(visible)
   }
 }

@@ -40,6 +40,7 @@ import { hasVisibleMessageContent, timelineItemToText } from '../../services/acp
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import {
   IAcpChatWidgetService,
+  type AcpChatWidget,
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
 } from '../../services/acp/acpChatWidgetService.js'
@@ -70,6 +71,10 @@ export interface WidgetHandle {
   toggleCollapse: () => void
   cycleCollapseMode: () => void
   getFocusedText: () => string | undefined
+  popoverSelectNext: () => void
+  popoverSelectPrev: () => void
+  popoverAccept: () => void
+  popoverHide: () => void
 }
 
 const noop = (): void => {}
@@ -82,6 +87,10 @@ const NOOP_HANDLE: WidgetHandle = {
   toggleCollapse: noop,
   cycleCollapseMode: noop,
   getFocusedText: () => undefined,
+  popoverSelectNext: noop,
+  popoverSelectPrev: noop,
+  popoverAccept: noop,
+  popoverHide: noop,
 }
 
 export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
@@ -103,11 +112,12 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
+  const widgetRef = useRef<AcpChatWidget | null>(null)
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
-    const sub = widgetService.register({
+    const widget: AcpChatWidget = {
       sessionId: session.id,
       container,
       moveTimeline: (d) => handleRef.current.move(d),
@@ -117,9 +127,29 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
       toggleCollapse: () => handleRef.current.toggleCollapse(),
       cycleCollapseMode: () => handleRef.current.cycleCollapseMode(),
       getFocusedText: () => handleRef.current.getFocusedText(),
-    })
-    return () => sub.dispose()
+      popoverSelectNext: () => handleRef.current.popoverSelectNext(),
+      popoverSelectPrev: () => handleRef.current.popoverSelectPrev(),
+      popoverAccept: () => handleRef.current.popoverAccept(),
+      popoverHide: () => handleRef.current.popoverHide(),
+    }
+    widgetRef.current = widget
+    const sub = widgetService.register(widget)
+    return () => {
+      sub.dispose()
+      widgetRef.current = null
+    }
   }, [widgetService, session.id])
+
+  // PromptInput reports its popover open/closed state up so the widget service
+  // can flip `acpPromptPopupVisible` for the focused widget (gates the suggestion
+  // navigation commands). Keyed on the widget identity, like focus tracking.
+  const handlePopoverOpenChange = useCallback(
+    (open: boolean) => {
+      const widget = widgetRef.current
+      if (widget) widgetService.setPopoverOpen(widget, open)
+    },
+    [widgetService],
+  )
 
   const chatClassName = hasTimelineContent
     ? styles['chat']
@@ -135,6 +165,7 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
         key={`prompt:${session.id}`}
         session={session}
         handleRef={handleRef}
+        onPopoverOpenChange={handlePopoverOpenChange}
         {...(autoFocus !== undefined ? { autoFocus } : {})}
       />
     </div>

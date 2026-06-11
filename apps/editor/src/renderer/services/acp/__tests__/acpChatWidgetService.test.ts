@@ -42,6 +42,10 @@ function makeWidget(
     toggleCollapse: vi.fn(),
     cycleCollapseMode: vi.fn(),
     getFocusedText: vi.fn(),
+    popoverSelectNext: vi.fn(),
+    popoverSelectPrev: vi.fn(),
+    popoverAccept: vi.fn(),
+    popoverHide: vi.fn(),
   }
   return { container, child, widget, moveSpy, focusSpy }
 }
@@ -177,6 +181,10 @@ describe('AcpChatWidgetService', () => {
       toggleCollapse: vi.fn(),
       cycleCollapseMode: vi.fn(),
       getFocusedText: vi.fn(),
+      popoverSelectNext: vi.fn(),
+      popoverSelectPrev: vi.fn(),
+      popoverAccept: vi.fn(),
+      popoverHide: vi.fn(),
     }
     svc.register(widget)
     expect(cks.get('acpChatFocused')).toBe(true)
