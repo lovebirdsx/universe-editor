@@ -140,6 +140,18 @@ pnpm e2e
 - **教训**：**`expect.poll` 里"盲按按键"是危险范式**——按键落到当前焦点，被测 UI 未就位时会打进别的控件（这里是编辑器），**污染被测对象自身的状态**（改文档→破坏 fixture→连锁让被测功能根本无法触发）。慢速 CI 把"按键落点"的竞态放大。正解是**把按键门控在"目标已就位/聚焦"的前置条件上**（探针读状态），而不是盲按 + 加宽窗口。加宽窗口对自污染型失败无效（多按几次只会污染更多）。
 
 
+### 案例 6：disposableLeak「whenRestored 评估时 Execution context was destroyed」——根因是重启 PO 末步用裸 evaluate，没对齐同文件已加固的兄弟方法
+- **现象**：`smoke.disposableLeak.spec.ts` `@p1`「Restart Editor leaves no un-disposed Disposables」仅在 Ubuntu CI 偶发挂，报 `page.evaluate: Execution context was destroyed, most likely because of a navigation`，栈顶在 `WorkbenchPO.ts:151` 的 `waitForRestartRestore()` 末步 `this.page.evaluate(() => window.__E2E__!.whenRestored())`。本地 Windows 稳过。
+- **判定关键——报错是 Playwright 基础设施错（"导航中评估上下文被销毁"），不是被测断言失败**：失败的不是 `expect(report).toBeNull()` 这个被测断言，而是 PO 的导航等待步骤，被测行为（leak 检测）根本没跑到。按速记 5，**同文件兄弟方法 `waitForRestored()`（47-63 行）早已针对完全相同的 "Execution context was destroyed" 做了"重试 + 重等探针"加固**，而 `waitForRestartRestore()` 第 151 行那次 `whenRestored()` 是**遗留的裸 evaluate**——这就是该对齐的薄弱点。
+- **根因（harness/PO 时序，产品无 bug）**：`restartEditor` → `hostService.restart()` → IPC → main `win.reload()`，reload 是 IPC 异步的。`waitForRestartRestore()` 注册 `load` 监听 → fire 命令 → `await load` → `waitForFunction(__E2E__)` → 裸 `evaluate(whenRestored)`。在慢速 CI（xvfb + 2 核抢 4 worker）上，reload 导航尚未完全 commit 时这次 evaluate 与上下文切换重合，执行上下文被销毁抛错。本地快、reload 在评估前已 commit，故不复现。
+- **修法（不削弱被测断言）**：把"对 context 销毁鲁棒的 whenRestored 评估"抽成共享私有方法 `_evaluateWhenRestored()`（捕获 `Execution context was destroyed` → 重等 `domcontentloaded` + `__E2E__` → 重试，上限 3 次），让 `waitForRestored()` 与 `waitForRestartRestore()` 末步都改用它。一处加固消除遗留薄弱点，两处对齐，被测断言一字未改。本地 `--repeat-each=3`（6 case）全绿，e2e tsconfig typecheck + eslint 干净。
+- **锚点**：
+  - 修复点：`apps/editor/e2e/pages/WorkbenchPO.ts`（新私有方法 `_evaluateWhenRestored`；`waitForRestored` 与 `waitForRestartRestore` 末步复用）
+  - 重启机制：`apps/editor/src/renderer/actions/windowActions.ts`（`RestartEditorAction` → `IHostService.restart()` → main `win.reload()`）
+  - 探针 whenRestored：`apps/editor/src/renderer/e2e/probe.ts`（`lifecycleService.when(LifecyclePhase.Restored)`）
+- **教训**：**凡是"fire 后页面会导航/reload，再 `page.evaluate` 探针"的 PO 步骤，evaluate 都要对 `Execution context was destroyed` 鲁棒（重等探针就绪后重试）**，因为慢速 CI 上导航 commit 时机会与评估重合。若同文件已有兄弟方法（如 `waitForRestored`）针对此做过加固，**新/遗留的同类步骤必须对齐复用**——别留裸 evaluate（速记 5）。这类失败的标志：报错是 Playwright 的 "context destroyed/navigation" 而非被测断言本身。
+
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -154,6 +166,7 @@ pnpm e2e
 11. 本地手跑单 LSP spec 前确保产物链齐：`pnpm ext:build`（生成 `extensions/*/dist`）+ `extension-host/dist` + `vendor/typescript-language-server`。少了 → 符号全空 `[]` 或探针方法缺失,**是产物问题不是回归**。正规跑法是根 `pnpm e2e`。
 12. **本地稳过 + CI 每次必挂 + received 空 + retry 救不回 = 伪 flake**（CI 漏装运行时产物,尤其**非 pnpm workspace 的 vendor**——`pnpm install`/`pnpm build` 不碰它）。别去 spec 层加超时,provider 没注册等多久都是空。鉴别捷径:**同类功能"A 能跑 B 不能"的不对称**(md LSP ✓ / ts LSP ✗),差异处就是缺的那环。修 CI 时:`vendor-install.mjs` 可能连带 submodule(claude-agent-acp),e2e job 没 `submodules: recursive`,只精准 `npm --prefix vendor/<x> ci` 装用得到的那个,别引入没 checkout 的 submodule。
 13. **`expect.poll` 里"盲按按键"(`keyboard.press`)是危险范式**:按键落到**当前 DOM 焦点**,被测 UI 未异步就位时会打进别的控件(如编辑器 `TEXTAREA`),**污染被测对象自身**(改文档→破坏 fixture→连锁让被测功能无法触发)。慢速 CI 把"按键落点"竞态放大,且**加宽 poll 窗口无效**(多按几次只会污染更多,received 稳定卡在初值)。正解:把按键**门控在"目标已聚焦/就位"前置条件**上(探针读状态,如 `isReferencePeekFocused()`),只在就位时才按。诊断捷径:fire 后盲按几次并打印 `document.activeElement` + 光标位置,看光标是否随 Enter 递增=实锤自污染(本地即可复现机制)。
+14. **报错是 `page.evaluate: Execution context was destroyed, most likely because of a navigation` = harness 时序 flake,不是被测断言失败**。凡"fire 后页面会 reload/导航,再 `page.evaluate(__E2E__...)`"的 PO 步骤,evaluate 都要对此鲁棒(捕获该错→重等 `domcontentloaded`+`__E2E__`→重试),因为慢速 CI 上导航 commit 会与评估重合。若同文件已有兄弟方法(如 `waitForRestored`)做过该加固,新/遗留同类步骤**必须对齐复用**,别留裸 evaluate(并入速记 5)。reload 类 PO 见 `WorkbenchPO._evaluateWhenRestored`。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

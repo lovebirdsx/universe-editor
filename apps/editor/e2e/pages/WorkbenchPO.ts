@@ -45,15 +45,26 @@ export class WorkbenchPO {
   }
 
   async waitForRestored(): Promise<void> {
-    // 偶发：fixture 的 firstWindow() 可能在首次导航 commit 前返回，
-    // 此时若评估正好与上下文切换重合，会抛 "Execution context was destroyed"。
-    // 重新等探针就绪再评估一次即可恢复。
-    for (let attempt = 0; attempt < 2; attempt++) {
+    await this._evaluateWhenRestored()
+  }
+
+  /**
+   * Evaluate `whenRestored()` tolerating a mid-evaluate context teardown.
+   *
+   * Two callers race a navigation: `waitForRestored()` (the fixture's
+   * firstWindow() may return before the first navigation commits) and
+   * `waitForRestartRestore()` (the reload may not be fully committed on slow
+   * CI). In both cases the evaluate can coincide with a context switch and
+   * throw "Execution context was destroyed". Re-wait for the probe to be
+   * (re)installed and evaluate again.
+   */
+  private async _evaluateWhenRestored(): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
         await this.page.evaluate(() => window.__E2E__!.whenRestored())
         return
       } catch (err) {
-        if (attempt === 1 || !/Execution context was destroyed/.test(String(err))) throw err
+        if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err
         await this.page.waitForLoadState('domcontentloaded')
         await this.page.waitForFunction(() =>
           Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
@@ -147,7 +158,8 @@ export class WorkbenchPO {
       Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
     )
 
-    // Wait for the workbench to reach Restored.
-    await this.page.evaluate(() => window.__E2E__!.whenRestored())
+    // Wait for the workbench to reach Restored. On slow CI the reload may not
+    // be fully committed yet, so tolerate a mid-evaluate context teardown.
+    await this._evaluateWhenRestored()
   }
 }
