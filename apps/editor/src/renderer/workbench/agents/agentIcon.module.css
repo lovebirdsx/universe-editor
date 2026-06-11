@@ -1,0 +1,11 @@
+.claude {
+  color: var(--color-agent-claude, #d97757);
+}
+
+.openai {
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.bot {
+  color: var(--color-accent, #0070e0);
+}

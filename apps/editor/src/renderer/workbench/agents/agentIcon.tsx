@@ -12,6 +12,7 @@ import type { JSX } from 'react'
 import { IAcpAgentRegistry, agentIconId } from '../../services/acp/acpAgentRegistry.js'
 import { AGENT_LOGO_PATHS } from '../../services/acp/agentIconData.js'
 import { useService } from '../useService.js'
+import styles from './agentIcon.module.css'
 
 export interface AgentIconProps {
   readonly size?: number | undefined
@@ -20,6 +21,8 @@ export interface AgentIconProps {
 
 type AgentIconComponent = (props: AgentIconProps) => JSX.Element
 
+const cx = (...parts: (string | undefined)[]) => parts.filter(Boolean).join(' ')
+
 function ClaudeLogo({ size = 16, className }: AgentIconProps) {
   return (
     <svg
@@ -27,7 +30,7 @@ function ClaudeLogo({ size = 16, className }: AgentIconProps) {
       height={size}
       viewBox="0 0 24 24"
       fill="currentColor"
-      className={className}
+      className={cx(styles['claude'], className)}
       aria-hidden="true"
     >
       <path d={AGENT_LOGO_PATHS['claude']} />
@@ -42,7 +45,7 @@ function OpenAILogo({ size = 16, className }: AgentIconProps) {
       height={size}
       viewBox="0 0 24 24"
       fill="currentColor"
-      className={className}
+      className={cx(styles['openai'], className)}
       aria-hidden="true"
     >
       <path d={AGENT_LOGO_PATHS['openai']} />
@@ -51,7 +54,7 @@ function OpenAILogo({ size = 16, className }: AgentIconProps) {
 }
 
 function BotLogo({ size = 16, className }: AgentIconProps) {
-  return <Bot size={size} strokeWidth={1.75} className={className} aria-hidden />
+  return <Bot size={size} strokeWidth={1.75} className={cx(styles['bot'], className)} aria-hidden />
 }
 
 const ICON_MAP: Record<string, AgentIconComponent> = {
