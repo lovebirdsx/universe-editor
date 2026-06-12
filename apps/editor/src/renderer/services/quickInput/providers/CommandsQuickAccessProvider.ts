@@ -12,6 +12,7 @@ import {
   IContextKeyService,
   ICommandService,
   IEditorGroupsService,
+  IStorageService,
   isSubmenuEntry,
   MenuId,
   MenuRegistry,
@@ -27,15 +28,30 @@ import {
 } from '../monacoCommandSource.js'
 import { resolveShortcut } from '../../../workbench/titlebar/keybindingFormat.js'
 
+// Shared with the pre-QuickAccess-refactor command palette so existing recently-used
+// history carries over. Most-recent-first, capped to keep the ranking meaningful.
+const MRU_STORAGE_KEY = 'quickinput.mru.workbench.commandPalette'
+const MRU_LIMIT = 20
+
 export class CommandsQuickAccessProvider implements IQuickAccessProvider {
   constructor(
     @ICommandService private readonly _commands: ICommandService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IContextKeyService private readonly _contextKeyService: IContextKeyService,
+    @IStorageService private readonly _storage: IStorageService,
   ) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, _options: IQuickAccessProviderRunOptions): void {
     picker.filterMode = 'word'
+
+    let mruIds: string[] = []
+    // Seed the recently-used ranking asynchronously; bail if the picker was torn
+    // down (prefix switch / hide) before storage resolved.
+    void this._storage.get<string[]>(MRU_STORAGE_KEY).then((stored) => {
+      if (_options.token.isCancellationRequested) return
+      mruIds = stored ?? []
+      picker.mruIds = mruIds
+    })
 
     const seenRegistryIds = new Set<string>()
     const registryItems: IQuickPickItem[] = []
@@ -64,6 +80,8 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
         const selected = items[0]
         picker.hide()
         if (!selected) return
+        mruIds = [selected.id, ...mruIds.filter((x) => x !== selected.id)].slice(0, MRU_LIMIT)
+        void this._storage.set(MRU_STORAGE_KEY, mruIds)
         if (isMonacoCommandItem(selected)) {
           void selected._editor.getAction(selected._actionId)?.run()
         } else {

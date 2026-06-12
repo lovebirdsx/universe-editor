@@ -46,6 +46,7 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   items: readonly QuickPickInput<T>[] = []
   value = ''
   prefix = ''
+  mruIds: readonly string[] = []
   filterExternally = false
   filterMode: 'fuzzy' | 'word' = 'fuzzy'
   matchOnDescription = false

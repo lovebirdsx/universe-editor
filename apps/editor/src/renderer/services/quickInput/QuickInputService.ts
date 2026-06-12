@@ -70,6 +70,7 @@ export class QuickInputService implements IQuickInputService {
     let _placeholder: string | undefined
     let _value = ''
     let _prefix = ''
+    let _mruIds: readonly string[] = []
     let _busy = false
     let _filterExternally = false
     let _filterMode: QuickPickFilterMode = 'fuzzy'
@@ -85,6 +86,7 @@ export class QuickInputService implements IQuickInputService {
         items: _items,
         value: _value,
         prefix: _prefix,
+        mruIds: _mruIds,
         placeholder: _placeholder,
         busy: _busy,
         filterExternally: _filterExternally,
@@ -129,6 +131,13 @@ export class QuickInputService implements IQuickInputService {
       },
       set prefix(v) {
         _prefix = v
+        pushState()
+      },
+      get mruIds() {
+        return _mruIds
+      },
+      set mruIds(v) {
+        _mruIds = v
         pushState()
       },
       get filterExternally() {

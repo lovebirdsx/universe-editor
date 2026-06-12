@@ -123,6 +123,12 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    * input before filtering and shows a hint if the user deletes it. Defaults to ''.
    */
   prefix: string
+  /**
+   * Ids of recently-accepted items, most-recent-first. The panel sorts matching
+   * items by this order (and marks them) so a quick access mode can surface a
+   * "recently used" ranking. Defaults to []. Providers own the persistence.
+   */
+  mruIds: readonly string[]
   filterExternally: boolean
   /** Panel-side filtering algorithm when `filterExternally` is false. Defaults to 'fuzzy'. */
   filterMode: QuickPickFilterMode
