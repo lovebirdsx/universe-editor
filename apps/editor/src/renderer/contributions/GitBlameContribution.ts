@@ -201,6 +201,11 @@ export class GitBlameContribution extends Disposable implements IWorkbenchContri
 
   private _getBlame(path: string): Promise<BlameResultDto | null> {
     if (this._cache.has(path)) return Promise.resolve(this._cache.get(path) ?? null)
+    // The git extension registers `git.getBlame` only after it activates, and it
+    // never activates when the workspace isn't a git repo. Probe the registry
+    // first so a non-git workspace doesn't log "command not found" on every
+    // cursor move. The miss isn't cached, so a later activation still retries.
+    if (!CommandsRegistry.getCommand(BlameCommands.getBlame)) return Promise.resolve(null)
     const existing = this._inflight.get(path)
     if (existing) return existing
 
