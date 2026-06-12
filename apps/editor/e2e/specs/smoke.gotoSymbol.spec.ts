@@ -95,7 +95,9 @@ test.describe('@p1 go to symbol', () => {
 
     await page.evaluate(() => void window.__E2E__!.runCommand('workbench.action.showAllSymbols'))
     await workbench.quickInput.waitForVisible()
-    await workbench.quickInput.input.fill('Alpha')
+    // showAllSymbols prefills the '#' prefix; keep it so the workspace-symbol
+    // provider stays active (a bare 'Alpha' would route to file search).
+    await workbench.quickInput.input.fill('#Alpha')
 
     await expect
       .poll(
