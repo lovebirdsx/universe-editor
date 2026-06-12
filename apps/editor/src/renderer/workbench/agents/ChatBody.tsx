@@ -439,19 +439,19 @@ function ChatScroll({
   }, [])
 
   // Restore a non-stuck scroll position saved before this session was unmounted
-  // (tab switch / session switch). Chat content grows asynchronously — code
-  // blocks colorize via Monaco, image data-blocks decode late — so a one-shot
-  // assignment lands clamped against a too-short scrollHeight. Re-apply as the
-  // content settles (ResizeObserver) until a short window elapses or the user
-  // takes over. When stuck, fall through to the bottom-pin effect.
+  // (tab switch / session switch). Content grows asynchronously — Monaco
+  // colorizes code, images decode late — so a one-shot assignment lands clamped
+  // against a too-short scrollHeight. Re-apply as the content settles
+  // (ResizeObserver) until a short window elapses or the user takes over. When
+  // stuck, fall through to the bottom-pin effect.
   //
-  // The target is resolved fresh on every apply() from the saved anchor (B): we
-  // look up the anchored slot's current offset in the live coordinate system and
-  // re-add the in-slot offset. As rows mount and measure (estimate → real), the
-  // anchored slot's offset shifts, and re-resolving keeps the same *message*
-  // pinned to the top — unlike a fixed scrollTop, which keeps a now-meaningless
-  // pixel. Falls back to the raw scrollTop when no anchor is available (e.g.
-  // state saved before anchors existed, or plain-list mode).
+  // Virtual mode resolves the target fresh on every apply() from the saved
+  // anchor: look up the anchored slot's offset in the live coordinate system and
+  // re-add the in-slot offset, so the same message stays pinned to the top as
+  // rows measure (estimate → real). Plain-list mode — the common case, below the
+  // virtualization threshold — has no virtualizer to anchor against and uses the
+  // raw scrollTop, which is reliable there since the full <ol> never re-estimates
+  // heights.
   useLayoutEffect(() => {
     const el = containerRef.current
     if (!el || !saved || saved.stuck) return
@@ -1000,10 +1000,10 @@ function captureAnchor(
 // system, so it's clamped to the slot's current measured height — otherwise a
 // row that re-measured shorter would let the offset overflow past it and pin a
 // later message to the top (the "lands 2 messages off" drift). Clamping keeps
-// the anchored message itself at the top, trading sub-row precision (which is
-// meaningless across a coordinate-system change anyway) for the property the
-// user actually perceives. Returns undefined when the anchored slot no longer
-// exists (e.g. the synthetic first-user row that displayTimeline drops).
+// the anchored message itself at the top, trading sub-row precision (meaningless
+// across a coordinate-system change anyway) for the property the user perceives.
+// Returns undefined when the anchored slot no longer exists (e.g. the synthetic
+// first-user row that displayTimeline drops).
 function resolveAnchor(
   vz: Virtualizer<HTMLDivElement, Element>,
   displayTimeline: readonly TimelineItem[],
@@ -1013,9 +1013,9 @@ function resolveAnchor(
   if (index < 0) return undefined
   const info = vz.getOffsetForIndex(index, 'start')
   if (!info) return undefined
-  const size = vz.measurementsCache[index]?.size
-  const offset =
-    typeof size === 'number' ? Math.min(anchor.offset, Math.max(0, size - 1)) : anchor.offset
+  // info implies measurementsCache[index] exists, so size is always present.
+  const size = vz.measurementsCache[index]?.size ?? 0
+  const offset = Math.min(anchor.offset, Math.max(0, size - 1))
   return Math.max(0, info[0] + offset)
 }
 
