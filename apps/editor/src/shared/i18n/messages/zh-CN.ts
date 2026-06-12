@@ -190,6 +190,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'command.category.diffEditor': '差异编辑器',
   'action.diffEditor.nextChange.title': '转到下一处更改',
   'action.diffEditor.previousChange.title': '转到上一处更改',
+  'action.editor.nextChange.title': '转到下一处更改',
+  'action.editor.previousChange.title': '转到上一处更改',
   'diffEditor.openFile': '打开文件 ({key})',
   'diffEditor.previousChange': '上一处更改 ({key})',
   'diffEditor.nextChange': '下一处更改 ({key})',

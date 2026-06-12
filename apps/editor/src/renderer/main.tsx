@@ -121,6 +121,10 @@ import {
   IScmDecorationsService,
   ScmDecorationsService,
 } from './services/scm/ScmDecorationsService.js'
+import {
+  IDirtyDiffNavigationService,
+  DirtyDiffNavigationService,
+} from './services/scm/DirtyDiffNavigationService.js'
 import { IActivityService, ActivityService } from './services/activity/ActivityService.js'
 import {
   IRendererDisposableLeakService,
@@ -458,6 +462,14 @@ async function bootstrapWorkbench(): Promise<void> {
   // editor tabs by file change state.
   const scmDecorationsService = workbenchStore.add(new ScmDecorationsService(scmService))
   services.set(IScmDecorationsService, scmDecorationsService)
+
+  // Holds the active editor's dirty-diff regions and the `quickDiffDecorationCount`
+  // context key; consumed by the "go to next/previous change" commands. Eager so the
+  // context key is seeded before any when-clause evaluates.
+  services.set(
+    IDirtyDiffNavigationService,
+    instantiation.createInstance(DirtyDiffNavigationService),
+  )
 
   // Activity Bar badges (unsaved files on Explorer, changed files on SCM).
   // Pure renderer state, no deps; contributions push counts into it.

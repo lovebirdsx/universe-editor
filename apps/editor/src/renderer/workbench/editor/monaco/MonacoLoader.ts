@@ -210,6 +210,15 @@ async function loadMonaco(): Promise<typeof monaco> {
       for (const id of monacoNavDefaultKeybindingCommandIds) {
         monacoMod.editor.addKeybindingRule({ keybinding: 0, command: `-${id}` })
       }
+      // On Windows/Linux monaco binds Alt+PageDown / Alt+PageUp to its core
+      // scrollPageDown / scrollPageUp commands (gated on textInputFocus). With
+      // the editor focused monaco matches them first and preventDefault()s, so
+      // the key never reaches our global handler — our own
+      // workbench.action.editor.{next,previous}Change (alt+pagedown/pageup,
+      // jump between dirty-diff changes) would never fire. Drop the default
+      // bindings so the keys fall through; the commands stay triggerable.
+      monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-scrollPageDown' })
+      monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-scrollPageUp' })
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here

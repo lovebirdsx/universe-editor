@@ -194,6 +194,8 @@ export const EN_US_MESSAGES: MessageMap = {
   'command.category.diffEditor': 'Diff Editor',
   'action.diffEditor.nextChange.title': 'Go to Next Difference',
   'action.diffEditor.previousChange.title': 'Go to Previous Difference',
+  'action.editor.nextChange.title': 'Go to Next Change',
+  'action.editor.previousChange.title': 'Go to Previous Change',
   'diffEditor.openFile': 'Open File ({key})',
   'diffEditor.previousChange': 'Previous Change ({key})',
   'diffEditor.nextChange': 'Next Change ({key})',

@@ -9,6 +9,7 @@ import {
   GoToPreviousDifferenceAction,
   OpenDiffAction,
 } from './diffActions.js'
+import { GoToNextChangeAction, GoToPreviousChangeAction } from './dirtyDiffActions.js'
 import {
   GetActiveEditorFileAction,
   GetConfigurationAction,
@@ -383,6 +384,10 @@ registerAction2(OpenMarkdownSourceAction)
 registerAction2(OpenDiffAction)
 registerAction2(GoToNextDifferenceAction)
 registerAction2(GoToPreviousDifferenceAction)
+
+// Editor — dirty-diff navigation (next/previous change vs git HEAD)
+registerAction2(GoToNextChangeAction)
+registerAction2(GoToPreviousChangeAction)
 registerAction2(GetActiveEditorFileAction)
 registerAction2(OpenFileFromExtensionAction)
 registerAction2(GetConfigurationAction)

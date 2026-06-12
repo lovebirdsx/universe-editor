@@ -24,6 +24,7 @@ import {
 import { DirtyDiffCommands } from '@universe-editor/extensions-common'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { IDirtyDiffNavigationService } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { computeDirtyDiffRegions, type DirtyDiffRegion } from './dirtyDiff.js'
@@ -50,6 +51,7 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
     @IEditorService editorService: IEditorService,
     @ICommandService private readonly _commandService: ICommandService,
     @IScmDecorationsService scmDecorationsService: IScmDecorationsService,
+    @IDirtyDiffNavigationService private readonly _navigation: IDirtyDiffNavigationService,
   ) {
     super()
 
@@ -150,6 +152,7 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
   }
 
   private _render(regions: readonly DirtyDiffRegion[]): void {
+    this._navigation.setRegions(regions)
     const collection = this._decorations
     if (!collection) return
     if (regions.length === 0) {
@@ -173,6 +176,7 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
   }
 
   private _clear(): void {
+    this._navigation.setRegions([])
     this._editorStore.clear()
     this._registryStore.clear()
     this._decorations?.clear()
