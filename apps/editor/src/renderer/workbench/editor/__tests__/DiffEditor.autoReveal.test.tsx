@@ -68,6 +68,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
       getOriginalEditor: () => original,
       getModifiedEditor: () => modified,
       updateOptions: () => {},
+      focus: () => {},
       // A freshly-created editor already has a (top-of-file) view state.
       saveViewState: () => ({ kind: 'auto-flushed' }),
       restoreViewState(state: unknown) {
@@ -112,6 +113,8 @@ import { cleanup, render } from '@testing-library/react'
 import {
   ICommandService,
   IConfigurationService,
+  IContextKeyService,
+  IEditorGroupsService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -144,6 +147,14 @@ function createInstantiationService(): InstantiationService {
   services.set(ICommandService, {
     _serviceBrand: undefined,
     executeCommand: async () => undefined,
+  } as never)
+  services.set(IContextKeyService, {
+    _serviceBrand: undefined,
+    set: () => {},
+  } as never)
+  services.set(IEditorGroupsService, {
+    _serviceBrand: undefined,
+    activeGroup: { activeEditor: undefined, lastActivationPreservedFocus: false },
   } as never)
   return new InstantiationService(services)
 }

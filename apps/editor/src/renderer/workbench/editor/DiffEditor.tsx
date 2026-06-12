@@ -11,6 +11,8 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import {
   IConfigurationService,
+  IContextKeyService,
+  IEditorGroupsService,
   type IDisposable,
   type IEditorInput,
 } from '@universe-editor/platform'
@@ -21,6 +23,7 @@ import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
+import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { DiffEditorToolbar } from './DiffEditorToolbar.js'
 import { diffModelUri } from './diffModelUri.js'
@@ -59,6 +62,8 @@ function getEditorTheme(configService: IConfigurationService): 'output-light' | 
 export function DiffEditor({ input }: { input: IEditorInput }) {
   const diffInput = input as DiffEditorInput
   const configService = useService(IConfigurationService)
+  const contextKeyService = useService(IContextKeyService)
+  const groupsService = useService(IEditorGroupsService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const diffEditorRef = useRef<monaco.editor.IStandaloneDiffEditor | null>(null)
@@ -150,6 +155,17 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
     modifiedModelRef.current = modifiedModel
     DiffEditorRegistry.register(diffInput, ed, group?.id)
 
+    // Monaco loads asynchronously, so the group's synchronous focus attempt (in
+    // EditorGroupView) ran before this instance existed. Mirror the file editor:
+    // once registered, pull focus to the modified side if we're the active editor
+    // and the open didn't ask to preserve focus (Space-preview from the SCM list).
+    const activeGroup = groupsService.activeGroup
+    if (activeGroup.activeEditor === diffInput && !activeGroup.lastActivationPreservedFocus) {
+      ed.focus()
+      syncEditorFocusContext(contextKeyService)
+      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
+    }
+
     const groupId = group?.id
     const resourceUri = diffInput.resource.toString()
     const fileUri = diffInput.originalUri.toString()
@@ -238,7 +254,7 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       originalModel.dispose()
       modifiedModel.dispose()
     }
-  }, [monacoNs, diffInput, group, configService])
+  }, [monacoNs, diffInput, group, configService, groupsService, contextKeyService])
 
   // Refresh both sides in place when the input's content changes (e.g. the file
   // is reverted via SCM discard). The diffInput instance is mutated, so the
