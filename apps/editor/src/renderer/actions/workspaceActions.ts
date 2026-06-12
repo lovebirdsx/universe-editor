@@ -113,7 +113,7 @@ export class OpenRecentAction extends Action2 {
       id: OpenRecentAction.ID,
       title: localize('action.openRecent.title', 'Open Recent…'),
       category: localize('command.category.file', 'File'),
-      keybinding: { primary: 'alt+shift+p' },
+      keybinding: { primary: 'ctrl+r' },
       f1: true,
     })
   }

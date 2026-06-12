@@ -18,6 +18,7 @@ import type {
   IQuickPickItem,
   IPickOptions,
   IInputOptions,
+  QuickPickFilterMode,
   QuickPickInput,
   QuickPickPresentation,
 } from '@universe-editor/platform'
@@ -68,8 +69,12 @@ export class QuickInputService implements IQuickInputService {
     let _items: readonly QuickPickInput<T>[] = []
     let _placeholder: string | undefined
     let _value = ''
+    let _prefix = ''
     let _busy = false
     let _filterExternally = false
+    let _filterMode: QuickPickFilterMode = 'fuzzy'
+    let _matchOnDescription = false
+    let _matchOnDetail = false
     let _presentation: QuickPickPresentation = 'default'
     let _visible = false
 
@@ -79,9 +84,13 @@ export class QuickInputService implements IQuickInputService {
         type: 'pick',
         items: _items,
         value: _value,
+        prefix: _prefix,
         placeholder: _placeholder,
         busy: _busy,
         filterExternally: _filterExternally,
+        filterMode: _filterMode,
+        matchOnDescription: _matchOnDescription,
+        matchOnDetail: _matchOnDetail,
         presentation: _presentation,
         onAccept: (selected) => onDidAccept.fire(selected as T[]),
         onValueChange: (value) => {
@@ -115,11 +124,39 @@ export class QuickInputService implements IQuickInputService {
         _value = v
         pushState()
       },
+      get prefix() {
+        return _prefix
+      },
+      set prefix(v) {
+        _prefix = v
+        pushState()
+      },
       get filterExternally() {
         return _filterExternally
       },
       set filterExternally(v) {
         _filterExternally = v
+        pushState()
+      },
+      get filterMode() {
+        return _filterMode
+      },
+      set filterMode(v) {
+        _filterMode = v
+        pushState()
+      },
+      get matchOnDescription() {
+        return _matchOnDescription
+      },
+      set matchOnDescription(v) {
+        _matchOnDescription = v
+        pushState()
+      },
+      get matchOnDetail() {
+        return _matchOnDetail
+      },
+      set matchOnDetail(v) {
+        _matchOnDetail = v
         pushState()
       },
       get presentation() {

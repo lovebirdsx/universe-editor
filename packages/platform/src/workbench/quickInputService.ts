@@ -118,7 +118,18 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[]
   value: string
+  /**
+   * Routing/display prefix (e.g. '@', '>'). When set, the panel strips it off the
+   * input before filtering and shows a hint if the user deletes it. Defaults to ''.
+   */
+  prefix: string
   filterExternally: boolean
+  /** Panel-side filtering algorithm when `filterExternally` is false. Defaults to 'fuzzy'. */
+  filterMode: QuickPickFilterMode
+  /** Also match the query against each item's description. Defaults to false. */
+  matchOnDescription: boolean
+  /** Also match the query against each item's detail. Defaults to false. */
+  matchOnDetail: boolean
   presentation: QuickPickPresentation
   /**
    * When true, the picker UI shows an indeterminate progress bar at the top.

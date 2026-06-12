@@ -7,7 +7,6 @@ import {
   Action2,
   IDialogService,
   IEditorGroupsService,
-  IFileSearchService,
   IFileService,
   IHostService,
   IInstantiationService,
@@ -17,16 +16,14 @@ import {
   URI,
   isEqualResource,
   localize,
-  DisposableStore,
-  type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
+import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
-import { IExcludeService } from '../services/exclude/ExcludeService.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri, type ITargetArg } from './fileActionsCommon.js'
 
@@ -155,26 +152,7 @@ export class OpenWithDefaultAppAction extends Action2 {
   }
 }
 
-const GO_TO_FILE_MAX_RESULTS = 512
-const GO_TO_FILE_SEARCH_DELAY_MS = 200
-
-function workspaceRelativePath(root: URI, uri: URI): string {
-  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '')
-  const norm = uri.fsPath.replace(/\\/g, '/')
-  return norm.startsWith(rootPath + '/') ? norm.slice(rootPath.length + 1) : uri.fsPath
-}
-
-function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPickItem {
-  const rel = workspaceRelativePath(root, uri)
-  const label = labelOverride ?? rel.split(/[/\\]/).at(-1) ?? uri.fsPath
-  return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
-}
-
-function isUriInsideRoot(root: URI, uri: URI): boolean {
-  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
-  const path = uri.fsPath.replace(/\\/g, '/').toLowerCase()
-  return path === rootPath || path.startsWith(rootPath + '/')
-}
+const GO_TO_FILE_PREFIX = ''
 
 export class GoToFileAction extends Action2 {
   static readonly ID = 'workbench.action.quickOpen'
@@ -189,162 +167,14 @@ export class GoToFileAction extends Action2 {
     })
   }
 
-  override async run(accessor: ServicesAccessor): Promise<void> {
-    const quickInput = accessor.get(IQuickInputService)
-    const workspace = accessor.get(IWorkspaceService)
-    const fileSearch = accessor.get(IFileSearchService)
-    const groups = accessor.get(IEditorGroupsService)
-    const inst = accessor.get(IInstantiationService)
-    const recentFiles = accessor.get(IRecentFilesService)
-    const exclude = accessor.get(IExcludeService)
-
-    const root = workspace.current?.folder
-
-    // No workspace open — fall back to recent files.
-    if (!root) {
-      const all = await recentFiles.getAll()
-      if (all.length === 0) return
-      const items = all.map((f) => ({
-        id: f.uri.toString(),
-        label: f.name,
-        description: f.uri.fsPath,
-        iconId: resourceIconId(f.uri),
-      }))
-      const pick = await quickInput.pick(items, {
-        id: 'workbench.recentFiles',
-        placeholder: localize('quickInput.openRecentFile.placeholder', 'Open Recent File…'),
-        matchOnDescription: true,
-      })
-      if (!pick) return
-      const uri = URI.parse(pick.id)
-      for (const group of groups.groups) {
-        for (const editor of group.editors) {
-          if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
-            groups.activateGroup(group)
-            group.setActive(editor)
-            return
-          }
-        }
-      }
-      const input = inst.createInstance(FileEditorInput, uri)
-      groups.activeGroup.openEditor(input, { activate: true })
-      return
-    }
-
-    const recent = await recentFiles.getAll()
-    const recentItems = recent
-      .filter((f) => isUriInsideRoot(root, f.uri))
-      .map((f) => createFilePick(root, f.uri, f.name))
-
-    const picker = quickInput.createQuickPick<IQuickPickItem>()
-    picker.placeholder = localize('quickInput.goToFile.placeholder', 'Go to File…')
-    picker.filterExternally = true
-    picker.items = recentItems
-
-    await new Promise<void>((resolve) => {
-      const store = new DisposableStore()
-      let timer: ReturnType<typeof setTimeout> | undefined
-      let requestSeq = 0
-      let accepted = false
-      let didResolve = false
-
-      const cleanup = (): void => {
-        requestSeq++
-        if (timer !== undefined) {
-          clearTimeout(timer)
-          timer = undefined
-        }
-        store.dispose()
-        picker.dispose()
-      }
-
-      const resolveOnce = (): void => {
-        if (didResolve) return
-        didResolve = true
-        cleanup()
-        resolve()
-      }
-
-      const openPick = async (pick: IQuickPickItem): Promise<void> => {
-        const uri = URI.parse(pick.id)
-        recentFiles.add(uri, pick.label)
-        for (const group of groups.groups) {
-          for (const editor of group.editors) {
-            if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
-              groups.activateGroup(group)
-              group.setActive(editor)
-              return
-            }
-          }
-        }
-        const input = inst.createInstance(FileEditorInput, uri)
-        groups.activeGroup.openEditor(input, { activate: true, pinned: true })
-      }
-
-      const runSearch = async (value: string): Promise<void> => {
-        const seq = ++requestSeq
-        const pattern = value.trim()
-        if (pattern.length === 0) {
-          picker.busy = false
-          picker.items = recentItems
-          return
-        }
-
-        picker.busy = true
-        try {
-          const complete = await fileSearch.search({
-            root,
-            pattern,
-            excludes: exclude.getSearchExcludeGlobs(),
-            ignore: exclude.getDirNameIgnores(),
-            maxResults: GO_TO_FILE_MAX_RESULTS,
-            includeExactPathMatches: true,
-          })
-          if (seq !== requestSeq) return
-          picker.items = complete.results.map((match) => {
-            const resource = URI.revive(match.resource)!
-            return {
-              id: resource.toString(),
-              label: match.basename,
-              description: match.relativePath,
-              iconId: resourceIconId(resource),
-            }
-          })
-        } finally {
-          if (seq === requestSeq) picker.busy = false
-        }
-      }
-
-      const scheduleSearch = (value: string): void => {
-        if (timer !== undefined) clearTimeout(timer)
-        if (value.trim().length === 0) {
-          void runSearch(value)
-          return
-        }
-        timer = setTimeout(() => {
-          timer = undefined
-          void runSearch(value)
-        }, GO_TO_FILE_SEARCH_DELAY_MS)
-      }
-
-      store.add(picker.onDidChangeValue(scheduleSearch))
-      store.add(
-        picker.onDidAccept((items) => {
-          const pick = items[0]
-          if (!pick) return
-          accepted = true
-          void openPick(pick).finally(resolveOnce)
-        }),
-      )
-      store.add(
-        picker.onDidHide(() => {
-          if (!accepted) resolveOnce()
-        }),
-      )
-
-      picker.show()
-      scheduleSearch('')
-    })
+  /**
+   * Unified quick open. An optional string `args[0]` (e.g. from a keybinding's
+   * `args: "@:"`) prefills the picker so it lands directly in that mode; mirrors
+   * VSCode's `workbench.action.quickOpen` argument.
+   */
+  override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
+    const initial = typeof args[0] === 'string' ? args[0] : GO_TO_FILE_PREFIX
+    await accessor.get(IQuickAccessController).show(initial)
   }
 }
 

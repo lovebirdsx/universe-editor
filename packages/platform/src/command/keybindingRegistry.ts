@@ -33,6 +33,11 @@ export interface IKeybindingItem {
   when?: ContextKeyExpression | string
   /** When set, pressing the key removes the binding rather than invoking the command. */
   isNegated?: boolean
+  /**
+   * Optional argument forwarded to the command handler when the binding fires
+   * (VSCode-style `args`). Enables e.g. `quickOpen` with a prefix like `@:`.
+   */
+  args?: unknown
 }
 
 interface IResolvedKeybindingItem {
@@ -40,6 +45,7 @@ interface IResolvedKeybindingItem {
   command: string
   when: ContextKeyExpression | undefined
   isNegated: boolean
+  args?: unknown
 }
 
 /**
@@ -50,7 +56,7 @@ interface IResolvedKeybindingItem {
  * - `no-match` → nothing matched.
  */
 export type KeystrokeResolution =
-  | { kind: 'execute'; command: string }
+  | { kind: 'execute'; command: string; args?: unknown }
   | { kind: 'enter-chord'; pending: readonly string[] }
   | { kind: 'no-match' }
 
@@ -185,6 +191,7 @@ class KeybindingsRegistryImpl {
       command: item.command,
       when: resolveWhen(item.when),
       isNegated: item.isNegated ?? false,
+      ...(item.args !== undefined ? { args: item.args } : {}),
     }
     this._items.push(resolved)
 
@@ -210,6 +217,7 @@ class KeybindingsRegistryImpl {
         command: it.command,
         ...(it.when !== undefined ? { when: it.when } : {}),
         ...(it.isNegated ? { isNegated: it.isNegated } : {}),
+        ...(it.args !== undefined ? { args: it.args } : {}),
       }))
   }
 
@@ -256,7 +264,11 @@ class KeybindingsRegistryImpl {
         if (
           evaluateBinding(binding, 'chord-complete', normalized, first, contextKeyService).matched
         ) {
-          return { kind: 'execute', command: binding.command }
+          return {
+            kind: 'execute',
+            command: binding.command,
+            ...(binding.args !== undefined ? { args: binding.args } : {}),
+          }
         }
       }
       return { kind: 'no-match' }
@@ -276,8 +288,16 @@ class KeybindingsRegistryImpl {
     }
 
     // No active chord prefix — fall through to single-stroke.
-    const singleHit = this.resolveKeybinding(normalized, contextKeyService)
-    if (singleHit !== undefined) return { kind: 'execute', command: singleHit }
+    for (let i = this._items.length - 1; i >= 0; i--) {
+      const binding = this._items[i]!
+      if (evaluateBinding(binding, 'single', normalized, undefined, contextKeyService).matched) {
+        return {
+          kind: 'execute',
+          command: binding.command,
+          ...(binding.args !== undefined ? { args: binding.args } : {}),
+        }
+      }
+    }
 
     return { kind: 'no-match' }
   }
@@ -409,6 +429,7 @@ class KeybindingsRegistryImpl {
         command: it.command,
         ...(it.when !== undefined ? { when: it.when } : {}),
         ...(it.isNegated ? { isNegated: it.isNegated } : {}),
+        ...(it.args !== undefined ? { args: it.args } : {}),
       }
       if (it.chords.length === 2) {
         return { ...base, chords: [it.chords[0]!, it.chords[1]!] as [string, string] }

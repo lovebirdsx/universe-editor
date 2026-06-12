@@ -111,6 +111,8 @@ import { AcpSessionService, IAcpSessionService } from './services/acp/acpSession
 // Side-effect import: registers IAcpSessionFilterService before the
 // getSingletonServiceDescriptors() snapshot below picks it up.
 import './services/acp/acpSessionFilterService.js'
+// Side-effect import: registers IQuickAccessController for the same snapshot.
+import './services/quickInput/QuickAccessController.js'
 import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
 import {
   ExtensionHostClientService,

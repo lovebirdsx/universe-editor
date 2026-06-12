@@ -2,12 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
-  ICommandService,
   IContextKeyService,
-  IEditorGroupsService,
-  IFileService,
   ILayoutService,
-  IQuickInputService,
   IViewsService,
   InstantiationService,
   KeybindingsRegistry,
@@ -15,20 +11,15 @@ import {
   MenuRegistry,
   PartId,
   ServiceCollection,
-  URI,
   registerAction2,
   type IDisposable,
-  type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
-  ShowCommandsAction,
   ShowExplorerAction,
   TogglePanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
 } from '../../actions/layoutActions.js'
-import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 
 describe('Built-in layout Action2s', () => {
   const disposables: IDisposable[] = []
@@ -117,177 +108,6 @@ describe('Built-in layout Action2s', () => {
     })
     expect(toggleVisible).toHaveBeenCalledWith(PartId.Panel)
     expect(openViewContainer).toHaveBeenCalledWith('workbench.view.output')
-  })
-
-  it('ShowCommands invokes quick input and executes selected command', async () => {
-    const pick = vi.fn().mockResolvedValue({ id: 'demo.cmd' })
-    const executeCommand = vi.fn().mockResolvedValue(undefined)
-    const services = new ServiceCollection()
-    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
-    services.set(ICommandService, { _serviceBrand: undefined, executeCommand } as never)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: undefined },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(CommandsRegistry.registerCommand('demo.cmd', () => undefined))
-    disposables.push(registerAction2(ShowCommandsAction))
-    await inst.invokeFunction(async (accessor) => {
-      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
-      await cmd.handler(accessor)
-    })
-    expect(pick).toHaveBeenCalled()
-    const pickedOptions = pick.mock.calls[0]?.[1] as
-      | { prefix?: string; filterMode?: string }
-      | undefined
-    expect(pickedOptions?.prefix).toBe('>')
-    expect(pickedOptions?.filterMode).toBe('word')
-    expect(executeCommand).toHaveBeenCalledWith('demo.cmd')
-  })
-
-  it('ShowCommands includes Monaco actions from the active FileEditor', async () => {
-    const input = new FileEditorInput(URI.file('/a.ts'), {} as IFileService)
-    const fakeEditor = {
-      getSupportedActions: () => [
-        {
-          id: 'editor.action.formatDocument',
-          label: 'Format Document',
-          alias: '',
-          metadata: undefined,
-          isSupported: () => true,
-          run: () => Promise.resolve(),
-        },
-      ],
-    }
-    FileEditorRegistry.register(input, fakeEditor as never)
-    disposables.push({ dispose: () => FileEditorRegistry._resetForTests() })
-
-    const pick = vi.fn().mockResolvedValue(undefined)
-    const services = new ServiceCollection()
-    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
-    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: input },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(ShowCommandsAction))
-    await inst.invokeFunction(async (accessor) => {
-      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
-      await cmd.handler(accessor)
-    })
-    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
-    expect(items?.some((i) => i.id === 'editor.action.formatDocument')).toBe(true)
-  })
-
-  it('ShowCommands deduplicates Monaco actions already registered as project commands', async () => {
-    const input = new FileEditorInput(URI.file('/a.ts'), {} as IFileService)
-    const fakeEditor = {
-      getSupportedActions: () => [
-        {
-          id: 'demo.collide',
-          label: 'Monaco Collide',
-          alias: '',
-          metadata: undefined,
-          isSupported: () => true,
-          run: () => Promise.resolve(),
-        },
-      ],
-    }
-    FileEditorRegistry.register(input, fakeEditor as never)
-    disposables.push({ dispose: () => FileEditorRegistry._resetForTests() })
-    disposables.push(CommandsRegistry.registerCommand('demo.collide', () => undefined))
-
-    const pick = vi.fn().mockResolvedValue(undefined)
-    const services = new ServiceCollection()
-    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
-    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: input },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(ShowCommandsAction))
-    await inst.invokeFunction(async (accessor) => {
-      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
-      await cmd.handler(accessor)
-    })
-    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
-    const count = items?.filter((i) => i.id === 'demo.collide').length ?? 0
-    expect(count).toBe(1)
-  })
-
-  it('ShowCommands attaches keybinding hint to commands that have bindings', async () => {
-    const pick = vi.fn().mockResolvedValue(undefined)
-    const services = new ServiceCollection()
-    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
-    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: undefined },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(ShowCommandsAction))
-    await inst.invokeFunction(async (accessor) => {
-      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
-      await cmd.handler(accessor)
-    })
-    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
-    const item = items?.find((i) => i.id === ShowCommandsAction.ID)
-    // ShowCommandsAction registers [ctrl+shift+p, f1]; resolveShortcut returns the last-registered binding
-    expect(item?.keybinding).toBe('F1')
-  })
-
-  it('ShowCommands formats label as "Category: Title" so commands are findable by category name', async () => {
-    disposables.push(
-      CommandsRegistry.registerCommand({
-        id: 'git.commit',
-        handler: () => undefined,
-        metadata: { description: 'Commit', category: 'Git' },
-      }),
-    )
-    const pick = vi.fn().mockResolvedValue(undefined)
-    const services = new ServiceCollection()
-    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
-    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: undefined },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(registerAction2(ShowCommandsAction))
-    await inst.invokeFunction(async (accessor) => {
-      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
-      await cmd.handler(accessor)
-    })
-    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
-    const item = items?.find((i) => i.id === 'git.commit')
-    // label must be "Git: Commit" — not just "Commit" — so the user can type
-    // "git" in the command palette and find this command via word filter.
-    expect(item?.label).toBe('Git: Commit')
-    // category must NOT appear as a separate description field (it is now in the label)
-    expect(item?.description).toBeUndefined()
-  })
-
-  it('ShowCommands leaves keybinding undefined for commands without bindings', async () => {
-    const pick = vi.fn().mockResolvedValue(undefined)
-    const services = new ServiceCollection()
-    services.set(IQuickInputService, { _serviceBrand: undefined, pick } as never)
-    services.set(ICommandService, { _serviceBrand: undefined, executeCommand: vi.fn() } as never)
-    services.set(IEditorGroupsService, {
-      _serviceBrand: undefined,
-      activeGroup: { activeEditor: undefined },
-    } as never)
-    const inst = new InstantiationService(services)
-    disposables.push(CommandsRegistry.registerCommand('demo.nokeybinding', () => undefined))
-    disposables.push(registerAction2(ShowCommandsAction))
-    await inst.invokeFunction(async (accessor) => {
-      const cmd = CommandsRegistry.getCommand(ShowCommandsAction.ID)!
-      await cmd.handler(accessor)
-    })
-    const items = pick.mock.calls[0]?.[0] as IQuickPickItem[] | undefined
-    const item = items?.find((i) => i.id === 'demo.nokeybinding')
-    expect(item?.keybinding).toBeUndefined()
   })
 
   it('dispose unregisters everything', () => {

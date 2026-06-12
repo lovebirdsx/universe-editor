@@ -32,3 +32,30 @@ export function flattenOutline(
   visit(roots, 0, '')
   return out
 }
+
+export interface SymbolKindGroup {
+  /** Monaco 0-based SymbolKind shared by every symbol in this group. */
+  readonly kind: number
+  readonly symbols: readonly FlatSymbol[]
+}
+
+/**
+ * Group a flattened symbol list by SymbolKind for the '@:' (by category) quick
+ * access view. Kinds are ordered by first appearance and symbols keep document
+ * order within each group. Pure.
+ */
+export function groupSymbolsByKind(flat: readonly FlatSymbol[]): readonly SymbolKindGroup[] {
+  const order: number[] = []
+  const byKind = new Map<number, FlatSymbol[]>()
+  for (const entry of flat) {
+    const kind = entry.symbol.kind
+    let bucket = byKind.get(kind)
+    if (!bucket) {
+      bucket = []
+      byKind.set(kind, bucket)
+      order.push(kind)
+    }
+    bucket.push(entry)
+  }
+  return order.map((kind) => ({ kind, symbols: byKind.get(kind) ?? [] }))
+}

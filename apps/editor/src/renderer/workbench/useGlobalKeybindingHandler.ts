@@ -241,7 +241,10 @@ export function useGlobalKeybindingHandler(): void {
         e.preventDefault()
         e.stopPropagation()
         if (result.kind === 'execute' && e.key.toLowerCase() === 'escape') {
-          void commandService.executeCommand(result.command)
+          void commandService.executeCommand(
+            result.command,
+            ...(result.args !== undefined ? [result.args] : []),
+          )
         }
         return
       }
@@ -282,7 +285,10 @@ export function useGlobalKeybindingHandler(): void {
         e.preventDefault()
         e.stopPropagation()
         if (result.kind === 'execute') {
-          void commandService.executeCommand(result.command)
+          void commandService.executeCommand(
+            result.command,
+            ...(result.args !== undefined ? [result.args] : []),
+          )
         }
         return
       }
@@ -344,7 +350,10 @@ export function useGlobalKeybindingHandler(): void {
       e.preventDefault()
       e.stopPropagation()
       if (result.kind === 'execute') {
-        void commandService.executeCommand(result.command)
+        void commandService.executeCommand(
+          result.command,
+          ...(result.args !== undefined ? [result.args] : []),
+        )
       } else {
         enterChord(result.pending[0]!)
       }

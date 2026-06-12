@@ -34,6 +34,8 @@ export interface IAction2Keybinding {
    */
   primary: string | readonly [string, string]
   when?: ContextKeyExpression | string
+  /** Optional argument forwarded to the command handler when the binding fires. */
+  args?: unknown
 }
 
 export interface IAction2Options {
@@ -141,6 +143,7 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
       ...(typeof kb.primary === 'string' ? { key: kb.primary } : { chords: kb.primary }),
       command: desc.id,
       ...(when !== undefined ? { when } : {}),
+      ...(kb.args !== undefined ? { args: kb.args } : {}),
     }
     disposables.push(KeybindingsRegistry.registerKeybinding(item))
   }

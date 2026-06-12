@@ -37,12 +37,15 @@ export interface IUserKeybindingEntry {
   /** Normalized key string (e.g. 'ctrl+shift+b'). null = disable default bindings. */
   key: string | null
   when?: string
+  /** Forwarded to the command when the binding fires (VSCode-style `args`). */
+  args?: unknown
 }
 
 interface FileKeybindingEntry {
   key?: string
   command: string
   when?: string
+  args?: unknown
 }
 
 export interface IUserKeybindingsService {
@@ -82,6 +85,7 @@ function keyToKeybindingItem(entry: IUserKeybindingEntry): IKeybindingItem | und
   const base = {
     command: entry.command,
     ...(entry.when !== undefined ? { when: entry.when } : {}),
+    ...(entry.args !== undefined ? { args: entry.args } : {}),
   }
 
   if (strokes.length === 2) {
@@ -104,6 +108,7 @@ function entryToFile(entry: IUserKeybindingEntry): FileKeybindingEntry {
     key: entry.key,
     command: entry.command,
     ...(entry.when !== undefined ? { when: entry.when } : {}),
+    ...(entry.args !== undefined ? { args: entry.args } : {}),
   }
 }
 
@@ -123,6 +128,7 @@ function fileToEntry(raw: FileKeybindingEntry): IUserKeybindingEntry | null {
     command: raw.command,
     key: raw.key,
     ...(typeof raw.when === 'string' ? { when: raw.when } : {}),
+    ...(raw.args !== undefined ? { args: raw.args } : {}),
   }
 }
 

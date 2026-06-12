@@ -69,6 +69,7 @@ import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
 } from './ActivityBarBadgeContributions.js'
+import { QuickAccessContribution } from './QuickAccessContribution.js'
 
 // Install the Monaco standalone override services (cross-file rename writer +
 // references text-model resolver) on MonacoLoader before any editor is created —
@@ -527,6 +528,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.scmActivity',
   ScmActivityContribution,
   WorkbenchPhase.AfterRestore,
+)
+
+// Register the QuickAccess provider descriptors (file / symbols / commands /
+// workspace symbols) so workbench.action.quickOpen routes by input prefix.
+// BlockStartup so the registry is populated before the first quick open.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.quickAccess',
+  QuickAccessContribution,
+  WorkbenchPhase.BlockStartup,
 )
 
 export {

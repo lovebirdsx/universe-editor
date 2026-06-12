@@ -4,16 +4,17 @@
 
 import { describe, expect, it } from 'vitest'
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
-import { flattenOutline } from '../outlineFlatten.js'
+import { flattenOutline, groupSymbolsByKind } from '../outlineFlatten.js'
 
 function sym(
   name: string,
   children: monaco.languages.DocumentSymbol[] = [],
+  kind = 14,
 ): monaco.languages.DocumentSymbol {
   return {
     name,
     detail: '',
-    kind: 14 as monaco.languages.SymbolKind,
+    kind: kind as monaco.languages.SymbolKind,
     tags: [],
     range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
     selectionRange: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
@@ -39,5 +40,20 @@ describe('flattenOutline', () => {
     const ids = flat.map((f) => f.id)
     expect(ids).toEqual(['0', '0/0', '1'])
     expect(new Set(ids).size).toBe(ids.length)
+  })
+})
+
+describe('groupSymbolsByKind', () => {
+  it('returns [] for an empty list', () => {
+    expect(groupSymbolsByKind([])).toEqual([])
+  })
+
+  it('groups by SymbolKind, ordered by first appearance, preserving document order within a group', () => {
+    // kinds: 11 (interface), 11, 4 (class), 11 — first-appearance order is [11, 4].
+    const flat = flattenOutline([sym('A', [], 11), sym('B', [], 4), sym('C', [], 11)])
+    const groups = groupSymbolsByKind(flat)
+    expect(groups.map((g) => g.kind)).toEqual([11, 4])
+    expect(groups[0]!.symbols.map((s) => s.symbol.name)).toEqual(['A', 'C'])
+    expect(groups[1]!.symbols.map((s) => s.symbol.name)).toEqual(['B'])
   })
 })

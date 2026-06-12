@@ -175,6 +175,31 @@ describe('UserKeybindingsService', () => {
     expect(service.disabledCommands).not.toContain('foo.bar')
   })
 
+  it('carries `args` from the keybindings file through to keystroke resolution', async () => {
+    disposables.push(
+      CommandsRegistry.registerCommand({ id: 'workbench.action.quickOpen', handler: () => {} }),
+    )
+
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.Keybindings,
+      JSON.stringify([{ key: 'ctrl+r', command: 'workbench.action.quickOpen', args: '@:' }]),
+    )
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+
+    await service.initialize()
+
+    const resolution = KeybindingsRegistry.resolveKeystroke('ctrl+r')
+    expect(resolution).toEqual({
+      kind: 'execute',
+      command: 'workbench.action.quickOpen',
+      args: '@:',
+    })
+    // The parsed user entry retains args so the Keyboard Shortcuts editor can round-trip it.
+    expect(service.getUserEntry('workbench.action.quickOpen')?.args).toBe('@:')
+  })
+
   it('serializes concurrent reload() calls without duplicating registrations', async () => {
     const lazyCommand = 'test.lazy.serialized'
     disposables.push(CommandsRegistry.registerCommand({ id: lazyCommand, handler: () => {} }))

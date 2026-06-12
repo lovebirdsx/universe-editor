@@ -6,25 +6,16 @@
 
 import {
   Action2,
-  ICommandService,
   IEditorGroupsService,
   ILayoutService,
-  IQuickInputService,
   IViewsService,
   MenuId,
   PartId,
   ViewContainerLocation,
-  CommandsRegistry,
   localize,
-  type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import {
-  collectMonacoCommands,
-  isMonacoCommandItem,
-  type MonacoCommandItem,
-} from '../services/quickInput/monacoCommandSource.js'
-import { resolveShortcut } from '../workbench/titlebar/keybindingFormat.js'
+import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
@@ -207,42 +198,6 @@ export class ShowCommandsAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const quickInputService = accessor.get(IQuickInputService)
-    const commandService = accessor.get(ICommandService)
-    const groupsService = accessor.get(IEditorGroupsService)
-
-    const registryItems: IQuickPickItem[] = [...CommandsRegistry.getCommands().values()].map(
-      (cmd) => {
-        const keybinding = resolveShortcut(cmd.id)
-        const title = cmd.metadata?.description ?? cmd.id
-        const category = cmd.metadata?.category
-        return {
-          id: cmd.id,
-          label: category !== undefined ? `${category}: ${title}` : title,
-          ...(keybinding !== undefined ? { keybinding } : {}),
-        }
-      },
-    )
-    const monacoItems: MonacoCommandItem[] = collectMonacoCommands(groupsService)
-    // De-dupe: a Monaco action id can collide with a project command id; prefer
-    // the project command (project intent wins, Monaco is a fallback source).
-    const projectIds = new Set(registryItems.map((i) => i.id))
-    const items: IQuickPickItem[] = [
-      ...registryItems,
-      ...monacoItems.filter((m) => !projectIds.has(m.id)),
-    ]
-
-    const selected = await quickInputService.pick(items, {
-      id: 'workbench.commandPalette',
-      placeholder: localize('quickInput.commandPalette.placeholder', 'Type a command name…'),
-      prefix: '>',
-      filterMode: 'word',
-    })
-    if (!selected) return
-    if (isMonacoCommandItem(selected)) {
-      void selected._editor.getAction(selected._actionId)?.run()
-    } else {
-      void commandService.executeCommand(selected.id)
-    }
+    await accessor.get(IQuickAccessController).show('>')
   }
 }

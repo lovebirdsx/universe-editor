@@ -53,7 +53,7 @@ import {
 import { SaveFileAction, SaveFileAsAction } from '../fileSaveActions.js'
 import { NewFileAction, NewFolderAction, NewUntitledFileAction } from '../fileCreateActions.js'
 import { DeleteFileAction, RenameFileAction } from '../fileMutateActions.js'
-import { GoToFileAction, OpenFileAction } from '../fileOpenActions.js'
+import { OpenFileAction } from '../fileOpenActions.js'
 import {
   ExplorerTreeService,
   IExplorerTreeService,
@@ -154,28 +154,6 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
       }
     },
   } as never
-}
-
-function addDir(fs: ReturnType<typeof makeFs>, parent: URI, name: string): URI {
-  const dir = URI.joinPath(parent, name)
-  fs.dirs.set(dir.toString(), fs.dirs.get(dir.toString()) ?? [])
-  const siblings = fs.dirs.get(parent.toString()) ?? []
-  if (!siblings.some((entry) => entry.name === name)) {
-    siblings.push({ name, isFile: false, isDirectory: true })
-  }
-  fs.dirs.set(parent.toString(), siblings)
-  return dir
-}
-
-function addFile(fs: ReturnType<typeof makeFs>, parent: URI, name: string): URI {
-  const file = URI.joinPath(parent, name)
-  fs.files.add(file.toString())
-  const siblings = fs.dirs.get(parent.toString()) ?? []
-  if (!siblings.some((entry) => entry.name === name)) {
-    siblings.push({ name, isFile: true, isDirectory: false })
-  }
-  fs.dirs.set(parent.toString(), siblings)
-  return file
 }
 
 class FakeWorkspaceService implements IWorkspaceServiceType {
@@ -312,7 +290,11 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidChangeActive = this._onDidChangeActive.event
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[] = []
+  prefix = ''
   filterExternally = false
+  filterMode: 'fuzzy' | 'word' = 'fuzzy'
+  matchOnDescription = false
+  matchOnDetail = false
   presentation: QuickPickPresentation = 'default'
   busy = false
   private _value = ''
@@ -546,7 +528,6 @@ const disposables: Array<{ dispose(): void }> = []
 beforeEach(() => {
   disposables.push(registerAction2(SaveFileAction))
   disposables.push(registerAction2(SaveFileAsAction))
-  disposables.push(registerAction2(GoToFileAction))
   disposables.push(registerAction2(OpenFileAction))
   disposables.push(registerAction2(NewFileAction))
   disposables.push(registerAction2(NewFolderAction))
@@ -601,66 +582,6 @@ describe('fileActions', () => {
       h.host.openResult = null
       await run(h, OpenFileAction.ID)
       expect(h.group.opened).toHaveLength(0)
-    })
-  })
-
-  describe('GoToFileAction', () => {
-    it('filters quick-open candidates through configured excludes', async () => {
-      const matcher = makeExcludeMatcher({
-        '**/node_modules': true,
-        '**/dist': true,
-        '**/*.generated.ts': true,
-      })!
-      const exclude = {
-        _serviceBrand: undefined,
-        onDidChange: new Emitter<void>().event,
-        currentWatcherGlobs: [],
-        isExcluded: (relPath: string) => matcher(relPath),
-        getDirNameIgnores: () => ['node_modules', 'dist'],
-        getSearchExcludeGlobs: () => ['**/node_modules', '**/dist', '**/*.generated.ts'],
-      } satisfies IExcludeService
-      const root = URI.file('/ws')
-      const h = makeHarness({ root, exclude })
-
-      const src = addDir(h.fs, root, 'src')
-      addFile(h.fs, src, 'main.ts')
-      addFile(h.fs, src, 'schema.generated.ts')
-      const nodeModules = addDir(h.fs, root, 'node_modules')
-      addFile(h.fs, nodeModules, 'pkg.js')
-      const dist = addDir(h.fs, root, 'dist')
-      addFile(h.fs, dist, 'bundle.js')
-
-      const pending = run(h, GoToFileAction.ID)
-      await Promise.resolve()
-      const qp = h.quickInput.quickPick!
-      qp.value = 'ts'
-      await new Promise((resolve) => setTimeout(resolve, 250))
-      qp.hide()
-      await pending
-
-      expect(qp.items.map((item) => item.description)).toEqual(['src/main.ts'])
-    })
-
-    it('searches beyond the old 5000-file pre-enumeration cap', async () => {
-      const root = URI.file('/ws')
-      const h = makeHarness({ root })
-      const many = addDir(h.fs, root, 'many')
-      for (let i = 0; i < 5001; i++) {
-        addFile(h.fs, many, `f${i}.ts`)
-      }
-      const target = addFile(h.fs, many, 'ActionDetailView.tsx')
-
-      const pending = run(h, GoToFileAction.ID)
-      await Promise.resolve()
-      const qp = h.quickInput.quickPick!
-      qp.value = 'ActionDetailView.tsx'
-      await new Promise((resolve) => setTimeout(resolve, 250))
-
-      expect(qp.items.map((item) => item.id)).toContain(target.toString())
-      qp.accept(qp.items.find((item) => item.id === target.toString()) as IQuickPickItem)
-      await pending
-
-      expect(h.group.opened[0]?.resource?.toString()).toBe(target.toString())
     })
   })
 
