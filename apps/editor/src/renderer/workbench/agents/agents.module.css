@@ -751,6 +751,11 @@
   overflow-y: hidden;
 }
 
+.promptTextarea:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
+}
+
 .promptTextarea.dropActive {
   border-color: var(--color-list-active-bar, #007acc);
   outline: 1px solid var(--color-list-active-bar, #007acc);
@@ -1511,6 +1516,11 @@
   color: inherit;
 }
 
+.questionFreeform:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
+}
+
 .questionPreview {
   flex: 1 1 50%;
   min-width: 0;
@@ -1538,6 +1548,11 @@
   background: var(--color-question-input-bg, #1e1e1e);
   color: inherit;
   resize: vertical;
+}
+
+.questionNotes:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .questionActions {
@@ -1893,8 +1908,8 @@
 }
 
 .findInput:focus {
-  outline: 1px solid var(--color-focus-border, var(--color-badge-progress, #4fa6e2));
-  outline-offset: -1px;
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .findCount {

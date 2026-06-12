@@ -58,7 +58,7 @@
 }
 
 .search:focus {
-  border-color: var(--color-input-focus-border, #0070e0);
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .body {
@@ -128,7 +128,7 @@
 }
 
 .control:focus {
-  border-color: var(--color-input-focus-border, #0070e0);
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .checkbox {

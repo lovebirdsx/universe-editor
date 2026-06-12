@@ -63,6 +63,11 @@
   border-radius: 2px;
 }
 
+.commitInput:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
+}
+
 .commitBar {
   display: flex;
   margin-top: 6px;

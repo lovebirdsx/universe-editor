@@ -39,6 +39,11 @@
   border-radius: 3px;
 }
 
+.repoSelect:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
+}
+
 .searchInput {
   width: 200px;
   padding: 2px 6px;
@@ -51,6 +56,11 @@
 
 .searchInput::placeholder {
   color: var(--color-editor-fg-muted);
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .toolBtn {
@@ -114,6 +124,11 @@
   color: var(--color-editor-fg);
   border: 1px solid var(--color-border);
   border-radius: 3px;
+}
+
+.settingsRow select:focus {
+  outline: none;
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .status,
