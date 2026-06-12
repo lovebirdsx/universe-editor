@@ -58,6 +58,15 @@ export class UntitledEditorInput extends EditorInput {
     return model
   }
 
+  /**
+   * The already-acquired model, if any — lets FileEditor swap synchronously
+   * (before paint) when switching back to this buffer. See FileEditorInput.peekModel.
+   */
+  peekModel(): monaco.editor.ITextModel | undefined {
+    if (!this._modelRefAcquired) return undefined
+    return MonacoModelRegistry.peek(this._resource)
+  }
+
   get backupContent(): string {
     return ''
   }
