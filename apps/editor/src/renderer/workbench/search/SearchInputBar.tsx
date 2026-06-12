@@ -26,6 +26,8 @@ export interface SearchInputBarProps {
   onToggleWord: () => void
   onToggleReplace: () => void
   onToggleFilters: () => void
+  /** Tab from the main query input moves focus into the results list. */
+  onTabToResults?: () => void
 }
 
 interface ToggleProps {
@@ -72,6 +74,12 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               aria-label="Search"
               value={props.pattern}
               onChange={(e) => props.onPattern(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Tab' && !e.shiftKey && props.onTabToResults) {
+                  e.preventDefault()
+                  props.onTabToResults()
+                }
+              }}
             />
             <div className={styles['toggles']}>
               <Toggle

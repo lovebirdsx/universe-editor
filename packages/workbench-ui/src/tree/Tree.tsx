@@ -71,6 +71,8 @@ export interface ITreeProps<T> {
   readonly onActivate?: (node: IVisibleNode<T>, opts: ITreeActivateOptions) => void
   /** Keys not handled by built-in navigation (e.g. F2 / Delete) reach the view here. */
   readonly onRowKeyDown?: (e: ReactKeyboardEvent, node: IVisibleNode<T>) => void
+  /** Shift+Tab inside the tree — lets the view hand focus back to a prior region. */
+  readonly onShiftTab?: () => void
   /** Context menu on empty area (null) — per-row menus are the view's job in renderRow. */
   readonly onContextMenu?: (e: ReactMouseEvent, node: IVisibleNode<T> | null) => void
 }
@@ -89,6 +91,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     rootRef,
     onActivate,
     onRowKeyDown,
+    onShiftTab,
     onContextMenu,
   } = props
 
@@ -158,6 +161,12 @@ export function Tree<T>(props: ITreeProps<T>) {
   const onKeyDown = useCallback(
     (e: ReactKeyboardEvent<HTMLDivElement>) => {
       if (e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.key === 'Tab' && e.shiftKey && onShiftTab) {
+        e.preventDefault()
+        e.stopPropagation()
+        onShiftTab()
+        return
+      }
       const vis = model.getVisibleNodes()
       if (vis.length === 0) return
       const focusedId = model.focused
@@ -240,7 +249,7 @@ export function Tree<T>(props: ITreeProps<T>) {
           return
       }
     },
-    [model, onActivate, onRowKeyDown],
+    [model, onActivate, onRowKeyDown, onShiftTab],
   )
 
   const renderNode = (node: IVisibleNode<T>, style?: CSSProperties): ReactNode =>

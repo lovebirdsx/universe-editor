@@ -22,6 +22,10 @@ export interface SearchSessionState {
   filtersVisible: boolean
   results: readonly IFileMatch[]
   treeCollapsedIds: ReadonlySet<string>
+  /** Resource last opened from the results tree, so a re-focus can target it. */
+  lastActivatedResource?: string
+  /** The match node id that was focused when that file was opened. */
+  lastActivatedFocusId?: string
 }
 
 function emptyState(): SearchSessionState {
@@ -44,4 +48,8 @@ export const searchSession: SearchSessionState = emptyState()
 
 export function resetSearchSession(): void {
   Object.assign(searchSession, emptyState())
+  // Optional fields aren't part of emptyState (exactOptionalPropertyTypes), so
+  // clear any carried-over value explicitly.
+  delete searchSession.lastActivatedResource
+  delete searchSession.lastActivatedFocusId
 }

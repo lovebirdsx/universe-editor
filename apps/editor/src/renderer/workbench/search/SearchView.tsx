@@ -10,9 +10,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { IWorkspaceService } from '@universe-editor/platform'
+import { IEditorService, IWorkspaceService, URI, isEqualResource } from '@universe-editor/platform'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { SearchInputBar } from './SearchInputBar.js'
-import { SearchResultsTree } from './SearchResultsTree.js'
+import { SearchResultsTree, type SearchResultsTreeHandle } from './SearchResultsTree.js'
 import { useSearchEngine, type ISearchQuery } from './useSearchEngine.js'
 import { useSearchActions } from './useSearchActions.js'
 import { searchViewState } from './searchViewState.js'
@@ -40,6 +41,7 @@ export function SearchView() {
   const [filtersVisible, setFiltersVisible] = useState(searchSession.filtersVisible)
 
   const inputRef = useRef<HTMLInputElement | null>(null)
+  const treeRef = useRef<SearchResultsTreeHandle>(null)
 
   const query = useMemo<ISearchQuery>(
     () => ({
@@ -64,10 +66,34 @@ export function SearchView() {
   const workspaceService = useService(IWorkspaceService)
   const rootUri = workspaceService.current?.folder ?? null
 
-  // Focus event from FindInFilesAction.
+  const editorService = useService(IEditorService)
+  // Read latest results from a ref so the focusable getter can stay stable.
+  const resultsRef = useRef(results)
+  resultsRef.current = results
+
+  // Focus target for FindInFilesAction: when the active editor's file is in the
+  // results, focus the tree at that file (or the match last opened from it);
+  // otherwise focus the query input.
   useViewFocusable(
     'workbench.view.search.results',
-    useCallback(() => inputRef.current, []),
+    useCallback(() => {
+      const active = editorService.activeEditor.get()
+      const resource = active instanceof FileEditorInput ? active.resource : null
+      const current = resultsRef.current
+      if (current.length > 0 && resource && treeRef.current) {
+        const inResults = current.some((fm) =>
+          isEqualResource(URI.revive(fm.resource) as URI, resource),
+        )
+        if (inResults) {
+          const preferId =
+            searchSession.lastActivatedResource === resource.toString()
+              ? (searchSession.lastActivatedFocusId ?? null)
+              : null
+          if (treeRef.current.focusResource(resource, preferId)) return null
+        }
+      }
+      return inputRef.current
+    }, [editorService]),
   )
 
   // Persist transient state so switching sidebars away and back restores it.
@@ -158,6 +184,7 @@ export function SearchView() {
         onToggleWord={() => setMatchWholeWord((v) => !v)}
         onToggleReplace={() => setReplaceVisible((v) => !v)}
         onToggleFilters={() => setFiltersVisible((v) => !v)}
+        onTabToResults={() => treeRef.current?.focusFirst()}
       />
       {regexError && <p className={styles['error']}>{regexError}</p>}
       {isStale && results.length > 0 && (
@@ -194,12 +221,14 @@ export function SearchView() {
         </div>
       )}
       <SearchResultsTree
+        ref={treeRef}
         results={results}
         rootUri={rootUri}
         onActivateMatch={onActivateMatch}
         onReplaceFile={onReplaceFile}
         onReplaceMatch={onReplaceMatch}
         replaceVisible={replaceVisible}
+        onShiftTab={() => inputRef.current?.focus()}
       />
     </div>
   )
