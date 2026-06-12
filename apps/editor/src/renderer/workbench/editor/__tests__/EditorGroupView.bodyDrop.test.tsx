@@ -209,7 +209,36 @@ describe('EditorGroupView body drop', () => {
     svc.dispose()
   })
 
-  it("dropping a group's only editor back onto itself is a no-op", () => {
+  it("splitting a group's only editor onto an edge clones it into a new group", () => {
+    const svc = new EditorGroupsService()
+    const a = new BodyDropInput('A', URI.file('/a.txt'))
+    const groupA = svc.activeGroup
+    groupA.openEditor(a)
+
+    renderTwoGroups(svc)
+    const bodyA = stubBodyRect(groupA, { left: 0, top: 0, width: 100, height: 100 } as DOMRect)
+
+    const addGroupSpy = vi.spyOn(svc, 'addGroup')
+    const copyEditorSpy = vi.spyOn(svc, 'copyEditor')
+    const moveEditorSpy = vi.spyOn(svc, 'moveEditor')
+
+    const tabA = within(screen.getByTestId(`group-wrapper-${groupA.id}`)).getByRole('tab')
+    fireEvent.dragStart(tabA)
+    fireDragWithCoords('dragOver', bodyA, { clientX: 5, clientY: 50 }) // left edge
+    fireDragWithCoords('drop', bodyA, { clientX: 5, clientY: 50 })
+
+    // A plain move would empty (and auto-remove) the source — split must clone.
+    expect(addGroupSpy).toHaveBeenCalledWith(groupA, GroupDirection.Left)
+    expect(copyEditorSpy).toHaveBeenCalled()
+    expect(moveEditorSpy).not.toHaveBeenCalled()
+    expect(svc.groups.length).toBe(2)
+    // Both groups stay populated.
+    expect(groupA.editors).toContain(a)
+    expect(svc.groups[svc.groups.length - 1]!.editors.length).toBe(1)
+    svc.dispose()
+  })
+
+  it("dropping a group's only editor on its own center is a no-op", () => {
     const svc = new EditorGroupsService()
     const a = new BodyDropInput('A', URI.file('/a.txt'))
     const groupA = svc.activeGroup
@@ -220,14 +249,16 @@ describe('EditorGroupView body drop', () => {
 
     const addGroupSpy = vi.spyOn(svc, 'addGroup')
     const moveEditorSpy = vi.spyOn(svc, 'moveEditor')
+    const copyEditorSpy = vi.spyOn(svc, 'copyEditor')
 
     const tabA = within(screen.getByTestId(`group-wrapper-${groupA.id}`)).getByRole('tab')
     fireEvent.dragStart(tabA)
-    fireDragWithCoords('dragOver', bodyA, { clientX: 5, clientY: 50 }) // left edge
-    fireDragWithCoords('drop', bodyA, { clientX: 5, clientY: 50 })
+    fireDragWithCoords('dragOver', bodyA, { clientX: 50, clientY: 50 }) // center
+    fireDragWithCoords('drop', bodyA, { clientX: 50, clientY: 50 })
 
     expect(addGroupSpy).not.toHaveBeenCalled()
     expect(moveEditorSpy).not.toHaveBeenCalled()
+    expect(copyEditorSpy).not.toHaveBeenCalled()
     expect(svc.groups.length).toBe(1)
     svc.dispose()
   })
@@ -258,7 +289,7 @@ describe('EditorGroupView body drop', () => {
     svc.dispose()
   })
 
-  it('dropping a single-editor source on its own body does not show overlay during dragOver', () => {
+  it('single-editor self-drag shows the edge split preview but suppresses center', () => {
     const svc = new EditorGroupsService()
     const a = new BodyDropInput('A', URI.file('/a.txt'))
     const groupA = svc.activeGroup
@@ -269,8 +300,11 @@ describe('EditorGroupView body drop', () => {
 
     const tabA = within(screen.getByTestId(`group-wrapper-${groupA.id}`)).getByRole('tab')
     fireEvent.dragStart(tabA)
-    fireDragWithCoords('dragOver', bodyA, { clientX: 5, clientY: 50 })
 
+    fireDragWithCoords('dragOver', bodyA, { clientX: 5, clientY: 50 }) // left edge
+    expect(screen.getByTestId('editor-group-drop-overlay').getAttribute('data-zone')).toBe('left')
+
+    fireDragWithCoords('dragOver', bodyA, { clientX: 50, clientY: 50 }) // center
     expect(screen.queryByTestId('editor-group-drop-overlay')).toBeNull()
     svc.dispose()
   })

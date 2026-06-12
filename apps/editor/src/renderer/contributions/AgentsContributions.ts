@@ -320,13 +320,19 @@ export class AgentsSessionEditorLifecycleContribution
         const closed = e.editor
         if (!(closed instanceof AcpSessionEditorInput)) return
         if (this._location.isMigrating) return
-        const stillOpen = this._editorGroups.groups.some((g) =>
-          g.editors.some((ed) => ed instanceof AcpSessionEditorInput && ed.id === closed.id),
-        )
-        if (stillOpen) return
-        const session = this._sessions.getById(closed.sessionId)
-        if (!session) return
-        void this._sessions.closeSession(session.id)
+        // `moveEditor` 实现为 detach(触发 'close')→ open,二者同步。detach 触发的
+        // 'close' 与真正关闭无法区分,且发生在 editor 进入目标组之前。把判断推到
+        // 微任务,等同步的 detach+open 结束后再看 editor 是否还在某个组——拖动分屏
+        // 时它已落在目标组,stillOpen 为 true → 不误杀 session。
+        queueMicrotask(() => {
+          const stillOpen = this._editorGroups.groups.some((g) =>
+            g.editors.some((ed) => ed instanceof AcpSessionEditorInput && ed.id === closed.id),
+          )
+          if (stillOpen) return
+          const session = this._sessions.getById(closed.sessionId)
+          if (!session) return
+          void this._sessions.closeSession(session.id)
+        })
       }),
     )
   }

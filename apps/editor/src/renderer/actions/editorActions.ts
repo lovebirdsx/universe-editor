@@ -8,7 +8,6 @@ import {
   Action2,
   ConfigurationTarget,
   type EditorInput,
-  EditorRegistry,
   GroupDirection,
   GroupLocation,
   IConfigurationService,
@@ -26,6 +25,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { closeEditorWithConfirm } from '../services/editor/closeEditorWithConfirm.js'
+import { cloneEditorInputForSplit } from '../services/editor/cloneEditorInput.js'
 import { focusEditorInput } from '../services/editor/editorFocus.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
@@ -48,12 +48,6 @@ function activateGroupAndFocus(
   const ae = group.activeEditor
   if (!(ae instanceof FileEditorInput)) return
   FileEditorRegistry.get(ae)?.focus()
-}
-
-function cloneEditorInputForSplit(input: EditorInput, accessor: ServicesAccessor): EditorInput {
-  const serialized = input.serialize?.()
-  if (serialized === undefined) return input
-  return EditorRegistry.deserialize(input.typeId, serialized, accessor) ?? input
 }
 
 // ---------------------------------------------------------------------------

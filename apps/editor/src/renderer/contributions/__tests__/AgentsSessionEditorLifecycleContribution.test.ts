@@ -133,34 +133,40 @@ function makeInput(inst: IInstantiationService, sessionId: string, agentId: stri
 }
 
 describe('AgentsSessionEditorLifecycleContribution', () => {
-  it('closes the live session when an AcpSessionEditorInput tab is closed', () => {
+  // closeSession 的判断被推到 queueMicrotask(见 contribution 注释),断言前需 flush。
+  const flush = () => Promise.resolve()
+
+  it('closes the live session when an AcpSessionEditorInput tab is closed', async () => {
     const h = makeHarness()
     h.sessions.register(makeSession('s1', 'fake'))
     const input = makeInput(h.inst, 's1', 'fake')
     h.groups.groupList[0]!.fireClose(input)
+    await flush()
     expect(h.sessions.closed).toEqual(['s1'])
     h.contrib.dispose()
   })
 
-  it('ignores closes of non-ACP editors', () => {
+  it('ignores closes of non-ACP editors', async () => {
     const h = makeHarness()
     const fileInput = { id: 'file:foo' } as unknown as EditorInput
     h.groups.groupList[0]!.fireClose(fileInput)
+    await flush()
     expect(h.sessions.closed).toEqual([])
     h.contrib.dispose()
   })
 
-  it('skips closeSession while AcpChatLocationService.isMigrating is true', () => {
+  it('skips closeSession while AcpChatLocationService.isMigrating is true', async () => {
     const h = makeHarness()
     h.sessions.register(makeSession('s1', 'fake'))
     h.location.isMigrating = true
     const input = makeInput(h.inst, 's1', 'fake')
     h.groups.groupList[0]!.fireClose(input)
+    await flush()
     expect(h.sessions.closed).toEqual([])
     h.contrib.dispose()
   })
 
-  it('does not stop a session whose input is still open in another group', () => {
+  it('does not stop a session whose input is still open in another group', async () => {
     const h = makeHarness()
     h.sessions.register(makeSession('s1', 'fake'))
     const input = makeInput(h.inst, 's1', 'fake')
@@ -169,24 +175,46 @@ describe('AgentsSessionEditorLifecycleContribution', () => {
     g2.editors.push(input)
     // Closed in group 0; group 1 still has it.
     h.groups.groupList[0]!.fireClose(input)
+    await flush()
     expect(h.sessions.closed).toEqual([])
     h.contrib.dispose()
   })
 
-  it('subscribes to groups added after construction', () => {
+  it('does not stop a session merely relocated by moveEditor (detach-then-open)', async () => {
+    const h = makeHarness()
+    h.sessions.register(makeSession('s1', 'fake'))
+    const input = makeInput(h.inst, 's1', 'fake')
+    // Editor starts in group 0.
+    h.groups.groupList[0]!.editors.push(input)
+    const g2 = h.groups.addGroup()
+    // moveEditor: detach from g0 (remove + fire 'close') THEN open in g2 — both
+    // synchronous. The 'close' fires while the input is in no group; the input
+    // lands in g2 before the deferred check runs.
+    h.groups.groupList[0]!.editors.length = 0
+    h.groups.groupList[0]!.fireClose(input)
+    g2.editors.push(input)
+    await flush()
+    expect(h.sessions.closed).toEqual([])
+    expect(h.sessions.getById('s1')).toBeDefined()
+    h.contrib.dispose()
+  })
+
+  it('subscribes to groups added after construction', async () => {
     const h = makeHarness()
     h.sessions.register(makeSession('s2', 'fake'))
     const g2 = h.groups.addGroup()
     const input = makeInput(h.inst, 's2', 'fake')
     g2.fireClose(input)
+    await flush()
     expect(h.sessions.closed).toEqual(['s2'])
     h.contrib.dispose()
   })
 
-  it('no-ops when no live session matches the closed input', () => {
+  it('no-ops when no live session matches the closed input', async () => {
     const h = makeHarness()
     const input = makeInput(h.inst, 's-gone', 'fake')
     h.groups.groupList[0]!.fireClose(input)
+    await flush()
     expect(h.sessions.closed).toEqual([])
     h.contrib.dispose()
   })

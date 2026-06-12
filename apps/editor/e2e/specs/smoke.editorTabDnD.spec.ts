@@ -125,4 +125,73 @@ test.describe('@p1 editor tab drag-and-drop', () => {
       await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
     }
   })
+
+  test('drag the only tab to an edge splits into a second group', async ({ workbench }) => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-tabdnd-solo-'))
+    const soloPath = path.join(tmpDir, 'solo.txt')
+    await fs.writeFile(soloPath, 'solo')
+
+    try {
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+
+      await expect
+        .poll(() => workbench.getContextKey<boolean>('sideBarVisible'), { timeout: 5000 })
+        .toBe(true)
+
+      await workbench.page.evaluate(
+        ([fsPath]) => window.__E2E__!.openFileUri(fsPath!, { pinned: true }),
+        [soloPath.replace(/\\/g, '/')] as const,
+      )
+      await expect
+        .poll(() => workbench.getActiveEditorUri(), { timeout: 5000 })
+        .toContain('solo.txt')
+      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(1)
+
+      const firstBody = workbench.page.locator('[data-testid="editor-group-body"]').nth(0)
+      await expect
+        .poll(
+          async () => {
+            const box = await firstBody.boundingBox()
+            return box ? Math.min(box.width, box.height) : 0
+          },
+          { timeout: 5000 },
+        )
+        .toBeGreaterThan(0)
+
+      // Drag the only tab and drop on the right edge of its own body — a single
+      // editor must still split (clone) into a new group rather than no-op.
+      await workbench.page.evaluate(() => {
+        const bar = document.querySelector<HTMLElement>('[data-testid="editor-group-tabbar"]')
+        const body = document.querySelector<HTMLElement>('[data-testid="editor-group-body"]')
+        const source = bar?.querySelector<HTMLElement>('[role="tab"]')
+        if (!source || !body) throw new Error('drag source/target missing')
+
+        const dt = new DataTransfer()
+        const fire = (el: HTMLElement, type: string, clientX: number, clientY: number) => {
+          const ev = new DragEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            composed: true,
+            clientX,
+            clientY,
+            dataTransfer: dt,
+          })
+          el.dispatchEvent(ev)
+        }
+        const tRect = body.getBoundingClientRect()
+        const edgeX = tRect.left + tRect.width * 0.92
+        const midY = tRect.top + tRect.height / 2
+
+        fire(source, 'dragstart', 0, 0)
+        fire(body, 'dragover', edgeX, midY)
+        fire(body, 'drop', edgeX, midY)
+        fire(source, 'dragend', edgeX, midY)
+      })
+
+      await expect.poll(() => workbench.getEditorGroupCount(), { timeout: 5000 }).toBe(2)
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+    }
+  })
 })

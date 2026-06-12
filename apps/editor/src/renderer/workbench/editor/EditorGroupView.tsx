@@ -27,6 +27,7 @@ import {
   IContextKeyService,
   IDialogService,
   IEditorResolverService,
+  IInstantiationService,
   markAsSingleton,
   MenuId,
   observableValue,
@@ -45,6 +46,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithConfirm.js'
+import { cloneEditorInputForSplit } from '../../services/editor/cloneEditorInput.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import {
@@ -279,6 +281,7 @@ export function EditorGroupView({
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const editorResolverService = useService(IEditorResolverService)
+  const instantiationService = useService(IInstantiationService)
   const dragSession = useContext(DragSessionContext)
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null)
   const [dropIndex, setDropIndex] = useState<number | null>(null)
@@ -330,9 +333,6 @@ export function EditorGroupView({
     if (!rect || !pos) return
     const sourceGroup = groupsService.getGroup(sourceGroupId)
     if (!sourceGroup) return
-    // Dropping a group's only editor back onto itself would split into an empty
-    // source group (auto-removed) — guard against the useless churn.
-    if (sourceGroupId === group.id && sourceGroup.editors.length === 1) return
     const zone = detectBodyDropZone(rect, pos.x, pos.y)
     if (zone === 'center') {
       // Same group + center = no-op (cross-group drops here behave like a tab-bar drop).
@@ -341,6 +341,15 @@ export function EditorGroupView({
       return
     }
     const newGroup = groupsService.addGroup(group, zoneToDirection(zone))
+    // Splitting a group's only editor onto an edge of itself: a plain move would
+    // empty (and auto-remove) the source. Clone into the new group instead — same
+    // semantics as the Split Editor command — so both groups stay populated.
+    if (sourceGroupId === group.id && sourceGroup.editors.length === 1) {
+      instantiationService.invokeFunction((accessor) => {
+        groupsService.copyEditor(cloneEditorInputForSplit(editor, accessor), newGroup)
+      })
+      return
+    }
     groupsService.moveEditor(editor, newGroup)
   })
 
@@ -367,12 +376,14 @@ export function EditorGroupView({
       }
       return
     }
-    const onlyEditorSelfDrop = payload?.sourceGroupId === group.id && group.editors.length === 1
-    if (onlyEditorSelfDrop) {
+    const zone = detectBodyDropZone(rect, e.clientX, e.clientY)
+    // A group's only editor can still be split onto an edge of itself, but a
+    // center drop there is a no-op — show edge previews, suppress center.
+    const onlyEditorSelfDrop = payload.sourceGroupId === group.id && group.editors.length === 1
+    if (onlyEditorSelfDrop && zone === 'center') {
       if (bodyZone !== null) setBodyZone(null)
       return
     }
-    const zone = detectBodyDropZone(rect, e.clientX, e.clientY)
     if (zone !== bodyZone) setBodyZone(zone)
   }
 

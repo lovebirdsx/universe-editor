@@ -162,6 +162,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         theme: getEditorTheme(configService),
         automaticLayout: true,
         editContext: true,
+        // 拖放交由编辑区 body 处理(分屏 / 打开外部文件);关掉 Monaco 自带的
+        // dropIntoEditor,避免它把拖来的文件路径插进当前文档并抢焦点。
+        dropIntoEditor: { enabled: false },
         ...getEditorTypographyOptions(configService, fileInput.language),
         wordWrap: getEditorWordWrap(configService),
         minimap: { enabled: minimapEnabled },
