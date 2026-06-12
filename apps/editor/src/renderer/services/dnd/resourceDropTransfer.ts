@@ -61,7 +61,8 @@ export function formatPathForTerminal(fsPath: string): string {
 /**
  * Resolve the `@`-mention name + resource URI for a dropped file. Files inside
  * the workspace use their forward-slash relative path (matching
- * `mentionFileSearch`); anything else falls back to the basename.
+ * `mentionFileSearch`); anything else falls back to the absolute path so the
+ * agent can locate files outside the current workspace.
  */
 export function toMentionName(uri: URI, workspaceRoot?: URI): { uri: string; name: string } {
   const resource = uri.toString()
@@ -69,7 +70,7 @@ export function toMentionName(uri: URI, workspaceRoot?: URI): { uri: string; nam
     const rel = relativeUnder(workspaceRoot, uri)
     if (rel) return { uri: resource, name: rel }
   }
-  return { uri: resource, name: basenameOf(uri) }
+  return { uri: resource, name: uri.fsPath }
 }
 
 function relativeUnder(root: URI, uri: URI): string | undefined {
@@ -80,9 +81,4 @@ function relativeUnder(root: URI, uri: URI): string | undefined {
     return uri.path.slice(base.length)
   }
   return undefined
-}
-
-function basenameOf(uri: URI): string {
-  const segments = uri.path.split('/').filter((s) => s.length > 0)
-  return segments[segments.length - 1] ?? uri.path
 }

@@ -73,15 +73,15 @@ describe('resourceDropTransfer', () => {
       expect(toMentionName(file, root)).toEqual({ uri: file.toString(), name: 'src/a.ts' })
     })
 
-    it('falls back to the basename outside the workspace', () => {
+    it('falls back to the absolute path outside the workspace', () => {
       const root = URI.file('/ws')
       const file = URI.file('/other/a.ts')
-      expect(toMentionName(file, root)).toEqual({ uri: file.toString(), name: 'a.ts' })
+      expect(toMentionName(file, root)).toEqual({ uri: file.toString(), name: file.fsPath })
     })
 
-    it('uses the basename when no workspace root is given', () => {
+    it('uses the absolute path when no workspace root is given', () => {
       const file = URI.file('/x/y/a.ts')
-      expect(toMentionName(file)).toEqual({ uri: file.toString(), name: 'a.ts' })
+      expect(toMentionName(file)).toEqual({ uri: file.toString(), name: file.fsPath })
     })
   })
 })
