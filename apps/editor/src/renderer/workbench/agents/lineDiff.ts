@@ -1,7 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  lineDiff — minimal line-level diff for ACP inline previews. Uses a classic
- *  LCS DP; chat diffs are tiny so the O(m*n) memory cost is fine.
+ *  lineDiff — line-level diff via Myers' O(ND) algorithm (the same family git and
+ *  VSCode use). Cost scales with the edit distance D, not the file size, so a
+ *  large document diffed against a near-identical revision (e.g. its git HEAD for
+ *  dirty-diff marks) is effectively O(n) regardless of where the edits sit —
+ *  switching back to a big, lightly-edited file no longer stalls. A common
+ *  prefix/suffix is trimmed first as an O(n) fast path (a byte-identical pair
+ *  returns immediately), and a divergence guard falls back to a coarse
+ *  whole-block replace rather than letting a near-total rewrite run unbounded.
  *--------------------------------------------------------------------------------------------*/
 
 export type DiffLineKind = 'add' | 'del' | 'ctx'
@@ -11,11 +17,143 @@ export interface DiffLine {
   readonly text: string
 }
 
+// Edit-distance ceiling for the Myers search over the changed middle. Real edits
+// against HEAD sit far below this; only a near-total rewrite of a huge file would
+// reach it, where coarse "delete all / add all" marks beat an unbounded search.
+const MAX_EDIT_DISTANCE = 2_000
+
 function splitLines(s: string): string[] {
   if (s.length === 0) return []
   const lines = s.split('\n')
   if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   return lines
+}
+
+/**
+ * Myers diff of the changed middle. Returns the edit sequence, or `null` when the
+ * edit distance exceeds {@link MAX_EDIT_DISTANCE} (caller falls back to a coarse
+ * replace). `trace` only grows to the actual edit distance, so a small real diff
+ * stays cheap even when the inputs themselves are large.
+ */
+function myersMiddle(a: readonly string[], b: readonly string[]): DiffLine[] | null {
+  const n = a.length
+  const m = b.length
+  const max = n + m
+  const maxD = Math.min(max, MAX_EDIT_DISTANCE)
+  const offset = max
+  // V is indexed by diagonal k ∈ [-max, max]; shift by `offset` into the array.
+  const v = new Int32Array(2 * max + 1)
+  const trace: Int32Array[] = []
+
+  let foundD = -1
+  for (let d = 0; d <= maxD; d++) {
+    trace.push(v.slice())
+    for (let k = -d; k <= d; k += 2) {
+      let x: number
+      if (k === -d || (k !== d && v[offset + k - 1]! < v[offset + k + 1]!)) {
+        x = v[offset + k + 1]! // move down: an insertion from b
+      } else {
+        x = v[offset + k - 1]! + 1 // move right: a deletion from a
+      }
+      let y = x - k
+      while (x < n && y < m && a[x] === b[y]) {
+        x++
+        y++
+      }
+      v[offset + k] = x
+      if (x >= n && y >= m) {
+        foundD = d
+        break
+      }
+    }
+    if (foundD !== -1) break
+  }
+  if (foundD === -1) return null
+
+  // Backtrack through the saved per-round V snapshots, emitting in reverse.
+  const rev: DiffLine[] = []
+  let x = n
+  let y = m
+  for (let d = foundD; d > 0; d--) {
+    const vPrev = trace[d]!
+    const k = x - y
+    let prevK: number
+    if (k === -d || (k !== d && vPrev[offset + k - 1]! < vPrev[offset + k + 1]!)) {
+      prevK = k + 1 // came from a down move (insertion)
+    } else {
+      prevK = k - 1 // came from a right move (deletion)
+    }
+    const prevX = vPrev[offset + prevK]!
+    const prevY = prevX - prevK
+    while (x > prevX && y > prevY) {
+      rev.push({ kind: 'ctx', text: a[x - 1]! })
+      x--
+      y--
+    }
+    if (x === prevX) {
+      rev.push({ kind: 'add', text: b[y - 1]! })
+    } else {
+      rev.push({ kind: 'del', text: a[x - 1]! })
+    }
+    x = prevX
+    y = prevY
+  }
+  while (x > 0 && y > 0) {
+    rev.push({ kind: 'ctx', text: a[x - 1]! })
+    x--
+    y--
+  }
+  rev.reverse()
+  return normalizeHunkOrder(rev)
+}
+
+/**
+ * Within each contiguous run of changes, emit all deletions before all
+ * insertions (matching git's `-` before `+` and the previous LCS output), so a
+ * replaced line reads as del-then-add and region classification is stable.
+ */
+function normalizeHunkOrder(lines: readonly DiffLine[]): DiffLine[] {
+  const out: DiffLine[] = []
+  let i = 0
+  while (i < lines.length) {
+    if (lines[i]!.kind === 'ctx') {
+      out.push(lines[i]!)
+      i++
+      continue
+    }
+    const dels: DiffLine[] = []
+    const adds: DiffLine[] = []
+    while (i < lines.length && lines[i]!.kind !== 'ctx') {
+      if (lines[i]!.kind === 'del') dels.push(lines[i]!)
+      else adds.push(lines[i]!)
+      i++
+    }
+    out.push(...dels, ...adds)
+  }
+  return out
+}
+
+/** Diff of the already-trimmed changed region, appended onto `out`. */
+function appendMiddleDiff(out: DiffLine[], a: readonly string[], b: readonly string[]): void {
+  const m = a.length
+  const n = b.length
+  if (m === 0 && n === 0) return
+  if (m === 0) {
+    for (const t of b) out.push({ kind: 'add', text: t })
+    return
+  }
+  if (n === 0) {
+    for (const t of a) out.push({ kind: 'del', text: t })
+    return
+  }
+  const script = myersMiddle(a, b)
+  if (script === null) {
+    // Too divergent to diff cheaply — coarse whole-block replace.
+    for (const t of a) out.push({ kind: 'del', text: t })
+    for (const t of b) out.push({ kind: 'add', text: t })
+    return
+  }
+  for (const line of script) out.push(line)
 }
 
 export function computeLineDiff(oldText: string, newText: string): readonly DiffLine[] {
@@ -24,30 +162,19 @@ export function computeLineDiff(oldText: string, newText: string): readonly Diff
   const m = a.length
   const n = b.length
 
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array<number>(n + 1).fill(0))
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      dp[i]![j] = a[i] === b[j] ? dp[i + 1]![j + 1]! + 1 : Math.max(dp[i + 1]![j]!, dp[i]![j + 1]!)
-    }
+  // A common prefix/suffix is necessarily shared, so emitting it as context and
+  // diffing only the middle is an O(n) fast path — a byte-identical pair (the
+  // common case when switching back to an unedited file) never reaches Myers.
+  let prefix = 0
+  while (prefix < m && prefix < n && a[prefix] === b[prefix]) prefix++
+  let suffix = 0
+  while (suffix < m - prefix && suffix < n - prefix && a[m - 1 - suffix] === b[n - 1 - suffix]) {
+    suffix++
   }
 
   const out: DiffLine[] = []
-  let i = 0
-  let j = 0
-  while (i < m && j < n) {
-    if (a[i] === b[j]) {
-      out.push({ kind: 'ctx', text: a[i]! })
-      i++
-      j++
-    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
-      out.push({ kind: 'del', text: a[i]! })
-      i++
-    } else {
-      out.push({ kind: 'add', text: b[j]! })
-      j++
-    }
-  }
-  while (i < m) out.push({ kind: 'del', text: a[i++]! })
-  while (j < n) out.push({ kind: 'add', text: b[j++]! })
+  for (let k = 0; k < prefix; k++) out.push({ kind: 'ctx', text: a[k]! })
+  appendMiddleDiff(out, a.slice(prefix, m - suffix), b.slice(prefix, n - suffix))
+  for (let k = m - suffix; k < m; k++) out.push({ kind: 'ctx', text: a[k]! })
   return out
 }

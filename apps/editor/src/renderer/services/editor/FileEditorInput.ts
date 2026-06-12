@@ -116,6 +116,17 @@ export class FileEditorInput extends EditorInput {
     return model
   }
 
+  /**
+   * The already-acquired model for this input, if any — no disk read, no refcount
+   * change. Lets the editor swap synchronously (before paint) when switching back
+   * to a file that is still open, avoiding a one-frame flash of the previous file.
+   * Returns undefined on first open, where `resolveModel` must read disk first.
+   */
+  peekModel(): monaco.editor.ITextModel | undefined {
+    if (!this._modelRefAcquired) return undefined
+    return MonacoModelRegistry.peek(this._resource)
+  }
+
   /** True once `resolve()` has succeeded at least once. */
   get isResolved(): boolean {
     return this._resolved

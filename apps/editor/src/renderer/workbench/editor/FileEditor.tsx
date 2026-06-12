@@ -12,7 +12,7 @@
  *  resolve, the component renders a lightweight loading placeholder.
  *--------------------------------------------------------------------------------------------*/
 
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { IDisposable, IEditorInput } from '@universe-editor/platform'
 import {
   ICommandService,
@@ -126,7 +126,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   }, [])
 
   // Create the standalone editor once monaco is ready; never recreate on input change.
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!monacoNs || !containerRef.current) return
     const minimapEnabled = configService.get<boolean>('editor.minimap.enabled') ?? true
     const ed = monacoNs.editor.create(
@@ -268,7 +268,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   }, [configService])
 
   // Wire the active input -> model swap + dirty tracking + viewState save/restore.
-  useEffect(() => {
+  // useLayoutEffect (not useEffect) so that switching back to an already-open file
+  // swaps the model *before* the browser paints — mirroring VSCode, which avoids a
+  // one-frame flash of the previous file's content on every tab switch.
+  useLayoutEffect(() => {
     fileInputRef.current = fileInput
     if (!monacoNs) return
     let cancelled = false
@@ -299,8 +302,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       }
     }
 
-    void (async () => {
-      const model = await fileInput.resolveModel()
+    const applyModel = (model: monaco.editor.ITextModel) => {
       if (cancelled) return
       editorRef.current?.setModel(model)
       // The editor instance is reused across tabs; keep readOnly in sync with
@@ -360,7 +362,17 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           }
         }
       })
-    })()
+    }
+
+    // Already-open file: its model is cached and our ref is held — swap it
+    // synchronously, before paint. First open needs a disk read, so it falls
+    // back to the async path (a brief loading frame here is unavoidable).
+    const cachedModel = fileInput.peekModel()
+    if (cachedModel) {
+      applyModel(cachedModel)
+    } else {
+      void fileInput.resolveModel().then(applyModel)
+    }
 
     return () => {
       cancelled = true
