@@ -13,6 +13,8 @@
  *  On Windows/Linux, CtrlCmd → ctrl, WinCtrl → meta.
  *--------------------------------------------------------------------------------------------*/
 
+import { normalizeKeybindingString } from '@universe-editor/platform'
+
 const MASK_KEYCODE = 0x00ff
 export const MASK_CTRLCMD = 0x0800
 const MASK_SHIFT = 0x0400
@@ -179,4 +181,33 @@ export function decodeMonacoKeybinding(keybinding: number): DecodedKeybinding | 
   const second = decodeChord(secondRaw)
   if (second === undefined) return undefined
   return { chords: [first, second] }
+}
+
+// The decoder emits the long arrow tokens ('arrowleft' …); the registry key
+// space — what KeybindingsRegistry and useGlobalKeybindingHandler.buildKeyString
+// operate on — uses the short form ('left' …). Mirror that map's only entries.
+const DECODER_TOKEN_TO_REGISTRY: Readonly<Record<string, string>> = {
+  arrowleft: 'left',
+  arrowright: 'right',
+  arrowup: 'up',
+  arrowdown: 'down',
+}
+
+function chordToRegistryKeyString(chord: string): string {
+  const parts = chord.split('+')
+  const last = parts.length - 1
+  parts[last] = DECODER_TOKEN_TO_REGISTRY[parts[last]!] ?? parts[last]!
+  return normalizeKeybindingString(parts.join('+'))
+}
+
+/**
+ * Convert a {@link DecodedKeybinding} into the registry key-space string used by
+ * KeybindingsRegistry — the single shared key space (D7). Chords are joined with
+ * a space, matching the `'ctrl+k ctrl+s'` form used elsewhere (user keybindings).
+ */
+export function decodedToRegistryKeyString(decoded: DecodedKeybinding): string {
+  if (decoded.chords) {
+    return `${chordToRegistryKeyString(decoded.chords[0])} ${chordToRegistryKeyString(decoded.chords[1])}`
+  }
+  return chordToRegistryKeyString(decoded.key!)
 }

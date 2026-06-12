@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { KeybindingsRegistry } from '../../command/keybindingRegistry.js'
+import { KeybindingsRegistry, KeybindingWeight } from '../../command/keybindingRegistry.js'
 import { ContextKeyService } from '../../command/contextKey.js'
 import type { IDisposable } from '../../base/lifecycle.js'
 
@@ -154,5 +154,98 @@ describe('KeybindingsRegistry.traceKeystroke', () => {
     const selected = trace.candidates.filter((c) => c.selected)
     expect(selected).toHaveLength(1)
     expect(selected[0]!.command).toBe('second')
+  })
+})
+
+describe('KeybindingsRegistry weight', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  it('higher weight wins even when registered first', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'high',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'low',
+        weight: KeybindingWeight.WorkbenchContrib,
+      }),
+    )
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('ctrl+s')
+    expect(resolved.kind).toBe('execute')
+    if (resolved.kind !== 'execute') throw new Error('unreachable')
+    expect(resolved.command).toBe('high')
+  })
+
+  it('within equal weight, newest registration wins', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'first',
+        weight: KeybindingWeight.WorkbenchContrib,
+      }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'second',
+        weight: KeybindingWeight.WorkbenchContrib,
+      }),
+    )
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('ctrl+s')
+    expect(resolved.kind === 'execute' && resolved.command).toBe('second')
+  })
+
+  it('User layer overrides a later-registered ExternalExtension binding', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'user',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    // Extension binding registered AFTER the user one — without weight ordering
+    // its LIFO position would let it win; weight must keep the user binding on top.
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'ext',
+        weight: KeybindingWeight.ExternalExtension,
+      }),
+    )
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('ctrl+s')
+    expect(resolved.kind === 'execute' && resolved.command).toBe('user')
+  })
+
+  it('defaults to WorkbenchContrib when weight omitted', () => {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'defaulted',
+      }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+s',
+        command: 'core',
+        weight: KeybindingWeight.EditorCore,
+      }),
+    )
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('ctrl+s')
+    // EditorCore (0) < WorkbenchContrib (200, the omitted default), so the
+    // defaulted binding wins.
+    expect(resolved.kind === 'execute' && resolved.command).toBe('defaulted')
   })
 })

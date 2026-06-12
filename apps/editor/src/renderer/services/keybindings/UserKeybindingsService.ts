@@ -25,6 +25,7 @@ import {
   IStorageService,
   IUserDataFilesService,
   KeybindingsRegistry,
+  KeybindingWeight,
   type IKeybindingItem,
   registerSingleton,
   URI,
@@ -84,6 +85,7 @@ function keyToKeybindingItem(entry: IUserKeybindingEntry): IKeybindingItem | und
   const strokes = entry.key.trim().split(/\s+/)
   const base = {
     command: entry.command,
+    weight: KeybindingWeight.User,
     ...(entry.when !== undefined ? { when: entry.when } : {}),
     ...(entry.args !== undefined ? { args: entry.args } : {}),
   }

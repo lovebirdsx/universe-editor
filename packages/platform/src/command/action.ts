@@ -36,6 +36,11 @@ export interface IAction2Keybinding {
   when?: ContextKeyExpression | string
   /** Optional argument forwarded to the command handler when the binding fires. */
   args?: unknown
+  /**
+   * Layered priority (see {@link KeybindingWeight}). Defaults to
+   * `WorkbenchContrib` when omitted.
+   */
+  weight?: number
 }
 
 export interface IAction2Options {
@@ -144,6 +149,7 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
       command: desc.id,
       ...(when !== undefined ? { when } : {}),
       ...(kb.args !== undefined ? { args: kb.args } : {}),
+      ...(kb.weight !== undefined ? { weight: kb.weight } : {}),
     }
     disposables.push(KeybindingsRegistry.registerKeybinding(item))
   }

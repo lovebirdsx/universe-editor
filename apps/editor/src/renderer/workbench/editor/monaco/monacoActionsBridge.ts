@@ -31,6 +31,7 @@ import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
 import {
   decodeMonacoKeybinding,
+  decodedToRegistryKeyString,
   MASK_CTRLCMD,
   TOKEN_TO_KEYCODE,
   type DecodedKeybinding,
@@ -70,6 +71,52 @@ export function getMonacoDefaultKeybinding(commandId: string): DecodedKeybinding
 
 export function getAllMonacoDefaultKeybindings(): ReadonlyMap<string, DecodedKeybinding> {
   return _defaults
+}
+
+// Reverse view of `_defaults` in the registry key space (D7), keyed for the
+// single global keydown dispatcher (D3) to consult when an editor widget has
+// focus. Single-stroke defaults map key → command; chord defaults contribute
+// only their first stroke to `_chordPrefixes`, so the dispatcher yields the
+// whole chord to Monaco's own state machine.
+const _defaultKeyToCommand = new Map<string, string>()
+const _chordPrefixes = new Set<string>()
+
+function rebuildDefaultKeyTables(): void {
+  _defaultKeyToCommand.clear()
+  _chordPrefixes.clear()
+  for (const [commandId, decoded] of _defaults) {
+    if (decoded.chords) {
+      _chordPrefixes.add(decodedToRegistryKeyString({ key: decoded.chords[0] }))
+    } else if (decoded.key !== undefined) {
+      const key = decodedToRegistryKeyString(decoded)
+      if (!_defaultKeyToCommand.has(key)) _defaultKeyToCommand.set(key, commandId)
+    }
+  }
+}
+
+/** Outcome of {@link monacoDeferDecision}, from the dispatcher's point of view. */
+export type MonacoDeferDecision =
+  /** The key is Monaco's to handle — don't preventDefault, let it bubble to Monaco. */
+  | 'defer'
+  /** The user rebound this Monaco command; swallow Monaco's original default key. */
+  | 'swallow'
+  /** Not a Monaco default — the project dispatcher owns it. */
+  | 'proceed'
+
+/**
+ * Decide who should handle `registryKey` while an editor widget holds focus.
+ * The dispatcher passes `isCommandRebound` (true when the user moved a command
+ * to a different key) so a rebound Monaco default is swallowed rather than
+ * fired twice.
+ */
+export function monacoDeferDecision(
+  registryKey: string,
+  isCommandRebound: (commandId: string) => boolean,
+): MonacoDeferDecision {
+  if (_chordPrefixes.has(registryKey)) return 'defer'
+  const commandId = _defaultKeyToCommand.get(registryKey)
+  if (commandId === undefined) return 'proceed'
+  return isCommandRebound(commandId) ? 'swallow' : 'defer'
 }
 
 function nlsLookup(key: string, fallback: string): string {
@@ -188,7 +235,9 @@ export function bridgeMonacoActionsForTests(
   disposables.push({
     dispose() {
       for (const id of installedDefaults) _defaults.delete(id)
+      rebuildDefaultKeyTables()
     },
   })
+  rebuildDefaultKeyTables()
   return combinedDisposable(...disposables)
 }

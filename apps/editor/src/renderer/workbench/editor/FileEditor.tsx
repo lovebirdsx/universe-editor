@@ -26,14 +26,12 @@ import {
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
-import { getAllMonacoDefaultKeybindings } from './monaco/monacoActionsBridge.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { focusStandaloneEditor, syncEditorFocusContext } from '../../services/editor/editorFocus.js'
-import { IUserKeybindingsService } from '../../services/keybindings/UserKeybindingsService.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
   EDITOR_FONT_WEIGHT_DEFAULT,
@@ -99,30 +97,6 @@ function getEditorTheme(configService: IConfigurationService): 'output-light' | 
     : 'output-dark'
 }
 
-// Canonical key-string normalization that matches KeybindingsRegistry's
-// internal form (lexicographic modifier order: alt → ctrl → meta → shift)
-// and the form `decodeMonacoKeybinding` emits.
-function normalizeKey(key: string): string {
-  const parts = key
-    .toLowerCase()
-    .split('+')
-    .map((s) => s.trim())
-  const modifiers = new Set(['ctrl', 'alt', 'shift', 'meta'])
-  const mods = parts.filter((p) => modifiers.has(p)).sort()
-  const rest = parts.filter((p) => !modifiers.has(p))
-  return [...mods, ...rest].join('+')
-}
-
-function buildKeyStringFromEvent(e: KeyboardEvent): string {
-  const parts: string[] = []
-  if (e.altKey) parts.push('alt')
-  if (e.ctrlKey) parts.push('ctrl')
-  if (e.metaKey) parts.push('meta')
-  if (e.shiftKey) parts.push('shift')
-  parts.push(e.key.toLowerCase())
-  return parts.join('+')
-}
-
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
@@ -130,7 +104,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
   const focusStackService = useService(IFocusStackService)
-  const userKeybindingsSvc = useService(IUserKeybindingsService)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -228,26 +201,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         },
       })
     })
-    // Bridge: when the user has rebound a Monaco built-in command to a new
-    // key, swallow monaco's *original* default key in the capture phase so
-    // monaco's internal dispatch doesn't also fire the action. The default
-    // keys come from monacoActionsBridge's side-table.
-    const container = ed.getContainerDomNode()
-    const bridgeHandler = (e: KeyboardEvent) => {
-      const key = normalizeKey(buildKeyStringFromEvent(e))
-      for (const [commandId, decoded] of getAllMonacoDefaultKeybindings()) {
-        // Only single-stroke defaults matter for this bridge — monaco's
-        // own chord state would need to be observed for two-stroke ones.
-        if (decoded.key === undefined) continue
-        if (normalizeKey(decoded.key) !== key) continue
-        if (userKeybindingsSvc.getUserEntry(commandId) !== undefined) {
-          e.preventDefault()
-          e.stopPropagation()
-          return
-        }
-      }
-    }
-    container.addEventListener('keydown', bridgeHandler, true)
     editorRef.current = ed
     return () => {
       focusSub.dispose()
@@ -255,7 +208,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       textFocusSub.dispose()
       textBlurSub.dispose()
       modelChangeSub.dispose()
-      container.removeEventListener('keydown', bridgeHandler, true)
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
@@ -265,15 +217,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // via `fileInputRef` (blur handler) and the model-swap effect handles input
     // changes with setModel, so neither is a dependency here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [
-    monacoNs,
-    commandService,
-    userKeybindingsSvc,
-    configService,
-    contextKeyService,
-    focusStackService,
-    group,
-  ])
+  }, [monacoNs, commandService, configService, contextKeyService, focusStackService, group])
 
   // Apply config changes to the live editor instance.
   useEffect(() => {

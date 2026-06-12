@@ -9,6 +9,20 @@ import { IContextKeyService } from './contextKey.js'
 import { ContextKeyExpr, ContextKeyExpression } from './contextKeyExpr.js'
 
 /**
+ * Layered priority for keybindings, mirroring VSCode's KeybindingWeight. Higher
+ * wins when several bindings match the same keystroke; within one weight, the
+ * most-recently-registered binding wins (newest-first).
+ */
+export enum KeybindingWeight {
+  EditorCore = 0,
+  EditorContrib = 100,
+  WorkbenchContrib = 200,
+  BuiltinExtension = 300,
+  ExternalExtension = 400,
+  User = 1000,
+}
+
+/**
  * Simplified keybinding descriptor. Uses a platform-neutral string format:
  * e.g. "ctrl+k", "meta+shift+p", "f1". A `chords` tuple expresses a 2-stroke
  * chord; `key` (legacy single-stroke) is still accepted and stored as a
@@ -38,6 +52,11 @@ export interface IKeybindingItem {
    * (VSCode-style `args`). Enables e.g. `quickOpen` with a prefix like `@:`.
    */
   args?: unknown
+  /**
+   * Layered priority. Higher wins on conflict; defaults to
+   * {@link KeybindingWeight.WorkbenchContrib} when omitted.
+   */
+  weight?: number
 }
 
 interface IResolvedKeybindingItem {
@@ -45,6 +64,7 @@ interface IResolvedKeybindingItem {
   command: string
   when: ContextKeyExpression | undefined
   isNegated: boolean
+  weight: number
   args?: unknown
 }
 
@@ -122,7 +142,7 @@ export type KeystrokeTrace =
  * Normalizes a key string to lowercase with sorted modifier order.
  * Canonical form: ctrl+alt+shift+meta+<key>
  */
-function normalizeKey(key: string): string {
+export function normalizeKeybindingString(key: string): string {
   const parts = key
     .toLowerCase()
     .split('+')
@@ -140,8 +160,9 @@ function resolveWhen(when: IKeybindingItem['when']): ContextKeyExpression | unde
 }
 
 function itemChords(item: IKeybindingItem): readonly string[] {
-  if (item.chords) return [normalizeKey(item.chords[0]), normalizeKey(item.chords[1])]
-  if (item.key !== undefined) return [normalizeKey(item.key)]
+  if (item.chords)
+    return [normalizeKeybindingString(item.chords[0]), normalizeKeybindingString(item.chords[1])]
+  if (item.key !== undefined) return [normalizeKeybindingString(item.key)]
   throw new Error('Keybinding item requires either `key` or `chords`.')
 }
 
@@ -191,14 +212,26 @@ class KeybindingsRegistryImpl {
       command: item.command,
       when: resolveWhen(item.when),
       isNegated: item.isNegated ?? false,
+      weight: item.weight ?? KeybindingWeight.WorkbenchContrib,
       ...(item.args !== undefined ? { args: item.args } : {}),
     }
-    this._items.push(resolved)
+    // Sorted insertion by ascending weight; within equal weight, append so the
+    // reverse (newest-first) resolve traversal yields highest-weight, then
+    // most-recently-registered. When every binding shares the default weight
+    // this degenerates to a plain push (registration order preserved).
+    let idx = this._items.length
+    for (let i = 0; i < this._items.length; i++) {
+      if (this._items[i]!.weight > resolved.weight) {
+        idx = i
+        break
+      }
+    }
+    this._items.splice(idx, 0, resolved)
 
     return toDisposable(() => {
-      const idx = this._items.indexOf(resolved)
-      if (idx !== -1) {
-        this._items.splice(idx, 1)
+      const i = this._items.indexOf(resolved)
+      if (i !== -1) {
+        this._items.splice(i, 1)
       }
     })
   }
@@ -208,7 +241,7 @@ class KeybindingsRegistryImpl {
    * bindings only — chord items are excluded for legacy callers.
    */
   getBindingsForKey(key: string): IKeybindingItem[] {
-    const normalized = normalizeKey(key)
+    const normalized = normalizeKeybindingString(key)
     return [...this._items]
       .reverse()
       .filter((item) => item.chords.length === 1 && item.chords[0] === normalized)
@@ -227,7 +260,7 @@ class KeybindingsRegistryImpl {
    * Use {@link resolveKeystroke} for chord-aware state-machine resolution.
    */
   resolveKeybinding(key: string, contextKeyService?: IContextKeyService): string | undefined {
-    const normalized = normalizeKey(key)
+    const normalized = normalizeKeybindingString(key)
     // Iterate in reverse (newest first) so later registrations win.
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
@@ -255,10 +288,10 @@ class KeybindingsRegistryImpl {
     contextKeyService?: IContextKeyService,
     pending?: readonly string[],
   ): KeystrokeResolution {
-    const normalized = normalizeKey(key)
+    const normalized = normalizeKeybindingString(key)
 
     if (pending && pending.length > 0) {
-      const first = normalizeKey(pending[0]!)
+      const first = normalizeKeybindingString(pending[0]!)
       for (let i = this._items.length - 1; i >= 0; i--) {
         const binding = this._items[i]!
         if (
@@ -313,7 +346,7 @@ class KeybindingsRegistryImpl {
     contextKeyService?: IContextKeyService,
     pending?: readonly string[],
   ): KeystrokeTrace {
-    const normalized = normalizeKey(key)
+    const normalized = normalizeKeybindingString(key)
     const pendingNormalized = pending && pending.length > 0 ? pending : undefined
     const candidates: IKeybindingTraceCandidate[] = []
 
@@ -339,7 +372,7 @@ class KeybindingsRegistryImpl {
 
     // Mirror resolveKeystroke's branch selection and newest-first traversal.
     if (pendingNormalized) {
-      const first = normalizeKey(pendingNormalized[0]!)
+      const first = normalizeKeybindingString(pendingNormalized[0]!)
       let winner: IResolvedKeybindingItem | undefined
       for (let i = this._items.length - 1; i >= 0; i--) {
         const binding = this._items[i]!
@@ -427,6 +460,7 @@ class KeybindingsRegistryImpl {
     return this._items.map((it) => {
       const base = {
         command: it.command,
+        weight: it.weight,
         ...(it.when !== undefined ? { when: it.when } : {}),
         ...(it.isNegated ? { isNegated: it.isNegated } : {}),
         ...(it.args !== undefined ? { args: it.args } : {}),

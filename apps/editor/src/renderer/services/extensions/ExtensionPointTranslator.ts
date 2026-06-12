@@ -20,6 +20,7 @@ import {
   ConfigurationRegistry,
   Disposable,
   KeybindingsRegistry,
+  KeybindingWeight,
   MenuId,
   MenuRegistry,
   type ICommandMetadata,
@@ -68,8 +69,16 @@ export class ExtensionPointTranslator extends Disposable {
   translate(extensions: readonly IExtensionDescriptionDto[]): void {
     for (const ext of extensions) {
       const contributes = ext.contributes
+      // Commands with an explicit `commandPalette` menu declaration opt out of the
+      // implicit default entry (VSCode: the declaration — typically `when: false` —
+      // overrides the automatic palette listing).
+      const explicitPaletteCommands = new Set(
+        (contributes.menus?.commandPalette ?? [])
+          .map((item) => item.command)
+          .filter((id): id is string => id !== undefined),
+      )
       for (const command of contributes.commands ?? []) {
-        this._registerCommand(command)
+        this._registerCommand(command, explicitPaletteCommands.has(command.command))
       }
       if (contributes.menus) {
         this._registerMenus(contributes.menus, contributes.submenus ?? [])
@@ -81,7 +90,7 @@ export class ExtensionPointTranslator extends Disposable {
     }
   }
 
-  private _registerCommand(command: ICommandContribution): void {
+  private _registerCommand(command: ICommandContribution, hasExplicitPaletteEntry: boolean): void {
     const metadata: ICommandMetadata = {
       description: command.title,
       ...(command.category !== undefined ? { category: command.category } : {}),
@@ -96,6 +105,17 @@ export class ExtensionPointTranslator extends Disposable {
         metadata,
       }),
     )
+    // VSCode surfaces every contributed command in the command palette by default,
+    // unless the extension declared its own `commandPalette` entry (the opt-out path).
+    if (!hasExplicitPaletteEntry) {
+      this._register(
+        MenuRegistry.addMenuItem(MenuId.CommandPalette, {
+          command: command.command,
+          title: command.title,
+          ...(command.category !== undefined ? { group: command.category } : {}),
+        }),
+      )
+    }
   }
 
   private _registerMenus(
@@ -152,6 +172,7 @@ export class ExtensionPointTranslator extends Disposable {
     const strokes = keybinding.key.trim().split(/\s+/)
     const base = {
       command: keybinding.command,
+      weight: KeybindingWeight.ExternalExtension,
       ...(keybinding.when !== undefined ? { when: keybinding.when } : {}),
     }
     const item: IKeybindingItem =
