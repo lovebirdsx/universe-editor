@@ -7,7 +7,7 @@
  *  through DOMPurify (securityLevel 'strict'), so dangerouslySetInnerHTML is safe.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { IConfigurationService } from '@universe-editor/platform'
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { useService } from '../useService.js'
@@ -32,17 +32,13 @@ function useIsDarkTheme(): boolean {
 
 export function MermaidBlock({ code }: { readonly code: string }) {
   const isDark = useIsDarkTheme()
-  // useId yields a stable unique id per block; mermaid.render needs one and it
-  // must not collide across diagrams on the page.
-  const rawId = useId()
-  const renderId = `mermaid-${rawId.replace(/[^a-zA-Z0-9-]/g, '')}`
   const [svg, setSvg] = useState<string | null>(null)
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setFailed(false)
-    void MermaidLoader.render(renderId, code, isDark ? 'dark' : 'default')
+    void MermaidLoader.render(code, isDark ? 'dark' : 'default')
       .then((rendered) => {
         if (!cancelled) setSvg(rendered)
       })
@@ -52,16 +48,10 @@ export function MermaidBlock({ code }: { readonly code: string }) {
           setFailed(true)
         }
       })
-      .finally(() => {
-        // mermaid leaves a temporary measurement node in the body when a render
-        // throws; clean it up so failed diagrams don't leak DOM.
-        document.getElementById(renderId)?.remove()
-        document.getElementById(`d${renderId}`)?.remove()
-      })
     return () => {
       cancelled = true
     }
-  }, [code, isDark, renderId])
+  }, [code, isDark])
 
   if (failed || svg === null) {
     return <CodeBlock code={code} lang="mermaid" />

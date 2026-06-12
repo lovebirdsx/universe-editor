@@ -29,18 +29,40 @@ async function load(): Promise<Mermaid> {
   return _promise
 }
 
+// mermaid.render() creates temporary measurement nodes keyed by the render id and
+// calls removeExistingElements on entry — so two renders sharing an id (e.g. React
+// StrictMode's double-invoke, or several diagrams rendering at once) delete each
+// other's measurement nodes mid-flight and produce empty diagrams (pie is the most
+// sensitive, as it leans on getBBox text measurement). Guard both: a per-call
+// unique id so ids never collide, and a serial queue so renders never overlap.
+let _renderSeq = 0
+let _queue: Promise<unknown> = Promise.resolve()
+
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = _queue.then(task, task)
+  // Keep the chain alive regardless of individual outcomes.
+  _queue = run.then(
+    () => undefined,
+    () => undefined,
+  )
+  return run
+}
+
 export const MermaidLoader = {
   ensureInitialized(): Promise<Mermaid> {
     return load()
   },
 
   /** Render `code` to an SVG string. Throws on a mermaid syntax error. */
-  async render(id: string, code: string, theme: MermaidTheme): Promise<string> {
-    const mermaid = await load()
-    // mermaid config is global; re-applying the theme before each render keeps
-    // every diagram in sync with the active workbench colour theme.
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme })
-    const { svg } = await mermaid.render(id, code)
-    return svg
+  async render(code: string, theme: MermaidTheme): Promise<string> {
+    return enqueue(async () => {
+      const mermaid = await load()
+      // mermaid config is global; re-applying the theme before each render keeps
+      // every diagram in sync with the active workbench colour theme.
+      mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme })
+      const id = `mermaid-render-${_renderSeq++}`
+      const { svg } = await mermaid.render(id, code)
+      return svg
+    })
   },
 }

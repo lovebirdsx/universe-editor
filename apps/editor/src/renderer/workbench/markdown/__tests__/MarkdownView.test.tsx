@@ -109,7 +109,7 @@ describe('MarkdownView', () => {
     renderMarkdown('```mermaid\ngraph TD; A-->B\n```')
     const diagram = await screen.findByTestId('mermaid-diagram')
     expect(diagram.querySelector('svg')).toBeTruthy()
-    expect(renderMock).toHaveBeenCalledWith(expect.any(String), 'graph TD; A-->B', 'dark')
+    expect(renderMock).toHaveBeenCalledWith('graph TD; A-->B', 'dark')
   })
 
   it('falls back to a code block when mermaid rendering fails', async () => {
