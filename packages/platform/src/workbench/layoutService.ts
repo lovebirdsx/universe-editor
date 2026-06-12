@@ -43,6 +43,11 @@ export interface ILayoutService {
 
   readonly visible: IObservable<Readonly<Record<PartId, boolean>>>
 
+  /** Whether the Panel is maximized (editor area hidden, panel fills the center). */
+  readonly panelMaximized: IObservable<boolean>
+  setPanelMaximized(maximized: boolean): void
+  togglePanelMaximized(): void
+
   readonly sizes: IObservable<Readonly<LayoutSizes>>
   setSize(key: keyof LayoutSizes, value: number): void
 

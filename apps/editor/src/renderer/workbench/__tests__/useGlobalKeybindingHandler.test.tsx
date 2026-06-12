@@ -105,6 +105,18 @@ describe('useGlobalKeybindingHandler', () => {
     expect(executeCommand).toHaveBeenCalledWith('test.arrowCmd')
   })
 
+  it.each([
+    ['Digit5', '%', 'ctrl+shift+5'],
+    ['Backquote', '~', 'ctrl+shift+`'],
+  ])('resolves shift-mutated %s via e.code so %s still matches %s', (code, shiftedKey, binding) => {
+    const { executeCommand, instantiation } = createHarness()
+    bind(binding, 'test.codeCmd')
+    mountHost(instantiation)
+
+    dispatch({ ctrlKey: true, shiftKey: true, key: shiftedKey, code })
+    expect(executeCommand).toHaveBeenCalledWith('test.codeCmd')
+  })
+
   it('does nothing when no keybinding matches', () => {
     const { executeCommand, instantiation } = createHarness()
     mountHost(instantiation)

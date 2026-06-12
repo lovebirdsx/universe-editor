@@ -50,6 +50,15 @@ export interface ITerminalExitEvent {
   readonly target: TerminalTarget
 }
 
+/**
+ * A panel terminal split group: one or more terminals rendered side-by-side.
+ * `terminals` is the left-to-right order of terminal ids within the group.
+ */
+export interface ITerminalGroup {
+  readonly id: string
+  readonly terminals: readonly string[]
+}
+
 export interface ITerminalManagerService {
   readonly _serviceBrand: undefined
 
@@ -57,6 +66,9 @@ export interface ITerminalManagerService {
   readonly terminals: IObservable<readonly ITerminalCreatedInfo[]>
   /** Panel-only terminals — consumed by TerminalView / TerminalViewToolbar. */
   readonly panelTerminals: IObservable<readonly ITerminalCreatedInfo[]>
+  /** Panel split groups in tab order — consumed by TerminalView for layout. */
+  readonly terminalGroups: IObservable<readonly ITerminalGroup[]>
+  readonly activeGroupId: IObservable<string | null>
   readonly activeTerminalId: IObservable<string | null>
   /** Fires when the active panel terminal's xterm should receive focus. */
   readonly onFocusRequest: Event<void>
@@ -66,6 +78,8 @@ export interface ITerminalManagerService {
   readonly onDidRemoveTerminal: Event<{ id: string }>
 
   newTerminal(spec?: ITerminalNewSpec): Promise<string | null>
+  /** Spawn a panel terminal alongside the active one in the same split group. */
+  splitTerminal(spec?: ITerminalNewSpec): Promise<string | null>
   closeTerminal(id: string): void
   setActiveTerminal(id: string): void
   /** Bind an xterm write callback; flushes buffered output. Dispose to detach. */
@@ -96,9 +110,15 @@ interface TermSpec {
   args?: readonly string[]
 }
 
+interface IPersistedTerminalEntry {
+  shell: string
+  cwd?: string
+  args?: readonly string[]
+}
+
 interface IPersistedTerminalState {
-  schemaVersion: 1
-  entries: Array<{ shell: string; cwd?: string; args?: readonly string[] }>
+  schemaVersion: 2
+  groups: Array<{ terminals: IPersistedTerminalEntry[] }>
 }
 
 const STORAGE_KEY = 'terminal.panelState'
@@ -121,12 +141,20 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     observableValue<readonly ITerminalCreatedInfo[]>('terminal.terminals', [])
   private readonly _panelTerminals: ISettableObservable<readonly ITerminalCreatedInfo[]> =
     observableValue<readonly ITerminalCreatedInfo[]>('terminal.panelTerminals', [])
+  private readonly _groups: ISettableObservable<readonly ITerminalGroup[]> = observableValue<
+    readonly ITerminalGroup[]
+  >('terminal.groups', [])
+  private readonly _activeGroupId: ISettableObservable<string | null> = observableValue<
+    string | null
+  >('terminal.activeGroupId', null)
   private readonly _activeTerminalId: ISettableObservable<string | null> = observableValue<
     string | null
   >('terminal.activeId', null)
 
   readonly terminals: IObservable<readonly ITerminalCreatedInfo[]> = this._terminals
   readonly panelTerminals: IObservable<readonly ITerminalCreatedInfo[]> = this._panelTerminals
+  readonly terminalGroups: IObservable<readonly ITerminalGroup[]> = this._groups
+  readonly activeGroupId: IObservable<string | null> = this._activeGroupId
   readonly activeTerminalId: IObservable<string | null> = this._activeTerminalId
 
   private readonly _onFocusRequest = this._register(new Emitter<void>())
@@ -141,6 +169,10 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private readonly _clients = new Map<string, TermClient>()
   private readonly _specs = new Map<string, TermSpec>()
   private readonly _logger: ILogger
+
+  /** Ordered panel split groups; each holds the left-to-right terminal ids. */
+  private _groupOrder: Array<{ id: string; terminals: string[] }> = []
+  private _nextGroupId = 0
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -164,6 +196,47 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   async newTerminal(spec?: ITerminalNewSpec): Promise<string | null> {
+    const target: TerminalTarget = spec?.target ?? 'panel'
+    const id = await this._spawn(spec)
+    if (id === null) return null
+    if (target === 'panel') {
+      // A plain "new terminal" opens its own group (a new tab).
+      const group = { id: `g${this._nextGroupId++}`, terminals: [id] }
+      this._groupOrder.push(group)
+      this._publishGroups()
+      this._activeGroupId.set(group.id, undefined)
+      this._activeTerminalId.set(id, undefined)
+    }
+    this._schedulePersist()
+    return id
+  }
+
+  async splitTerminal(spec?: ITerminalNewSpec): Promise<string | null> {
+    // Splitting always targets the panel; fall back to a fresh group when none exists.
+    const active = this._groupOrder.find((g) => g.id === this._activeGroupId.get())
+    if (!active) return this.newTerminal({ ...spec, target: 'panel' })
+
+    // Inherit the cwd of the currently active terminal, like VSCode does.
+    const activeId = this._activeTerminalId.get()
+    const inheritedCwd = activeId ? this._specs.get(activeId)?.cwd : undefined
+    const splitSpec: ITerminalNewSpec = {
+      ...spec,
+      target: 'panel',
+      ...(spec?.cwd === undefined && inheritedCwd ? { cwd: inheritedCwd } : {}),
+    }
+
+    const id = await this._spawn(splitSpec)
+    if (id === null) return null
+    const index = activeId ? active.terminals.indexOf(activeId) : -1
+    if (index >= 0) active.terminals.splice(index + 1, 0, id)
+    else active.terminals.push(id)
+    this._publishGroups()
+    this._activeTerminalId.set(id, undefined)
+    this._schedulePersist()
+    return id
+  }
+
+  private async _spawn(spec?: ITerminalNewSpec): Promise<string | null> {
     const target: TerminalTarget = spec?.target ?? 'panel'
 
     const shell =
@@ -190,10 +263,6 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
         ...(args !== undefined && args.length > 0 ? { args } : {}),
       })
       this._setAllTerminals([...this._terminals.get(), info])
-      if (target === 'panel') {
-        this._activeTerminalId.set(info.id, undefined)
-      }
-      this._schedulePersist()
       return info.id
     } catch (err) {
       this._logger.warn(`create failed: ${(err as Error).message}`)
@@ -208,7 +277,10 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   setActiveTerminal(id: string): void {
-    if (this._clients.has(id)) this._activeTerminalId.set(id, undefined)
+    if (!this._clients.has(id)) return
+    this._activeTerminalId.set(id, undefined)
+    const group = this._groupOrder.find((g) => g.terminals.includes(id))
+    if (group) this._activeGroupId.set(group.id, undefined)
   }
 
   attach(id: string, onData: (data: string) => void): IDisposable {
@@ -249,17 +321,23 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     } catch {
       return
     }
-    if (!data || data.schemaVersion !== 1) return
+    if (!data || data.schemaVersion !== 2) return
 
     this._suspendPersist = true
     try {
-      for (const entry of data.entries) {
-        await this.newTerminal({
-          ...(entry.shell ? { shell: entry.shell } : {}),
-          ...(entry.cwd ? { cwd: entry.cwd } : {}),
-          ...(entry.args && entry.args.length > 0 ? { shellArgs: entry.args } : {}),
-          target: 'panel',
-        })
+      for (const group of data.groups) {
+        let groupId: string | null = null
+        for (const entry of group.terminals) {
+          const spec: ITerminalNewSpec = {
+            ...(entry.shell ? { shell: entry.shell } : {}),
+            ...(entry.cwd ? { cwd: entry.cwd } : {}),
+            ...(entry.args && entry.args.length > 0 ? { shellArgs: entry.args } : {}),
+            target: 'panel',
+          }
+          const id =
+            groupId === null ? await this.newTerminal(spec) : await this.splitTerminal(spec)
+          if (id !== null && groupId === null) groupId = this._activeGroupId.get()
+        }
       }
     } finally {
       this._suspendPersist = false
@@ -271,16 +349,22 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
       clearTimeout(this._saveTimer)
       this._saveTimer = undefined
     }
-    const entries = this._panelTerminals.get().map((t) => {
-      const spec = this._specs.get(t.id)
+    const toEntry = (id: string): IPersistedTerminalEntry | null => {
+      const spec = this._specs.get(id)
+      if (!spec) return null
       return {
-        shell: spec?.shell ?? t.shell,
-        ...(spec?.cwd ? { cwd: spec.cwd } : {}),
-        ...(spec?.args && spec.args.length > 0 ? { args: spec.args } : {}),
+        shell: spec.shell,
+        ...(spec.cwd ? { cwd: spec.cwd } : {}),
+        ...(spec.args && spec.args.length > 0 ? { args: spec.args } : {}),
       }
-    })
+    }
+    const groups = this._groupOrder
+      .map((g) => ({
+        terminals: g.terminals.map(toEntry).filter((e): e is IPersistedTerminalEntry => e !== null),
+      }))
+      .filter((g) => g.terminals.length > 0)
     try {
-      await this._storage.set(STORAGE_KEY, { schemaVersion: 1, entries }, StorageScope.WORKSPACE)
+      await this._storage.set(STORAGE_KEY, { schemaVersion: 2, groups }, StorageScope.WORKSPACE)
     } catch {
       // best-effort
     }
@@ -338,11 +422,46 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     this._onDidRemoveTerminal.fire({ id })
     const next = this._terminals.get().filter((t) => t.id !== id)
     this._setAllTerminals(next)
-    if (this._activeTerminalId.get() === id) {
-      // activate the last remaining panel terminal, if any
-      const lastPanel = [...this._panelTerminals.get()].pop()
-      this._activeTerminalId.set(lastPanel?.id ?? null, undefined)
+
+    // Maintain the group structure: drop the id, compute a sensible successor
+    // (a sibling in the same group, else the nearest surviving group's last
+    // terminal) before the group is possibly removed.
+    const groupIndex = this._groupOrder.findIndex((g) => g.terminals.includes(id))
+    let successor: string | null = null
+    let successorGroup: string | null = null
+    if (groupIndex >= 0) {
+      const group = this._groupOrder[groupIndex]!
+      const pos = group.terminals.indexOf(id)
+      group.terminals.splice(pos, 1)
+      if (group.terminals.length > 0) {
+        successor = group.terminals[Math.min(pos, group.terminals.length - 1)] ?? null
+        successorGroup = group.id
+      } else {
+        this._groupOrder.splice(groupIndex, 1)
+        const fallback = this._groupOrder[Math.min(groupIndex, this._groupOrder.length - 1)]
+        successor = fallback ? (fallback.terminals[fallback.terminals.length - 1] ?? null) : null
+        successorGroup = fallback?.id ?? null
+      }
+      this._publishGroups()
     }
+
+    if (this._activeTerminalId.get() === id) {
+      this._activeTerminalId.set(successor, undefined)
+      this._activeGroupId.set(successorGroup, undefined)
+    } else if (this._activeGroupId.get() && !this._groupExists(this._activeGroupId.get())) {
+      this._activeGroupId.set(successorGroup, undefined)
+    }
+  }
+
+  private _groupExists(id: string | null): boolean {
+    return id !== null && this._groupOrder.some((g) => g.id === id)
+  }
+
+  private _publishGroups(): void {
+    this._groups.set(
+      this._groupOrder.map((g) => ({ id: g.id, terminals: [...g.terminals] })),
+      undefined,
+    )
   }
 
   private _setAllTerminals(next: readonly ITerminalCreatedInfo[]): void {

@@ -51,6 +51,7 @@ const INITIAL_SIZES: Readonly<LayoutSizes> = {
 interface PersistedLayout {
   visible?: Partial<Record<PartId, boolean>>
   sizes?: Partial<LayoutSizes>
+  panelMaximized?: boolean
 }
 
 export class LayoutService extends Disposable implements ILayoutService {
@@ -61,6 +62,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     INITIAL_VISIBLE,
   )
   readonly sizes = observableValue<Readonly<LayoutSizes>>('LayoutService.sizes', INITIAL_SIZES)
+  readonly panelMaximized = observableValue<boolean>('LayoutService.panelMaximized', false)
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -98,8 +100,26 @@ export class LayoutService extends Disposable implements ILayoutService {
     // setPartHidden). Snapshot before the state flips since the DOM changes after.
     const hadFocus = !visible && (this._parts.get(part)?.isFocused() ?? false)
     this.visible.set({ ...this.visible.get(), [part]: visible }, undefined)
+    // Hiding the Panel clears its maximized state so it doesn't reappear maximized.
+    if (part === PartId.Panel && !visible && this.panelMaximized.get()) {
+      this.panelMaximized.set(false, undefined)
+    }
     this._schedulePersist()
     if (hadFocus) this._passFocusToEditor()
+  }
+
+  setPanelMaximized(maximized: boolean): void {
+    if (this.panelMaximized.get() === maximized) return
+    // Maximizing only makes sense when the Panel is visible; reveal it first.
+    if (maximized && !this.getVisible(PartId.Panel)) {
+      this.visible.set({ ...this.visible.get(), [PartId.Panel]: true }, undefined)
+    }
+    this.panelMaximized.set(maximized, undefined)
+    this._schedulePersist()
+  }
+
+  togglePanelMaximized(): void {
+    this.setPanelMaximized(!this.panelMaximized.get())
   }
 
   private _passFocusToEditor(): void {
@@ -147,6 +167,9 @@ export class LayoutService extends Disposable implements ILayoutService {
         if (typeof data.sizes.panel === 'number') merged.panel = data.sizes.panel
         this.sizes.set(merged, undefined)
       }
+      if (typeof data.panelMaximized === 'boolean') {
+        this.panelMaximized.set(data.panelMaximized, undefined)
+      }
     } finally {
       this._suspendPersist = false
     }
@@ -160,6 +183,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     const payload: PersistedLayout = {
       visible: this.visible.get(),
       sizes: this.sizes.get(),
+      panelMaximized: this.panelMaximized.get(),
     }
     try {
       await this._storage.set(STORAGE_KEY, payload, StorageScope.WORKSPACE)
@@ -182,6 +206,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     try {
       this.visible.set(INITIAL_VISIBLE, undefined)
       this.sizes.set(INITIAL_SIZES, undefined)
+      this.panelMaximized.set(false, undefined)
     } finally {
       this._suspendPersist = false
     }

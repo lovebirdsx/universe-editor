@@ -36,6 +36,23 @@ const DOM_KEY_MAP: Record<string, string> = {
   arrowup: 'up',
   arrowdown: 'down',
 }
+
+// Shift mutates `e.key` for the number row (e.g. 5 → %, ` → ~), so those keys
+// would build as `ctrl+shift+%` and never match a `ctrl+shift+5` binding.
+// Resolve them from the layout-independent `e.code` instead.
+const CODE_KEY_MAP: Record<string, string> = {
+  Digit0: '0',
+  Digit1: '1',
+  Digit2: '2',
+  Digit3: '3',
+  Digit4: '4',
+  Digit5: '5',
+  Digit6: '6',
+  Digit7: '7',
+  Digit8: '8',
+  Digit9: '9',
+  Backquote: '`',
+}
 const QUICK_INPUT_NATIVE_NAVIGATION_KEYS = new Set(['arrowleft', 'arrowright', 'home', 'end'])
 const QUICK_INPUT_NATIVE_PRIMARY_SHORTCUTS = new Set(['a', 'c', 'v', 'x', 'z', 'y'])
 const QUICK_INPUT_OWNED_KEYS = new Set(['enter', 'arrowup', 'arrowdown', 'pageup', 'pagedown'])
@@ -47,7 +64,7 @@ function buildKeyString(e: KeyboardEvent): string {
   if (e.shiftKey) parts.push('shift')
   if (e.metaKey) parts.push('meta')
   const raw = e.key.toLowerCase()
-  parts.push(DOM_KEY_MAP[raw] ?? raw)
+  parts.push(CODE_KEY_MAP[e.code] ?? DOM_KEY_MAP[raw] ?? raw)
   return parts.join('+')
 }
 

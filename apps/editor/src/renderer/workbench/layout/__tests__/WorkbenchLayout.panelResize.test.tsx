@@ -78,6 +78,7 @@ function makeProps(
     sidebarVisible: true,
     secondarySidebarVisible: false,
     panelVisible: false,
+    panelMaximized: false,
     activitybarVisible: true,
     sizes: DEFAULT_SIZES,
     onSidebarResize: vi.fn(),

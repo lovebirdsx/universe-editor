@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ExternalLink, Plus, SplitSquareHorizontal, Trash2 } from 'lucide-react'
 import { ICommandService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService, useObservable } from '../../useService.js'
@@ -48,6 +48,8 @@ export function TerminalViewToolbar() {
     if (activeId) manager.closeTerminal(activeId)
   }
 
+  const handleSplit = () => void manager.splitTerminal({ target: 'panel' })
+
   const handleOpenInEditor = () =>
     void commandService.executeCommand('workbench.action.createTerminalEditor')
 
@@ -78,6 +80,16 @@ export function TerminalViewToolbar() {
         onClick={handleOpenInEditor}
       >
         <ExternalLink size={14} />
+      </button>
+
+      <button
+        type="button"
+        className={styles['iconBtn']}
+        title="Split Terminal (Ctrl+Shift+5)"
+        onClick={handleSplit}
+        disabled={!activeId}
+      >
+        <SplitSquareHorizontal size={14} />
       </button>
 
       <button

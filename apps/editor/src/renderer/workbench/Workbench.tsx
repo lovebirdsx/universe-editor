@@ -40,6 +40,7 @@ function WorkbenchShell() {
   const dialogService = useService(IDialogService) as RendererDialogService
   const visible = useObservable(layoutService.visible)
   const sizes = useObservable(layoutService.sizes)
+  const panelMaximized = useObservable(layoutService.panelMaximized)
   const sidebarVisible = visible[PartId.SideBar]
   const secondarySidebarVisible = visible[PartId.SecondarySideBar]
   const panelVisible = visible[PartId.Panel]
@@ -73,6 +74,7 @@ function WorkbenchShell() {
         sidebarVisible={sidebarVisible}
         secondarySidebarVisible={secondarySidebarVisible}
         panelVisible={panelVisible}
+        panelMaximized={panelMaximized}
         activitybarVisible={activityBarVisible}
         sizes={sizes}
         onSidebarResize={onSidebarResize}

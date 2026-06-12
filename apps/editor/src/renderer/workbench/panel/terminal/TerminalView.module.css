@@ -13,6 +13,19 @@
   overflow: hidden;
 }
 
+/* Groups are stacked; only the active one is shown. Inactive groups keep their
+   xterm holders mounted (hidden) so switching tabs is instant and scrollback
+   survives. */
+.group {
+  position: absolute;
+  inset: 0;
+  display: none;
+}
+
+.group.groupVisible {
+  display: block;
+}
+
 .empty {
   padding: 8px 12px;
   font-size: 13px;

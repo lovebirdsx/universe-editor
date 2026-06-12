@@ -22,6 +22,7 @@ import {
   FocusOutlineAction,
   ToggleActivityBarVisibilityAction,
   TogglePanelAction,
+  ToggleMaximizedPanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
 } from './layoutActions.js'
@@ -110,6 +111,7 @@ import {
 } from './fileCopyActions.js'
 import {
   NewTerminalAction,
+  SplitTerminalAction,
   OpenInTerminalAction,
   ToggleTerminalAction,
   OpenTerminalInEditorAction,
@@ -214,6 +216,7 @@ registerAction2(ToggleActivityBarVisibilityAction)
 registerAction2(ToggleSidebarVisibilityAction)
 registerAction2(ToggleSecondarySidebarVisibilityAction)
 registerAction2(TogglePanelAction)
+registerAction2(ToggleMaximizedPanelAction)
 registerAction2(ShowCommandsAction)
 registerAction2(ShowExplorerAction)
 registerAction2(ShowScmAction)
@@ -402,6 +405,7 @@ registerAction2(ShowReleaseNotesAction)
 registerAction2(OpenInTerminalAction)
 registerAction2(ToggleTerminalAction)
 registerAction2(NewTerminalAction)
+registerAction2(SplitTerminalAction)
 registerAction2(OpenTerminalInEditorAction)
 registerAction2(FocusTerminalPanelAction)
 

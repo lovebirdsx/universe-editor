@@ -16,7 +16,10 @@ import styles from './TerminalInstance.module.css'
 
 export interface TerminalInstanceProps {
   id: string
+  /** Whether this instance is shown (its group/editor is the visible one). */
   active: boolean
+  /** Whether this instance should grab focus. Defaults to `active`. */
+  focused?: boolean
   cwd: string
   resolveFile: (absolutePath: string) => Promise<URI | null>
   openFile: (uri: URI, line?: number, col?: number) => void
@@ -25,10 +28,12 @@ export interface TerminalInstanceProps {
 export function TerminalInstance({
   id,
   active,
+  focused,
   cwd,
   resolveFile,
   openFile,
 }: TerminalInstanceProps) {
+  const isFocused = focused ?? active
   const contextKeyService = useService(IContextKeyService)
   const manager = useService(ITerminalManagerService)
   const xtermService = useService(ITerminalXtermService)
@@ -90,21 +95,22 @@ export function TerminalInstance({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, xtermService])
 
-  // Becoming active may follow a display:none (size 0) phase; refit and focus.
+  // Becoming active may follow a display:none (size 0) phase; refit, then focus
+  // only the instance that should own focus (the active one within its group).
   useEffect(() => {
     if (!active) return
     const holder = holderRef.current
     if (!holder) return
     holder.fit()
-    holder.focus()
-  }, [active])
+    if (isFocused) holder.focus()
+  }, [active, isFocused])
 
   // Respond to programmatic focus requests (e.g. FocusTerminalPanelAction).
   useEffect(() => {
-    if (!active) return
+    if (!isFocused) return
     const d = markAsSingleton(manager.onFocusRequest(() => holderRef.current?.focus()))
     return () => d.dispose()
-  }, [active, manager])
+  }, [isFocused, manager])
 
   // Dismiss context menu on Escape.
   useEffect(() => {

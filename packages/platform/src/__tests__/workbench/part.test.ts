@@ -17,6 +17,7 @@ class StubLayoutService implements ILayoutService {
   declare readonly _serviceBrand: undefined
   readonly visible: ISettableObservable<Readonly<Record<PartId, boolean>>>
   readonly sizes: ISettableObservable<Readonly<LayoutSizes>>
+  readonly panelMaximized: ISettableObservable<boolean>
   private readonly _parts = new Map<PartId, IPart>()
   private readonly _onDidRegisterPart = new Emitter<IPart>()
   readonly onDidRegisterPart = this._onDidRegisterPart.event
@@ -35,6 +36,7 @@ class StubLayoutService implements ILayoutService {
       secondarySidebar: 300,
       panel: 200,
     })
+    this.panelMaximized = observableValue('StubLayout.panelMaximized', false)
   }
 
   getVisible(part: PartId): boolean {
@@ -48,6 +50,12 @@ class StubLayoutService implements ILayoutService {
   }
   setSize(key: keyof LayoutSizes, value: number): void {
     this.sizes.set({ ...this.sizes.get(), [key]: value }, undefined)
+  }
+  setPanelMaximized(maximized: boolean): void {
+    this.panelMaximized.set(maximized, undefined)
+  }
+  togglePanelMaximized(): void {
+    this.setPanelMaximized(!this.panelMaximized.get())
   }
   async load() {}
   async save() {}

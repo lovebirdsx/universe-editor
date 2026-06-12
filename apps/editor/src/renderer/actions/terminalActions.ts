@@ -124,6 +124,30 @@ export class NewTerminalAction extends Action2 {
   }
 }
 
+/** Split the active panel terminal: a sibling terminal in the same group. */
+export class SplitTerminalAction extends Action2 {
+  static readonly ID = 'workbench.action.terminal.split'
+  constructor() {
+    super({
+      id: SplitTerminalAction.ID,
+      title: localize('action.splitTerminal.title', 'Split Terminal'),
+      category: localize('command.category.terminal', 'Terminal'),
+      keybinding: { primary: 'ctrl+shift+5' },
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const layout = accessor.get(ILayoutService)
+    const views = accessor.get(IViewsService)
+    const manager = accessor.get(ITerminalManagerService)
+    if (!layout.getVisible(PartId.Panel)) layout.toggleVisible(PartId.Panel)
+    views.openViewContainer(TERMINAL_CONTAINER_ID)
+    await manager.splitTerminal({ target: 'panel' })
+    manager.focus()
+  }
+}
+
 /** Focus the terminal panel (show + switch container + focus xterm). */
 export class FocusTerminalPanelAction extends Action2 {
   static readonly ID = 'workbench.action.terminal.focus'

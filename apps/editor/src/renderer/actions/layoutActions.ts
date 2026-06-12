@@ -146,6 +146,28 @@ export class TogglePanelAction extends Action2 {
   }
 }
 
+export class ToggleMaximizedPanelAction extends Action2 {
+  static readonly ID = 'workbench.action.toggleMaximizedPanel'
+  constructor() {
+    super({
+      id: ToggleMaximizedPanelAction.ID,
+      title: localize('action.toggleMaximizedPanel.title', 'Toggle Maximized Panel'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'alt+m' },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const layoutService = accessor.get(ILayoutService)
+    const viewsService = accessor.get(IViewsService)
+    layoutService.togglePanelMaximized()
+    if (layoutService.getVisible(PartId.Panel)) {
+      const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.Panel)
+      if (!activeId) viewsService.openViewContainer('workbench.view.output')
+    }
+  }
+}
+
 export class ShowScmAction extends Action2 {
   static readonly ID = 'workbench.view.scm'
   constructor() {

@@ -11,7 +11,7 @@
  *  actions resolved through a per-view scoped ContextKeyService carrying `view`.
  *--------------------------------------------------------------------------------------------*/
 
-import { X } from 'lucide-react'
+import { Maximize2, Minimize2, X } from 'lucide-react'
 import {
   ILayoutService,
   IViewsService,
@@ -22,7 +22,7 @@ import {
   localize,
 } from '@universe-editor/platform'
 import type { IViewContainerDescriptor, IViewDescriptor } from '@universe-editor/platform'
-import { useService } from '../useService.js'
+import { useService, useObservable } from '../useService.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
@@ -40,6 +40,7 @@ interface Props {
 export function PaneCompositeHeader({ mode, location, partId, activeContainer, onlyView }: Props) {
   const viewsService = useService(IViewsService)
   const layoutService = useService(ILayoutService)
+  const panelMaximized = useObservable(layoutService.panelMaximized)
   const ctx = useViewScopedContextKey(onlyView?.id)
   const Custom = onlyView ? viewToolbarMap.get(onlyView.id) : undefined
 
@@ -62,6 +63,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
   const activeId = activeContainer?.id
   const containers = ViewContainerRegistry.getViewContainers(location)
   const isSingle = containers.length <= 1
+  const isPanel = location === ViewContainerLocation.Panel
 
   return (
     <div className={styles['tabsHeader']} role="tablist">
@@ -94,6 +96,29 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
       </div>
       <div className={styles['toolbar']}>
         {actions}
+        {isPanel ? (
+          <button
+            className={styles['closeBtn']}
+            onClick={() => layoutService.togglePanelMaximized()}
+            title={
+              panelMaximized
+                ? localize('panel.restore', 'Restore Panel Size')
+                : localize('panel.maximize', 'Maximize Panel Size')
+            }
+            aria-label={
+              panelMaximized
+                ? localize('panel.restore', 'Restore Panel Size')
+                : localize('panel.maximize', 'Maximize Panel Size')
+            }
+            data-testid={`view-container-header-maximize-${partId}`}
+          >
+            {panelMaximized ? (
+              <Minimize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <Maximize2 size={14} strokeWidth={1.75} aria-hidden="true" />
+            )}
+          </button>
+        ) : null}
         <button
           className={styles['closeBtn']}
           onClick={() => layoutService.setVisible(partId, false)}

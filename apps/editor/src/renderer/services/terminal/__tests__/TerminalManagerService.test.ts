@@ -34,8 +34,7 @@ interface Harness {
   terminalErrors: { input: Error | undefined; resize: Error | undefined }
 }
 
-function makeStorage(): IStorageService {
-  const store = new Map<string, unknown>()
+function makeStorage(store: Map<string, unknown> = new Map<string, unknown>()): IStorageService {
   const onChangeWs = new Emitter<void>()
   return {
     _serviceBrand: undefined,
@@ -63,6 +62,7 @@ function makeConfig(overrides: Record<string, unknown> = {}): IConfigurationServ
 function makeHarness(
   cwd: string | null = '/work',
   configOverrides?: Record<string, unknown>,
+  store?: Map<string, unknown>,
 ): Harness {
   const onData = new Emitter<ITerminalDataEvent>()
   const onExit = new Emitter<ITerminalExitEvent>()
@@ -128,7 +128,7 @@ function makeHarness(
     terminal,
     workspace,
     loggerService,
-    makeStorage(),
+    makeStorage(store),
     makeConfig(configOverrides),
   )
   return { manager, onData, onExit, created, released, inputs, resizes, warnings, terminalErrors }
@@ -289,5 +289,74 @@ describe('TerminalManagerService', () => {
     h.manager.onDidRemoveTerminal(({ id }) => removed.push(id))
     h.onExit.fire({ id: id!, exitCode: 0 })
     expect(removed).toEqual([id])
+  })
+
+  describe('split groups', () => {
+    it('newTerminal opens each terminal in its own group', async () => {
+      const a = await h.manager.newTerminal()
+      const b = await h.manager.newTerminal()
+      const groups = h.manager.terminalGroups.get()
+      expect(groups.map((g) => g.terminals)).toEqual([[a], [b]])
+      expect(h.manager.activeGroupId.get()).toBe(groups[1]!.id)
+    })
+
+    it('splitTerminal adds a sibling into the active group and activates it', async () => {
+      const a = await h.manager.newTerminal()
+      const b = await h.manager.splitTerminal()
+      const groups = h.manager.terminalGroups.get()
+      expect(groups).toHaveLength(1)
+      expect(groups[0]!.terminals).toEqual([a, b])
+      expect(h.manager.activeTerminalId.get()).toBe(b)
+      expect(h.manager.activeGroupId.get()).toBe(groups[0]!.id)
+    })
+
+    it('splitTerminal inserts after the active terminal within the group', async () => {
+      const a = await h.manager.newTerminal()
+      const b = await h.manager.splitTerminal()
+      h.manager.setActiveTerminal(a!)
+      const c = await h.manager.splitTerminal()
+      expect(h.manager.terminalGroups.get()[0]!.terminals).toEqual([a, c, b])
+    })
+
+    it('splitTerminal with no active group falls back to a new group', async () => {
+      const id = await h.manager.splitTerminal()
+      const groups = h.manager.terminalGroups.get()
+      expect(groups).toHaveLength(1)
+      expect(groups[0]!.terminals).toEqual([id])
+    })
+
+    it('closing a split terminal keeps the group and activates a sibling', async () => {
+      const a = await h.manager.newTerminal()
+      const b = await h.manager.splitTerminal()
+      h.manager.closeTerminal(b!)
+      const groups = h.manager.terminalGroups.get()
+      expect(groups).toHaveLength(1)
+      expect(groups[0]!.terminals).toEqual([a])
+      expect(h.manager.activeTerminalId.get()).toBe(a)
+    })
+
+    it('closing the last terminal of a group removes the group', async () => {
+      const a = await h.manager.newTerminal()
+      const b = await h.manager.newTerminal()
+      h.manager.closeTerminal(b!)
+      const groups = h.manager.terminalGroups.get()
+      expect(groups.map((g) => g.terminals)).toEqual([[a]])
+      expect(h.manager.activeGroupId.get()).toBe(groups[0]!.id)
+      expect(h.manager.activeTerminalId.get()).toBe(a)
+    })
+
+    it('persists and restores split groups across a reload', async () => {
+      const store = new Map<string, unknown>()
+      const first = makeHarness('/work', undefined, store)
+      await first.manager.newTerminal()
+      await first.manager.splitTerminal()
+      await first.manager.newTerminal()
+      await first.manager.save()
+
+      const second = makeHarness('/work', undefined, store)
+      await second.manager.load()
+      const groups = second.manager.terminalGroups.get()
+      expect(groups.map((g) => g.terminals.length)).toEqual([2, 1])
+    })
   })
 })

@@ -17,6 +17,7 @@ interface WorkbenchLayoutProps {
   sidebarVisible: boolean
   secondarySidebarVisible: boolean
   panelVisible: boolean
+  panelMaximized: boolean
   activitybarVisible: boolean
   sizes: Readonly<LayoutSizes>
   onSidebarResize: (px: number) => void
@@ -40,6 +41,7 @@ export function WorkbenchLayout({
   sidebarVisible,
   secondarySidebarVisible,
   panelVisible,
+  panelMaximized,
   activitybarVisible,
   sizes,
   onSidebarResize,
@@ -47,6 +49,10 @@ export function WorkbenchLayout({
   onPanelResize,
 }: WorkbenchLayoutProps) {
   const allotmentRef = useRef<AllotmentHandle>(null)
+  // Maximizing the panel hides the editor pane so the panel fills the center
+  // column (mirrors VSCode's "Maximize Panel Size"). Only meaningful while the
+  // panel is actually visible.
+  const editorPaneVisible = !(panelMaximized && panelVisible)
   // Allotment 1.20.5's distributeEmptySpace greedily fills the first visible
   // pane up to its maxSize on the initial layout pass — preferredSize is read
   // when views are added, but the container has size=0 at that point so the
@@ -79,8 +85,12 @@ export function WorkbenchLayout({
   const panelJustShownRef = useRef(false)
   const panelVisibleRef = useRef(panelVisible)
   const onPanelResizeRef = useRef(onPanelResize)
+  // While maximized the panel's height is the whole column, not the user's
+  // chosen size — never persist it, or restoring would lose the real size.
+  const panelMaximizedRef = useRef(panelMaximized)
   panelVisibleRef.current = panelVisible
   onPanelResizeRef.current = onPanelResize
+  panelMaximizedRef.current = panelMaximized
 
   if (prevPanelVisibleRef.current !== panelVisible) {
     if (!prevPanelVisibleRef.current && panelVisible) panelJustShownRef.current = true
@@ -163,6 +173,9 @@ export function WorkbenchLayout({
                 onChange={(s) => {
                   const second = s[1]
                   if (typeof second !== 'number' || !panelVisibleRef.current) return
+                  // Don't persist the panel's height while maximized — it's the
+                  // full column, not the user's preferred size.
+                  if (panelMaximizedRef.current) return
                   if (panelJustShownRef.current) {
                     // Defer to break the ResizeObserver loop: Allotment fires this
                     // callback synchronously from its own ResizeObserver during the
@@ -178,12 +191,12 @@ export function WorkbenchLayout({
                   onPanelResizeRef.current(second)
                 }}
               >
-                <Allotment.Pane>
+                <Allotment.Pane visible={editorPaneVisible}>
                   <div className={styles['pane']}>{editor}</div>
                 </Allotment.Pane>
                 <Allotment.Pane
                   minSize={PANEL_MIN}
-                  maxSize={PANEL_MAX}
+                  {...(editorPaneVisible ? { maxSize: PANEL_MAX } : {})}
                   preferredSize={sizes.panel}
                   visible={panelVisible}
                 >

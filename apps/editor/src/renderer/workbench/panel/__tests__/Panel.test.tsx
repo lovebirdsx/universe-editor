@@ -8,6 +8,7 @@ import {
   ViewContainerLocation,
   ViewContainerRegistry,
   ViewRegistry,
+  observableValue,
   type IStorageService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -58,6 +59,9 @@ function renderPanel(activeContainerId: string | undefined) {
     getVisible: () => false,
     setVisible: () => {},
     toggleVisible: () => {},
+    panelMaximized: observableValue<boolean>('test.panelMaximized', false),
+    setPanelMaximized: () => {},
+    togglePanelMaximized: () => {},
   } as never)
   const inst = new InstantiationService(services)
   return render(
