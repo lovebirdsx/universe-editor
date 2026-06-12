@@ -21,6 +21,7 @@
 import {
   CommandsRegistry,
   IEditorGroupsService,
+  INotificationService,
   combinedDisposable,
   markAsSingleton,
   type IDisposable,
@@ -28,7 +29,12 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
-import { decodeMonacoKeybinding, type DecodedKeybinding } from './monacoKeybindingDecoder.js'
+import {
+  decodeMonacoKeybinding,
+  MASK_CTRLCMD,
+  TOKEN_TO_KEYCODE,
+  type DecodedKeybinding,
+} from './monacoKeybindingDecoder.js'
 
 interface IMonacoEditorAction {
   readonly id: string
@@ -73,14 +79,20 @@ function nlsLookup(key: string, fallback: string): string {
 }
 
 function makeHandler(commandId: string) {
-  return (accessor: ServicesAccessor): void => {
+  return (accessor: ServicesAccessor, ...args: unknown[]): void => {
     const groups = accessor.get(IEditorGroupsService)
     const activeInput = groups.activeGroup.activeEditor
-    if (!(activeInput instanceof FileEditorInput)) return
-    const editor = FileEditorRegistry.get(activeInput)
-    if (!editor) return
-
-    editor.trigger('', commandId, {})
+    const editor =
+      activeInput instanceof FileEditorInput ? FileEditorRegistry.get(activeInput) : undefined
+    if (!editor) {
+      // The mirrored editor.action.* commands are always listed in the command
+      // palette (CommandsQuickAccessProvider enumerates CommandsRegistry without
+      // when-filtering), so a user can pick one with no active text editor. Tell
+      // them why nothing happened instead of returning silently.
+      accessor.get(INotificationService).status('该命令需要一个活动的文本编辑器')
+      return
+    }
+    editor.trigger('', commandId, args[0] ?? {})
   }
 }
 
@@ -93,24 +105,21 @@ function firstPrimaryOf(kbOpts: IMonacoEditorAction['_kbOpts']): number | undefi
   return undefined
 }
 
-// Modifier bit Monaco packs into a keybinding for Ctrl/Cmd (see
-// monacoKeybindingDecoder). KeyCode values for letters are lifted from the same
-// decoder's KEYCODE_TO_TOKEN table (z=56, y=55, a=31).
-const CTRL = 0x0800
-
 // Core editor commands Monaco registers outside the EditorAction registry, so
 // the loop above never sees them. Mirror them by hand so undo/redo/select-all
 // show up in our CommandsRegistry (Edit menu, Keyboard Shortcuts editor). Their
 // default keys go into the side-table only, leaving Monaco's own dispatch in
 // charge of the actual key handling.
+const ctrl = (token: string): number => MASK_CTRLCMD | TOKEN_TO_KEYCODE[token]!
+
 const CORE_COMMANDS: readonly CoreCommand[] = [
-  { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: CTRL | 56 },
-  { id: 'redo', label: 'Redo', nlsKey: 'redo', primary: CTRL | 55 },
+  { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: ctrl('z') },
+  { id: 'redo', label: 'Redo', nlsKey: 'redo', primary: ctrl('y') },
   {
     id: 'editor.action.selectAll',
     label: 'Select All',
     nlsKey: 'editor.action.selectAll',
-    primary: CTRL | 31,
+    primary: ctrl('a'),
   },
 ]
 

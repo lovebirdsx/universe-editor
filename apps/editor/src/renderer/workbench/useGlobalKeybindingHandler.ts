@@ -185,6 +185,18 @@ export function useGlobalKeybindingHandler(): void {
     //    yield to Monaco while the editor is focused (they still work outside it).
     const runResolution = (e: KeyboardEvent) => {
       const dbg = keyboardDebugService.enabled
+      // IME composition owns every keystroke until it commits. keyCode 229 is
+      // the legacy "composition" sentinel Chromium reports while e.isComposing
+      // is true, so guarding on either keeps multi-cursor / chord shortcuts from
+      // misfiring mid-composition (matches VSCode's _dispatch IME guard).
+      if (e.isComposing || e.keyCode === 229) {
+        if (dbg) {
+          keyboardDebugService.append(
+            formatGuardStop(toDiagnostics(e, buildKeyString(e)), 'IME composition in progress'),
+          )
+        }
+        return
+      }
       if (isModifierOnly(e.key)) {
         if (dbg) {
           keyboardDebugService.append(

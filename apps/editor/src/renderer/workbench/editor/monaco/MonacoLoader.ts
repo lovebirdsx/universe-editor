@@ -231,6 +231,12 @@ async function loadMonaco(): Promise<typeof monaco> {
         })
         .catch((err) => {
           _logger.error('bridgeAllMonacoActions failed', err)
+          // Still flip the flag and fire so waiters
+          // (MonacoKeybindingSyncContribution.reload /
+          // MonacoDefaultKeybindingOverrideContribution._sync) run against
+          // whatever did register instead of hanging forever.
+          _actionsBridged = true
+          _onDidBridgeActions.fire()
         })
       return monacoMod
     })()

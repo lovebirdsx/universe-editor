@@ -14,7 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 const MASK_KEYCODE = 0x00ff
-const MASK_CTRLCMD = 0x0800
+export const MASK_CTRLCMD = 0x0800
 const MASK_SHIFT = 0x0400
 const MASK_ALT = 0x0200
 const MASK_WINCTRL = 0x0100
@@ -132,6 +132,13 @@ const KEYCODE_TO_TOKEN: Readonly<Record<number, string>> = {
   112: 'numpad_decimal',
   113: 'numpad_divide',
 }
+
+// Reverse of KEYCODE_TO_TOKEN, derived from the single source above so callers
+// that need to *encode* a key (e.g. the core-command side-table in
+// monacoActionsBridge) don't re-hardcode keycode magic numbers.
+export const TOKEN_TO_KEYCODE: Readonly<Record<string, number>> = Object.fromEntries(
+  Object.entries(KEYCODE_TO_TOKEN).map(([code, token]) => [token, Number(code)]),
+)
 
 function decodeChord(chord: number): string | undefined {
   const keyCode = chord & MASK_KEYCODE
