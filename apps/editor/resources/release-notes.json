@@ -1,5 +1,28 @@
 [
   {
+    "version": "0.1.16",
+    "date": "2026-06-12",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "session内容支持搜索",
+          "Editor Tab 栏支持鼠标滚轮横向滚动",
+          "acp session列表加入搜索支持"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复vscode按键配置没有继承的bug",
+          "修复关闭terminal，焦点没有回收到编辑器的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.15",
     "date": "2026-06-11",
     "groups": [
