@@ -296,6 +296,13 @@ export interface E2EProbe {
    * bindings since it evaluates `when` against the (unfocused) current context.
    */
   getKeybindingCommandsForKey(key: string): string[]
+  /**
+   * Write a configuration value at Memory scope, bypassing settings.json. Lets
+   * specs flip runtime knobs (e.g. lowering
+   * `workbench.chat.virtualizationThreshold` so a short timeline still exercises
+   * the virtual-scroll path) without shipping fixtures of thousands of items.
+   */
+  updateConfigValue(key: string, value: unknown): void
 }
 
 declare global {

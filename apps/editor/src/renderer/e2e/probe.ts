@@ -392,6 +392,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         })
         .map((kb) => kb.command)
     },
+    updateConfigValue: (key: string, value: unknown): void =>
+      services.configurationService.update(key, value, ConfigurationTarget.Memory),
   }
 
   window[E2E_PROBE_KEY] = probe

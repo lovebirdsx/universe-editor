@@ -36,4 +36,23 @@ describe('AcpChatViewStateCache', () => {
     expect(AcpChatViewStateCache.load('s1')).toBeUndefined()
     expect(AcpChatViewStateCache.load('s2')).toBeTruthy()
   })
+
+  it('round-trips the scroll anchor and measurement cache', () => {
+    AcpChatViewStateCache.save('s1', {
+      scrollTop: 4200,
+      stuck: false,
+      focusedKey: null,
+      anchor: { key: 'm:abc', offset: 18 },
+      measurements: [
+        { key: 'm:abc', size: 120 },
+        { key: 't:def', size: 64 },
+      ],
+    })
+    const loaded = AcpChatViewStateCache.load('s1')
+    expect(loaded?.anchor).toEqual({ key: 'm:abc', offset: 18 })
+    expect(loaded?.measurements).toEqual([
+      { key: 'm:abc', size: 120 },
+      { key: 't:def', size: 64 },
+    ])
+  })
 })

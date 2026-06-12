@@ -27,7 +27,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type MutableRefObject,
 } from 'react'
-import { useVirtualizer, type Virtualizer } from '@tanstack/react-virtual'
+import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import { Bot, History, Plus } from 'lucide-react'
 import { IConfigurationService, ICommandService, localize } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable, useService } from '../useService.js'
@@ -44,7 +44,11 @@ import {
   type AcpTimelineMoveDirection,
   type AcpTimelineScrollTarget,
 } from '../../services/acp/acpChatWidgetService.js'
-import { AcpChatViewStateCache } from '../../services/acp/acpChatViewStateCache.js'
+import {
+  AcpChatViewStateCache,
+  type AcpChatAnchor,
+  type AcpChatViewState,
+} from '../../services/acp/acpChatViewStateCache.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { PermissionCard } from './PermissionCard.js'
@@ -258,6 +262,9 @@ function ChatScroll({
     onFindVisibleChange,
   )
   const virtualize = timeline.length > threshold && !find.visible
+  // Let persist()/the restore effect read the live mode without re-binding to it.
+  const virtualizeRef = useRef(virtualize)
+  virtualizeRef.current = virtualize
 
   const firstUserIdx = timeline.findIndex(
     (it) => it.kind === 'message' && it.message.role === 'user',
@@ -277,9 +284,34 @@ function ChatScroll({
 
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
 
+  // Feed the previously measured row heights back into a freshly mounted
+  // virtualizer (A). Without this the remounted instance falls back to
+  // estimateRow for every row, so its total size — and therefore the scrollbar
+  // and the meaning of any restored scrollTop — disagrees with what the user
+  // last saw. Sizes are keyed by slotKey, so they re-attach to the right rows
+  // even if streaming appended new items while this session was unmounted; the
+  // start/end/index/lane fields are placeholders the virtualizer recomputes
+  // immediately (it only reads key + size from this seed).
+  const initialMeasurementsCache = useMemo<VirtualItem[]>(
+    () =>
+      (saved?.measurements ?? []).map((m) => ({
+        index: 0,
+        start: 0,
+        size: m.size,
+        end: m.size,
+        key: m.key,
+        lane: 0,
+      })),
+    // saved is read once at mount; recomputing on later renders would be wrong.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  )
+
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
     count: virtualize ? displayTimeline.length : 0,
     getScrollElement: () => containerRef.current,
+    initialMeasurementsCache,
+    initialOffset: saved && !saved.stuck ? saved.scrollTop : 0,
     // Stable, content-derived estimate. It must NOT vary as other rows get
     // measured: a moving estimate shifts every not-yet-measured row's offset on
     // each measurement, so a streaming tail would make the whole list — and any
@@ -306,8 +338,26 @@ function ChatScroll({
     // here would clobber the position handleScroll already saved. Only trust the
     // DOM while the container is still connected; otherwise keep the saved value.
     const prev = AcpChatViewStateCache.load(session.id)
-    const scrollTop = el?.isConnected ? el.scrollTop : (prev?.scrollTop ?? 0)
-    AcpChatViewStateCache.save(session.id, {
+    const connected = el?.isConnected ?? false
+    const scrollTop = connected && el ? el.scrollTop : (prev?.scrollTop ?? 0)
+    // Anchor (B): the slot at the top of the viewport + the offset into it. On
+    // restore we re-resolve the slot's offset in the *current* coordinate system,
+    // so a position survives the estimate→measured height shift that a raw
+    // scrollTop cannot. Only computable while connected and virtualizing; keep
+    // the previous anchor otherwise so an unmount flush never wipes it.
+    const vz = virtualizerRef.current
+    const anchor =
+      connected && el && virtualizeRef.current && vz
+        ? captureAnchor(vz, el.scrollTop)
+        : prev?.anchor
+    // Measurements (A): the real per-row heights, captured before unmount and
+    // replayed via initialMeasurementsCache. Keep the previous snapshot if the
+    // virtualizer has nothing measured yet (e.g. plain-list mode).
+    const measurements =
+      vz && vz.measurementsCache && vz.measurementsCache.length > 0
+        ? vz.measurementsCache.map((m) => ({ key: String(m.key), size: m.size }))
+        : prev?.measurements
+    const next: AcpChatViewState = {
       scrollTop,
       stuck: stickRef.current,
       focusedKey: focusedKeyRef.current,
@@ -315,7 +365,10 @@ function ChatScroll({
         mode: collapseRef.current.mode,
         overrides: [...collapseRef.current.overrides],
       },
-    })
+    }
+    if (anchor) next.anchor = anchor
+    if (measurements) next.measurements = measurements
+    AcpChatViewStateCache.save(session.id, next)
   }, [session.id])
 
   // Persist whenever the overrides change (Alt+F / chevron).
@@ -388,17 +441,34 @@ function ChatScroll({
   // Restore a non-stuck scroll position saved before this session was unmounted
   // (tab switch / session switch). Chat content grows asynchronously — code
   // blocks colorize via Monaco, image data-blocks decode late — so a one-shot
-  // assignment lands clamped against a too-short scrollHeight. Re-apply the
-  // target as the content settles (ResizeObserver) until a short window elapses
-  // or the user takes over. When stuck, fall through to the bottom-pin effect.
+  // assignment lands clamped against a too-short scrollHeight. Re-apply as the
+  // content settles (ResizeObserver) until a short window elapses or the user
+  // takes over. When stuck, fall through to the bottom-pin effect.
+  //
+  // The target is resolved fresh on every apply() from the saved anchor (B): we
+  // look up the anchored slot's current offset in the live coordinate system and
+  // re-add the in-slot offset. As rows mount and measure (estimate → real), the
+  // anchored slot's offset shifts, and re-resolving keeps the same *message*
+  // pinned to the top — unlike a fixed scrollTop, which keeps a now-meaningless
+  // pixel. Falls back to the raw scrollTop when no anchor is available (e.g.
+  // state saved before anchors existed, or plain-list mode).
   useLayoutEffect(() => {
     const el = containerRef.current
     if (!el || !saved || saved.stuck) return
-    const target = saved.scrollTop
     restoringRef.current = true
+
+    const resolveTarget = (): number => {
+      const vz = virtualizerRef.current
+      if (saved.anchor && virtualizeRef.current && vz) {
+        const resolved = resolveAnchor(vz, displayTimelineRef.current, saved.anchor)
+        if (resolved !== undefined) return resolved
+      }
+      return saved.scrollTop
+    }
 
     const apply = (): void => {
       if (!restoringRef.current) return
+      const target = resolveTarget()
       if (el.scrollTop !== target) el.scrollTop = target
     }
     apply()
@@ -908,6 +978,45 @@ const TimelineSlot = memo(function TimelineSlot({
 
 function slotKey(item: TimelineItem): string {
   return itemSlotKey(item)
+}
+
+// Capture the slot at the top of the viewport plus how far into it we've
+// scrolled. `getVirtualItemForOffset` returns the row spanning `scrollTop` in
+// the current coordinate system; `scrollTop - item.start` is the in-slot
+// offset. Pairing the row's stable slotKey with that offset makes the position
+// replayable after a remount even though pixel offsets shift as rows measure.
+function captureAnchor(
+  vz: Virtualizer<HTMLDivElement, Element>,
+  scrollTop: number,
+): AcpChatAnchor | undefined {
+  const item = vz.getVirtualItemForOffset(scrollTop)
+  if (!item) return undefined
+  return { key: String(item.key), offset: scrollTop - item.start }
+}
+
+// Resolve a saved anchor back to a scrollTop in the live coordinate system:
+// find the slot's current index, ask the virtualizer for its start offset, and
+// re-add the in-slot offset. The offset was captured in the *old* coordinate
+// system, so it's clamped to the slot's current measured height — otherwise a
+// row that re-measured shorter would let the offset overflow past it and pin a
+// later message to the top (the "lands 2 messages off" drift). Clamping keeps
+// the anchored message itself at the top, trading sub-row precision (which is
+// meaningless across a coordinate-system change anyway) for the property the
+// user actually perceives. Returns undefined when the anchored slot no longer
+// exists (e.g. the synthetic first-user row that displayTimeline drops).
+function resolveAnchor(
+  vz: Virtualizer<HTMLDivElement, Element>,
+  displayTimeline: readonly TimelineItem[],
+  anchor: AcpChatAnchor,
+): number | undefined {
+  const index = displayTimeline.findIndex((it) => slotKey(it) === anchor.key)
+  if (index < 0) return undefined
+  const info = vz.getOffsetForIndex(index, 'start')
+  if (!info) return undefined
+  const size = vz.measurementsCache[index]?.size
+  const offset =
+    typeof size === 'number' ? Math.min(anchor.offset, Math.max(0, size - 1)) : anchor.offset
+  return Math.max(0, info[0] + offset)
 }
 
 // First non-empty line of a message, trimmed and clamped, for the collapsed

@@ -16,11 +16,38 @@ export interface AcpChatCollapseState {
   overrides: ReadonlyArray<readonly [string, boolean]>
 }
 
+/**
+ * Logical scroll anchor: the slot at the top of the viewport plus the pixel
+ * offset into it. Survives a coordinate-system change (estimated → measured
+ * heights) that a raw `scrollTop` cannot — on restore we resolve the slot's
+ * current offset and re-add `offset`, landing on the same message rather than
+ * the same pixel.
+ */
+export interface AcpChatAnchor {
+  key: string
+  offset: number
+}
+
+/**
+ * Per-slot measured row heights (keyed by slotKey, the virtualizer's item key),
+ * captured before unmount and fed back as `initialMeasurementsCache` so the
+ * remounted virtualizer reconstructs the exact same total size / row offsets
+ * instead of falling back to coarse estimates. This is what stops the scrollbar
+ * from jumping and the "scrolled to bottom → switch away → switch back lands in
+ * the middle" regression for already-visited sessions.
+ */
+export interface AcpChatMeasurement {
+  key: string
+  size: number
+}
+
 export interface AcpChatViewState {
   scrollTop: number
   stuck: boolean
   focusedKey: string | null
   collapse?: AcpChatCollapseState
+  anchor?: AcpChatAnchor
+  measurements?: ReadonlyArray<AcpChatMeasurement>
 }
 
 class AcpChatViewStateCacheImpl {
