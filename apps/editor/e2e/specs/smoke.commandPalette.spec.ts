@@ -27,8 +27,7 @@ test.describe('@p0 command palette', () => {
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect(workbench.editor.monacoEditor).toBeVisible()
 
-    await workbench.runCommand('workbench.action.focusActiveEditorGroup')
-    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+    await workbench.focusActiveEditorGroup()
 
     await page.evaluate(() => {
       void window.__E2E__!.runCommand('workbench.action.showCommands')
@@ -87,8 +86,7 @@ test.describe('@p0 command palette', () => {
     await expect.poll(() => workbench.getEditorGroupCount()).toBe(1)
 
     // Focus the editor so _captureFocusTarget saves it as the restore target
-    await workbench.runCommand('workbench.action.focusActiveEditorGroup')
-    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+    await workbench.focusActiveEditorGroup()
 
     // Open the command palette and select "Split Editor Right" via Enter.
     // Fire-and-forget so the await-on-pick inside showCommands doesn't deadlock.

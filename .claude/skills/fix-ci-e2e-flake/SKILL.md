@@ -173,6 +173,17 @@ pnpm e2e
   - 同型裸清理（潜在隐患，暂不动）：`smoke.{explorerDnD,explorerRowHeight,explorerExternalWatch,...}.spec.ts` 的 `fs.rm(..., { recursive, force })`
 - **教训**：报错是 **Node `fs` 的 `EBUSY/EPERM rmdir` 且栈在 `finally`/teardown 清理步** = Windows 文件锁清理竞态，不是被测 bug 也不是断言 flake。根因是 spec 的 `finally` 删 tmp workspace 时 Electron app 还没被 fixture 关闭（句柄/watcher 仍占目录），`force: true` 不重试 EBUSY。正解是 `fs.rm` 加 `maxRetries`/`retryDelay`（Node 内建 Windows 重试），别移到别处删或 sleep 硬等。只改触发 flake 的 spec。
 
+### 案例 9：commandPalette「`editorFocus` poll 5s 超时，received 恒 false」——根因是 fire-once focus 命令在 Monaco 实例注册前空转，poll 只读 key 不重 fire
+- **现象**：`smoke.commandPalette.spec.ts` `@p0`「Enter key does not leak…」在 CI 偶发挂，但失败行是**前置 setup**（第 91 行 `await expect.poll(() => getContextKey('editorFocus')).toBe(true)`，紧跟 `runCommand('focusActiveEditorGroup')`），**不是被测断言**（被测是后面 split 成两组 + uri 不变）。received 稳定 `false`，5000ms 超时。本地稳过。
+- **判定关键——失败在前置步、received 稳定 false（非波动）、是「等编辑器/Monaco 首帧就位」类冷启动敏感步**：按速记 1，received 稳定指向「被测对象自身没就位」；按速记 9，这是 setup 步而非被测断言失败。再按速记 13 思路看 spec 范式有无副作用——这里不是盲按键，而是**「动作 fire 一次 + poll 只读状态」的分离范式**，动作没放进 poll。
+- **根因（测试范式缺陷，产品无 bug）**：`focusActiveEditorGroup` 是 **fire-once**——它 `run` 时经 `FileEditorRegistry.get()` 取 Monaco 实例才 `editor.focus()`+同步 `editorFocus`；而该实例在 `FileEditor.tsx` 的 `applyModel`（model **异步**加载后）才 `FileEditorRegistry.register`。spec 第 86 行 `monacoEditor` toBeVisible 只代表 DOM 挂载，register 尚未完成。冷启动慢时命令在 register 前触发 → `focusEditorInput` 返回 false → 静默 no-op；而第 91 行的 poll **只读 context key、从不重新 fire focus** → `editorFocus` 永远停在 false，**加宽窗口无效**（等多久都没人再去 focus）。本地快、register 在命令前已完成，故不复现。
+- **修法（不削弱被测断言）**：把「fire focus 命令」**放进 poll 谓词**，每轮重 fire 直到 `editorFocus` 翻 true——抽成 PO helper `workbench.focusActiveEditorGroup()`（`expect.poll(async()=>{ await runCommand('focusActiveEditorGroup'); return getContextKey('editorFocus') }).toBe(true)`）。替换本 spec 两处同范式（第 31、91 行）+ 同型遗留薄弱点 `smoke.editorFocus.spec.ts:11`（同为 `newUntitledFile` 后立即 fire-once focus 的**前置 setup**）。其余 `editorGroupSwitch:205`/`quickAccess:83` 前面已有多步交互、Monaco 早注册，非冷启动首帧风险，不动（避免过度修改）。被测断言一字未改，本地 `--repeat-each=3`（18 case）全绿，e2e typecheck+lint 干净。
+- **锚点**：
+  - 修复点：`apps/editor/e2e/pages/WorkbenchPO.ts`（新 `focusActiveEditorGroup()`：fire-in-poll）；`smoke.{commandPalette,editorFocus}.spec.ts` 改用之
+  - fire-once 命令：`apps/editor/src/renderer/actions/editorActions.ts`（`FocusActiveEditorGroupAction.run` → `focusEditorInput`，拿不到实例返回 false 即 no-op）
+  - 实例注册时机：`apps/editor/src/renderer/workbench/editor/FileEditor.tsx:345`（`applyModel` 内 `FileEditorRegistry.register`，model 异步加载后）；`editorFocus` 同步：`apps/editor/src/renderer/services/editor/editorFocus.ts`
+- **教训**：**「`runCommand(动作)` + `expect.poll(只读状态)`」是危险的分离范式**——若动作是 fire-once 且依赖某个**异步就位**的前置（这里是 Monaco 实例注册），动作在前置就位前触发会静默 no-op，而 poll 只读状态、永不重 fire → received 卡死在初值、**加宽窗口无效**（同速记 13「盲按 + 加宽无效」的近亲：根因都是「该重做的动作没进 poll」）。正解是**把动作本身放进 poll 谓词**，每轮重做直到状态满足。鉴别：失败在 setup 步 + received 稳定卡初值 + 该步在「fire 一次后只 poll 读」。
+
 ## 易踩坑速记
 1. call log 的 count **波动** = 背景噪音；count **卡死在错值** = 更像真回归。先分清。
 2. extension host 在 CI 偶发崩溃，会污染一切对通知做全局 count 的断言——按文案过滤。
@@ -190,6 +201,7 @@ pnpm e2e
 14. **报错是 `page.evaluate: Execution context was destroyed, most likely because of a navigation` = harness 时序 flake,不是被测断言失败**。凡"fire 后页面会 reload/导航,再 `page.evaluate(__E2E__...)`"的 PO 步骤,evaluate 都要对此鲁棒(捕获该错→重等 `domcontentloaded`+`__E2E__`→重试),因为慢速 CI 上导航 commit 会与评估重合。若同文件已有兄弟方法(如 `waitForRestored`)做过该加固,新/遗留同类步骤**必须对齐复用**,别留裸 evaluate(并入速记 5)。reload 类 PO 见 `WorkbenchPO._evaluateWhenRestored`。
 15. **config 已按 `process.env['CI']` 分档 `expect.timeout` 时,spec 里硬编码 `{ timeout: 5000 }` 会把 CI 分档盖回本地值**(5000===本地默认=分档失效)。received 稳定空 `""` + 这步等的是"编辑器/Monaco 首帧就位"(冷启动敏感) → 查这步是否钉死了局部 `timeout`。修法:删掉该 poll 的显式 `{ timeout: 5000 }` 让它继承 config 默认,断言不动,CI 自动吃到加宽窗口。与速记 10 的 `test.slow()` 互补(一个抬 test 级天花板,一个让 expect 级吃 CI 分档)。**只改触发 flake 的那个谓词,别无差别批量改稳过用例的 5000**(过度修改)。
 16. **报错是 Node `fs` 的 `EBUSY/EPERM/ENOTEMPTY rmdir`、栈在 `finally`/teardown 清理步 = Windows 文件锁清理竞态,不是被测断言失败**(同案例 6 的 harness flake 家族)。根因:spec 自建 tmp workspace→`openWorkspace`,测试体 `finally` 删 tmpDir 时 **Electron app 还没被 fixture 关闭**(`electronApp` fixture `await use(app)` 之后才 `closeApp`),打开的文件句柄 + chokidar watcher 仍占目录;`force: true` 只吞 ENOENT **不重试 EBUSY**。修法:`fs.rm` 加 `maxRetries: 10, retryDelay: 200`(Node 内建的 Windows 重试退避),断言不动。split/多 pinned 文件的 spec 句柄最多、窗口最大,故独此偶发。只改触发 flake 的 spec,别无差别改其它裸 `force:true` 清理。
+17. **`runCommand(动作)` + 紧跟 `expect.poll(只读状态)` 的分离范式,若动作是 fire-once 且依赖异步就位的前置,会 received 卡死初值 + 加宽窗口无效**(案例 9)。典型:`focusActiveEditorGroup` 依赖 Monaco 实例 `FileEditorRegistry.register`(model 异步加载后才注册),`monacoEditor` toBeVisible 只是 DOM 挂载、register 未完成;冷启动慢时命令在 register 前 fire→静默 no-op,而 poll 只读 `editorFocus`、从不重 fire→恒 false。鉴别:**失败在前置 setup 步 + received 稳定卡初值(非波动) + 该步「fire 一次后只 poll 读」**。修法:**把动作放进 poll 谓词**(每轮重 fire 直到状态满足),抽 PO helper(`workbench.focusActiveEditorGroup()`)。与速记 13(盲按+加宽无效)同源——根因都是「该重做的动作没进 poll」;与速记 9 互参(失败在 setup 步≠被测断言失败)。只改冷启动首帧风险的步(`newUntitledFile`后立即 focus),前面已有多步交互的 focus(Monaco 早注册)不动。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级

@@ -8,8 +8,7 @@ test.describe('@p0 editor focus', () => {
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect(workbench.editor.monacoEditor).toBeVisible()
 
-    await workbench.runCommand('workbench.action.focusActiveEditorGroup')
-    await expect.poll(() => workbench.getContextKey<boolean>('editorFocus')).toBe(true)
+    await workbench.focusActiveEditorGroup()
 
     await workbench.runCommand('workbench.action.splitEditorRight')
     await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)

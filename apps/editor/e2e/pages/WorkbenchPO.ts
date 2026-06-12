@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test'
+import { expect, type Page } from '@playwright/test'
 import type {
   E2EDisposableLeakReport,
   E2EOpenWindow,
@@ -38,6 +38,26 @@ export class WorkbenchPO {
 
   async getContextKey<T = unknown>(key: string): Promise<T> {
     return this.page.evaluate((k) => window.__E2E__!.getContextKey(k) as unknown, key) as Promise<T>
+  }
+
+  /**
+   * Focus the active editor group and wait until Monaco actually owns DOM focus.
+   *
+   * `focusActiveEditorGroup` is fire-once: it focuses the Monaco instance looked
+   * up from FileEditorRegistry, which is only registered after the model loads
+   * asynchronously (FileEditor.tsx applyModel). On a cold first frame the
+   * command can fire before the instance is registered and silently no-op,
+   * leaving `editorFocus` false forever — a bare poll on the context key never
+   * recovers because nothing re-fires the focus. Re-fire on every poll until the
+   * key flips true.
+   */
+  async focusActiveEditorGroup(): Promise<void> {
+    await expect
+      .poll(async () => {
+        await this.runCommand('workbench.action.focusActiveEditorGroup')
+        return this.getContextKey<boolean>('editorFocus')
+      })
+      .toBe(true)
   }
 
   async lifecyclePhase(): Promise<string> {
