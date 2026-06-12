@@ -18,6 +18,7 @@ import {
   IContextKeyService,
   IEditorService,
   IHistoryService,
+  IStorageService,
   IWorkbenchContribution,
   URI,
   autorun,
@@ -53,6 +54,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     @IHistoryService private readonly _historyService: IHistoryService,
     @IContextKeyService contextKeyService: IContextKeyService,
     @IEditorService editorService: IEditorService,
+    @IStorageService storageService: IStorageService,
   ) {
     super()
 
@@ -79,6 +81,7 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     // longer open in any group. The cursor listener below upgrades file
     // entries in-place once Monaco mounts and the user moves the caret.
     let lastRecordedResource: string | undefined
+    let lastActiveInput: EditorInput | undefined
     this._register(
       autorun((reader) => {
         const active = editorService.activeEditor.read(reader)
@@ -87,12 +90,31 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
         if (!resource) return
         const uri = resource.toString()
         if (uri === lastRecordedResource) return
+        // Before leaving the previous editor, fold its current caret into its
+        // existing stack entry. A small intra-file move (1→2) never crosses the
+        // cursor listener's significance threshold, so without this GoBack would
+        // return to the stale entry position rather than where the user left off
+        // (matches vscode, which snapshots the outgoing editor's view state).
+        this._captureLeaving(lastActiveInput)
+        lastActiveInput = active
         lastRecordedResource = uri
         this._historyService.record({
           resource,
           typeId: active.typeId,
           serialized: active.serialize?.(),
         })
+      }),
+    )
+
+    // History is workspace-bound (matches vscode): when the workspace storage
+    // scope swaps (folder open/close/change) the prior workspace's entries are
+    // meaningless and GoBack must not cross into them. Reset the dedup closure
+    // too so re-opening a same-named file in the new workspace records afresh.
+    this._register(
+      storageService.onDidChangeWorkspaceScope(() => {
+        lastRecordedResource = undefined
+        lastActiveInput = undefined
+        this._historyService.clear()
       }),
     )
 
@@ -110,6 +132,31 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
         this._listeners.clear()
       }),
     )
+  }
+
+  private _captureLeaving(input: EditorInput | undefined): void {
+    if (!(input instanceof FileEditorInput)) return
+    const editor = FileEditorRegistry.get(input)
+    if (!editor) return
+    // Cancel a pending debounced flush for this editor: it would otherwise fire
+    // after the new editor was recorded and push a stale, out-of-order entry.
+    const state = this._listeners.get(editor)
+    if (state?.timer) {
+      clearTimeout(state.timer)
+      state.timer = undefined
+    }
+    const pos = editor.getPosition()
+    if (!pos) return
+    if (state) {
+      state.lastResource = input.resource.toString()
+      state.lastLine = pos.lineNumber
+    }
+    this._historyService.updateCurrent(input.resource, {
+      startLine: pos.lineNumber,
+      startColumn: pos.column,
+      endLine: pos.lineNumber,
+      endColumn: pos.column,
+    })
   }
 
   private _attach(editor: MonacoLikeEditor, resource: URI): void {

@@ -41,6 +41,14 @@ export interface IHistoryService {
   /** Record `entry` as the latest navigation point. Drops the forward stack. */
   record(entry: Omit<IHistoryEntry, 'timestamp'>): void
 
+  /**
+   * Update the selection of the most recent back-stack entry for `resource`
+   * in place, without changing stack order or touching the forward stack.
+   * Used to capture a leaving editor's final caret when switching away (the
+   * move was too small to record on its own). No-op if `resource` has no entry.
+   */
+  updateCurrent(resource: URI, selection: IHistorySelection): void
+
   /** Step one position back. Returns the entry to navigate to, or undefined. */
   goBack(): IHistoryEntry | undefined
 

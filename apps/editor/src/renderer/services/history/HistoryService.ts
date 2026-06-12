@@ -2,10 +2,15 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  HistoryService — back/forward navigation history. Pure renderer state; no
  *  persistence (matches vscode). Records are inserted via `record()` from the
- *  FileEditor Monaco cursor listener; `goBack`/`goForward` return the entry
- *  and flip a `_suppressNext` guard so the resulting cursor change is not
- *  re-recorded. Stack depth is bounded; consecutive same-line entries on the
- *  same file collapse into one (latest selection wins).
+ *  active-editor autorun and the FileEditor Monaco cursor listener.
+ *  `goBack`/`goForward` return the entry and open a short *suppression window*
+ *  keyed to the target resource: a single navigation fires several records for
+ *  that resource (the synchronous active-editor change plus the debounced
+ *  cursor flush ~250ms later), and all of them must be ignored — otherwise the
+ *  trailing flush would clear the freshly-built forward stack. Records for a
+ *  *different* resource inside the window are genuine user navigation and pass
+ *  through (closing the window). Stack depth is bounded; consecutive same-line
+ *  entries on the same file collapse into one (latest selection wins).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -19,6 +24,12 @@ import {
 } from '@universe-editor/platform'
 
 const MAX_DEPTH = 50
+
+// How long after a goBack/goForward we keep swallowing records for the target
+// resource. Must outlast the cursor listener's debounce (250ms) plus the
+// editor (re)open + setPosition round-trip, so the trailing flush lands inside
+// the window and does not clear the forward stack.
+const SUPPRESS_WINDOW_MS = 1000
 
 function sameFile(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolean {
   return isEqualResource(a.resource, b.resource)
@@ -39,19 +50,34 @@ export class HistoryService extends Disposable implements IHistoryService {
 
   private readonly _back: IHistoryEntry[] = []
   private readonly _forward: IHistoryEntry[] = []
-  private _suppressNext = false
+  // Resource we are currently navigating to (via goBack/goForward) and the
+  // wall-clock deadline until which records for it are swallowed. A single
+  // navigation produces multiple records for this resource; all are ignored
+  // until the deadline. A record for any other resource is real user
+  // navigation — it closes the window and records normally.
+  private _suppressResource: string | undefined
+  private _suppressUntil = 0
 
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange = this._onDidChange.event
 
   record(entry: Omit<IHistoryEntry, 'timestamp'>): void {
-    if (this._suppressNext) {
-      this._suppressNext = false
-      return
-    }
     const reviveResource =
       entry.resource instanceof URI ? entry.resource : (URI.revive(entry.resource) as URI)
     if (!reviveResource) return
+    if (this._suppressResource !== undefined) {
+      if (
+        Date.now() <= this._suppressUntil &&
+        reviveResource.toString() === this._suppressResource
+      ) {
+        // A record for the navigation target inside the window — swallow it so
+        // the trailing cursor flush cannot clear the forward stack.
+        return
+      }
+      // Window expired, or the user navigated elsewhere: stop suppressing.
+      this._suppressResource = undefined
+      this._suppressUntil = 0
+    }
     const next: Omit<IHistoryEntry, 'timestamp'> = {
       resource: reviveResource,
       selection: entry.selection,
@@ -74,6 +100,18 @@ export class HistoryService extends Disposable implements IHistoryService {
     this._onDidChange.fire()
   }
 
+  updateCurrent(resource: URI, selection: IHistorySelection): void {
+    const target = resource.toString()
+    for (let i = this._back.length - 1; i >= 0; i--) {
+      const e = this._back[i]
+      if (e && e.resource.toString() === target) {
+        this._back[i] = { ...e, selection, timestamp: Date.now() }
+        this._onDidChange.fire()
+        return
+      }
+    }
+  }
+
   goBack(): IHistoryEntry | undefined {
     if (this._back.length < 2) return undefined
     const current = this._back.pop()
@@ -81,7 +119,7 @@ export class HistoryService extends Disposable implements IHistoryService {
     this._forward.push(current)
     if (this._forward.length > MAX_DEPTH) this._forward.shift()
     const target = this._back[this._back.length - 1]
-    this._suppressNext = true
+    if (target) this._suppress(target.resource)
     this._onDidChange.fire()
     return target
   }
@@ -91,9 +129,14 @@ export class HistoryService extends Disposable implements IHistoryService {
     if (!target) return undefined
     this._back.push(target)
     if (this._back.length > MAX_DEPTH) this._back.shift()
-    this._suppressNext = true
+    this._suppress(target.resource)
     this._onDidChange.fire()
     return target
+  }
+
+  private _suppress(resource: URI): void {
+    this._suppressResource = resource.toString()
+    this._suppressUntil = Date.now() + SUPPRESS_WINDOW_MS
   }
 
   canGoBack(): boolean {
@@ -116,7 +159,8 @@ export class HistoryService extends Disposable implements IHistoryService {
     if (this._back.length === 0 && this._forward.length === 0) return
     this._back.length = 0
     this._forward.length = 0
-    this._suppressNext = false
+    this._suppressResource = undefined
+    this._suppressUntil = 0
     this._onDidChange.fire()
   }
 }

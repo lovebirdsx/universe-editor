@@ -11,6 +11,7 @@ import {
   IEditorService,
   IFileService,
   IHistoryService,
+  IStorageService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -19,6 +20,7 @@ import {
   type IEditorInput,
   type IEditorService as IEditorServiceType,
   type IFileService as IFileServiceType,
+  type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -115,6 +117,23 @@ function makeFakeEditorService(): {
   }
 }
 
+function makeFakeStorageService(): {
+  service: IStorageServiceType
+  swapWorkspaceScope: () => void
+} {
+  const scope = new Emitter<void>()
+  const service: IStorageServiceType = {
+    _serviceBrand: undefined,
+    async get() {
+      return undefined
+    },
+    async set() {},
+    async remove() {},
+    onDidChangeWorkspaceScope: scope.event,
+  }
+  return { service, swapWorkspaceScope: () => scope.fire() }
+}
+
 function setup() {
   FileEditorRegistry._resetForTests()
   const services = new ServiceCollection()
@@ -125,9 +144,18 @@ function setup() {
   services.set(IHistoryService, historyService)
   const editor = makeFakeEditorService()
   services.set(IEditorService, editor.service)
+  const storage = makeFakeStorageService()
+  services.set(IStorageService, storage.service)
   const inst = new InstantiationService(services)
   const contrib = inst.createInstance(HistoryContribution)
-  return { historyService, contextKeyService, inst, contrib, setActiveEditor: editor.setActive }
+  return {
+    historyService,
+    contextKeyService,
+    inst,
+    contrib,
+    setActiveEditor: editor.setActive,
+    swapWorkspaceScope: storage.swapWorkspaceScope,
+  }
 }
 
 describe('HistoryContribution', () => {
@@ -167,6 +195,31 @@ describe('HistoryContribution', () => {
       URI.file('/a.ts').fsPath,
       URI.file('/b.ts').fsPath,
     ])
+  })
+
+  it('clears history when the workspace scope swaps', () => {
+    const { historyService, setActiveEditor, swapWorkspaceScope, inst } = setup()
+    const inputA = inst.createInstance(FileEditorInput, URI.file('/a.ts'))
+    const inputB = inst.createInstance(FileEditorInput, URI.file('/b.ts'))
+    setActiveEditor(inputA)
+    setActiveEditor(inputB)
+    expect(historyService.canGoBack()).toBe(true)
+
+    swapWorkspaceScope()
+    expect(historyService.getBackStack().length).toBe(0)
+    expect(historyService.canGoBack()).toBe(false)
+  })
+
+  it('records a same-named file freshly after a workspace swap (dedup closure reset)', () => {
+    const { historyService, setActiveEditor, swapWorkspaceScope, inst } = setup()
+    const before = inst.createInstance(FileEditorInput, URI.file('/a.ts'))
+    setActiveEditor(before)
+    swapWorkspaceScope()
+    expect(historyService.getBackStack().length).toBe(0)
+    // Same URI string, new workspace — must be recorded, not deduped away.
+    const after = inst.createInstance(FileEditorInput, URI.file('/a.ts'))
+    setActiveEditor(after)
+    expect(historyService.getBackStack().length).toBe(1)
   })
 
   it('records non-file editor inputs with typeId + serialized so GoBack can rebuild them', () => {
@@ -276,6 +329,59 @@ describe('HistoryContribution', () => {
 
     expect(historyService.getBackStack().length).toBe(2)
     expect(historyService.getBackStack()[1]?.resource.fsPath).toBe(URI.file('/b.ts').fsPath)
+  })
+
+  it('captures the leaving editor’s final cursor on a sub-threshold move when switching away', () => {
+    // Repro: cursor 1→2 in A (delta below threshold), switch to B before the
+    // 250ms debounce fires. GoBack must return to A@2, so A's stack entry has
+    // to carry the final caret — not the selection-less placeholder recorded on
+    // entry.
+    const { historyService, inst, setActiveEditor } = setup()
+    const uriA = URI.file('/a.ts')
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    const editorA = makeFakeEditor(uriA)
+    setActiveEditor(inputA)
+    FileEditorRegistry.register(
+      inputA,
+      editorA as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editorA.position = { lineNumber: 2, column: 3 }
+    editorA.triggerCursor()
+
+    // Switch to B before the debounce window elapses.
+    const inputB = inst.createInstance(FileEditorInput, URI.file('/b.ts'))
+    setActiveEditor(inputB)
+
+    const aEntry = historyService.getBackStack().find((e) => e.resource.fsPath === uriA.fsPath)
+    expect(aEntry?.selection?.startLine).toBe(2)
+    expect(aEntry?.selection?.startColumn).toBe(3)
+  })
+
+  it('cancels the leaving editor’s pending flush so a late fire cannot corrupt the stack', () => {
+    // Without cancellation the debounced flush for A lands AFTER B was recorded
+    // and pushes a third, out-of-order [A, B, A] entry.
+    const { historyService, inst, setActiveEditor } = setup()
+    const uriA = URI.file('/a.ts')
+    const inputA = inst.createInstance(FileEditorInput, uriA)
+    const editorA = makeFakeEditor(uriA)
+    setActiveEditor(inputA)
+    FileEditorRegistry.register(
+      inputA,
+      editorA as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+    editorA.position = { lineNumber: 2, column: 1 }
+    editorA.triggerCursor()
+
+    const inputB = inst.createInstance(FileEditorInput, URI.file('/b.ts'))
+    setActiveEditor(inputB)
+
+    // Any pending A timer must have been cancelled / folded in on the switch.
+    vi.advanceTimersByTime(300)
+
+    expect(historyService.getBackStack().map((e) => e.resource.fsPath)).toEqual([
+      uriA.fsPath,
+      URI.file('/b.ts').fsPath,
+    ])
   })
 
   it('detaches when the Monaco editor disposes', () => {

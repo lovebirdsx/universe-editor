@@ -146,6 +146,39 @@ describe('HistoryService', () => {
     expect(h.getForwardStack().length).toBe(0)
   })
 
+  it('keeps the forward stack across multiple same-target records after goBack', () => {
+    // Regression: a single goBack fires several records for the target — the
+    // synchronous active-editor change AND the debounced cursor flush. All of
+    // them must be swallowed; if any leaks through, record() clears forward and
+    // GoForward (alt+right) silently breaks.
+    const h = new HistoryService()
+    h.record(entry('/a.ts'))
+    h.record(entry('/b.ts'))
+    const target = h.goBack()
+    expect(h.getForwardStack().length).toBe(1)
+    // active-editor autorun re-opens the target
+    h.record({ resource: target!.resource })
+    // ...then the trailing cursor flush lands with a concrete selection
+    h.record(entry('/a.ts', 12, 3))
+    expect(h.getForwardStack().length).toBe(1)
+    expect(h.canGoForward()).toBe(true)
+  })
+
+  it('a record for a different resource inside the window closes suppression', () => {
+    const h = new HistoryService()
+    h.record(entry('/a.ts'))
+    h.record(entry('/b.ts'))
+    h.record(entry('/c.ts'))
+    h.goBack() // target /b.ts, forward = [c]
+    h.record(entry('/d.ts')) // genuine navigation elsewhere — drops forward
+    expect(h.getForwardStack().length).toBe(0)
+    expect(h.getBackStack().map((e) => e.resource.fsPath)).toEqual([
+      URI.file('/a.ts').fsPath,
+      URI.file('/b.ts').fsPath,
+      URI.file('/d.ts').fsPath,
+    ])
+  })
+
   it('fires onDidChange on record, goBack, goForward, clear', () => {
     const h = new HistoryService()
     let count = 0
@@ -181,5 +214,41 @@ describe('HistoryService', () => {
     // Cast away type: simulates a non-URI-instance payload (IPC boundary).
     h.record({ resource: components as unknown as URI })
     expect(h.getBackStack()[0]?.resource).toBeInstanceOf(URI)
+  })
+
+  it('updateCurrent rewrites the selection of the matching entry in place', () => {
+    const h = new HistoryService()
+    h.record(entry('/a.ts', 1, 1))
+    h.record(entry('/b.ts'))
+    h.updateCurrent(URI.file('/a.ts'), {
+      startLine: 2,
+      startColumn: 3,
+      endLine: 2,
+      endColumn: 3,
+    })
+    const a = h.getBackStack().find((e) => e.resource.fsPath === URI.file('/a.ts').fsPath)
+    expect(a?.selection?.startLine).toBe(2)
+    expect(a?.selection?.startColumn).toBe(3)
+    // Stack shape is untouched.
+    expect(h.getBackStack().length).toBe(2)
+  })
+
+  it('updateCurrent does not touch the forward stack', () => {
+    const h = new HistoryService()
+    h.record(entry('/a.ts', 1))
+    h.record(entry('/b.ts'))
+    h.goBack() // forward = [b]
+    h.updateCurrent(URI.file('/a.ts'), { startLine: 9, startColumn: 1, endLine: 9, endColumn: 1 })
+    expect(h.getForwardStack().length).toBe(1)
+    expect(h.canGoForward()).toBe(true)
+  })
+
+  it('updateCurrent is a no-op when the resource has no entry', () => {
+    const h = new HistoryService()
+    h.record(entry('/a.ts', 1))
+    let fired = 0
+    h.onDidChange(() => fired++)
+    h.updateCurrent(URI.file('/z.ts'), { startLine: 1, startColumn: 1, endLine: 1, endColumn: 1 })
+    expect(fired).toBe(0)
   })
 })
