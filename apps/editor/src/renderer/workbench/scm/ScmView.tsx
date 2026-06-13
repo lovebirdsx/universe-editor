@@ -858,6 +858,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         className={styles['tree'] ?? ''}
         rootRef={treeRef}
         virtualizationThreshold={Number.MAX_SAFE_INTEGER}
+        indentBase={0}
         renderRow={renderRow}
         onActivate={(node, opts) => {
           const n = node.element
