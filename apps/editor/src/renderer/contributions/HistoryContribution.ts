@@ -211,7 +211,21 @@ export class HistoryContribution extends Disposable implements IWorkbenchContrib
     const uri = state.resource.toString()
     const fileChanged = uri !== state.lastResource
     const lineDelta = Math.abs(pos.lineNumber - state.lastLine)
-    if (!fileChanged && lineDelta <= SIGNIFICANT_LINE_DELTA) return
+    if (!fileChanged && lineDelta <= SIGNIFICANT_LINE_DELTA) {
+      // Sub-threshold intra-file move: don't grow the stack, but slide the top
+      // entry to the new caret so a subsequent far jump (go-to-definition) puts
+      // this exact spot on the back stack. Without this, GoBack would skip past
+      // the real jump origin to wherever the caret last crossed the threshold
+      // (matches vscode, which replaces the current entry on small moves).
+      this._historyService.updateCurrent(state.resource, {
+        startLine: pos.lineNumber,
+        startColumn: pos.column,
+        endLine: pos.lineNumber,
+        endColumn: pos.column,
+      })
+      state.lastLine = pos.lineNumber
+      return
+    }
 
     state.lastResource = uri
     state.lastLine = pos.lineNumber

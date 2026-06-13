@@ -301,6 +301,38 @@ describe('HistoryContribution', () => {
     expect(historyService.getBackStack().length).toBe(2)
   })
 
+  it('GoBack returns to the jump origin B after a small A→B move then a definition jump (same file)', () => {
+    // Repro: caret at symbol A (line 5), small move to symbol B (line 8, delta
+    // 3 <= threshold), then "go to definition" jumps to line 50 (same file).
+    // GoBack must land on B (line 8) — the spot the jump began — not on A.
+    const { historyService, inst } = setup()
+    const uri = URI.file('/a.ts')
+    const input = inst.createInstance(FileEditorInput, uri)
+    const editor = makeFakeEditor(uri)
+    FileEditorRegistry.register(
+      input,
+      editor as unknown as Parameters<typeof FileEditorRegistry.register>[1],
+    )
+
+    // Caret at A.
+    editor.position = { lineNumber: 5, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+
+    // Small move to B (delta 3, below the significance threshold).
+    editor.position = { lineNumber: 8, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+
+    // Go to definition jumps far away (same file).
+    editor.position = { lineNumber: 50, column: 1 }
+    editor.triggerCursor()
+    vi.advanceTimersByTime(300)
+
+    const target = historyService.goBack()
+    expect(target?.selection?.startLine).toBe(8)
+  })
+
   it('records on file change regardless of line delta', () => {
     const { historyService, inst } = setup()
     const uriA = URI.file('/a.ts')
