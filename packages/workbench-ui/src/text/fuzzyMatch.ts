@@ -17,22 +17,86 @@ export function fuzzyMatchField(text: string, query: string): boolean {
   return qi === q.length
 }
 
+/** A contiguous run of matched characters, usable directly as a highlight span. */
+export interface FuzzyMatchSpan {
+  readonly start: number
+  readonly end: number
+}
+
+export interface FuzzyScoreResult {
+  readonly score: number
+  /** Matched character ranges in `text`, merged so adjacent hits form one span. */
+  readonly matches: readonly FuzzyMatchSpan[]
+}
+
+/** A position starts a new word: at index 0, after a separator, or a camelCase hump. */
+function isWordStart(text: string, i: number): boolean {
+  if (i <= 0) return true
+  const prev = text[i - 1]
+  const cur = text[i]
+  if (prev === undefined || cur === undefined) return true
+  if (isWordSeparator(prev)) return true
+  return prev === prev.toLowerCase() && cur !== cur.toLowerCase() && cur === cur.toUpperCase()
+}
+
+function mergeSpans(positions: readonly number[]): FuzzyMatchSpan[] {
+  const spans: FuzzyMatchSpan[] = []
+  for (const pos of positions) {
+    const last = spans[spans.length - 1]
+    if (last && last.end === pos) spans[spans.length - 1] = { start: last.start, end: pos + 1 }
+    else spans.push({ start: pos, end: pos + 1 })
+  }
+  return spans
+}
+
+/**
+ * Score `query` against a single field and report which characters matched.
+ * Returns `null` for no match; `{score: 0, matches: []}` for an empty query.
+ * Tiers: prefix (1000) beats substring (500) beats loose subsequence (50);
+ * within a tier a shorter field ranks higher, and hitting word starts (after a
+ * separator or at a camelCase hump) adds a small bonus so e.g. `GetEntityData`
+ * outranks `GetDecompressedEntityDatas` for the query `GetEntityData`. The
+ * returned `matches` double as highlight ranges, so ranking and highlighting
+ * never drift apart. Mirrors VSCode's fuzzy scorer behavior at a smaller scale.
+ */
+export function fuzzyScore(text: string, query: string): FuzzyScoreResult | null {
+  if (!query) return { score: 0, matches: [] }
+  const t = text.toLowerCase()
+  const q = query.toLowerCase()
+
+  if (t.startsWith(q)) return { score: 1000 - t.length, matches: [{ start: 0, end: q.length }] }
+
+  const subIdx = t.indexOf(q)
+  if (subIdx >= 0) {
+    const bonus = isWordStart(text, subIdx) ? 1 : 0
+    return { score: 500 - t.length + bonus, matches: [{ start: subIdx, end: subIdx + q.length }] }
+  }
+
+  const positions: number[] = []
+  let qi = 0
+  for (let i = 0; i < t.length && qi < q.length; i++) {
+    if (t[i] === q[qi]) {
+      positions.push(i)
+      qi++
+    }
+  }
+  if (qi !== q.length) return null
+
+  let bonus = 0
+  for (const pos of positions) if (isWordStart(text, pos)) bonus++
+  return { score: 50 - t.length + bonus, matches: mergeSpans(positions) }
+}
+
 /**
  * Relevance score for matching `query` against a single field. Higher is more
- * relevant; -1 means no match. Tiers: prefix beats substring beats loose
- * subsequence, and within a tier a shorter field ranks higher. Mirrors the
- * tiering the @-mention file search uses so every "type to filter" surface
- * orders results consistently — callers combine per-field scores as they see
- * fit (e.g. weighting a name above a description).
+ * relevant; -1 means no match. Thin wrapper over {@link fuzzyScore} for callers
+ * that only need the number. Mirrors the tiering the @-mention file search uses
+ * so every "type to filter" surface orders results consistently.
  */
 export function scoreFuzzyMatch(text: string, query: string): number {
   if (!query) return 0
-  const t = text.toLowerCase()
-  const q = query.toLowerCase()
-  if (t.startsWith(q)) return 1000 - t.length
-  if (t.includes(q)) return 500 - t.length
-  if (fuzzyMatchField(t, q)) return 50 - t.length
-  return -1
+  const result = fuzzyScore(text, query)
+  return result ? result.score : -1
 }
 
 function normalizeWordQuery(query: string): string {

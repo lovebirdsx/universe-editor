@@ -112,7 +112,7 @@
 
 .highlight {
   background: transparent;
-  color: var(--color-accent, #0070e0);
+  color: var(--color-match-highlight-fg, var(--color-accent, #2aaaff));
   font-weight: 600;
   padding: 0;
 }

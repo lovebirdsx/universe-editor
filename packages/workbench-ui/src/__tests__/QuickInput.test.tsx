@@ -68,8 +68,11 @@ describe('QuickPickPanel prefix mode', () => {
     render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
     const input = screen.getByTestId('quick-input-field') as HTMLInputElement
     fireEvent.change(input, { target: { value: '>fmt' } })
-    expect(screen.getByText('Format Document')).toBeTruthy()
-    expect(screen.queryByText('Go to Line')).toBeNull()
+    // Fuzzy mode highlights matches, splitting the label across <mark> nodes, so
+    // assert on the option's full textContent rather than a single text node.
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]?.textContent).toContain('Format Document')
   })
 
   it('shows a hint and suppresses the list when the prefix is wiped', () => {
@@ -86,8 +89,9 @@ describe('QuickPickPanel prefix mode', () => {
     const input = screen.getByTestId('quick-input-field') as HTMLInputElement
     expect(input.value).toBe('')
     fireEvent.change(input, { target: { value: 'line' } })
-    expect(screen.queryByText('Format Document')).toBeNull()
-    expect(screen.getByText('Go to Line')).toBeTruthy()
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(1)
+    expect(options[0]?.textContent).toContain('Go to Line')
   })
 
   it('renders keybinding hint when item has keybinding field', () => {
@@ -289,6 +293,31 @@ describe('QuickPickPanel prefix mode', () => {
     )
 
     expect(container.querySelector('mark')?.textContent).toBe('ee')
+  })
+
+  it('highlights fuzzy matches it computes itself for the symbol picker', () => {
+    const { container } = render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: '@',
+          items: [
+            { type: 'separator', id: 'kind.method', label: 'methods' },
+            { id: 's0', label: 'GetEntityData' },
+            { id: 's1', label: 'GetAbandonedEntityDataRecords' },
+          ],
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    fireEvent.change(screen.getByTestId('quick-input-field'), {
+      target: { value: '@GetEntityData' },
+    })
+
+    const options = screen.getAllByRole('option')
+    expect(options[0]?.textContent).toContain('GetEntityData')
+    // The matched run is wrapped in a <mark> so it can be styled (blue/bold).
+    expect(container.querySelector('mark')?.textContent).toBe('GetEntityData')
   })
 
   it('applies compact presentation to item rows', () => {

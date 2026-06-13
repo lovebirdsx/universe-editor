@@ -22,11 +22,11 @@ import type {
   IKeyMods,
   IQuickItemHighlight,
   IQuickPickItem,
+  IQuickPickItemHighlights,
   IQuickPickSeparator,
-  QuickPickFilterMode,
   QuickPickInput,
 } from '@universe-editor/platform'
-import { fuzzyMatchField, wordMatchField } from '../../text/fuzzyMatch.js'
+import { fuzzyScore, wordMatchField } from '../../text/fuzzyMatch.js'
 import type { QuickPickState } from './quickInputViewModel.js'
 import styles from './QuickInput.module.css'
 
@@ -44,25 +44,104 @@ export interface QuickInputPanelProps {
   renderStatusIcon?: RenderQuickIcon | undefined
 }
 
-function itemMatches(
+function wordItemMatches(
   item: IQuickPickItem,
   query: string,
-  mode: QuickPickFilterMode,
   matchOnDescription: boolean,
   matchOnDetail: boolean,
 ): boolean {
-  const matcher = mode === 'word' ? wordMatchField : fuzzyMatchField
-  if (matcher(item.label, query)) return true
-  if (item.leadingLabel && matcher(item.leadingLabel, query)) return true
-  if (matchOnDescription && item.description && matcher(item.description, query)) {
+  if (wordMatchField(item.label, query)) return true
+  if (item.leadingLabel && wordMatchField(item.leadingLabel, query)) return true
+  if (matchOnDescription && item.description && wordMatchField(item.description, query)) {
     return true
   }
-  if (matchOnDetail && item.detail && matcher(item.detail, query)) return true
+  if (matchOnDetail && item.detail && wordMatchField(item.detail, query)) return true
   return false
+}
+
+/**
+ * Fuzzy-match an item across its fields, returning a ranking score plus the
+ * highlight ranges to render. `null` means no field matched. The label (and the
+ * fixed leading column, folded into it) ranks highest; description/detail are
+ * demoted so a name hit always outranks a path/detail hit. The matched ranges
+ * are returned as highlights so ranking and highlighting can never disagree.
+ */
+function fuzzyItemMatch(
+  item: IQuickPickItem,
+  query: string,
+  matchOnDescription: boolean,
+  matchOnDetail: boolean,
+): { score: number; highlights: IQuickPickItemHighlights | undefined } | null {
+  const labelRes = fuzzyScore(item.label, query)
+  const leadingRes = item.leadingLabel ? fuzzyScore(item.leadingLabel, query) : null
+  const descRes =
+    matchOnDescription && item.description ? fuzzyScore(item.description, query) : null
+  const detailRes = matchOnDetail && item.detail ? fuzzyScore(item.detail, query) : null
+
+  const scores: number[] = []
+  if (labelRes) scores.push(labelRes.score)
+  if (leadingRes) scores.push(leadingRes.score)
+  if (descRes) scores.push(descRes.score - 1000)
+  if (detailRes) scores.push(detailRes.score - 1000)
+  if (scores.length === 0) return null
+
+  const highlights: { -readonly [K in keyof IQuickPickItemHighlights]: IQuickItemHighlight[] } = {}
+  if (labelRes && labelRes.matches.length > 0) highlights.label = [...labelRes.matches]
+  if (descRes && descRes.matches.length > 0) highlights.description = [...descRes.matches]
+
+  return {
+    score: Math.max(...scores),
+    highlights: highlights.label || highlights.description ? highlights : undefined,
+  }
 }
 
 function isSeparator(item: QuickPickInput<IQuickPickItem>): item is IQuickPickSeparator {
   return 'type' in item && item.type === 'separator'
+}
+
+/**
+ * Fuzzy filter + relevance sort that respects separator grouping: each section
+ * (the leading section and every separator-led one) is filtered and sorted by
+ * score independently, empty sections drop out, and matched ranges are attached
+ * as highlights. An empty query keeps the original order (all scores tie and the
+ * sort is stable), preserving e.g. document order for the symbol picker.
+ */
+function fuzzyFilterAndSort(
+  items: readonly QuickPickInput<IQuickPickItem>[],
+  query: string,
+  matchOnDescription: boolean,
+  matchOnDetail: boolean,
+  mruIds: readonly string[],
+): QuickPickInput<IQuickPickItem>[] {
+  const result: QuickPickInput<IQuickPickItem>[] = []
+  let pendingSeparator: IQuickPickSeparator | undefined
+  let section: { item: IQuickPickItem; score: number }[] = []
+
+  const flushSection = (): void => {
+    if (section.length === 0) return
+    // Score-descending; ties (notably an empty query, where all score 0) fall
+    // back to MRU so a "recently used" head is preserved.
+    section.sort((a, b) => b.score - a.score || compareMru(a.item, b.item, mruIds))
+    if (pendingSeparator) result.push(pendingSeparator)
+    for (const { item } of section) result.push(item)
+    pendingSeparator = undefined
+    section = []
+  }
+
+  for (const item of items) {
+    if (isSeparator(item)) {
+      flushSection()
+      pendingSeparator = item
+      continue
+    }
+    const match = fuzzyItemMatch(item, query, matchOnDescription, matchOnDetail)
+    if (!match) continue
+    const withHighlights = match.highlights ? { ...item, highlights: match.highlights } : item
+    section.push({ item: withHighlights, score: match.score })
+  }
+  flushSection()
+
+  return result
 }
 
 function isSelectable(item: QuickPickInput<IQuickPickItem> | undefined): item is IQuickPickItem {
@@ -127,7 +206,6 @@ function pagedSelectableIndex(
 function filterWithSeparators(
   items: readonly QuickPickInput<IQuickPickItem>[],
   query: string,
-  mode: QuickPickFilterMode,
   matchOnDescription: boolean,
   matchOnDetail: boolean,
 ): QuickPickInput<IQuickPickItem>[] {
@@ -139,7 +217,7 @@ function filterWithSeparators(
       pendingSeparator = item
       continue
     }
-    if (!itemMatches(item, query, mode, matchOnDescription, matchOnDetail)) continue
+    if (!wordItemMatches(item, query, matchOnDescription, matchOnDetail)) continue
     if (pendingSeparator) {
       result.push(pendingSeparator)
       pendingSeparator = undefined
@@ -205,6 +283,7 @@ export function QuickPickPanel({
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const mruIds = state.mruIds ?? []
+  const mruKey = mruIds.join(',')
   const filterMode = state.filterMode ?? 'fuzzy'
   const matchOnDescription = state.matchOnDescription === true
   const matchOnDetail = state.matchOnDetail === true
@@ -230,13 +309,11 @@ export function QuickPickPanel({
     if (prefixMissing) return []
     const items = (state.items ?? []).filter((item) => !removedIds.has(item.id))
     if (filterExternally) return items
-    return filterWithSeparators(
-      items,
-      deferredFilterText,
-      filterMode,
-      matchOnDescription,
-      matchOnDetail,
-    )
+    if (filterMode === 'word') {
+      return filterWithSeparators(items, deferredFilterText, matchOnDescription, matchOnDetail)
+    }
+    return fuzzyFilterAndSort(items, deferredFilterText, matchOnDescription, matchOnDetail, mruIds)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     prefixMissing,
     filterExternally,
@@ -246,21 +323,24 @@ export function QuickPickPanel({
     filterMode,
     matchOnDescription,
     matchOnDetail,
+    mruKey,
   ])
 
   const sortedFiltered = useMemo(
     () => {
-      if (filterExternally || filtered.some(isSeparator)) return filtered
+      // Fuzzy mode is already relevance-sorted (with separator grouping) by
+      // fuzzyFilterAndSort. External filtering and word mode keep provider order,
+      // applying only MRU and, for word mode, an alphabetical tiebreak.
+      if (filterExternally || filterMode === 'fuzzy' || filtered.some(isSeparator)) return filtered
       return [...filtered].sort((a, b) => {
         if (isSeparator(a) || isSeparator(b)) return 0
         const mruCompare = compareMru(a, b, mruIds)
         if (mruCompare !== 0) return mruCompare
-        if (filterMode === 'word') return a.label.localeCompare(b.label)
-        return 0
+        return a.label.localeCompare(b.label)
       })
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filtered, filterExternally, filterMode, mruIds.join(',')],
+    [filtered, filterExternally, filterMode, mruKey],
   )
 
   const ITEM_HEIGHT = compact ? 24 : 32

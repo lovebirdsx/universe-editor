@@ -30,6 +30,7 @@ html, body, #root {
   --color-border: #0f0f11;
   --color-focus-border: #0070e0;
   --color-accent: #0070e0;
+  --color-match-highlight-fg: #2aaaff;
   --color-surface: #242427;
   --color-agent-claude: #d97757;
 
@@ -202,6 +203,7 @@ html, body, #root {
   --color-border: #d6d8de;
   --color-focus-border: #0067c0;
   --color-accent: #0067c0;
+  --color-match-highlight-fg: #0066bf;
   --color-surface: #ffffff;
 
   --color-titlebar: #eceef2;

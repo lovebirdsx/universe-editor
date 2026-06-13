@@ -33,6 +33,7 @@ import {
 } from '../../languageFeatures/typescript/lspMonacoConvert.js'
 import { symbolIconId } from '../../../workbench/symbols/symbolIcon.js'
 import { MonacoLoader } from '../../../workbench/editor/monaco/MonacoLoader.js'
+import { fuzzyScore } from '@universe-editor/workbench-ui'
 
 type MonacoNamespace = Awaited<ReturnType<typeof MonacoLoader.ensureInitialized>>
 
@@ -52,28 +53,6 @@ let emptyQueryCache:
 function relativePath(root: URI | undefined, uri: URI, platform: HostPlatform): string {
   if (!root) return uri.fsPath
   return relativePathUnder(root.fsPath, uri.fsPath, platform) ?? uri.fsPath
-}
-
-/**
- * Match positions for `query` in `text`, aligned with scoreFuzzyMatch's tiers:
- * a contiguous substring highlights as one span, otherwise fall back to a
- * per-character subsequence. Returns `[]` when the query is empty or absent.
- */
-function fuzzyHighlights(text: string, query: string): readonly IQuickItemHighlight[] {
-  if (!query) return []
-  const t = text.toLowerCase()
-  const q = query.toLowerCase()
-  const idx = t.indexOf(q)
-  if (idx >= 0) return [{ start: idx, end: idx + q.length }]
-  const out: IQuickItemHighlight[] = []
-  let qi = 0
-  for (let i = 0; i < t.length && qi < q.length; i++) {
-    if (t[i] === q[qi]) {
-      out.push({ start: i, end: i + 1 })
-      qi++
-    }
-  }
-  return qi === q.length ? out : []
 }
 
 /** A workspace symbol from any language server, normalized for the picker. */
@@ -154,26 +133,46 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     const render = (entries: readonly WorkspaceSymbolEntry[], query: string): void => {
       byId.clear()
       const merged = entries.map((e) => tsEntryToUnified(e, root, this._host.platform))
-      // A real query keeps each server's relevance ranking. An empty (match-all)
-      // query has no ranking and concatenates multiple providers, so sort by
-      // name (then path) for a stable, predictable list — and so the leading
-      // MAX_RESULTS slice keeps an alphabetical head instead of an arbitrary,
-      // provider-ordered cut. Mirrors VSCode's symbols quick access.
+      // An empty (match-all) query has no relevance signal and concatenates
+      // multiple providers, so sort by name (then path) for a stable, predictable
+      // list — and so the leading MAX_RESULTS slice keeps an alphabetical head
+      // instead of an arbitrary, provider-ordered cut. A real query is fuzzy
+      // scored against the name and re-sorted by relevance (each server's own
+      // ranking mixes poorly across providers), with the matched ranges reused as
+      // highlights. Mirrors VSCode's symbols quick access.
+      let ranked: { symbol: UnifiedWorkspaceSymbol; matches: readonly IQuickItemHighlight[] }[]
       if (!query) {
         merged.sort(
           (a, b) => a.name.localeCompare(b.name) || a.description.localeCompare(b.description),
         )
+        ranked = merged.map((symbol) => ({ symbol, matches: [] }))
+      } else {
+        ranked = merged
+          .map((symbol) => {
+            const res = fuzzyScore(symbol.name, query)
+            return res ? { symbol, score: res.score, matches: res.matches } : undefined
+          })
+          .filter(
+            (
+              x,
+            ): x is {
+              symbol: UnifiedWorkspaceSymbol
+              score: number
+              matches: readonly IQuickItemHighlight[]
+            } => x !== undefined,
+          )
+          .sort((a, b) => b.score - a.score)
       }
-      picker.items = merged.slice(0, MAX_RESULTS).map((symbol, i) => {
+      picker.items = ranked.slice(0, MAX_RESULTS).map((entry, i) => {
         const id = String(i)
-        byId.set(id, symbol)
-        const languageId = symbol.uri.path.endsWith('.md') ? 'markdown' : undefined
+        byId.set(id, entry.symbol)
+        const languageId = entry.symbol.uri.path.endsWith('.md') ? 'markdown' : undefined
         return {
           id,
-          label: symbol.name,
-          iconId: symbolIconId(symbol.iconKind, languageId),
-          description: symbol.description,
-          highlights: { label: fuzzyHighlights(symbol.name, query) },
+          label: entry.symbol.name,
+          iconId: symbolIconId(entry.symbol.iconKind, languageId),
+          description: entry.symbol.description,
+          highlights: { label: entry.matches },
         }
       })
     }
