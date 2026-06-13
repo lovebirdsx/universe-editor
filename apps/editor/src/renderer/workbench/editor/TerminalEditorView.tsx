@@ -21,6 +21,7 @@ export function TerminalEditorView({ input }: { input: IEditorInput }) {
   return (
     <div className={styles['root']}>
       <TerminalInstance
+        key={input.terminalId}
         id={input.terminalId}
         active={true}
         cwd={cwd}
