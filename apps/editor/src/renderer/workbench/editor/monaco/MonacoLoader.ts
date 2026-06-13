@@ -89,12 +89,13 @@ function disableLanguageDiagnostics(): void {
   // as warnings). Everything else stays off — TS/JS/CSS/HTML validation is the
   // real memory hog and we don't need it.
   //
-  // documentSymbols is forced OFF: monaco 0.52's JSON worker has a special
-  // outline branch for files whose path ends with `/user/keybindings.json`
-  // (matching VS Code's keybindings) that emits symbols without a `children`
-  // field; the jsonMode adapter then mis-detects them as flat SymbolInformation
-  // and dereferences a missing `.location`, throwing on open. We don't surface
-  // a JSON outline anyway, so disabling it sidesteps the crash.
+  // documentSymbols stays OFF on the built-in worker: the JSON outline /
+  // breadcrumbs / "Go to Symbol in File" flow through the workbench
+  // OutlineService, which only enumerates providers registered with
+  // ILanguageFeaturesService. JsonLanguageFeaturesContribution registers one
+  // such provider (delegating to this same worker via monaco.json.getWorker),
+  // so it forwards to Monaco itself — enabling the flag here too would register
+  // a second provider and double every symbol in Ctrl+Shift+O.
   const { jsonDefaults } = _monaco.json
   jsonDefaults.setModeConfiguration({
     ...jsonDefaults.modeConfiguration,

@@ -32,6 +32,7 @@ import { WindowTitleContribution } from './WindowTitleContribution.js'
 import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
+import { JsonLanguageFeaturesContribution } from './JsonLanguageFeaturesContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
 import { AgentFontContribution } from './AgentFontContribution.js'
@@ -197,6 +198,16 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.jsonSchemaBridge',
   JsonSchemaBridgeContribution,
   WorkbenchPhase.BlockStartup,
+)
+
+// JSON document symbols (Outline / breadcrumbs / Go to Symbol in File) via a
+// provider that delegates to Monaco's built-in JSON worker. AfterRestore so the
+// language features service + Monaco are live, mirroring the other language
+// feature wiring.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.jsonLanguageFeatures',
+  JsonLanguageFeaturesContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 // File editor cursor / language / encoding entries — only mount once both the
