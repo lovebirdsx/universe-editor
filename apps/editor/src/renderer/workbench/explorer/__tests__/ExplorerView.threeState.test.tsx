@@ -257,10 +257,8 @@ describe('ExplorerView — three-state UI', () => {
     await screen.findByText('README.md')
     const view = screen.getByRole('tree')
     view.focus()
+    // focus auto-selects root (visible[0]); ArrowDown lands on visible[1] = 'src'
     fireEvent.keyDown(view, { key: 'ArrowDown' })
-    // First ArrowDown from no focus should land on visible[0] = workspace root.
-    fireEvent.keyDown(view, { key: 'ArrowDown' })
-    // Now on visible[1] = 'src'
     expect(rowFor('src').className).toContain(styles['focused']!)
   })
 

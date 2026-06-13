@@ -186,6 +186,9 @@ export function ExplorerView() {
           virtualizationThreshold={threshold}
           renderRow={renderRow}
           onActivate={(node, opts) => openFile(node.element.resource, { preview: opts.preview })}
+          onFocus={() => {
+            if (!tree.focused && root) tree.setSelection(root, root)
+          }}
           onRowKeyDown={(e, node) => {
             if (node.id === rootKey) return
             if (e.key === 'F2') {

@@ -75,6 +75,8 @@ export interface ITreeProps<T> {
   readonly onShiftTab?: () => void
   /** Context menu on empty area (null) — per-row menus are the view's job in renderRow. */
   readonly onContextMenu?: (e: ReactMouseEvent, node: IVisibleNode<T> | null) => void
+  /** Called when the tree container receives DOM focus — before built-in focus state update. */
+  readonly onFocus?: () => void
 }
 
 export function Tree<T>(props: ITreeProps<T>) {
@@ -93,6 +95,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onRowKeyDown,
     onShiftTab,
     onContextMenu,
+    onFocus,
   } = props
 
   const { selectionVersion, visibleNodes } = useTreeModel(model)
@@ -273,7 +276,10 @@ export function Tree<T>(props: ITreeProps<T>) {
       data-focused={hasFocus}
       onKeyDown={onKeyDown}
       onMouseDown={() => containerRef.current?.focus()}
-      onFocus={() => setHasFocus(true)}
+      onFocus={() => {
+        setHasFocus(true)
+        onFocus?.()
+      }}
       onBlur={() => setHasFocus(false)}
       {...(onContextMenu ? { onContextMenu: (e: ReactMouseEvent) => onContextMenu(e, null) } : {})}
     >
