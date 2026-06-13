@@ -223,8 +223,9 @@ describe('ChatBody — virtualization threshold', () => {
     expect(list.tagName).toBe('DIV')
     expect(list.style.position).toBe('relative')
     // happy-dom has no layout engine, so the virtualizer renders 0 rows but still
-    // sizes the spacer from estimateRow (64px per message) × 3 = 192px.
-    expect(list.style.height).toBe('192px')
+    // sizes the spacer from estimateRow. A single-line agent message estimates at
+    // 60 + 1×21 = 81px, × 3 = 243px.
+    expect(list.style.height).toBe('243px')
   })
 
   it('stays on the plain <ol> list below the threshold', () => {

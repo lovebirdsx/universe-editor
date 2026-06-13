@@ -118,8 +118,13 @@
 /* Virtual mode: a positioned spacer whose height is the virtualizer total size.
    Rows are absolutely positioned via inline transform; the 8px inter-row gap of
    `.timeline` is replaced by `.timelineRow` padding so it is part of each row's
-   measured height. */
+   measured height. `flex: none` is essential: .chatBody is a flex column, and
+   without it the inline `height: <totalSize>` gets shrunk by the flex layout to
+   the extent of the currently-mounted absolutely-positioned rows. The container
+   scrollHeight then tracks whatever is rendered instead of the real total, so
+   the scrollbar thumb balloons/shrinks as you scroll (the reported bug). */
 .timelineVirtual {
+  flex: none;
   list-style: none;
   margin: 0;
   padding: 0;

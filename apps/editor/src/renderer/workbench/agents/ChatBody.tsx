@@ -225,6 +225,10 @@ function ChatScroll({
   // the programmatic scrolls it triggers don't get mistaken for the user
   // scrolling (which would corrupt `stuck` / overwrite the saved position).
   const restoringRef = useRef(false)
+  // True while the stuck-restore window is re-pinning the view to the bottom each
+  // frame. Unlike restoringRef this does NOT gate handleScroll: a real outside
+  // scroll during the window must still flip `stuck` to false so the pin aborts.
+  const pinningRef = useRef(false)
   const [focusedKey, setFocusedKey] = useState<string | null>(saved?.focusedKey ?? null)
   const focusedKeyRef = useRef<string | null>(null)
   focusedKeyRef.current = focusedKey
@@ -307,6 +311,17 @@ function ChatScroll({
     [],
   )
 
+  // Track which rows have actually been mounted+measured (vs. still carrying an
+  // estimateRow guess). `virtualizer.measurementsCache` mixes both — every row
+  // up to `count` is in it, but off-screen rows hold the coarse estimate. Saving
+  // that blend would persist estimates as if they were truth, so the next mount
+  // locks them into itemSizeCache and the coordinate system drifts a little each
+  // time (the "switch back twice → snaps to the top" bug). Seed from the saved
+  // keys: those were real measurements last time.
+  const measuredKeysRef = useRef<Set<string>>(
+    new Set((saved?.measurements ?? []).map((m) => m.key)),
+  )
+
   const virtualizer = useVirtualizer<HTMLDivElement, Element>({
     count: virtualize ? displayTimeline.length : 0,
     getScrollElement: () => containerRef.current,
@@ -317,7 +332,10 @@ function ChatScroll({
     // each measurement, so a streaming tail would make the whole list — and any
     // position you've scrolled to — jitter. Same item → same height here; the
     // virtualizer overrides each row with its real measured size once mounted.
-    estimateSize: (i) => estimateRow(displayTimeline[i]),
+    estimateSize: (i) => {
+      const item = displayTimeline[i]
+      return estimateRow(item, item ? resolveCollapsed(slotKey(item), item, collapse) : false)
+    },
     // Stable per-row identity so measured heights are cached by slot key, not by
     // index — appending / re-slicing the tail during streaming no longer shifts
     // every cached measurement onto the wrong row.
@@ -330,6 +348,18 @@ function ChatScroll({
   const virtualizerRef = useRef<Virtualizer<HTMLDivElement, Element> | null>(null)
   virtualizerRef.current = virtualizer
 
+  // measureElement, but also remember the row's slotKey as genuinely measured so
+  // persist() can tell real heights from estimates. The virtualizer reads the
+  // index off data-index; we read data-slot-key (set on the same node) to record
+  // the key, then delegate.
+  const measureElement = useCallback((node: Element | null) => {
+    if (node) {
+      const key = node.getAttribute('data-slot-key')
+      if (key) measuredKeysRef.current.add(key)
+    }
+    virtualizerRef.current?.measureElement(node)
+  }, [])
+
   const persist = useCallback(() => {
     const el = containerRef.current
     // Final flush on unmount: by the time React runs this cleanup it has already
@@ -338,8 +368,16 @@ function ChatScroll({
     // here would clobber the position handleScroll already saved. Only trust the
     // DOM while the container is still connected; otherwise keep the saved value.
     const prev = AcpChatViewStateCache.load(session.id)
+    // While a restore is still converging (its RAF window hasn't ended), the live
+    // scrollTop/anchor are mid-flight — not where the user left the view. A quick
+    // switch-back-and-away unmounts during this window; capturing now would write
+    // the half-restored position back over the correct saved one, and the next
+    // restore lands on it → the view creeps to the top across repeated switches.
+    // Keep the saved position untouched in that case (collapse/focus still update).
+    const restoring = restoringRef.current
     const connected = el?.isConnected ?? false
-    const scrollTop = connected && el ? el.scrollTop : (prev?.scrollTop ?? 0)
+    const canReadDom = connected && !restoring
+    const scrollTop = canReadDom && el ? el.scrollTop : (prev?.scrollTop ?? 0)
     // Anchor (B): the slot at the top of the viewport + the offset into it. On
     // restore we re-resolve the slot's offset in the *current* coordinate system,
     // so a position survives the estimate→measured height shift that a raw
@@ -347,19 +385,24 @@ function ChatScroll({
     // the previous anchor otherwise so an unmount flush never wipes it.
     const vz = virtualizerRef.current
     const anchor =
-      connected && el && virtualizeRef.current && vz
-        ? captureAnchor(vz, el.scrollTop)
-        : prev?.anchor
+      canReadDom && el && virtualizeRef.current && vz ? captureAnchor(el) : prev?.anchor
+    const stuck = canReadDom ? stickRef.current : (prev?.stuck ?? stickRef.current)
     // Measurements (A): the real per-row heights, captured before unmount and
-    // replayed via initialMeasurementsCache. Keep the previous snapshot if the
-    // virtualizer has nothing measured yet (e.g. plain-list mode).
-    const measurements =
+    // replayed via initialMeasurementsCache. Persist ONLY rows that were actually
+    // mounted+measured (measuredKeysRef) — measurementsCache also holds estimate
+    // values for off-screen rows, and persisting those would poison the next
+    // mount's itemSizeCache. Keep the previous snapshot if nothing real measured
+    // yet (e.g. plain-list mode).
+    const measured =
       vz && vz.measurementsCache && vz.measurementsCache.length > 0
-        ? vz.measurementsCache.map((m) => ({ key: String(m.key), size: m.size }))
-        : prev?.measurements
+        ? vz.measurementsCache
+            .filter((m) => measuredKeysRef.current.has(String(m.key)))
+            .map((m) => ({ key: String(m.key), size: m.size }))
+        : []
+    const measurements = measured.length > 0 ? measured : prev?.measurements
     const next: AcpChatViewState = {
       scrollTop,
-      stuck: stickRef.current,
+      stuck,
       focusedKey: focusedKeyRef.current,
       collapse: {
         mode: collapseRef.current.mode,
@@ -439,59 +482,142 @@ function ChatScroll({
   }, [])
 
   // Restore a non-stuck scroll position saved before this session was unmounted
-  // (tab switch / session switch). Content grows asynchronously — Monaco
-  // colorizes code, images decode late — so a one-shot assignment lands clamped
-  // against a too-short scrollHeight. Re-apply as the content settles
-  // (ResizeObserver) until a short window elapses or the user takes over. When
-  // stuck, fall through to the bottom-pin effect.
+  // (tab switch / session switch). Two things make a raw scrollTop unreliable in
+  // virtual mode: content grows asynchronously (Monaco colorizes, images decode),
+  // and — the dominant effect — the rows ABOVE the anchor are mostly unmeasured
+  // after a remount, so the virtualizer places them with estimateRow. Those
+  // estimates run systematically short, so getOffsetForIndex(anchor) returns a
+  // too-small start and the position creeps toward the top, collapsing to 0 after
+  // a couple of round trips.
   //
-  // Virtual mode resolves the target fresh on every apply() from the saved
-  // anchor: look up the anchored slot's offset in the live coordinate system and
-  // re-add the in-slot offset, so the same message stays pinned to the top as
-  // rows measure (estimate → real). Plain-list mode — the common case, below the
-  // virtualization threshold — has no virtualizer to anchor against and uses the
-  // raw scrollTop, which is reliable there since the full <ol> never re-estimates
-  // heights.
+  // The fix anchors against the real DOM rect, which is independent of the
+  // estimate coordinate system: bring the anchored row into the DOM via the
+  // (approximate) estimated offset, then read its actual position and align it so
+  // its top sits `offset` px above the viewport top. A RAF loop re-aligns every
+  // frame for a short window — as rows above measure (estimate → real) the row
+  // drifts down and the next frame pulls it back, converging on the exact spot.
+  // Plain-list mode (below the threshold) has no virtualizer to anchor against and
+  // uses the raw scrollTop, reliable there since the full <ol> never re-estimates.
   useLayoutEffect(() => {
     const el = containerRef.current
-    if (!el || !saved || saved.stuck) return
+    if (!el) return
+    // Stuck (pinned to bottom) on remount: the bottom-pin effect is keyed on
+    // timeline length / tail signature, which are unchanged across a tab switch,
+    // so it does not re-fire. With `.timelineVirtual { flex: none }` the spacer
+    // honours its full getTotalSize() height, so the initialOffset of 0 leaves the
+    // view at the top instead of (previously) a collapsed-short container that
+    // happened to sit near the end. A single re-pin is not enough either: in
+    // virtual mode rows mount/unmount as we jump, re-measure, and shift the total
+    // by up to ~1000px for several frames, and the virtualizer's own size-change
+    // adjustment can pull the offset back up. Pin to the bottom every frame for a
+    // short window so the view rides the total to its settled value, aborting on
+    // the first real user scroll input.
+    if (!saved || saved.stuck) {
+      pinningRef.current = true
+      stickRef.current = true
+      const vz0 = virtualizerRef.current
+      if (vz0) vz0.shouldAdjustScrollPositionOnItemSizeChange = () => false
+      let rafId: number | undefined
+      let lastPinnedTop = -1
+      const startedAt = performance.now()
+      const stop = (): void => {
+        if (!pinningRef.current) return
+        pinningRef.current = false
+        const vz = virtualizerRef.current
+        if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
+        if (rafId !== undefined) cancelAnimationFrame(rafId)
+        el.removeEventListener('wheel', stop)
+        el.removeEventListener('pointerdown', stop)
+        el.removeEventListener('keydown', stop)
+      }
+      const tick = (): void => {
+        rafId = undefined
+        if (!pinningRef.current) return
+        // Distinguish the two reasons scrollTop sits below the bottom:
+        //  - content grew (rows mounted/measured): the browser keeps scrollTop where
+        //    we pinned it last frame while scrollHeight rose → keep pinning.
+        //  - an outside scroll (user wheel / programmatic set) pulled scrollTop UP
+        //    from where we pinned it → stop and let the new position stand.
+        if (lastPinnedTop >= 0 && el.scrollTop < lastPinnedTop - 4) {
+          stop()
+          return
+        }
+        el.scrollTop = el.scrollHeight
+        lastPinnedTop = el.scrollTop
+        if (performance.now() - startedAt < 600) rafId = requestAnimationFrame(tick)
+        else stop()
+      }
+      el.scrollTop = el.scrollHeight
+      lastPinnedTop = el.scrollTop
+      rafId = requestAnimationFrame(tick)
+      el.addEventListener('wheel', stop, { passive: true })
+      el.addEventListener('pointerdown', stop)
+      el.addEventListener('keydown', stop)
+      return stop
+    }
     restoringRef.current = true
 
-    const resolveTarget = (): number => {
+    // While restoring we drive scrollTop by hand each frame. The virtualizer's
+    // default correction independently nudges scrollOffset when an above-viewport
+    // row measures taller/shorter; the two fight and the position creeps. Suppress
+    // it for the restore window, then restore the native default on stop.
+    const vz0 = virtualizerRef.current
+    if (vz0) vz0.shouldAdjustScrollPositionOnItemSizeChange = () => false
+
+    const anchor = saved.anchor
+
+    const applyOnce = (): void => {
       const vz = virtualizerRef.current
-      if (saved.anchor && virtualizeRef.current && vz) {
-        const resolved = resolveAnchor(vz, displayTimelineRef.current, saved.anchor)
-        if (resolved !== undefined) return resolved
+      if (anchor && virtualizeRef.current && vz) {
+        // Authoritative path: the anchored row is in the DOM — align by its real
+        // rect, immune to estimated heights above it.
+        const node = el.querySelector<HTMLElement>(`[data-slot-key="${cssEscape(anchor.key)}"]`)
+        if (node) {
+          const relTop = node.getBoundingClientRect().top - el.getBoundingClientRect().top
+          const max = Math.max(0, el.scrollHeight - el.clientHeight)
+          const next = Math.max(0, Math.min(el.scrollTop + relTop + anchor.offset, max))
+          if (Math.abs(el.scrollTop - next) > 0.5) el.scrollTop = next
+          return
+        }
+        // Not mounted yet: ask the virtualizer to scroll the row's index into view
+        // (recomputes its range and mounts the row), so a later frame can take the
+        // DOM path above. scrollToIndex is reliable here where a hand-set scrollTop
+        // against the estimate coordinate system is not.
+        const index = displayTimelineRef.current.findIndex((it) => slotKey(it) === anchor.key)
+        if (index >= 0) {
+          vz.scrollToIndex(index, { align: 'start' })
+          return
+        }
       }
-      return saved.scrollTop
+      if (el.scrollTop !== saved.scrollTop) el.scrollTop = saved.scrollTop
     }
 
-    const apply = (): void => {
-      if (!restoringRef.current) return
-      const target = resolveTarget()
-      if (el.scrollTop !== target) el.scrollTop = target
-    }
-    apply()
+    applyOnce()
 
-    const ro = new ResizeObserver(apply)
-    ro.observe(el)
-    const inner = el.firstElementChild
-    if (inner) ro.observe(inner)
-
-    const timerRef: { id?: ReturnType<typeof setTimeout> } = {}
+    let rafId: number | undefined
+    const startedAt = performance.now()
     const stop = (): void => {
       if (!restoringRef.current) return
       restoringRef.current = false
-      ro.disconnect()
-      if (timerRef.id !== undefined) clearTimeout(timerRef.id)
+      const vz = virtualizerRef.current
+      if (vz) vz.shouldAdjustScrollPositionOnItemSizeChange = undefined
+      if (rafId !== undefined) cancelAnimationFrame(rafId)
       el.removeEventListener('wheel', stop)
       el.removeEventListener('pointerdown', stop)
       el.removeEventListener('keydown', stop)
     }
+    const tick = (): void => {
+      rafId = undefined
+      if (!restoringRef.current) return
+      applyOnce()
+      if (performance.now() - startedAt < 600) rafId = requestAnimationFrame(tick)
+      else stop()
+    }
+    rafId = requestAnimationFrame(tick)
+
     el.addEventListener('wheel', stop, { passive: true })
     el.addEventListener('pointerdown', stop)
     el.addEventListener('keydown', stop)
-    timerRef.id = setTimeout(stop, 600)
 
     return stop
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -752,8 +878,9 @@ function ChatScroll({
             return (
               <div
                 key={key}
-                ref={virtualizer.measureElement}
+                ref={measureElement}
                 data-index={vi.index}
+                data-slot-key={key}
                 className={styles['timelineRow']}
                 style={{
                   position: 'absolute',
@@ -981,42 +1108,29 @@ function slotKey(item: TimelineItem): string {
 }
 
 // Capture the slot at the top of the viewport plus how far into it we've
-// scrolled. `getVirtualItemForOffset` returns the row spanning `scrollTop` in
-// the current coordinate system; `scrollTop - item.start` is the in-slot
-// offset. Pairing the row's stable slotKey with that offset makes the position
-// replayable after a remount even though pixel offsets shift as rows measure.
-function captureAnchor(
-  vz: Virtualizer<HTMLDivElement, Element>,
-  scrollTop: number,
-): AcpChatAnchor | undefined {
-  const item = vz.getVirtualItemForOffset(scrollTop)
-  if (!item) return undefined
-  return { key: String(item.key), offset: scrollTop - item.start }
-}
-
-// Resolve a saved anchor back to a scrollTop in the live coordinate system:
-// find the slot's current index, ask the virtualizer for its start offset, and
-// re-add the in-slot offset. The offset was captured in the *old* coordinate
-// system, so it's clamped to the slot's current measured height — otherwise a
-// row that re-measured shorter would let the offset overflow past it and pin a
-// later message to the top (the "lands 2 messages off" drift). Clamping keeps
-// the anchored message itself at the top, trading sub-row precision (meaningless
-// across a coordinate-system change anyway) for the property the user perceives.
-// Returns undefined when the anchored slot no longer exists (e.g. the synthetic
-// first-user row that displayTimeline drops).
-function resolveAnchor(
-  vz: Virtualizer<HTMLDivElement, Element>,
-  displayTimeline: readonly TimelineItem[],
-  anchor: AcpChatAnchor,
-): number | undefined {
-  const index = displayTimeline.findIndex((it) => slotKey(it) === anchor.key)
-  if (index < 0) return undefined
-  const info = vz.getOffsetForIndex(index, 'start')
-  if (!info) return undefined
-  // info implies measurementsCache[index] exists, so size is always present.
-  const size = vz.measurementsCache[index]?.size ?? 0
-  const offset = Math.min(anchor.offset, Math.max(0, size - 1))
-  return Math.max(0, info[0] + offset)
+// scrolled. Captured from the live DOM — NOT the virtualizer's coordinate
+// system — so it stays consistent with the restore path, which also aligns by
+// getBoundingClientRect. getVirtualItemForOffset would pick the row spanning
+// scrollTop in the estimate coordinate space; when the rows above hold estimate
+// heights that differ from reality, that row is not the one actually at the top
+// of the viewport, and the captured offset drifts a little every remount until
+// the position collapses to the top. Walking the mounted rows top-to-bottom and
+// taking the first one still (partially) visible avoids that entirely. `offset`
+// is how far the row's top sits above the container's top edge (>= 0), the exact
+// quantity the restore effect adds back.
+function captureAnchor(el: HTMLElement): AcpChatAnchor | undefined {
+  const containerTop = el.getBoundingClientRect().top
+  const rows = el.querySelectorAll<HTMLElement>('[data-slot-key]')
+  for (const row of rows) {
+    const key = row.getAttribute('data-slot-key')
+    if (!key) continue
+    const rect = row.getBoundingClientRect()
+    const top = rect.top - containerTop
+    const bottom = rect.bottom - containerTop
+    if (bottom <= 0) continue // entirely scrolled above the viewport
+    return { key, offset: Math.max(0, -top) }
+  }
+  return undefined
 }
 
 // First non-empty line of a message, trimmed and clamped, for the collapsed
@@ -1027,22 +1141,44 @@ function firstLineSummary(text: string): string {
   return firstLine.length > MAX ? `${firstLine.slice(0, MAX)}…` : firstLine
 }
 
-// Stable first-paint height estimate, derived only from the row's own content
-// length so it never shifts as sibling rows get measured (a moving estimate is
-// what made the list jitter). Short rows match the old 64/96 constants; longer
-// content estimates taller, which keeps the initial scrollbar from ballooning as
-// off-screen rows mount. The virtualizer replaces each value with the real
-// measured height once the row is on screen.
-function estimateRow(item: TimelineItem | undefined): number {
+// Stable first-paint height estimate, derived from the row's content AND how it
+// renders. It must not shift as sibling rows get measured (a moving estimate
+// jitters the list), but until a row is measured this value drives
+// getTotalSize() — i.e. the scrollbar thumb. The dominant error source is row
+// kinds with a CAPPED height: a `default`/`thought`-collapsed card is compact
+// regardless of body length, and a USER message body is clamped to a fixed
+// max-height (160px, internal scroll) so a long prompt never grows the row.
+// Estimating those as if they expanded with content made the scrollbar balloon
+// as they scrolled in and measured far shorter — the "scrollbar longer up top,
+// shrinks scrolling down" bug. Constants are fitted to measured real heights:
+// collapsed ≈ 190px, user-clamped ≈ 224px, free-growing ≈ base + lines × 21.
+const ESTIMATE_WRAP_COLS = 90
+const ESTIMATE_COLLAPSED = 190
+const ESTIMATE_USER_MAX = 224
+
+function estimateLineCount(text: string): number {
+  let lines = 0
+  for (const seg of text.split('\n')) {
+    lines += Math.max(1, Math.ceil(seg.length / ESTIMATE_WRAP_COLS))
+  }
+  return Math.max(1, lines)
+}
+
+function estimateRow(item: TimelineItem | undefined, collapsed: boolean): number {
   if (item === undefined) return 64
+  if (collapsed) return ESTIMATE_COLLAPSED
   switch (item.kind) {
     case 'message': {
-      const lines = Math.max(1, Math.ceil(item.message.text.length / 80))
-      return Math.min(44 + lines * 20, 800)
+      const lines = estimateLineCount(item.message.text)
+      const free = 60 + lines * 21
+      // User prompts are clamped to a fixed max-height and scroll internally, so
+      // their row height saturates instead of growing with the body.
+      if (item.message.role === 'user') return Math.min(free, ESTIMATE_USER_MAX)
+      return Math.min(free, 4000)
     }
     case 'toolCall': {
-      const lines = Math.max(1, Math.ceil(item.call.text.length / 80))
-      return Math.min(78 + lines * 18, 600)
+      const lines = estimateLineCount(item.call.text)
+      return Math.min(78 + lines * 20, 3000)
     }
   }
 }
