@@ -34,6 +34,7 @@ export const ServiceChannels = {
   ExtensionHost: 'extensionHost',
   SessionSwitcher: 'sessionSwitcher',
   RendererSessions: 'rendererSessions',
+  Usage: 'usage',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

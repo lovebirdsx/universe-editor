@@ -23,6 +23,7 @@ import {
   ILogFilesService,
   IPerformanceMarksService,
   IPingService,
+  IUsageService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
@@ -128,5 +129,9 @@ export function registerProxyChannelServices(
     ProxyChannel.toService<ISessionSwitcherService>(
       ipc.getChannel(ServiceChannels.SessionSwitcher),
     ),
+  )
+  services.set(
+    IUsageService,
+    ProxyChannel.toService<IUsageService>(ipc.getChannel(ServiceChannels.Usage)),
   )
 }

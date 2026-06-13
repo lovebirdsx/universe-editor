@@ -101,6 +101,7 @@ function makeOpts() {
       update: {} as never,
       releaseNotes: {} as never,
       performance: {} as never,
+      usage: {} as never,
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} } as never,
       configLocation: {
         onDidChangeConfigDir: () => ({ dispose: () => {} }),

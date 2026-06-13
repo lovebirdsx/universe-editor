@@ -154,6 +154,15 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Controls the font family of the Agent chat panel. Leave empty to inherit the workbench UI font.',
             ),
           },
+          'acp.usage.refreshIntervalMs': {
+            type: 'number',
+            default: 10000,
+            minimum: 1000,
+            description: localize(
+              'settings.acp.usage.refreshIntervalMs',
+              'How often (milliseconds) the API usage indicator below the Agent prompt refreshes. Polling pauses while the window is hidden.',
+            ),
+          },
         },
       }),
     )

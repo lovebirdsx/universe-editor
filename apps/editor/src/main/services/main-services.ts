@@ -21,6 +21,7 @@ import {
   IDisposableLeakService,
   IPerformanceMarksService,
   IPingService,
+  IUsageService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
@@ -50,6 +51,7 @@ import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.
 import { PerformanceMainService } from './performance/performanceMainService.js'
 import { SessionSwitcherMainService } from './sessionSwitcher/sessionSwitcherMainService.js'
 import { ConfigLocationMainService } from './configLocation/configLocationMainService.js'
+import { UsageMainService } from './usage/usageMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
 // @-injected services with non-branded static params (spawner stubs, Storage,
@@ -122,4 +124,9 @@ registerSingleton(
 registerSingleton(
   IConfigLocationService,
   new SyncDescriptor<IConfigLocationService>(ConfigLocationMainService, [], false),
+)
+registerSingleton(
+  IUsageService,
+  // 1 leading static param (settingsPath) before @ILoggerService.
+  new SyncDescriptor<IUsageService>(UsageMainService, [undefined], false),
 )

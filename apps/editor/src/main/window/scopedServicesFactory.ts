@@ -20,6 +20,7 @@ import type {
   IPerformanceMarksService,
   IPingService,
   IDisposableLeakService,
+  IUsageService,
 } from '../../shared/ipc/services.js'
 import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
@@ -51,6 +52,7 @@ export interface ApplicationServices {
   readonly update: IUpdateService
   readonly releaseNotes: IReleaseNotesService
   readonly performance: IPerformanceMarksService
+  readonly usage: IUsageService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /
    * unregisterWindow on it, which are main-internal and not on the wire contract.

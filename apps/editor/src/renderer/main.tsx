@@ -135,6 +135,7 @@ import {
 import { RendererLifecycleService } from './services/lifecycle/RendererLifecycleService.js'
 import { RendererSessionsService } from './services/sessionSwitcher/RendererSessionsService.js'
 import { ITerminalManagerService } from './services/terminal/TerminalManagerService.js'
+import { ApiUsageService, IApiUsageService } from './services/usage/ApiUsageService.js'
 import '@universe-editor/workbench-ui/tokens.css'
 import '@vscode/codicons/dist/codicon.css'
 import './workbench.css'
@@ -482,6 +483,12 @@ async function bootstrapWorkbench(): Promise<void> {
     instantiation.createInstance(ExtensionHostClientService),
   )
   services.set(IExtensionHostClientService, extensionHostClientService)
+
+  // API usage indicator: single owner of the account-level usage snapshot +
+  // polling loop. Created here so its proxy + config deps are available; the
+  // UsageIndicator in PromptInput subscribes to its observable.
+  const apiUsageService = workbenchStore.add(instantiation.createInstance(ApiUsageService))
+  services.set(IApiUsageService, apiUsageService)
 
   // Register all built-in contributions + actions (side-effect import) so the
   // ContributionService below can instantiate them by phase. UserSettingsSync +

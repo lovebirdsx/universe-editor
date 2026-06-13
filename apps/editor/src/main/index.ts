@@ -28,6 +28,7 @@ import {
   IDisposableLeakService,
   IPingService,
   IPerformanceMarksService,
+  IUsageService,
 } from '../shared/ipc/services.js'
 import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
@@ -200,6 +201,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       update: accessor.get(IUpdateService),
       releaseNotes: accessor.get(IReleaseNotesService),
       performance: accessor.get(IPerformanceMarksService),
+      usage: accessor.get(IUsageService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
     }))

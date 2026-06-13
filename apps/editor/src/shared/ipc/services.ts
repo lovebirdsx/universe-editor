@@ -132,3 +132,47 @@ export interface IPerformanceMarksService {
 
 export const IPerformanceMarksService =
   createDecorator<IPerformanceMarksService>('performanceMarksService')
+
+// -------- API Usage (main reads ~/.claude/settings.json + queries provider) --------
+
+/** Per-model usage breakdown for the current day. Monetary fields are raw integers. */
+export interface UsageModelUsage {
+  readonly model: string
+  readonly requests: number
+  readonly rawTokens: number
+  /** Raw integer cost; divide by 10000 for the CNY amount. */
+  readonly costCny: number
+}
+
+/**
+ * A successfully-fetched usage snapshot. Monetary fields keep the provider's raw
+ * integer scale (divide by 10000 for the CNY amount); formatting is the
+ * renderer's job so the wire contract stays presentation-agnostic.
+ */
+export interface UsageSnapshot {
+  readonly date: string
+  readonly periodBucket: string
+  readonly periodUsedCny: number
+  readonly periodLimitCny: number
+  readonly periodRemainingCny: number
+  readonly requests: number
+  readonly rawTokens: number
+  readonly models: readonly UsageModelUsage[]
+}
+
+/**
+ * Result of an API-usage query. A discriminated union so the renderer can react
+ * distinctly: `disabled` (credentials missing — hide the indicator entirely),
+ * `ok` (snapshot), or `error` (show an error glyph + reason tooltip).
+ */
+export type UsageResult =
+  | { readonly kind: 'disabled'; readonly reason: string }
+  | { readonly kind: 'ok'; readonly snapshot: UsageSnapshot }
+  | { readonly kind: 'error'; readonly message: string }
+
+export interface IUsageService {
+  readonly _serviceBrand: undefined
+  getUsage(): Promise<UsageResult>
+}
+
+export const IUsageService = createDecorator<IUsageService>('usageService')
