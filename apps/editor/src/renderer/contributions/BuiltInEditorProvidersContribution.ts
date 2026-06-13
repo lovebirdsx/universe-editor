@@ -17,6 +17,7 @@
 
 import { Disposable, EditorRegistry, type IWorkbenchContribution } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { MergeEditorInput } from '../services/editor/MergeEditorInput.js'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
@@ -74,6 +75,12 @@ export class BuiltInEditorProvidersContribution
       EditorRegistry.registerEditorProvider({
         typeId: DiffEditorInput.TYPE_ID,
         componentKey: 'diff',
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: MergeEditorInput.TYPE_ID,
+        componentKey: 'merge',
       }),
     )
     this._register(

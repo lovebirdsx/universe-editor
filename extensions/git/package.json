@@ -36,6 +36,7 @@
       { "command": "git.rebase", "title": "Rebase Branch...", "category": "Git", "icon": "merge" },
       { "command": "git.publishBranch", "title": "Publish Branch", "category": "Git", "icon": "push" },
       { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
+      { "command": "git.openMergeEditor", "title": "Resolve in Merge Editor", "category": "Git", "icon": "merge" },
       { "command": "git.openFile", "title": "Open File", "category": "Git" },
       { "command": "git.pull", "title": "Pull", "category": "Git", "icon": "pull" },
       { "command": "git.pullRebase", "title": "Pull (Rebase)", "category": "Git", "icon": "pull" },
@@ -142,6 +143,7 @@
         { "command": "git.submoduleSync",       "group": "1@2", "icon": "git-submodule" }
       ],
       "scm/resourceState/context": [
+        { "command": "git.openMergeEditor", "when": "scmResourceState == U", "group": "inline", "icon": "merge" },
         { "command": "git.stage", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "add" },
         { "command": "git.discard", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "discard" },
         { "command": "git.unstage", "when": "scmResourceGroup == index", "group": "inline", "icon": "remove" }
@@ -175,6 +177,11 @@
           "type": "boolean",
           "default": true,
           "description": "Whether git source control is enabled."
+        },
+        "git.mergeEditor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Open conflicted files in the 3-way merge editor. When false, conflicts open as a working-tree diff and are resolved inline via conflict markers."
         },
         "git.autoRepositoryDetection": {
           "type": "boolean",

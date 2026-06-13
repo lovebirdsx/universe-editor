@@ -363,6 +363,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
         : undefined
     }),
 
+    commands.registerCommand('git.openMergeEditor', async (...args: unknown[]) => {
+      const path = resourcePath(args[0])
+      if (!path) return
+      await mgr.resolveRepo({ resourceUri: path })?.openMergeEditor(path)
+    }),
+
     commands.registerCommand('git.openFile', async (...args: unknown[]) => {
       const path =
         resourcePath(args[0]) ??

@@ -412,4 +412,54 @@ html, body, #root {
   margin-left: 2px;
 }
 
+/* Inline merge-conflict regions (git markers in a plain file editor). Whole-line
+   tints mirror VSCode's merge-conflict extension: green = current/ours,
+   blue = incoming/theirs, neutral = diff3 base; the marker lines get a stronger
+   band. The action bar is a content widget positioned ABOVE the `<<<<<<<` marker
+   line (CodeLens-style) so it stays clickable in Monaco's overlay layer; a view
+   zone reserves the band above so it doesn't crowd the previous line. */
+.merge-conflict-current-content {
+  background-color: rgba(64, 200, 64, 0.16);
+}
+.merge-conflict-incoming-content {
+  background-color: rgba(64, 140, 255, 0.16);
+}
+.merge-conflict-base-content {
+  background-color: rgba(140, 140, 140, 0.16);
+}
+.merge-conflict-header {
+  background-color: rgba(128, 128, 128, 0.28);
+  font-weight: 600;
+}
+.merge-conflict-actions {
+  display: flex;
+  align-items: center;
+  padding-bottom: 6px;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1;
+  pointer-events: auto;
+}
+.merge-conflict-action {
+  color: var(--vscode-textLink-foreground, #4daafc);
+  cursor: pointer;
+  user-select: none;
+  opacity: 0.85;
+  /* Symmetric horizontal padding so the separator below lands midway between
+     adjacent actions. The first item drops its left padding to stay flush. */
+  padding: 0 14px;
+}
+.merge-conflict-action:first-child {
+  padding-left: 0;
+}
+/* Thin separator centered between adjacent actions, like VSCode's CodeLens bar. */
+.merge-conflict-action + .merge-conflict-action {
+  border-left: 1px solid var(--vscode-editorCodeLens-foreground, rgba(140, 140, 140, 0.5));
+}
+.merge-conflict-action:hover {
+  opacity: 1;
+  text-decoration: underline;
+}
+
+
 

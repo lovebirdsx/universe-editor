@@ -22,6 +22,7 @@ import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
 import { FileEditorStatusContribution } from './FileEditorStatusContribution.js'
 import { GitBlameContribution } from './GitBlameContribution.js'
+import { GitMergeConflictContribution } from './GitMergeConflictContribution.js'
 import { DirtyDiffContribution } from './DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
 import { GlobalDragAndDropContribution } from './GlobalDragAndDropContribution.js'
@@ -224,6 +225,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.gitBlame',
   GitBlameContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Inline merge-conflict resolution: scans the active file editor for git conflict
+// markers, tints the regions, and floats Accept Current/Incoming/Both + Compare
+// actions on each conflict. AfterRestore so the editor area + Monaco are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.gitMergeConflict',
+  GitMergeConflictContribution,
   WorkbenchPhase.AfterRestore,
 )
 

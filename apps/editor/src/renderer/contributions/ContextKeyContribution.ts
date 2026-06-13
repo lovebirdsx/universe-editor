@@ -39,6 +39,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { MergeEditorInput } from '../services/editor/MergeEditorInput.js'
 import { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 
 export class ContextKeyContribution extends Disposable implements IWorkbenchContribution {
@@ -83,6 +84,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     const activeEditorLanguageId = contextKeyService.createKey<string>('activeEditorLanguageId', '')
     const activeEditorTypeId = contextKeyService.createKey<string>('activeEditorTypeId', '')
     const isInDiffEditor = contextKeyService.createKey<boolean>('isInDiffEditor', false)
+    const isInMergeEditor = contextKeyService.createKey<boolean>('isInMergeEditor', false)
     const textCompareEditorVisible = contextKeyService.createKey<boolean>(
       'textCompareEditorVisible',
       false,
@@ -101,6 +103,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
         activeEditorTypeId.set(editor instanceof EditorInput ? editor.typeId : '')
         const isDiff = editor instanceof DiffEditorInput
         isInDiffEditor.set(isDiff)
+        isInMergeEditor.set(editor instanceof MergeEditorInput)
         textCompareEditorVisible.set(isDiff)
       }),
     )

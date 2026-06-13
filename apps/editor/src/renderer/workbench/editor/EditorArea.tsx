@@ -13,6 +13,7 @@ import { KeybindingsEditor } from '../keybindings/KeybindingsEditor.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
 import { FileEditor } from './FileEditor.js'
 import { DiffEditor } from './DiffEditor.js'
+import { MergeEditor } from './MergeEditor.js'
 import { MarkdownPreviewEditor } from './MarkdownPreviewEditor.js'
 import { ReleaseNotesEditor } from './ReleaseNotesEditor.js'
 import { StartupPerformanceEditor } from './StartupPerformanceEditor.js'
@@ -32,6 +33,7 @@ editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEdi
 editorComponentMap.set('keybindings', KeybindingsEditor as ComponentType<{ input: IEditorInput }>)
 editorComponentMap.set('file', FileEditor)
 editorComponentMap.set('diff', DiffEditor)
+editorComponentMap.set('merge', MergeEditor)
 editorComponentMap.set('markdown.preview', MarkdownPreviewEditor)
 editorComponentMap.set('releaseNotes', ReleaseNotesEditor)
 editorComponentMap.set('startupPerformance', StartupPerformanceEditor)

@@ -78,29 +78,45 @@ export function gitPrimaryInputCommand({
   return GIT_COMMIT_DISABLED_INPUT_COMMAND
 }
 
-function toResourceState(root: string, path: string, letter: string): SourceControlResourceState {
+function toResourceState(
+  root: string,
+  path: string,
+  letter: string,
+  mergeEditor: boolean,
+): SourceControlResourceState {
   const decoration = DECORATIONS[letter] ?? { color: '#cccccc', tooltip: letter }
+  // Conflicted (unmerged) files open the 3-way merge editor when enabled;
+  // everything else opens a working-tree diff.
+  const command =
+    letter === 'U' && mergeEditor
+      ? { command: 'git.openMergeEditor', title: 'Resolve in Merge Editor' }
+      : { command: 'git.openChange', title: 'Open Changes' }
   return {
     resourceUri: join(root, path),
     contextValue: letter,
     decorations: { tooltip: decoration.tooltip, color: decoration.color },
-    command: { command: 'git.openChange', title: 'Open Changes' },
+    command,
   }
 }
 
-function stagedStates(root: string, files: readonly GitFileStatus[]): SourceControlResourceState[] {
+function stagedStates(
+  root: string,
+  files: readonly GitFileStatus[],
+  mergeEditor: boolean,
+): SourceControlResourceState[] {
   return files
     .filter((f) => f.kind === 'tracked' && f.index !== '.')
-    .map((f) => toResourceState(root, f.path, f.index))
+    .map((f) => toResourceState(root, f.path, f.index, mergeEditor))
 }
 
 function workingStates(
   root: string,
   files: readonly GitFileStatus[],
+  mergeEditor: boolean,
 ): SourceControlResourceState[] {
   return files
     .filter((f) => f.workingTree !== '.')
-    .map((f) => toResourceState(root, f.path, f.workingTree))
+    .map((f) => toResourceState(root, f.path, f.workingTree, mergeEditor))
 }
 
 interface RepositoryOptions {
@@ -192,8 +208,9 @@ export class Repository {
       return
     }
     const status = parseStatus(res.stdout)
-    const staged = stagedStates(this.root, status.files)
-    const working = workingStates(this.root, status.files)
+    const mergeEditor = await workspace.getConfiguration('git').get('mergeEditor', true)
+    const staged = stagedStates(this.root, status.files, mergeEditor)
+    const working = workingStates(this.root, status.files, mergeEditor)
     this._staged.resourceStates = staged
     this._working.resourceStates = working
     this._stagedCount = staged.length
@@ -582,6 +599,56 @@ export class Repository {
       pinned,
       preserveFocus,
     })
+  }
+
+  /**
+   * Open the 3-way merge editor for a conflicted file. Reads the three git merge
+   * stages (`:1:` base, `:2:` ours/HEAD, `:3:` theirs/MERGE_HEAD) plus the
+   * working-tree content (markers intact) as the result seed, and labels the two
+   * sides from the HEAD / MERGE_HEAD commit subjects.
+   */
+  async openMergeEditor(absPath: string): Promise<void> {
+    const rel = relative(this.root, absPath).replace(/\\/g, '/')
+    const [base, current, incoming] = await Promise.all([
+      this._showStage(`:1:${rel}`),
+      this._showStage(`:2:${rel}`),
+      this._showStage(`:3:${rel}`),
+    ])
+    let merged = ''
+    try {
+      merged = await readFile(absPath, 'utf8')
+    } catch {
+      merged = ''
+    }
+    const [currentLabel, incomingLabel] = await Promise.all([
+      this._mergeSideLabel('HEAD'),
+      this._mergeSideLabel('MERGE_HEAD'),
+    ])
+    await commands.executeCommand('_workbench.openMergeEditor', {
+      path: absPath,
+      base,
+      current,
+      incoming,
+      merged,
+      currentLabel,
+      incomingLabel,
+    })
+  }
+
+  /** Content of a git object path (e.g. `:2:foo.ts`), or '' when it doesn't exist. */
+  private async _showStage(spec: string): Promise<string> {
+    const res = await gitExec(['show', spec], this.root, this._log)
+    return res.exitCode === 0 ? res.stdout : ''
+  }
+
+  /** A `<ref-name>: <subject>` label for a merge side, or '' when unavailable. */
+  private async _mergeSideLabel(ref: string): Promise<string> {
+    const subject = await gitExec(['log', '-1', '--format=%s', ref], this.root, this._log)
+    const name = await gitExec(['rev-parse', '--abbrev-ref', ref], this.root, this._log)
+    const shortRef = name.exitCode === 0 ? name.stdout.trim() : ''
+    const label = shortRef && shortRef !== 'HEAD' ? shortRef : ref
+    const text = subject.exitCode === 0 ? subject.stdout.trim() : ''
+    return text ? `${label}: ${text}` : ''
   }
 
   private async _run(
