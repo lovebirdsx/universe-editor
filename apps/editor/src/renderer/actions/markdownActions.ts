@@ -107,6 +107,7 @@ export class OpenMarkdownSourceAction extends Action2 {
       title: localize('action.markdown.showSource.title', 'Open Source'),
       category: localize('command.category.markdown', 'Markdown'),
       icon: 'go-to-file',
+      keybinding: { primary: 'ctrl+shift+v' },
       precondition: MARKDOWN_PREVIEW_PRECONDITION,
       menu: [{ id: MenuId.EditorTitle, group: 'navigation', when: MARKDOWN_PREVIEW_PRECONDITION }],
       f1: true,
