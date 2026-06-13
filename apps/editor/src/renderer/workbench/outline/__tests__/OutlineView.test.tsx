@@ -6,8 +6,8 @@
  *  already mounted with an empty (or absent) outline — without needing a remount.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   InstantiationService,
   ServiceCollection,
@@ -21,16 +21,25 @@ import {
 } from '../../../services/languageFeatures/OutlineService.js'
 import { ServicesContext } from '../../useService.js'
 import { OutlineView } from '../OutlineView.js'
+import { outlineViewState } from '../outlineViewState.js'
 
-function makeSymbol(name: string): monaco.languages.DocumentSymbol {
+function makeSymbol(
+  name: string,
+  opts: {
+    line?: number
+    kind?: number
+    children?: monaco.languages.DocumentSymbol[]
+  } = {},
+): monaco.languages.DocumentSymbol {
+  const line = opts.line ?? 1
   return {
     name,
     detail: '',
-    kind: 14 as monaco.languages.SymbolKind,
+    kind: (opts.kind ?? 14) as monaco.languages.SymbolKind,
     tags: [],
-    range: { startLineNumber: 1, startColumn: 1, endLineNumber: 2, endColumn: 1 },
-    selectionRange: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
-    children: [],
+    range: { startLineNumber: line, startColumn: 1, endLineNumber: line + 1, endColumn: 1 },
+    selectionRange: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+    children: opts.children ?? [],
   }
 }
 
@@ -52,10 +61,32 @@ function setup(initial: OutlineModel | undefined) {
   const services = new ServiceCollection()
   services.set(IOutlineService, outlineService as never)
   const instantiation = new InstantiationService(services)
-  return { outline, instantiation }
+  return { outline, activeSymbol, instantiation }
 }
 
 afterEach(() => cleanup())
+
+beforeEach(() => {
+  // outlineViewState is a module-level singleton — reset to defaults so cases
+  // that flip preferences don't leak into one another.
+  outlineViewState.setFollowCursor(true)
+  outlineViewState.setFilterOnType(true)
+  outlineViewState.setSortBy('position')
+})
+
+function renderView(instantiation: InstantiationService): void {
+  render(
+    <ServicesContext.Provider value={instantiation}>
+      <OutlineView />
+    </ServicesContext.Provider>,
+  )
+}
+
+function rowLabels(): string[] {
+  return Array.from(document.querySelectorAll('[role="treeitem"] > span:last-child')).map(
+    (el) => el.textContent ?? '',
+  )
+}
 
 describe('OutlineView', () => {
   it('renders symbols that arrive after mount with an initially empty outline', () => {
@@ -138,5 +169,92 @@ describe('OutlineView', () => {
     })
     expect(screen.queryByText('No symbols found.')).toBeNull()
     expect(screen.getByText('Beta')).toBeTruthy()
+  })
+
+  it('sorts roots by name / position / kind', () => {
+    const { instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [
+        makeSymbol('Charlie', { line: 1, kind: 11 }),
+        makeSymbol('Alpha', { line: 2, kind: 5 }),
+        makeSymbol('Bravo', { line: 3, kind: 5 }),
+      ],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    // position: document order
+    expect(rowLabels()).toEqual(['Charlie', 'Alpha', 'Bravo'])
+
+    act(() => outlineViewState.setSortBy('name'))
+    expect(rowLabels()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+
+    // kind: lower kind first (5 before 11), name as tiebreak
+    act(() => outlineViewState.setSortBy('kind'))
+    expect(rowLabels()).toEqual(['Alpha', 'Bravo', 'Charlie'])
+  })
+
+  it('collapses and expands all on toolbar signals, syncing allCollapsed', () => {
+    const { instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Parent', { children: [makeSymbol('Child', { line: 2 })] })],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    // Default-expanded: child visible, not all collapsed.
+    expect(screen.getByText('Child')).toBeTruthy()
+    expect(outlineViewState.allCollapsed.get()).toBe(false)
+
+    act(() => outlineViewState.requestCollapseAll())
+    expect(screen.queryByText('Child')).toBeNull()
+    expect(outlineViewState.allCollapsed.get()).toBe(true)
+
+    act(() => outlineViewState.requestExpandAll())
+    expect(screen.getByText('Child')).toBeTruthy()
+    expect(outlineViewState.allCollapsed.get()).toBe(false)
+  })
+
+  it('follow cursor expands ancestors of and selects the active symbol', () => {
+    const child = makeSymbol('Child', { line: 2 })
+    const { activeSymbol, instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Parent', { children: [child] })],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    act(() => outlineViewState.requestCollapseAll())
+    expect(screen.queryByText('Child')).toBeNull()
+
+    // Cursor moves into the child — follow-cursor must reveal it.
+    act(() => activeSymbol.set(child, undefined))
+    expect(screen.getByText('Child')).toBeTruthy()
+  })
+
+  it('filter on type prunes the tree to matches and ancestors', () => {
+    const { instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [
+        makeSymbol('Alpha', { line: 1 }),
+        makeSymbol('Beta', { line: 2, children: [makeSymbol('Gamma', { line: 3 })] }),
+      ],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+    expect(rowLabels()).toEqual(['Alpha', 'Beta', 'Gamma'])
+
+    // Type to filter — only Gamma (and its ancestor Beta) survive.
+    const view = document.querySelector('[role="tree"]') as HTMLElement
+    act(() => {
+      view.focus()
+      fireEvent.keyDown(view, { key: 'g' })
+    })
+    expect(rowLabels()).toEqual(['Beta', 'Gamma'])
+    expect(screen.queryByText('Alpha')).toBeNull()
   })
 })

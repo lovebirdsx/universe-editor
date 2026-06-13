@@ -70,6 +70,7 @@ import {
   ScmActivityContribution,
 } from './ActivityBarBadgeContributions.js'
 import { QuickAccessContribution } from './QuickAccessContribution.js'
+import { OutlineViewStateContribution } from './OutlineViewStateContribution.js'
 
 // Install the Monaco standalone override services (cross-file rename writer +
 // references text-model resolver) on MonacoLoader before any editor is created —
@@ -537,6 +538,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.quickAccess',
   QuickAccessContribution,
   WorkbenchPhase.BlockStartup,
+)
+
+// Hydrate + persist the Outline view's user preferences (follow cursor / filter
+// on type / sort order). AfterRestore so the storage service is live; hydration
+// is fire-and-forget and the toolbar reads the observables once it mounts.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.outlineViewState',
+  OutlineViewStateContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 export {

@@ -1,0 +1,73 @@
+.toolbarBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-foreground-muted, #8a8a92);
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.toolbarBtn:hover:not(:disabled) {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.toolbarBtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.overflowMenu {
+  position: fixed;
+  z-index: 1000;
+  min-width: 200px;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--color-dropdown-bg, #2f2f35);
+  color: var(--color-foreground, #c8c8c8);
+  border: 1px solid var(--color-border, #454545);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
+}
+
+.overflowItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.overflowItem:hover {
+  background: var(--color-list-active-bg, #04395e);
+  color: var(--color-list-active-fg, #ffffff);
+}
+
+.overflowCheck {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  flex: 0 0 auto;
+}
+
+.overflowItemLabel {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overflowSeparator {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--color-border, #454545);
+}

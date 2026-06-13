@@ -12,6 +12,7 @@ import { TerminalViewToolbar } from '../panel/terminal/TerminalViewToolbar.js'
 import { ScmViewToolbar } from '../scm/ScmViewToolbar.js'
 import { AgentsViewToolbar } from '../agents/AgentsViewToolbar.js'
 import { SearchViewToolbar } from '../search/SearchViewToolbar.js'
+import { OutlineViewToolbar } from '../outline/OutlineViewToolbar.js'
 
 export const viewToolbarMap = new Map<string, ComponentType>([
   ['workbench.view.explorer.tree', ExplorerViewToolbar],
@@ -20,4 +21,5 @@ export const viewToolbarMap = new Map<string, ComponentType>([
   ['workbench.view.scm.main', ScmViewToolbar],
   ['workbench.view.agents.main', AgentsViewToolbar],
   ['workbench.view.search.results', SearchViewToolbar],
+  ['workbench.view.outline.main', OutlineViewToolbar],
 ])

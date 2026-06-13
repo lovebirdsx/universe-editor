@@ -4,9 +4,25 @@
  *  from IOutlineService (which pulls from the language features facade); the
  *  generic <Tree> handles virtualization / keyboard nav. Clicking a row jumps to
  *  the symbol; the symbol under the cursor is highlighted (follow-cursor).
+ *
+ *  Title-bar driven behaviour (state in outlineViewState):
+ *   - Sort By Position / Name / Category — re-sorts each level before building.
+ *   - Collapse All / Expand All — driven by monotonic signals from the toolbar.
+ *   - Follow Cursor — when on, the symbol under the caret is expanded-to,
+ *     selected and scrolled into view (when off it is only highlighted).
+ *   - Filter on Type — typing in the focused tree opens a find box; on it prunes
+ *     the tree to matches + ancestors, off it highlights matches in place.
  *--------------------------------------------------------------------------------------------*/
 
-import { useCallback, useEffect, useRef, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react'
 import { localize } from '@universe-editor/platform'
 import {
   Tree,
@@ -19,6 +35,7 @@ import { useViewFocusable } from '../useViewFocusable.js'
 import { type monaco } from '../editor/monaco/MonacoLoader.js'
 import { IOutlineService } from '../../services/languageFeatures/OutlineService.js'
 import { SymbolIcon } from '../symbols/symbolIcon.js'
+import { outlineViewState, type OutlineSortOrder } from './outlineViewState.js'
 import styles from './OutlineView.module.css'
 
 interface OutlineNode {
@@ -27,31 +44,110 @@ interface OutlineNode {
   readonly children: OutlineNode[]
 }
 
-interface BuiltOutline {
+interface DisplayOutline {
   readonly roots: OutlineNode[]
   readonly idBySymbol: Map<monaco.languages.DocumentSymbol, string>
+  readonly matchedIds: Set<string>
+  /** Ids whose expansion must be forced to true after a refresh (filter/highlight). */
+  readonly expandToIds: string[]
 }
 
-function buildOutlineNodes(roots: readonly monaco.languages.DocumentSymbol[]): BuiltOutline {
+function comparePosition(
+  a: monaco.languages.DocumentSymbol,
+  b: monaco.languages.DocumentSymbol,
+): number {
+  return (
+    a.range.startLineNumber - b.range.startLineNumber || a.range.startColumn - b.range.startColumn
+  )
+}
+
+function compareSymbols(
+  a: monaco.languages.DocumentSymbol,
+  b: monaco.languages.DocumentSymbol,
+  order: OutlineSortOrder,
+): number {
+  if (order === 'name') return a.name.localeCompare(b.name) || comparePosition(a, b)
+  if (order === 'kind') return a.kind - b.kind || a.name.localeCompare(b.name)
+  return comparePosition(a, b)
+}
+
+function buildNodes(
+  roots: readonly monaco.languages.DocumentSymbol[],
+  order: OutlineSortOrder,
+): { roots: OutlineNode[]; idBySymbol: Map<monaco.languages.DocumentSymbol, string> } {
   const idBySymbol = new Map<monaco.languages.DocumentSymbol, string>()
   const build = (
     symbols: readonly monaco.languages.DocumentSymbol[],
     prefix: string,
   ): OutlineNode[] =>
-    symbols.map((symbol, i) => {
-      const id = prefix === '' ? `${i}` : `${prefix}/${i}`
-      idBySymbol.set(symbol, id)
-      return { id, symbol, children: build(symbol.children ?? [], id) }
-    })
+    [...symbols]
+      .sort((a, b) => compareSymbols(a, b, order))
+      .map((symbol, i) => {
+        const id = prefix === '' ? `${i}` : `${prefix}/${i}`
+        idBySymbol.set(symbol, id)
+        return { id, symbol, children: build(symbol.children ?? [], id) }
+      })
   return { roots: build(roots, ''), idBySymbol }
+}
+
+function ancestorIds(id: string): string[] {
+  const parts = id.split('/')
+  const out: string[] = []
+  for (let i = 1; i < parts.length; i++) out.push(parts.slice(0, i).join('/'))
+  return out
+}
+
+function collectExpandableIds(nodes: readonly OutlineNode[], acc: string[] = []): string[] {
+  for (const n of nodes) {
+    if (n.children.length > 0) {
+      acc.push(n.id)
+      collectExpandableIds(n.children, acc)
+    }
+  }
+  return acc
+}
+
+/** Prune the tree to nodes that match `q` or have a matching descendant. */
+function pruneTree(nodes: readonly OutlineNode[], q: string): OutlineNode[] {
+  const out: OutlineNode[] = []
+  for (const n of nodes) {
+    const children = pruneTree(n.children, q)
+    if (n.symbol.name.toLowerCase().includes(q) || children.length > 0) {
+      out.push({ id: n.id, symbol: n.symbol, children })
+    }
+  }
+  return out
+}
+
+/** Collect ids of every node whose name matches `q`. */
+function collectMatchedIds(
+  nodes: readonly OutlineNode[],
+  q: string,
+  acc: Set<string> = new Set(),
+): Set<string> {
+  for (const n of nodes) {
+    if (n.symbol.name.toLowerCase().includes(q)) acc.add(n.id)
+    collectMatchedIds(n.children, q, acc)
+  }
+  return acc
 }
 
 export function OutlineView() {
   const outlineService = useService(IOutlineService)
   const outline = useObservable(outlineService.outline)
   const activeSymbol = useObservable(outlineService.activeSymbol)
+  const sortBy = useObservable(outlineViewState.sortBy)
+  const followCursor = useObservable(outlineViewState.followCursor)
+  const filterOnType = useObservable(outlineViewState.filterOnType)
+  const collapseSignal = useObservable(outlineViewState.collapseAllSignal)
+  const expandSignal = useObservable(outlineViewState.expandAllSignal)
+
+  const [findActive, setFindActive] = useState(false)
+  const [filterText, setFilterText] = useState('')
+  const query = filterText.trim().toLowerCase()
 
   const containerRef = useRef<HTMLDivElement>(null)
+  const findInputRef = useRef<HTMLInputElement>(null)
   const rootsRef = useRef<OutlineNode[]>([])
   const idBySymbolRef = useRef<Map<monaco.languages.DocumentSymbol, string>>(new Map())
   const activeIdRef = useRef<string | undefined>(undefined)
@@ -71,14 +167,78 @@ export function OutlineView() {
     useCallback(() => containerRef.current, []),
   )
 
-  // Rebuild the node tree whenever the symbol set changes; keep folding state by
-  // reusing stable path ids across rebuilds.
+  // Build the display tree: sort, then (when filtering) prune to matches +
+  // ancestors or collect the matches to highlight in place.
+  const display = useMemo<DisplayOutline>(() => {
+    const built = buildNodes(outline?.roots ?? [], sortBy)
+    if (query === '') {
+      return {
+        roots: built.roots,
+        idBySymbol: built.idBySymbol,
+        matchedIds: new Set(),
+        expandToIds: [],
+      }
+    }
+    const matchedIds = collectMatchedIds(built.roots, query)
+    if (filterOnType) {
+      const pruned = pruneTree(built.roots, query)
+      return {
+        roots: pruned,
+        idBySymbol: built.idBySymbol,
+        matchedIds,
+        expandToIds: collectExpandableIds(pruned),
+      }
+    }
+    // Highlight mode: keep the full tree, expand ancestors of every match.
+    const expand = new Set<string>()
+    for (const id of matchedIds) for (const a of ancestorIds(id)) expand.add(a)
+    return {
+      roots: built.roots,
+      idBySymbol: built.idBySymbol,
+      matchedIds,
+      expandToIds: [...expand],
+    }
+  }, [outline, sortBy, query, filterOnType])
+
+  // Apply the freshly built tree to the model, then force any required expansion.
   useEffect(() => {
-    const built = buildOutlineNodes(outline?.roots ?? [])
-    rootsRef.current = built.roots
-    idBySymbolRef.current = built.idBySymbol
+    rootsRef.current = display.roots
+    idBySymbolRef.current = display.idBySymbol
     model.refresh()
-  }, [outline, model])
+    if (display.expandToIds.length > 0) {
+      model.setExpansion(display.expandToIds.map((id) => [id, true] as const))
+    }
+  }, [display, model])
+
+  // Keep outlineViewState.allCollapsed in sync so the toolbar icon flips. A node
+  // counts as "collapsed" only when an expandable visible row is not expanded;
+  // reading the visible nodes also materialises default-expanded state.
+  useEffect(() => {
+    const update = (): void => {
+      const visible = model.getVisibleNodes()
+      const expandable = visible.filter((n) => n.hasChildren)
+      const allCollapsed = expandable.length > 0 && expandable.every((n) => !n.expanded)
+      outlineViewState.setAllCollapsed(allCollapsed)
+    }
+    update()
+    const d = model.onDidChangeStructure(update)
+    return () => d.dispose()
+  }, [model])
+
+  // Collapse-all / expand-all signals from the toolbar (skip the mount value).
+  const lastCollapse = useRef(collapseSignal)
+  useEffect(() => {
+    if (collapseSignal === lastCollapse.current) return
+    lastCollapse.current = collapseSignal
+    model.collapseAll()
+  }, [collapseSignal, model])
+
+  const lastExpand = useRef(expandSignal)
+  useEffect(() => {
+    if (expandSignal === lastExpand.current) return
+    lastExpand.current = expandSignal
+    model.setExpansion(collectExpandableIds(rootsRef.current).map((id) => [id, true] as const))
+  }, [expandSignal, model])
 
   // When the tree gains focus without a focused row (e.g. via the
   // `outline.focus` command), select the symbol under the editor cursor — or the
@@ -95,71 +255,137 @@ export function OutlineView() {
     return () => el.removeEventListener('focus', onFocus)
   }, [model])
 
-  const activeId = activeSymbol ? idBySymbolRef.current.get(activeSymbol) : undefined
+  const activeId = activeSymbol ? display.idBySymbol.get(activeSymbol) : undefined
   activeIdRef.current = activeId
+
+  // Follow cursor: expand to + select + scroll the active symbol into view.
+  useEffect(() => {
+    if (!followCursor || query !== '' || !activeId) return
+    const ancestors = ancestorIds(activeId)
+    if (ancestors.length > 0) model.setExpansion(ancestors.map((id) => [id, true] as const))
+    model.setSelection([activeId], activeId)
+  }, [followCursor, query, activeId, model])
+
+  // Focus the find box as it opens.
+  useEffect(() => {
+    if (findActive) findInputRef.current?.focus()
+  }, [findActive])
+
+  const closeFind = useCallback(() => {
+    setFindActive(false)
+    setFilterText('')
+    containerRef.current?.focus()
+  }, [])
+
+  // Type-to-filter: a printable key in the focused tree opens the find box.
+  const onWrapperKeyDownCapture = useCallback(
+    (e: ReactKeyboardEvent) => {
+      if (findActive || e.altKey || e.ctrlKey || e.metaKey) return
+      if (e.key.length === 1 && e.key !== ' ') {
+        setFindActive(true)
+        setFilterText(e.key)
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    },
+    [findActive],
+  )
 
   if (!outline || outline.roots.length === 0) {
     return <div className={styles['empty']}>{localize('outline.empty', 'No symbols found.')}</div>
   }
 
+  const hasResults = display.roots.length > 0
+
   return (
-    <Tree<OutlineNode>
-      model={model}
-      rootRef={containerRef}
-      className={styles['view'] ?? ''}
-      virtualListClassName={styles['virtualList'] ?? ''}
-      ariaLabel={localize('outline.label', 'Outline')}
-      renderRow={(ctx) => {
-        const node = ctx.node
-        const className = [
-          styles['row'],
-          node.id === activeId && styles['active'],
-          ctx.isSelected && styles['selected'],
-          ctx.isFocused && styles['focused'],
-        ]
-          .filter(Boolean)
-          .join(' ')
-        const onClick = (e: ReactMouseEvent) => {
-          ctx.onClickRow(e)
-          outlineService.revealSymbol(node.element.symbol)
-        }
-        return (
-          <div
-            key={node.id}
-            data-row-key={node.id}
-            role="treeitem"
-            aria-expanded={node.hasChildren ? node.expanded : undefined}
-            aria-selected={ctx.isSelected}
-            className={className}
-            style={
-              ctx.style
-                ? { paddingLeft: ctx.indentPadding, ...ctx.style }
-                : { paddingLeft: ctx.indentPadding }
+    <div className={styles['wrapper']} onKeyDownCapture={onWrapperKeyDownCapture}>
+      {findActive && (
+        <div className={styles['findWidget']}>
+          <input
+            ref={findInputRef}
+            type="text"
+            className={styles['findInput']}
+            placeholder={localize('outline.filterPlaceholder', 'Filter')}
+            value={filterText}
+            spellCheck={false}
+            onChange={(e) => setFilterText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault()
+                closeFind()
+              }
+            }}
+          />
+        </div>
+      )}
+      {hasResults ? (
+        <Tree<OutlineNode>
+          model={model}
+          rootRef={containerRef}
+          className={styles['view'] ?? ''}
+          virtualListClassName={styles['virtualList'] ?? ''}
+          ariaLabel={localize('outline.label', 'Outline')}
+          renderRow={(ctx) => {
+            const node = ctx.node
+            const isMatch = display.matchedIds.has(node.id)
+            const isDim = query !== '' && !filterOnType && !isMatch
+            const className = [
+              styles['row'],
+              node.id === activeId && styles['active'],
+              ctx.isSelected && styles['selected'],
+              ctx.isFocused && styles['focused'],
+              isMatch && styles['match'],
+              isDim && styles['dim'],
+            ]
+              .filter(Boolean)
+              .join(' ')
+            const onClick = (e: ReactMouseEvent) => {
+              ctx.onClickRow(e)
+              outlineService.revealSymbol(node.element.symbol)
             }
-            onClick={onClick}
-          >
-            <span
-              className={styles['twisty']}
-              aria-hidden="true"
-              onClick={(e) => {
-                e.stopPropagation()
-                ctx.onToggle()
-              }}
-            >
-              {node.hasChildren ? (node.expanded ? '▾' : '▸') : ''}
-            </span>
-            <span className={styles['icon']} aria-hidden="true">
-              <SymbolIcon
-                kind={node.element.symbol.kind}
-                languageId={outline.languageId}
-                size={14}
-              />
-            </span>
-            <span className={styles['label']}>{node.element.symbol.name}</span>
-          </div>
-        )
-      }}
-      onActivate={(node) => outlineService.revealSymbol(node.element.symbol)}
-    />
+            return (
+              <div
+                key={node.id}
+                data-row-key={node.id}
+                role="treeitem"
+                aria-expanded={node.hasChildren ? node.expanded : undefined}
+                aria-selected={ctx.isSelected}
+                className={className}
+                style={
+                  ctx.style
+                    ? { paddingLeft: ctx.indentPadding, ...ctx.style }
+                    : { paddingLeft: ctx.indentPadding }
+                }
+                onClick={onClick}
+              >
+                <span
+                  className={styles['twisty']}
+                  aria-hidden="true"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    ctx.onToggle()
+                  }}
+                >
+                  {node.hasChildren ? (node.expanded ? '▾' : '▸') : ''}
+                </span>
+                <span className={styles['icon']} aria-hidden="true">
+                  <SymbolIcon
+                    kind={node.element.symbol.kind}
+                    languageId={outline.languageId}
+                    size={14}
+                  />
+                </span>
+                <span className={styles['label']}>{node.element.symbol.name}</span>
+              </div>
+            )
+          }}
+          onActivate={(node) => outlineService.revealSymbol(node.element.symbol)}
+        />
+      ) : (
+        <div className={styles['empty']}>
+          {localize('outline.noMatches', 'No matching symbols.')}
+        </div>
+      )}
+    </div>
   )
 }
