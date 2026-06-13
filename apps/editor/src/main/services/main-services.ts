@@ -30,6 +30,7 @@ import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
+import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
 import { FileSearchMainService } from './fileSearch/fileSearchMainService.js'
@@ -48,6 +49,7 @@ import { UpdateMainService } from './update/updateMainService.js'
 import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.js'
 import { PerformanceMainService } from './performance/performanceMainService.js'
 import { SessionSwitcherMainService } from './sessionSwitcher/sessionSwitcherMainService.js'
+import { ConfigLocationMainService } from './configLocation/configLocationMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
 // @-injected services with non-branded static params (spawner stubs, Storage,
@@ -116,4 +118,8 @@ registerSingleton(
 registerSingleton(
   ISessionSwitcherService,
   new SyncDescriptor<ISessionSwitcherService>(SessionSwitcherMainService, [], false),
+)
+registerSingleton(
+  IConfigLocationService,
+  new SyncDescriptor<IConfigLocationService>(ConfigLocationMainService, [], false),
 )

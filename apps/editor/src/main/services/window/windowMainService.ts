@@ -99,6 +99,8 @@ export interface WindowMainServiceOptions {
   readonly rendererUrl: string | undefined
   /** Absolute path to renderer/index.html (production). */
   readonly rendererHtml: string
+  /** Resolved directory for user settings/keybindings (EnvironmentMainService.configDir). */
+  readonly getConfigDir: () => string
 }
 
 const SESSION_PERSIST_DEBOUNCE_MS = 300
@@ -194,7 +196,11 @@ export class WindowMainService implements IWindowMainService {
     if (opts?.workspace) {
       await workspace.restoreCurrent(opts.workspace)
     }
-    const userData = disposables.add(new UserDataMainService(workspace))
+    const userData = disposables.add(new UserDataMainService(workspace, this._opts.getConfigDir()))
+    // Hot-reload user settings/keybindings when the config directory changes.
+    disposables.add(
+      appServices.configLocation.onDidChangeConfigDir((dir) => userData.relocate(dir)),
+    )
     const host = disposables.add(
       new MainHostService(
         win,

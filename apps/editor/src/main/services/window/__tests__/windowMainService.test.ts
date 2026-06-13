@@ -102,6 +102,10 @@ function makeOpts() {
       releaseNotes: {} as never,
       performance: {} as never,
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} } as never,
+      configLocation: {
+        onDidChangeConfigDir: () => ({ dispose: () => {} }),
+        currentDir: '',
+      } as never,
     },
     logService,
     e2eEnabled: false,
@@ -109,6 +113,7 @@ function makeOpts() {
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',
     rendererHtml: '/renderer/index.html',
+    getConfigDir: () => join(tmpdir(), 'ue-wintest'),
   }
 }
 

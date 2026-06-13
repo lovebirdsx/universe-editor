@@ -63,6 +63,19 @@ describe('UserDataMainService', () => {
     svc.dispose()
   })
 
+  it('loads settings/keybindings from an explicit configDir, not userData', async () => {
+    const ws = new FakeWorkspace()
+    const configDir = join(tmp, 'config')
+    await fs.mkdir(configDir, { recursive: true })
+    const svc = new UserDataMainService(ws as never, configDir)
+    await svc.write(UserDataFile.Settings, '{"a":1}\n')
+    expect(await fs.readFile(join(configDir, 'settings.json'), 'utf8')).toBe('{"a":1}\n')
+    await expect(fs.stat(join(currentUserData, 'settings.json'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    svc.dispose()
+  })
+
   it('setValue() preserves // line comments in settings.json', async () => {
     const ws = new FakeWorkspace()
     const svc = new UserDataMainService(ws as never)

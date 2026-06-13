@@ -104,6 +104,42 @@ describe('updateUrl', () => {
   })
 })
 
+describe('configDir', () => {
+  it('falls back to userData when nothing overrides it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    const env = make({})
+    env.resolveFileConfig(dir)
+    expect(env.configDir).toBe(dir)
+  })
+
+  it('reads <userData>/config-location.json', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    writeFileSync(join(dir, 'config-location.json'), JSON.stringify({ configDir: '/my/config' }))
+    const env = make({})
+    env.resolveFileConfig(dir)
+    expect(env.configDir).toBe('/my/config')
+  })
+
+  it('resolves cli > env > file', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    writeFileSync(join(dir, 'config-location.json'), JSON.stringify({ configDir: '/file' }))
+    const env = make({
+      argv: ['node', 'main.js', '--config-dir=/cli'],
+      env: { UNIVERSE_CONFIG_DIR: '/env' },
+    })
+    env.resolveFileConfig(dir)
+    expect(env.configDir).toBe('/cli')
+  })
+
+  it('env outranks the file source', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ue-cfg-'))
+    writeFileSync(join(dir, 'config-location.json'), JSON.stringify({ configDir: '/file' }))
+    const env = make({ env: { UNIVERSE_CONFIG_DIR: '/env' } })
+    env.resolveFileConfig(dir)
+    expect(env.configDir).toBe('/env')
+  })
+})
+
 describe('cli commands', () => {
   it('shouldPrintHelp for --help and -h', () => {
     expect(make({ argv: ['node', 'main.js', '--help'] }).shouldPrintHelp).toBe(true)
@@ -123,6 +159,7 @@ describe('cli commands', () => {
     expect(help).toContain('--help')
     expect(help).toContain('--version')
     expect(help).toContain('--user-data-dir')
+    expect(help).toContain('--config-dir')
     expect(help).toContain('--update-url')
   })
 

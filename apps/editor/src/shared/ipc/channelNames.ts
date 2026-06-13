@@ -17,6 +17,7 @@ export const ServiceChannels = {
   FileWatcher: 'fileWatcher',
   Workspace: 'workspace',
   UserData: 'userData',
+  ConfigLocation: 'configLocation',
   Log: 'log',
   LogFiles: 'logFiles',
   Window: 'window',

@@ -75,6 +75,11 @@ import {
   SelectColorThemeAction,
 } from './preferencesActions.js'
 import {
+  OpenConfigLocationFolderAction,
+  ResetConfigLocationAction,
+  SetConfigLocationAction,
+} from './configLocationActions.js'
+import {
   AboutAction,
   CloseWindowAction,
   ExitAction,
@@ -295,6 +300,9 @@ registerAction2(ConfigureDisplayLanguageAction)
 registerAction2(OpenWorkspaceSettingsAction)
 registerAction2(OpenWorkspaceSettingsJsonAction)
 registerAction2(SelectColorThemeAction)
+registerAction2(SetConfigLocationAction)
+registerAction2(OpenConfigLocationFolderAction)
+registerAction2(ResetConfigLocationAction)
 
 // Workspace
 registerAction2(OpenFolderAction)

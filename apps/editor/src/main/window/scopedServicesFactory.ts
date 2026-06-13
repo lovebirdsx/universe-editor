@@ -33,6 +33,7 @@ import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
+import type { ConfigLocationMainService } from '../services/configLocation/configLocationMainService.js'
 
 /** Services shared across all windows. Instantiated once at app startup. */
 export interface ApplicationServices {
@@ -55,6 +56,11 @@ export interface ApplicationServices {
    * unregisterWindow on it, which are main-internal and not on the wire contract.
    */
   readonly sessionSwitcher: SessionSwitcherMainService
+  /**
+   * Concrete type: WindowMainService reads currentDir synchronously to seed each
+   * window's UserDataMainService, and subscribes to onDidChangeConfigDir.
+   */
+  readonly configLocation: ConfigLocationMainService
 }
 
 /**

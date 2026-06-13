@@ -22,6 +22,7 @@ import {
 import {
   APP_DATA,
   CLI_OPTIONS,
+  CONFIG_DIR,
   HELP,
   HOME,
   IS_E2E,
@@ -36,6 +37,7 @@ import {
 import type { ResolveEnv } from '../productPaths.js'
 
 const UPDATE_CONFIG_FILE = 'update-config.json'
+const CONFIG_LOCATION_FILE = 'config-location.json'
 
 export interface EnvironmentMainServiceOptions {
   argv: readonly string[]
@@ -57,6 +59,7 @@ export class EnvironmentMainService {
   private readonly _isDev: boolean
   private readonly _platform: NodeJS.Platform
   private readonly _homeDir: string
+  private _userDataDir: string | undefined
 
   constructor(opts: EnvironmentMainServiceOptions) {
     this._isDev = opts.isDev
@@ -134,12 +137,34 @@ export class EnvironmentMainService {
   /** Append the deployment config file (<userDataDir>/update-config.json) as the
    *  lowest-priority source. Missing/invalid files are tolerated silently. */
   resolveFileConfig(userDataDir: string): void {
-    const data = this._readJsonFile(join(userDataDir, UPDATE_CONFIG_FILE))
-    this._resolver.appendSource(new FileConfigSource(data))
+    this._userDataDir = userDataDir
+    const updateData = this._readJsonFile(join(userDataDir, UPDATE_CONFIG_FILE))
+    this._resolver.appendSource(new FileConfigSource(updateData))
+    const locationData = this._readJsonFile(join(userDataDir, CONFIG_LOCATION_FILE))
+    this._resolver.appendSource(new FileConfigSource(locationData))
   }
 
   get updateUrl(): string | undefined {
     return this._resolver.get(UPDATE_URL)
+  }
+
+  /**
+   * Directory to load user settings.json / keybindings.json from. Resolves
+   * cli > env > <userData>/config-location.json > userData itself. Falls back to
+   * userData when resolveFileConfig hasn't run yet (phase one).
+   */
+  get configDir(): string {
+    return this._resolver.get(CONFIG_DIR) ?? this._userDataDir ?? ''
+  }
+
+  /** Provenance of configDir: 'cli' | 'env' | 'file' | 'default'. */
+  get configDirOrigin(): string {
+    return this._resolver.resolve(CONFIG_DIR).origin
+  }
+
+  /** Resolved userData directory (available after resolveFileConfig). */
+  get userDataDir(): string {
+    return this._userDataDir ?? ''
   }
 
   private _readJsonFile(path: string): Record<string, unknown> {

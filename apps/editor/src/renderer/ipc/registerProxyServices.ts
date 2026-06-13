@@ -34,6 +34,7 @@ import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
+import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 
 export function registerProxyChannelServices(
   services: ServiceCollection,
@@ -73,6 +74,10 @@ export function registerProxyChannelServices(
   services.set(
     IUserDataFilesService,
     ProxyChannel.toService<IUserDataFilesService>(ipc.getChannel(ServiceChannels.UserData)),
+  )
+  services.set(
+    IConfigLocationService,
+    ProxyChannel.toService<IConfigLocationService>(ipc.getChannel(ServiceChannels.ConfigLocation)),
   )
   services.set(
     ILogFilesService,

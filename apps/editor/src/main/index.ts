@@ -21,6 +21,8 @@ import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
+import type { ConfigLocationMainService } from './services/configLocation/configLocationMainService.js'
+import { IConfigLocationService } from '../shared/ipc/configLocationService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
@@ -199,6 +201,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       releaseNotes: accessor.get(IReleaseNotesService),
       performance: accessor.get(IPerformanceMarksService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
+      configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
     }))
   }
   if (!windowMainService) {
@@ -211,6 +214,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       preloadPath: join(__dirname, '../preload/index.cjs'),
       rendererUrl: environmentService.rendererUrl,
       rendererHtml: join(__dirname, '../renderer/index.html'),
+      getConfigDir: () => applicationServices!.configLocation.currentDir,
     })
   }
   return { app: applicationServices, windows: windowMainService }

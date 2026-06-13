@@ -35,6 +35,22 @@ export const USER_DATA_DIR: ConfigItem<'string'> = {
   description: '覆盖用户数据目录',
 }
 
+/**
+ * Directory to load user settings.json / keybindings.json from. cli > env > file
+ * (the UI-written pointer at <userData>/config-location.json) > default (userData
+ * itself). Only relocates those two user-level files; global state and per-workspace
+ * data stay under userData.
+ */
+export const CONFIG_DIR: ConfigItem<'string'> = {
+  id: 'configDir',
+  type: 'string',
+  cli: 'config-dir',
+  env: 'UNIVERSE_CONFIG_DIR',
+  filePath: 'configDir',
+  args: '<path>',
+  description: '从指定目录加载用户设置（settings.json / keybindings.json）',
+}
+
 export const IS_E2E: ConfigItem<'boolean'> = {
   id: 'isE2E',
   type: 'boolean',
@@ -84,4 +100,10 @@ export const USER_PROFILE: ConfigItem<'string'> = {
 }
 
 /** User-facing CLI options, in --help display order. */
-export const CLI_OPTIONS: readonly ConfigItem[] = [HELP, VERSION, USER_DATA_DIR, UPDATE_URL]
+export const CLI_OPTIONS: readonly ConfigItem[] = [
+  HELP,
+  VERSION,
+  USER_DATA_DIR,
+  CONFIG_DIR,
+  UPDATE_URL,
+]

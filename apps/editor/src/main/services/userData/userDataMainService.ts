@@ -45,6 +45,29 @@ const PROJECT_SETTINGS_TEMPLATE = `// Project settings — overrides user settin
 const SELF_WRITE_SUPPRESS_MS = 250
 const FLUSH_DEBOUNCE_MS = 50
 
+// Cloud-sync folders (OneDrive, 坚果云, …) briefly lock a file right after it's
+// written while they index/upload it. A relocate that copies into such a folder
+// and immediately reads back races that lock, surfacing EBUSY/EPERM/EACCES.
+// These are transient — retry with a short backoff instead of failing the call.
+const TRANSIENT_FS_CODES = new Set(['EBUSY', 'EPERM', 'EACCES'])
+
+async function retryTransient<T>(op: () => Promise<T>, attempts = 5, baseDelayMs = 60): Promise<T> {
+  let lastErr: unknown
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await op()
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (!code || !TRANSIENT_FS_CODES.has(code)) throw err
+      lastErr = err
+      if (i < attempts - 1) {
+        await new Promise((resolve) => setTimeout(resolve, baseDelayMs * (i + 1)))
+      }
+    }
+  }
+  throw lastErr
+}
+
 function defaultVSCodeKeybindingsPath(): string {
   // Test hook: let E2E specs point the read-only VSCode keybindings layer at a
   // tmp file instead of the real `%APPDATA%/Code/User/keybindings.json`, so they
@@ -87,12 +110,18 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
 
   private readonly _slots = new Map<UserDataFile, WatchSlot>()
 
-  constructor(private readonly _workspace: WorkspaceMainService) {
+  constructor(
+    private readonly _workspace: WorkspaceMainService,
+    configDir?: string,
+  ) {
     super()
 
+    // User-level files (settings/keybindings) live in configDir, which defaults
+    // to userData but can be relocated (see EnvironmentMainService.configDir).
     const userData = app.getPath('userData')
-    this._installSlot(UserDataFile.Settings, join(userData, 'settings.json'))
-    this._installSlot(UserDataFile.Keybindings, join(userData, 'keybindings.json'))
+    const userFilesDir = configDir && configDir.length > 0 ? configDir : userData
+    this._installSlot(UserDataFile.Settings, join(userFilesDir, 'settings.json'))
+    this._installSlot(UserDataFile.Keybindings, join(userFilesDir, 'keybindings.json'))
     this._installSlot(UserDataFile.VSCodeKeybindings, defaultVSCodeKeybindingsPath(), true)
 
     // Project settings track the active workspace. The read-only VSCode layer
@@ -140,7 +169,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     const slot = this._slots.get(file)
     if (!slot) return ''
     try {
-      return await fs.readFile(slot.fullPath, 'utf8')
+      return await retryTransient(() => fs.readFile(slot.fullPath, 'utf8'))
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return ''
       throw err
@@ -184,6 +213,24 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     const slot = this._slots.get(file)
     if (!slot) return null
     return URI.file(slot.fullPath).toJSON()
+  }
+
+  /**
+   * Point the user-level slots (settings/keybindings) at a new directory and
+   * fire change events so the renderer hot-reloads. Workspace-tracked slots are
+   * untouched. No-op when the directory is unchanged.
+   */
+  relocate(configDir: string): void {
+    const userData = app.getPath('userData')
+    const dir = configDir && configDir.length > 0 ? configDir : userData
+    const settings = this._slots.get(UserDataFile.Settings)
+    if (settings && dirname(settings.fullPath) === resolvePath(dir)) return
+    this._teardownSlot(UserDataFile.Settings)
+    this._teardownSlot(UserDataFile.Keybindings)
+    this._installSlot(UserDataFile.Settings, join(dir, 'settings.json'))
+    this._installSlot(UserDataFile.Keybindings, join(dir, 'keybindings.json'))
+    this._onDidChangeFile.fire(UserDataFile.Settings)
+    this._onDidChangeFile.fire(UserDataFile.Keybindings)
   }
 
   private _installSlot(file: UserDataFile, fullPath: string, readOnly = false): void {
@@ -276,7 +323,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     const tmp = `${slot.fullPath}.${process.pid}.${Date.now()}.tmp`
     await fs.writeFile(tmp, content, 'utf8')
     try {
-      await fs.rename(tmp, slot.fullPath)
+      await retryTransient(() => fs.rename(tmp, slot.fullPath))
     } catch (err) {
       // Best-effort cleanup if rename failed.
       try {
