@@ -43,6 +43,9 @@ export function SearchView() {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const treeRef = useRef<SearchResultsTreeHandle>(null)
 
+  const useExcludeSettings = useObservable(searchViewState.useExcludeSettings)
+  const history = useObservable(searchViewState.history)
+
   const query = useMemo<ISearchQuery>(
     () => ({
       pattern,
@@ -51,17 +54,15 @@ export function SearchView() {
       matchWholeWord,
       includes: splitGlobs(includesText),
       excludes: splitGlobs(excludesText),
+      useExcludeSettings,
     }),
-    [pattern, isRegex, matchCase, matchWholeWord, includesText, excludesText],
+    [pattern, isRegex, matchCase, matchWholeWord, includesText, excludesText, useExcludeSettings],
   )
 
   const { results, setResults, progress, isSearching, regexError, isStale, rerun } =
     useSearchEngine(query, searchSession.results)
-  const { onActivateMatch, onReplaceFile, onReplaceMatch, replaceAll } = useSearchActions(
-    results,
-    setResults,
-    replacePattern,
-  )
+  const { onActivateMatch, onReplaceFile, onReplaceMatch, replaceAll, dismissMatch, dismissFile } =
+    useSearchActions(results, setResults, replacePattern)
 
   const workspaceService = useService(IWorkspaceService)
   const rootUri = workspaceService.current?.folder ?? null
@@ -150,6 +151,22 @@ export function SearchView() {
     rerun()
   }, [refreshSignal, rerun])
 
+  // Seed from the active editor selection (set by FindInFilesAction). Consume on
+  // mount and on every seed signal, since the view stays mounted across invocations.
+  const seedSignal = useObservable(searchViewState.seedSignal)
+  const consumeSeed = useCallback(() => {
+    const seed = searchSession.seedPattern
+    if (seed === undefined) return
+    delete searchSession.seedPattern
+    setPattern(seed)
+    searchViewState.addHistory(seed)
+    inputRef.current?.focus()
+    inputRef.current?.select()
+  }, [])
+  useEffect(() => {
+    consumeSeed()
+  }, [seedSignal, consumeSeed])
+
   const rerunSearch = useCallback(() => {
     rerun()
   }, [rerun])
@@ -175,6 +192,8 @@ export function SearchView() {
         matchWholeWord={matchWholeWord}
         replaceVisible={replaceVisible}
         filtersVisible={filtersVisible}
+        useExcludeSettings={useExcludeSettings}
+        history={history}
         onPattern={setPattern}
         onReplace={setReplacePattern}
         onIncludes={setIncludesText}
@@ -184,6 +203,8 @@ export function SearchView() {
         onToggleWord={() => setMatchWholeWord((v) => !v)}
         onToggleReplace={() => setReplaceVisible((v) => !v)}
         onToggleFilters={() => setFiltersVisible((v) => !v)}
+        onToggleUseExclude={() => searchViewState.setUseExcludeSettings(!useExcludeSettings)}
+        onSubmit={() => searchViewState.addHistory(pattern)}
         onTabToResults={() => treeRef.current?.focusFirst()}
       />
       {regexError && <p className={styles['error']}>{regexError}</p>}
@@ -227,7 +248,10 @@ export function SearchView() {
         onActivateMatch={onActivateMatch}
         onReplaceFile={onReplaceFile}
         onReplaceMatch={onReplaceMatch}
+        onDismissMatch={dismissMatch}
+        onDismissFile={dismissFile}
         replaceVisible={replaceVisible}
+        replacePattern={replacePattern}
         onShiftTab={() => inputRef.current?.focus()}
       />
     </div>

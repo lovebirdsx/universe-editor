@@ -60,6 +60,11 @@ export interface ITextSearchProgress {
 export interface ITextSearchOptions {
   readonly onProgress?: (progress: ITextSearchProgress) => void
   readonly signal?: AbortSignal
+  /**
+   * Apply the configured files.exclude / search.exclude globs (default true).
+   * false searches everything except the hard-coded base ignores.
+   */
+  readonly useExcludeSettings?: boolean
 }
 
 export interface ITextSearchService {

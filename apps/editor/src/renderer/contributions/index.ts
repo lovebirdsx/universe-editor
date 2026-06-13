@@ -71,6 +71,7 @@ import {
 } from './ActivityBarBadgeContributions.js'
 import { QuickAccessContribution } from './QuickAccessContribution.js'
 import { OutlineViewStateContribution } from './OutlineViewStateContribution.js'
+import { SearchPersistenceContribution } from './SearchPersistenceContribution.js'
 
 // Install the Monaco standalone override services (cross-file rename writer +
 // references text-model resolver) on MonacoLoader before any editor is created —
@@ -547,6 +548,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.outlineViewState',
   OutlineViewStateContribution,
   WorkbenchPhase.AfterRestore,
+)
+
+// Hydrate the Search viewlet's persisted view mode / history / exclude toggle from
+// GLOBAL storage. BlockStartup so the view mode is restored before SearchView first
+// paints (otherwise the tree flashes the default 'list' layout).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.searchPersistence',
+  SearchPersistenceContribution,
+  WorkbenchPhase.BlockStartup,
 )
 
 export {

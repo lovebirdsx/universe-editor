@@ -84,6 +84,10 @@ describe('FindInFilesAction', () => {
     const services = new ServiceCollection()
     services.set(ILayoutService, layout.mock)
     services.set(IViewsService, views.mock)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: null },
+    } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
@@ -104,6 +108,10 @@ describe('FindInFilesAction', () => {
     const services = new ServiceCollection()
     services.set(ILayoutService, layout.mock)
     services.set(IViewsService, views.mock)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: null },
+    } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
@@ -123,6 +131,10 @@ describe('FindInFilesAction', () => {
     const services = new ServiceCollection()
     services.set(ILayoutService, layout.mock)
     services.set(IViewsService, views.mock)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: null },
+    } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 
@@ -140,6 +152,10 @@ describe('FindInFilesAction', () => {
     const services = new ServiceCollection()
     services.set(ILayoutService, layout.mock)
     services.set(IViewsService, views.mock)
+    services.set(IEditorGroupsService, {
+      _serviceBrand: undefined,
+      activeGroup: { activeEditor: null },
+    } as never)
     const inst = new InstantiationService(services)
     disposables.push(registerAction2(FindInFilesAction))
 

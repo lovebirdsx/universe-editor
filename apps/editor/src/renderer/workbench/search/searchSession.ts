@@ -26,6 +26,11 @@ export interface SearchSessionState {
   lastActivatedResource?: string
   /** The match node id that was focused when that file was opened. */
   lastActivatedFocusId?: string
+  /**
+   * Set by FindInFilesAction from the active editor's selection. SearchView reads
+   * and clears it on mount so opening the panel seeds the query with selected text.
+   */
+  seedPattern?: string
 }
 
 function emptyState(): SearchSessionState {
@@ -52,4 +57,5 @@ export function resetSearchSession(): void {
   // clear any carried-over value explicitly.
   delete searchSession.lastActivatedResource
   delete searchSession.lastActivatedFocusId
+  delete searchSession.seedPattern
 }

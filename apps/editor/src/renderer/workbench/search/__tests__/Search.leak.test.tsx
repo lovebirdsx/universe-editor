@@ -108,6 +108,7 @@ const QUERY: ISearchQuery = {
   matchWholeWord: false,
   includes: [],
   excludes: [],
+  useExcludeSettings: true,
 }
 
 function Host() {

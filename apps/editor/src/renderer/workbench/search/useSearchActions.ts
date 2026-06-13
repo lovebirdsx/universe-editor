@@ -31,10 +31,19 @@ import { applyReplacements, type IReplaceEdit } from '../../services/search/repl
 const REPLACE_CONFIRM_THRESHOLD = 20
 
 export interface ISearchActions {
-  readonly onActivateMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
+  readonly onActivateMatch: (
+    resource: URI,
+    match: ITextSearchMatch,
+    rangeIndex: number,
+    preview?: boolean,
+  ) => void
   readonly onReplaceFile: (resource: URI) => void
   readonly onReplaceMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
   readonly replaceAll: () => Promise<void>
+  /** Drop one match range from the results without touching the file on disk. */
+  readonly dismissMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
+  /** Drop an entire file's matches from the results without touching disk. */
+  readonly dismissFile: (resource: URI) => void
 }
 
 export function useSearchActions(
@@ -48,9 +57,9 @@ export function useSearchActions(
   const dialogService = useService(IDialogService)
 
   const onActivateMatch = useCallback(
-    (resource: URI, match: ITextSearchMatch, rangeIndex: number) => {
+    (resource: URI, match: ITextSearchMatch, rangeIndex: number, preview = true) => {
       const input = instantiation.createInstance(FileEditorInput, resource)
-      editorService.openEditor(input, { pinned: false })
+      editorService.openEditor(input, { pinned: !preview })
       // Reveal against the *active* editor input, not the one we just created:
       // openEditor dedupes by resource and discards our fresh input when the file
       // is already open, so FileEditorRegistry only knows the original instance.
@@ -199,5 +208,42 @@ export function useSearchActions(
     setResults([])
   }, [results, replaceFile, replacePattern, dialogService, setResults])
 
-  return { onActivateMatch, onReplaceFile, onReplaceMatch, replaceAll }
+  const dismissMatch = useCallback(
+    (resource: URI, match: ITextSearchMatch, rangeIndex: number) => {
+      setResults((prev) =>
+        prev
+          .map((fm) => {
+            if ((URI.revive(fm.resource) as URI).toString() !== resource.toString()) return fm
+            const matches = fm.matches
+              .map((m) => {
+                if (m !== match) return m
+                const ranges = m.ranges.filter((_, i) => i !== rangeIndex)
+                return ranges.length === 0 ? null : { ...m, ranges }
+              })
+              .filter((m): m is ITextSearchMatch => m !== null)
+            return matches.length === 0 ? null : { ...fm, matches }
+          })
+          .filter((fm): fm is IFileMatch => fm !== null),
+      )
+    },
+    [setResults],
+  )
+
+  const dismissFile = useCallback(
+    (resource: URI) => {
+      setResults((prev) =>
+        prev.filter((fm) => (URI.revive(fm.resource) as URI).toString() !== resource.toString()),
+      )
+    },
+    [setResults],
+  )
+
+  return {
+    onActivateMatch,
+    onReplaceFile,
+    onReplaceMatch,
+    replaceAll,
+    dismissMatch,
+    dismissFile,
+  }
 }

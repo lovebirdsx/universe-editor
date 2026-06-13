@@ -32,6 +32,7 @@ export interface ISearchQuery {
   readonly matchWholeWord: boolean
   readonly includes: readonly string[]
   readonly excludes: readonly string[]
+  readonly useExcludeSettings: boolean
 }
 
 export interface ISearchEngine {
@@ -66,7 +67,8 @@ export function useSearchEngine(
   // run so switching sidebars back doesn't re-search (and flash the status bar).
   const skipFirstRef = useRef(initialResults.length > 0 && query.pattern.length > 0)
 
-  const { pattern, isRegex, matchCase, matchWholeWord, includes, excludes } = query
+  const { pattern, isRegex, matchCase, matchWholeWord, includes, excludes, useExcludeSettings } =
+    query
 
   const runSearch = useCallback(
     (q: string) => {
@@ -96,6 +98,7 @@ export function useSearchEngine(
           },
           {
             signal: ac.signal,
+            useExcludeSettings,
             onProgress: (p) => {
               if (!ac.signal.aborted) setProgress(p)
             },
@@ -112,7 +115,7 @@ export function useSearchEngine(
           setIsSearching(false)
         })
     },
-    [searchService, isRegex, matchCase, matchWholeWord, includes, excludes],
+    [searchService, isRegex, matchCase, matchWholeWord, includes, excludes, useExcludeSettings],
   )
 
   useEffect(() => {

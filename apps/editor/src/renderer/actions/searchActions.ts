@@ -16,6 +16,23 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IQuickTextSearchService } from '../services/search/QuickTextSearchService.js'
+import { searchSession } from '../workbench/search/searchSession.js'
+import { searchViewState } from '../workbench/search/searchViewState.js'
+
+const SEED_TEXT_MAX_LENGTH = 200
+
+/** Single-line selection text from the active editor, for seeding the search box. */
+function readEditorSelection(accessor: ServicesAccessor): string {
+  const groups = accessor.get(IEditorGroupsService)
+  const active = groups.activeGroup.activeEditor
+  if (!(active instanceof FileEditorInput)) return ''
+  const editor = FileEditorRegistry.get(active, groups.activeGroup.id)
+  const selection = editor?.getSelection()
+  if (!editor || !selection || selection.isEmpty()) return ''
+  const text = editor.getModel()?.getValueInRange(selection).trim()
+  if (!text || text.includes('\n')) return ''
+  return text.length > SEED_TEXT_MAX_LENGTH ? text.slice(0, SEED_TEXT_MAX_LENGTH) : text
+}
 
 export class FindInFilesAction extends Action2 {
   static readonly ID = 'workbench.action.findInFiles'
@@ -32,6 +49,12 @@ export class FindInFilesAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const layoutService = accessor.get(ILayoutService)
     const viewsService = accessor.get(IViewsService)
+    const seed = readEditorSelection(accessor)
+    if (seed) {
+      searchSession.seedPattern = seed
+      // A mounted SearchView won't remount, so nudge it to consume the seed.
+      searchViewState.requestSeed()
+    }
     const sidebarVisible = layoutService.getVisible(PartId.SideBar)
     const activeId = viewsService.getActiveViewContainerId(ViewContainerLocation.SideBar)
     if (

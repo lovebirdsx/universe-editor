@@ -10,12 +10,14 @@
 
 import {
   type CSSProperties,
+  type MouseEvent as ReactMouseEvent,
   forwardRef,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
 } from 'react'
 import {
   type IFileMatch,
@@ -41,17 +43,33 @@ import {
   type SearchNode,
   type SearchSnapshot,
 } from './searchTree.js'
+import {
+  SearchResultsContextMenu,
+  type SearchContextMenuState,
+  type SearchMenuItem,
+} from './SearchResultsContextMenu.js'
 import styles from './SearchView.module.css'
 
 export interface SearchResultsTreeProps {
   results: readonly IFileMatch[]
   rootUri?: URI | null
-  onActivateMatch: (resource: URI, match: ITextSearchMatch, rangeIndex: number) => void
+  onActivateMatch: (
+    resource: URI,
+    match: ITextSearchMatch,
+    rangeIndex: number,
+    preview?: boolean,
+  ) => void
   onReplaceMatch?:
     | ((resource: URI, match: ITextSearchMatch, rangeIndex: number) => void)
     | undefined
   onReplaceFile?: ((resource: URI) => void) | undefined
+  onDismissMatch?:
+    | ((resource: URI, match: ITextSearchMatch, rangeIndex: number) => void)
+    | undefined
+  onDismissFile?: ((resource: URI) => void) | undefined
   replaceVisible?: boolean
+  /** Replacement text, for the inline old→new diff preview on match rows. */
+  replacePattern?: string
   /** Shift+Tab on the results tree — hand focus back to the search input. */
   onShiftTab?: (() => void) | undefined
 }
@@ -67,15 +85,27 @@ export interface SearchResultsTreeHandle {
   focusResource(resource: URI, preferMatchId: string | null): boolean
 }
 
-function highlight(preview: string, range: { startColumn: number; endColumn: number } | undefined) {
+function highlight(
+  preview: string,
+  range: { startColumn: number; endColumn: number } | undefined,
+  replaceText: string | null,
+) {
   if (!range) return preview
   const start = Math.max(range.startColumn - 1, 0)
   const end = Math.max(range.endColumn - 1, start)
+  const matched = preview.slice(start, end)
   return [
     preview.slice(0, start),
-    <span key="m" className={styles['match']}>
-      {preview.slice(start, end)}
-    </span>,
+    replaceText !== null ? (
+      <span key="r" className={styles['matchReplace']}>
+        <span className={styles['matchRemove']}>{matched}</span>
+        <span className={styles['matchInsert']}>{replaceText}</span>
+      </span>
+    ) : (
+      <span key="m" className={styles['match']}>
+        {matched}
+      </span>
+    ),
     preview.slice(end),
   ]
 }
@@ -88,12 +118,16 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       onActivateMatch,
       onReplaceFile,
       onReplaceMatch,
+      onDismissMatch,
+      onDismissFile,
       replaceVisible,
+      replacePattern = '',
       onShiftTab,
     },
     handleRef,
   ) {
     const viewMode = useObservable(searchViewState.viewMode)
+    const [menu, setMenu] = useState<SearchContextMenuState | null>(null)
 
     const containerRef = useRef<HTMLDivElement | null>(null)
     const snapshotRef = useRef<SearchSnapshot>(EMPTY_SNAPSHOT)
@@ -200,6 +234,43 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       return () => d.dispose()
     }, [model])
 
+    const dismissNode = (n: SearchNode): void => {
+      if (n.kind === 'match') onDismissMatch?.(n.resource, n.match, n.rangeIndex)
+      else if (n.kind === 'file') onDismissFile?.(n.resource)
+    }
+
+    const openRowMenu = (e: ReactMouseEvent, n: SearchNode): void => {
+      e.preventDefault()
+      e.stopPropagation()
+      const items: SearchMenuItem[] = []
+      if (n.kind === 'match') {
+        items.push({
+          label: '复制',
+          run: () => void navigator.clipboard?.writeText(n.match.preview.trim()),
+        })
+        if (onDismissMatch) items.push({ label: '移除', run: () => dismissNode(n) })
+      } else if (n.kind === 'file') {
+        items.push({
+          label: '复制路径',
+          run: () => void navigator.clipboard?.writeText(n.resource.fsPath),
+        })
+        items.push({
+          label: '全部复制',
+          run: () =>
+            void navigator.clipboard?.writeText(
+              n.fileMatch.matches.map((m) => m.preview.trim()).join('\n'),
+            ),
+        })
+        if (onDismissFile) items.push({ label: '移除', run: () => dismissNode(n) })
+      } else {
+        items.push({
+          label: '复制路径',
+          run: () => void navigator.clipboard?.writeText(n.relPath),
+        })
+      }
+      if (items.length > 0) setMenu({ x: e.clientX, y: e.clientY, items })
+    }
+
     const renderRow = (ctx: ITreeRowRenderContext<SearchNode>) => {
       const n = ctx.node.element
       const style: CSSProperties = { paddingLeft: ctx.indentPadding, ...(ctx.style ?? {}) }
@@ -222,6 +293,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             style={style}
             title={n.relPath}
             onClick={ctx.onClickRow}
+            onContextMenu={(e) => openRowMenu(e, n)}
           >
             <button
               type="button"
@@ -260,6 +332,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             style={style}
             title={n.relPath}
             onClick={ctx.onClickRow}
+            onContextMenu={(e) => openRowMenu(e, n)}
           >
             <button
               type="button"
@@ -301,6 +374,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
       }
 
       const range = n.match.ranges[n.rangeIndex]
+      const replaceText = replaceVisible && replacePattern.length > 0 ? replacePattern : null
       return (
         <div
           key={n.id}
@@ -310,9 +384,13 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           style={style}
           title={n.match.preview}
           onClick={ctx.onClickRow}
+          onDoubleClick={() => onActivateMatch(n.resource, n.match, n.rangeIndex, false)}
+          onContextMenu={(e) => openRowMenu(e, n)}
         >
           <span className={styles['lineNumber']}>{n.match.lineNumber}</span>
-          <span className={styles['matchPreview']}>{highlight(n.match.preview, range)}</span>
+          <span className={styles['matchPreview']}>
+            {highlight(n.match.preview, range, replaceText)}
+          </span>
           {replaceVisible && onReplaceMatch && (
             <button
               type="button"
@@ -332,25 +410,37 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
     }
 
     return (
-      <Tree<SearchNode>
-        model={model}
-        rootRef={containerRef}
-        className={styles['resultsTree'] ?? ''}
-        virtualListClassName={styles['resultsTree'] ?? ''}
-        ariaLabel="Search results"
-        rowHeight={22}
-        indentWidth={10}
-        renderRow={renderRow}
-        {...(onShiftTab ? { onShiftTab } : {})}
-        onActivate={(node) => {
-          const n = node.element
-          if (n.kind === 'match') {
-            searchSession.lastActivatedResource = n.resource.toString()
-            searchSession.lastActivatedFocusId = n.id
-            onActivateMatch(n.resource, n.match, n.rangeIndex)
-          }
-        }}
-      />
+      <>
+        <Tree<SearchNode>
+          model={model}
+          rootRef={containerRef}
+          className={styles['resultsTree'] ?? ''}
+          virtualListClassName={styles['resultsTree'] ?? ''}
+          ariaLabel="Search results"
+          rowHeight={22}
+          indentWidth={10}
+          renderRow={renderRow}
+          {...(onShiftTab ? { onShiftTab } : {})}
+          onActivate={(node, opts) => {
+            const n = node.element
+            if (n.kind === 'match') {
+              searchSession.lastActivatedResource = n.resource.toString()
+              searchSession.lastActivatedFocusId = n.id
+              onActivateMatch(n.resource, n.match, n.rangeIndex, opts.preview)
+            }
+          }}
+          onRowKeyDown={(e, node) => {
+            if (e.key === 'Delete') {
+              e.preventDefault()
+              dismissNode(node.element)
+            }
+          }}
+          onContextMenu={(e, node) => {
+            if (node) openRowMenu(e, node.element)
+          }}
+        />
+        {menu && <SearchResultsContextMenu state={menu} onClose={() => setMenu(null)} />}
+      </>
     )
   },
 )

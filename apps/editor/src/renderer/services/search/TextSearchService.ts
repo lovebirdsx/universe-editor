@@ -89,7 +89,8 @@ export class TextSearchService implements ITextSearchService {
         sessionId,
         root: root.toJSON(),
         pattern,
-        configurationExcludes: this._exclude.getSearchExcludeGlobs(),
+        configurationExcludes:
+          opts.useExcludeSettings === false ? [] : this._exclude.getSearchExcludeGlobs(),
       })
       opts.onProgress?.(complete.progress)
       this._logger.info(

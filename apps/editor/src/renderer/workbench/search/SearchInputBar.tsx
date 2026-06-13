@@ -3,8 +3,8 @@
  *  SearchInputBar — query / replace inputs plus toggle options.
  *--------------------------------------------------------------------------------------------*/
 
-import { forwardRef, type RefObject } from 'react'
-import { SlidersHorizontal } from 'lucide-react'
+import { forwardRef, useRef, type RefObject } from 'react'
+import { FileX2, SlidersHorizontal } from 'lucide-react'
 import styles from './SearchView.module.css'
 
 export interface SearchInputBarProps {
@@ -17,6 +17,9 @@ export interface SearchInputBarProps {
   matchWholeWord: boolean
   replaceVisible: boolean
   filtersVisible: boolean
+  useExcludeSettings: boolean
+  /** Most-recent-first ring of accepted queries, for ↑/↓ navigation. */
+  history: readonly string[]
   onPattern: (v: string) => void
   onReplace: (v: string) => void
   onIncludes: (v: string) => void
@@ -26,6 +29,9 @@ export interface SearchInputBarProps {
   onToggleWord: () => void
   onToggleReplace: () => void
   onToggleFilters: () => void
+  onToggleUseExclude: () => void
+  /** Enter in the query input — record the current query in history. */
+  onSubmit?: () => void
   /** Tab from the main query input moves focus into the results list. */
   onTabToResults?: () => void
 }
@@ -53,6 +59,42 @@ function Toggle({ label, title, active, onClick }: ToggleProps) {
 
 export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
   function SearchInputBar(props, ref) {
+    // History navigation state. -1 means "editing a fresh draft" (not in history);
+    // draftRef holds that draft so ArrowDown past the newest entry restores it.
+    const historyIndexRef = useRef(-1)
+    const draftRef = useRef('')
+
+    const onQueryKeyDown = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+      if (e.key === 'Tab' && !e.shiftKey && props.onTabToResults) {
+        e.preventDefault()
+        props.onTabToResults()
+        return
+      }
+      if (e.key === 'Enter') {
+        historyIndexRef.current = -1
+        props.onSubmit?.()
+        return
+      }
+      const history = props.history
+      if (e.key === 'ArrowUp') {
+        if (history.length === 0) return
+        e.preventDefault()
+        if (historyIndexRef.current === -1) draftRef.current = props.pattern
+        const next = Math.min(historyIndexRef.current + 1, history.length - 1)
+        historyIndexRef.current = next
+        props.onPattern(history[next] ?? '')
+        return
+      }
+      if (e.key === 'ArrowDown') {
+        if (historyIndexRef.current === -1) return
+        e.preventDefault()
+        const next = historyIndexRef.current - 1
+        historyIndexRef.current = next
+        props.onPattern(next === -1 ? draftRef.current : (history[next] ?? ''))
+        return
+      }
+    }
+
     return (
       <div className={styles['inputBar']}>
         <div className={styles['inputRow']}>
@@ -73,13 +115,11 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               placeholder="Search"
               aria-label="Search"
               value={props.pattern}
-              onChange={(e) => props.onPattern(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Tab' && !e.shiftKey && props.onTabToResults) {
-                  e.preventDefault()
-                  props.onTabToResults()
-                }
+              onChange={(e) => {
+                historyIndexRef.current = -1
+                props.onPattern(e.target.value)
               }}
+              onKeyDown={onQueryKeyDown}
             />
             <div className={styles['toggles']}>
               <Toggle
@@ -141,7 +181,19 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               />
             </label>
             <label className={styles['filterLabel']}>
-              <span>files to exclude</span>
+              <span className={styles['filterLabelRow']}>
+                files to exclude
+                <button
+                  type="button"
+                  title="Use Exclude Settings and Ignore Files"
+                  aria-label="Use Exclude Settings and Ignore Files"
+                  aria-pressed={props.useExcludeSettings}
+                  className={`${styles['excludeToggle']} ${props.useExcludeSettings ? styles['excludeToggleActive'] : ''}`}
+                  onClick={props.onToggleUseExclude}
+                >
+                  <FileX2 size={13} strokeWidth={1.75} aria-hidden="true" />
+                </button>
+              </span>
               <input
                 className={styles['input']}
                 type="text"
