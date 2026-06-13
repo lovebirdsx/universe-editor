@@ -83,6 +83,9 @@
   background: var(--color-button-bg, #0e639c);
   color: var(--color-button-fg, #ffffff);
   font-size: 13px;
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
 }
 
 .commitButtonOnly {
@@ -98,6 +101,57 @@
   opacity: 0.45;
   background: var(--color-surface, #3a3d41);
   color: var(--color-foreground-muted, #8a8a92);
+}
+
+/* Keep the button looking active while committing is in progress */
+.commitButton.committing,
+.commitButton.committing:disabled {
+  cursor: default;
+  opacity: 1;
+  background: var(--color-button-bg, #0e639c);
+  color: var(--color-button-fg, #ffffff);
+}
+
+@keyframes commitBorderSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Spinning light — a large square conic gradient rotated around the button center */
+.commitButton.committing::before {
+  content: '';
+  position: absolute;
+  width: 200px;
+  height: 200px;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--color-focus-border, #0070e0) 15deg,
+    color-mix(in srgb, var(--color-focus-border, #0070e0) 20%, white) 50deg,
+    var(--color-focus-border, #0070e0) 85deg,
+    transparent 100deg
+  );
+  animation: commitBorderSpin 1.5s linear infinite;
+  z-index: 0;
+}
+
+/* Inner mask that covers everything except the 2px border ring */
+.commitButton.committing::after {
+  content: '';
+  position: absolute;
+  inset: 2px;
+  background: var(--color-button-bg, #0e639c);
+  z-index: 1;
+}
+
+/* Lift the label above the inner mask */
+.commitButtonLabel {
+  position: relative;
+  z-index: 2;
 }
 
 .commitDropdown {

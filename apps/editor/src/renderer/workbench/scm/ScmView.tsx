@@ -571,6 +571,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
 
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
   const [stickyCommitId, setStickyCommitId] = useState<string>(DEFAULT_COMMIT_ACTION.id)
+  const [isCommitting, setIsCommitting] = useState(false)
 
   // Restore the last-picked commit action so the button defaults to it.
   const restoredCommitRef = useRef(false)
@@ -697,7 +698,12 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
 
   const runCommand = (command: ICommandDto | string): void => {
     const id = typeof command === 'string' ? command : command.command
-    void commandService.executeCommand(id, { rootUri: model.rootUri, sourceControlId: model.id })
+    setIsCommitting(true)
+    commandService
+      .executeCommand(id, { rootUri: model.rootUri, sourceControlId: model.id })
+      .finally(() => {
+        setIsCommitting(false)
+      })
   }
 
   const localChangeCount = useMemo(
@@ -813,7 +819,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
         onKeyDown={(e) => {
           if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
             e.preventDefault()
-            if (primaryCommitAction && !primaryCommitAction.disabled) {
+            if (primaryCommitAction && !primaryCommitAction.disabled && !isCommitting) {
               runCommand(primaryCommitAction.command)
             }
           }
@@ -834,17 +840,18 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
             type="button"
             className={`${styles['commitButton']} ${
               showCommitMenuButton ? '' : styles['commitButtonOnly']
-            }`}
-            disabled={primaryCommitAction.disabled}
+            } ${isCommitting ? styles['committing'] : ''}`}
+            disabled={primaryCommitAction.disabled || isCommitting}
             onClick={() => runCommand(primaryCommitAction.command)}
           >
-            {primaryCommitAction.label}
+            <span className={styles['commitButtonLabel']}>{primaryCommitAction.label}</span>
           </button>
           {showCommitMenuButton && (
             <button
               type="button"
               className={styles['commitDropdown']}
               title={localize('scm.commitActions', 'Commit actions...')}
+              disabled={isCommitting}
               onClick={openCommitMenu}
             >
               ▾
