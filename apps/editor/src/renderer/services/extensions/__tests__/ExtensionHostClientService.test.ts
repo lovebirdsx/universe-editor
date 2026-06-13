@@ -9,6 +9,7 @@ import {
   Event,
   type ICommandService,
   type IDialogService,
+  type IEditorService,
   type IFileService,
   type ILoggerService,
   type INotificationService,
@@ -78,6 +79,7 @@ function makeService(host: IExtensionHostService) {
     {} as IAcpPathPolicy,
     {} as ICommandService,
     {} as ILanguageFeaturesService,
+    {} as IEditorService,
   )
 }
 

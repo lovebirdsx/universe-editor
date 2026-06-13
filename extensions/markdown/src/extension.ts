@@ -18,6 +18,7 @@ import { URI } from 'vscode-uri'
 import { createMdServer } from './server/mdServer.js'
 import type { IMdServer } from './server/types.js'
 import { createMdFsBridge } from './mdFsBridge.js'
+import { registerEditingCommands } from './edit/commands.js'
 
 const MARKDOWN_LANGUAGES = ['markdown']
 
@@ -54,6 +55,7 @@ export function activate(context: ExtensionContext): void {
 
   registerProviders(context, server)
   registerDocumentSync(context, server, (uri, diags) => diagnostics.set(uriComponents(uri), diags))
+  registerEditingCommands(context)
 }
 
 function registerProviders(context: ExtensionContext, server: IMdServer): void {

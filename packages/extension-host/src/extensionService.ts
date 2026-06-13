@@ -33,7 +33,10 @@ import {
   type SourceControl,
   type StatusBarAlignment,
   type StatusBarItem,
+  type Selection,
   type TextDocument,
+  type TextEditor,
+  type TextEditorEdit,
   type TypeDefinitionProvider,
   type UriComponents,
   type WorkspaceSymbolProvider,
@@ -47,8 +50,11 @@ import {
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
   type ILanguageProviderMetadata,
+  type ISelectionDto,
+  type ITextEditDto,
   type IMainThreadCommands,
   type IMainThreadFs,
+  type IMainThreadEditor,
   type IMainThreadLanguages,
   type IMainThreadOutput,
   type IMainThreadScm,
@@ -80,7 +86,7 @@ import {
   type IExtensionHostBridge,
 } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
-import { ExtHostDocuments } from './hostDocuments.js'
+import { ExtHostDocuments, HostTextDocument } from './hostDocuments.js'
 
 type CommandHandler = (...args: unknown[]) => unknown
 
@@ -260,6 +266,44 @@ class HostOutputChannel implements OutputChannel {
   }
 }
 
+/**
+ * Host-side TextEditor handle. A snapshot of the editor at fetch time (document +
+ * selections frozen); `edit` and `setSelections` drive the live editor over RPC.
+ * An edit carries the snapshot's version so the renderer can reject it if the
+ * document moved on, mirroring VSCode's optimistic-edit contract.
+ */
+class HostTextEditor implements TextEditor {
+  constructor(
+    readonly document: TextDocument,
+    readonly selections: readonly Selection[],
+    private readonly _version: number,
+    private readonly _editorRpc: IMainThreadEditor,
+  ) {}
+
+  get selection(): Selection {
+    return this.selections[0]!
+  }
+
+  edit(callback: (editBuilder: TextEditorEdit) => void): Promise<boolean> {
+    const edits: ITextEditDto[] = []
+    const builder: TextEditorEdit = {
+      replace: (range, text) => edits.push({ range, text }),
+      insert: (position, text) => edits.push({ range: { start: position, end: position }, text }),
+      delete: (range) => edits.push({ range, text: '' }),
+    }
+    callback(builder)
+    return this._editorRpc.$applyEdits(this.document.uri, this._version, edits)
+  }
+
+  setSelections(selections: readonly Selection[]): Promise<void> {
+    return this._editorRpc.$setSelections(this.document.uri, selections.map(toSelectionDto))
+  }
+}
+
+function toSelectionDto(sel: Selection): ISelectionDto {
+  return { anchor: sel.anchor, active: sel.active }
+}
+
 export class ExtensionService implements IExtensionHostBridge {
   private readonly _commands = new Map<string, CommandHandler>()
   private readonly _activated = new Map<string, ActivatedExtension>()
@@ -287,6 +331,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _kind: 'trusted' | 'restricted' = 'trusted',
     private readonly _mainThreadOutput?: IMainThreadOutput,
     private readonly _mainThreadLanguages?: IMainThreadLanguages,
+    private readonly _mainThreadEditor?: IMainThreadEditor,
   ) {
     installApiBridge(this)
   }
@@ -436,6 +481,28 @@ export class ExtensionService implements IExtensionHostBridge {
     const handle = this._outputHandle++
     void this._mainThreadOutput.$registerOutputChannel(handle, name)
     return new HostOutputChannel(handle, name, this._mainThreadOutput)
+  }
+
+  // --- editor: active text editor inspection + edits (trusted-only) ---
+
+  private _editor(): IMainThreadEditor {
+    if (!this._mainThreadEditor) {
+      throw new Error('text editor access is not available in this extension host')
+    }
+    return this._mainThreadEditor
+  }
+
+  async getActiveTextEditor(): Promise<TextEditor | undefined> {
+    const snapshot = await this._editor().$getActiveTextEditor()
+    if (!snapshot) return undefined
+    const document = new HostTextDocument(
+      snapshot.uri,
+      snapshot.languageId,
+      snapshot.version,
+      snapshot.text,
+    )
+    const selections = snapshot.selections.map((s) => ({ anchor: s.anchor, active: s.active }))
+    return new HostTextEditor(document, selections, snapshot.version, this._editor())
   }
 
   // --- languages: provider registration (handle-routed, mirrors SCM) ---

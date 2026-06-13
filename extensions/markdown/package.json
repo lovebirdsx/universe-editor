@@ -15,7 +15,33 @@
   "activationEvents": [
     "onLanguage:markdown"
   ],
-  "contributes": {},
+  "contributes": {
+    "commands": [
+      { "command": "markdown.editing.toggleBold", "title": "Toggle Bold", "category": "Markdown" },
+      { "command": "markdown.editing.toggleItalic", "title": "Toggle Italic", "category": "Markdown" },
+      { "command": "markdown.editing.toggleInlineCode", "title": "Toggle Inline Code", "category": "Markdown" },
+      { "command": "markdown.editing.toggleStrikethrough", "title": "Toggle Strikethrough", "category": "Markdown" },
+      { "command": "markdown.editing.toggleMath", "title": "Toggle Math", "category": "Markdown" },
+      { "command": "markdown.editing.headingUp", "title": "Increase Heading Level", "category": "Markdown" },
+      { "command": "markdown.editing.headingDown", "title": "Decrease Heading Level", "category": "Markdown" },
+      { "command": "markdown.editing.toggleTask", "title": "Toggle Task Completion", "category": "Markdown" },
+      { "command": "markdown.editing.formatTable", "title": "Format Table", "category": "Markdown" }
+    ],
+    "keybindings": [
+      { "command": "markdown.editing.toggleBold", "key": "ctrl+b", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.toggleItalic", "key": "ctrl+i", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.toggleInlineCode", "key": "ctrl+m", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.toggleStrikethrough", "key": "alt+s", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.toggleMath", "key": "ctrl+shift+m", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.headingUp", "key": "ctrl+shift+]", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.headingDown", "key": "ctrl+shift+[", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.toggleTask", "key": "alt+c", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.formatTable", "key": "ctrl+alt+t", "when": "editorTextFocus && editorLangId == markdown" },
+      { "command": "markdown.editing.onEnter", "key": "enter", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" },
+      { "command": "markdown.editing.onTab", "key": "tab", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" },
+      { "command": "markdown.editing.onShiftTab", "key": "shift+tab", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" }
+    ]
+  },
   "scripts": {
     "build": "node esbuild.config.mjs",
     "dev": "node esbuild.config.mjs --watch",

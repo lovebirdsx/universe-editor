@@ -176,6 +176,11 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // onDidFocus/BlurEditorText.
     contextKeyService.createKey<boolean>('editorTextFocus', false)
 
+    // True while Monaco's completion (suggest) widget is open. Monaco keeps this
+    // on its own scoped context-key service; FileEditor mirrors it here so global
+    // and extension keybindings (e.g. smart Enter/Tab) can yield to accept.
+    contextKeyService.createKey<boolean>('suggestWidgetVisible', false)
+
     // True when an xterm.js terminal instance holds DOM focus (panel or editor tab).
     // Written by TerminalInstance via xterm's onFocus/onBlur events.
     contextKeyService.createKey<boolean>('terminalFocus', false)

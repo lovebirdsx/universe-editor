@@ -22,6 +22,7 @@ import type {
   Hover,
   Location,
   Position,
+  Range,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -52,6 +53,8 @@ export const ExtHostChannels = {
   extHostDocuments: 'extHostDocuments',
   /** Ext host → renderer: provider registration + diagnostics fed into the editor. */
   mainThreadLanguages: 'mainThreadLanguages',
+  /** Ext host → renderer: active text editor inspection + edits/selection control. */
+  mainThreadEditor: 'mainThreadEditor',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -335,4 +338,48 @@ export interface IMainThreadLanguages {
     diagnostics: readonly Diagnostic[],
   ): Promise<void>
   $clearDiagnostics(owner: string, uri?: UriComponents): Promise<void>
+}
+
+/** A single text edit applied by {@link IMainThreadEditor.$applyEdits}: replace
+ *  `range` with `text` (insert when the range is empty, delete when text is ''). */
+export interface ITextEditDto {
+  readonly range: Range
+  readonly text: string
+}
+
+/** A selection in the active editor. LSP-shaped (0-based); `anchor`/`active`
+ *  preserve direction so the host can keep a reversed selection reversed. */
+export interface ISelectionDto {
+  readonly anchor: Position
+  readonly active: Position
+}
+
+/** Snapshot of the active text editor returned by {@link IMainThreadEditor.$getActiveTextEditor}.
+ *  Carries the live text so it stays consistent with `selections` — the debounced
+ *  document mirror may lag the editor, so the host can't reuse its own model here. */
+export interface IActiveTextEditorDto {
+  readonly uri: UriComponents
+  readonly languageId: string
+  readonly version: number
+  readonly text: string
+  readonly selections: readonly ISelectionDto[]
+}
+
+/**
+ * Ext host → exposed to the renderer: inspect and drive the active text editor.
+ * Backs `window.activeTextEditor` and `TextEditor.edit()`. Coordinates are
+ * LSP-shaped (0-based line/character) to match the document-sync convention;
+ * the renderer converts to Monaco's 1-based positions internally.
+ */
+export interface IMainThreadEditor {
+  /** Snapshot of the focused editor, or null when no text editor is active. */
+  $getActiveTextEditor(): Promise<IActiveTextEditorDto | null>
+  /**
+   * Apply edits to the document at `uri` as one undo step. Edits are
+   * non-overlapping; the renderer sorts and applies them bottom-up. Returns
+   * false when the editor is gone or its version no longer matches.
+   */
+  $applyEdits(uri: UriComponents, version: number, edits: readonly ITextEditDto[]): Promise<boolean>
+  /** Replace the selections of the editor at `uri` and reveal the primary one. */
+  $setSelections(uri: UriComponents, selections: readonly ISelectionDto[]): Promise<void>
 }

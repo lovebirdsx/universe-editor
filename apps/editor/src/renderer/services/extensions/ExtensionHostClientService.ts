@@ -17,6 +17,7 @@ import {
   Disposable,
   ICommandService,
   IDialogService,
+  IEditorService,
   IFileService,
   ILoggerService,
   INotificationService,
@@ -109,6 +110,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IAcpPathPolicy private readonly _pathPolicy: IAcpPathPolicy,
     @ICommandService private readonly _commandService: ICommandService,
     @ILanguageFeaturesService private readonly _languageFeatures: ILanguageFeaturesService,
+    @IEditorService private readonly _editorService: IEditorService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -172,7 +174,13 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       files: this._files,
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
-      ...(kind === 'trusted' ? { scm: this._scm, languageFeatures: this._languageFeatures } : {}),
+      ...(kind === 'trusted'
+        ? {
+            scm: this._scm,
+            languageFeatures: this._languageFeatures,
+            editorService: this._editorService,
+          }
+        : {}),
       output: this._output,
       stderr,
       logger: this._logger,

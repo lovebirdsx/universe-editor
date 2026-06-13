@@ -32,6 +32,7 @@ import type {
   StatusBarItem,
   TextDocument,
   TextDocumentChangeEvent,
+  TextEditor,
   TypeDefinitionProvider,
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
@@ -59,6 +60,7 @@ export interface IExtensionHostBridge {
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
+  getActiveTextEditor(): Promise<TextEditor | undefined>
   getWorkspaceRoot(): string | undefined
   fsReadFile(path: string): Promise<Uint8Array>
   fsWriteFile(path: string, content: Uint8Array): Promise<void>

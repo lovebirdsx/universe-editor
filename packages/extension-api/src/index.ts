@@ -21,6 +21,7 @@ import type {
   Hover,
   Location,
   Position,
+  Range,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -157,6 +158,9 @@ export interface WindowApi {
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment?: StatusBarAlignment, priority?: number): StatusBarItem
   createOutputChannel(name: string): OutputChannel
+  /** The focused text editor, or undefined when no editor has focus. A snapshot —
+   *  re-fetch after an external change rather than holding the handle long-term. */
+  getActiveTextEditor(): Promise<TextEditor | undefined>
 }
 
 /** A text document open in the editor. URIs/positions are LSP-shaped. */
@@ -171,6 +175,40 @@ export interface TextDocument {
 /** Fired by `onDidChangeTextDocument`. Full-text sync, so only the document is carried. */
 export interface TextDocumentChangeEvent {
   readonly document: TextDocument
+}
+
+/** A selection in a {@link TextEditor}. `anchor` is the fixed end, `active` the
+ *  moving end (where the cursor is); they're equal for an empty selection. */
+export interface Selection {
+  readonly anchor: Position
+  readonly active: Position
+}
+
+/** Edit builder handed to {@link TextEditor.edit}; collected edits apply as one
+ *  undo step. Coordinates are LSP-shaped (0-based), as everywhere in this API. */
+export interface TextEditorEdit {
+  replace(range: Range, text: string): void
+  insert(position: Position, text: string): void
+  delete(range: Range): void
+}
+
+/**
+ * A handle to a text editor open in the workbench. Returned by
+ * {@link WindowApi.getActiveTextEditor} as a snapshot: `document` and
+ * `selections` reflect the editor at the moment it was fetched, while `edit`
+ * and `setSelections` drive the live editor (an edit fails if its content
+ * changed underneath in the meantime).
+ */
+export interface TextEditor {
+  readonly document: TextDocument
+  /** All selections; the primary one is `selections[0]`. Never empty. */
+  readonly selections: readonly Selection[]
+  /** Convenience for `selections[0]` — the primary selection. */
+  readonly selection: Selection
+  /** Apply edits as a single undo step. Resolves false if the document moved on. */
+  edit(callback: (editBuilder: TextEditorEdit) => void): Promise<boolean>
+  /** Replace the selections and reveal the primary one. */
+  setSelections(selections: readonly Selection[]): Promise<void>
 }
 
 /** The `workspace` namespace: the folder the editor currently has open. */
@@ -404,6 +442,7 @@ interface IExtensionHostBridge {
   showInputBox(options?: InputBoxOptions): Promise<string | undefined>
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
+  getActiveTextEditor(): Promise<TextEditor | undefined>
   getWorkspaceRoot(): string | undefined
   fsReadFile(path: string): Promise<Uint8Array>
   fsWriteFile(path: string, content: Uint8Array): Promise<void>
@@ -482,6 +521,7 @@ export const window: WindowApi = {
   createStatusBarItem: (alignment = StatusBarAlignment.Left, priority = 0) =>
     bridge().createStatusBarItem(alignment, priority),
   createOutputChannel: (name) => bridge().createOutputChannel(name),
+  getActiveTextEditor: () => bridge().getActiveTextEditor(),
 }
 
 export const scm: ScmApi = {

@@ -20,6 +20,7 @@ import {
   ProxyChannel,
   type ICommandService,
   type IDialogService,
+  type IEditorService,
   type IFileService,
   type ILogger,
   type INotificationService,
@@ -43,6 +44,7 @@ import type {
 } from '../../../shared/ipc/extensionHostService.js'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
+import { MainThreadEditor } from './MainThreadEditor.js'
 import { MainThreadFs } from './MainThreadFs.js'
 import { MainThreadLanguages } from './MainThreadLanguages.js'
 import { MainThreadOutput } from './MainThreadOutput.js'
@@ -63,6 +65,8 @@ export interface HostConnectionDeps {
   readonly scm?: IScmService
   /** Wired only for the trusted connection — language plugins are trusted-only. */
   readonly languageFeatures?: ILanguageFeaturesService
+  /** Wired only for the trusted connection — active-editor control is trusted-only. */
+  readonly editorService?: IEditorService
   readonly output: IOutputService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
@@ -154,6 +158,14 @@ export class HostConnection extends Disposable {
       server.registerChannel(
         ExtHostChannels.mainThreadLanguages,
         ProxyChannel.fromService(mainThreadLanguages),
+      )
+    }
+
+    if (deps.editorService) {
+      const mainThreadEditor = store.add(new MainThreadEditor(deps.editorService))
+      server.registerChannel(
+        ExtHostChannels.mainThreadEditor,
+        ProxyChannel.fromService(mainThreadEditor),
       )
     }
 

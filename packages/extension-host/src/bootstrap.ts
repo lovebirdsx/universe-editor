@@ -21,6 +21,7 @@ import {
   type IExtHostLanguages,
   type IExtHostScm,
   type IMainThreadCommands,
+  type IMainThreadEditor,
   type IMainThreadFs,
   type IMainThreadLanguages,
   type IMainThreadOutput,
@@ -64,6 +65,9 @@ const mainThreadOutput = ProxyChannel.toService<IMainThreadOutput>(
 )
 const mainThreadLanguages = ProxyChannel.toService<IMainThreadLanguages>(
   client.getChannel(ExtHostChannels.mainThreadLanguages),
+)
+const mainThreadEditor = ProxyChannel.toService<IMainThreadEditor>(
+  client.getChannel(ExtHostChannels.mainThreadEditor),
 )
 
 // Register channels synchronously so a renderer call that races the async scan
@@ -162,6 +166,7 @@ async function main(): Promise<void> {
       kind,
       mainThreadOutput,
       mainThreadLanguages,
+      mainThreadEditor,
     ),
   )
   console.error(`[ext-host] ready (${kind})`)

@@ -35,7 +35,11 @@ import { Breadcrumbs } from './Breadcrumbs.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
-import { focusStandaloneEditor, syncEditorFocusContext } from '../../services/editor/editorFocus.js'
+import {
+  bridgeSuggestWidgetVisible,
+  focusStandaloneEditor,
+  syncEditorFocusContext,
+} from '../../services/editor/editorFocus.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
   EDITOR_FONT_WEIGHT_DEFAULT,
@@ -206,6 +210,11 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         },
       })
     })
+    // Mirror Monaco's suggest-widget visibility onto the global `suggestWidgetVisible`
+    // context key so extension keybindings (smart Enter/Tab) yield to completion
+    // accept while the widget is open. Monaco keeps this key only on its own scoped
+    // context-key service; the global handler can't see it otherwise.
+    const suggestSub = bridgeSuggestWidgetVisible(ed, contextKeyService)
     editorRef.current = ed
     return () => {
       focusSub.dispose()
@@ -213,6 +222,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       textFocusSub.dispose()
       textBlurSub.dispose()
       modelChangeSub.dispose()
+      suggestSub.dispose()
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
