@@ -26,6 +26,10 @@ import {
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
+import {
+  affectsBridgedEditorOption,
+  buildBridgedEditorOptions,
+} from './monaco/editorOptionsFromConfig.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
@@ -128,7 +132,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   // Create the standalone editor once monaco is ready; never recreate on input change.
   useLayoutEffect(() => {
     if (!monacoNs || !containerRef.current) return
-    const minimapEnabled = configService.get<boolean>('editor.minimap.enabled') ?? true
     const ed = monacoNs.editor.create(
       containerRef.current,
       {
@@ -138,9 +141,11 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         // 拖放交由编辑区 body 处理(分屏 / 打开外部文件);关掉 Monaco 自带的
         // dropIntoEditor,避免它把拖来的文件路径插进当前文档并抢焦点。
         dropIntoEditor: { enabled: false },
+        // All user-configured editor.* options (minimap, wordSeparators, cursor*,
+        // renderWhitespace, …). Spread first so the bespoke options below win.
+        ...buildBridgedEditorOptions(configService),
         ...getEditorTypographyOptions(configService, fileInput.language),
         wordWrap: getEditorWordWrap(configService),
-        minimap: { enabled: minimapEnabled },
         scrollBeyondLastLine: false,
         tabSize: 2,
         insertSpaces: true,
@@ -257,9 +262,11 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         if (e.affectsConfiguration('editor.wordWrap')) {
           options.wordWrap = getEditorWordWrap(configService)
         }
-        if (e.affectsConfiguration('editor.minimap.enabled')) {
-          const enabled = configService.get<boolean>('editor.minimap.enabled') ?? true
-          options.minimap = { enabled }
+        // Bridge every other user-configured editor.* option (minimap,
+        // wordSeparators, cursor*, renderWhitespace, …). Applied after the
+        // bespoke keys above; the bridge excludes those keys so no conflict.
+        if (affectsBridgedEditorOption(e)) {
+          Object.assign(options, buildBridgedEditorOptions(configService))
         }
         if (Object.keys(options).length > 0) editorRef.current?.updateOptions(options)
       }),

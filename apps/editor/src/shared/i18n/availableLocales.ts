@@ -1,6 +1,7 @@
 import type { MessageMap } from '@universe-editor/platform'
 import { EN_US_MESSAGES } from './messages/en-US.js'
 import { ZH_CN_MESSAGES } from './messages/zh-CN.js'
+import { EDITOR_OPTIONS_ZH_CN_MESSAGES } from './messages/editorOptions.zh-CN.generated.js'
 
 export const DISPLAY_LANGUAGE_SETTING_KEY = 'workbench.language'
 export const DEFAULT_LOCALE = 'en-US'
@@ -41,8 +42,10 @@ export function resolveDisplayLanguage(
   return normalizeLocale(systemLocale) ?? DEFAULT_LOCALE
 }
 
+const ZH_CN_ALL_MESSAGES: MessageMap = { ...EDITOR_OPTIONS_ZH_CN_MESSAGES, ...ZH_CN_MESSAGES }
+
 export function getLocaleMessages(locale: SupportedLocale): MessageMap {
-  if (locale === 'zh-CN') return ZH_CN_MESSAGES
+  if (locale === 'zh-CN') return ZH_CN_ALL_MESSAGES
   return EN_US_MESSAGES
 }
 

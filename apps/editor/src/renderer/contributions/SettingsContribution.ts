@@ -12,6 +12,7 @@ import {
   IWorkbenchContribution,
   localize,
 } from '@universe-editor/platform'
+import { GENERATED_EDITOR_OPTIONS } from './generated/editorOptionsSchema.generated.js'
 import { DISPLAY_LANGUAGE_SETTING_KEY } from '../../shared/i18n/availableLocales.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
@@ -90,6 +91,11 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
         id: 'editor',
         title: localize('settings.editor', 'Editor'),
         properties: {
+          // Full Monaco option schema extracted from VSCode (codegen). Spread
+          // first so the hand-written entries below override any overlap. The
+          // generator already excludes the hand-written keys, so in practice
+          // there is no collision — this ordering is just defensive.
+          ...GENERATED_EDITOR_OPTIONS,
           'editor.fontSize': {
             type: 'number',
             default: 14,

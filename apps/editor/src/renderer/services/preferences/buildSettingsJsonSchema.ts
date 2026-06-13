@@ -13,16 +13,19 @@ import {
 } from '@universe-editor/platform'
 
 function toJsonSchemaNode(prop: IConfigurationPropertySchema): IJSONSchema {
-  const node: IJSONSchema = { type: prop.type }
+  const node: IJSONSchema = {}
+  if (prop.type !== undefined) node.type = prop.type
   if (prop.default !== undefined) node.default = prop.default
   if (prop.description !== undefined) {
     node.description = prop.description
     node.markdownDescription = prop.description
   }
   if (prop.enum !== undefined) node.enum = [...prop.enum]
+  if (prop.enumDescriptions !== undefined) node.enumDescriptions = [...prop.enumDescriptions]
   if (prop.minimum !== undefined) node.minimum = prop.minimum
   if (prop.maximum !== undefined) node.maximum = prop.maximum
   if (prop.items !== undefined) node.items = toJsonSchemaNode(prop.items)
+  if (prop.anyOf !== undefined) node.anyOf = prop.anyOf.map(toJsonSchemaNode)
   if (prop.properties !== undefined) {
     node.properties = Object.fromEntries(
       Object.entries(prop.properties).map(([k, v]) => [k, toJsonSchemaNode(v)]),

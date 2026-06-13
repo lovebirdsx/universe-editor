@@ -19,6 +19,10 @@ import {
 import { useService } from '../useService.js'
 import type { monaco } from './monaco/MonacoLoader.js'
 import { MonacoLoader } from './monaco/MonacoLoader.js'
+import {
+  affectsBridgedEditorOption,
+  buildBridgedEditorOptions,
+} from './monaco/editorOptionsFromConfig.js'
 import { languageForResource } from '../files/resourceLanguage.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
@@ -90,6 +94,9 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       theme: getEditorTheme(configService),
       automaticLayout: true,
       editContext: true,
+      // All user-configured editor.* options. Spread first so the bespoke
+      // options below win.
+      ...buildBridgedEditorOptions(configService),
       ...getEditorFontOptions(configService, diffLanguageRef.current),
       wordWrap: getEditorWordWrap(configService),
       readOnly: true,
@@ -126,6 +133,9 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       }
       if (e.affectsConfiguration('editor.wordWrap')) {
         options.wordWrap = getEditorWordWrap(configService)
+      }
+      if (affectsBridgedEditorOption(e)) {
+        Object.assign(options, buildBridgedEditorOptions(configService))
       }
       if (Object.keys(options).length > 0) diffEditorRef.current?.updateOptions(options)
     })

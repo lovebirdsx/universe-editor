@@ -40,6 +40,21 @@ function originLabel(origin: ConfigurationTarget | undefined): string {
   }
 }
 
+// The form only renders scalar settings (boolean / number / string / single
+// enum). Object / array / union (type[]) / anyOf settings have no good form
+// control — they remain fully editable in settings.json (which gets the complete
+// schema for completion + validation). This keeps the form usable instead of
+// showing dozens of "not editable" rows.
+function isScalarSchema(schema: IConfigurationPropertySchema): boolean {
+  if (schema.anyOf !== undefined) return false
+  // Union types (e.g. boolean | string) have no clean single control even when
+  // they carry an enum, so keep them in settings.json only.
+  if (Array.isArray(schema.type)) return false
+  if (Array.isArray(schema.enum) && schema.enum.length > 0) return true
+  const t = schema.type
+  return t === 'boolean' || t === 'number' || t === 'integer' || t === 'string'
+}
+
 interface RowProps {
   configKey: string
   schema: IConfigurationPropertySchema
@@ -74,7 +89,7 @@ function PropertyRow({ configKey, schema, value, origin, onChange }: RowProps) {
         onChange={(e) => onChange(e.target.checked)}
       />
     )
-  } else if (schema.type === 'number') {
+  } else if (schema.type === 'number' || schema.type === 'integer') {
     control = (
       <input
         className={styles['control']}
@@ -193,9 +208,23 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
   const nodes = ConfigurationRegistry.getConfigurationNodes()
   const normalisedQuery = query.trim().toLowerCase()
 
-  const filtered = useMemo<IConfigurationNode[]>(() => {
-    if (!normalisedQuery) return [...nodes]
+  // Drop non-scalar settings up front so both the count and the rendered rows
+  // reflect only what the form can edit.
+  const scalarNodes = useMemo<IConfigurationNode[]>(() => {
     return nodes
+      .map((node) => {
+        const keep: Record<string, IConfigurationPropertySchema> = {}
+        for (const [k, s] of Object.entries(node.properties)) {
+          if (isScalarSchema(s)) keep[k] = s
+        }
+        return Object.keys(keep).length ? { ...node, properties: keep } : null
+      })
+      .filter((n): n is IConfigurationNode => n !== null)
+  }, [nodes])
+
+  const filtered = useMemo<IConfigurationNode[]>(() => {
+    if (!normalisedQuery) return scalarNodes
+    return scalarNodes
       .map((node) => {
         const keep: Record<string, IConfigurationPropertySchema> = {}
         for (const [k, s] of Object.entries(node.properties)) {
@@ -204,11 +233,11 @@ export function SettingsEditor({ input }: { input: IEditorInput }) {
         return Object.keys(keep).length ? { ...node, properties: keep } : null
       })
       .filter((n): n is IConfigurationNode => n !== null)
-  }, [nodes, normalisedQuery])
+  }, [scalarNodes, normalisedQuery])
 
   const totalKeys = useMemo(
-    () => nodes.reduce((acc, n) => acc + Object.keys(n.properties).length, 0),
-    [nodes],
+    () => scalarNodes.reduce((acc, n) => acc + Object.keys(n.properties).length, 0),
+    [scalarNodes],
   )
 
   return (

@@ -6,14 +6,26 @@
 import { Emitter, Event } from '../base/event.js'
 import { IDisposable, toDisposable } from '../base/lifecycle.js'
 
+export type ConfigurationPropertyType =
+  | 'string'
+  | 'number'
+  | 'integer'
+  | 'boolean'
+  | 'object'
+  | 'array'
+  | 'null'
+
 /**
  * Subset of JSON Schema used for configuration declarations.
  */
 export interface IConfigurationPropertySchema {
-  type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'null'
+  /** A single type, or a union of types (e.g. `['boolean', 'string']`). */
+  type?: ConfigurationPropertyType | ConfigurationPropertyType[]
   default?: unknown
   description?: string
   enum?: unknown[]
+  /** Per-enum-value documentation, index-aligned with `enum`. */
+  enumDescriptions?: string[]
   enumItemLabels?: Readonly<Record<string, string>>
   minimum?: number
   maximum?: number
@@ -22,6 +34,8 @@ export interface IConfigurationPropertySchema {
   properties?: Record<string, IConfigurationPropertySchema>
   /** For object-typed settings (e.g. `files.exclude`): schema of free-form values. */
   additionalProperties?: boolean | IConfigurationPropertySchema
+  /** Alternative schemas, any of which may match (e.g. boolean | string | object). */
+  anyOf?: IConfigurationPropertySchema[]
 }
 
 export interface IConfigurationNode {

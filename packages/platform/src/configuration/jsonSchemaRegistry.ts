@@ -12,8 +12,17 @@ import { IDisposable, toDisposable } from '../base/lifecycle.js'
  * shape Monaco's JSON language service understands so we can pass nodes through
  * untouched.
  */
+export type JSONSchemaType =
+  | 'string'
+  | 'number'
+  | 'integer'
+  | 'boolean'
+  | 'object'
+  | 'array'
+  | 'null'
+
 export interface IJSONSchema {
-  type?: 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array' | 'null'
+  type?: JSONSchemaType | JSONSchemaType[]
   default?: unknown
   description?: string
   markdownDescription?: string
