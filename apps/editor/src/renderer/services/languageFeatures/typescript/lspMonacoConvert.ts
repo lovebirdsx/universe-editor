@@ -14,6 +14,7 @@ import type {
   DefinitionLink,
   Diagnostic,
   DocumentSymbol,
+  FoldingRange,
   Hover,
   Location,
   LocationLink,
@@ -457,4 +458,37 @@ export function workspaceSymbolsToEntries(
     })
   }
   return out
+}
+
+/** LSP folding-range kind (string) → Monaco FoldingRangeKind instance. */
+function foldingRangeKindToMonaco(
+  kind: string | undefined,
+  monacoNs: typeof monaco,
+): monaco.languages.FoldingRangeKind | undefined {
+  switch (kind) {
+    case 'comment':
+      return monacoNs.languages.FoldingRangeKind.Comment
+    case 'imports':
+      return monacoNs.languages.FoldingRangeKind.Imports
+    case 'region':
+      return monacoNs.languages.FoldingRangeKind.Region
+    default:
+      return undefined
+  }
+}
+
+/** LSP FoldingRange[] (0-based lines) → Monaco FoldingRange[] (1-based lines). */
+export function foldingRangesToMonaco(
+  ranges: FoldingRange[] | null,
+  monacoNs: typeof monaco,
+): monaco.languages.FoldingRange[] {
+  if (!ranges) return []
+  return ranges.map((r) => {
+    const kind = foldingRangeKindToMonaco(r.kind, monacoNs)
+    return {
+      start: r.startLine + 1,
+      end: r.endLine + 1,
+      ...(kind ? { kind } : {}),
+    }
+  })
 }

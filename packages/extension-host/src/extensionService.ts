@@ -19,6 +19,7 @@ import {
   type DocumentSymbolProvider,
   type ExtensionContext,
   type FileStat,
+  type FoldingRangeProvider,
   type HoverProvider,
   type ImplementationProvider,
   type InputBoxOptions,
@@ -63,6 +64,7 @@ import type {
   DefinitionLink,
   Diagnostic,
   DocumentSymbol,
+  FoldingRange,
   Hover,
   Location,
   Position,
@@ -106,6 +108,7 @@ type AnyLanguageProvider =
   | DocumentSymbolProvider
   | RenameProvider
   | WorkspaceSymbolProvider
+  | FoldingRangeProvider
 
 interface RegisteredProvider {
   readonly type: LanguageProviderType
@@ -526,6 +529,13 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._registerProvider('workspaceSymbol', [], provider)
   }
 
+  registerFoldingRangeProvider(
+    selector: DocumentSelector,
+    provider: FoldingRangeProvider,
+  ): Disposable {
+    return this._registerProvider('foldingRange', selector, provider)
+  }
+
   createDiagnosticCollection(name?: string): DiagnosticCollection {
     return new HostDiagnosticCollection(
       name ?? `diagnostics-${this._diagnosticHandle++}`,
@@ -708,6 +718,13 @@ export class ExtensionService implements IExtensionHostBridge {
     const provider = this._provider<WorkspaceSymbolProvider>(handle, 'workspaceSymbol')
     if (!provider) return null
     return (await provider.provideWorkspaceSymbols(query)) ?? null
+  }
+
+  /** IExtHostLanguages.$provideFoldingRanges */
+  async provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null> {
+    const provider = this._provider<FoldingRangeProvider>(handle, 'foldingRange')
+    if (!provider) return null
+    return (await provider.provideFoldingRanges(this._documents.getOrSynthesize(uri))) ?? null
   }
 
   /** IExtHostScm.$onInputBoxValueChange */

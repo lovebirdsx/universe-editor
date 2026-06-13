@@ -30,6 +30,7 @@ import {
   createCompletionProxy,
   createDefinitionProxy,
   createDocumentSymbolProxy,
+  createFoldingRangeProxy,
   createHoverProxy,
   createImplementationProxy,
   createReferenceProxy,
@@ -142,6 +143,11 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
       }
       case 'workspaceSymbol': {
         store.add(lf.registerWorkspaceSymbolProvider(createWorkspaceSymbolProxy(handle, ext)))
+        break
+      }
+      case 'foldingRange': {
+        const p = createFoldingRangeProxy(handle, ext)
+        for (const lang of selector) store.add(lf.registerFoldingRangeProvider(lang, p))
         break
       }
     }

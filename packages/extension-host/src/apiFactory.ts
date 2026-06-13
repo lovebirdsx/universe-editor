@@ -15,6 +15,7 @@ import type {
   ExtensionContext,
   FileStat,
   FileType,
+  FoldingRangeProvider,
   HoverProvider,
   ImplementationProvider,
   InputBoxOptions,
@@ -98,6 +99,10 @@ export interface IExtensionHostBridge {
   ): Disposable
   registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable
   registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable
+  registerFoldingRangeProvider(
+    selector: DocumentSelector,
+    provider: FoldingRangeProvider,
+  ): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>

@@ -18,6 +18,7 @@ import type {
   DefinitionLink,
   Diagnostic,
   DocumentSymbol,
+  FoldingRange,
   Hover,
   Location,
   Position,
@@ -207,6 +208,7 @@ export type LanguageProviderType =
   | 'documentSymbol'
   | 'rename'
   | 'workspaceSymbol'
+  | 'foldingRange'
 
 /** Language ids a provider applies to. Empty for workspace-wide providers. */
 export type DocumentSelector = readonly string[]
@@ -293,6 +295,7 @@ export interface IExtHostLanguages {
     handle: number,
     query: string,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
+  $provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null>
 }
 
 /**

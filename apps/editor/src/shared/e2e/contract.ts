@@ -261,6 +261,11 @@ export interface E2EProbe {
    * resolve to other documents' URIs.
    */
   getMarkdownDefinition(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
+  /**
+   * Folding ranges for an open markdown file as `[startLine, endLine]` pairs
+   * (1-based), via the markdown language server's folding provider.
+   */
+  getMarkdownFoldingRanges(uri: string): Promise<ReadonlyArray<readonly [number, number]>>
   /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
   getMarkdownMarkers(uri: string): readonly E2EMarker[]
   // -- Outline probe --------------------------------------------------------

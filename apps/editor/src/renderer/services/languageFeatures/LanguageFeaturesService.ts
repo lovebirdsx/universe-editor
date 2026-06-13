@@ -73,8 +73,13 @@ export interface ILanguageFeaturesService {
   ): IDisposable
   registerRenameProvider(languageId: string, provider: monaco.languages.RenameProvider): IDisposable
   registerWorkspaceSymbolProvider(provider: IWorkspaceSymbolProvider): IDisposable
+  registerFoldingRangeProvider(
+    languageId: string,
+    provider: monaco.languages.FoldingRangeProvider,
+  ): IDisposable
   getDocumentSymbolProviders(languageId: string): readonly monaco.languages.DocumentSymbolProvider[]
   getDefinitionProviders(languageId: string): readonly monaco.languages.DefinitionProvider[]
+  getFoldingRangeProviders(languageId: string): readonly monaco.languages.FoldingRangeProvider[]
   hasDefinitionProvider(languageId: string): boolean
   hasImplementationProvider(languageId: string): boolean
   hasReferenceProvider(languageId: string): boolean
@@ -114,6 +119,10 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     Set<monaco.languages.SignatureHelpProvider>
   >()
   private readonly _renameProviders = new Map<string, Set<monaco.languages.RenameProvider>>()
+  private readonly _foldingRangeProviders = new Map<
+    string,
+    Set<monaco.languages.FoldingRangeProvider>
+  >()
   private readonly _workspaceSymbolProviders = new Set<IWorkspaceSymbolProvider>()
 
   private readonly _onDidChangeDocumentSymbolProviders = this._register(
@@ -234,6 +243,19 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     )
   }
 
+  registerFoldingRangeProvider(
+    languageId: string,
+    provider: monaco.languages.FoldingRangeProvider,
+  ): IDisposable {
+    return this._add(
+      this._foldingRangeProviders,
+      languageId,
+      provider,
+      (m) => m.languages.registerFoldingRangeProvider(languageId, provider),
+      false,
+    )
+  }
+
   getDocumentSymbolProviders(
     languageId: string,
   ): readonly monaco.languages.DocumentSymbolProvider[] {
@@ -243,6 +265,13 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
 
   getDefinitionProviders(languageId: string): readonly monaco.languages.DefinitionProvider[] {
     const set = this._definitionProviders.get(languageId)
+    return set ? [...set] : []
+  }
+
+  getFoldingRangeProviders(
+    languageId: string,
+  ): readonly monaco.languages.FoldingRangeProvider[] {
+    const set = this._foldingRangeProviders.get(languageId)
     return set ? [...set] : []
   }
 

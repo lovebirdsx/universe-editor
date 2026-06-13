@@ -6,6 +6,7 @@
  *    2. workspace symbols across files (Ctrl+T backing)
  *    3. cross-file definition (F12)
  *    4. broken-link diagnostics (Monaco markers)
+ *    5. folding ranges (header sections)
  *
  *  Spawns a real subprocess, so each assertion polls — the server starts lazily
  *  on first markdown open and diagnostics arrive after a debounce.
@@ -72,5 +73,12 @@ test.describe('@p1 markdown language server', () => {
         timeout: 10000,
       })
       .toEqual(expect.arrayContaining([expect.objectContaining({ severity: 4 })]))
+
+    // 5. Folding ranges — the `# Alpha` section folds from its heading (line 1).
+    await expect
+      .poll(() => page.evaluate((u) => window.__E2E__!.getMarkdownFoldingRanges(u), mdUri), {
+        timeout: 10000,
+      })
+      .toEqual(expect.arrayContaining([expect.arrayContaining([1])]))
   })
 })

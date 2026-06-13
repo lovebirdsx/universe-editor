@@ -16,6 +16,7 @@
 import type {
   Diagnostic,
   DocumentSymbol,
+  FoldingRange,
   Location,
   Position,
   WorkspaceSymbol,
@@ -47,6 +48,7 @@ export interface IMdServer {
     includeDeclaration: boolean,
   ): Promise<Location[]>
   $provideWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[]>
+  $provideFoldingRanges(uri: string): Promise<FoldingRange[]>
   $computeDiagnostics(uri: string): Promise<Diagnostic[]>
 }
 

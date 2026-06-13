@@ -111,6 +111,8 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideRenameEdits(handle, uri, position, newName),
   $provideWorkspaceSymbols: async (handle, query) =>
     (await serviceReady).provideWorkspaceSymbols(handle, query),
+  $provideFoldingRanges: async (handle, uri) =>
+    (await serviceReady).provideFoldingRanges(handle, uri),
 }
 const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentOpen: async (uri, languageId, version, text) => {

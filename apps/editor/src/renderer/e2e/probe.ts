@@ -354,6 +354,17 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const links = Array.isArray(result) ? result : [result]
       return links.map((l) => l.uri.toString())
     },
+    getMarkdownFoldingRanges: async (
+      uri: string,
+    ): Promise<ReadonlyArray<readonly [number, number]>> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const provider = services.languageFeaturesService.getFoldingRangeProviders('markdown')[0]
+      if (!provider) return []
+      const ranges = (await provider.provideFoldingRanges(model, {}, NONE_TOKEN)) ?? []
+      return ranges.map((r) => [r.start, r.end] as const)
+    },
     getMarkdownMarkers: (uri: string) => {
       const markers = MonacoLoader.get().editor.getModelMarkers({
         owner: 'markdown',

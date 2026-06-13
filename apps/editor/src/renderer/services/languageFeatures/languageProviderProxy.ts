@@ -15,6 +15,7 @@ import {
   completionListToMonaco,
   definitionToMonaco,
   documentSymbolsToMonaco,
+  foldingRangesToMonaco,
   hoverToMonaco,
   locationsToMonaco,
   monacoPositionToLsp,
@@ -181,5 +182,18 @@ export function createWorkspaceSymbolProxy(
 ): IWorkspaceSymbolProvider {
   return {
     provideWorkspaceSymbols: (query) => extHost.$provideWorkspaceSymbols(handle, query),
+  }
+}
+
+export function createFoldingRangeProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.FoldingRangeProvider {
+  return {
+    provideFoldingRanges: async (model) =>
+      foldingRangesToMonaco(
+        await extHost.$provideFoldingRanges(handle, model.uri),
+        MonacoLoader.get(),
+      ),
   }
 }

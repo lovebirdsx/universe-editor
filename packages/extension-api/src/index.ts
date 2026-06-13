@@ -17,6 +17,7 @@ import type {
   DefinitionLink,
   Diagnostic,
   DocumentSymbol,
+  FoldingRange,
   Hover,
   Location,
   Position,
@@ -37,6 +38,7 @@ export type {
   DefinitionLink,
   Diagnostic,
   DocumentSymbol,
+  FoldingRange,
   Hover,
   Location,
   LocationLink,
@@ -49,6 +51,10 @@ export type {
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
+
+/** `FoldingRangeKind` is a value (its `Comment`/`Imports`/`Region` constants),
+ *  so it re-exports separately from the type-only block above. */
+export { FoldingRangeKind } from 'vscode-languageserver-types'
 
 /** Semantic version of this API surface. The host checks `engines.universe`. */
 export const version = '0.1.0'
@@ -326,6 +332,10 @@ export interface WorkspaceSymbolProvider {
   provideWorkspaceSymbols(query: string): ProviderResult<WorkspaceSymbol[] | SymbolInformation[]>
 }
 
+export interface FoldingRangeProvider {
+  provideFoldingRanges(document: TextDocument): ProviderResult<FoldingRange[]>
+}
+
 /**
  * Owns a set of diagnostics surfaced as editor markers. `set` replaces a URI's
  * diagnostics (or clears it with `undefined`); the collection name is the marker
@@ -368,6 +378,10 @@ export interface LanguagesApi {
   ): Disposable
   registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable
   registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable
+  registerFoldingRangeProvider(
+    selector: DocumentSelector,
+    provider: FoldingRangeProvider,
+  ): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
 }
 
@@ -430,6 +444,10 @@ interface IExtensionHostBridge {
   ): Disposable
   registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable
   registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable
+  registerFoldingRangeProvider(
+    selector: DocumentSelector,
+    provider: FoldingRangeProvider,
+  ): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
@@ -489,6 +507,8 @@ export const languages: LanguagesApi = {
   registerRenameProvider: (selector, provider) =>
     bridge().registerRenameProvider(selector, provider),
   registerWorkspaceSymbolProvider: (provider) => bridge().registerWorkspaceSymbolProvider(provider),
+  registerFoldingRangeProvider: (selector, provider) =>
+    bridge().registerFoldingRangeProvider(selector, provider),
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
 }
 

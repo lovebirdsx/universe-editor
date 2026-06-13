@@ -107,6 +107,12 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
     $provideWorkspaceSymbols: async (query) =>
       ls.getWorkspaceSymbols(query, CancellationToken.None),
 
+    $provideFoldingRanges: async (uri) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      return ls.getFoldingRanges(doc, CancellationToken.None)
+    },
+
     $computeDiagnostics: async (uri) => {
       const doc = await resolveDoc(uri)
       if (!doc) return []
