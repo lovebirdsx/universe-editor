@@ -5,8 +5,9 @@
  *  (so edits show immediately) and falls back to reading disk otherwise.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { IEditorInput, IFileService } from '@universe-editor/platform'
+import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { IEditorGroupsService, IEditorInput, IFileService } from '@universe-editor/platform'
+import { EditorGroupContext } from './EditorGroupContext.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewViewStateCache } from '../../services/editor/MarkdownPreviewViewStateCache.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
@@ -23,6 +24,8 @@ const RESTORE_WINDOW_MS = 600
 
 export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const fileService = useService(IFileService)
+  const groupsService = useService(IEditorGroupsService)
+  const group = useContext(EditorGroupContext)
   const sourceUri = (input as MarkdownPreviewInput).sourceUri
   const stateKey = sourceUri.toString()
   const [content, setContent] = useState('')
@@ -30,6 +33,8 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   // True while re-applying a restored scrollTop, so onScroll doesn't treat the
   // programmatic scroll as a user action and overwrite the saved target.
   const restoringRef = useRef(false)
+  const activeGroup = groupsService.activeGroup
+  const activeGroupActiveEditor = activeGroup.activeEditor
   useMarkdownSyncScroll(rootRef, sourceUri)
 
   useEffect(() => {
@@ -105,8 +110,23 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
     return stop
   }, [stateKey])
 
+  // The preview is a plain div, not a Monaco instance, so focusEditorInput()
+  // (which only knows the editor registries) can't focus it when the group
+  // activates it. Focus the scroll container ourselves whenever this preview
+  // becomes the active editor, so arrow/page keys scroll it immediately.
+  useEffect(() => {
+    if (activeGroup !== group) return
+    if (activeGroupActiveEditor !== input) return
+    rootRef.current?.focus()
+  }, [activeGroup, activeGroupActiveEditor, group, input])
+
   return (
-    <div ref={rootRef} className={styles['previewRoot']} data-testid="markdown-preview">
+    <div
+      ref={rootRef}
+      className={styles['previewRoot']}
+      data-testid="markdown-preview"
+      tabIndex={0}
+    >
       <MarkdownView text={content} className={styles['previewBody'] ?? ''} />
     </div>
   )

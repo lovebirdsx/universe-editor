@@ -81,10 +81,14 @@ function previewTopForEditor(
   const frac =
     nextTop > lineTop ? clamp01((editor.getScrollTop() - lineTop) / (nextTop - lineTop)) : 0
   const probe = startLine - 1 + frac
-  return interpolate(
-    entries.map((e) => ({ key: e.line, value: e.top })),
-    probe,
-  )
+
+  const totalLines = editor.getModel()?.getLineCount() ?? 0
+  const maxPreviewScroll = Math.max(0, root.scrollHeight - root.clientHeight)
+  const points: Point[] = entries.map((e) => ({ key: e.line, value: e.top }))
+  if (totalLines > (entries[entries.length - 1]?.line ?? -1)) {
+    points.push({ key: totalLines, value: maxPreviewScroll })
+  }
+  return interpolate(points, probe)
 }
 
 function editorTopForPreview(
@@ -93,10 +97,15 @@ function editorTopForPreview(
 ): number | undefined {
   const entries = collectEntries(root)
   if (entries.length === 0) return undefined
-  const probeLine = interpolate(
-    entries.map((e) => ({ key: e.top, value: e.line })),
-    root.scrollTop,
-  )
+
+  const totalLines = editor.getModel()?.getLineCount() ?? 0
+  const maxPreviewScroll = Math.max(0, root.scrollHeight - root.clientHeight)
+  const reversePoints: Point[] = entries.map((e) => ({ key: e.top, value: e.line }))
+  if (totalLines > (entries[entries.length - 1]?.line ?? -1)) {
+    reversePoints.push({ key: maxPreviewScroll, value: totalLines })
+  }
+
+  const probeLine = interpolate(reversePoints, root.scrollTop)
   const floor = Math.max(0, Math.floor(probeLine))
   const lineTop = editor.getTopForLineNumber(floor + 1)
   const nextTop = editor.getTopForLineNumber(floor + 2)
