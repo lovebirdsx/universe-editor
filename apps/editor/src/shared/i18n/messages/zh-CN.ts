@@ -113,6 +113,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.openRecent.title': '打开最近打开的项…',
   'action.openSettingsJson.title': '打开设置（JSON）',
   'action.openSettings.title': '打开设置',
+  'action.openVSCodeKeybindingsJson.title': '打开 VS Code 键盘快捷方式（JSON）',
+  'action.openVSCodeSettingsJson.title': '打开 VS Code 设置（JSON）',
   'action.openWithDefaultApplication.title': '使用默认应用打开',
   'action.previousEditor.title': '打开上一个编辑器',
   'action.quickTextSearch.title': '快速搜索',

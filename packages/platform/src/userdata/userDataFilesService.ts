@@ -19,6 +19,8 @@ export const enum UserDataFile {
   ProjectSettings = 'projectSettings',
   /** Read-only VSCode-compatible workspace settings: `<workspace>/.vscode/settings.json`. */
   VSCodeSettings = 'vscodeSettings',
+  /** Read-only VSCode user settings: `<vscodeUserData>/settings.json`. */
+  VSCodeUserSettings = 'vscodeUserSettings',
   /** Read-only VSCode user keybindings: `<vscodeUserData>/keybindings.json`. */
   VSCodeKeybindings = 'vscodeKeybindings',
 }

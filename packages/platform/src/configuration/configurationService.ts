@@ -14,14 +14,16 @@ import { ConfigurationRegistry } from './configurationRegistry.js'
 export const enum ConfigurationTarget {
   /** Built-in defaults declared via ConfigurationRegistry. */
   Default = 0,
+  /** Read-only VSCode user settings (`<vscodeUserData>/settings.json`). */
+  VSCodeUser = 1,
   /** User-global settings (e.g. ~/.universe-editor/settings.json). */
-  User = 1,
+  User = 2,
   /** Read-only VSCode-compatible workspace settings (<workspace>/.vscode/settings.json). */
-  VSCodeWorkspace = 2,
+  VSCodeWorkspace = 3,
   /** Project-level settings (<workspace>/.universe-editor/settings.json). */
-  Project = 3,
+  Project = 4,
   /** Runtime in-memory overrides (highest priority). */
-  Memory = 4,
+  Memory = 5,
 }
 
 export interface IConfigurationChangeEvent {
@@ -83,6 +85,7 @@ export class ConfigurationService extends Disposable implements IConfigurationSe
   /** Layers in priority order (index = ConfigurationTarget value). */
   private readonly _layers: ConfigStore[] = [
     {}, // Default — populated lazily from ConfigurationRegistry
+    {}, // VSCodeUser — read-only <vscodeUserData>/settings.json
     {}, // User
     {}, // VSCodeWorkspace — read-only .vscode/settings.json
     {}, // Project

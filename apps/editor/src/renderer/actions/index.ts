@@ -75,6 +75,7 @@ import {
   OpenSettingsAction,
   OpenSettingsJsonAction,
   OpenVSCodeKeybindingsJsonAction,
+  OpenVSCodeSettingsJsonAction,
   OpenWorkspaceSettingsAction,
   OpenWorkspaceSettingsJsonAction,
   SelectColorThemeAction,
@@ -301,6 +302,7 @@ registerAction2(OpenKeybindingsEditorAction)
 registerAction2(OpenSettingsJsonAction)
 registerAction2(OpenKeybindingsJsonAction)
 registerAction2(OpenVSCodeKeybindingsJsonAction)
+registerAction2(OpenVSCodeSettingsJsonAction)
 registerAction2(ConfigureDisplayLanguageAction)
 registerAction2(OpenWorkspaceSettingsAction)
 registerAction2(OpenWorkspaceSettingsJsonAction)

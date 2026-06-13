@@ -50,6 +50,7 @@ export class UserSettingsSync extends Disposable {
 
   async initialize(): Promise<void> {
     await this._migrateLegacyUserSettings()
+    await this._reloadVSCodeUserLayer()
     await this._reloadUserLayer()
     await this._reloadProjectLayer()
     await this._reloadVSCodeLayer()
@@ -62,6 +63,8 @@ export class UserSettingsSync extends Disposable {
           void this._reloadProjectLayer()
         } else if (file === UserDataFile.VSCodeSettings) {
           void this._reloadVSCodeLayer()
+        } else if (file === UserDataFile.VSCodeUserSettings) {
+          void this._reloadVSCodeUserLayer()
         }
       }),
     )
@@ -112,6 +115,22 @@ export class UserSettingsSync extends Disposable {
     this._suspendWriteBack = true
     try {
       this._config.loadLayer(ConfigurationTarget.VSCodeWorkspace, data)
+    } finally {
+      this._suspendWriteBack = false
+    }
+  }
+
+  /**
+   * Load the read-only VSCode user-settings layer
+   * (`<vscodeUserData>/settings.json`). Never written back; sits below the
+   * editor's own User layer so local settings win on conflict.
+   */
+  private async _reloadVSCodeUserLayer(): Promise<void> {
+    const text = await this._files.read(UserDataFile.VSCodeUserSettings)
+    const data = parseJsoncObject(text)
+    this._suspendWriteBack = true
+    try {
+      this._config.loadLayer(ConfigurationTarget.VSCodeUser, data)
     } finally {
       this._suspendWriteBack = false
     }

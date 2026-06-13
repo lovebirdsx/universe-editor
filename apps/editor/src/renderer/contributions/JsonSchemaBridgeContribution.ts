@@ -23,12 +23,14 @@ import { buildKeybindingsJsonSchema } from '../services/keybindings/buildKeybind
 
 const SETTINGS_USER_URI = 'universe-editor://schemas/settings/user'
 const SETTINGS_PROJECT_URI = 'universe-editor://schemas/settings/project'
+const SETTINGS_VSCODE_URI = 'universe-editor://schemas/settings/vscode'
 const KEYBINDINGS_URI = 'universe-editor://schemas/keybindings'
 
 export class JsonSchemaBridgeContribution extends Disposable implements IWorkbenchContribution {
   private _settingsDisposables: {
     user?: ReturnType<typeof JSONContributionRegistry.registerSchema>
     project?: ReturnType<typeof JSONContributionRegistry.registerSchema>
+    vscode?: ReturnType<typeof JSONContributionRegistry.registerSchema>
   } = {}
   private _keybindingsDisposable:
     | ReturnType<typeof JSONContributionRegistry.registerSchema>
@@ -58,6 +60,7 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
   override dispose(): void {
     this._settingsDisposables.user?.dispose()
     this._settingsDisposables.project?.dispose()
+    this._settingsDisposables.vscode?.dispose()
     this._keybindingsDisposable?.dispose()
     super.dispose()
   }
@@ -82,9 +85,11 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
 
   private _refreshSettingsSchema(): void {
     const schema: IJSONSchema = buildSettingsJsonSchema()
+    const strictSchema: IJSONSchema = buildSettingsJsonSchema({ strict: true })
 
     this._settingsDisposables.user?.dispose()
     this._settingsDisposables.project?.dispose()
+    this._settingsDisposables.vscode?.dispose()
 
     this._settingsDisposables.user = this._register(
       JSONContributionRegistry.registerSchema({
@@ -98,6 +103,17 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
         uri: SETTINGS_PROJECT_URI,
         fileMatch: ['**/.universe-editor/settings.json'],
         schema,
+      }),
+    )
+    // Read-only VSCode settings layers (user-global Code/User/settings.json and
+    // workspace .vscode/settings.json). The strict variant rejects keys this
+    // editor doesn't support so they surface as warnings, mirroring how an
+    // unknown command id is flagged in VSCode keybindings.json.
+    this._settingsDisposables.vscode = this._register(
+      JSONContributionRegistry.registerSchema({
+        uri: SETTINGS_VSCODE_URI,
+        fileMatch: ['**/Code/User/settings.json', '**/.vscode/settings.json'],
+        schema: strictSchema,
       }),
     )
   }

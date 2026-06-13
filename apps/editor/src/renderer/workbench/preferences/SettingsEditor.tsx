@@ -29,8 +29,12 @@ function originLabel(origin: ConfigurationTarget | undefined): string {
   switch (origin) {
     case ConfigurationTarget.Project:
       return localize('settings.origin.workspace', 'Workspace')
+    case ConfigurationTarget.VSCodeWorkspace:
+      return localize('settings.origin.vscodeWorkspace', 'VSCode Workspace')
     case ConfigurationTarget.User:
       return localize('settings.origin.user', 'User')
+    case ConfigurationTarget.VSCodeUser:
+      return localize('settings.origin.vscodeUser', 'VSCode User')
     case ConfigurationTarget.Memory:
       return localize('settings.origin.memory', 'Runtime')
     case ConfigurationTarget.Default:

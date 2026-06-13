@@ -68,6 +68,18 @@ async function retryTransient<T>(op: () => Promise<T>, attempts = 5, baseDelayMs
   throw lastErr
 }
 
+function vscodeUserDir(): string {
+  if (process.platform === 'win32') {
+    const appdata = process.env['APPDATA'] ?? join(os.homedir(), 'AppData', 'Roaming')
+    return join(appdata, 'Code', 'User')
+  }
+  if (process.platform === 'darwin') {
+    return join(os.homedir(), 'Library', 'Application Support', 'Code', 'User')
+  }
+  const xdgConfig = process.env['XDG_CONFIG_HOME'] ?? join(os.homedir(), '.config')
+  return join(xdgConfig, 'Code', 'User')
+}
+
 function defaultVSCodeKeybindingsPath(): string {
   // Test hook: let E2E specs point the read-only VSCode keybindings layer at a
   // tmp file instead of the real `%APPDATA%/Code/User/keybindings.json`, so they
@@ -75,15 +87,16 @@ function defaultVSCodeKeybindingsPath(): string {
   // actual VSCode config. Consistent with this function's other direct env reads.
   const override = process.env['UNIVERSE_VSCODE_KEYBINDINGS_PATH']
   if (override) return override
-  if (process.platform === 'win32') {
-    const appdata = process.env['APPDATA'] ?? join(os.homedir(), 'AppData', 'Roaming')
-    return join(appdata, 'Code', 'User', 'keybindings.json')
-  }
-  if (process.platform === 'darwin') {
-    return join(os.homedir(), 'Library', 'Application Support', 'Code', 'User', 'keybindings.json')
-  }
-  const xdgConfig = process.env['XDG_CONFIG_HOME'] ?? join(os.homedir(), '.config')
-  return join(xdgConfig, 'Code', 'User', 'keybindings.json')
+  return join(vscodeUserDir(), 'keybindings.json')
+}
+
+function defaultVSCodeUserSettingsPath(): string {
+  // Test hook mirroring UNIVERSE_VSCODE_KEYBINDINGS_PATH: point the read-only
+  // VSCode user-settings layer at a tmp file instead of the real
+  // `%APPDATA%/Code/User/settings.json`.
+  const override = process.env['UNIVERSE_VSCODE_SETTINGS_PATH']
+  if (override) return override
+  return join(vscodeUserDir(), 'settings.json')
 }
 
 const FORMATTING: FormattingOptions = {
@@ -122,6 +135,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     const userFilesDir = configDir && configDir.length > 0 ? configDir : userData
     this._installSlot(UserDataFile.Settings, join(userFilesDir, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(userFilesDir, 'keybindings.json'))
+    this._installSlot(UserDataFile.VSCodeUserSettings, defaultVSCodeUserSettingsPath(), true)
     this._installSlot(UserDataFile.VSCodeKeybindings, defaultVSCodeKeybindingsPath(), true)
 
     // Project settings track the active workspace. The read-only VSCode layer
@@ -177,7 +191,11 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   async write(file: UserDataFile, content: string): Promise<void> {
-    if (file === UserDataFile.VSCodeSettings || file === UserDataFile.VSCodeKeybindings) {
+    if (
+      file === UserDataFile.VSCodeSettings ||
+      file === UserDataFile.VSCodeUserSettings ||
+      file === UserDataFile.VSCodeKeybindings
+    ) {
       throw new Error(`UserData: ${file} is read-only`)
     }
     const slot = this._slots.get(file)
@@ -192,7 +210,11 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     jsonPath: readonly (string | number)[],
     value: unknown,
   ): Promise<boolean> {
-    if (file === UserDataFile.VSCodeSettings || file === UserDataFile.VSCodeKeybindings)
+    if (
+      file === UserDataFile.VSCodeSettings ||
+      file === UserDataFile.VSCodeUserSettings ||
+      file === UserDataFile.VSCodeKeybindings
+    )
       return false
     const slot = this._slots.get(file)
     if (!slot) return false

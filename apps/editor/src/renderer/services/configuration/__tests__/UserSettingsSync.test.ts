@@ -231,4 +231,58 @@ describe('UserSettingsSync', () => {
     sync.dispose()
     config.dispose()
   })
+
+  it('loads VSCode user settings.json into the VSCodeUser layer', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    files.files.set(UserDataFile.VSCodeUserSettings, '{ "editor.fontSize": 13 }')
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+    expect(config.get('editor.fontSize')).toBe(13)
+    expect(config.getValueOrigin('editor.fontSize')).toBe(ConfigurationTarget.VSCodeUser)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it("editor's own User layer overrides the VSCode user layer", async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    files.files.set(UserDataFile.VSCodeUserSettings, '{ "editor.fontSize": 13 }')
+    files.files.set(UserDataFile.Settings, '{ "editor.fontSize": 20 }')
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+    expect(config.get('editor.fontSize')).toBe(20)
+    expect(config.getValueOrigin('editor.fontSize')).toBe(ConfigurationTarget.User)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('VSCode user file change hot-reloads the VSCodeUser layer', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+
+    files.files.set(UserDataFile.VSCodeUserSettings, '{ "editor.tabSize": 8 }')
+    files.fire(UserDataFile.VSCodeUserSettings)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(config.get('editor.tabSize')).toBe(8)
+    sync.dispose()
+    config.dispose()
+  })
+
+  it('never writes back to the read-only VSCode user layer', async () => {
+    const storage = new FakeStorage()
+    const files = new FakeUserData()
+    const { sync, config } = makeInstance(storage, files)
+    await sync.initialize()
+
+    config.update('editor.fontSize', 99, ConfigurationTarget.VSCodeUser)
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(files.setValueCalls.some((c) => c.file === UserDataFile.VSCodeUserSettings)).toBe(false)
+    sync.dispose()
+    config.dispose()
+  })
 })

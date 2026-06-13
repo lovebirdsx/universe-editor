@@ -279,6 +279,40 @@ export class OpenVSCodeKeybindingsJsonAction extends Action2 {
   }
 }
 
+export class OpenVSCodeSettingsJsonAction extends Action2 {
+  static readonly ID = 'workbench.action.openVSCodeSettingsJson'
+  constructor() {
+    super({
+      id: OpenVSCodeSettingsJsonAction.ID,
+      title: localize('action.openVSCodeSettingsJson.title', 'Open VS Code Settings (JSON)'),
+      category: localize('command.category.preferences', 'Preferences'),
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const services = userDataFileServices(accessor)
+    const fileService = accessor.get(IFileService)
+    const notification = accessor.get(INotificationService)
+
+    const uriComponents = await services.files.getFileUri(UserDataFile.VSCodeUserSettings)
+    if (uriComponents && (await fileService.exists(URI.revive(uriComponents) as URI))) {
+      // Open editable (not read-only) so users can change VS Code's own
+      // settings; never seed our template into VS Code's file.
+      await openUserDataFile(services, UserDataFile.VSCodeUserSettings, '', { seedTemplate: false })
+      return
+    }
+
+    notification.notify({
+      severity: Severity.Warning,
+      message: localize(
+        'action.openVSCodeSettingsJson.notFound',
+        'No VS Code settings file found (VS Code may not be installed).',
+      ),
+    })
+  }
+}
+
 export class ConfigureDisplayLanguageAction extends Action2 {
   static readonly ID = 'workbench.action.configureDisplayLanguage'
   constructor() {
