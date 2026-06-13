@@ -221,21 +221,10 @@ describe('MainHostService', () => {
     service.dispose()
   })
 
-  it('restart relaunches the app and then quits', async () => {
+  it('restart reloads the current window', async () => {
     const win = makeFakeWin()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const service = new MainHostService(win as any)
-    await service.restart()
-    expect(relaunch).toHaveBeenCalledTimes(1)
-    expect(quit).toHaveBeenCalledTimes(1)
-    expect(relaunch.mock.invocationCallOrder[0]).toBeLessThan(quit.mock.invocationCallOrder[0]!)
-    service.dispose()
-  })
-
-  it('restart reloads the current window in dev mode', async () => {
-    const win = makeFakeWin()
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const service = new MainHostService(win as any, undefined, undefined, true)
     await service.restart()
     expect(win.calls).toEqual(['reload'])
     expect(relaunch).not.toHaveBeenCalled()

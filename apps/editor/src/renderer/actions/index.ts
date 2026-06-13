@@ -81,7 +81,7 @@ import {
   NewWindowAction,
   OpenFolderInNewWindowAction,
   OpenUserDataFolderAction,
-  RestartEditorAction,
+  ReloadWindowAction,
   SwitchWindowAction,
   ToggleDevToolsAction,
 } from './windowActions.js'
@@ -325,7 +325,7 @@ registerAction2(CopyFileRelativePathAction)
 
 // Window / Help
 registerAction2(NewWindowAction)
-registerAction2(RestartEditorAction)
+registerAction2(ReloadWindowAction)
 registerAction2(CloseWindowAction)
 registerAction2(OpenFolderInNewWindowAction)
 registerAction2(SwitchWindowAction)

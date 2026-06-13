@@ -167,7 +167,7 @@ export class WorkbenchPO {
 
     // Fire restart. win.reload() is triggered via IPC (E2E mode uses reload not relaunch).
     void this.page
-      .evaluate(() => void window.__E2E__!.runCommand('workbench.action.restartEditor'))
+      .evaluate(() => void window.__E2E__!.runCommand('workbench.action.reloadWindow'))
       .catch(() => {})
 
     // Wait for the page to reload and reach 'load' state.

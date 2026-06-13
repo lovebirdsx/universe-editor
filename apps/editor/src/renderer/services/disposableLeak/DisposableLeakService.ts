@@ -2,9 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Renderer wrapper around the cross-process IDisposableLeakService.
  *
- *  Adds an in-memory `unloadReason` flag that RestartEditorAction sets right
+ *  Adds an in-memory `unloadReason` flag that ReloadWindowAction sets right
  *  before triggering `host.restart()`, so the beforeunload listener can label
- *  the persisted report with its origin. On the next session, a 'restart' source
+ *  the persisted report with its origin. On the next session, a 'reload' source
  *  suppresses the notification (the user already saw the modal).
  *--------------------------------------------------------------------------------------------*/
 

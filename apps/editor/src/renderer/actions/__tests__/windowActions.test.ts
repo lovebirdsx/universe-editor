@@ -25,7 +25,7 @@ import {
 import {
   AboutAction,
   CloseWindowAction,
-  RestartEditorAction,
+  ReloadWindowAction,
   ToggleDevToolsAction,
 } from '../windowActions.js'
 import {
@@ -123,26 +123,26 @@ describe('windowActions', () => {
     while (disposables.length > 0) disposables.pop()?.dispose()
   })
 
-  it('registers RestartEditor with keybinding + File menu wiring', () => {
-    disposables.push(registerAction2(RestartEditorAction))
-    expect(CommandsRegistry.getCommand(RestartEditorAction.ID)).toBeDefined()
-    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+r')).toBe(RestartEditorAction.ID)
+  it('registers ReloadWindow with keybinding + File menu wiring', () => {
+    disposables.push(registerAction2(ReloadWindowAction))
+    expect(CommandsRegistry.getCommand(ReloadWindowAction.ID)).toBeDefined()
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+r')).toBe(ReloadWindowAction.ID)
     expect(
       MenuRegistry.getMenuItems(MenuId.MenubarFileMenu).some(
-        (i) => 'command' in i && i.command === RestartEditorAction.ID,
+        (i) => 'command' in i && i.command === ReloadWindowAction.ID,
       ),
     ).toBe(true)
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
-        (i) => 'command' in i && i.command === RestartEditorAction.ID,
+        (i) => 'command' in i && i.command === ReloadWindowAction.ID,
       ),
     ).toBe(true)
   })
 
-  it('RestartEditor.run invokes IHostService.restart', async () => {
-    disposables.push(registerAction2(RestartEditorAction))
+  it('ReloadWindow.run invokes IHostService.restart', async () => {
+    disposables.push(registerAction2(ReloadWindowAction))
     const host = makeHostStub()
-    await runCommand(RestartEditorAction.ID, host)
+    await runCommand(ReloadWindowAction.ID, host)
     expect(host.restart).toHaveBeenCalledTimes(1)
   })
 
@@ -211,7 +211,7 @@ describe('windowActions', () => {
   })
 })
 
-describe('RestartEditorAction leak-detection path', () => {
+describe('ReloadWindowAction leak-detection path', () => {
   const disposables: IDisposable[] = []
 
   afterEach(() => {
@@ -232,13 +232,13 @@ describe('RestartEditorAction leak-detection path', () => {
     services.set(ILifecycleService, lifecycle)
     const inst = new InstantiationService(services)
     await inst.invokeFunction((accessor) => {
-      const cmd = CommandsRegistry.getCommand(RestartEditorAction.ID)!
+      const cmd = CommandsRegistry.getCommand(ReloadWindowAction.ID)!
       return cmd.handler(accessor) as unknown as Promise<void>
     })
   }
 
   it('skips confirm and restarts when no tracker is installed (production path)', async () => {
-    disposables.push(registerAction2(RestartEditorAction))
+    disposables.push(registerAction2(ReloadWindowAction))
     const host = makeHostStub()
     const dialog = new FakeDialogService()
     const confirm = vi.spyOn(dialog, 'confirm')
@@ -252,7 +252,7 @@ describe('RestartEditorAction leak-detection path', () => {
   })
 
   it('skips confirm when tracker installed but no leaks', async () => {
-    disposables.push(registerAction2(RestartEditorAction))
+    disposables.push(registerAction2(ReloadWindowAction))
     setDisposableTracker(new DisposableTracker())
     const host = makeHostStub()
     const dialog = new FakeDialogService()
@@ -263,11 +263,11 @@ describe('RestartEditorAction leak-detection path', () => {
 
     expect(confirm).not.toHaveBeenCalled()
     expect(host.restart).toHaveBeenCalledTimes(1)
-    expect(leak.readUnloadReason()).toBe('restart')
+    expect(leak.readUnloadReason()).toBe('reload')
   })
 
   it('shows confirm modal with leak details when tracker reports leaks', async () => {
-    disposables.push(registerAction2(RestartEditorAction))
+    disposables.push(registerAction2(ReloadWindowAction))
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
     disposables.push(toDisposable(() => {}))
@@ -281,11 +281,11 @@ describe('RestartEditorAction leak-detection path', () => {
 
     expect(dialog.lastDetail).toBeTruthy()
     expect(host.restart).toHaveBeenCalledTimes(1)
-    expect(leak.readUnloadReason()).toBe('restart')
+    expect(leak.readUnloadReason()).toBe('reload')
   })
 
   it('does not restart when user cancels the leak confirm', async () => {
-    disposables.push(registerAction2(RestartEditorAction))
+    disposables.push(registerAction2(ReloadWindowAction))
     const tracker = new DisposableTracker()
     setDisposableTracker(tracker)
     disposables.push(toDisposable(() => {}))

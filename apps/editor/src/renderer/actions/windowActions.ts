@@ -131,12 +131,12 @@ export class ExitAction extends Action2 {
   }
 }
 
-export class RestartEditorAction extends Action2 {
-  static readonly ID = 'workbench.action.restartEditor'
+export class ReloadWindowAction extends Action2 {
+  static readonly ID = 'workbench.action.reloadWindow'
   constructor() {
     super({
-      id: RestartEditorAction.ID,
-      title: localize('action.restartEditor.title', 'Restart Editor'),
+      id: ReloadWindowAction.ID,
+      title: localize('action.reloadWindow.title', 'Reload Window'),
       category: localize('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+alt+r' },
       menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 0 },
@@ -171,23 +171,23 @@ export class RestartEditorAction extends Action2 {
           count: report.leaks.length,
           details: report.details,
           capturedAt: Date.now(),
-          source: 'restart',
+          source: 'reload',
         })
         const choice = await dialogService!.confirm({
           type: 'warning',
           message: localize(
-            'restart.leakDetected.message',
+            'reload.leakDetected.message',
             'Detected {count} un-disposed Disposable(s)',
             { count: report.leaks.length },
           ),
           detail: report.details,
-          primaryButton: localize('restart.leakDetected.restart', 'Restart Anyway'),
+          primaryButton: localize('reload.leakDetected.reload', 'Reload Anyway'),
           cancelButton: localize('common.cancel', 'Cancel'),
           copyButton: localize('common.copy', 'Copy'),
         })
         if (!choice.confirmed) return
       }
-      leakService!.markUnloadReason('restart')
+      leakService!.markUnloadReason('reload')
     }
     if (await lifecycleService.confirmBeforeShutdown(ShutdownReason.Reload)) return
     await hostService.restart()

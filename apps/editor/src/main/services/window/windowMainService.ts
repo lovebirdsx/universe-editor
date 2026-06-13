@@ -202,10 +202,8 @@ export class WindowMainService implements IWindowMainService {
           void this.createWindow({})
         },
         logService.createLogger({ id: 'host', name: 'Host' }),
-        rendererUrl !== undefined || e2eEnabled,
         {
           getRendererLifecycle: () => this._windows.get(win.id)?.rendererLifecycle,
-          onConfirmedQuit: () => this.markQuitConfirmed(),
         },
       ),
     )

@@ -87,7 +87,7 @@ export const ILogFilesService = createDecorator<ILogFilesService>('logFilesServi
 
 // -------- Disposable Leak Report (renderer -> main persistence across sessions) --------
 
-export type DisposableLeakSource = 'restart' | 'close' | 'quit' | 'unknown'
+export type DisposableLeakSource = 'reload' | 'close' | 'quit' | 'unknown'
 
 export interface IDisposableLeakReport {
   readonly count: number

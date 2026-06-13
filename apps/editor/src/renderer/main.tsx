@@ -550,14 +550,14 @@ async function bootstrapWorkbench(): Promise<void> {
         )
         channel.appendLine(report.details)
         channel.appendLine('')
-        // 'restart' means the user already saw the modal in the previous session
-        // (RestartEditorAction). Skip the notification to avoid duplicate noise;
+        // 'reload' means the user already saw the modal in the previous session
+        // (ReloadWindowAction). Skip the notification to avoid duplicate noise;
         // the Output channel still has the details for reference.
-        if (report.source === 'restart') return
+        if (report.source === 'reload') return
         notificationService.notify({
           severity: Severity.Warning,
           message: localize(
-            'restart.leakDetected.message',
+            'reload.leakDetected.message',
             'Detected {count} un-disposed Disposable(s)',
             { count: report.count },
           ),
