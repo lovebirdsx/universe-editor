@@ -1,5 +1,50 @@
 [
   {
+    "version": "0.1.17",
+    "date": "2026-06-13",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "加入api使用的统计支持",
+          "加入可以设定配置目录的功能",
+          "加入json的大纲和跳转符号支持",
+          "优化搜索面板体验，加入历史记录，状态保存，内联预览，exclude开关等功能",
+          "优化outline的体验，加入折叠，同步光标等功能",
+          "重载整个编辑器，改成重载window",
+          "拖动非workspace的文件到session输入框，采用绝对路径",
+          "terminal支持多窗口，最大化",
+          "同一输入框的高亮风格",
+          "QuickAccess 前缀路由重构（对齐 VSCode 范式）",
+          "支持在当前编辑器的变更处之间跳转（alt+pageup / alt+pagedown）",
+          "搜索体验优化：Ctrl+Shift+F 智能聚焦 + Tab 键导航"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "优化跳转符号的排序算法以及匹配的高亮",
+          "markdown预览模式下，ctrl+shift+v可以回到原来的文档",
+          "首次聚焦Explorer，没有选中项表达的问题",
+          "修复session虚拟化渲染不稳定的bug",
+          "修复Editor类型terminal在切换时会丢失焦点的bug",
+          "修复markdown预览中，mermaid 切走再切回变空，切回预览滚动位置重置",
+          "优化切换大文件卡顿问题",
+          "修复scm中打开文件，焦点没有聚集到editor的bug"
+        ]
+      },
+      {
+        "type": "other",
+        "title": "其他变更",
+        "items": [
+          "重构按键模块管理，彻底解决按键规则混乱导致的不响应问题"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.16",
     "date": "2026-06-12",
     "groups": [
