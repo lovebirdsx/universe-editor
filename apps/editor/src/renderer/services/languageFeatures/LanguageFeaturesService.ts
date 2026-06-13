@@ -268,9 +268,7 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     return set ? [...set] : []
   }
 
-  getFoldingRangeProviders(
-    languageId: string,
-  ): readonly monaco.languages.FoldingRangeProvider[] {
+  getFoldingRangeProviders(languageId: string): readonly monaco.languages.FoldingRangeProvider[] {
     const set = this._foldingRangeProviders.get(languageId)
     return set ? [...set] : []
   }
