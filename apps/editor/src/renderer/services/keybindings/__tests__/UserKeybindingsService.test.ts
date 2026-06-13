@@ -4,6 +4,7 @@ import {
   Emitter,
   Event,
   KeybindingsRegistry,
+  KeybindingWeight,
   URI,
   UserDataFile,
   type IDisposable,
@@ -85,7 +86,7 @@ describe('UserKeybindingsService', () => {
     await service.initialize()
 
     expect(KeybindingsRegistry.resolveKeystroke('ctrl+k').kind).toBe('enter-chord')
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+u', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+u', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: 'git.sync',
     })
@@ -110,7 +111,7 @@ describe('UserKeybindingsService', () => {
     disposables.push(CommandsRegistry.registerCommand({ id: lazyCommand, handler: () => {} }))
     await service.reload()
 
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d')).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d')).toMatchObject({
       kind: 'execute',
       command: lazyCommand,
     })
@@ -133,11 +134,11 @@ describe('UserKeybindingsService', () => {
 
     await service.initialize()
 
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d')).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+d')).toMatchObject({
       kind: 'execute',
       command: cmd,
     })
-    expect(KeybindingsRegistry.resolveKeystroke('shift+alt+down')).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('shift+alt+down')).toMatchObject({
       kind: 'execute',
       command: cmd,
     })
@@ -191,7 +192,7 @@ describe('UserKeybindingsService', () => {
     await service.initialize()
 
     const resolution = KeybindingsRegistry.resolveKeystroke('ctrl+r')
-    expect(resolution).toEqual({
+    expect(resolution).toMatchObject({
       kind: 'execute',
       command: 'workbench.action.quickOpen',
       args: '@:',
@@ -219,5 +220,65 @@ describe('UserKeybindingsService', () => {
       (kb) => kb.command === lazyCommand && !kb.isNegated,
     )
     expect(bound).toHaveLength(1)
+  })
+
+  it('preserves the key on a `-command` removal so only that key is freed', async () => {
+    const cmd = 'editor.action.nextMatchFindAction'
+    disposables.push(CommandsRegistry.registerCommand({ id: cmd, handler: () => {} }))
+    // A live default binding plus a sibling on a different key.
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'f3', command: cmd, weight: 50 }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({ key: 'enter', command: cmd, weight: 50 }),
+    )
+
+    const files = new FakeUserData()
+    files.files.set(
+      UserDataFile.VSCodeKeybindings,
+      JSON.stringify([{ key: 'f3', command: `-${cmd}` }]),
+    )
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+    await service.initialize()
+
+    // F3 is freed (no positive binding wins it)...
+    expect(KeybindingsRegistry.resolveKeystroke('f3').kind).toBe('no-match')
+    // ...but the sibling Enter binding survives.
+    expect(KeybindingsRegistry.resolveKeystroke('enter')).toMatchObject({
+      kind: 'execute',
+      command: cmd,
+    })
+    // A keyed removal does NOT mark the whole command disabled.
+    expect(service.disabledCommands).not.toContain(cmd)
+    expect(service.disabledBindings).toContainEqual({ command: cmd, key: 'f3' })
+  })
+
+  it('setKeybinding auto-negates the original default key on rebind', async () => {
+    const cmd = 'workbench.action.foo'
+    disposables.push(CommandsRegistry.registerCommand({ id: cmd, handler: () => {} }))
+    // Project default binding (below User weight) on ctrl+alt+p.
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+alt+p',
+        command: cmd,
+        weight: KeybindingWeight.WorkbenchContrib,
+      }),
+    )
+
+    const files = new FakeUserData()
+    const service = new UserKeybindingsService(new FakeStorage(), files)
+    disposables.push(service)
+    await service.initialize()
+
+    service.setKeybinding(cmd, 'ctrl+alt+n')
+
+    // New key fires the command.
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+alt+n')).toMatchObject({
+      kind: 'execute',
+      command: cmd,
+    })
+    // Original key no longer fires it (auto-negated).
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+alt+p').kind).toBe('no-match')
   })
 })

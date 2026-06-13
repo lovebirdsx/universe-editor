@@ -37,6 +37,8 @@ function makeLanguageFeaturesStub() {
   return {
     onDidChangeProviders: onDidChangeProviders.event,
     hasImplementationProvider: () => false,
+    hasDefinitionProvider: () => false,
+    hasReferenceProvider: () => false,
     _providersEmitter: onDidChangeProviders,
   }
 }
@@ -222,7 +224,9 @@ describe('ContextKeyContribution', () => {
     expect(ctx.get('editorTextFocus')).toBe(false)
     expect(ctx.get('editorLangId')).toBe('')
     expect(ctx.get('editorReadonly')).toBe(false)
+    expect(ctx.get('editorHasDefinitionProvider')).toBe(false)
     expect(ctx.get('editorHasImplementationProvider')).toBe(false)
+    expect(ctx.get('editorHasReferenceProvider')).toBe(false)
     expect(ctx.get('editorHasCodeActionsProvider')).toBe(false)
     expect(ctx.get('isInEmbeddedEditor')).toBe(false)
     expect(ctx.get('inReferenceSearchEditor')).toBe(false)

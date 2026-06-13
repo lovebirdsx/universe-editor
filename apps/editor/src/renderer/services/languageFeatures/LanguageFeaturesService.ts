@@ -75,7 +75,9 @@ export interface ILanguageFeaturesService {
   registerWorkspaceSymbolProvider(provider: IWorkspaceSymbolProvider): IDisposable
   getDocumentSymbolProviders(languageId: string): readonly monaco.languages.DocumentSymbolProvider[]
   getDefinitionProviders(languageId: string): readonly monaco.languages.DefinitionProvider[]
+  hasDefinitionProvider(languageId: string): boolean
   hasImplementationProvider(languageId: string): boolean
+  hasReferenceProvider(languageId: string): boolean
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[]
 }
 
@@ -246,6 +248,16 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
 
   hasImplementationProvider(languageId: string): boolean {
     const set = this._implementationProviders.get(languageId)
+    return set !== undefined && set.size > 0
+  }
+
+  hasDefinitionProvider(languageId: string): boolean {
+    const set = this._definitionProviders.get(languageId)
+    return set !== undefined && set.size > 0
+  }
+
+  hasReferenceProvider(languageId: string): boolean {
+    const set = this._referenceProviders.get(languageId)
     return set !== undefined && set.size > 0
   }
 

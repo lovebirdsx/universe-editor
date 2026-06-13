@@ -15,6 +15,14 @@ import { ContextKeyExpr, ContextKeyExpression } from './contextKeyExpr.js'
  */
 export enum KeybindingWeight {
   EditorCore = 0,
+  /**
+   * Monaco's own built-in editor-action default keys, mirrored into this
+   * registry by monacoActionsBridge. Sits below every project/extension
+   * binding so any of those wins the same keystroke; the dispatcher *defers*
+   * (does not preventDefault) when a binding at this weight wins, letting
+   * Monaco's native dispatch run the key with its full internal context.
+   */
+  MonacoDefault = 50,
   EditorContrib = 100,
   WorkbenchContrib = 200,
   BuiltinExtension = 300,
@@ -76,8 +84,8 @@ interface IResolvedKeybindingItem {
  * - `no-match` → nothing matched.
  */
 export type KeystrokeResolution =
-  | { kind: 'execute'; command: string; args?: unknown }
-  | { kind: 'enter-chord'; pending: readonly string[] }
+  | { kind: 'execute'; command: string; weight: number; args?: unknown }
+  | { kind: 'enter-chord'; pending: readonly string[]; weight: number }
   | { kind: 'no-match' }
 
 /** Why a candidate binding did or did not match a keystroke. */
@@ -87,6 +95,8 @@ export type BindingSkipReason =
   | 'key-mismatch'
   | 'is-negated'
   | 'when-failed'
+  /** Matched on its own, but a negation entry (a `-command` rule) removed it. */
+  | 'removed-by-negation'
 
 /** Snapshot of a single context key referenced by a binding's when-clause. */
 export interface IKeybindingWhenKeyState {
@@ -203,6 +213,37 @@ function evaluateBinding(
   return { matched: true, reason: 'matched' }
 }
 
+function sameChords(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false
+  return true
+}
+
+/**
+ * VSCode-style removal: a positive binding is suppressed when an active
+ * `-command` (negated) entry targets the same command on the same chords. The
+ * negation is "active" when its own when-clause currently holds. This is what
+ * makes "disable a default key" actually free the key for a lower-priority
+ * binding — without it, a negated entry would only fail to fire itself while
+ * the original binding still won.
+ */
+function isRemovedByNegation(
+  positive: IResolvedKeybindingItem,
+  items: readonly IResolvedKeybindingItem[],
+  contextKeyService: IContextKeyService | undefined,
+): boolean {
+  for (const other of items) {
+    if (!other.isNegated) continue
+    if (other.command !== positive.command) continue
+    if (!sameChords(other.chords, positive.chords)) continue
+    if (other.when !== undefined && contextKeyService) {
+      if (!contextKeyService.contextMatchesRules(other.when)) continue
+    }
+    return true
+  }
+  return false
+}
+
 class KeybindingsRegistryImpl {
   private readonly _items: IResolvedKeybindingItem[] = []
 
@@ -265,6 +306,7 @@ class KeybindingsRegistryImpl {
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
       if (evaluateBinding(binding, 'single', normalized, undefined, contextKeyService).matched) {
+        if (isRemovedByNegation(binding, this._items, contextKeyService)) continue
         return binding.command
       }
     }
@@ -297,9 +339,11 @@ class KeybindingsRegistryImpl {
         if (
           evaluateBinding(binding, 'chord-complete', normalized, first, contextKeyService).matched
         ) {
+          if (isRemovedByNegation(binding, this._items, contextKeyService)) continue
           return {
             kind: 'execute',
             command: binding.command,
+            weight: binding.weight,
             ...(binding.args !== undefined ? { args: binding.args } : {}),
           }
         }
@@ -316,7 +360,8 @@ class KeybindingsRegistryImpl {
       if (
         evaluateBinding(binding, 'chord-prefix', normalized, undefined, contextKeyService).matched
       ) {
-        return { kind: 'enter-chord', pending: [normalized] }
+        if (isRemovedByNegation(binding, this._items, contextKeyService)) continue
+        return { kind: 'enter-chord', pending: [normalized], weight: binding.weight }
       }
     }
 
@@ -324,9 +369,11 @@ class KeybindingsRegistryImpl {
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
       if (evaluateBinding(binding, 'single', normalized, undefined, contextKeyService).matched) {
+        if (isRemovedByNegation(binding, this._items, contextKeyService)) continue
         return {
           kind: 'execute',
           command: binding.command,
+          weight: binding.weight,
           ...(binding.args !== undefined ? { args: binding.args } : {}),
         }
       }
@@ -376,7 +423,7 @@ class KeybindingsRegistryImpl {
       let winner: IResolvedKeybindingItem | undefined
       for (let i = this._items.length - 1; i >= 0; i--) {
         const binding = this._items[i]!
-        const { matched, reason } = evaluateBinding(
+        const evaluated = evaluateBinding(
           binding,
           'chord-complete',
           normalized,
@@ -384,8 +431,12 @@ class KeybindingsRegistryImpl {
           contextKeyService,
         )
         // Only the second-stroke key matters here; skip unrelated bindings.
-        if (reason === 'wrong-chord-length' || reason === 'key-mismatch') continue
-        const selected = matched && winner === undefined
+        if (evaluated.reason === 'wrong-chord-length' || evaluated.reason === 'key-mismatch')
+          continue
+        const removed =
+          evaluated.matched && isRemovedByNegation(binding, this._items, contextKeyService)
+        const reason: BindingSkipReason = removed ? 'removed-by-negation' : evaluated.reason
+        const selected = evaluated.matched && !removed && winner === undefined
         if (selected) winner = binding
         candidates.push(describe(binding, reason, selected))
       }
@@ -405,15 +456,18 @@ class KeybindingsRegistryImpl {
     let chordWinner: IResolvedKeybindingItem | undefined
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
-      const { matched, reason } = evaluateBinding(
+      const evaluated = evaluateBinding(
         binding,
         'chord-prefix',
         normalized,
         undefined,
         contextKeyService,
       )
-      if (reason === 'wrong-chord-length' || reason === 'key-mismatch') continue
-      const selected = matched && chordWinner === undefined
+      if (evaluated.reason === 'wrong-chord-length' || evaluated.reason === 'key-mismatch') continue
+      const removed =
+        evaluated.matched && isRemovedByNegation(binding, this._items, contextKeyService)
+      const reason: BindingSkipReason = removed ? 'removed-by-negation' : evaluated.reason
+      const selected = evaluated.matched && !removed && chordWinner === undefined
       if (selected) chordWinner = binding
       candidates.push(describe(binding, reason, selected))
     }
@@ -431,15 +485,12 @@ class KeybindingsRegistryImpl {
     let singleWinner: IResolvedKeybindingItem | undefined
     for (let i = this._items.length - 1; i >= 0; i--) {
       const binding = this._items[i]!
-      const { matched, reason } = evaluateBinding(
-        binding,
-        'single',
-        normalized,
-        undefined,
-        contextKeyService,
-      )
-      if (reason === 'wrong-chord-length' || reason === 'key-mismatch') continue
-      const selected = matched && singleWinner === undefined
+      const evaluated = evaluateBinding(binding, 'single', normalized, undefined, contextKeyService)
+      if (evaluated.reason === 'wrong-chord-length' || evaluated.reason === 'key-mismatch') continue
+      const removed =
+        evaluated.matched && isRemovedByNegation(binding, this._items, contextKeyService)
+      const reason: BindingSkipReason = removed ? 'removed-by-negation' : evaluated.reason
+      const selected = evaluated.matched && !removed && singleWinner === undefined
       if (selected) singleWinner = binding
       candidates.push(describe(binding, reason, selected))
     }

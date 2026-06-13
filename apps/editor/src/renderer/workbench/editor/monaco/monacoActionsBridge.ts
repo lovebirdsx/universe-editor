@@ -7,21 +7,29 @@
  *  outside that registry, and mirror them into our own CommandsRegistry so
  *  the Keyboard Shortcuts editor can list and rebind them.
  *
- *  Their *default* keybindings are intentionally NOT registered with our
- *  KeybindingsRegistry — they're recorded in a side-table accessible via
- *  `getMonacoDefaultKeybinding(id)`. That keeps monaco's own
- *  context-aware keybinding dispatch in charge of the default keys (so
- *  ESC inside a find widget still cancels the widget, IntelliSense's ESC
- *  still dismisses the popup, etc.). When a user *overrides* a binding,
- *  that override goes through KeybindingsRegistry as usual, and
- *  FileEditor's capture-phase bridge prevents monaco from also acting on
- *  the *original* default key.
+ *  Each action's *default* keybindings are also registered into our
+ *  KeybindingsRegistry at the lowest priority tier ({@link
+ *  KeybindingWeight.MonacoDefault}) with a `when: editorFocus` clause. This
+ *  makes the registry the single arbiter for every keystroke: any project /
+ *  extension / user binding outranks a Monaco default on the same key, while a
+ *  Monaco default that wins unopposed is *deferred* by the dispatcher — it does
+ *  not preventDefault, so the event reaches Monaco's own context-aware dispatch
+ *  (ESC in a find widget still cancels it, IntelliSense ESC still dismisses,
+ *  Ctrl+K chords still work) which re-evaluates the key with its real internal
+ *  when-clauses. A user override is just a higher-weight binding; disabling a
+ *  default (`-command`) is a negation entry that suppresses the MonacoDefault
+ *  binding via the registry's removal semantics.
+ *
+ *  The first decoded default per command is also kept in a `_defaults`
+ *  side-table read by the Keyboard Shortcuts editor to show the built-in key.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   CommandsRegistry,
   IEditorGroupsService,
   INotificationService,
+  KeybindingsRegistry,
+  KeybindingWeight,
   combinedDisposable,
   markAsSingleton,
   type IDisposable,
@@ -59,9 +67,9 @@ export interface CoreCommand {
 }
 
 /**
- * Side-table: commandId → its first decoded default keybinding. KeybindingsEditor
- * reads from this to show the default key; FileEditor reads from this to figure
- * out which native monaco keys to swallow when the user has rebound the command.
+ * Side-table: commandId → its first decoded default keybinding. The Keyboard
+ * Shortcuts editor reads from this to show the built-in key when neither the
+ * registry nor a user override supplies one.
  */
 const _defaults = new Map<string, DecodedKeybinding>()
 
@@ -73,50 +81,35 @@ export function getAllMonacoDefaultKeybindings(): ReadonlyMap<string, DecodedKey
   return _defaults
 }
 
-// Reverse view of `_defaults` in the registry key space (D7), keyed for the
-// single global keydown dispatcher (D3) to consult when an editor widget has
-// focus. Single-stroke defaults map key → command; chord defaults contribute
-// only their first stroke to `_chordPrefixes`, so the dispatcher yields the
-// whole chord to Monaco's own state machine.
-const _defaultKeyToCommand = new Map<string, string>()
-const _chordPrefixes = new Set<string>()
-
-function rebuildDefaultKeyTables(): void {
-  _defaultKeyToCommand.clear()
-  _chordPrefixes.clear()
-  for (const [commandId, decoded] of _defaults) {
-    if (decoded.chords) {
-      _chordPrefixes.add(decodedToRegistryKeyString({ key: decoded.chords[0] }))
-    } else if (decoded.key !== undefined) {
-      const key = decodedToRegistryKeyString(decoded)
-      if (!_defaultKeyToCommand.has(key)) _defaultKeyToCommand.set(key, commandId)
-    }
-  }
+/** Convert one decoded chord stroke into the registry key-space string. */
+function strokeToRegistryKey(stroke: string): string {
+  return decodedToRegistryKeyString({ key: stroke })
 }
 
-/** Outcome of {@link monacoDeferDecision}, from the dispatcher's point of view. */
-export type MonacoDeferDecision =
-  /** The key is Monaco's to handle — don't preventDefault, let it bubble to Monaco. */
-  | 'defer'
-  /** The user rebound this Monaco command; swallow Monaco's original default key. */
-  | 'swallow'
-  /** Not a Monaco default — the project dispatcher owns it. */
-  | 'proceed'
-
 /**
- * Decide who should handle `registryKey` while an editor widget holds focus.
- * The dispatcher passes `isCommandRebound` (true when the user moved a command
- * to a different key) so a rebound Monaco default is swallowed rather than
- * fired twice.
+ * Register one Monaco default keybinding into KeybindingsRegistry at the
+ * MonacoDefault tier, gated on `editorFocus` so it only competes while an
+ * editor widget holds focus.
  */
-export function monacoDeferDecision(
-  registryKey: string,
-  isCommandRebound: (commandId: string) => boolean,
-): MonacoDeferDecision {
-  if (_chordPrefixes.has(registryKey)) return 'defer'
-  const commandId = _defaultKeyToCommand.get(registryKey)
-  if (commandId === undefined) return 'proceed'
-  return isCommandRebound(commandId) ? 'swallow' : 'defer'
+function registerMonacoDefault(commandId: string, decoded: DecodedKeybinding): IDisposable {
+  if (decoded.chords) {
+    const chords: readonly [string, string] = [
+      strokeToRegistryKey(decoded.chords[0]),
+      strokeToRegistryKey(decoded.chords[1]),
+    ]
+    return KeybindingsRegistry.registerKeybinding({
+      chords,
+      command: commandId,
+      when: 'editorFocus',
+      weight: KeybindingWeight.MonacoDefault,
+    })
+  }
+  return KeybindingsRegistry.registerKeybinding({
+    key: strokeToRegistryKey(decoded.key!),
+    command: commandId,
+    when: 'editorFocus',
+    weight: KeybindingWeight.MonacoDefault,
+  })
 }
 
 function nlsLookup(key: string, fallback: string): string {
@@ -143,20 +136,22 @@ function makeHandler(commandId: string) {
   }
 }
 
-function firstPrimaryOf(kbOpts: IMonacoEditorAction['_kbOpts']): number | undefined {
-  if (!kbOpts) return undefined
+/** Every distinct, non-empty `primary` across an action's `_kbOpts`. */
+function allPrimariesOf(kbOpts: IMonacoEditorAction['_kbOpts']): number[] {
+  if (!kbOpts) return []
   const arr = Array.isArray(kbOpts) ? kbOpts : [kbOpts]
+  const out: number[] = []
   for (const opt of arr) {
-    if (opt.primary && opt.primary !== 0) return opt.primary
+    if (opt.primary && opt.primary !== 0 && !out.includes(opt.primary)) out.push(opt.primary)
   }
-  return undefined
+  return out
 }
 
 // Core editor commands Monaco registers outside the EditorAction registry, so
 // the loop above never sees them. Mirror them by hand so undo/redo/select-all
-// show up in our CommandsRegistry (Edit menu, Keyboard Shortcuts editor). Their
-// default keys go into the side-table only, leaving Monaco's own dispatch in
-// charge of the actual key handling.
+// show up in our CommandsRegistry (Edit menu, Keyboard Shortcuts editor) and
+// their default keys participate in registry arbitration like every other
+// Monaco default.
 const ctrl = (token: string): number => MASK_CTRLCMD | TOKEN_TO_KEYCODE[token]!
 
 const CORE_COMMANDS: readonly CoreCommand[] = [
@@ -192,6 +187,18 @@ export function bridgeMonacoActionsForTests(
   const seenIds = new Set<string>()
   const installedDefaults: string[] = []
 
+  const recordDefaults = (commandId: string, primaries: readonly number[]): void => {
+    for (const primary of primaries) {
+      const decoded = decodeMonacoKeybinding(primary)
+      if (!decoded) continue
+      disposables.push(registerMonacoDefault(commandId, decoded))
+      if (!_defaults.has(commandId)) {
+        _defaults.set(commandId, decoded)
+        installedDefaults.push(commandId)
+      }
+    }
+  }
+
   for (const action of registry.getEditorActions()) {
     if (seenIds.has(action.id)) continue
     seenIds.add(action.id)
@@ -204,14 +211,7 @@ export function bridgeMonacoActionsForTests(
       }),
     )
 
-    const primary = firstPrimaryOf(action._kbOpts)
-    if (primary !== undefined) {
-      const decoded = decodeMonacoKeybinding(primary)
-      if (decoded && !_defaults.has(action.id)) {
-        _defaults.set(action.id, decoded)
-        installedDefaults.push(action.id)
-      }
-    }
+    recordDefaults(action.id, allPrimariesOf(action._kbOpts))
   }
 
   for (const core of coreCommands) {
@@ -225,19 +225,13 @@ export function bridgeMonacoActionsForTests(
         handler: makeHandler(core.id),
       }),
     )
-    const decoded = decodeMonacoKeybinding(core.primary)
-    if (decoded && !_defaults.has(core.id)) {
-      _defaults.set(core.id, decoded)
-      installedDefaults.push(core.id)
-    }
+    recordDefaults(core.id, [core.primary])
   }
 
   disposables.push({
     dispose() {
       for (const id of installedDefaults) _defaults.delete(id)
-      rebuildDefaultKeyTables()
     },
   })
-  rebuildDefaultKeyTables()
   return combinedDisposable(...disposables)
 }

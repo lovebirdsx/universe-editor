@@ -200,6 +200,66 @@ function chordToRegistryKeyString(chord: string): string {
   return normalizeKeybindingString(parts.join('+'))
 }
 
+// Reverse of DECODER_TOKEN_TO_REGISTRY: registry short form → the decoder token
+// that TOKEN_TO_KEYCODE is keyed by, so encoding can resolve 'left' → keycode.
+const REGISTRY_TOKEN_TO_DECODER: Readonly<Record<string, string>> = {
+  left: 'arrowleft',
+  right: 'arrowright',
+  up: 'arrowup',
+  down: 'arrowdown',
+}
+
+function encodeChord(chord: string): number | undefined {
+  const parts = normalizeKeybindingString(chord).split('+')
+  let mods = 0
+  let keyToken: string | undefined
+  for (const part of parts) {
+    switch (part) {
+      case 'ctrl':
+        mods |= MASK_CTRLCMD
+        break
+      case 'shift':
+        mods |= MASK_SHIFT
+        break
+      case 'alt':
+        mods |= MASK_ALT
+        break
+      case 'meta':
+        mods |= MASK_WINCTRL
+        break
+      default:
+        if (keyToken !== undefined) return undefined
+        keyToken = part
+    }
+  }
+  if (keyToken === undefined) return undefined
+  const keyCode = TOKEN_TO_KEYCODE[REGISTRY_TOKEN_TO_DECODER[keyToken] ?? keyToken]
+  if (keyCode === undefined) return undefined
+  return mods | keyCode
+}
+
+/**
+ * Inverse of {@link decodedToRegistryKeyString}: encode a registry key-space
+ * string (single stroke or space-joined 2-stroke chord) into Monaco's numeric
+ * KeyMod | KeyCode form. Returns undefined when any token is not encodable —
+ * the caller then falls back to a whole-command unbind. Used to disable one
+ * specific Monaco default key (e.g. F3) without touching its siblings (Enter).
+ */
+export function encodeRegistryKeyToMonaco(key: string): number | undefined {
+  const strokes = key.trim().split(/\s+/)
+  if (strokes.length === 1) {
+    if (strokes[0] === '') return undefined
+    return encodeChord(strokes[0]!)
+  }
+  if (strokes.length === 2) {
+    const first = encodeChord(strokes[0]!)
+    const second = encodeChord(strokes[1]!)
+    if (first === undefined || second === undefined) return undefined
+    return (first & 0x0000ffff) | ((second & 0x0000ffff) << 16)
+  }
+  return undefined
+}
+
 /**
  * Convert a {@link DecodedKeybinding} into the registry key-space string used by
  * KeybindingsRegistry — the single shared key space (D7). Chords are joined with

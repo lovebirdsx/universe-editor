@@ -216,7 +216,7 @@ describe('workspaceActions', () => {
     const first = KeybindingsRegistry.resolveKeystroke('ctrl+k')
     expect(first.kind).toBe('enter-chord')
     const second = KeybindingsRegistry.resolveKeystroke('ctrl+o', undefined, ['ctrl+k'])
-    expect(second).toEqual({ kind: 'execute', command: OpenFolderAction.ID })
+    expect(second).toMatchObject({ kind: 'execute', command: OpenFolderAction.ID })
     expect(
       MenuRegistry.getMenuItems(MenuId.MenubarFileMenu).some(
         (i) => 'command' in i && i.command === OpenFolderAction.ID,

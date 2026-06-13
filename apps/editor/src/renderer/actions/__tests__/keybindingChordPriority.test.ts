@@ -34,7 +34,7 @@ describe('chord priority — ctrl+k conflicts', () => {
     expect(first.kind).toBe('enter-chord')
 
     const second = KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])
-    expect(second).toEqual({ kind: 'execute', command: OpenKeybindingsEditorAction.ID })
+    expect(second).toMatchObject({ kind: 'execute', command: OpenKeybindingsEditorAction.ID })
   })
 
   it('ctrl+k ctrl+o resolves to OpenFolderAction', () => {
@@ -42,7 +42,7 @@ describe('chord priority — ctrl+k conflicts', () => {
     disposables.push(registerAction2(OpenFolderAction))
 
     expect(KeybindingsRegistry.resolveKeystroke('ctrl+k').kind).toBe('enter-chord')
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+o', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+o', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: OpenFolderAction.ID,
     })
@@ -53,7 +53,7 @@ describe('chord priority — ctrl+k conflicts', () => {
     disposables.push(registerAction2(FocusLeftGroupAction))
 
     expect(KeybindingsRegistry.resolveKeystroke('ctrl+k').kind).toBe('enter-chord')
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+down', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+down', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: FocusBelowGroupAction.ID,
     })

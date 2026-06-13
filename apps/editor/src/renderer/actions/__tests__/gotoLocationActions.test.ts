@@ -17,10 +17,7 @@ import {
   registerAction2,
   type IDisposable,
 } from '@universe-editor/platform'
-import {
-  gotoLocationActions,
-  monacoNavDefaultKeybindingCommandIds,
-} from '../gotoLocationActions.js'
+import { gotoLocationActions } from '../gotoLocationActions.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
@@ -109,11 +106,11 @@ describe('gotoLocationActions', () => {
 
   it('binds Open Definition to the Side as a Ctrl+K F12 chord', () => {
     for (const ctor of gotoLocationActions) disposables.push(registerAction2(ctor))
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toMatchObject({
       kind: 'enter-chord',
       pending: ['ctrl+k'],
     })
-    expect(KeybindingsRegistry.resolveKeystroke('f12', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('f12', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: 'editor.action.revealDefinitionAside',
     })
@@ -149,16 +146,5 @@ describe('gotoLocationActions', () => {
       ),
     ).resolves.not.toThrow()
     expect(triggerSpy).not.toHaveBeenCalled()
-  })
-
-  it('exposes only the keybound ids for MonacoLoader to unbind', () => {
-    expect(monacoNavDefaultKeybindingCommandIds).toEqual([
-      'editor.action.revealDefinition',
-      'editor.action.revealDefinitionAside',
-      'editor.action.peekDefinition',
-      'editor.action.goToImplementation',
-      'editor.action.peekImplementation',
-      'editor.action.goToReferences',
-    ])
   })
 })

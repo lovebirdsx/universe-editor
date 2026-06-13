@@ -382,7 +382,7 @@ describe('KeybindingsRegistry — chord bindings', () => {
       command: 'chord.openKeybindings',
     })
     const r = KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])
-    expect(r).toEqual({ kind: 'execute', command: 'chord.openKeybindings' })
+    expect(r).toMatchObject({ kind: 'execute', command: 'chord.openKeybindings' })
     d.dispose()
   })
 
@@ -411,13 +411,13 @@ describe('KeybindingsRegistry — chord bindings', () => {
     const r = KeybindingsRegistry.resolveKeystroke('ctrl+k')
     expect(r.kind).toBe('enter-chord')
     // Second stroke completes the chord.
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: 'chord.cmd',
     })
     // After removing the chord, the single-stroke is reachable again.
     d1.dispose()
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toMatchObject({
       kind: 'execute',
       command: 'single.cmd',
     })
@@ -439,7 +439,7 @@ describe('KeybindingsRegistry — chord bindings', () => {
       when: 'chord.active',
     })
     // when-clause false → chord not reachable → single-stroke fires
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc)).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc)).toMatchObject({
       kind: 'execute',
       command: 'single.cmd',
     })
@@ -453,7 +453,7 @@ describe('KeybindingsRegistry — chord bindings', () => {
 
   it('single-stroke fires when no chord exists for that key', () => {
     const d = KeybindingsRegistry.registerKeybinding({ key: 'ctrl+k', command: 'single.only' })
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+k')).toMatchObject({
       kind: 'execute',
       command: 'single.only',
     })
@@ -480,7 +480,7 @@ describe('KeybindingsRegistry — chord bindings', () => {
     expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc).kind).toBe('no-match')
     svc.set('chord.allowed', true)
     expect(KeybindingsRegistry.resolveKeystroke('ctrl+k', svc).kind).toBe('enter-chord')
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+t', svc, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+t', svc, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: 'chord.guarded',
     })
@@ -495,7 +495,9 @@ describe('KeybindingsRegistry — chord bindings', () => {
     })
     const r1 = KeybindingsRegistry.resolveKeystroke('ctrl+k')
     expect(r1.kind).toBe('enter-chord')
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+shift+p', undefined, ['ctrl+k'])).toEqual({
+    expect(
+      KeybindingsRegistry.resolveKeystroke('ctrl+shift+p', undefined, ['ctrl+k']),
+    ).toMatchObject({
       kind: 'execute',
       command: 'chord.norm',
     })
@@ -520,11 +522,11 @@ describe('KeybindingsRegistry — chord bindings', () => {
       chords: ['ctrl+k', 'ctrl+o'],
       command: 'chord.o',
     })
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+s', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: 'chord.s',
     })
-    expect(KeybindingsRegistry.resolveKeystroke('ctrl+o', undefined, ['ctrl+k'])).toEqual({
+    expect(KeybindingsRegistry.resolveKeystroke('ctrl+o', undefined, ['ctrl+k'])).toMatchObject({
       kind: 'execute',
       command: 'chord.o',
     })

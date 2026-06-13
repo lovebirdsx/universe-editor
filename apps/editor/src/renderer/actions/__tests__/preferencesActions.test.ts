@@ -130,7 +130,7 @@ describe('OpenKeybindingsEditorAction', () => {
       undefined,
       firstStroke.kind === 'enter-chord' ? firstStroke.pending : undefined,
     )
-    expect(secondStroke).toEqual({ kind: 'execute', command: OpenKeybindingsEditorAction.ID })
+    expect(secondStroke).toMatchObject({ kind: 'execute', command: OpenKeybindingsEditorAction.ID })
     expect(
       MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
         (i) => 'command' in i && i.command === OpenKeybindingsEditorAction.ID,

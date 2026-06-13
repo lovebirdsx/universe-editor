@@ -5,7 +5,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { CommandsRegistry, type IDisposable } from '@universe-editor/platform'
+import {
+  CommandsRegistry,
+  KeybindingsRegistry,
+  KeybindingWeight,
+  type IDisposable,
+} from '@universe-editor/platform'
 import {
   bridgeMonacoActionsForTests,
   getAllMonacoDefaultKeybindings,
@@ -204,5 +209,61 @@ describe('bridgeMonacoActionsForTests', () => {
     expect(CommandsRegistry.getCommands().get('undo')).toBeUndefined()
     expect(getMonacoDefaultKeybinding('editor.action.demo')).toBeUndefined()
     expect(getMonacoDefaultKeybinding('undo')).toBeUndefined()
+  })
+
+  it('registers the default key into KeybindingsRegistry at MonacoDefault weight, gated on editorFocus', () => {
+    registered = bridgeMonacoActionsForTests(
+      makeRegistry([
+        {
+          id: 'editor.action.formatDocument',
+          label: 'Format Document',
+          _kbOpts: { primary: Shift | Alt | KC_KeyF },
+        },
+      ]),
+      [],
+    )
+    const bound = KeybindingsRegistry.getAllKeybindings().filter(
+      (kb) => kb.command === 'editor.action.formatDocument',
+    )
+    expect(bound).toHaveLength(1)
+    expect(bound[0]!.key).toBe('alt+shift+f')
+    expect(bound[0]!.weight).toBe(KeybindingWeight.MonacoDefault)
+    const when = bound[0]!.when
+    expect(typeof when === 'string' ? when : when?.serialize()).toBe('editorFocus')
+  })
+
+  it('registers ALL distinct primaries from a kbOpts array, not just the first', () => {
+    registered = bridgeMonacoActionsForTests(
+      makeRegistry([
+        {
+          id: 'editor.action.multi',
+          label: 'Multi',
+          _kbOpts: [{ primary: KC_F1 }, { primary: CtrlCmd | KC_KeyA }],
+        },
+      ]),
+      [],
+    )
+    const keys = KeybindingsRegistry.getAllKeybindings()
+      .filter((kb) => kb.command === 'editor.action.multi')
+      .map((kb) => kb.key)
+      .sort()
+    expect(keys).toEqual(['ctrl+a', 'f1'])
+  })
+
+  it('dispose() removes the registry bindings too', () => {
+    registered = bridgeMonacoActionsForTests(
+      makeRegistry([
+        { id: 'editor.action.demo', label: 'Demo', _kbOpts: { primary: CtrlCmd | KC_KeyA } },
+      ]),
+      [],
+    )
+    expect(
+      KeybindingsRegistry.getAllKeybindings().some((kb) => kb.command === 'editor.action.demo'),
+    ).toBe(true)
+    registered.dispose()
+    registered = undefined
+    expect(
+      KeybindingsRegistry.getAllKeybindings().some((kb) => kb.command === 'editor.action.demo'),
+    ).toBe(false)
   })
 })

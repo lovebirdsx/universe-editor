@@ -36,6 +36,7 @@ function mount() {
     onDidChange: onDidChangeEmitter.event,
     userEntries: [],
     disabledCommands: [],
+    disabledBindings: [],
     initialize: async () => undefined,
     reload: async () => undefined,
     setKeybinding: vi.fn(),

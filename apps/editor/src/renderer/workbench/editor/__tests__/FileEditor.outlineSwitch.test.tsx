@@ -234,6 +234,7 @@ function makeServices() {
     onDidChange: () => ({ dispose() {} }),
     userEntries: [],
     disabledCommands: [],
+    disabledBindings: [],
     initialize: async () => {},
     reload: async () => {},
     setKeybinding: () => {},

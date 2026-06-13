@@ -8,6 +8,7 @@ import {
   IStatusBarService,
   InstantiationService,
   KeybindingsRegistry,
+  KeybindingWeight,
   ServiceCollection,
   registerAction2,
   type IDisposable,
@@ -826,5 +827,102 @@ describe('useGlobalKeybindingHandler — Monaco interop (capture phase)', () => 
 
     expect(statusBar.entries.get()).toHaveLength(0)
     expect(executeCommand).not.toHaveBeenCalled()
+  })
+
+  // Monaco's own default keys live in the registry at the MonacoDefault tier.
+  // When such a binding wins unopposed, the dispatcher defers to Monaco's native
+  // dispatch: it must NOT preventDefault and must NOT run the mirror command
+  // itself (Monaco re-evaluates the key with its real internal context).
+  it('defers to Monaco when a MonacoDefault binding wins unopposed', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'ctrl+f',
+        command: 'actions.find',
+        when: 'editorFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('actions.find', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('editorFocus', true)
+    mountHost(instantiation)
+
+    const { preventDefault, stopPropagation } = dispatch({ ctrlKey: true, key: 'f' })
+    expect(executeCommand).not.toHaveBeenCalled()
+    expect(preventDefault).not.toHaveBeenCalled()
+    expect(stopPropagation).not.toHaveBeenCalled()
+  })
+
+  // A higher-weight binding (project Action2) on the same key as a Monaco
+  // default outranks it: the dispatcher claims the key and runs the command,
+  // even while the editor is focused. This is Bug 1's fix (alt+shift+o).
+  it('a higher-weight binding outranks a MonacoDefault on the same key', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'alt+shift+o',
+        command: 'editor.action.organizeImports',
+        when: 'editorFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('editor.action.organizeImports', () => {}))
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'alt+shift+o',
+        command: 'workbench.action.showAllSymbols',
+        weight: KeybindingWeight.User,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('workbench.action.showAllSymbols', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('editorFocus', true)
+    mountHost(instantiation)
+
+    const { preventDefault } = dispatch({ altKey: true, shiftKey: true, key: 'o' })
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.showAllSymbols')
+    expect(preventDefault).toHaveBeenCalled()
+  })
+
+  // A keyed `-command` negation frees just that key: with F3→nextMatch's Monaco
+  // default negated, the project FindNext binding (higher weight) wins F3. This
+  // is Bug 2's fix.
+  it('a keyed negation lets a higher-weight binding take over the freed key', () => {
+    const { executeCommand, instantiation } = createHarness()
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'f3',
+        command: 'editor.action.nextMatchFindAction',
+        when: 'editorFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      }),
+    )
+    disposables.push(
+      CommandsRegistry.registerCommand('editor.action.nextMatchFindAction', () => {}),
+    )
+    // VSCode-layer `{key:"f3", command:"-editor.action.nextMatchFindAction"}`.
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'f3',
+        command: 'editor.action.nextMatchFindAction',
+        isNegated: true,
+      }),
+    )
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'f3',
+        command: 'workbench.action.editor.findNext',
+        weight: KeybindingWeight.WorkbenchContrib,
+      }),
+    )
+    disposables.push(CommandsRegistry.registerCommand('workbench.action.editor.findNext', () => {}))
+    const ck = instantiation.invokeFunction((a) => a.get(IContextKeyService))
+    ck.createKey('editorFocus', true)
+    mountHost(instantiation)
+
+    const { preventDefault } = dispatch({ key: 'F3' })
+    expect(executeCommand).toHaveBeenCalledWith('workbench.action.editor.findNext')
+    expect(preventDefault).toHaveBeenCalled()
   })
 })

@@ -94,15 +94,6 @@ const NAVIGATION_COMMANDS: readonly NavCommandDef[] = [
   },
 ]
 
-/**
- * Monaco command ids whose built-in default keys we mirror as project
- * keybindings. MonacoLoader unbinds these on the Monaco side so the key
- * doesn't fire twice. Single source of truth for both ends.
- */
-export const monacoNavDefaultKeybindingCommandIds: readonly string[] = NAVIGATION_COMMANDS.filter(
-  (c) => c.keybinding !== undefined,
-).map((c) => c.id)
-
 function runMonacoNavAction(accessor: ServicesAccessor, actionId: string): void {
   const groups = accessor.get(IEditorGroupsService)
   const active = groups.activeGroup.activeEditor

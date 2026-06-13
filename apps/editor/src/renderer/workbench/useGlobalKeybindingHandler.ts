@@ -12,6 +12,7 @@ import {
   IStatusBarService,
   CommandsRegistry,
   KeybindingsRegistry,
+  KeybindingWeight,
   StatusBarAlignment,
   type IDisposable,
 } from '@universe-editor/platform'
@@ -20,7 +21,6 @@ import { formatChord } from './titlebar/keybindingFormat.js'
 import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
 import { MonacoLoader } from './editor/monaco/MonacoLoader.js'
-import { monacoDeferDecision } from './editor/monaco/monacoActionsBridge.js'
 import {
   formatGuardStop,
   formatKeystrokeTrace,
@@ -190,23 +190,27 @@ export function useGlobalKeybindingHandler(): void {
     }
 
     // Single document capture-phase listener. It always runs *before* Monaco's
-    // own dispatch, then decides per keystroke who wins:
+    // own dispatch, then decides per keystroke who wins — by consulting the one
+    // registry (KeybindingsRegistry) for every key, focused editor or not.
     //
-    //  - Editor NOT focused → resolve against the project registry directly
-    //    (status quo): global shortcuts stay authoritative.
+    // The registry is the single arbiter. Monaco's own default keys are mirrored
+    // into it at the lowest tier (KeybindingWeight.MonacoDefault, gated on
+    // `editorFocus`), so a winning binding falls into two cases:
     //
-    //  - Editor focused → consult `monacoDeferDecision`. Keys that are Monaco
-    //    defaults (or a chord prefix) are *deferred* — we return without
-    //    preventDefault so the event reaches Monaco's dispatcher (Find, ESC,
-    //    IntelliSense, Ctrl+K chords keep working). A Monaco default the user
-    //    has rebound is *swallowed* (preventDefault + stopPropagation) so
-    //    Monaco's original key is dead and the user's binding runs instead.
-    //    Everything else *proceeds* to the project registry; keys with no
-    //    project binding fall through to Monaco via the no-match return.
+    //  - weight === MonacoDefault → the key is Monaco's. We *defer*: return
+    //    without preventDefault so the event reaches Monaco's own context-aware
+    //    dispatch (Find, ESC, IntelliSense, Ctrl+K chords keep working with
+    //    Monaco's real internal when-clauses).
+    //
+    //  - weight > MonacoDefault → a project / extension / user / vscode binding
+    //    outranks any Monaco default on this key. We claim it (preventDefault +
+    //    stopPropagation) and run the command. A user override that *disables* a
+    //    Monaco default is a negation entry in the registry, so the default no
+    //    longer wins and the key falls through to Monaco as plain input.
     //
     // This removes the old bubble listener and its `e.defaultPrevented` probe:
-    // "did Monaco consume this" is now answered by the explicit defer table
-    // rather than by inspecting Monaco's side effects.
+    // "did Monaco consume this" is now answered by the registry's weight rather
+    // than by inspecting Monaco's side effects.
     const runResolution = (e: KeyboardEvent) => {
       const dbg = keyboardDebugService.enabled
       // IME composition owns every keystroke until it commits. keyCode 229 is
@@ -331,33 +335,6 @@ export function useGlobalKeybindingHandler(): void {
 
       const key = buildKeyString(e)
 
-      // Editor-focus arbitration (replaces the old bubble + defaultPrevented
-      // route). Defer Monaco's own default keys to Monaco; swallow the original
-      // key of a command the user has rebound so it doesn't fire twice.
-      if (contextKeyService.get('editorFocus') === true) {
-        const decision = monacoDeferDecision(
-          key,
-          (id) => userKeybindings.getUserEntry(id) !== undefined,
-        )
-        if (decision === 'defer') {
-          if (dbg) {
-            keyboardDebugService.append(
-              formatGuardStop(
-                toDiagnostics(e, key),
-                'editor focused: Monaco owns this default key',
-              ),
-            )
-          }
-          return
-        }
-        if (decision === 'swallow') {
-          // Kill Monaco's original default key, then fall through so the user's
-          // own binding (if any) resolves below.
-          e.preventDefault()
-          e.stopPropagation()
-        }
-      }
-
       const result = KeybindingsRegistry.resolveKeystroke(key, contextKeyService, undefined)
       const diag = dbg ? toDiagnostics(e, key) : undefined
       if (dbg && diag) {
@@ -383,6 +360,21 @@ export function useGlobalKeybindingHandler(): void {
         }
       }
       if (result.kind === 'no-match') return
+
+      // A Monaco default won unopposed: defer to Monaco's own dispatch. Don't
+      // preventDefault — let the event reach Monaco so its context-aware
+      // keybinding service runs the key with its real internal when-clauses
+      // (find-widget ESC, IntelliSense, Ctrl+K chords). Any higher-weight
+      // binding would have outranked this, so reaching here means no project /
+      // extension / user binding claims the key.
+      if (result.weight === KeybindingWeight.MonacoDefault) {
+        if (dbg && diag) {
+          keyboardDebugService.append(
+            formatGuardStop(diag, 'Monaco default won unopposed: deferred to Monaco dispatch'),
+          )
+        }
+        return
+      }
 
       // Reserve printable single-character keys (without ctrl/alt/meta) and the
       // native editing keys (Delete/Backspace) for text input. A focused Monaco

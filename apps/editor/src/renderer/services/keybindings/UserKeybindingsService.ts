@@ -13,19 +13,18 @@
 
 import { parse, type ParseError } from 'jsonc-parser'
 import {
-  combinedDisposable,
   CommandsRegistry,
   createDecorator,
   Disposable,
   DisposableStore,
   Emitter,
   type Event,
-  type IDisposable,
   InstantiationType,
   IStorageService,
   IUserDataFilesService,
   KeybindingsRegistry,
   KeybindingWeight,
+  normalizeKeybindingString,
   type IKeybindingItem,
   registerSingleton,
   URI,
@@ -35,11 +34,26 @@ import { formatKey, formatChord } from '../../workbench/titlebar/keybindingForma
 
 export interface IUserKeybindingEntry {
   command: string
-  /** Normalized key string (e.g. 'ctrl+shift+b'). null = disable default bindings. */
+  /**
+   * Key for this entry, in the registry key space ('ctrl+shift+b', or a
+   * space-joined 2-stroke chord 'ctrl+k ctrl+s').
+   *  - positive entry (`isRemoval` falsy): the key the command is bound to.
+   *  - removal entry (`isRemoval` true): the specific key to disable, or `null`
+   *    to disable every binding of the command.
+   */
   key: string | null
+  /** True for a `-command` disable entry; false/undefined for a normal binding. */
+  isRemoval?: boolean
   when?: string
   /** Forwarded to the command when the binding fires (VSCode-style `args`). */
   args?: unknown
+}
+
+/** A disabled (command, key) pair surfaced for Monaco-side default unbinding. */
+export interface IDisabledBinding {
+  command: string
+  /** Specific disabled key (registry key space), or null = whole command. */
+  key: string | null
 }
 
 interface FileKeybindingEntry {
@@ -53,8 +67,10 @@ export interface IUserKeybindingsService {
   readonly _serviceBrand: undefined
   readonly onDidChange: Event<void>
   readonly userEntries: readonly IUserKeybindingEntry[]
-  /** Commands disabled via a `-command` entry in either layer (deduped). */
+  /** Commands fully disabled via a keyless `-command` entry in either layer (deduped). */
   readonly disabledCommands: readonly string[]
+  /** Every `-command` disable across both layers, keyed (command, key) for Monaco-side sync. */
+  readonly disabledBindings: readonly IDisabledBinding[]
   /** Synchronous snapshot of the last VSCode-layer reload, for keyboard-debug diagnostics. */
   readonly diagnostics: IUserKeybindingsDiagnostics
   initialize(): Promise<void>
@@ -100,14 +116,17 @@ function keyToKeybindingItem(entry: IUserKeybindingEntry): IKeybindingItem | und
 }
 
 function entryToFile(entry: IUserKeybindingEntry): FileKeybindingEntry {
-  if (entry.key === null) {
+  if (entry.isRemoval) {
     return {
       command: '-' + entry.command,
+      // A removal may target one specific key (key !== null) or the whole
+      // command (key === null). Preserve the key so the disable stays precise.
+      ...(entry.key !== null ? { key: entry.key } : {}),
       ...(entry.when !== undefined ? { when: entry.when } : {}),
     }
   }
   return {
-    key: entry.key,
+    key: entry.key!,
     command: entry.command,
     ...(entry.when !== undefined ? { when: entry.when } : {}),
     ...(entry.args !== undefined ? { args: entry.args } : {}),
@@ -119,9 +138,14 @@ function fileToEntry(raw: FileKeybindingEntry): IUserKeybindingEntry | null {
   if (raw.command.startsWith('-')) {
     const cmd = raw.command.slice(1)
     if (cmd.length === 0) return null
+    // Preserve the key on a `-command` removal: with a key it disables only that
+    // binding (VSCode `{key, command:"-x"}`), without one it disables the whole
+    // command. Dropping the key here was the bug that turned a single-key
+    // disable into a whole-command unbind (Bug 2: F3 disable killed Enter too).
     return {
       command: cmd,
-      key: null,
+      key: typeof raw.key === 'string' && raw.key.length > 0 ? raw.key : null,
+      isRemoval: true,
       ...(typeof raw.when === 'string' ? { when: raw.when } : {}),
     }
   }
@@ -155,14 +179,17 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange: Event<void> = this._onDidChange.event
 
-  private readonly _userEntries = new Map<string, IUserKeybindingEntry>()
+  // Flat list of user-layer (keybindings.json) entries. A single command may
+  // contribute several entries — e.g. a positive rebind plus an auto-appended
+  // removal of its original default key — so this is a list, not a per-command
+  // map. The whole user layer is re-registered wholesale on any change.
+  private readonly _userEntries: IUserKeybindingEntry[] = []
   private readonly _registrationStore = this._register(new DisposableStore())
-  private readonly _registrationDisposables = new Map<string, IDisposable>()
   private readonly _vscodeRegistrationStore = this._register(new DisposableStore())
   private readonly _defaultSnapshot = new Map<string, string>()
 
-  /** Commands disabled (`-command`) by the read-only VSCode layer, last reload. */
-  private readonly _vscodeDisabledCommands = new Set<string>()
+  /** `-command` disables from the read-only VSCode layer, last reload (key may be null = whole command). */
+  private readonly _vscodeDisabled: IDisabledBinding[] = []
 
   /** Suspend file write-back while we apply an external file change. */
   private _suspendWriteBack = false
@@ -227,15 +254,26 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   }
 
   get userEntries(): readonly IUserKeybindingEntry[] {
-    return [...this._userEntries.values()]
+    return [...this._userEntries]
   }
 
   get disabledCommands(): readonly string[] {
-    const set = new Set(this._vscodeDisabledCommands)
-    for (const entry of this._userEntries.values()) {
-      if (entry.key === null) set.add(entry.command)
+    const set = new Set<string>()
+    // Only keyless removals disable a whole command; a keyed removal frees just
+    // one key and leaves the command's other bindings live.
+    for (const d of this._vscodeDisabled) if (d.key === null) set.add(d.command)
+    for (const entry of this._userEntries) {
+      if (entry.isRemoval && entry.key === null) set.add(entry.command)
     }
     return [...set]
+  }
+
+  get disabledBindings(): readonly IDisabledBinding[] {
+    const out: IDisabledBinding[] = [...this._vscodeDisabled]
+    for (const entry of this._userEntries) {
+      if (entry.isRemoval) out.push({ command: entry.command, key: entry.key })
+    }
+    return out
   }
 
   // Re-evaluate VSCode + user bindings. Extension-contributed commands register
@@ -252,7 +290,12 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   }
 
   getUserEntry(command: string): IUserKeybindingEntry | undefined {
-    return this._userEntries.get(command)
+    // Prefer the positive (rebind) entry so the shortcuts editor shows the new
+    // key; fall back to a removal entry so a pure disable still reads as "User".
+    return (
+      this._userEntries.find((e) => e.command === command && !e.isRemoval) ??
+      this._userEntries.find((e) => e.command === command)
+    )
   }
 
   getDefaultKey(command: string): string | undefined {
@@ -260,35 +303,70 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   }
 
   setKeybinding(command: string, key: string | null, when?: string): void {
-    const entry: IUserKeybindingEntry = {
-      command,
-      key,
-      ...(when !== undefined ? { when } : {}),
+    // Replace any prior user-layer entries for this command (positive + the
+    // removals we previously auto-appended).
+    this._removeUserEntries(command)
+
+    if (key === null) {
+      // Pure disable: a keyless removal that frees the command entirely.
+      this._userEntries.push({ command, key: null, isRemoval: true })
+    } else {
+      this._userEntries.push({
+        command,
+        key,
+        ...(when !== undefined ? { when } : {}),
+      })
+      // Mirror VSCode's rebind UX: appending a removal of each original default
+      // key so the old key stops firing the command once it's been moved. This
+      // replaces the deleted dispatcher-side 'swallow' mechanism.
+      for (const defaultKey of this._defaultKeysOf(command)) {
+        if (defaultKey === normalizeKeybindingString(key)) continue
+        this._userEntries.push({ command, key: defaultKey, isRemoval: true })
+      }
     }
-    this._applyEntry(entry)
+
+    this._applyAllUserEntries()
     void this._writeFile()
     this._onDidChange.fire()
   }
 
   resetKeybinding(command: string): void {
-    const d = this._registrationDisposables.get(command)
-    if (d) {
-      this._registrationStore.delete(d)
-      this._registrationDisposables.delete(command)
-    }
-    this._userEntries.delete(command)
+    this._removeUserEntries(command)
+    this._applyAllUserEntries()
     void this._writeFile()
     this._onDidChange.fire()
+  }
+
+  private _removeUserEntries(command: string): void {
+    for (let i = this._userEntries.length - 1; i >= 0; i--) {
+      if (this._userEntries[i]!.command === command) this._userEntries.splice(i, 1)
+    }
+  }
+
+  /**
+   * Registry key-space strings of every active default binding for `command` —
+   * non-negated bindings below User weight (project Action2s and mirrored Monaco
+   * defaults). Used to auto-negate the original key on rebind.
+   */
+  private _defaultKeysOf(command: string): string[] {
+    const out: string[] = []
+    for (const kb of KeybindingsRegistry.getAllKeybindings()) {
+      if (kb.command !== command || kb.isNegated) continue
+      if ((kb.weight ?? KeybindingWeight.WorkbenchContrib) >= KeybindingWeight.User) continue
+      const key = kb.chords ? `${kb.chords[0]} ${kb.chords[1]}` : kb.key
+      if (key !== undefined && !out.includes(key)) out.push(key)
+    }
+    return out
   }
 
   private async _reloadVSCodeFile(): Promise<void> {
     const text = await this._files.read(UserDataFile.VSCodeKeybindings)
     const entries = parseKeybindingsFile(text)
     this._vscodeRegistrationStore.clear()
-    this._vscodeDisabledCommands.clear()
+    this._vscodeDisabled.length = 0
     let registered = 0
     for (const entry of entries) {
-      if (entry.key === null) this._vscodeDisabledCommands.add(entry.command)
+      if (entry.isRemoval) this._vscodeDisabled.push({ command: entry.command, key: entry.key })
       if (!CommandsRegistry.getCommand(entry.command)) continue
       // No per-command dedup here: a single command may legitimately have several
       // VSCode bindings (e.g. the user's custom key plus the kept default). The
@@ -303,7 +381,6 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
   private async _reloadVSCodeAndUser(): Promise<void> {
     // Clear user entries first so they can be re-registered after VSCode entries (LIFO order).
     this._registrationStore.clear()
-    this._registrationDisposables.clear()
     await this._reloadVSCodeFile()
     await this._reloadFromFile()
   }
@@ -314,81 +391,73 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     const entries = parseKeybindingsFile(text)
     this._suspendWriteBack = true
     try {
-      // Drop all previous user-applied registrations.
-      this._registrationStore.clear()
-      this._registrationDisposables.clear()
-      this._userEntries.clear()
-      for (const entry of entries) this._applyEntry(entry)
+      this._userEntries.length = 0
+      this._userEntries.push(...entries)
+      this._applyAllUserEntries()
     } finally {
       this._suspendWriteBack = false
     }
     this._onDidChange.fire()
   }
 
-  private _applyEntry(entry: IUserKeybindingEntry): void {
-    this._applyEntryToStore(entry, this._registrationStore, this._registrationDisposables)
-    this._userEntries.set(entry.command, entry)
+  // Re-register the entire user layer from `_userEntries`. The whole layer is
+  // rebuilt on any change (the file is the source of truth), so there's no
+  // incremental per-command bookkeeping.
+  private _applyAllUserEntries(): void {
+    this._registrationStore.clear()
+    for (const entry of this._userEntries) this._registerEntry(entry, this._registrationStore)
   }
 
-  // User-layer registration: one binding per command (the Keyboard Shortcuts
-  // editor manages a single override per command, so re-applying a command
-  // replaces its previous binding).
-  private _applyEntryToStore(
-    entry: IUserKeybindingEntry,
-    store: DisposableStore,
-    disposables: Map<string, IDisposable>,
-  ): void {
-    const prev = disposables.get(entry.command)
-    if (prev) {
-      store.delete(prev)
-      disposables.delete(entry.command)
-    }
-    const d = this._registerEntry(entry, store)
-    if (d) disposables.set(entry.command, d)
-  }
-
-  // Registers a single entry into `store` and returns its disposable (undefined
-  // when the entry yields no binding). No command-level dedup — callers that
-  // need at-most-one-per-command go through _applyEntryToStore.
-  private _registerEntry(
-    entry: IUserKeybindingEntry,
-    store: DisposableStore,
-  ): IDisposable | undefined {
-    if (entry.key === null) {
-      const toNegate: IKeybindingItem[] = KeybindingsRegistry.getAllKeybindings().filter(
-        (kb) => kb.command === entry.command && !kb.isNegated,
-      )
-      if (toNegate.length === 0) return undefined
-
-      const ds: IDisposable[] = toNegate.map((kb) => {
-        if (kb.chords) {
-          return KeybindingsRegistry.registerKeybinding({
-            chords: kb.chords as [string, string],
-            command: entry.command,
-            isNegated: true,
-          })
+  // Registers a single entry into `store`. Positive entries add a binding;
+  // removal entries add negation(s) that suppress matching bindings via the
+  // registry's removal semantics.
+  private _registerEntry(entry: IUserKeybindingEntry, store: DisposableStore): void {
+    if (entry.isRemoval) {
+      if (entry.key === null) {
+        // Whole-command disable: negate every current non-negated binding.
+        for (const kb of KeybindingsRegistry.getAllKeybindings()) {
+          if (kb.command !== entry.command || kb.isNegated) continue
+          if (kb.chords) {
+            store.add(
+              KeybindingsRegistry.registerKeybinding({
+                chords: kb.chords as [string, string],
+                command: entry.command,
+                isNegated: true,
+              }),
+            )
+          } else if (kb.key !== undefined) {
+            store.add(
+              KeybindingsRegistry.registerKeybinding({
+                key: kb.key,
+                command: entry.command,
+                isNegated: true,
+              }),
+            )
+          }
         }
-        return KeybindingsRegistry.registerKeybinding({
-          key: kb.key!,
-          command: entry.command,
-          isNegated: true,
-        })
-      })
-
-      const combined = combinedDisposable(...ds)
-      store.add(combined)
-      return combined
+        return
+      }
+      // Keyed disable: negate just (command, key), leaving siblings live.
+      const strokes = entry.key.trim().split(/\s+/)
+      const negation: IKeybindingItem =
+        strokes.length === 2
+          ? {
+              chords: [strokes[0]!, strokes[1]!] as [string, string],
+              command: entry.command,
+              isNegated: true,
+            }
+          : { key: strokes[0]!, command: entry.command, isNegated: true }
+      store.add(KeybindingsRegistry.registerKeybinding(negation))
+      return
     }
 
     const item = keyToKeybindingItem(entry)
-    if (!item) return undefined
-    const d = KeybindingsRegistry.registerKeybinding(item)
-    store.add(d)
-    return d
+    if (!item) return
+    store.add(KeybindingsRegistry.registerKeybinding(item))
   }
 
   private async _writeFile(): Promise<void> {
-    const fileEntries = [...this._userEntries.values()].map(entryToFile)
+    const fileEntries = this._userEntries.map(entryToFile)
     const body = `// User keybinding overrides — edit and save to apply immediately.\n${JSON.stringify(fileEntries, null, 2)}\n`
     await this._files.write(UserDataFile.Keybindings, body)
   }

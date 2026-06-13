@@ -15,7 +15,6 @@ import {
 } from '@universe-editor/platform'
 import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
-import { monacoNavDefaultKeybindingCommandIds } from '../../../actions/gotoLocationActions.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
 
@@ -198,27 +197,6 @@ async function loadMonaco(): Promise<typeof monaco> {
       // 走的是 onLanguageEncountered/getOrCreate，二者错配会导致 ```json 块不着色。
       // 主动建一个 json model 触发 onLanguage，把 tokens provider 提前注册上。
       monacoMod.editor.createModel('', 'json').dispose()
-      // Drop monaco's built-in Ctrl+Shift+O (quickOutline) default key so it
-      // doesn't double-fire alongside our own `workbench.action.gotoSymbol`,
-      // which provides the Go to Symbol quick pick. The command itself stays
-      // registered (still triggerable via editor.trigger).
-      monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-editor.action.quickOutline' })
-      // Same treatment for the goto/peek navigation commands we mirror as
-      // project Action2s (gotoLocationActions): drop monaco's built-in default
-      // keys so they don't double-fire alongside our global keybinding handler.
-      // The commands stay registered (still triggerable via editor.trigger).
-      for (const id of monacoNavDefaultKeybindingCommandIds) {
-        monacoMod.editor.addKeybindingRule({ keybinding: 0, command: `-${id}` })
-      }
-      // On Windows/Linux monaco binds Alt+PageDown / Alt+PageUp to its core
-      // scrollPageDown / scrollPageUp commands (gated on textInputFocus). With
-      // the editor focused monaco matches them first and preventDefault()s, so
-      // the key never reaches our global handler — our own
-      // workbench.action.editor.{next,previous}Change (alt+pagedown/pageup,
-      // jump between dirty-diff changes) would never fire. Drop the default
-      // bindings so the keys fall through; the commands stay triggerable.
-      monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-scrollPageDown' })
-      monacoMod.editor.addKeybindingRule({ keybinding: 0, command: '-scrollPageUp' })
       // Mirror every monaco-internal EditorAction + core command into our
       // CommandsRegistry / KeybindingsRegistry so the Keyboard Shortcuts
       // editor can list and rebind them. Fire-and-forget — failure here

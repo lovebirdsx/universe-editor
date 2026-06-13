@@ -1,22 +1,45 @@
 import { describe, expect, it } from 'vitest'
-import { diffMonacoDisabled } from '../MonacoDefaultKeybindingOverrideContribution.js'
+import {
+  desiredMonacoRules,
+  diffMonacoDisabled,
+} from '../MonacoDefaultKeybindingOverrideContribution.js'
 
 describe('diffMonacoDisabled', () => {
-  it('adds newly desired commands not yet applied', () => {
-    const { toAdd, toRemove } = diffMonacoDisabled(new Set(['a', 'b']), new Set(['a']))
-    expect(toAdd).toEqual(['b'])
+  const ruleA = { command: 'a', keybinding: 0 }
+  const ruleB = { command: 'b', keybinding: 0 }
+
+  it('adds newly desired rules not yet applied', () => {
+    const desired = new Map([
+      ['a 0', ruleA],
+      ['b 0', ruleB],
+    ])
+    const { toAdd, toRemove } = diffMonacoDisabled(desired, new Set(['a 0']))
+    expect(toAdd).toEqual([ruleB])
     expect(toRemove).toEqual([])
   })
 
-  it('removes applied commands no longer desired', () => {
-    const { toAdd, toRemove } = diffMonacoDisabled(new Set(['a']), new Set(['a', 'b']))
+  it('removes applied rules no longer desired', () => {
+    const desired = new Map([['a 0', ruleA]])
+    const { toAdd, toRemove } = diffMonacoDisabled(desired, new Set(['a 0', 'b 0']))
     expect(toAdd).toEqual([])
-    expect(toRemove).toEqual(['b'])
+    expect(toRemove).toEqual(['b 0'])
   })
 
   it('is a no-op when desired equals applied', () => {
-    const { toAdd, toRemove } = diffMonacoDisabled(new Set(['a', 'b']), new Set(['b', 'a']))
+    const desired = new Map([
+      ['a 0', ruleA],
+      ['b 0', ruleB],
+    ])
+    const { toAdd, toRemove } = diffMonacoDisabled(desired, new Set(['b 0', 'a 0']))
     expect(toAdd).toEqual([])
     expect(toRemove).toEqual([])
+  })
+})
+
+describe('desiredMonacoRules', () => {
+  it('skips commands with no Monaco default keybinding', () => {
+    // 'no.such.command' is not a bridged Monaco default → filtered out.
+    const rules = desiredMonacoRules([{ command: 'no.such.command', key: 'f3' }])
+    expect(rules.size).toBe(0)
   })
 })

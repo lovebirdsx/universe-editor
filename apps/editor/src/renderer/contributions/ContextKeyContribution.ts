@@ -9,7 +9,9 @@
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorTextFocus                                            (Monaco text input focus)
  *   - editorLangId / editorReadonly                              (active editor attributes, monaco parity)
+ *   - editorHasDefinitionProvider                               (definition provider for active lang)
  *   - editorHasImplementationProvider                           (impl provider for active lang)
+ *   - editorHasReferenceProvider                                (reference provider for active lang)
  *   - editorHasCodeActionsProvider / isInEmbeddedEditor / inReferenceSearchEditor (seeded false)
  *   - editorPartMultipleEditorGroups / editorIsOpen
  *   - groupEditorsCount / activeEditorGroupIndex / activeEditorGroupEmpty
@@ -109,7 +111,9 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // has loaded yet.
     //   editorLangId      — active editor language (monaco: editorLangId)
     //   editorReadonly    — active editor is read-only (monaco: editorReadonly)
+    //   editorHasDefinitionProvider — a definition provider is registered for the lang
     //   editorHasImplementationProvider — a provider is registered for the lang
+    //   editorHasReferenceProvider — a reference provider is registered for the lang
     //   editorHasCodeActionsProvider    — seeded false; the project has no code-
     //     action provider layer yet, so no data source exists to flip it on.
     //   isInEmbeddedEditor / inReferenceSearchEditor — always false in the main
@@ -117,8 +121,16 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     //     maintain their own scoped context-key service.
     const editorLangId = contextKeyService.createKey<string>('editorLangId', '')
     const editorReadonly = contextKeyService.createKey<boolean>('editorReadonly', false)
+    const editorHasDefinitionProvider = contextKeyService.createKey<boolean>(
+      'editorHasDefinitionProvider',
+      false,
+    )
     const editorHasImplementationProvider = contextKeyService.createKey<boolean>(
       'editorHasImplementationProvider',
+      false,
+    )
+    const editorHasReferenceProvider = contextKeyService.createKey<boolean>(
+      'editorHasReferenceProvider',
       false,
     )
     contextKeyService.createKey<boolean>('editorHasCodeActionsProvider', false)
@@ -130,8 +142,14 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       const lang = editor instanceof FileEditorInput ? editor.language : ''
       editorLangId.set(lang)
       editorReadonly.set(editor instanceof FileEditorInput ? editor.isReadonly : false)
+      editorHasDefinitionProvider.set(
+        lang !== '' && languageFeaturesService.hasDefinitionProvider(lang),
+      )
       editorHasImplementationProvider.set(
         lang !== '' && languageFeaturesService.hasImplementationProvider(lang),
+      )
+      editorHasReferenceProvider.set(
+        lang !== '' && languageFeaturesService.hasReferenceProvider(lang),
       )
     }
     this._register(
