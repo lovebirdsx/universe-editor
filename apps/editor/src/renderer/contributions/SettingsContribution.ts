@@ -333,7 +333,7 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
           },
           'workbench.chat.virtualizationThreshold': {
             type: 'number',
-            default: 1000,
+            default: 50,
             minimum: 10,
             description: localize(
               'settings.workbench.chat.virtualizationThreshold.description',
