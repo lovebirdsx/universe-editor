@@ -1,8 +1,10 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Ollama provider — talks to a local Ollama server (no API key needed, ideal for
- *  end-to-end verification). Models come from /api/tags; chat streams NDJSON from
- *  /api/chat. Translates the standard request/response shapes to/from Ollama's.
+ *  OpenAI provider — talks to the OpenAI Chat Completions API or any OpenAI-compatible
+ *  endpoint (LM Studio, vLLM, DeepSeek, Together, …) via a configurable baseUrl.
+ *  Models come from GET /models; chat streams Server-Sent Events from
+ *  POST /chat/completions. The API key is read from encrypted secret storage and
+ *  used only here in main; it never reaches the renderer or settings.json.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -13,6 +15,8 @@ import {
   CancellationError,
   DeferredPromise,
   DisposableStore,
+  Emitter,
+  type Event,
   type AiMessage,
   type AiRequestOptions,
   type AiResponse,
@@ -25,45 +29,65 @@ import {
 import type { AiProviderContext } from '../aiModelMainService.js'
 import { retryWithBackoff } from './retry.js'
 
-const VENDOR = 'ollama'
-const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
-// Ollama exposes no per-model token window via the API; use a conservative default.
-const DEFAULT_MAX_TOKENS = 4096
+const VENDOR = 'openai'
+const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
+const SECRET_KEY = `ai.secret.${VENDOR}.apiKey`
+// OpenAI exposes per-model context windows only out-of-band; use a safe default.
+const DEFAULT_MAX_TOKENS = 8192
 
-interface OllamaTag {
-  readonly name: string
-  readonly model?: string
+interface OpenAiModelEntry {
+  readonly id: string
 }
 
-interface OllamaChatStreamLine {
-  readonly message?: { readonly role?: string; readonly content?: string }
-  readonly done?: boolean
-  readonly prompt_eval_count?: number
-  readonly eval_count?: number
+interface OpenAiChatStreamChunk {
+  readonly choices?: ReadonlyArray<{ readonly delta?: { readonly content?: string } }>
+  readonly usage?: { readonly prompt_tokens?: number; readonly completion_tokens?: number }
 }
 
-export class OllamaProvider implements IAiModelProvider {
+export class OpenAiProvider implements IAiModelProvider {
+  private readonly _onDidChange = new Emitter<void>()
+  readonly onDidChange: Event<void> = this._onDidChange.event
+
   constructor(private readonly _context: AiProviderContext) {}
 
+  /** Call after the API key changes so the registry re-resolves the model list. */
+  notifyConfigChanged(): void {
+    this._onDidChange.fire()
+  }
+
+  dispose(): void {
+    this._onDidChange.dispose()
+  }
+
   private get _baseUrl(): string {
-    return this._context.getVendorConfig(VENDOR)?.baseUrl?.replace(/\/+$/, '') ?? DEFAULT_BASE_URL
+    const configured = this._context.getVendorConfig(VENDOR)?.baseUrl?.trim()
+    return (configured || DEFAULT_BASE_URL).replace(/\/+$/, '')
+  }
+
+  private _apiKey(): Promise<string | undefined> {
+    return this._context.secrets.get(SECRET_KEY)
   }
 
   async provideModels(token: CancellationToken): Promise<readonly AiModelMetadata[]> {
+    const apiKey = await this._apiKey()
+    if (!apiKey) return []
     const signals = new DisposableStore()
     let res: Response
     try {
-      res = await fetch(`${this._baseUrl}/api/tags`, { signal: toAbortSignal(token, signals) })
+      res = await fetch(`${this._baseUrl}/models`, {
+        headers: { authorization: `Bearer ${apiKey}` },
+        signal: toAbortSignal(token, signals),
+      })
     } catch {
-      // Server not running / unreachable — no models, not a hard error.
+      // Endpoint unreachable — no models, not a hard error.
       return []
     } finally {
       signals.dispose()
     }
     if (!res.ok) return []
-    const body = (await res.json()) as { models?: OllamaTag[] }
-    const tags = body.models ?? []
-    return tags.map((tag) => toMetadata(tag.name))
+    const body = (await res.json()) as { data?: OpenAiModelEntry[] }
+    const entries = body.data ?? []
+    return entries.map((entry) => toMetadata(entry.id))
   }
 
   sendRequest(
@@ -90,11 +114,19 @@ export class OllamaProvider implements IAiModelProvider {
     let usage: { inputTokens: number; outputTokens: number } | undefined
     const signals = new DisposableStore()
     try {
+      const apiKey = await this._apiKey()
+      if (!apiKey) {
+        throw new AiError(AiErrorCode.Unauthorized, 'No OpenAI API key configured.')
+      }
+
       const res = await retryWithBackoff(
         () =>
-          fetch(`${this._baseUrl}/api/chat`, {
+          fetch(`${this._baseUrl}/chat/completions`, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+              'content-type': 'application/json',
+              authorization: `Bearer ${apiKey}`,
+            },
             body: JSON.stringify(buildChatBody(toModelName(options.modelId), messages, options)),
             signal: toAbortSignal(token, signals),
           }),
@@ -106,19 +138,18 @@ export class OllamaProvider implements IAiModelProvider {
         throw mapHttpError(res.status, await safeText(res))
       }
 
-      for await (const line of readNdjson(res.body, token)) {
-        if (line.message?.content) {
-          source.emitOne({ type: 'text', value: line.message.content })
-        }
-        if (line.done) {
+      for await (const chunk of readSse(res.body, token)) {
+        const delta = chunk.choices?.[0]?.delta?.content
+        if (delta) source.emitOne({ type: 'text', value: delta })
+        if (chunk.usage) {
           usage = {
-            inputTokens: line.prompt_eval_count ?? 0,
-            outputTokens: line.eval_count ?? 0,
+            inputTokens: chunk.usage.prompt_tokens ?? 0,
+            outputTokens: chunk.usage.completion_tokens ?? 0,
           }
-          source.emitOne({ type: 'usage', ...usage })
         }
       }
 
+      if (usage) source.emitOne({ type: 'usage', ...usage })
       source.resolve()
       result.complete(usage ? { usage } : {})
     } catch (err) {
@@ -131,7 +162,7 @@ export class OllamaProvider implements IAiModelProvider {
   }
 
   async provideTokenCount(_modelId: string, text: string): Promise<number> {
-    // Ollama has no token-count endpoint; approximate ~4 chars/token.
+    // No token-count endpoint; approximate ~4 chars/token like the Ollama provider.
     return Math.ceil(text.length / 4)
   }
 }
@@ -141,13 +172,10 @@ function buildChatBody(
   messages: readonly AiMessage[],
   options: AiRequestOptions,
 ): Record<string, unknown> {
-  const ollamaOptions: Record<string, unknown> = {}
-  if (options.temperature !== undefined) ollamaOptions.temperature = options.temperature
-  if (options.maxTokens !== undefined) ollamaOptions.num_predict = options.maxTokens
-  if (options.stop !== undefined) ollamaOptions.stop = [...options.stop]
-  return {
+  const body: Record<string, unknown> = {
     model,
     stream: true,
+    stream_options: { include_usage: true },
     messages: messages.map((m) => ({
       role: roleToString(m.role),
       content: m.content
@@ -155,9 +183,11 @@ function buildChatBody(
         .map((p) => p.value)
         .join(''),
     })),
-    options: ollamaOptions,
-    ...(options.extra ?? {}),
   }
+  if (options.temperature !== undefined) body.temperature = options.temperature
+  if (options.maxTokens !== undefined) body.max_tokens = options.maxTokens
+  if (options.stop !== undefined) body.stop = [...options.stop]
+  return { ...body, ...(options.extra ?? {}) }
 }
 
 function roleToString(role: AiMessageRole): string {
@@ -171,27 +201,27 @@ function roleToString(role: AiMessageRole): string {
   }
 }
 
-function toMetadata(name: string): AiModelMetadata {
+function toMetadata(id: string): AiModelMetadata {
   return {
-    id: `${VENDOR}/${name}`,
+    id: `${VENDOR}/${id}`,
     vendor: VENDOR,
-    name,
-    family: name.split(':')[0] ?? name,
+    name: id,
+    family: id,
     maxInputTokens: DEFAULT_MAX_TOKENS,
     maxOutputTokens: DEFAULT_MAX_TOKENS,
     capabilities: { streaming: true },
   }
 }
 
-/** Strip the `ollama/` prefix back to the bare model name Ollama expects. */
+/** Strip the `openai/` prefix back to the bare model name the API expects. */
 function toModelName(modelId: string): string {
   return modelId.startsWith(`${VENDOR}/`) ? modelId.slice(VENDOR.length + 1) : modelId
 }
 
-async function* readNdjson(
+async function* readSse(
   body: ReadableStream<Uint8Array>,
   token: CancellationToken,
-): AsyncGenerator<OllamaChatStreamLine> {
+): AsyncGenerator<OpenAiChatStreamChunk> {
   const reader = body.getReader()
   const decoder = new TextDecoder()
   let buffer = ''
@@ -205,14 +235,26 @@ async function* readNdjson(
       while ((newlineIndex = buffer.indexOf('\n')) >= 0) {
         const rawLine = buffer.slice(0, newlineIndex).trim()
         buffer = buffer.slice(newlineIndex + 1)
-        if (rawLine) yield JSON.parse(rawLine) as OllamaChatStreamLine
+        const data = parseSseData(rawLine)
+        if (data === undefined) continue
+        if (data === DONE) return
+        yield JSON.parse(data) as OpenAiChatStreamChunk
       }
     }
-    const tail = buffer.trim()
-    if (tail) yield JSON.parse(tail) as OllamaChatStreamLine
   } finally {
     void reader.cancel().catch(() => undefined)
   }
+}
+
+const DONE = Symbol('sse-done')
+
+/** Returns the JSON payload of a `data:` line, DONE on `[DONE]`, undefined to skip. */
+function parseSseData(line: string): string | typeof DONE | undefined {
+  if (!line.startsWith('data:')) return undefined
+  const payload = line.slice('data:'.length).trim()
+  if (!payload) return undefined
+  if (payload === '[DONE]') return DONE
+  return payload
 }
 
 function toAbortSignal(token: CancellationToken, store: DisposableStore): AbortSignal {
@@ -231,15 +273,15 @@ function isTransient(err: unknown): boolean {
 
 function mapHttpError(status: number, detail: string): AiError {
   if (status === 401 || status === 403) {
-    return new AiError(AiErrorCode.Unauthorized, `Ollama unauthorized (${status}): ${detail}`)
+    return new AiError(AiErrorCode.Unauthorized, `OpenAI unauthorized (${status}): ${detail}`)
   }
   if (status === 429) {
-    return new AiError(AiErrorCode.RateLimited, `Ollama rate limited (${status}): ${detail}`)
+    return new AiError(AiErrorCode.RateLimited, `OpenAI rate limited (${status}): ${detail}`)
   }
   if (status >= 500) {
-    return new AiError(AiErrorCode.NetworkError, `Ollama server error (${status}): ${detail}`)
+    return new AiError(AiErrorCode.NetworkError, `OpenAI server error (${status}): ${detail}`)
   }
-  return new AiError(AiErrorCode.Unknown, `Ollama request failed (${status}): ${detail}`)
+  return new AiError(AiErrorCode.Unknown, `OpenAI request failed (${status}): ${detail}`)
 }
 
 function normalizeError(err: unknown, token: CancellationToken): unknown {

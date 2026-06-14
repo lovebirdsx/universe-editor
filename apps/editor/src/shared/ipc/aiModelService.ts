@@ -85,6 +85,13 @@ export interface IAiModelMainService {
 
   /** Push the renderer-resolved non-secret config (schema default + user layers). */
   setConfig(config: AiResolvedConfigDto): Promise<void>
+
+  /** Store a vendor's API key in encrypted secret storage (plaintext stays in main). */
+  setApiKey(vendor: string, key: string): Promise<void>
+  /** Remove a vendor's stored API key. */
+  deleteApiKey(vendor: string): Promise<void>
+  /** Whether a vendor currently has an API key stored. */
+  hasApiKey(vendor: string): Promise<boolean>
 }
 
 export const IAiModelMainService = createDecorator<IAiModelMainService>('aiModelMainService')

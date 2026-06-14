@@ -147,6 +147,7 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
+import { SetOpenAiApiKeyAction, ClearOpenAiApiKeyAction } from './aiActions.js'
 import {
   ViewGitGraphAction,
   GitGraphFocusSearchAction,
@@ -379,6 +380,10 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// AI
+registerAction2(SetOpenAiApiKeyAction)
+registerAction2(ClearOpenAiApiKeyAction)
 
 // Git Graph
 registerAction2(ViewGitGraphAction)

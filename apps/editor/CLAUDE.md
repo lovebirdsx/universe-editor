@@ -306,7 +306,9 @@ AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelPr
 2. 在 `AiModelMainService._registerBuiltInProviders` 加一行 `this._register(this._registry.registerProvider('xxx', new XxxProvider(context)))`。
 3. 若该 vendor 有非密钥配置，在 `contributions/AiConfigurationContribution.ts` 注册 `ai.xxx.baseUrl` 等 schema，并把 vendor 名加进 `aiModelClientService.ts` 的 `KNOWN_VENDORS`（renderer 据此把配置推给 main）。
 
-**密钥红线**：API key 只经 `ISecretStorageService`（main 侧 `safeStorage` 加密落盘，键名 `ai.secret.<vendor>.apiKey`），**绝不进 renderer / settings.json / 线协议 DTO**；`safeStorage` 不可用时报错，不静默落明文。
+**密钥红线**：API key 只经 `ISecretStorageService`（main 侧 `safeStorage` 加密落盘，键名 `ai.secret.<vendor>.apiKey`），**绝不进 renderer / settings.json / 线协议 DTO**；`safeStorage` 不可用时报错，不静默落明文。录入 key 不直接暴露 secret storage 给 renderer，而是经 `IAiModelService.setApiKey/deleteApiKey/hasApiKey`（门面方法）→ main 内部读写；命令 `ai.setOpenAiApiKey` / `ai.clearOpenAiApiKey`（`renderer/actions/aiActions.ts`）即走此路。
+
+**已落地 provider**：`ollama`（本地，无需 key，`/api/chat` NDJSON 流）、`openai`（`ai.openai.baseUrl` 可指向任何 OpenAI 兼容端点如 LM Studio/vLLM/DeepSeek，`/chat/completions` SSE 流）。改了 key 后 provider 经 `onDidChange` 让注册表失效、重新枚举模型。
 
 参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`
 

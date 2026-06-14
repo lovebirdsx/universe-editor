@@ -340,6 +340,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return JSON.parse(raw) as E2EDisposableLeakReport
     },
     getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
+    getScmInputBoxValue: (): string | undefined =>
+      services.scmService.sourceControls.get()[0]?.inputValue.get(),
     getMarkdownDocumentSymbols: async (uri: string): Promise<readonly string[]> => {
       const monacoNs = MonacoLoader.get()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))

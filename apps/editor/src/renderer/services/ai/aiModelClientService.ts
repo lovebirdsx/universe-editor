@@ -74,6 +74,18 @@ export class AiModelClientService extends Disposable implements IAiModelService 
     return this._main.computeTokenLength(modelId, text)
   }
 
+  setApiKey(vendor: string, key: string): Promise<void> {
+    return this._main.setApiKey(vendor, key)
+  }
+
+  deleteApiKey(vendor: string): Promise<void> {
+    return this._main.deleteApiKey(vendor)
+  }
+
+  hasApiKey(vendor: string): Promise<boolean> {
+    return this._main.hasApiKey(vendor)
+  }
+
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,

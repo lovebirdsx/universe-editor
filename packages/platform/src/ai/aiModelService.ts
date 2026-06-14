@@ -53,6 +53,13 @@ export interface IAiModelService {
 
   /** Count tokens for `text` under `modelId` (to trim context to maxInputTokens). */
   computeTokenLength(modelId: string, text: string, token: CancellationToken): Promise<number>
+
+  /** Store a vendor's API key in encrypted secret storage (plaintext stays in main). */
+  setApiKey(vendor: string, key: string): Promise<void>
+  /** Remove a vendor's stored API key. */
+  deleteApiKey(vendor: string): Promise<void>
+  /** Whether a vendor currently has an API key stored. */
+  hasApiKey(vendor: string): Promise<boolean>
 }
 
 export const IAiModelService = createDecorator<IAiModelService>('aiModelService')

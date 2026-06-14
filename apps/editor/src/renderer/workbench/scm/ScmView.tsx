@@ -572,6 +572,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
   const [commitMenu, setCommitMenu] = useState<{ x: number; y: number } | null>(null)
   const [stickyCommitId, setStickyCommitId] = useState<string>(DEFAULT_COMMIT_ACTION.id)
   const [isCommitting, setIsCommitting] = useState(false)
+  const [isGenerating, setIsGenerating] = useState(false)
 
   // Restore the last-picked commit action so the button defaults to it.
   const restoredCommitRef = useRef(false)
@@ -803,7 +804,9 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
 
   return (
     <section className={styles['provider']}>
-      <div className={styles['commitInputWrapper']}>
+      <div
+        className={`${styles['commitInputWrapper']} ${isGenerating ? styles['generating'] : ''}`}
+      >
         <textarea
           ref={inputRef}
           className={styles['commitInput']}
@@ -837,10 +840,15 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
                 action={a}
                 onRun={(e) => {
                   e.preventDefault()
-                  void commandService.executeCommand(a.command, {
-                    rootUri: model.rootUri,
-                    sourceControlId: model.id,
-                  })
+                  setIsGenerating(true)
+                  void commandService
+                    .executeCommand(a.command, {
+                      rootUri: model.rootUri,
+                      sourceControlId: model.id,
+                    })
+                    .finally(() => {
+                      setIsGenerating(false)
+                    })
                 }}
               />
             ))}

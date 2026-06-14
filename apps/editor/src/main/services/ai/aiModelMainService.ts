@@ -32,6 +32,7 @@ import type {
   IAiModelMainService,
 } from '../../../shared/ipc/aiModelService.js'
 import { OllamaProvider } from './providers/ollamaProvider.js'
+import { OpenAiProvider } from './providers/openAiProvider.js'
 
 /** What a provider may read from its host: resolved config + secret access. */
 export interface AiProviderContext {
@@ -47,6 +48,8 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   private readonly _logger: ILogger
   private readonly _registry = this._register(new AiModelRegistry())
+  private readonly _secrets: ISecretStorageService
+  private readonly _keyedProviders = new Map<string, { notifyConfigChanged(): void }>()
 
   private readonly _onDidEmitChunk = this._register(new Emitter<AiChunkEvent>())
   readonly onDidEmitChunk = this._onDidEmitChunk.event
@@ -65,6 +68,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'aiModel', name: 'AI Model' })
+    this._secrets = secrets
 
     const context: AiProviderContext = {
       secrets,
@@ -76,6 +80,9 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   private _registerBuiltInProviders(context: AiProviderContext): void {
     this._register(this._registry.registerProvider('ollama', new OllamaProvider(context)))
+    const openai = new OpenAiProvider(context)
+    this._keyedProviders.set('openai', openai)
+    this._register(this._registry.registerProvider('openai', openai))
   }
 
   getModels(): Promise<readonly AiModelMetadata[]> {
@@ -96,6 +103,20 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   async setConfig(config: AiResolvedConfigDto): Promise<void> {
     this._config = config
+  }
+
+  async setApiKey(vendor: string, key: string): Promise<void> {
+    await this._secrets.set(secretKey(vendor), key)
+    this._keyedProviders.get(vendor)?.notifyConfigChanged()
+  }
+
+  async deleteApiKey(vendor: string): Promise<void> {
+    await this._secrets.delete(secretKey(vendor))
+    this._keyedProviders.get(vendor)?.notifyConfigChanged()
+  }
+
+  async hasApiKey(vendor: string): Promise<boolean> {
+    return (await this._secrets.get(secretKey(vendor))) !== undefined
   }
 
   async startRequest(
@@ -174,6 +195,11 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     this._inflight.clear()
     super.dispose()
   }
+}
+
+/** Secret-storage key holding a vendor's API key, e.g. `ai.secret.openai.apiKey`. */
+function secretKey(vendor: string): string {
+  return `ai.secret.${vendor}.apiKey`
 }
 
 function reviveMessage(dto: AiMessageDto): AiMessage {

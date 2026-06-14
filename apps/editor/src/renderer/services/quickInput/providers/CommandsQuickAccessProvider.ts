@@ -82,11 +82,17 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
         if (!selected) return
         mruIds = [selected.id, ...mruIds.filter((x) => x !== selected.id)].slice(0, MRU_LIMIT)
         void this._storage.set(MRU_STORAGE_KEY, mruIds)
-        if (isMonacoCommandItem(selected)) {
-          void selected._editor.getAction(selected._actionId)?.run()
-        } else {
-          void this._commands.executeCommand(selected.id)
-        }
+        // Defer the command run past the accept handler's synchronous tail: the
+        // panel's accept also calls the service's hide() after this callback, so a
+        // command that synchronously opens its own quick input (e.g. an API-key
+        // prompt) would otherwise be torn down the instant it appears.
+        queueMicrotask(() => {
+          if (isMonacoCommandItem(selected)) {
+            void selected._editor.getAction(selected._actionId)?.run()
+          } else {
+            void this._commands.executeCommand(selected.id)
+          }
+        })
       }),
     )
   }

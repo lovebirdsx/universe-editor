@@ -225,4 +225,44 @@ describe('AiModelMainService', () => {
     expect(opts && 'maxTokens' in opts).toBe(false)
     service.dispose()
   })
+
+  it('stores, reports, and clears a vendor API key via secret storage', async () => {
+    const store = new Map<string, string>()
+    const secrets: ISecretStorageService = {
+      _serviceBrand: undefined,
+      get: (key) => Promise.resolve(store.get(key)),
+      set: (key, value) => {
+        store.set(key, value)
+        return Promise.resolve()
+      },
+      delete: (key) => {
+        store.delete(key)
+        return Promise.resolve()
+      },
+    }
+    const service = new AiModelMainService(secrets)
+
+    expect(await service.hasApiKey('openai')).toBe(false)
+
+    await service.setApiKey('openai', 'sk-123')
+    expect(store.get('ai.secret.openai.apiKey')).toBe('sk-123')
+    expect(await service.hasApiKey('openai')).toBe(true)
+
+    await service.deleteApiKey('openai')
+    expect(store.has('ai.secret.openai.apiKey')).toBe(false)
+    expect(await service.hasApiKey('openai')).toBe(false)
+
+    service.dispose()
+  })
+
+  it('fires onDidChangeModels when the openai key changes', async () => {
+    const service = new AiModelMainService(secretsStub)
+    let fired = 0
+    service.onDidChangeModels(() => fired++)
+
+    await service.setApiKey('openai', 'sk-123')
+    expect(fired).toBeGreaterThan(0)
+
+    service.dispose()
+  })
 })

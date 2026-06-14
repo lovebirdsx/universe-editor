@@ -53,6 +53,55 @@
   display: flex;
 }
 
+/* While AI generation is in progress, wrap the input in a spinning border ring,
+   mirroring the commit button's committing animation. */
+.commitInputWrapper.generating {
+  overflow: hidden;
+  isolation: isolate;
+  border-radius: 2px;
+}
+
+.commitInputWrapper.generating::before {
+  content: '';
+  position: absolute;
+  width: 360px;
+  height: 360px;
+  top: 50%;
+  left: 50%;
+  translate: -50% -50%;
+  background: conic-gradient(
+    from 0deg,
+    transparent 0deg,
+    var(--color-focus-border, #0070e0) 15deg,
+    color-mix(in srgb, var(--color-focus-border, #0070e0) 20%, white) 50deg,
+    var(--color-focus-border, #0070e0) 85deg,
+    transparent 100deg
+  );
+  animation: commitBorderSpin 1.5s linear infinite;
+  z-index: 0;
+}
+
+.commitInputWrapper.generating::after {
+  content: '';
+  position: absolute;
+  inset: 1px;
+  border-radius: 1px;
+  background: var(--color-input-bg, #3c3c3c);
+  z-index: 1;
+}
+
+/* Lift the textarea above the mask and let the ring show through its border. */
+.commitInputWrapper.generating .commitInput {
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  border-color: transparent;
+}
+
+.commitInputWrapper.generating .inputBoxActions {
+  z-index: 2;
+}
+
 .commitInput {
   width: 100%;
   box-sizing: border-box;

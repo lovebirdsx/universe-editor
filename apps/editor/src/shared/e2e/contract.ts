@@ -272,6 +272,8 @@ export interface E2EProbe {
   getStoredLeakReport(): E2EDisposableLeakReport | null
   /** Number of currently registered SCM source controls. */
   getScmSourceControlCount(): number
+  /** Commit input box value of the first SCM source control (undefined if none). */
+  getScmInputBoxValue(): string | undefined
   // -- Markdown language server probe ---------------------------------------
   /**
    * Flattened document-symbol names for an open markdown file, via the markdown

@@ -59,6 +59,15 @@ class FakeMain implements IAiModelMainService {
     this.configs.push(config)
     return Promise.resolve()
   }
+  setApiKey(): Promise<void> {
+    return Promise.resolve()
+  }
+  deleteApiKey(): Promise<void> {
+    return Promise.resolve()
+  }
+  hasApiKey(): Promise<boolean> {
+    return Promise.resolve(false)
+  }
 }
 
 const userMsg: readonly AiMessage[] = [
