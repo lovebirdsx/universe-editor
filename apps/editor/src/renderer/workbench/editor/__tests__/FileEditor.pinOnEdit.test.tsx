@@ -88,6 +88,7 @@ vi.mock('../../../services/editor/FileEditorRegistry.js', () => {
 
 import { cleanup, render } from '@testing-library/react'
 import {
+  ConfigurationRegistry,
   ContextKeyService,
   ConfigurationTarget,
   EditorInput,
@@ -283,6 +284,11 @@ describe('FileEditor — auto-pin on first edit', () => {
   })
 
   it('passes editor font size and word wrap settings to Monaco on create', async () => {
+    const schemaReg = ConfigurationRegistry.registerConfiguration({
+      id: 'editor',
+      title: 'Editor',
+      properties: { 'editor.wordWrap': { type: 'string', default: 'off' } },
+    })
     const services = new ServiceCollection()
     services.set(IFileService, makeFs())
     services.set(ICommandService, {
@@ -294,7 +300,7 @@ describe('FileEditor — auto-pin on first edit', () => {
       new FakeConfigurationService({
         'editor.fontSize': 20,
         'editor.fontFamily': "'Fira Code', monospace",
-        'editor.wordWrap': true,
+        'editor.wordWrap': 'on',
         'workbench.colorTheme': 'light',
       }) as never,
     )
@@ -319,9 +325,15 @@ describe('FileEditor — auto-pin on first edit', () => {
       wordWrap: 'on',
       theme: 'output-light',
     })
+    schemaReg.dispose()
   })
 
   it('updates live Monaco options when editor settings change', async () => {
+    const schemaReg = ConfigurationRegistry.registerConfiguration({
+      id: 'editor',
+      title: 'Editor',
+      properties: { 'editor.wordWrap': { type: 'string', default: 'off' } },
+    })
     const services = new ServiceCollection()
     services.set(IFileService, makeFs())
     services.set(ICommandService, {
@@ -331,7 +343,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     const config = new FakeConfigurationService({
       'editor.fontSize': 14,
       'editor.fontFamily': "Consolas, 'Courier New', monospace",
-      'editor.wordWrap': false,
+      'editor.wordWrap': 'off',
     })
     services.set(IConfigurationService, config as never)
     services.set(IContextKeyService, new ContextKeyService())
@@ -351,7 +363,7 @@ describe('FileEditor — auto-pin on first edit', () => {
     })
     config.update('editor.fontSize', 18, ConfigurationTarget.User)
     config.update('editor.fontFamily', "'JetBrains Mono', monospace", ConfigurationTarget.User)
-    config.update('editor.wordWrap', true, ConfigurationTarget.User)
+    config.update('editor.wordWrap', 'on', ConfigurationTarget.User)
 
     expect(monacoMockState.updateOptionsCalls).toContainEqual(
       expect.objectContaining({ fontSize: 18 }),
@@ -360,5 +372,6 @@ describe('FileEditor — auto-pin on first edit', () => {
       expect.objectContaining({ fontFamily: "'JetBrains Mono', monospace" }),
     )
     expect(monacoMockState.updateOptionsCalls).toContainEqual({ wordWrap: 'on' })
+    schemaReg.dispose()
   })
 })

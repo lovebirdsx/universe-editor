@@ -883,7 +883,7 @@ export class ToggleWordWrapAction extends Action2 {
   }
   override run(accessor: ServicesAccessor): void {
     const config = accessor.get(IConfigurationService)
-    const current = config.get<boolean>('editor.wordWrap') ?? false
-    config.update('editor.wordWrap', !current, ConfigurationTarget.User)
+    const current = config.get<string>('editor.wordWrap') ?? 'off'
+    config.update('editor.wordWrap', current === 'off' ? 'on' : 'off', ConfigurationTarget.User)
   }
 }

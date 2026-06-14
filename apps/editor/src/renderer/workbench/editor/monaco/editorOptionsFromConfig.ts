@@ -8,9 +8,10 @@
  *  recognise, so passing the full set is safe.
  *
  *  A handful of settings have bespoke handling in FileEditor/DiffEditor
- *  (language-aware fonts, boolean->'on'/'off' wordWrap, theme-derived colors,
- *  forced tabSize/insertSpaces) and are excluded here so the bridge never fights
- *  that logic.
+ *  (language-aware fonts, theme-derived colors) and are excluded here so the
+ *  bridge never fights that logic. Plain pass-through options (wordWrap, tabSize,
+ *  insertSpaces, detectIndentation, …) now share Monaco's exact value shape, so
+ *  the bridge forwards them directly.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -33,8 +34,6 @@ const BESPOKE_KEYS = new Set<string>([
   'editor.lineHighlightBackground',
   'editor.lineHighlightBorder',
   'editor.languageFonts',
-  'editor.wordWrap',
-  'editor.tabSize',
 ])
 
 // Prefixes whose whole subtree is owned elsewhere. `unicodeHighlight` is forced

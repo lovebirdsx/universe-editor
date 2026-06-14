@@ -99,8 +99,8 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
           'editor.fontSize': {
             type: 'number',
             default: 14,
-            minimum: 8,
-            maximum: 32,
+            minimum: 6,
+            maximum: 100,
             description: localize(
               'settings.editor.fontSize.description',
               'Controls the editor font size in pixels.',
@@ -202,21 +202,56 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
             ),
           },
           'editor.tabSize': {
-            type: 'number',
+            type: 'integer',
             default: 4,
             minimum: 1,
-            maximum: 8,
+            maximum: 100,
             description: localize(
               'settings.editor.tabSize.description',
-              'Number of spaces a tab is equal to.',
+              'The number of spaces a tab is equal to. This setting is overridden based on the file contents when `editor.detectIndentation` is on.',
+            ),
+          },
+          'editor.insertSpaces': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.editor.insertSpaces.description',
+              'Insert spaces when pressing Tab. This setting is overridden based on the file contents when `editor.detectIndentation` is on.',
+            ),
+          },
+          'editor.detectIndentation': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.editor.detectIndentation.description',
+              'Controls whether `editor.tabSize` and `editor.insertSpaces` are automatically detected when a file is opened based on the file contents.',
             ),
           },
           'editor.wordWrap': {
-            type: 'boolean',
-            default: false,
+            type: 'string',
+            default: 'off',
+            enum: ['off', 'on', 'wordWrapColumn', 'bounded'],
+            enumItemLabels: {
+              off: localize('settings.enum.wordWrap.off', 'Off'),
+              on: localize('settings.enum.wordWrap.on', 'On'),
+              wordWrapColumn: localize('settings.enum.wordWrap.wordWrapColumn', 'Word Wrap Column'),
+              bounded: localize('settings.enum.wordWrap.bounded', 'Bounded'),
+            },
+            enumDescriptions: [
+              localize('settings.editor.wordWrap.off', 'Lines will never wrap.'),
+              localize('settings.editor.wordWrap.on', 'Lines will wrap at the viewport width.'),
+              localize(
+                'settings.editor.wordWrap.wordWrapColumn',
+                'Lines will wrap at `editor.wordWrapColumn`.',
+              ),
+              localize(
+                'settings.editor.wordWrap.bounded',
+                'Lines will wrap at the minimum of viewport and `editor.wordWrapColumn`.',
+              ),
+            ],
             description: localize(
               'settings.editor.wordWrap.description',
-              'Controls whether lines wrap.',
+              'Controls how lines should wrap.',
             ),
           },
           'editor.minimap.enabled': {

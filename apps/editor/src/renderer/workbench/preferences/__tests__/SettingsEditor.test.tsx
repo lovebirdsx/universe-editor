@@ -95,8 +95,8 @@ describe('SettingsEditor', () => {
         id: 'editor',
         title: 'Editor',
         properties: {
-          'editor.fontSize': { type: 'number', default: 14, minimum: 8, maximum: 32 },
-          'editor.wordWrap': { type: 'boolean', default: false },
+          'editor.fontSize': { type: 'number', default: 14, minimum: 6, maximum: 100 },
+          'editor.minimap.enabled': { type: 'boolean', default: true },
         },
       }),
       ConfigurationRegistry.registerConfiguration({
@@ -128,7 +128,7 @@ describe('SettingsEditor', () => {
     const { container } = mount()
     expect(container.querySelector('[data-key="editor.fontSize"] input[type=number]')).toBeTruthy()
     expect(
-      container.querySelector('[data-key="editor.wordWrap"] input[type=checkbox]'),
+      container.querySelector('[data-key="editor.minimap.enabled"] input[type=checkbox]'),
     ).toBeTruthy()
     expect(container.querySelector('[data-key="files.autoSave"] select')).toBeTruthy()
   })
@@ -140,7 +140,7 @@ describe('SettingsEditor', () => {
     fireEvent.change(search, { target: { value: 'fontSize' } })
 
     expect(container.querySelector('[data-key="editor.fontSize"]')).toBeTruthy()
-    expect(container.querySelector('[data-key="editor.wordWrap"]')).toBeNull()
+    expect(container.querySelector('[data-key="editor.minimap.enabled"]')).toBeNull()
     expect(container.querySelector('[data-key="files.autoSave"]')).toBeNull()
   })
 
@@ -190,10 +190,10 @@ describe('SettingsEditor', () => {
     registerSeedSchema()
     const { container, config } = mount()
     const cb = container.querySelector(
-      '[data-key="editor.wordWrap"] input[type=checkbox]',
+      '[data-key="editor.minimap.enabled"] input[type=checkbox]',
     ) as HTMLInputElement
     fireEvent.click(cb)
-    expect(config.get('editor.wordWrap')).toBe(true)
+    expect(config.get('editor.minimap.enabled')).toBe(false)
   })
 
   it('editing an enum writes to the User layer', () => {

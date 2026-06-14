@@ -53,10 +53,6 @@ function getEditorFontOptions(
   return resolveLanguageFonts(globalFamily, globalSize, map, languageId)
 }
 
-function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
-  return configService.get<boolean>('editor.wordWrap') === true ? 'on' : 'off'
-}
-
 function getEditorTheme(configService: IConfigurationService): 'output-light' | 'output-dark' {
   return configService.get<string>('workbench.colorTheme') === 'light'
     ? 'output-light'
@@ -94,11 +90,10 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
       theme: getEditorTheme(configService),
       automaticLayout: true,
       editContext: true,
-      // All user-configured editor.* options. Spread first so the bespoke
-      // options below win.
+      // All user-configured editor.* options (incl. wordWrap). Spread first so
+      // the bespoke font options below win.
       ...buildBridgedEditorOptions(configService),
       ...getEditorFontOptions(configService, diffLanguageRef.current),
-      wordWrap: getEditorWordWrap(configService),
       readOnly: true,
       originalEditable: false,
       renderSideBySide: true,
@@ -130,9 +125,6 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
         )
         options.fontFamily = fontFamily
         options.fontSize = fontSize
-      }
-      if (e.affectsConfiguration('editor.wordWrap')) {
-        options.wordWrap = getEditorWordWrap(configService)
       }
       if (affectsBridgedEditorOption(e)) {
         Object.assign(options, buildBridgedEditorOptions(configService))

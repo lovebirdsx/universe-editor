@@ -49,8 +49,10 @@ export const EN_US_MESSAGES: MessageMap = {
   'settings.enum.off': 'Off',
   'settings.enum.afterDelay': 'After Delay',
   'settings.enum.onFocusChange': 'On Focus Change',
-  'settings.enum.wordWrapOff': 'Off',
-  'settings.enum.wordWrapOn': 'On',
+  'settings.enum.wordWrap.bounded': 'Bounded',
+  'settings.enum.wordWrap.off': 'Off',
+  'settings.enum.wordWrap.on': 'On',
+  'settings.enum.wordWrap.wordWrapColumn': 'Word Wrap Column',
   'settings.enum.zh-CN': 'Simplified Chinese',
   'settings.explorer': 'Explorer',
   'settings.files': 'Files',
@@ -173,10 +175,20 @@ export const EN_US_MESSAGES: MessageMap = {
   'keybindings.schema.key.description': 'Keybinding chord, e.g. "ctrl+shift+p" or "ctrl+k ctrl+s".',
   'keybindings.schema.removeBinding.desc': 'Remove default binding ({desc})',
   'keybindings.schema.when.description': 'Context-key expression that gates this binding.',
+  'settings.editor.detectIndentation.description':
+    'Controls whether `editor.tabSize` and `editor.insertSpaces` are automatically detected when a file is opened based on the file contents.',
   'settings.editor.fontSize.description': 'Controls the editor font size in pixels.',
+  'settings.editor.insertSpaces.description':
+    'Insert spaces when pressing Tab. This setting is overridden based on the file contents when `editor.detectIndentation` is on.',
   'settings.editor.minimap.description': 'Controls whether the minimap is shown.',
-  'settings.editor.tabSize.description': 'Number of spaces a tab is equal to.',
-  'settings.editor.wordWrap.description': 'Controls whether lines wrap.',
+  'settings.editor.tabSize.description':
+    'The number of spaces a tab is equal to. This setting is overridden based on the file contents when `editor.detectIndentation` is on.',
+  'settings.editor.wordWrap.bounded':
+    'Lines will wrap at the minimum of viewport and `editor.wordWrapColumn`.',
+  'settings.editor.wordWrap.description': 'Controls how lines should wrap.',
+  'settings.editor.wordWrap.off': 'Lines will never wrap.',
+  'settings.editor.wordWrap.on': 'Lines will wrap at the viewport width.',
+  'settings.editor.wordWrap.wordWrapColumn': 'Lines will wrap at `editor.wordWrapColumn`.',
   'settings.explorer.autoReveal.description':
     'Controls whether the Explorer should automatically reveal and select files when opening them.',
   'settings.files.autoSave.description': 'Controls auto save of dirty files.',

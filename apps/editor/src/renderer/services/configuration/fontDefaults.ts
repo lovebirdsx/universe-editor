@@ -8,7 +8,7 @@ export const EDITOR_LETTER_SPACING_DEFAULT = 0
 export const EDITOR_FONT_WEIGHT_DEFAULT = 'normal'
 export const EDITOR_DISABLE_MONOSPACE_OPTIMIZATIONS_DEFAULT = false
 export const EDITOR_RENDER_LINE_HIGHLIGHT_DEFAULT = 'line' // 'none' | 'gutter' | 'line' | 'all'
-export const EDITOR_OCCURRENCES_HIGHLIGHT_DEFAULT = 'off' // 'off' | 'singleFile' | 'multiFile'
+export const EDITOR_OCCURRENCES_HIGHLIGHT_DEFAULT = 'singleFile' // 'off' | 'singleFile' | 'multiFile'
 export const EDITOR_LINE_HIGHLIGHT_BACKGROUND_DEFAULT = '' // 空 = 用主题内置默认色
 export const EDITOR_LINE_HIGHLIGHT_BORDER_DEFAULT = '' // 空 = 用主题内置默认色（透明，无外框）
 

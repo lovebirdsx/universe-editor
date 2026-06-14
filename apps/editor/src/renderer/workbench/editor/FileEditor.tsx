@@ -95,10 +95,6 @@ function getEditorTypographyOptions(
   }
 }
 
-function getEditorWordWrap(configService: IConfigurationService): 'on' | 'off' {
-  return configService.get<boolean>('editor.wordWrap') === true ? 'on' : 'off'
-}
-
 function getEditorTheme(configService: IConfigurationService): 'output-light' | 'output-dark' {
   return configService.get<string>('workbench.colorTheme') === 'light'
     ? 'output-light'
@@ -145,14 +141,12 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         // 拖放交由编辑区 body 处理(分屏 / 打开外部文件);关掉 Monaco 自带的
         // dropIntoEditor,避免它把拖来的文件路径插进当前文档并抢焦点。
         dropIntoEditor: { enabled: false },
-        // All user-configured editor.* options (minimap, wordSeparators, cursor*,
-        // renderWhitespace, …). Spread first so the bespoke options below win.
+        // All user-configured editor.* options (minimap, wordWrap, tabSize,
+        // insertSpaces, cursor*, renderWhitespace, …). Spread first so the
+        // bespoke typography options below win.
         ...buildBridgedEditorOptions(configService),
         ...getEditorTypographyOptions(configService, fileInput.language),
-        wordWrap: getEditorWordWrap(configService),
         scrollBeyondLastLine: false,
-        tabSize: 2,
-        insertSpaces: true,
         readOnly: fileInput.isReadonly,
         unicodeHighlight: {
           nonBasicASCII: false,
@@ -269,12 +263,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
           options.renderLineHighlight = renderLineHighlight
           options.occurrencesHighlight = occurrencesHighlight
         }
-        if (e.affectsConfiguration('editor.wordWrap')) {
-          options.wordWrap = getEditorWordWrap(configService)
-        }
         // Bridge every other user-configured editor.* option (minimap,
-        // wordSeparators, cursor*, renderWhitespace, …). Applied after the
-        // bespoke keys above; the bridge excludes those keys so no conflict.
+        // wordWrap, tabSize, insertSpaces, cursor*, renderWhitespace, …).
+        // Applied after the bespoke typography keys above; the bridge excludes
+        // those keys so no conflict.
         if (affectsBridgedEditorOption(e)) {
           Object.assign(options, buildBridgedEditorOptions(configService))
         }
