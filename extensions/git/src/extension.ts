@@ -336,6 +336,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
       return getBlame(repo.root, path, { ignoreWhitespace }, log)
     }),
 
+    commands.registerCommand('git.getCommitDiff', (arg) => mgr.resolveRepo(arg)?.getCommitDiff()),
+    commands.registerCommand('git.setCommitMessage', (...args: unknown[]) => {
+      const [arg, message] = args as [unknown, string]
+      const repo = mgr.resolveRepo(arg)
+      if (repo) repo.commitMessage = message
+    }),
+
     commands.registerCommand('git.getHeadContent', (...args: unknown[]) => {
       const path = args[0] as string
       const repo = mgr.resolveRepo({ resourceUri: path })

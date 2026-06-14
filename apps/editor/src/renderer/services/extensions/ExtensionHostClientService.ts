@@ -15,6 +15,7 @@
 import {
   createDecorator,
   Disposable,
+  IAiModelService,
   ICommandService,
   IDialogService,
   IEditorService,
@@ -111,6 +112,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @ICommandService private readonly _commandService: ICommandService,
     @ILanguageFeaturesService private readonly _languageFeatures: ILanguageFeaturesService,
     @IEditorService private readonly _editorService: IEditorService,
+    @IAiModelService private readonly _aiModel: IAiModelService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -179,6 +181,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
             scm: this._scm,
             languageFeatures: this._languageFeatures,
             editorService: this._editorService,
+            aiModel: this._aiModel,
           }
         : {}),
       output: this._output,

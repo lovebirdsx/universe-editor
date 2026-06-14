@@ -35,6 +35,7 @@ export const ServiceChannels = {
   SessionSwitcher: 'sessionSwitcher',
   RendererSessions: 'rendererSessions',
   Usage: 'usage',
+  AiModel: 'aiModel',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

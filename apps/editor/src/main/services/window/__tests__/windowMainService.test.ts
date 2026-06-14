@@ -107,6 +107,7 @@ function makeOpts() {
         onDidChangeConfigDir: () => ({ dispose: () => {} }),
         currentDir: '',
       } as never,
+      aiModel: {} as never,
     },
     logService,
     e2eEnabled: false,

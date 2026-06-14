@@ -11,6 +11,7 @@
 import { pathToFileURL } from 'node:url'
 import {
   FileType,
+  type AiApi,
   type CompletionItemProvider,
   type DefinitionProvider,
   type DiagnosticCollection,
@@ -59,6 +60,7 @@ import {
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadWindow,
+  type IMainThreadAi,
   type IReferenceContext,
   type ISignatureHelpContext,
   type LanguageProviderType,
@@ -86,6 +88,7 @@ import {
   type IExtensionHostBridge,
 } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
+import { HostAi } from './hostAi.js'
 import { ExtHostDocuments, HostTextDocument } from './hostDocuments.js'
 
 type CommandHandler = (...args: unknown[]) => unknown
@@ -332,6 +335,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadOutput?: IMainThreadOutput,
     private readonly _mainThreadLanguages?: IMainThreadLanguages,
     private readonly _mainThreadEditor?: IMainThreadEditor,
+    private readonly _mainThreadAi?: IMainThreadAi,
   ) {
     installApiBridge(this)
   }
@@ -614,6 +618,17 @@ export class ExtensionService implements IExtensionHostBridge {
 
   getTextDocuments(): readonly TextDocument[] {
     return this._documents.all()
+  }
+
+  // --- ai: inference models (trusted-only) ---
+
+  private _aiApi: AiApi | undefined
+
+  get ai(): AiApi {
+    if (!this._mainThreadAi) {
+      throw new Error('AI model access is not available in this extension host')
+    }
+    return (this._aiApi ??= new HostAi(this._mainThreadAi))
   }
 
   // --- RPC surface (called from the renderer) ---

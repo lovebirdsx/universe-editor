@@ -38,6 +38,8 @@
       { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
       { "command": "git.openMergeEditor", "title": "Resolve in Merge Editor", "category": "Git", "icon": "merge" },
       { "command": "git.openFile", "title": "Open File", "category": "Git" },
+      { "command": "git.getCommitDiff", "title": "Get Commit Diff", "category": "Git" },
+      { "command": "git.setCommitMessage", "title": "Set Commit Message", "category": "Git" },
       { "command": "git.pull", "title": "Pull", "category": "Git", "icon": "pull" },
       { "command": "git.pullRebase", "title": "Pull (Rebase)", "category": "Git", "icon": "pull" },
       { "command": "git.pullAutostash", "title": "Pull (Autostash)", "category": "Git", "icon": "pull" },

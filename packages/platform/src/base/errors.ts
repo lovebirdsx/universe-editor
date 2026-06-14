@@ -60,3 +60,66 @@ export class ErrorNoTelemetry extends Error {
     return result
   }
 }
+
+/**
+ * Plain, structured-clone-safe shape of an `Error` for sending across a process
+ * boundary (the IPC layer drops prototypes, so an `Error` instance arrives as a
+ * bare object). Mirrors VSCode's `SerializedError` (base/common/errors.ts).
+ */
+export interface SerializedError {
+  readonly $isError: true
+  readonly name: string
+  readonly message: string
+  readonly stack?: string
+  /** Preserved so `isCancellationError` survives the round-trip. */
+  readonly noTelemetry?: boolean
+}
+
+/** Convert an arbitrary thrown value into a serializable {@link SerializedError}. */
+export function transformErrorForSerialization(error: unknown): SerializedError {
+  if (error instanceof Error) {
+    const { name, message } = error
+    const stack = (error as { stacktrace?: string }).stacktrace ?? error.stack
+    const serialized: SerializedError = {
+      $isError: true,
+      name,
+      message,
+      ...(stack !== undefined ? { stack } : {}),
+      ...((error as ErrorNoTelemetry).noTelemetry ? { noTelemetry: true } : {}),
+    }
+    return serialized
+  }
+  return { $isError: true, name: 'Error', message: String(error) }
+}
+
+function isSerializedError(thing: unknown): thing is SerializedError {
+  return (
+    thing !== null &&
+    typeof thing === 'object' &&
+    (thing as { $isError?: unknown }).$isError === true
+  )
+}
+
+/** Rebuild an `Error` from a {@link SerializedError} (the inverse of transform). */
+export function transformErrorFromSerialization(data: SerializedError): Error {
+  let error: Error
+  if (data.name === 'Canceled' && data.message === 'Canceled') {
+    error = new CancellationError()
+  } else if (data.noTelemetry) {
+    error = new ErrorNoTelemetry()
+    error.message = data.message
+  } else {
+    error = new Error()
+    error.name = data.name
+    error.message = data.message
+  }
+  if (data.stack !== undefined) {
+    error.stack = data.stack
+  }
+  return error
+}
+
+/** Normalize an unknown value (possibly a {@link SerializedError}) into an `Error`. */
+export function reviveError(thing: unknown): unknown {
+  return isSerializedError(thing) ? transformErrorFromSerialization(thing) : thing
+}

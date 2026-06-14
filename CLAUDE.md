@@ -26,6 +26,7 @@ packages/
 | 加 StatusBar 条目 | `apps/editor/src/renderer/workbench/statusbar/` | `apps/editor/CLAUDE.md`（套路 E） | `addEntry` + accessor `update/dispose` 生命周期 |
 | 加性能打点 / 启动耗时检测 | `apps/editor/src/shared/perf/marks.ts` + 打点处 | `apps/editor/CLAUDE.md`（套路 G） | `mark()` 打点 + `PerfMarks` 常量 + `ITimerService` 聚合 |
 | 加 E2E 冒烟场景 | `apps/editor/e2e/specs/` | `apps/editor/CLAUDE.md`（套路 F） | Playwright + `_electron`，通过 `window.__E2E__` 探针调服务；`@p0` 阻塞 CI |
+| 加 AI 供应商（provider） | `apps/editor/src/main/services/ai/providers/` | `apps/editor/CLAUDE.md`（套路 I） | 实现 `IAiModelProvider` + 一行 `registerProvider`；密钥只走 `ISecretStorageService`，绝不进 renderer/settings.json |
 | 加 platform 内核 API（DI/Event/Command） | `packages/platform/src/` | `packages/platform/CLAUDE.md` | **必须**在 `packages/platform/src/index.ts` re-export |
 | 调整 tsconfig 预设 | `packages/config-ts/` | `packages/config-ts/CLAUDE.md` | strict 三件套不可在子包覆盖关掉 |
 | 调整 ESLint 规则 | `packages/config-eslint/` | `packages/config-eslint/CLAUDE.md` | flat config；base + react 两套 |

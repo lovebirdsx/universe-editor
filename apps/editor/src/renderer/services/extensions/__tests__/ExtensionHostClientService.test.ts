@@ -7,6 +7,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   Event,
+  type IAiModelService,
   type ICommandService,
   type IDialogService,
   type IEditorService,
@@ -80,6 +81,7 @@ function makeService(host: IExtensionHostService) {
     {} as ICommandService,
     {} as ILanguageFeaturesService,
     {} as IEditorService,
+    {} as IAiModelService,
   )
 }
 

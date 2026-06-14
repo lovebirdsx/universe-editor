@@ -31,6 +31,7 @@ import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
+import type { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
 import type { SessionSwitcherMainService } from '../services/sessionSwitcher/sessionSwitcherMainService.js'
@@ -53,6 +54,7 @@ export interface ApplicationServices {
   readonly releaseNotes: IReleaseNotesService
   readonly performance: IPerformanceMarksService
   readonly usage: IUsageService
+  readonly aiModel: IAiModelMainService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /
    * unregisterWindow on it, which are main-internal and not on the wire contract.

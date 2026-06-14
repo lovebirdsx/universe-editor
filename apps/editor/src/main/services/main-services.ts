@@ -16,6 +16,7 @@
 import { registerSingleton, SyncDescriptor } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
+import { ISecretStorageService } from '@universe-editor/platform'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
   IDisposableLeakService,
@@ -32,6 +33,7 @@ import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
+import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
 import { FileSearchMainService } from './fileSearch/fileSearchMainService.js'
@@ -52,6 +54,8 @@ import { PerformanceMainService } from './performance/performanceMainService.js'
 import { SessionSwitcherMainService } from './sessionSwitcher/sessionSwitcherMainService.js'
 import { ConfigLocationMainService } from './configLocation/configLocationMainService.js'
 import { UsageMainService } from './usage/usageMainService.js'
+import { SecretStorageMainService } from './ai/secretStorageMainService.js'
+import { AiModelMainService } from './ai/aiModelMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
 // @-injected services with non-branded static params (spawner stubs, Storage,
@@ -129,4 +133,13 @@ registerSingleton(
   IUsageService,
   // 1 leading static param (settingsPath) before @ILoggerService.
   new SyncDescriptor<IUsageService>(UsageMainService, [undefined], false),
+)
+registerSingleton(
+  ISecretStorageService,
+  // 1 leading static param (safeStorage) before @IMainStorageService / @ILoggerService.
+  new SyncDescriptor<ISecretStorageService>(SecretStorageMainService, [undefined], false),
+)
+registerSingleton(
+  IAiModelMainService,
+  new SyncDescriptor<IAiModelMainService>(AiModelMainService, [], false),
 )

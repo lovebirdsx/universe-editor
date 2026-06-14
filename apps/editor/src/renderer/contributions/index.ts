@@ -17,6 +17,7 @@ import { ContextKeyContribution } from './ContextKeyContribution.js'
 import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
 import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
 import { ConfigInitContribution } from './ConfigInitContribution.js'
+import { AiConfigurationContribution } from './AiConfigurationContribution.js'
 import { AcpInitContribution } from './AcpInitContribution.js'
 import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
@@ -174,6 +175,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.theme',
   ThemeContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// AI service config schema (ai.<vendor>.baseUrl / defaultModel, ai.request.*).
+// No API keys — those live in encrypted secret storage. BlockStartup so the
+// schema is registered before the Settings editor or the AI client read it.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aiConfiguration',
+  AiConfigurationContribution,
   WorkbenchPhase.BlockStartup,
 )
 

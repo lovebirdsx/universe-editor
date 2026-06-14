@@ -387,6 +387,78 @@ export interface DiagnosticCollection {
   dispose(): void
 }
 
+/** Role of a message in an AI conversation. Matches the platform's numeric enum. */
+export enum AiMessageRole {
+  System = 0,
+  User = 1,
+  Assistant = 2,
+}
+
+/** A single message in an AI request. Text content only for now. */
+export interface AiMessage {
+  readonly role: AiMessageRole
+  readonly content: string
+}
+
+/** Per-request options. `modelId` is required; the rest fall back to user config. */
+export interface AiRequestOptions {
+  readonly modelId: string
+  readonly temperature?: number
+  readonly maxTokens?: number
+  readonly stop?: readonly string[]
+}
+
+/** Self-describing model metadata, so an extension can pick a model by capability. */
+export interface AiModelMetadata {
+  readonly id: string
+  readonly vendor: string
+  readonly name: string
+  readonly family: string
+  readonly version?: string
+  readonly maxInputTokens: number
+  readonly maxOutputTokens: number
+  readonly capabilities: {
+    readonly streaming: boolean
+    readonly vision?: boolean
+    readonly toolCalling?: boolean
+  }
+}
+
+/** Pick a model by condition instead of hardcoding an id. */
+export interface AiModelSelector {
+  readonly vendor?: string
+  readonly family?: string
+  readonly id?: string
+}
+
+/** Smallest unit of a streamed response. */
+export type AiResponseChunk =
+  | { readonly type: 'text'; readonly value: string }
+  | { readonly type: 'usage'; readonly inputTokens: number; readonly outputTokens: number }
+
+/**
+ * A streamed AI response. Iterate `stream` for chunks as they arrive; await
+ * `result` for completion (rejects on failure). Call `cancel()` to abort — it
+ * propagates across the process boundary and stops the underlying network call.
+ */
+export interface AiResponse {
+  readonly stream: AsyncIterable<AiResponseChunk>
+  readonly result: Promise<void>
+  cancel(): void
+}
+
+/**
+ * The `ai` namespace: inference models and streaming requests. Trusted (built-in)
+ * extensions only; restricted (external) extensions cannot reach AI models.
+ */
+export interface AiApi {
+  getModels(): Promise<readonly AiModelMetadata[]>
+  selectModels(selector: AiModelSelector): Promise<readonly string[]>
+  computeTokenLength(modelId: string, text: string): Promise<number>
+  /** Send a request and stream the response. Cancel via the returned handle. */
+  sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse
+}
+
 /** The `languages` namespace: register language feature providers with the editor. */
 export interface LanguagesApi {
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
@@ -492,6 +564,7 @@ interface IExtensionHostBridge {
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
+  readonly ai: AiApi
 }
 
 /** Global key the host installs the bridge under. KEEP IN SYNC with the host. */
@@ -526,6 +599,13 @@ export const window: WindowApi = {
 
 export const scm: ScmApi = {
   createSourceControl: (id, label, rootUri) => bridge().createSourceControl(id, label, rootUri),
+}
+
+export const ai: AiApi = {
+  getModels: () => bridge().ai.getModels(),
+  selectModels: (selector) => bridge().ai.selectModels(selector),
+  computeTokenLength: (modelId, text) => bridge().ai.computeTokenLength(modelId, text),
+  sendRequest: (messages, options) => bridge().ai.sendRequest(messages, options),
 }
 
 export const languages: LanguagesApi = {

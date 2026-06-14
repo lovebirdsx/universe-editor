@@ -5,6 +5,7 @@
  * are created at activation time.
  */
 import type {
+  AiApi,
   CompletionItemProvider,
   DefinitionProvider,
   DiagnosticCollection,
@@ -110,6 +111,8 @@ export interface IExtensionHostBridge {
   readonly onDidOpenTextDocument: Event<TextDocument>
   readonly onDidChangeTextDocument: Event<TextDocumentChangeEvent>
   readonly onDidCloseTextDocument: Event<TextDocument>
+  /** The `ai` namespace — trusted-only; throws in a restricted host. */
+  readonly ai: AiApi
 }
 
 export function installApiBridge(bridge: IExtensionHostBridge): void {

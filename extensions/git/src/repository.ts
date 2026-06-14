@@ -573,6 +573,19 @@ export class Repository {
     await this._run(['checkout', '-b', name.trim()], 'create branch')
   }
 
+  /**
+   * Unified diff to commit, mirroring VSCode commit semantics: staged changes
+   * when anything is staged (`git diff --cached`), otherwise all tracked
+   * working-tree changes (`git diff`). Untracked files are excluded — they carry
+   * no diff git can produce without staging.
+   */
+  async getCommitDiff(): Promise<string> {
+    const staged = await gitExec(['diff', '--cached'], this.root, this._log)
+    if (staged.exitCode === 0 && staged.stdout.trim()) return staged.stdout
+    const working = await gitExec(['diff'], this.root, this._log)
+    return working.exitCode === 0 ? working.stdout : ''
+  }
+
   /** The file's content at HEAD, or null when it has no HEAD revision (new / untracked). */
   async getHeadContent(absPath: string): Promise<string | null> {
     const rel = relative(this.root, absPath).replace(/\\/g, '/')

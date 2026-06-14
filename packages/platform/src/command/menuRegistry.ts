@@ -26,6 +26,8 @@ export const enum MenuId {
   ScmTitle = 'scm/title',
   ScmResourceStateContext = 'scm/resourceState/context',
   ScmResourceGroupContext = 'scm/resourceGroup/context',
+  /** Inline actions rendered next to the SCM commit input box. */
+  ScmInputBox = 'scm/inputBox',
   /** Per-view title-bar actions, resolved by a `view == <viewId>` clause. */
   ViewTitle = 'view/title',
   // Title-bar menubar dropdowns

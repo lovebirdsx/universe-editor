@@ -4,10 +4,15 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  CancellationError,
   ErrorNoTelemetry,
+  isCancellationError,
   onUnexpectedError,
+  reviveError,
   setErrorTelemetryHook,
   setUnexpectedErrorHandler,
+  transformErrorForSerialization,
+  transformErrorFromSerialization,
 } from '../../base/errors.js'
 
 afterEach(() => {
@@ -72,5 +77,48 @@ describe('setErrorTelemetryHook', () => {
     setUnexpectedErrorHandler(() => {})
     onUnexpectedError(new ErrorNoTelemetry('silent'))
     expect(hook).not.toHaveBeenCalled()
+  })
+})
+
+describe('transformErrorForSerialization', () => {
+  it('round-trips a plain Error preserving name/message/stack', () => {
+    const err = new Error('boom')
+    err.name = 'CustomError'
+    const serialized = transformErrorForSerialization(err)
+    expect(serialized.$isError).toBe(true)
+    expect(serialized.name).toBe('CustomError')
+    expect(serialized.message).toBe('boom')
+    const revived = transformErrorFromSerialization(serialized)
+    expect(revived).toBeInstanceOf(Error)
+    expect(revived.name).toBe('CustomError')
+    expect(revived.message).toBe('boom')
+    expect(revived.stack).toBe(serialized.stack)
+  })
+
+  it('preserves cancellation across the round-trip', () => {
+    const serialized = transformErrorForSerialization(new CancellationError())
+    const revived = transformErrorFromSerialization(serialized)
+    expect(isCancellationError(revived)).toBe(true)
+  })
+
+  it('preserves noTelemetry across the round-trip', () => {
+    const serialized = transformErrorForSerialization(new ErrorNoTelemetry('quiet'))
+    expect(serialized.noTelemetry).toBe(true)
+    const revived = transformErrorFromSerialization(serialized)
+    expect((revived as ErrorNoTelemetry).noTelemetry).toBe(true)
+  })
+
+  it('handles non-Error throwables', () => {
+    const serialized = transformErrorForSerialization('just a string')
+    expect(serialized.message).toBe('just a string')
+  })
+})
+
+describe('reviveError', () => {
+  it('revives a SerializedError but passes other values through', () => {
+    const serialized = transformErrorForSerialization(new Error('x'))
+    expect(reviveError(serialized)).toBeInstanceOf(Error)
+    expect(reviveError('not an error')).toBe('not an error')
+    expect(reviveError(undefined)).toBeUndefined()
   })
 })

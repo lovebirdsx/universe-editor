@@ -25,8 +25,9 @@ describe('ApplicationServices type', () => {
       usage: {} as ApplicationServices['usage'],
       sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],
       configLocation: {} as ApplicationServices['configLocation'],
+      aiModel: {} as ApplicationServices['aiModel'],
     }
-    expect(Object.keys(svc)).toHaveLength(17)
+    expect(Object.keys(svc)).toHaveLength(18)
   })
 })
 

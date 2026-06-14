@@ -25,6 +25,7 @@ import {
   IWindowsService,
   IIpcService,
   IConfigurationService,
+  IAiModelService,
   IUserDataFilesService,
   IWorkspaceService,
   IFocusTrackerService,
@@ -54,6 +55,8 @@ import { PerfMarks } from '../shared/perf/marks.js'
 import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/services.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
+import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
+import { AiModelClientService } from './services/ai/aiModelClientService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
 import { createRendererIpcService } from './ipc/bootstrap.js'
@@ -307,6 +310,17 @@ async function bootstrapWorkbench(): Promise<void> {
   // IStorageService so user settings persist across restarts.
   const configurationService = workbenchStore.add(new ConfigurationService())
   services.set(IConfigurationService, configurationService)
+
+  // AI model facade: wraps the main-process transport proxy, reassembles streams,
+  // and mirrors the resolved non-secret config to main. Consumers depend only on
+  // IAiModelService.
+  const aiModelMainProxy = ProxyChannel.toService<IAiModelMainService>(
+    ipcService.getChannel(ServiceChannels.AiModel),
+  )
+  const aiModelService = workbenchStore.add(
+    new AiModelClientService(aiModelMainProxy, configurationService),
+  )
+  services.set(IAiModelService, aiModelService)
 
   // Feed all declaratively-registered singletons into the collection. The
   // `has` guard lets explicitly-set instances win, so this coexists with the

@@ -13,6 +13,7 @@ export * from './base/functional.js'
 export * from './base/async.js'
 export * from './base/cancellation.js'
 export * from './base/uri.js'
+export * from './base/uuid.js'
 export * from './base/path.js'
 export * from './base/grid.js'
 export * from './base/observable/index.js'
@@ -115,3 +116,13 @@ export * from './workbench/fileSearchService.js'
 // telemetry
 export * from './telemetry/telemetryService.js'
 export * from './telemetry/noopTelemetryService.js'
+
+// AI model service (contracts + registry + stream reassembly)
+export * from './ai/aiModelTypes.js'
+export * from './ai/aiModelService.js'
+export * from './ai/aiModelProvider.js'
+export * from './ai/aiModelRegistry.js'
+export * from './ai/aiStream.js'
+
+// encrypted secret storage (interface; implementation in main)
+export * from './secret/secretStorageService.js'

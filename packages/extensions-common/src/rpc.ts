@@ -55,6 +55,8 @@ export const ExtHostChannels = {
   mainThreadLanguages: 'mainThreadLanguages',
   /** Ext host → renderer: active text editor inspection + edits/selection control. */
   mainThreadEditor: 'mainThreadEditor',
+  /** Trusted ext host → renderer: AI model requests (streaming chunks + cancel). */
+  mainThreadAi: 'mainThreadAi',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]

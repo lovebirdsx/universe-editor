@@ -44,6 +44,7 @@ import type {
 } from '../../../shared/ipc/extensionHostService.js'
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 import { MainThreadCommands, type CommandOwnershipLedger } from './MainThreadCommands.js'
+import { MainThreadAi } from './MainThreadAi.js'
 import { MainThreadEditor } from './MainThreadEditor.js'
 import { MainThreadFs } from './MainThreadFs.js'
 import { MainThreadLanguages } from './MainThreadLanguages.js'
@@ -51,6 +52,7 @@ import { MainThreadOutput } from './MainThreadOutput.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
+import type { IAiModelService } from '@universe-editor/platform'
 
 export interface HostConnectionDeps {
   readonly host: IExtensionHostService
@@ -67,6 +69,8 @@ export interface HostConnectionDeps {
   readonly languageFeatures?: ILanguageFeaturesService
   /** Wired only for the trusted connection — active-editor control is trusted-only. */
   readonly editorService?: IEditorService
+  /** Wired only for the trusted connection — AI models are trusted-only. */
+  readonly aiModel?: IAiModelService
   readonly output: IOutputService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
@@ -167,6 +171,11 @@ export class HostConnection extends Disposable {
         ExtHostChannels.mainThreadEditor,
         ProxyChannel.fromService(mainThreadEditor),
       )
+    }
+
+    if (deps.aiModel) {
+      const mainThreadAi = store.add(new MainThreadAi(deps.aiModel))
+      server.registerChannel(ExtHostChannels.mainThreadAi, ProxyChannel.fromService(mainThreadAi))
     }
 
     const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)

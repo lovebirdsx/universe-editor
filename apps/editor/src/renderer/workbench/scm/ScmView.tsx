@@ -790,6 +790,13 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     setCommitMenu({ x: rect.right - 200, y: rect.bottom + 2 })
   }
 
+  const inputScope = useMemo(() => ({ scmProvider: model.id }), [model.id])
+  const inputBoxActions = useMemo(
+    () => menuActions(MenuId.ScmInputBox, inputScope, 'inline'),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [inputScope, revision],
+  )
+
   const commitRows = useMemo<OverflowRow[]>(
     () =>
       COMMIT_ACTIONS.map((a) => ({
@@ -809,31 +816,50 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
 
   return (
     <section className={styles['provider']}>
-      <textarea
-        ref={inputRef}
-        className={styles['commitInput']}
-        value={inputValue}
-        placeholder={placeholder}
-        rows={1}
-        onChange={(e) => scm.changeInputBoxValue(model.handle, e.target.value)}
-        onKeyDown={(e) => {
-          if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
-            e.preventDefault()
-            if (primaryCommitAction && !primaryCommitAction.disabled && !isCommitting) {
-              runCommand(primaryCommitAction.command)
+      <div className={styles['commitInputWrapper']}>
+        <textarea
+          ref={inputRef}
+          className={styles['commitInput']}
+          value={inputValue}
+          placeholder={placeholder}
+          rows={1}
+          onChange={(e) => scm.changeInputBoxValue(model.handle, e.target.value)}
+          onKeyDown={(e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && acceptCommand) {
+              e.preventDefault()
+              if (primaryCommitAction && !primaryCommitAction.disabled && !isCommitting) {
+                runCommand(primaryCommitAction.command)
+              }
             }
-          }
-          if (e.key === 'Tab' && !e.shiftKey) {
-            e.preventDefault()
-            treeRef.current?.focus()
-            // Give keyboard navigation an anchor: select the first row if none focused.
-            if (!treeModel.focused) {
-              const first = treeModel.getVisibleNodes()[0]
-              if (first) treeModel.setSelection([first.id], first.id)
+            if (e.key === 'Tab' && !e.shiftKey) {
+              e.preventDefault()
+              treeRef.current?.focus()
+              // Give keyboard navigation an anchor: select the first row if none focused.
+              if (!treeModel.focused) {
+                const first = treeModel.getVisibleNodes()[0]
+                if (first) treeModel.setSelection([first.id], first.id)
+              }
             }
-          }
-        }}
-      />
+          }}
+        />
+        {inputBoxActions.length > 0 && (
+          <span className={styles['inputBoxActions']}>
+            {inputBoxActions.map((a) => (
+              <ActionButton
+                key={a.id}
+                action={a}
+                onRun={(e) => {
+                  e.preventDefault()
+                  void commandService.executeCommand(a.command, {
+                    rootUri: model.rootUri,
+                    sourceControlId: model.id,
+                  })
+                }}
+              />
+            ))}
+          </span>
+        )}
+      </div>
       {primaryCommitAction && (
         <div className={styles['commitBar']}>
           <button

@@ -3,7 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
-import { AbstractIdleValue, GlobalIdleValue, runWhenIdle } from '../../base/async.js'
+import {
+  AbstractIdleValue,
+  AsyncIterableSource,
+  DeferredPromise,
+  GlobalIdleValue,
+  runWhenIdle,
+} from '../../base/async.js'
+import { CancellationError } from '../../base/errors.js'
 
 describe('runWhenIdle', () => {
   it('falls back to setTimeout when requestIdleCallback is unavailable', () => {
@@ -116,5 +123,93 @@ describe('GlobalIdleValue', () => {
     const v = new GlobalIdleValue(exec)
     expect(v.value).toBe(7)
     expect(exec).toHaveBeenCalledOnce()
+  })
+})
+
+describe('DeferredPromise', () => {
+  it('resolves via complete()', async () => {
+    const d = new DeferredPromise<number>()
+    expect(d.isSettled).toBe(false)
+    d.complete(42)
+    await expect(d.p).resolves.toBe(42)
+    expect(d.isResolved).toBe(true)
+    expect(d.isSettled).toBe(true)
+  })
+
+  it('rejects via error()', async () => {
+    const d = new DeferredPromise<number>()
+    d.error(new Error('boom'))
+    await expect(d.p).rejects.toThrow('boom')
+    expect(d.isRejected).toBe(true)
+  })
+
+  it('cancel() rejects with CancellationError', async () => {
+    const d = new DeferredPromise<number>()
+    d.cancel()
+    await expect(d.p).rejects.toBeInstanceOf(CancellationError)
+  })
+
+  it('ignores settling more than once', async () => {
+    const d = new DeferredPromise<number>()
+    d.complete(1)
+    d.complete(2)
+    d.error(new Error('late'))
+    await expect(d.p).resolves.toBe(1)
+  })
+})
+
+describe('AsyncIterableSource', () => {
+  it('delivers buffered values then completes', async () => {
+    const src = new AsyncIterableSource<number>()
+    src.emitOne(1)
+    src.emitOne(2)
+    src.resolve()
+    const out: number[] = []
+    for await (const v of src.asyncIterable) out.push(v)
+    expect(out).toEqual([1, 2])
+  })
+
+  it('delivers values emitted after iteration has started (async)', async () => {
+    const src = new AsyncIterableSource<number>()
+    const collected: number[] = []
+    const done = (async () => {
+      for await (const v of src.asyncIterable) collected.push(v)
+    })()
+    src.emitOne(10)
+    await Promise.resolve()
+    src.emitOne(20)
+    src.resolve()
+    await done
+    expect(collected).toEqual([10, 20])
+  })
+
+  it('reject() surfaces the error to the consumer after prior values', async () => {
+    const src = new AsyncIterableSource<number>()
+    src.emitOne(1)
+    src.reject(new Error('mid-stream'))
+    const out: number[] = []
+    await expect(
+      (async () => {
+        for await (const v of src.asyncIterable) out.push(v)
+      })(),
+    ).rejects.toThrow('mid-stream')
+    expect(out).toEqual([1])
+  })
+
+  it('ignores emits after close', async () => {
+    const src = new AsyncIterableSource<number>()
+    src.emitOne(1)
+    src.resolve()
+    src.emitOne(2)
+    const out: number[] = []
+    for await (const v of src.asyncIterable) out.push(v)
+    expect(out).toEqual([1])
+  })
+
+  it('throws when consumed twice', () => {
+    const src = new AsyncIterableSource<number>()
+    src.resolve()
+    void src.asyncIterable[Symbol.asyncIterator]()
+    expect(() => src.asyncIterable[Symbol.asyncIterator]()).toThrow(/once/)
   })
 })
