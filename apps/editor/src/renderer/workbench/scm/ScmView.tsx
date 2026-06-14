@@ -683,19 +683,6 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     return () => clearTimeout(id)
   }, [inputValue, inputStorageKey, storage])
 
-  // Auto-grow the commit box up to 5 lines, then scroll.
-  useLayoutEffect(() => {
-    const ta = inputRef.current
-    if (!ta) return
-    ta.style.height = 'auto'
-    const style = getComputedStyle(ta)
-    const line = parseFloat(style.lineHeight) || 18
-    const padding = parseFloat(style.paddingTop) + parseFloat(style.paddingBottom)
-    const max = line * 5 + padding
-    ta.style.height = `${Math.min(ta.scrollHeight, max)}px`
-    ta.style.overflowY = ta.scrollHeight > max ? 'auto' : 'hidden'
-  }, [inputValue])
-
   const runCommand = (command: ICommandDto | string): void => {
     const id = typeof command === 'string' ? command : command.command
     setIsCommitting(true)

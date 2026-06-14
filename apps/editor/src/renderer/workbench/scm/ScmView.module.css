@@ -57,8 +57,11 @@
   width: 100%;
   box-sizing: border-box;
   resize: none;
-  overflow: hidden;
+  field-sizing: content;
+  overflow-y: auto;
+  line-height: 18px;
   min-height: 26px;
+  max-height: calc(18px * 5 + 8px);
   padding: 4px 6px;
   font-family: inherit;
   font-size: 13px;

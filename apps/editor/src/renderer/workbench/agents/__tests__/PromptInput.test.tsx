@@ -489,26 +489,17 @@ describe('PromptInput — textarea sizing and browser checks', () => {
     expect(getTextarea().getAttribute('spellcheck')).toBe('false')
   })
 
-  it('grows up to sixteen rows before enabling internal scrolling', () => {
-    vi.spyOn(globalThis, 'getComputedStyle').mockReturnValue({
-      lineHeight: '18px',
-      fontSize: '12px',
-      paddingTop: '3px',
-      paddingBottom: '3px',
-      borderTopWidth: '1px',
-      borderBottomWidth: '1px',
-    } as CSSStyleDeclaration)
-
+  it('relies on native field-sizing for auto-grow instead of JS height writes', () => {
     renderWithServices(<PromptInput session={makeSession()} />)
     const ta = getTextarea()
-    Object.defineProperty(ta, 'scrollHeight', { value: 420, configurable: true })
 
     fireEvent.change(ta, {
       target: { value: Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') },
     })
 
-    expect(ta.style.height).toBe('296px')
-    expect(ta.style.overflowY).toBe('auto')
+    // No inline height is written: sizing is delegated to CSS `field-sizing: content`
+    // with min/max-height bounds, so the box can never get stuck at a stale pixel value.
+    expect(ta.style.height).toBe('')
   })
 })
 
