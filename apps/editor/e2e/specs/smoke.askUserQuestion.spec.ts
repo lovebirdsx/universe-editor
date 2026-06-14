@@ -10,7 +10,7 @@
 
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const ASK_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'askAgent.cjs')

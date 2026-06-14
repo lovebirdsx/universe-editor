@@ -10,7 +10,7 @@
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 const ROW_HEIGHT = 22
 // Enough rows to overflow any reasonable viewport, but well under the 200 default

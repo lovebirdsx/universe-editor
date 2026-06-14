@@ -22,7 +22,7 @@ import {
   type Page,
 } from '@playwright/test'
 import { join } from 'node:path'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO } from '../pages/WorkbenchPO.js'
 import { APP_ROOT, MAIN_ENTRY } from './electronApp.js'
@@ -40,6 +40,12 @@ const INITIAL_STATE = JSON.stringify({ 'welcome.agentOnboarding.seen': true }, n
 function seedUserData(userDataDir: string): void {
   writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
   writeFileSync(join(userDataDir, 'state.json'), INITIAL_STATE, 'utf8')
+  // Per-workspace session (open editor groups, layout) lives under
+  // workspaces/<id>.json. A spec that opened a folder leaves its editor groups
+  // there; without clearing it the next test's reload restores those ghost
+  // editors (e.g. getEditorGroupCount returns 2 instead of 1). Wipe the whole
+  // directory so every test reloads to a pristine, workspace-less first frame.
+  rmSync(join(userDataDir, 'workspaces'), { recursive: true, force: true })
 }
 
 async function waitForProbe(page: Page): Promise<void> {
@@ -66,6 +72,10 @@ async function resetWindow(page: Page, userDataDir: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await page.evaluate(() => window.__E2E__!.whenRestored())
+      // Navigation back/forward stack lives in the main-process HistoryService,
+      // which a reload does NOT clear. Wipe it so a prior test's navigation
+      // entries can't leak into this test's GoBack behaviour.
+      await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.clearHistory'))
       return
     } catch (err) {
       if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err

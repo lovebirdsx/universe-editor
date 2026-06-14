@@ -8,7 +8,7 @@
  *  Fix: WorkbenchLayout 在 visibility 变化时快照尺寸，useEffect 后显式 resize。
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/sharedApp.js'
+import { test, expect } from '../fixtures/electronApp.js'
 
 const TOGGLE_CMD = 'workbench.action.toggleSecondarySidebarVisibility'
 

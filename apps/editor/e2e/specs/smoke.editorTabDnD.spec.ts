@@ -5,7 +5,7 @@
 import * as path from 'node:path'
 import * as fs from 'node:fs/promises'
 import * as os from 'node:os'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 editor tab drag-and-drop', () => {
   test('drag tab to another group moves the editor', async ({ workbench }) => {

@@ -134,11 +134,11 @@ jobs:
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor e2e -- --shard=${{ matrix.shard }}/2
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert @visual --shard=${{ matrix.shard }}/2
 
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
-        run: pnpm --filter @universe-editor/editor e2e -- --shard=${{ matrix.shard }}/2
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert @visual --shard=${{ matrix.shard }}/2
 
       # - name: Run visual regression (Linux only)
       #   if: runner.os == 'Linux'
