@@ -235,6 +235,45 @@ describe('OutlineView', () => {
     expect(screen.getByText('Child')).toBeTruthy()
   })
 
+  it('selects the first row when focused with nothing focused yet', () => {
+    const { instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Alpha', { line: 1 }), makeSymbol('Beta', { line: 2 })],
+      languageId: 'typescript',
+      version: 1,
+    })
+    renderView(instantiation)
+
+    const rows = () => Array.from(document.querySelectorAll('[role="treeitem"]'))
+    expect(rows().some((r) => r.getAttribute('aria-selected') === 'true')).toBe(false)
+
+    const view = document.querySelector('[role="tree"]') as HTMLElement
+    act(() => view.focus())
+
+    expect(rows()[0]?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('selects the active symbol over the first row on focus', () => {
+    const beta = makeSymbol('Beta', { line: 2 })
+    const { activeSymbol, instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [makeSymbol('Alpha', { line: 1 }), beta],
+      languageId: 'typescript',
+      version: 1,
+    })
+    // follow-cursor would also select; turn it off to isolate the focus path.
+    outlineViewState.setFollowCursor(false)
+    renderView(instantiation)
+    act(() => activeSymbol.set(beta, undefined))
+
+    const view = document.querySelector('[role="tree"]') as HTMLElement
+    act(() => view.focus())
+
+    const rows = Array.from(document.querySelectorAll('[role="treeitem"]'))
+    expect(rows[0]?.getAttribute('aria-selected')).toBe('false')
+    expect(rows[1]?.getAttribute('aria-selected')).toBe('true')
+  })
+
   it('filter on type prunes the tree to matches and ancestors', () => {
     const { instantiation } = setup({
       uri: 'file:///a.ts',

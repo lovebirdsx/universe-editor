@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { interpolate } from '../useMarkdownSyncScroll.js'
+import { interpolate } from '../previewScrollMap.js'
 
 describe('interpolate', () => {
   it('returns 0 for no control points', () => {

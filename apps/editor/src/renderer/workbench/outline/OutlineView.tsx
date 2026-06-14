@@ -240,19 +240,18 @@ export function OutlineView() {
     model.setExpansion(collectExpandableIds(rootsRef.current).map((id) => [id, true] as const))
   }, [expandSignal, model])
 
-  // When the tree gains focus without a focused row (e.g. via the
-  // `outline.focus` command), select the symbol under the editor cursor — or the
-  // first row — so keyboard navigation is usable immediately, VSCode-style.
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const onFocus = () => {
-      if (model.focused != null) return
-      const targetId = activeIdRef.current ?? model.getVisibleNodes()[0]?.id
-      if (targetId != null) model.setSelection([targetId], targetId)
-    }
-    el.addEventListener('focus', onFocus)
-    return () => el.removeEventListener('focus', onFocus)
+  // When the tree gains focus without a (still-visible) focused row — e.g. via
+  // the `outline.focus` command, or after a document switch left a stale focus —
+  // select the symbol under the editor cursor, falling back to the first row, so
+  // keyboard navigation is usable immediately, VSCode-style. Driven by the Tree's
+  // onFocus prop rather than a manual listener so it also fires when symbols
+  // arrive after the tree first mounted empty (cold language-server start).
+  const onTreeFocus = useCallback(() => {
+    const visible = model.getVisibleNodes()
+    const focusedId = model.focused
+    if (focusedId != null && visible.some((n) => n.id === focusedId)) return
+    const targetId = activeIdRef.current ?? visible[0]?.id
+    if (targetId != null) model.setSelection([targetId], targetId)
   }, [model])
 
   const activeId = activeSymbol ? display.idBySymbol.get(activeSymbol) : undefined
@@ -380,6 +379,7 @@ export function OutlineView() {
             )
           }}
           onActivate={(node) => outlineService.revealSymbol(node.element.symbol)}
+          onFocus={onTreeFocus}
         />
       ) : (
         <div className={styles['empty']}>

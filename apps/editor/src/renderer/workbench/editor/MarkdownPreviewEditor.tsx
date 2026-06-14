@@ -6,12 +6,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { IEditorGroupsService, IEditorInput, IFileService } from '@universe-editor/platform'
+import {
+  Emitter,
+  IEditorGroupsService,
+  IEditorInput,
+  IFileService,
+} from '@universe-editor/platform'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
+import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
 import { MarkdownPreviewViewStateCache } from '../../services/editor/MarkdownPreviewViewStateCache.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
+import { collectEntries, lineForPreviewTop, previewTopForLine } from './previewScrollMap.js'
 import { useMarkdownSyncScroll } from './useMarkdownSyncScroll.js'
 import { useService } from '../useService.js'
 import styles from './MarkdownPreviewEditor.module.css'
@@ -119,6 +126,34 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
     if (activeGroupActiveEditor !== input) return
     rootRef.current?.focus()
   }, [activeGroup, activeGroupActiveEditor, group, input])
+
+  // Expose a controller to the Outline service so clicking a heading scrolls the
+  // preview, and so the active heading tracks the viewport. Lives here because
+  // the line↔pixel mapping needs the live DOM (data-line blocks settle late).
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const onDidScroll = new Emitter<void>()
+    const controller = {
+      scrollToLine: (line: number) => {
+        el.scrollTop = previewTopForLine(collectEntries(el), line)
+      },
+      getTopVisibleLine: () => {
+        const entries = collectEntries(el)
+        return entries.length === 0 ? undefined : lineForPreviewTop(entries, el.scrollTop)
+      },
+      focus: () => el.focus(),
+      onDidScroll: onDidScroll.event,
+    }
+    const fire = () => onDidScroll.fire()
+    el.addEventListener('scroll', fire, { passive: true })
+    MarkdownPreviewRegistry.register(sourceUri, controller)
+    return () => {
+      el.removeEventListener('scroll', fire)
+      MarkdownPreviewRegistry.unregister(sourceUri, controller)
+      onDidScroll.dispose()
+    }
+  }, [sourceUri])
 
   return (
     <div

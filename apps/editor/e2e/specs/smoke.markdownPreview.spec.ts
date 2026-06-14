@@ -20,6 +20,13 @@ function writeTempMarkdown(): string {
   return file.replace(/\\/g, '/')
 }
 
+function writeTempMarkdownWithHeadings(): { dir: string; filePath: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
+  const file = join(dir, 'outline.md')
+  writeFileSync(file, '# Alpha\n\ntext\n\n## Beta\n\nmore\n\n## Gamma\n\nend\n')
+  return { dir: dir.replace(/\\/g, '/'), filePath: file.replace(/\\/g, '/') }
+}
+
 test.describe('@p1 markdown preview', () => {
   test('Open Preview replaces source tab with preview tab', async ({ page, workbench }) => {
     await workbench.waitForRestored()
@@ -91,5 +98,41 @@ test.describe('@p1 markdown preview', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
       .toBe('markdown.preview')
+  })
+
+  test('Outline stays populated after switching to preview', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const { dir, filePath } = writeTempMarkdownWithHeadings()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+
+    // Reveal + focus the Outline view so its DOM renders.
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('outline.focus')
+    })
+
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    // Outline fills in for the source editor (markdown plugin provides symbols;
+    // names carry the heading markup, VSCode parity).
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
+      .toEqual(['# Alpha', '## Beta', '## Gamma'])
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    // Same outline must remain available in preview mode.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 10000 })
+      .toEqual(['# Alpha', '## Beta', '## Gamma'])
   })
 })

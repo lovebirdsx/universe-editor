@@ -22,6 +22,7 @@ import { type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { basenameOfResource, extensionOfBasename } from '../workbench/files/resourceInfo.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 
@@ -80,6 +81,18 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
 
   private _sync(): void {
     const input = this._editorService.activeEditor.get()
+
+    // A markdown preview has no model of its own; mirror its source file's shared
+    // model so language plugins see the document and the Outline view fills in.
+    if (input instanceof MarkdownPreviewInput) {
+      const model = MonacoModelRegistry.peek(input.sourceUri)
+      if (!model) return
+      const key = model.uri.toString()
+      if (this._open.has(key)) return
+      this._attach(key, model, resolveLanguageId(input.sourceUri, model))
+      return
+    }
+
     if (!(input instanceof FileEditorInput)) return
 
     const editor = FileEditorRegistry.get(input)

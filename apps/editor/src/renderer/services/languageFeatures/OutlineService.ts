@@ -21,6 +21,8 @@ import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoL
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
+import { MarkdownPreviewInput } from '../editor/MarkdownPreviewInput.js'
+import { MarkdownPreviewRegistry } from '../editor/MarkdownPreviewRegistry.js'
 import { ILanguageFeaturesService } from './LanguageFeaturesService.js'
 import { findSymbolAtLine } from './symbolTree.js'
 
@@ -94,6 +96,8 @@ export class OutlineService extends Disposable implements IOutlineService {
   /** Subscriptions bound to the currently-attached model + editor. */
   private readonly _attachListeners = this._register(new DisposableStore())
   private _currentInput: FileEditorInput | undefined
+  /** Set instead of `_currentInput` when the active editor is a markdown preview. */
+  private _currentPreview: MarkdownPreviewInput | undefined
   private _currentModel: monaco.editor.ITextModel | undefined
   private _version = 0
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined
@@ -125,6 +129,16 @@ export class OutlineService extends Disposable implements IOutlineService {
       }),
     )
 
+    // The preview component mounts asynchronously too; its controller registers
+    // once the DOM is ready, so re-attach to pull symbols when it appears.
+    this._register(
+      MarkdownPreviewRegistry.onDidChange((uri) => {
+        if (this._currentPreview && uri.toString() === this._currentPreview.sourceUri.toString()) {
+          this._attachActiveEditor()
+        }
+      }),
+    )
+
     // Providers register at AfterRestore — possibly after the first editor is
     // already active — and a freshly-registered server still needs a moment to
     // analyse the file, so its first pull may be empty. Recompute WITH retries.
@@ -142,6 +156,7 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _attachActiveEditor(): void {
     const input = this._editorService.activeEditor.get()
     const fileInput = input instanceof FileEditorInput ? input : undefined
+    const previewInput = input instanceof MarkdownPreviewInput ? input : undefined
     const sameInput = fileInput !== undefined && fileInput === this._currentInput
 
     this._attachListeners.clear()
@@ -153,12 +168,22 @@ export class OutlineService extends Disposable implements IOutlineService {
     // re-mounting / re-registering while the language server is still analysing —
     // must NOT cancel the running retry chain, or the outline can stay stuck empty
     // as repeated re-registrations keep killing each scheduled retry.
-    if (!sameInput) {
+    const samePreview =
+      previewInput !== undefined &&
+      this._currentPreview !== undefined &&
+      previewInput.sourceUri.toString() === this._currentPreview.sourceUri.toString()
+    if (!sameInput && !samePreview) {
       this._clearRetry()
       this._attachGeneration++
     }
     const generation = this._attachGeneration
     this._currentInput = fileInput
+    this._currentPreview = previewInput
+
+    if (previewInput) {
+      this._attachPreview(previewInput, samePreview, generation)
+      return
+    }
 
     if (!fileInput) {
       this._currentModel = undefined
@@ -215,6 +240,43 @@ export class OutlineService extends Disposable implements IOutlineService {
         delay: INITIAL_PULL_RETRY_MS,
         elapsed: 0,
       })
+    }
+  }
+
+  /**
+   * Attach to a markdown preview: pull symbols from the source file's shared
+   * model (the preview holds the source open, so it stays alive), and track the
+   * active heading from the preview's top visible line instead of a cursor.
+   */
+  private _attachPreview(
+    preview: MarkdownPreviewInput,
+    samePreview: boolean,
+    generation: number,
+  ): void {
+    const model = MonacoModelRegistry.peek(preview.sourceUri)
+    if (!model) {
+      // Source not open (e.g. a restored standalone preview): no shared model to
+      // pull symbols from. DocumentSyncContribution mirrors it on activation, so
+      // MarkdownPreviewRegistry.onDidChange / a later mount re-attaches.
+      if (!samePreview) {
+        this._currentModel = undefined
+        this._publish(undefined, undefined)
+      }
+      return
+    }
+    this._currentModel = model
+
+    this._attachListeners.add(model.onDidChangeContent(() => this._scheduleRecompute()))
+    const controller = MarkdownPreviewRegistry.get(preview.sourceUri)
+    if (controller) {
+      this._attachListeners.add(controller.onDidScroll(() => this._recomputeActiveSymbol()))
+    }
+
+    const current = this._outline.get()
+    const haveSymbols =
+      current !== undefined && current.uri === model.uri.toString() && current.roots.length > 0
+    if (!samePreview || (!haveSymbols && this._retryTimer === undefined)) {
+      this._recomputeSymbols({ generation, delay: INITIAL_PULL_RETRY_MS, elapsed: 0 })
     }
   }
 
@@ -285,15 +347,27 @@ export class OutlineService extends Disposable implements IOutlineService {
 
   private _recomputeActiveSymbol(): void {
     const model = this._currentModel
-    const input = this._currentInput
-    const editor = input ? FileEditorRegistry.get(input) : undefined
-    const position = editor?.getPosition()
     const roots = this._outline.get()?.roots
-    if (!model || !position || !roots) {
+    if (!model || !roots) {
       this._activeSymbol.set(undefined, undefined)
       return
     }
-    this._activeSymbol.set(findSymbolAtLine(roots, position.lineNumber), undefined)
+
+    // In a preview the "cursor" is the top of the viewport; otherwise it's the
+    // Monaco editor's cursor line.
+    let line: number | undefined
+    if (this._currentPreview) {
+      line = MarkdownPreviewRegistry.get(this._currentPreview.sourceUri)?.getTopVisibleLine()
+    } else {
+      const editor = this._currentInput ? FileEditorRegistry.get(this._currentInput) : undefined
+      line = editor?.getPosition()?.lineNumber
+    }
+
+    if (line === undefined) {
+      this._activeSymbol.set(undefined, undefined)
+      return
+    }
+    this._activeSymbol.set(findSymbolAtLine(roots, line), undefined)
   }
 
   private _publish(
@@ -307,6 +381,12 @@ export class OutlineService extends Disposable implements IOutlineService {
   }
 
   revealSymbol(symbol: monaco.languages.DocumentSymbol): void {
+    if (this._currentPreview) {
+      const controller = MarkdownPreviewRegistry.get(this._currentPreview.sourceUri)
+      controller?.scrollToLine(symbol.selectionRange.startLineNumber)
+      controller?.focus()
+      return
+    }
     const input = this._currentInput
     if (!input) return
     const editor = FileEditorRegistry.get(input)

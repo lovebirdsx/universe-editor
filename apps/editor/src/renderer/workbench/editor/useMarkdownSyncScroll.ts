@@ -19,54 +19,11 @@ import {
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import type { monaco } from './monaco/MonacoLoader.js'
+import { collectEntries, interpolate, type Point } from './previewScrollMap.js'
 import { useService } from '../useService.js'
-
-interface Point {
-  readonly key: number
-  readonly value: number
-}
-
-/**
- * Piecewise-linear map: given (key→value) control points, return the value at
- * `probe`, clamping to the endpoints outside the mapped range.
- */
-export function interpolate(points: readonly Point[], probe: number): number {
-  if (points.length === 0) return 0
-  const sorted = [...points].sort((a, b) => a.key - b.key)
-  const first = sorted[0]!
-  const last = sorted[sorted.length - 1]!
-  if (probe <= first.key) return first.value
-  if (probe >= last.key) return last.value
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const a = sorted[i]!
-    const b = sorted[i + 1]!
-    if (probe >= a.key && probe <= b.key) {
-      const span = b.key - a.key
-      const frac = span > 0 ? (probe - a.key) / span : 0
-      return a.value + frac * (b.value - a.value)
-    }
-  }
-  return last.value
-}
 
 function clamp01(n: number): number {
   return n < 0 ? 0 : n > 1 ? 1 : n
-}
-
-interface LineEntry {
-  line: number
-  top: number
-}
-
-function collectEntries(root: HTMLElement): LineEntry[] {
-  const rootRect = root.getBoundingClientRect()
-  const out: LineEntry[] = []
-  for (const el of root.querySelectorAll<HTMLElement>('[data-line]')) {
-    const line = Number(el.dataset['line'])
-    if (Number.isNaN(line)) continue
-    out.push({ line, top: el.getBoundingClientRect().top - rootRect.top + root.scrollTop })
-  }
-  return out
 }
 
 function previewTopForEditor(
@@ -80,7 +37,8 @@ function previewTopForEditor(
   const nextTop = editor.getTopForLineNumber(startLine + 1)
   const frac =
     nextTop > lineTop ? clamp01((editor.getScrollTop() - lineTop) / (nextTop - lineTop)) : 0
-  const probe = startLine - 1 + frac
+  // entries carry 1-based source lines, so probe in the same 1-based space.
+  const probe = startLine + frac
 
   const totalLines = editor.getModel()?.getLineCount() ?? 0
   const maxPreviewScroll = Math.max(0, root.scrollHeight - root.clientHeight)
@@ -105,10 +63,11 @@ function editorTopForPreview(
     reversePoints.push({ key: maxPreviewScroll, value: totalLines })
   }
 
+  // probeLine is a 1-based source line; clamp to >= 1 before reading line tops.
   const probeLine = interpolate(reversePoints, root.scrollTop)
-  const floor = Math.max(0, Math.floor(probeLine))
-  const lineTop = editor.getTopForLineNumber(floor + 1)
-  const nextTop = editor.getTopForLineNumber(floor + 2)
+  const floor = Math.max(1, Math.floor(probeLine))
+  const lineTop = editor.getTopForLineNumber(floor)
+  const nextTop = editor.getTopForLineNumber(floor + 1)
   return lineTop + (probeLine - floor) * (nextTop - lineTop)
 }
 

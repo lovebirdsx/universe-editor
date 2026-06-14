@@ -16,11 +16,17 @@ import {
 import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
+import { MarkdownPreviewInput } from '../../editor/MarkdownPreviewInput.js'
+import {
+  MarkdownPreviewRegistry,
+  type IMarkdownPreviewController,
+} from '../../editor/MarkdownPreviewRegistry.js'
 import type { ILanguageFeaturesService } from '../LanguageFeaturesService.js'
 import { OutlineService } from '../OutlineService.js'
 
-const { markerListeners } = vi.hoisted(() => ({
+const { markerListeners, previewModels } = vi.hoisted(() => ({
   markerListeners: [] as Array<(resources: readonly { toString(): string }[]) => void>,
+  previewModels: new Map<string, unknown>(),
 }))
 
 // OutlineService subscribes to monaco's marker changes to re-pull symbols once a
@@ -40,6 +46,14 @@ vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
         },
       },
     }),
+  },
+}))
+
+// The markdown-preview path pulls symbols from the source file's shared model;
+// stub the registry so a test can plant a model for a given source URI.
+vi.mock('../../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
+  MonacoModelRegistry: {
+    peek: (resource: { toString(): string }) => previewModels.get(resource.toString()),
   },
 }))
 
@@ -135,6 +149,8 @@ function makeFakeEditorFor(uri: string, languageId = 'markdown') {
 describe('OutlineService', () => {
   beforeEach(() => {
     FileEditorRegistry._resetForTests()
+    MarkdownPreviewRegistry._resetForTests()
+    previewModels.clear()
     markerListeners.length = 0
   })
 
@@ -572,6 +588,99 @@ describe('OutlineService', () => {
     svc.restoreViewState(state!)
     expect(restored).toEqual({ selection, scrollTop: 120, scrollLeft: 30 })
     expect(decorationClears).toBeGreaterThan(0)
+    svc.dispose()
+  })
+
+  // ---- markdown preview -----------------------------------------------------
+
+  function setupPreview(symbols: monaco.languages.DocumentSymbol[]) {
+    const sourceUri = URI.file('/ws/x.md')
+    const model = {
+      uri: { toString: () => sourceUri.toString() },
+      getLanguageId: () => 'markdown',
+      getValue: () => '',
+      isDisposed: () => false,
+      onDidChangeContent: () => ({ dispose: () => {} }),
+    } as unknown as monaco.editor.ITextModel
+    previewModels.set(sourceUri.toString(), model)
+
+    const activeEditor = observableValue<MarkdownPreviewInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const provider = {
+      provideDocumentSymbols: () => symbols,
+    } as unknown as monaco.languages.DocumentSymbolProvider
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+    } as unknown as ILanguageFeaturesService
+
+    const svc = new OutlineService(editorService, facade)
+    const preview = new MarkdownPreviewInput(sourceUri)
+    return { svc, preview, sourceUri, activeEditor }
+  }
+
+  function makeController(overrides: Partial<IMarkdownPreviewController> = {}) {
+    const scrolled: number[] = []
+    let focusCount = 0
+    const onDidScroll = new Emitter<void>()
+    const controller: IMarkdownPreviewController = {
+      scrollToLine: (line: number) => scrolled.push(line),
+      getTopVisibleLine: () => 1,
+      focus: () => {
+        focusCount += 1
+      },
+      onDidScroll: onDidScroll.event,
+      ...overrides,
+    }
+    return { controller, scrolled, onDidScroll, focusCount: () => focusCount }
+  }
+
+  it('publishes symbols for an active markdown preview from the source model', async () => {
+    const symbols = [makeSymbol('Title', 1, 9)]
+    const { svc, preview, sourceUri, activeEditor } = setupPreview(symbols)
+    MarkdownPreviewRegistry.register(sourceUri, makeController().controller)
+    activeEditor.set(preview, undefined)
+    await flush()
+    expect(svc.outline.get()?.roots).toEqual(symbols)
+    expect(svc.outline.get()?.uri).toBe(sourceUri.toString())
+    svc.dispose()
+  })
+
+  it('revealSymbol scrolls the preview to the symbol line and refocuses it', async () => {
+    const symbols = [makeSymbol('A', 1, 3), makeSymbol('B', 5, 10)]
+    const { svc, preview, sourceUri, activeEditor } = setupPreview(symbols)
+    const { controller, scrolled, focusCount } = makeController()
+    MarkdownPreviewRegistry.register(sourceUri, controller)
+    activeEditor.set(preview, undefined)
+    await flush()
+    svc.revealSymbol(symbols[1]!)
+    expect(scrolled).toEqual([5])
+    expect(focusCount()).toBe(1)
+    svc.dispose()
+  })
+
+  it('tracks the active symbol from the preview top visible line on scroll', async () => {
+    const symbols = [makeSymbol('A', 1, 4), makeSymbol('B', 5, 10)]
+    let topLine = 1
+    const { svc, preview, sourceUri, activeEditor } = setupPreview(symbols)
+    const { controller, onDidScroll } = makeController({ getTopVisibleLine: () => topLine })
+    MarkdownPreviewRegistry.register(sourceUri, controller)
+    activeEditor.set(preview, undefined)
+    await flush()
+    expect(svc.activeSymbol.get()?.name).toBe('A')
+    topLine = 6
+    onDidScroll.fire()
+    expect(svc.activeSymbol.get()?.name).toBe('B')
+    svc.dispose()
+  })
+
+  it('clears the outline for a preview whose source model is not open', async () => {
+    const symbols = [makeSymbol('A', 1, 3)]
+    const { svc, preview, sourceUri, activeEditor } = setupPreview(symbols)
+    previewModels.delete(sourceUri.toString())
+    activeEditor.set(preview, undefined)
+    await flush()
+    expect(svc.outline.get()).toBeUndefined()
     svc.dispose()
   })
 })
