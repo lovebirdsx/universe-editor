@@ -259,6 +259,7 @@
   overflow: auto;
   display: flex;
   flex-direction: column;
+  font-size: 13px;
 }
 
 .resultsTree[role='tree']:focus,
@@ -366,7 +367,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-family: var(--font-mono, 'Consolas', 'Menlo', monospace);
 }
 
 .match {

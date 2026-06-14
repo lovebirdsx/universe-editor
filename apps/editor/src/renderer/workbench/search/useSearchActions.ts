@@ -76,6 +76,7 @@ export function useSearchActions(
           endColumn: range.endColumn,
         })
         editor.revealLineInCenter(match.lineNumber)
+        if (!preview) editor.focus()
         return true
       }
       // Monaco may not be mounted yet on first open; retry after a frame.

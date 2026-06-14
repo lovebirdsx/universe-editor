@@ -168,5 +168,29 @@ export function buildSearchSnapshot(
     for (const mn of matches) parentMap.set(mn.id, fileNode)
   }
 
+  if (mode === 'tree') {
+    const compactChains = (nodes: SearchNode[]): void => {
+      for (const node of nodes) {
+        if (node.kind !== 'folder') continue
+        compactChains(childrenMap.get(node.id) ?? [])
+        let current = childrenMap.get(node.id) ?? []
+        while (current.length === 1 && current[0]!.kind === 'folder') {
+          const child = current[0] as Extract<SearchNode, { kind: 'folder' }>
+          ;(node as Record<string, unknown>)['name'] = (node.name as string) + '/' + child.name
+          ;(node as Record<string, unknown>)['relPath'] = child.relPath
+          const grandchildren = childrenMap.get(child.id) ?? []
+          childrenMap.delete(child.id)
+          const idx = expandableIds.indexOf(child.id)
+          if (idx >= 0) expandableIds.splice(idx, 1)
+          for (const gc of grandchildren) parentMap.set(gc.id, node)
+          parentMap.delete(child.id)
+          current = grandchildren
+        }
+        childrenMap.set(node.id, current)
+      }
+    }
+    compactChains(roots)
+  }
+
   return { roots, childrenMap, parentMap, expandableIds }
 }
