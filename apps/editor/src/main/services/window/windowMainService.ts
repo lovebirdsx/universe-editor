@@ -6,7 +6,7 @@
  *  the app can restore them on next launch.
  *--------------------------------------------------------------------------------------------*/
 
-import { BrowserWindow, dialog } from 'electron'
+import { BrowserWindow, dialog, shell } from 'electron'
 import { basename } from 'node:path'
 import { homedir } from 'node:os'
 import {
@@ -166,6 +166,19 @@ export class WindowMainService implements IWindowMainService {
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
         ],
       },
+    })
+
+    win.webContents.setWindowOpenHandler(({ url }) => {
+      if (url.startsWith('https://') || url.startsWith('http://')) {
+        void shell.openExternal(url)
+      }
+      return { action: 'deny' }
+    })
+
+    win.webContents.on('will-navigate', (event, url) => {
+      if (!url.startsWith('file:')) {
+        event.preventDefault()
+      }
     })
 
     win.once('ready-to-show', () => {

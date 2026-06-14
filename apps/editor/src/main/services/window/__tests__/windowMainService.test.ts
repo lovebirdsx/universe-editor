@@ -67,6 +67,7 @@ vi.mock('electron', () => ({
       removeListener: vi.fn(),
       openDevTools: vi.fn(),
       isDevToolsOpened: vi.fn().mockReturnValue(false),
+      setWindowOpenHandler: vi.fn(),
     },
   })),
   screen: {
