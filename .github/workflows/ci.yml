@@ -138,6 +138,7 @@ jobs:
 
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
+        shell: bash
         run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert @visual --shard=${{ matrix.shard }}/2
 
       # - name: Run visual regression (Linux only)
