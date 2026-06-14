@@ -17,6 +17,7 @@ import {
 } from '@universe-editor/platform'
 import { IAcpSessionService } from './acpSessionService.js'
 import { IAcpSessionHistoryService } from './acpSessionHistory.js'
+import { IAcpChatWidgetService } from './acpChatWidgetService.js'
 import { agentIconId } from './acpAgentRegistry.js'
 import { resolveLiveSessionTitle, truncateSessionTitle } from './acpSessionTitle.js'
 
@@ -38,6 +39,7 @@ export class AcpSessionEditorInput extends EditorInput {
     initialTitle: string | undefined,
     @IAcpSessionService private readonly _sessions: IAcpSessionService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
+    @IAcpChatWidgetService private readonly _chatWidgetService: IAcpChatWidgetService,
   ) {
     super()
     this._resource = URI.from({ scheme: 'universe', path: `/acp/session/${sessionId}` })
@@ -78,6 +80,10 @@ export class AcpSessionEditorInput extends EditorInput {
 
   override getIconId(): string {
     return agentIconId(this.agentId)
+  }
+
+  override focus(): boolean {
+    return this._chatWidgetService.focusSessionInput(this.sessionId)
   }
 
   override async confirmClose(dialogService: IDialogService): Promise<boolean> {

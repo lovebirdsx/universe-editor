@@ -96,6 +96,14 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   confirmClose?(dialogService: IDialogService): Promise<boolean>
 
   /**
+   * Request focus for this input's mounted view. Non-Monaco editors (e.g.
+   * React-based) implement this instead of registering with a Monaco registry.
+   * Return true if focus was handled; undefined/false falls through to the
+   * EditorArea container focus fallback.
+   */
+  focus?(): boolean
+
+  /**
    * Returns a JSON-serialisable snapshot of this input for persistence.
    * `EditorGroupsService.toJSON` falls back to `null` when an input does not
    * implement this hook, preserving backwards compatibility with virtual

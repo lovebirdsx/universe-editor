@@ -70,6 +70,8 @@ export function focusEditorInput(
     queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     return true
   }
+  // Non-Monaco editors (e.g. React-based) may implement focus() directly.
+  if (input.focus?.()) return true
   return false
 }
 
