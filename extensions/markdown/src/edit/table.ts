@@ -5,7 +5,14 @@
  * normalizes the delimiter row, preserving per-column alignment. Navigation
  * moves the cursor to the next/previous cell (adding a row past the last cell).
  */
-import { cursor, range, replaceLine, type EditResult, type Selection } from './textEditing.js'
+import {
+  cursor,
+  range,
+  replaceLine,
+  type EditOp,
+  type EditResult,
+  type Selection,
+} from './textEditing.js'
 
 type Align = 'left' | 'center' | 'right' | 'none'
 
@@ -144,7 +151,34 @@ function delimiterCell(width: number, align: Align): string {
 export function formatTable(lines: readonly string[], lineIndex: number): EditResult | undefined {
   const table = findTableAt(lines, lineIndex)
   if (!table) return undefined
+  return { edits: formatBlockEdits(lines, table) }
+}
 
+/** Format every table whose block intersects the inclusive [startLine, endLine]
+ *  range. Pass the whole document range to format all tables. Blocks are
+ *  discovered by scanning, so each table is formatted exactly once. */
+export function formatTables(
+  lines: readonly string[],
+  startLine: number,
+  endLine: number,
+): EditResult | undefined {
+  const edits: EditOp[] = []
+  let i = Math.max(0, startLine)
+  const last = Math.min(lines.length - 1, endLine)
+  while (i <= last) {
+    const table = findTableAt(lines, i)
+    if (table) {
+      edits.push(...formatBlockEdits(lines, table))
+      i = table.end + 1
+    } else {
+      i++
+    }
+  }
+  return edits.length > 0 ? { edits } : undefined
+}
+
+/** Compute the per-line replacement edits that align a single table block. */
+function formatBlockEdits(lines: readonly string[], table: TableBlock): EditOp[] {
   const colCount = Math.max(table.aligns.length, ...table.rows.map((r) => r.length))
   const aligns: Align[] = []
   for (let c = 0; c < colCount; c++) aligns.push(table.aligns[c] ?? 'none')
@@ -171,7 +205,7 @@ export function formatTable(lines: readonly string[], lineIndex: number): EditRe
     return '| ' + out.join(' | ') + ' |'
   }
 
-  const edits = []
+  const edits: EditOp[] = []
   let rowIdx = 0
   for (let i = table.start; i <= table.end; i++) {
     const original = lines[i]!
@@ -184,7 +218,7 @@ export function formatTable(lines: readonly string[], lineIndex: number): EditRe
     }
     if (next !== original) edits.push(replaceLine(i, original, next))
   }
-  return { edits }
+  return edits
 }
 
 /** Compute the cursor target for Tab / Shift+Tab inside a table. Returns the new
@@ -265,13 +299,14 @@ function cellIndexAt(line: string, character: number): number {
 
 /** A cursor placed at the start of the content of cell `target` on `line`. */
 function cellCursor(line: string, lineIndex: number, target: number): Selection {
-  let col = 0
-  let cell = 0
   let i = 0
-  // Skip a leading pipe.
+  let col = 0
+  // A leading pipe is the boundary before cell 0; content starts after it.
   if (line.trimStart().startsWith('|')) {
     i = line.indexOf('|') + 1
+    col = i
   }
+  let cell = 0
   for (; i < line.length; i++) {
     const ch = line[i]!
     if (ch === '\\') {
@@ -282,10 +317,9 @@ function cellCursor(line: string, lineIndex: number, target: number): Selection 
       cell++
       if (cell > target) break
       col = i + 1
-      continue
     }
   }
-  // Position just after the pipe + the single padding space, if present.
+  // Position just after the boundary pipe, skipping the single padding space(s).
   let c = col
   while (c < line.length && line[c] === ' ') c++
   return cursor(lineIndex, c)

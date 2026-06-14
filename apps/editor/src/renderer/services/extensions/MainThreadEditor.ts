@@ -7,7 +7,13 @@
  *  Monaco's 1-based positions here, the single boundary where the two meet.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, IEditorService, URI, type UriComponents } from '@universe-editor/platform'
+import {
+  Disposable,
+  IEditorService,
+  URI,
+  isEqualResource,
+  type UriComponents,
+} from '@universe-editor/platform'
 import type {
   IActiveTextEditorDto,
   IMainThreadEditor,
@@ -82,8 +88,11 @@ export class MainThreadEditor extends Disposable implements IMainThreadEditor {
     const editor = this._activeEditor()
     const model = editor?.getModel()
     if (!editor || !model) return undefined
-    const target = URI.revive(uri)
-    return target && model.uri.toString() === target.toString() ? editor : undefined
+    // Compare through the platform URI helper: a Monaco model URI and a revived
+    // host URI can disagree on Windows drive-letter case and colon encoding.
+    return isEqualResource(URI.revive(uri) ?? undefined, URI.parse(model.uri.toString()))
+      ? editor
+      : undefined
   }
 }
 

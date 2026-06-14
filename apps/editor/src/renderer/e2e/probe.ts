@@ -210,6 +210,37 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!position) return undefined
       return { lineNumber: position.lineNumber, column: position.column }
     },
+    getActiveEditorText: () => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const monaco = FileEditorRegistry.get(active)
+      return monaco?.getModel()?.getValue()
+    },
+    setActiveEditorText: (text: string) => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return false
+      const monaco = FileEditorRegistry.get(active)
+      const model = monaco?.getModel()
+      if (!monaco || !model) return false
+      model.setValue(text)
+      monaco.setPosition({ lineNumber: 1, column: 1 })
+      monaco.focus()
+      return true
+    },
+    setActiveEditorSelection: (
+      startLineNumber: number,
+      startColumn: number,
+      endLineNumber: number,
+      endColumn: number,
+    ) => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return false
+      const monaco = FileEditorRegistry.get(active)
+      if (!monaco) return false
+      monaco.setSelection({ startLineNumber, startColumn, endLineNumber, endColumn })
+      monaco.focus()
+      return true
+    },
     getActiveDiffViewState: () => {
       const group = services.editorGroupsService.activeGroup
       const active = group?.activeEditor

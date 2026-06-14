@@ -128,6 +128,42 @@ export class WorkbenchPO {
     return this.page.evaluate(() => window.__E2E__!.getActiveEditorUri())
   }
 
+  /** Full text of the active editor's model, or undefined if no file editor. */
+  async getActiveEditorText(): Promise<string | undefined> {
+    return this.page.evaluate(() => window.__E2E__!.getActiveEditorText())
+  }
+
+  /** Replace the active editor's whole text (cursor resets to the top). */
+  async setActiveEditorText(text: string): Promise<boolean> {
+    return this.page.evaluate((t) => window.__E2E__!.setActiveEditorText(t), text)
+  }
+
+  /** Set the active editor's single selection (1-based). */
+  async setActiveEditorSelection(
+    startLineNumber: number,
+    startColumn: number,
+    endLineNumber: number,
+    endColumn: number,
+  ): Promise<boolean> {
+    return this.page.evaluate(
+      ([sl, sc, el, ec]) => window.__E2E__!.setActiveEditorSelection(sl, sc, el, ec),
+      [startLineNumber, startColumn, endLineNumber, endColumn] as const,
+    )
+  }
+
+  /** Place an empty cursor at a 1-based position in the active editor. */
+  async setActiveEditorCursor(lineNumber: number, column: number): Promise<boolean> {
+    return this.page.evaluate(([l, c]) => window.__E2E__!.setActiveEditorSelection(l, c, l, c), [
+      lineNumber,
+      column,
+    ] as const)
+  }
+
+  /** Command ids of every keybinding whose first chord equals `key`. */
+  async getKeybindingCommandsForKey(key: string): Promise<string[]> {
+    return this.page.evaluate((k) => window.__E2E__!.getKeybindingCommandsForKey(k), key)
+  }
+
   /** Return the number of editor groups currently open. */
   async getEditorGroupCount(): Promise<number> {
     return this.page.evaluate(() => window.__E2E__!.getEditorGroupCount())

@@ -4,8 +4,8 @@ import { changeHeadingLevel } from '../heading.js'
 import { toggleTask } from '../task.js'
 import { computeSmartEnter, computeIndent, computeOutdent } from '../smartList.js'
 import { renumberOrderedLists } from '../renumber.js'
-import { formatTable, navigateTable } from '../table.js'
-import type { EditOp, EditResult, Selection } from '../textEditing.js'
+import { formatTable, formatTables, navigateTable } from '../table.js'
+import { splitLines, type EditOp, type EditResult, type Selection } from '../textEditing.js'
 
 function sel(line: number, character: number, endLine = line, endChar = character): Selection {
   return { anchor: { line, character }, active: { line: endLine, character: endChar } }
@@ -140,6 +140,18 @@ describe('computeSmartEnter', () => {
     const r = computeSmartEnter(lines, [sel(0, 10)])
     expect(apply(lines, r as EditResult)).toEqual(['- [x] done', '- [ ] '])
   })
+
+  it('renumbers following items without duplicating when Enter is pressed mid-list', () => {
+    const lines = ['1. hello', '2. world', '2. yes']
+    const r = computeSmartEnter(lines, [sel(1, 8)])
+    expect(apply(lines, r as EditResult)).toEqual(['1. hello', '2. world', '3. ', '4. yes'])
+  })
+
+  it('inserts mid-document without disturbing trailing non-list lines', () => {
+    const lines = ['1. a', '3. c', 'tail']
+    const r = computeSmartEnter(lines, [sel(0, 4)])
+    expect(apply(lines, r as EditResult)).toEqual(['1. a', '2. ', '3. c', 'tail'])
+  })
 })
 
 describe('computeIndent / computeOutdent', () => {
@@ -226,5 +238,74 @@ describe('navigateTable', () => {
     const lines = ['| a | b |', '| - | - |', '| 1 | 2 |']
     const r = navigateTable(lines, [sel(2, 6)], 'next')
     expect(apply(lines, r)).toEqual(['| a | b |', '| - | - |', '| 1 | 2 |', '| | |'])
+  })
+
+  it('lands on the first cell content (not before the leading pipe) when moving back', () => {
+    const lines = ['| foo | bar |', '| --- | --- |', '| 1 | 2 |']
+    // Cursor in the second cell of the header; Shift+Tab → first cell content.
+    const r = navigateTable(lines, [sel(0, 8)], 'prev')
+    // 'foo' starts at offset 2 ("| ").
+    expect(r?.selections?.[0]?.active).toEqual({ line: 0, character: 2 })
+  })
+
+  it('wraps to the first cell content of the next row', () => {
+    const lines = ['| foo | bar |', '| --- | --- |', '| 1 | 2 |']
+    // Last cell of the header row; Tab skips the delimiter row to row 3, cell 0.
+    const r = navigateTable(lines, [sel(0, 8)], 'next')
+    expect(r?.selections?.[0]?.active).toEqual({ line: 2, character: 2 })
+  })
+})
+
+describe('splitLines (CRLF tolerance)', () => {
+  it('splits on CRLF, CR, and LF', () => {
+    expect(splitLines('a\r\nb\rc\nd')).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('lets list/task parsing work on non-final CRLF lines', () => {
+    // The original bug: split('\n') left a trailing \r on every line but the
+    // last, so regexes anchored with $ failed except on the final line.
+    const lines = splitLines('- a\r\n- b\r\n- c')
+    const out = apply(lines, toggleTask(lines, [sel(0, 0)]))
+    expect(out[0]).toBe('- [x] a')
+  })
+
+  it('keeps heading level changes correct on a non-final CRLF line', () => {
+    // Regression: \r made HEADING_RE miss, so increase fell into the "not a
+    // heading" branch (## → "# ##\r") and decrease became a no-op.
+    const lines = splitLines('## a\r\nbody')
+    expect(apply(lines, changeHeadingLevel(lines, [sel(0, 0)], 1))[0]).toBe('### a')
+    expect(apply(lines, changeHeadingLevel(lines, [sel(0, 0)], -1))[0]).toBe('# a')
+  })
+})
+
+describe('formatTables (whole-document / range)', () => {
+  it('formats every table in the document', () => {
+    const lines = [
+      '| a | bb |',
+      '| - | - |',
+      '| ccc | d |',
+      '',
+      'text',
+      '',
+      '| x | y |',
+      '| - | - |',
+      '| zzzz | w |',
+    ]
+    const out = apply(lines, formatTables(lines, 0, lines.length - 1))
+    expect(out).toEqual([
+      '| a   | bb  |',
+      '| --- | --- |',
+      '| ccc | d   |',
+      '',
+      'text',
+      '',
+      '| x    | y   |',
+      '| ---- | --- |',
+      '| zzzz | w   |',
+    ])
+  })
+
+  it('returns undefined when the range has no tables', () => {
+    expect(formatTables(['plain', 'text'], 0, 1)).toBeUndefined()
   })
 })

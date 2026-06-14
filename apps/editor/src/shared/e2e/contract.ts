@@ -162,6 +162,30 @@ export interface E2EProbe {
    */
   getActiveEditorCursor(): { lineNumber: number; column: number } | undefined
   /**
+   * Full text of the active Monaco editor's model, or undefined when the active
+   * editor isn't a file editor (or its Monaco instance isn't mounted). Used by
+   * the markdown-editing spec to assert the result of each editing command.
+   */
+  getActiveEditorText(): string | undefined
+  /**
+   * Replace the active Monaco editor's whole text and reset the cursor to the
+   * top. Returns false when no file editor is active. Lets the markdown-editing
+   * spec seed a known document before each editing command.
+   */
+  setActiveEditorText(text: string): boolean
+  /**
+   * Set the active Monaco editor's single selection (1-based, inclusive of the
+   * anchor, exclusive of the active column as Monaco models it). When the four
+   * coordinates collapse, places an empty cursor. Returns false when no file
+   * editor is active. Backs the markdown-editing spec's per-command setup.
+   */
+  setActiveEditorSelection(
+    startLineNumber: number,
+    startColumn: number,
+    endLineNumber: number,
+    endColumn: number,
+  ): boolean
+  /**
    * Snapshot of the active diff editor's modified-side view state: the cursor
    * line and the first visible line. Used by diff auto-reveal specs to assert
    * the view scrolled to the first change. Undefined when the active editor is

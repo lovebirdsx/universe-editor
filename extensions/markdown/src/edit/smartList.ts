@@ -19,18 +19,62 @@ function nextOrderedMarker(marker: string): string {
 }
 
 /**
- * Apply `lineEdit` to the in-memory lines and recompute ordered numbering, so the
- * returned edits include both the structural change and any renumbering it
- * triggers. `lineEdits` are full-line replacements/insertions already applied to
- * `working`.
+ * Recompute ordered numbering over `working` (the lines after the structural
+ * change is applied in memory), then diff the result against the original lines.
+ * Diffing keeps every edit in the *original* document's coordinate space — the
+ * structural change and the renumbering can disagree on line indices once a line
+ * is inserted/removed, so emitting them separately would corrupt the document.
  */
 function withRenumber(
+  lines: readonly string[],
   working: string[],
-  structural: EditOp[],
   selections: Selection[],
 ): EditResult {
-  const renumberEdits = renumberOrderedLists(working)
-  return { edits: [...structural, ...renumberEdits], selections }
+  const final = [...working]
+  for (const e of renumberOrderedLists(working)) final[e.range.start.line] = e.text
+  return { edits: diffLineEdits(lines, final), selections }
+}
+
+/**
+ * Minimal line-level diff: shrink the common prefix/suffix, then replace the
+ * differing middle as one edit. Handles replacement, insertion, and deletion
+ * uniformly, always in the original document's coordinates.
+ */
+function diffLineEdits(original: readonly string[], final: readonly string[]): EditOp[] {
+  let p = 0
+  const maxPrefix = Math.min(original.length, final.length)
+  while (p < maxPrefix && original[p] === final[p]) p++
+  let s = 0
+  while (
+    s < Math.min(original.length - p, final.length - p) &&
+    original[original.length - 1 - s] === final[final.length - 1 - s]
+  ) {
+    s++
+  }
+
+  const origStart = p
+  const origEnd = original.length - s // exclusive
+  const newLines = final.slice(p, final.length - s)
+
+  if (origStart === origEnd && newLines.length === 0) return []
+
+  // Replace the consumed original lines [origStart, origEnd) with newLines.
+  if (origEnd > origStart) {
+    const last = origEnd - 1
+    return [{ range: range(origStart, 0, last, original[last]!.length), text: newLines.join('\n') }]
+  }
+
+  // Pure insertion: no original lines consumed.
+  if (origStart < original.length) {
+    return [{ range: range(origStart, 0, origStart, 0), text: newLines.join('\n') + '\n' }]
+  }
+  const last = original.length - 1
+  return [
+    {
+      range: range(last, original[last]!.length, last, original[last]!.length),
+      text: '\n' + newLines.join('\n'),
+    },
+  ]
 }
 
 export function computeSmartEnter(
@@ -54,8 +98,7 @@ export function computeSmartEnter(
   if (isEmptyItem(parsed)) {
     const working = [...lines]
     working[lineIndex] = ''
-    const structural: EditOp[] = [{ range: range(lineIndex, 0, lineIndex, line.length), text: '' }]
-    return withRenumber(working, structural, [cursor(lineIndex, 0)])
+    return withRenumber(lines, working, [cursor(lineIndex, 0)])
   }
 
   // Continue the list: split content at the cursor, start a new item below.
@@ -78,11 +121,8 @@ export function computeSmartEnter(
   working[lineIndex] = before
   working.splice(lineIndex + 1, 0, newLineText)
 
-  const structural: EditOp[] = [
-    { range: range(lineIndex, col, lineIndex, line.length), text: '\n' + prefix },
-  ]
   const newCursor = cursor(lineIndex + 1, prefix.length)
-  return withRenumber(working, structural, [newCursor])
+  return withRenumber(lines, working, [newCursor])
 }
 
 /** Tab on a list item: indent it. Returns 'default' when not a single-cursor list op. */
@@ -136,7 +176,6 @@ function computeShift(
   }
 
   const working = [...lines]
-  const structural: EditOp[] = []
   for (const { index, line, parsed } of parsedLines) {
     let newLine: string
     if (direction === 'indent') {
@@ -146,7 +185,6 @@ function computeShift(
       newLine = line.slice(remove)
     }
     working[index] = newLine
-    structural.push({ range: range(index, 0, index, line.length), text: newLine })
   }
 
   // Preserve the cursor relative to the indent change.
@@ -157,5 +195,5 @@ function computeShift(
   const selOut: Selection[] = isPoint
     ? [cursor(sel.active.line, Math.max(0, sel.active.character + shift))]
     : selections.slice()
-  return withRenumber(working, structural, selOut)
+  return withRenumber(lines, working, selOut)
 }

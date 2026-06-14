@@ -69,12 +69,19 @@ export interface ActiveMarkdown {
   readonly selections: readonly Selection[]
 }
 
+/** Split document text into lines, tolerating CRLF / CR / LF endings. Monaco's
+ *  line content never includes the terminator, so the per-line lengths produced
+ *  here line up with the editor's columns. */
+export function splitLines(text: string): string[] {
+  return text.split(/\r\n|\r|\n/)
+}
+
 export async function activeMarkdown(): Promise<ActiveMarkdown | undefined> {
   const editor = await window.getActiveTextEditor()
   if (!editor || editor.document.languageId !== 'markdown') return undefined
   return {
     editor,
-    lines: editor.document.getText().split('\n'),
+    lines: splitLines(editor.document.getText()),
     selections: editor.selections,
   }
 }

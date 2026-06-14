@@ -11,6 +11,7 @@ import {
   activeMarkdown,
   applyResult,
   cursor,
+  isEmpty,
   range,
   type ActiveMarkdown,
   type EditResult,
@@ -20,7 +21,7 @@ import { toggleDelimiter } from './toggleDelimiter.js'
 import { changeHeadingLevel } from './heading.js'
 import { toggleTask } from './task.js'
 import { computeSmartEnter, computeIndent, computeOutdent, INDENT_UNIT } from './smartList.js'
-import { formatTable, navigateTable } from './table.js'
+import { formatTables, navigateTable } from './table.js'
 
 type ActiveMd = ActiveMarkdown
 
@@ -123,8 +124,16 @@ export function registerEditingCommands(context: ExtensionContext): void {
     const md = await activeMarkdown()
     if (!md) return
     const sel = md.selections[0]
-    if (!sel) return
-    const result = formatTable(md.lines, sel.active.line)
+    // No (or empty) selection → format every table in the document; otherwise
+    // format the tables the selection spans.
+    const hasSelection = sel !== undefined && !isEmpty(sel)
+    const result = hasSelection
+      ? formatTables(
+          md.lines,
+          Math.min(sel.anchor.line, sel.active.line),
+          Math.max(sel.anchor.line, sel.active.line),
+        )
+      : formatTables(md.lines, 0, md.lines.length - 1)
     if (result) await applyResult(md.editor, result)
   })
 }
