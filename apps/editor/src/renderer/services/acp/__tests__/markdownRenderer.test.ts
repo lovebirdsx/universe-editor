@@ -89,7 +89,15 @@ describe('parseMarkdown — block layer', () => {
 
   it('parses ordered lists', () => {
     expect(parseMarkdown('1. a\n2. b')).toEqual<readonly MdNode[]>([
-      { type: 'list', ordered: true, items: [[text('a')], [text('b')]], line: 0 },
+      {
+        type: 'list',
+        ordered: true,
+        items: [
+          { inline: [text('a')], checked: null },
+          { inline: [text('b')], checked: null },
+        ],
+        line: 0,
+      },
     ])
   })
 

@@ -63,13 +63,36 @@ function Block({ node }: { node: MdNode }): ReactNode {
       return node.ordered ? (
         <ol {...lineAttr}>
           {node.items.map((item, i) => (
-            <li key={i}>{renderInline(item)}</li>
+            <li key={i}>
+              {item.checked !== null && (
+                <input
+                  type="checkbox"
+                  readOnly
+                  checked={item.checked}
+                  className={styles['taskCheckbox']}
+                />
+              )}
+              {renderInline(item.inline)}
+            </li>
           ))}
         </ol>
       ) : (
-        <ul {...lineAttr}>
+        <ul
+          {...lineAttr}
+          className={node.items.some((it) => it.checked !== null) ? styles['taskList'] : undefined}
+        >
           {node.items.map((item, i) => (
-            <li key={i}>{renderInline(item)}</li>
+            <li key={i}>
+              {item.checked !== null && (
+                <input
+                  type="checkbox"
+                  readOnly
+                  checked={item.checked}
+                  className={styles['taskCheckbox']}
+                />
+              )}
+              {renderInline(item.inline)}
+            </li>
           ))}
         </ul>
       )
@@ -121,8 +144,12 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
       return <strong>{renderInline(node.children)}</strong>
     case 'italic':
       return <em>{renderInline(node.children)}</em>
+    case 'strike':
+      return <del>{renderInline(node.children)}</del>
     case 'code':
       return <code className={styles['inlineCode']}>{node.text}</code>
+    case 'image':
+      return <img src={node.src} alt={node.alt} className={styles['mdImage']} />
     case 'softbreak':
       return <Fragment>{'\n'}</Fragment>
     case 'link':

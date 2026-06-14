@@ -55,7 +55,19 @@
 
 .markdown strong {
   font-weight: 700;
-  color: var(--color-foreground, #e8e8e8);
+  color: var(--color-foreground-bright, #ffffff);
+}
+
+.markdown em {
+  font-style: italic;
+  color: var(--color-foreground-muted, #b0b0bc);
+}
+
+.markdown strong em,
+.markdown em strong {
+  font-weight: 700;
+  font-style: italic;
+  color: var(--color-foreground-bright, #ffffff);
 }
 
 .markdown ul,
@@ -64,13 +76,15 @@
   padding-left: 1.6em;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 4px;
 }
 
 .markdown blockquote {
   margin: 0.2em 0;
-  padding: 0.2em 0.7em;
+  padding: 0.3em 0.8em;
   border-left: 2px solid var(--color-message-thought-accent, #7a7aa3);
+  background: rgba(122, 122, 163, 0.06);
+  border-radius: 0 3px 3px 0;
   color: var(--color-message-role-fg, #aaa);
 }
 
@@ -97,6 +111,10 @@
 .markdown th {
   font-weight: 600;
   background: var(--color-input-bg, #2d2d2d);
+}
+
+.markdown tbody tr:nth-child(even) {
+  background: rgba(127, 127, 127, 0.05);
 }
 
 .inlineCode {
@@ -131,4 +149,27 @@
 .mermaidBlock svg {
   max-width: 100%;
   height: auto;
+}
+
+.markdown del {
+  text-decoration: line-through;
+  color: var(--color-foreground-muted, #b0b0bc);
+}
+
+.taskList {
+  list-style: none;
+  padding-left: 0.4em;
+}
+
+.taskCheckbox {
+  margin-right: 0.4em;
+  cursor: default;
+  vertical-align: middle;
+}
+
+.mdImage {
+  max-width: 100%;
+  height: auto;
+  border-radius: 3px;
+  display: block;
 }

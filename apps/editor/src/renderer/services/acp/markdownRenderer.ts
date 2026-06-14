@@ -17,8 +17,10 @@
  *  Supported inline tokens:
  *    - **bold**, __bold__
  *    - *italic*, _italic_
+ *    - ~~strikethrough~~
  *    - `inline code`
  *    - [label](url)
+ *    - ![alt](url)       (image — https/file only)
  *    - <url>           (autolink — http/https/file only)
  *    - bare http(s)://…
  *    - `\\` escapes the next punctuation char
@@ -41,7 +43,10 @@ export type MdNode =
   | {
       readonly type: 'list'
       readonly ordered: boolean
-      readonly items: readonly (readonly MdInline[])[]
+      readonly items: readonly {
+        readonly inline: readonly MdInline[]
+        readonly checked: boolean | null
+      }[]
       readonly line?: number
     }
   | { readonly type: 'blockquote'; readonly children: readonly MdInline[]; readonly line?: number }
@@ -60,8 +65,10 @@ export type MdInline =
   | { readonly type: 'text'; readonly text: string }
   | { readonly type: 'bold'; readonly children: readonly MdInline[] }
   | { readonly type: 'italic'; readonly children: readonly MdInline[] }
+  | { readonly type: 'strike'; readonly children: readonly MdInline[] }
   | { readonly type: 'code'; readonly text: string }
   | { readonly type: 'link'; readonly href: string; readonly children: readonly MdInline[] }
+  | { readonly type: 'image'; readonly src: string; readonly alt: string }
   | { readonly type: 'softbreak' }
 
 /**
@@ -143,12 +150,21 @@ export function parseMarkdown(input: string): readonly MdNode[] {
     const ol = /^\s*\d+\.\s+(.*)$/.exec(line)
     if (ul || ol) {
       const ordered = !!ol
-      const items: MdInline[][] = []
+      const items: { inline: MdInline[]; checked: boolean | null }[] = []
       while (i < lines.length) {
         const cur = lines[i] ?? ''
         const m = ordered ? /^\s*\d+\.\s+(.*)$/.exec(cur) : /^\s*[-*+]\s+(.*)$/.exec(cur)
         if (!m) break
-        items.push([...parseInline(m[1] ?? '')])
+        const rawText = m[1] ?? ''
+        const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(rawText)
+        if (taskMatch) {
+          items.push({
+            inline: [...parseInline(taskMatch[2] ?? '')],
+            checked: taskMatch[1] !== ' ',
+          })
+        } else {
+          items.push({ inline: [...parseInline(rawText)], checked: null })
+        }
         i++
       }
       out.push({ type: 'list', ordered, items, line: blockStart })
@@ -239,6 +255,35 @@ export function parseInline(text: string): readonly MdInline[] {
         out.push({ type: 'code', text: text.slice(i + 1, close) })
         i = close + 1
         continue
+      }
+    }
+
+    // Strikethrough: ~~text~~
+    if (ch === '~' && text[i + 1] === '~') {
+      const closeIdx = text.indexOf('~~', i + 2)
+      if (closeIdx !== -1 && closeIdx > i + 2) {
+        flush()
+        out.push({ type: 'strike', children: parseInline(text.slice(i + 2, closeIdx)) })
+        i = closeIdx + 2
+        continue
+      }
+    }
+
+    // Image: ![alt](url) — must be checked before link since `!` precedes `[`.
+    if (ch === '!' && text[i + 1] === '[') {
+      const labelEnd = findMatching(text, i + 1, '[', ']')
+      if (labelEnd !== -1 && text[labelEnd + 1] === '(') {
+        const urlEnd = findMatching(text, labelEnd + 1, '(', ')')
+        if (urlEnd !== -1) {
+          const alt = text.slice(i + 2, labelEnd)
+          const src = text.slice(labelEnd + 2, urlEnd).trim()
+          if (isSafeHref(src)) {
+            flush()
+            out.push({ type: 'image', src, alt })
+            i = urlEnd + 1
+            continue
+          }
+        }
       }
     }
 
