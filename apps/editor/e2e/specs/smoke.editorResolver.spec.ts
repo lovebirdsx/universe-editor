@@ -14,7 +14,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 editorResolver', () => {
   test('resolves .dummy file to dummyEditor via resolver', async ({ page, workbench }) => {

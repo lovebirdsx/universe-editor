@@ -7,7 +7,7 @@
  *  长任务命令均 fire-and-forget, 避免 await-on-pick 死锁.
  *--------------------------------------------------------------------------------------------*/
 
-import { expect, test } from '../fixtures/electronApp.js'
+import { expect, test } from '../fixtures/sharedApp.js'
 
 async function placeholderOf(input: import('@playwright/test').Locator): Promise<string | null> {
   return input.getAttribute('placeholder')

@@ -2,7 +2,7 @@
  *  S6 — Toggle panel reveals Output tab (P1).
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 output panel', () => {
   test('panel hosts Output tab and toggling round-trips visibility', async ({ workbench }) => {

@@ -5,7 +5,7 @@
  *  应跟随变化; 再次点击当前激活项则关闭(VSCode 行为).
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 const EXPLORER = 'workbench.view.explorer'
 const SEARCH = 'workbench.view.search'

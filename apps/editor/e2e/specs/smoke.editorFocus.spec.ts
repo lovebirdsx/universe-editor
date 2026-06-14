@@ -1,4 +1,4 @@
-import { expect, test } from '../fixtures/electronApp.js'
+import { expect, test } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 editor focus', () => {
   test('keeps focus after closing a group created by split command', async ({

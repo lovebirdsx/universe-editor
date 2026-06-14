@@ -10,7 +10,7 @@
  *   6. MoveEditorToNextGroup cycles editor between existing groups
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 import type { WorkbenchPO } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
 

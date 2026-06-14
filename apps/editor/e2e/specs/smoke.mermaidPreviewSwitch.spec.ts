@@ -16,7 +16,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 // 轻量、确定的 fixture：几张图（含对竞态最敏感的 pie）+ 大量文本填充使其可滚动。
 // 数量小 → 串行渲染快 → 能在 restore 窗口内稳定，避免重型真实文档在 CI 高负载下

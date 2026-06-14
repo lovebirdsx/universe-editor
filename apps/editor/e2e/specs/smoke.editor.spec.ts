@@ -6,7 +6,7 @@
  *    - 让 getActiveEditorUri() 返回以 'untitled:' 开头的 URI
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 editor', () => {
   test('newUntitledFile mounts Monaco and exposes untitled: URI', async ({ workbench }) => {

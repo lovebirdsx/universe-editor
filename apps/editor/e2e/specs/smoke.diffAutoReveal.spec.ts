@@ -7,7 +7,7 @@
  *  when auto-reveal is broken.
  *--------------------------------------------------------------------------------------------*/
 
-import { expect, test } from '../fixtures/electronApp.js'
+import { expect, test } from '../fixtures/sharedApp.js'
 
 const LINE_COUNT = 100
 const FIRST_CHANGE_LINE = 60

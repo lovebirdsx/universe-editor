@@ -5,7 +5,7 @@
  *  （升级后自动弹出的链路由单测覆盖；E2E 只冒烟手动命令的展示。）
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 release notes', () => {
   test('Show Release Notes opens a releaseNotes editor', async ({ page, workbench }) => {

@@ -8,7 +8,7 @@
  *    - ContextKey `workbenchReady` 为 true
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 startup', () => {
   test('workbench reaches Ready and exposes E2E probe', async ({ page }) => {

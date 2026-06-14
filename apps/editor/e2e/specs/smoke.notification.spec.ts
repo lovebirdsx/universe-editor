@@ -2,7 +2,7 @@
  *  Smoke spec: NotificationService — toast + center + clearAll (P0).
  *--------------------------------------------------------------------------------------------*/
 
-import { test, expect } from '../fixtures/electronApp.js'
+import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 notification service', () => {
   test('toast appears, auto-hides after 3 s, center shows history, clearAll empties it', async ({

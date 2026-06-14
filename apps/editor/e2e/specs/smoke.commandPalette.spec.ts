@@ -6,7 +6,7 @@
  *  作为统一入口, 不应再出现 Monaco 自带的 quick command.
  *--------------------------------------------------------------------------------------------*/
 
-import { expect, test } from '../fixtures/electronApp.js'
+import { expect, test } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 command palette', () => {
   test('opens via command and closes via Escape', async ({ page, workbench }) => {

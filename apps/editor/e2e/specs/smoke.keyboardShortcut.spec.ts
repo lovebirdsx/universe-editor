@@ -5,7 +5,7 @@
  *  → QuickInput 全链路.
  *--------------------------------------------------------------------------------------------*/
 
-import { test } from '../fixtures/electronApp.js'
+import { test } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 keyboard shortcut', () => {
   test('Ctrl+Shift+P opens the command palette', async ({ page, workbench }) => {
