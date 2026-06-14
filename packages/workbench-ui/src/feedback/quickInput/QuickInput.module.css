@@ -86,17 +86,24 @@
 }
 
 .itemLabel {
-  flex: 1 0 auto;
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+/* When the row has a trailing status column, the label sizes to its content
+   (capped) instead of stretching, so a short title keeps the status icon close
+   rather than pushing it to the far edge. */
+.itemLabelCapped {
+  flex: 0 1 auto;
+  max-width: 360px;
+}
+
 .itemLeading {
   flex-shrink: 0;
-  width: 180px;
-  max-width: 40%;
+  max-width: 220px;
   margin-right: 10px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -106,7 +113,7 @@
 
 .itemStatusIcon {
   flex-shrink: 0;
-  margin-left: 10px;
+  margin-left: auto;
   opacity: 0.85;
 }
 

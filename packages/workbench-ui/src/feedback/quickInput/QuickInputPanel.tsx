@@ -267,6 +267,30 @@ function isCtrlNavigationKey(e: KeyboardEvent<HTMLInputElement>, key: 'n' | 'p')
   return e.ctrlKey && !e.altKey && !e.metaKey && !e.shiftKey && e.key.toLowerCase() === key
 }
 
+// Column metrics, kept in sync with QuickInput.module.css. Used only to size the
+// container to its content when a status column is present (the session
+// switcher), so the box doesn't leave a wide gap on the right.
+const ROW_H_PADDING = 24 // .item padding-left + padding-right (12 + 12)
+const ICON_COL_WIDTH = 22 // .itemIconSlot width 16 + margin-right 6
+const LEADING_CAP = 220 // .itemLeading max-width
+const LEADING_MARGIN = 10 // .itemLeading margin-right
+const LABEL_CAP = 360 // .itemLabelCapped max-width
+const STATUS_GAP = 16 // min spacing before the trailing status icon
+const STATUS_ICON_WIDTH = 14 // status glyph size
+const MIN_CONTAINER_WIDTH = 360
+const ITEM_FONT = 13 // .item font-size
+const INPUT_FONT = 14 // .input font-size
+
+let sharedMeasureCanvas: HTMLCanvasElement | undefined
+function measureText(text: string, fontSize: number, fontFamily: string): number {
+  if (typeof document === 'undefined') return 0
+  sharedMeasureCanvas ??= document.createElement('canvas')
+  const ctx = sharedMeasureCanvas.getContext('2d')
+  if (!ctx) return 0
+  ctx.font = `${fontSize}px ${fontFamily}`
+  return ctx.measureText(text).width
+}
+
 // Exported for unit tests so prefix / filtering behavior can be exercised
 // without booting the full portal + service plumbing.
 export function QuickPickPanel({
@@ -294,6 +318,40 @@ export function QuickPickPanel({
     () => (state.items ?? []).some((item) => !isSeparator(item) && item.iconId !== undefined),
     [state.items],
   )
+  const hasStatusColumn = useMemo(
+    () => (state.items ?? []).some((item) => !isSeparator(item) && item.statusIconId !== undefined),
+    [state.items],
+  )
+
+  // Shrink the container to the width its columns actually need (status-column
+  // pickers only — e.g. the session switcher). Measuring the longest leading /
+  // label text lets the trailing status icons line up in a column with no dead
+  // space to their right. Other pickers keep the CSS default width.
+  const contentWidth = useMemo(() => {
+    if (!hasStatusColumn || typeof document === 'undefined') return undefined
+    const family = getComputedStyle(document.body).fontFamily || 'sans-serif'
+    let leadMax = 0
+    let labelMax = 0
+    for (const item of state.items ?? []) {
+      if (isSeparator(item)) continue
+      if (item.leadingLabel) {
+        leadMax = Math.max(leadMax, measureText(item.leadingLabel, ITEM_FONT, family))
+      }
+      labelMax = Math.max(labelMax, measureText(item.label, ITEM_FONT, family))
+    }
+    const leadW = leadMax > 0 ? Math.min(LEADING_CAP, Math.ceil(leadMax) + 2) + LEADING_MARGIN : 0
+    const labelW = Math.min(LABEL_CAP, Math.ceil(labelMax) + 2)
+    const iconW = hasIconColumn ? ICON_COL_WIDTH : 0
+    let total = ROW_H_PADDING + iconW + leadW + labelW + STATUS_GAP + STATUS_ICON_WIDTH
+    if (state.placeholder) {
+      total = Math.max(
+        total,
+        ROW_H_PADDING + Math.ceil(measureText(state.placeholder, INPUT_FONT, family)) + 8,
+      )
+    }
+    const max = (typeof window !== 'undefined' ? window.innerWidth : 1000) * 0.9
+    return Math.round(Math.max(MIN_CONTAINER_WIDTH, Math.min(total, max)))
+  }, [hasStatusColumn, hasIconColumn, state.items, state.placeholder])
 
   useLayoutEffect(() => {
     inputRef.current?.focus()
@@ -483,7 +541,13 @@ export function QuickPickPanel({
   }
 
   return (
-    <div className={styles['container']} role="dialog" aria-modal data-testid="quick-input">
+    <div
+      className={styles['container']}
+      role="dialog"
+      aria-modal
+      data-testid="quick-input"
+      {...(contentWidth !== undefined ? { style: { width: contentWidth } } : {})}
+    >
       <div className={styles['inputRow']}>
         <input
           ref={inputRef}
@@ -563,7 +627,11 @@ export function QuickPickPanel({
                       {item.leadingLabel && (
                         <span className={styles['itemLeading']}>{item.leadingLabel}</span>
                       )}
-                      <span className={styles['itemLabel']}>
+                      <span
+                        className={`${styles['itemLabel']} ${
+                          hasStatusColumn ? styles['itemLabelCapped'] : ''
+                        }`}
+                      >
                         {renderHighlightedText(item.label, item.highlights?.label)}
                       </span>
                       {item.description && (
