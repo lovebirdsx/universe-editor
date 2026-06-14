@@ -72,6 +72,28 @@ function buildRules(colors: typeof LOG_COLORS_DARK): monaco.editor.ITokenThemeRu
   ]
 }
 
+const MD_TOKEN_RULES_DARK: monaco.editor.ITokenThemeRule[] = [
+  { token: 'keyword.md', foreground: '569cd6', fontStyle: 'bold' },
+  { token: 'strong.md', foreground: '569cd6', fontStyle: 'bold' },
+  { token: 'strong.emphasis.md', foreground: '569cd6', fontStyle: 'bold italic' },
+  { token: 'emphasis.md', foreground: 'c586c0', fontStyle: 'italic' },
+  { token: 'variable.md', foreground: 'ce9178' },
+  { token: 'variable.source.md', foreground: 'ce9178' },
+  { token: 'comment.md', foreground: '6a9955' },
+  { token: 'string.link.md', foreground: '4fc1ff' },
+]
+
+const MD_TOKEN_RULES_LIGHT: monaco.editor.ITokenThemeRule[] = [
+  { token: 'keyword.md', foreground: '0000ff', fontStyle: 'bold' },
+  { token: 'strong.md', foreground: '0000ff', fontStyle: 'bold' },
+  { token: 'strong.emphasis.md', foreground: '0000ff', fontStyle: 'bold italic' },
+  { token: 'emphasis.md', foreground: 'af00db', fontStyle: 'italic' },
+  { token: 'variable.md', foreground: 'a31515' },
+  { token: 'variable.source.md', foreground: 'a31515' },
+  { token: 'comment.md', foreground: '008000' },
+  { token: 'string.link.md', foreground: '0070c1' },
+]
+
 function buildOutputThemeColors(
   variant: 'dark' | 'light',
   overrides?: LineHighlightOverrides,
@@ -93,14 +115,14 @@ export function defineOutputThemes(m: typeof monaco, overrides?: LineHighlightOv
   m.editor.defineTheme('output-dark', {
     base: 'vs-dark',
     inherit: true,
-    rules: buildRules(LOG_COLORS_DARK),
+    rules: [...buildRules(LOG_COLORS_DARK), ...MD_TOKEN_RULES_DARK],
     colors: buildOutputThemeColors('dark', overrides),
   })
 
   m.editor.defineTheme('output-light', {
     base: 'vs',
     inherit: true,
-    rules: buildRules(LOG_COLORS_LIGHT),
+    rules: [...buildRules(LOG_COLORS_LIGHT), ...MD_TOKEN_RULES_LIGHT],
     colors: buildOutputThemeColors('light', overrides),
   })
 }
