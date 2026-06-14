@@ -358,8 +358,15 @@
   background: var(--color-list-active-bg, #094771);
 }
 
-.tree:not([data-focused='true']) .selected .resourceActions {
-  background: var(--color-list-inactive-bg, rgba(58, 61, 65, 0.6));
+/* The action container is absolutely positioned over the row's text, so its
+   backdrop must stay opaque for the icons to read — never let the half-opaque
+   inactive selection colour reach it. When a selected row is hovered it shows
+   the hover background, so the container follows it to blend in. */
+.resource.selected:hover .resourceActions,
+.folder.selected:hover .resourceActions,
+.tree:not([data-focused='true']) .resource.selected:hover .resourceActions,
+.tree:not([data-focused='true']) .folder.selected:hover .resourceActions {
+  background: var(--color-list-hover-bg, #2a2d2e);
 }
 
 .actionButton {
