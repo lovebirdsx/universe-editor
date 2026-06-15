@@ -59,7 +59,15 @@ export class MainThreadAi extends Disposable implements IMainThreadAi {
     const cts = new CancellationTokenSource()
     this._inflight.set(requestId, cts)
 
-    const response = this._ai.sendRequest(messages.map(reviveMessage), options, cts.token)
+    let response: ReturnType<IAiModelService['sendRequest']>
+    try {
+      response = this._ai.sendRequest(messages.map(reviveMessage), options, cts.token)
+    } catch (err) {
+      this._onDidEndRequest.fire({ requestId, error: transformErrorForSerialization(err) })
+      this._disposeInflight(requestId)
+      return
+    }
+
     void (async () => {
       try {
         for await (const chunk of response.stream) {
@@ -70,14 +78,18 @@ export class MainThreadAi extends Disposable implements IMainThreadAi {
       } catch (err) {
         this._onDidEndRequest.fire({ requestId, error: transformErrorForSerialization(err) })
       } finally {
-        this._inflight.get(requestId)?.dispose()
-        this._inflight.delete(requestId)
+        this._disposeInflight(requestId)
       }
     })()
   }
 
   async cancelRequest(requestId: string): Promise<void> {
     this._inflight.get(requestId)?.cancel()
+  }
+
+  private _disposeInflight(requestId: string): void {
+    this._inflight.get(requestId)?.dispose()
+    this._inflight.delete(requestId)
   }
 
   override dispose(): void {

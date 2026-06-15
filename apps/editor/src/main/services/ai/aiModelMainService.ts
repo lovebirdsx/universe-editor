@@ -7,6 +7,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  AiError,
+  AiErrorCode,
   AiModelRegistry,
   type CancellationToken,
   CancellationTokenSource,
@@ -19,6 +21,8 @@ import {
   transformErrorForSerialization,
   type AiMessage,
   type AiMessagePart,
+  type AiResponse,
+  type IAiModelProvider,
   type AiModelMetadata,
   type AiModelSelector,
   type AiRequestOptions,
@@ -95,8 +99,8 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   async computeTokenLength(modelId: string, text: string): Promise<number> {
     return this._withTimeoutToken(async (token) => {
-      const provider = await this._registry.providerForModel(modelId, token)
-      if (!provider) throw new Error(`No provider found for model '${modelId}'`)
+      const provider = await this._providerForModelId(modelId, token)
+      if (!provider) throw missingProviderError(modelId)
       return provider.provideTokenCount(modelId, text, token)
     })
   }
@@ -127,39 +131,21 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     const cts = new CancellationTokenSource()
     this._inflight.set(requestId, cts)
 
-    const provider = await this._registry.providerForModel(options.modelId, cts.token)
-    if (!provider) {
-      this._inflight.delete(requestId)
-      cts.dispose()
-      this._onDidEndRequest.fire({
-        requestId,
-        error: transformErrorForSerialization(
-          new Error(`No provider found for model '${options.modelId}'`),
-        ),
-      })
-      return
-    }
-
-    const domainMessages = messages.map(reviveMessage)
-    const merged = this._mergeConfig(options)
-    const response = provider.sendRequest(domainMessages, merged, cts.token)
-
-    // Pump the provider's stream into requestId-keyed events. Errors and normal
-    // completion both terminate via onDidEndRequest (two-path on the renderer).
-    void (async () => {
-      try {
-        for await (const chunk of response.stream) {
-          this._onDidEmitChunk.fire({ requestId, chunk })
-        }
-        await response.result
-        this._onDidEndRequest.fire({ requestId })
-      } catch (err) {
-        this._onDidEndRequest.fire({ requestId, error: transformErrorForSerialization(err) })
-      } finally {
-        this._inflight.get(requestId)?.dispose()
-        this._inflight.delete(requestId)
+    try {
+      const provider = await this._providerForModelId(options.modelId, cts.token)
+      if (!provider) {
+        this._endRequestWithError(requestId, missingProviderError(options.modelId))
+        this._disposeInflight(requestId)
+        return
       }
-    })()
+
+      const domainMessages = messages.map(reviveMessage)
+      const merged = this._mergeConfig(options)
+      this._pumpResponse(requestId, provider.sendRequest(domainMessages, merged, cts.token))
+    } catch (err) {
+      this._endRequestWithError(requestId, err)
+      this._disposeInflight(requestId)
+    }
   }
 
   async cancelRequest(requestId: string): Promise<void> {
@@ -187,6 +173,46 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     }
   }
 
+  private _providerForModelId(
+    modelId: string,
+    token: CancellationToken,
+  ): Promise<IAiModelProvider | undefined> {
+    const vendor = vendorFromModelId(modelId)
+    if (vendor !== undefined) {
+      return Promise.resolve(this._registry.getProvider(vendor))
+    }
+    return this._registry.providerForModel(modelId, token)
+  }
+
+  private _pumpResponse(requestId: string, response: AiResponse): void {
+    // Pump the provider's stream into requestId-keyed events. Errors and normal
+    // completion both terminate via onDidEndRequest (two-path on the renderer).
+    void (async () => {
+      try {
+        for await (const chunk of response.stream) {
+          this._onDidEmitChunk.fire({ requestId, chunk })
+        }
+        await response.result
+        this._onDidEndRequest.fire({ requestId })
+      } catch (err) {
+        this._endRequestWithError(requestId, err)
+      } finally {
+        this._disposeInflight(requestId)
+      }
+    })()
+  }
+
+  private _endRequestWithError(requestId: string, error: unknown): void {
+    const message = error instanceof Error ? error.message : String(error)
+    this._logger.warn(`request ${requestId} failed: ${message}`)
+    this._onDidEndRequest.fire({ requestId, error: transformErrorForSerialization(error) })
+  }
+
+  private _disposeInflight(requestId: string): void {
+    this._inflight.get(requestId)?.dispose()
+    this._inflight.delete(requestId)
+  }
+
   override dispose(): void {
     for (const cts of this._inflight.values()) {
       cts.cancel()
@@ -200,6 +226,22 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 /** Secret-storage key holding a vendor's API key, e.g. `ai.secret.openai.apiKey`. */
 function secretKey(vendor: string): string {
   return `ai.secret.${vendor}.apiKey`
+}
+
+function vendorFromModelId(modelId: string): string | undefined {
+  const slash = modelId.indexOf('/')
+  return slash > 0 ? modelId.slice(0, slash) : undefined
+}
+
+function missingProviderError(modelId: string): AiError {
+  const vendor = vendorFromModelId(modelId)
+  if (vendor !== undefined) {
+    return new AiError(
+      AiErrorCode.ProviderUnavailable,
+      `AI provider '${vendor}' is not available for model '${modelId}'.`,
+    )
+  }
+  return new AiError(AiErrorCode.ModelNotFound, `No AI model provider found for '${modelId}'.`)
 }
 
 function reviveMessage(dto: AiMessageDto): AiMessage {

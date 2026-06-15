@@ -34,6 +34,10 @@ import { scanExtensions } from './extensionScanner.js'
 import { ExtensionService } from './extensionService.js'
 import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
 
+process.on('unhandledRejection', (reason: unknown) => {
+  console.error(`[ext-host] unhandled rejection: ${formatUnknownError(reason)}`)
+})
+
 const onData = new Emitter<string>()
 process.stdin.setEncoding('utf8')
 process.stdin.on('data', (chunk: string) => onData.fire(chunk))
@@ -185,3 +189,7 @@ void main().catch((err: unknown) => {
   console.error(`[ext-host] fatal: ${(err as Error).stack ?? String(err)}`)
   process.exit(1)
 })
+
+function formatUnknownError(error: unknown): string {
+  return error instanceof Error ? (error.stack ?? error.message) : String(error)
+}

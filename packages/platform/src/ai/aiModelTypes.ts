@@ -71,6 +71,10 @@ export interface AiModelSelector {
 
 /** Coarse error classification a provider maps HTTP failures onto. */
 export const enum AiErrorCode {
+  ProviderUnavailable = 'providerUnavailable',
+  ModelNotFound = 'modelNotFound',
+  ConfigurationRequired = 'configurationRequired',
+  NoPermission = 'noPermission',
   Unauthorized = 'unauthorized',
   RateLimited = 'rateLimited',
   QuotaExceeded = 'quotaExceeded',
@@ -88,4 +92,9 @@ export class AiError extends Error {
     super(message)
     this.name = 'AiError'
   }
+}
+
+export function getAiErrorCode(error: unknown): AiErrorCode | undefined {
+  const code = (error as { code?: unknown } | undefined)?.code
+  return typeof code === 'string' ? (code as AiErrorCode) : undefined
 }

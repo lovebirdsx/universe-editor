@@ -140,7 +140,7 @@ describe('OpenAiProvider', () => {
     })
   })
 
-  it('rejects with Unauthorized when sending without an API key', async () => {
+  it('rejects with ConfigurationRequired when sending without an API key', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch')
     const provider = new OpenAiProvider(makeContext({}))
     const cts = new CancellationTokenSource()
@@ -148,6 +148,9 @@ describe('OpenAiProvider', () => {
     const response = provider.sendRequest(userMessages, { modelId: 'openai/gpt-4o' }, cts.token)
 
     await expect(response.result).rejects.toBeInstanceOf(AiError)
+    await expect(response.result).rejects.toMatchObject({
+      code: AiErrorCode.ConfigurationRequired,
+    })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 

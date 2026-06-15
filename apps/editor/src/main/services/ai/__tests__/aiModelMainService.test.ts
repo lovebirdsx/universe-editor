@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  AiErrorCode,
   AsyncIterableSource,
   DeferredPromise,
   type AiModelMetadata,
@@ -182,10 +183,70 @@ describe('AiModelMainService', () => {
   it('ends with an error when no provider owns the model', async () => {
     const service = new AiModelMainService(secretsStub)
     const ended = collectEnd(service)
-    await service.startRequest('r4', userMsg, { modelId: 'nope/x' })
+    await expect(
+      service.startRequest('r4', userMsg, { modelId: 'nope/x' }),
+    ).resolves.toBeUndefined()
     const end = await ended
     expect(end.error?.$isError).toBe(true)
-    expect(end.error?.message).toMatch(/No provider found/)
+    expect(end.error?.code).toBe(AiErrorCode.ProviderUnavailable)
+    expect(end.error?.message).toContain("AI provider 'nope' is not available")
+    service.dispose()
+  })
+
+  it('routes vendor-prefixed model ids to their provider even when not listed in the model cache', async () => {
+    const service = new AiModelMainService(secretsStub)
+    addProvider(
+      service,
+      'fake',
+      fakeStreamingProvider([], (source, result) => {
+        source.emitOne({ type: 'text', value: 'ok' })
+        source.resolve()
+        result.complete({})
+      }).provider,
+    )
+    const chunks: AiChunkEvent[] = []
+    service.onDidEmitChunk((e) => chunks.push(e))
+    const ended = collectEnd(service)
+
+    await service.startRequest('r4b', userMsg, { modelId: 'fake/not-listed' })
+    const end = await ended
+
+    expect(chunks.map((c) => c.chunk)).toEqual([{ type: 'text', value: 'ok' }])
+    expect(end.error).toBeUndefined()
+    service.dispose()
+  })
+
+  it('reports provider synchronous failures through the end event instead of rejecting startRequest', async () => {
+    const service = new AiModelMainService(secretsStub)
+    addProvider(service, 'fake', {
+      provideModels: () => Promise.resolve([model('fake/m', 'fake')]),
+      sendRequest: () => {
+        throw new Error('sync boom')
+      },
+      provideTokenCount: () => Promise.resolve(0),
+    })
+    const ended = collectEnd(service)
+
+    await expect(
+      service.startRequest('r4c', userMsg, { modelId: 'fake/m' }),
+    ).resolves.toBeUndefined()
+    const end = await ended
+
+    expect(end.error?.message).toBe('sync boom')
+    service.dispose()
+  })
+
+  it('reports OpenAI key misconfiguration instead of treating an explicit OpenAI model as provider-missing', async () => {
+    const service = new AiModelMainService(secretsStub)
+    const ended = collectEnd(service)
+
+    await expect(
+      service.startRequest('r4d', userMsg, { modelId: 'openai/gpt-5-nano' }),
+    ).resolves.toBeUndefined()
+    const end = await ended
+
+    expect(end.error?.code).toBe(AiErrorCode.ConfigurationRequired)
+    expect(end.error?.message).toBe('OpenAI API key is not configured.')
     service.dispose()
   })
 

@@ -71,6 +71,8 @@ export interface SerializedError {
   readonly name: string
   readonly message: string
   readonly stack?: string
+  /** Optional domain error code, e.g. AiError.code. */
+  readonly code?: string
   /** Preserved so `isCancellationError` survives the round-trip. */
   readonly noTelemetry?: boolean
 }
@@ -80,11 +82,13 @@ export function transformErrorForSerialization(error: unknown): SerializedError 
   if (error instanceof Error) {
     const { name, message } = error
     const stack = (error as { stacktrace?: string }).stacktrace ?? error.stack
+    const code = (error as { code?: unknown }).code
     const serialized: SerializedError = {
       $isError: true,
       name,
       message,
       ...(stack !== undefined ? { stack } : {}),
+      ...(typeof code === 'string' ? { code } : {}),
       ...((error as ErrorNoTelemetry).noTelemetry ? { noTelemetry: true } : {}),
     }
     return serialized
@@ -115,6 +119,10 @@ export function transformErrorFromSerialization(data: SerializedError): Error {
   }
   if (data.stack !== undefined) {
     error.stack = data.stack
+  }
+  if (data.code !== undefined) {
+    const coded = error as { code?: string }
+    coded.code = data.code
   }
   return error
 }

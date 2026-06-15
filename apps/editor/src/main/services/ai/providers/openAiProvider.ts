@@ -116,7 +116,7 @@ export class OpenAiProvider implements IAiModelProvider {
     try {
       const apiKey = await this._apiKey()
       if (!apiKey) {
-        throw new AiError(AiErrorCode.Unauthorized, 'No OpenAI API key configured.')
+        throw new AiError(AiErrorCode.ConfigurationRequired, 'OpenAI API key is not configured.')
       }
 
       const res = await retryWithBackoff(

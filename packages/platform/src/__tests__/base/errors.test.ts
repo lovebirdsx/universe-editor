@@ -14,6 +14,7 @@ import {
   transformErrorForSerialization,
   transformErrorFromSerialization,
 } from '../../base/errors.js'
+import { AiError, AiErrorCode } from '../../ai/aiModelTypes.js'
 
 afterEach(() => {
   // Reset handler to default (console.error) after each test
@@ -106,6 +107,16 @@ describe('transformErrorForSerialization', () => {
     expect(serialized.noTelemetry).toBe(true)
     const revived = transformErrorFromSerialization(serialized)
     expect((revived as ErrorNoTelemetry).noTelemetry).toBe(true)
+  })
+
+  it('preserves domain error codes across the round-trip', () => {
+    const serialized = transformErrorForSerialization(
+      new AiError(AiErrorCode.ModelNotFound, 'missing model'),
+    )
+    expect(serialized.code).toBe(AiErrorCode.ModelNotFound)
+    const revived = transformErrorFromSerialization(serialized)
+    expect((revived as { code?: string }).code).toBe(AiErrorCode.ModelNotFound)
+    expect(revived.message).toBe('missing model')
   })
 
   it('handles non-Error throwables', () => {
