@@ -8,7 +8,6 @@ import type {
   IKeyMods,
   IQuickInputButton,
   IQuickPickItem,
-  IQuickInputButton,
   QuickPickFilterMode,
   QuickPickInput,
   QuickPickPresentation,
@@ -51,9 +50,6 @@ export interface QuickPickState {
   autoFocusFirstItem?: boolean | undefined
   onAccept?: (items: IQuickPickItem[], mods?: IKeyMods) => void
   onItemRemove?: ((item: IQuickPickItem) => void) | undefined
-  /** Buttons rendered at the right edge of the input row. */
-  buttons?: readonly IQuickInputButton[] | undefined
-  onTriggerButton?: ((button: IQuickInputButton) => void) | undefined
   onValueChange?: (value: string) => void
   /** Fires when the focused (active) item changes; `undefined` when none. */
   onActiveChange?: (item: IQuickPickItem | undefined) => void

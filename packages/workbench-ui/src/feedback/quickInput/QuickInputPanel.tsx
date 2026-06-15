@@ -643,7 +643,7 @@ export function QuickPickPanel({
             data-testid="quick-input-button"
             onClick={() => state.onTriggerButton?.(button)}
           >
-            {renderIcon?.(button.iconId, 16)}
+            {renderTitleButton?.(button.iconId, 16)}
           </button>
         ))}
         {state.okLabel !== undefined && state.okLabel !== '' && (

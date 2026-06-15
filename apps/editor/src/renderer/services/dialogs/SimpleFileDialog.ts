@@ -86,8 +86,16 @@ export class SimpleFileDialog implements IFileDialogService {
       const syncHiddenButton = (): void => {
         qp.buttons = [
           showDotFiles
-            ? { iconId: 'eye-off', tooltip: localize('fileDialog.hideHidden', 'Hide Hidden Files') }
-            : { iconId: 'eye', tooltip: localize('fileDialog.showHidden', 'Show Hidden Files') },
+            ? {
+                id: 'toggle-hidden',
+                iconId: 'eye-off',
+                tooltip: localize('fileDialog.hideHidden', 'Hide Hidden Files'),
+              }
+            : {
+                id: 'toggle-hidden',
+                iconId: 'eye',
+                tooltip: localize('fileDialog.showHidden', 'Show Hidden Files'),
+              },
         ]
       }
       syncHiddenButton()

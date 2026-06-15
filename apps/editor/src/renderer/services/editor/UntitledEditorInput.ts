@@ -71,6 +71,11 @@ export class UntitledEditorInput extends EditorInput {
     return ''
   }
 
+  /** Untitled buffers are dirty whenever they hold any text. */
+  updateDirtyFromModel(model: monaco.editor.ITextModel): void {
+    this.setDirty(model.getValue() !== '')
+  }
+
   get language(): string {
     return 'plaintext'
   }

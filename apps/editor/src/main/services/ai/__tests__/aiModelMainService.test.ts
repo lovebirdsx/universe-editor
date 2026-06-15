@@ -63,7 +63,6 @@ function makeConfigLocation(dir: string): IConfigLocationService {
     getInfo: () => Promise.resolve({ dir, origin: 'default', locked: false }),
     setConfigDir: () => Promise.resolve(false),
     resetToDefault: () => Promise.resolve(false),
-    pickConfigDir: () => Promise.resolve(null),
     isDirNonEmpty: () => Promise.resolve(false),
   }
 }
