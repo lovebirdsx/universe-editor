@@ -28,6 +28,7 @@ import {
   IDialogService,
   IEditorResolverService,
   IInstantiationService,
+  localize,
   markAsSingleton,
   MenuId,
   observableValue,
@@ -41,6 +42,7 @@ import {
   ContextMenu,
   DragSessionContext,
   dragContainsResources,
+  useHover,
   useDragHandle,
   useDropTarget,
 } from '@universe-editor/workbench-ui'
@@ -64,6 +66,8 @@ const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
   'emptyScmDecorations',
   { files: new Map(), folders: new Map() },
 )
+
+const PATH_LIKE_TOOLTIP_SCHEMES = new Set(['file', 'diff', 'merge', 'markdown-preview'])
 
 interface TabMenuState {
   readonly x: number
@@ -115,6 +119,50 @@ export function detectBodyDropZone(
   if (min === distRight) return 'right'
   if (min === distTop) return 'top'
   return 'bottom'
+}
+
+function formatEditorResourceForHover(input: EditorInput): string | undefined {
+  const resource = input.resource
+  if (!resource) return undefined
+  if (resource.scheme === 'untitled') {
+    return localize('editorTab.tooltip.untitled', 'Unsaved file')
+  }
+  if (PATH_LIKE_TOOLTIP_SCHEMES.has(resource.scheme)) {
+    const path = resource.fsPath
+    return path && path !== input.label ? path : undefined
+  }
+  if (
+    resource.scheme === 'universe' ||
+    resource.scheme === 'release-notes' ||
+    resource.scheme === 'startup-performance'
+  ) {
+    return undefined
+  }
+  const uri = resource.toString()
+  return uri && uri !== input.label ? uri : undefined
+}
+
+function isReadonlyEditor(input: EditorInput): boolean {
+  return 'isReadonly' in input && (input as { readonly isReadonly?: unknown }).isReadonly === true
+}
+
+function getEditorTabStatusLabels(
+  input: EditorInput,
+  isPreview: boolean,
+  scmTooltip: string | undefined,
+): string[] {
+  const statuses: string[] = []
+  if (input.isDirty) {
+    statuses.push(localize('editorTab.tooltip.unsavedChanges', 'Unsaved changes'))
+  }
+  if (isPreview) {
+    statuses.push(localize('editorTab.tooltip.preview', 'Preview'))
+  }
+  if (isReadonlyEditor(input)) {
+    statuses.push(localize('editorTab.tooltip.readonly', 'Read-only'))
+  }
+  if (scmTooltip) statuses.push(scmTooltip)
+  return statuses
 }
 
 function zoneToDirection(zone: Exclude<BodyDropZone, 'center'>): GroupDirection {
@@ -213,6 +261,9 @@ function EditorTab({
       uriList: () => (resource && resource.scheme === 'file' ? [resource.toString()] : []),
     },
   )
+  const { hoverProps, HoverPopup } = useHover()
+  const resourceTooltip = formatEditorResourceForHover(input)
+  const statusLabels = getEditorTabStatusLabels(input, isPreview, deco?.tooltip)
 
   const fullyActive = isActive && isGroupActive && hasInputFocus
   const tabClass = [
@@ -233,9 +284,10 @@ function EditorTab({
       role="tab"
       aria-selected={isActive}
       data-drop-before={showDropIndicator ? 'true' : undefined}
+      {...hoverProps}
       {...dragHandleProps}
     >
-      {input.isDirty && <span className={styles['dirtyDot']} title="Unsaved changes" />}
+      {input.isDirty && <span className={styles['dirtyDot']} />}
       {iconId
         ? (() => {
             const Icon = resolveAgentIcon(iconId)
@@ -251,7 +303,7 @@ function EditorTab({
               size={14}
             />
           )}
-      <span className={styles['tabLabel']} style={labelStyle} title={deco?.tooltip}>
+      <span className={styles['tabLabel']} style={labelStyle}>
         {input.label}
       </span>
       <button
@@ -260,10 +312,27 @@ function EditorTab({
           e.stopPropagation()
           onClose()
         }}
-        aria-label={`Close ${input.label}`}
+        aria-label={localize('editorTab.close', 'Close {name}', { name: input.label })}
       >
         ×
       </button>
+      <HoverPopup>
+        <div className={styles['tabTooltip']} data-testid="editor-tab-hover">
+          <div className={styles['tabTooltipTitle']}>{input.label}</div>
+          {resourceTooltip && (
+            <div className={styles['tabTooltipDescription']}>{resourceTooltip}</div>
+          )}
+          {statusLabels.length > 0 && (
+            <div className={styles['tabTooltipStatuses']}>
+              {statusLabels.map((status, index) => (
+                <span key={`${status}-${index}`} className={styles['tabTooltipStatus']}>
+                  {status}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      </HoverPopup>
     </div>
   )
 }

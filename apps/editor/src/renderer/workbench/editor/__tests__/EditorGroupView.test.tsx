@@ -7,8 +7,8 @@
  *  same number, so React skipped the re-render.
  *--------------------------------------------------------------------------------------------*/
 
-import { beforeEach, afterEach, describe, expect, it } from 'vitest'
-import { render, screen, fireEvent } from '@testing-library/react'
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { act, render, screen, fireEvent } from '@testing-library/react'
 import type { ComponentType } from 'react'
 import {
   ContextKeyService,
@@ -84,6 +84,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   providerDisposable.dispose()
 })
 
@@ -201,6 +202,44 @@ describe('EditorGroupView — tab switching', () => {
     const tabs = screen.getAllByRole('tab')
     expect(tabs[0]?.querySelector('[data-file-icon="file-typescript"]')).toBeTruthy()
     expect(tabs[1]?.querySelector('[data-file-icon="file-package"]')).toBeTruthy()
+
+    svc.dispose()
+  })
+
+  it('shows a hover with full resource path and tab state after the delay', () => {
+    vi.useFakeTimers()
+    const svc = new EditorGroupsService()
+    const group = svc.activeGroup
+    const a = new TabTestInput('Alpha', URI.file('/test/a.txt'))
+    a.setDirty(true)
+    group.openEditor(a, { pinned: false })
+
+    render(
+      <ServicesContext.Provider value={makeFakeInstantiation()}>
+        <EditorGroupView group={group} groupsService={svc} componentMap={componentMap} />
+      </ServicesContext.Provider>,
+    )
+
+    const tab = screen.getByRole('tab')
+    fireEvent.mouseEnter(tab, { clientX: 10, clientY: 10 })
+    act(() => {
+      vi.advanceTimersByTime(400)
+    })
+
+    expect(screen.queryByTestId('editor-tab-hover')).toBeNull()
+
+    act(() => {
+      vi.advanceTimersByTime(150)
+    })
+
+    const hover = screen.getByTestId('editor-tab-hover')
+    expect(hover.textContent).toContain('Alpha')
+    expect(hover.textContent).toContain('/test/a.txt')
+    expect(hover.textContent).toContain('Unsaved changes')
+    expect(hover.textContent).toContain('Preview')
+
+    fireEvent.mouseLeave(tab)
+    expect(screen.queryByTestId('editor-tab-hover')).toBeNull()
 
     svc.dispose()
   })
