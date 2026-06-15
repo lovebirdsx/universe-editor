@@ -6,7 +6,7 @@
  *  window's UserDataMainService can relocate its slots and hot-reload.
  *--------------------------------------------------------------------------------------------*/
 
-import { app, BrowserWindow, dialog } from 'electron'
+import { app } from 'electron'
 import { promises as fs } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -77,15 +77,6 @@ export class ConfigLocationMainService extends Disposable implements IConfigLoca
     await this._writePointer({})
     this._apply(this._userDataDir)
     return true
-  }
-
-  async pickConfigDir(): Promise<string | null> {
-    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null
-    const result = win
-      ? await dialog.showOpenDialog(win, { properties: ['openDirectory', 'createDirectory'] })
-      : await dialog.showOpenDialog({ properties: ['openDirectory', 'createDirectory'] })
-    if (result.canceled || result.filePaths.length === 0) return null
-    return result.filePaths[0] ?? null
   }
 
   async isDirNonEmpty(dir: string): Promise<boolean> {

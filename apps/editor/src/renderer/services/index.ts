@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './quickInput/QuickInputService.js'
+import './dialogs/SimpleFileDialog.js'
 import './progress/ProgressService.js'
 import './search/TextSearchService.js'
 import './search/QuickTextSearchService.js'

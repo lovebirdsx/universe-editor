@@ -7,10 +7,12 @@ import {
   Action2,
   getDisposableTracker,
   IDialogService,
+  IFileDialogService,
   IHostService,
   ILifecycleService,
   IQuickInputService,
   IWindowsService,
+  IWorkspaceService,
   MenuId,
   ShutdownReason,
   URI,
@@ -70,8 +72,18 @@ export class OpenFolderInNewWindowAction extends Action2 {
     })
   }
 
-  override run(accessor: ServicesAccessor): void {
-    void accessor.get(IWindowsService).openWindow()
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const fileDialog = accessor.get(IFileDialogService)
+    const workspace = accessor.get(IWorkspaceService)
+    const folder = await fileDialog.showOpenDialog({
+      title: localize('fileDialog.openFolder.title', 'Open Folder'),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      openLabel: localize('fileDialog.openFolderButton', 'Open'),
+      ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
+    })
+    if (!folder) return
+    await accessor.get(IWindowsService).openWindow(folder)
   }
 }
 

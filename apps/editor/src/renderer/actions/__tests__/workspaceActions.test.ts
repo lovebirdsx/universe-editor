@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
+  IFileDialogService,
   ILifecycleService,
   IProgressService,
   IQuickInputService,
@@ -20,6 +21,8 @@ import {
   URI,
   registerAction2,
   type IDisposable,
+  type IFileDialogOptions,
+  type IFileDialogService as IFileDialogServiceType,
   type IOpenWindowInfo,
   type IPickOptions,
   type IProgressOptions,
@@ -182,16 +185,37 @@ function makeProgressStub(): IProgressServiceType {
   }
 }
 
+interface FileDialogStub extends IFileDialogServiceType {
+  readonly openCalls: IFileDialogOptions[]
+}
+
+function makeFileDialogStub(result?: URI): FileDialogStub {
+  const openCalls: IFileDialogOptions[] = []
+  return {
+    _serviceBrand: undefined,
+    openCalls,
+    async showOpenDialog(opts: IFileDialogOptions) {
+      openCalls.push(opts)
+      return result
+    },
+    async showSaveDialog() {
+      return undefined
+    },
+  } as FileDialogStub
+}
+
 function runCommand(
   id: string,
   workspace: IWorkspaceServiceType,
   quickInput?: IQuickInputServiceType,
   windows: IWindowsServiceType = makeWindowsStub(),
+  fileDialog: IFileDialogServiceType = makeFileDialogStub(),
 ): Promise<unknown> {
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
   services.set(IProgressService, makeProgressStub())
   services.set(IWindowsService, windows)
+  services.set(IFileDialogService, fileDialog)
   services.set(ILifecycleService, new LifecycleService())
   if (quickInput) services.set(IQuickInputService, quickInput)
   const inst = new InstantiationService(services)
@@ -229,12 +253,23 @@ describe('workspaceActions', () => {
     ).toBe(true)
   })
 
-  it('OpenFolder.run delegates to IWorkspaceService.openFolder() without args', async () => {
+  it('OpenFolder.run shows the file dialog then opens the picked folder', async () => {
     disposables.push(registerAction2(OpenFolderAction))
     const ws = makeWorkspaceStub()
-    await runCommand(OpenFolderAction.ID, ws)
+    const picked = URI.file('/tmp/picked')
+    const fileDialog = makeFileDialogStub(picked)
+    await runCommand(OpenFolderAction.ID, ws, undefined, makeWindowsStub(), fileDialog)
+    expect(fileDialog.openCalls).toHaveLength(1)
+    expect(fileDialog.openCalls[0]?.canSelectFolders).toBe(true)
     expect(ws.openCalls).toHaveLength(1)
-    expect(ws.openCalls[0]?.toString()).toBe('cmd:dialog')
+    expect(ws.openCalls[0]?.toString()).toBe(picked.toString())
+  })
+
+  it('OpenFolder.run does nothing when the dialog is cancelled', async () => {
+    disposables.push(registerAction2(OpenFolderAction))
+    const ws = makeWorkspaceStub()
+    await runCommand(OpenFolderAction.ID, ws, undefined, makeWindowsStub(), makeFileDialogStub())
+    expect(ws.openCalls).toHaveLength(0)
   })
 
   it('CloseFolder.run delegates to IWorkspaceService.closeFolder()', async () => {

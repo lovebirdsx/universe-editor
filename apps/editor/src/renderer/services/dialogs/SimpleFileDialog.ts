@@ -1,0 +1,412 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  SimpleFileDialog — a QuickInput-based file/folder browser that replaces the
+ *  native OS dialogs (mirrors VSCode's files.simpleDialog.enable). Lives entirely
+ *  in the renderer; filesystem access goes through IFileService over IPC.
+ *--------------------------------------------------------------------------------------------*/
+
+import {
+  IDialogService,
+  IFileService,
+  IFileDialogService,
+  IQuickInputService,
+  IWorkspaceService,
+  InstantiationType,
+  URI,
+  localize,
+  registerSingleton,
+  type IFileDialogOptions,
+  type IQuickPickItem,
+} from '@universe-editor/platform'
+import { resourceIconId } from '../quickInput/quickPickResourceIcon.js'
+import {
+  endsWithSeparator,
+  expandTilde,
+  isDeletion,
+  prepareEntries,
+  splitTrailingSegment,
+  type DialogEntry,
+} from './simpleFileDialogUtil.js'
+
+type DialogMode = 'open' | 'save'
+
+interface ResolvedEntry {
+  readonly uri: URI
+  readonly isDirectory: boolean
+}
+
+const PARENT_ID = '..'
+
+export class SimpleFileDialog implements IFileDialogService {
+  declare readonly _serviceBrand: undefined
+
+  private readonly _sep: string
+  private readonly _home: string
+
+  constructor(
+    @IQuickInputService private readonly _quickInput: IQuickInputService,
+    @IFileService private readonly _fileService: IFileService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IDialogService private readonly _dialog: IDialogService,
+  ) {
+    const ipc = typeof window !== 'undefined' ? window.ipc : undefined
+    this._sep = ipc?.platform === 'win32' ? '\\' : '/'
+    this._home = typeof ipc?.home === 'string' ? ipc.home : ''
+  }
+
+  showOpenDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+    return this._show(opts, 'open')
+  }
+
+  showSaveDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+    return this._show(opts, 'save')
+  }
+
+  private async _show(opts: IFileDialogOptions, mode: DialogMode): Promise<URI | undefined> {
+    const allowFiles = opts.canSelectFiles
+    const start = await this._resolveStart(opts, mode)
+
+    return new Promise<URI | undefined>((resolve) => {
+      const qp = this._quickInput.createQuickPick<IQuickPickItem>()
+      qp.filterExternally = true
+      qp.keepOpenOnAccept = true
+      qp.autoFocusFirstItem = false
+      qp.title = opts.title
+      qp.okLabel = opts.openLabel ?? localize('fileDialog.ok', 'OK')
+
+      let currentFolder = start.folder
+      let showDotFiles = false
+      let currentItems: IQuickPickItem[] = []
+      let entriesById = new Map<string, ResolvedEntry>()
+      let settled = false
+      let lastValue = ''
+      let userTypedSegment = ''
+      let navToken = 0
+
+      const syncHiddenButton = (): void => {
+        qp.buttons = [
+          showDotFiles
+            ? { iconId: 'eye-off', tooltip: localize('fileDialog.hideHidden', 'Hide Hidden Files') }
+            : { iconId: 'eye', tooltip: localize('fileDialog.showHidden', 'Show Hidden Files') },
+        ]
+      }
+      syncHiddenButton()
+
+      const finish = (uri: URI | undefined): void => {
+        if (settled) return
+        settled = true
+        qp.hide()
+        qp.dispose()
+        resolve(uri)
+      }
+
+      const confirmAndFinish = async (target: URI): Promise<void> => {
+        if (mode === 'save' && (await this._fileService.exists(target))) {
+          const { confirmed } = await this._dialog.confirm({
+            message: localize(
+              'fileDialog.overwrite',
+              "A file named '{name}' already exists. Do you want to replace it?",
+              { name: this._basename(target) },
+            ),
+            primaryButton: localize('fileDialog.replace', 'Replace'),
+            type: 'warning',
+          })
+          if (!confirmed) return
+        }
+        finish(target)
+      }
+
+      const setInputToFolder = (): void => {
+        const v = this._isDriveListRoot(currentFolder) ? '' : this._displayWithSep(currentFolder)
+        lastValue = v
+        qp.value = v
+        qp.valueSelection = undefined
+      }
+
+      const updateItems = async (folder: URI, listOpts: { resetInput: boolean }): Promise<void> => {
+        const token = ++navToken
+        qp.busy = true
+        const items: IQuickPickItem[] = []
+        const byId = new Map<string, ResolvedEntry>()
+
+        if (this._isDriveListRoot(folder)) {
+          let drives: string[] = []
+          try {
+            drives = (await this._fileService.listDrives?.()) ?? []
+          } catch {
+            drives = []
+          }
+          if (token !== navToken) return
+          currentFolder = folder
+          for (const drive of drives) {
+            const uri = this._uriFromInput(drive)
+            const id = uri.toString()
+            items.push({ id, label: drive, iconId: resourceIconId(uri, true) })
+            byId.set(id, { uri, isDirectory: true })
+          }
+        } else {
+          let entries: DialogEntry[] = []
+          try {
+            entries = await this._fileService.list(folder)
+          } catch {
+            entries = []
+          }
+          if (token !== navToken) return
+          currentFolder = folder
+          const prepared = prepareEntries(entries, { allowFiles, showDotFiles })
+
+          const parent = this._parentOf(folder)
+          if (parent) {
+            items.push({ id: PARENT_ID, label: '..', iconId: resourceIconId(parent, true) })
+            byId.set(PARENT_ID, { uri: parent, isDirectory: true })
+          }
+          for (const entry of prepared) {
+            const child = URI.joinPath(folder, entry.name)
+            const id = child.toString()
+            items.push({ id, label: entry.name, iconId: resourceIconId(child, entry.isDirectory) })
+            byId.set(id, { uri: child, isDirectory: entry.isDirectory })
+          }
+        }
+
+        currentItems = items
+        entriesById = byId
+        qp.items = items
+        qp.busy = false
+        if (listOpts.resetInput) setInputToFolder()
+      }
+
+      // Highlight the entry whose name prefixes the typed trailing segment. Setting
+      // activeItems drives the panel focus, which fires onDidChangeActive and
+      // autocompletes the value.
+      const applyMatch = (name: string): void => {
+        const lower = name.toLowerCase()
+        const match = currentItems.find(
+          (it) => it.id !== PARENT_ID && it.label.toLowerCase().startsWith(lower),
+        )
+        qp.activeItems = match ? [match] : []
+      }
+
+      const onValueChange = async (value: string): Promise<void> => {
+        const expanded = expandTilde(value, this._display(this._homeUri()), this._sep)
+        if (expanded !== undefined) {
+          value = expanded
+          lastValue = expanded
+          qp.value = expanded
+        }
+
+        const deletion = isDeletion(lastValue, value)
+        lastValue = value
+
+        const { dir, name } = splitTrailingSegment(value)
+        userTypedSegment = name
+
+        // On Windows a value with no directory part is a fresh top-level entry:
+        // the user cleared the box and is typing a drive (or nothing). Surface
+        // the drive list and match drives by the typed prefix, instead of
+        // autocompleting the bare segment into the current folder.
+        if (dir === '' && this._sep === '\\') {
+          if (!this._isDriveListRoot(currentFolder)) {
+            await updateItems(this._driveListRoot(), { resetInput: false })
+          }
+          if (!deletion && name !== '') applyMatch(name)
+          else qp.activeItems = []
+          return
+        }
+
+        // [A] When the typed directory part differs from the current folder, sync
+        // the listing to it (without clobbering what the user is typing).
+        if (dir !== '') {
+          const dirUri = this._uriFromInput(dir)
+          if (dirUri.path !== currentFolder.path) {
+            try {
+              const stat = await this._fileService.stat(dirUri)
+              if (stat.isDirectory) {
+                await updateItems(dirUri, { resetInput: false })
+              } else {
+                qp.activeItems = []
+                return
+              }
+            } catch {
+              qp.activeItems = []
+              return
+            }
+          }
+        }
+
+        // [B] Match-highlight the trailing segment, unless the user is deleting.
+        if (!deletion && name !== '') applyMatch(name)
+        else qp.activeItems = []
+      }
+
+      // [C] Autocomplete the input to the focused item as the user arrows through
+      // the list. The untyped tail is selected so the next keystroke replaces it.
+      const onActiveChange = (item: IQuickPickItem | undefined): void => {
+        if (!item) return
+        const entry = entriesById.get(item.id)
+        if (!entry) return
+        const prefix = this._isDriveListRoot(currentFolder)
+          ? ''
+          : this._displayWithSep(currentFolder)
+        const completed = item.id === PARENT_ID ? prefix + '..' : prefix + item.label
+        const startsWithTyped =
+          item.id !== PARENT_ID &&
+          item.label.toLowerCase().startsWith(userTypedSegment.toLowerCase())
+        const typedLen = startsWithTyped ? userTypedSegment.length : 0
+        lastValue = completed
+        qp.value = completed
+        qp.valueSelection = [Math.min(prefix.length + typedLen, completed.length), completed.length]
+      }
+
+      const setSaveValue = (uri: URI): void => {
+        const v = this._display(uri)
+        lastValue = v
+        qp.value = v
+        qp.valueSelection = undefined
+      }
+
+      // Resolve the typed value directly: enter / select a folder, open a file, or
+      // confirm a save target. [D] A trailing separator means "this folder itself".
+      const acceptValue = async (value: string): Promise<void> => {
+        if (value === '') return
+        const target = this._uriFromInput(value)
+        if (mode === 'save') {
+          if (endsWithSeparator(value)) return
+          await confirmAndFinish(target)
+          return
+        }
+        try {
+          const stat = await this._fileService.stat(target)
+          if (stat.isDirectory) {
+            if (opts.canSelectFolders) finish(target)
+            else await updateItems(target, { resetInput: true })
+          } else if (stat.isFile && allowFiles) {
+            finish(target)
+          }
+        } catch {
+          // path does not exist — keep the dialog open
+        }
+      }
+
+      const onAccept = async (items: IQuickPickItem[]): Promise<void> => {
+        // A concrete item was chosen (clicked, or focused + Enter): act on it
+        // directly. This is independent of the input value, so it can't race the
+        // autocomplete that lags a click. [B/C]
+        const active = items[0]
+        if (active) {
+          const entry = entriesById.get(active.id)
+          if (entry) {
+            if (entry.isDirectory) {
+              await updateItems(entry.uri, { resetInput: true })
+              return
+            }
+            if (mode === 'save') {
+              setSaveValue(entry.uri)
+              return
+            }
+            if (allowFiles) {
+              finish(entry.uri)
+            }
+            return
+          }
+        }
+
+        // No item selected → resolve the typed value: a trailing-separator path
+        // opens that folder [D], a full path opens the file / enters the folder.
+        await acceptValue(qp.value)
+      }
+
+      qp.onDidAccept((items) => void onAccept(items))
+      qp.onDidChangeValue((value) => void onValueChange(value))
+      qp.onDidChangeActive((item) => onActiveChange(item))
+      qp.onDidTriggerOk(() => void acceptValue(qp.value))
+      qp.onDidTriggerButton(() => {
+        showDotFiles = !showDotFiles
+        syncHiddenButton()
+        void updateItems(currentFolder, { resetInput: false })
+      })
+      qp.onDidHide(() => finish(undefined))
+
+      qp.show()
+      void (async () => {
+        await updateItems(start.folder, { resetInput: true })
+        if (mode === 'save' && start.fileName) {
+          const folderPrefix = this._displayWithSep(start.folder)
+          const v = folderPrefix + start.fileName
+          lastValue = v
+          qp.value = v
+          qp.valueSelection = [folderPrefix.length, folderPrefix.length + start.fileName.length]
+        }
+      })()
+    })
+  }
+
+  private async _resolveStart(
+    opts: IFileDialogOptions,
+    mode: DialogMode,
+  ): Promise<{ folder: URI; fileName?: string }> {
+    const fallback = this._workspace.current?.folder ?? this._homeUri()
+    if (mode === 'save' && opts.defaultUri) {
+      return {
+        folder: this._parentOf(opts.defaultUri) ?? fallback,
+        fileName: this._basename(opts.defaultUri),
+      }
+    }
+    const base = opts.defaultUri ?? fallback
+    try {
+      const stat = await this._fileService.stat(base)
+      if (stat.isDirectory) return { folder: base }
+      return { folder: this._parentOf(base) ?? fallback }
+    } catch {
+      return { folder: fallback }
+    }
+  }
+
+  private _homeUri(): URI {
+    return URI.file(this._home || '/')
+  }
+
+  private _parentOf(uri: URI): URI | undefined {
+    const parent = URI.joinPath(uri, '..')
+    return parent.path === uri.path ? undefined : parent
+  }
+
+  private _basename(uri: URI): string {
+    const path = uri.path
+    const idx = path.lastIndexOf('/')
+    return idx === -1 ? path : path.slice(idx + 1)
+  }
+
+  private _display(uri: URI): string {
+    return this._sep === '/' ? uri.fsPath : uri.fsPath.replace(/\//g, this._sep)
+  }
+
+  private _uriFromInput(value: string): URI {
+    let normalized = value.replace(/\\/g, '/')
+    while (normalized.length > 1 && normalized.endsWith('/')) {
+      normalized = normalized.slice(0, -1)
+    }
+    // A bare Windows drive ("D:") addresses the drive's working directory, not
+    // its root; keep the trailing slash so it resolves to the drive root ("D:/").
+    if (/^[A-Za-z]:$/.test(normalized)) {
+      normalized += '/'
+    }
+    return URI.file(normalized)
+  }
+
+  /** The synthetic "list of drives" root, shown on Windows above all drives. */
+  private _driveListRoot(): URI {
+    return URI.file('/')
+  }
+
+  /** Whether `uri` is the Windows drive-list root (filesystem root on win32). */
+  private _isDriveListRoot(uri: URI): boolean {
+    return this._sep === '\\' && uri.scheme === 'file' && uri.path === '/'
+  }
+
+  private _displayWithSep(uri: URI): string {
+    const display = this._display(uri)
+    return display.endsWith(this._sep) ? display : display + this._sep
+  }
+}
+
+registerSingleton(IFileDialogService, SimpleFileDialog, InstantiationType.Delayed)

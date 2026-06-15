@@ -7,6 +7,7 @@ import {
   Action2,
   IDialogService,
   IEditorGroupsService,
+  IFileDialogService,
   IFileService,
   IHostService,
   IInstantiationService,
@@ -40,18 +41,20 @@ export class OpenFileAction extends Action2 {
     })
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const host = accessor.get(IHostService)
     const workspace = accessor.get(IWorkspaceService)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
     const fileService = accessor.get(IFileService)
     const dialog = accessor.get(IDialogService)
+    const fileDialog = accessor.get(IFileDialogService)
 
-    const picked = reviveUri(
-      await host.showOpenFileDialog({
-        ...(workspace.current ? { defaultPath: workspace.current.folder.fsPath } : {}),
-      }),
-    )
+    const picked = await fileDialog.showOpenDialog({
+      title: localize('fileDialog.openFile.title', 'Open File'),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      openLabel: localize('fileDialog.open', 'Open'),
+      ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
+    })
     if (!picked) return
     if (!(await confirmLargeFile(picked, fileService, dialog))) return
     const input = inst.createInstance(FileEditorInput, picked)

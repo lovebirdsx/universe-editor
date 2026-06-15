@@ -313,6 +313,7 @@ export function QuickPickPanel({
   const matchOnDetail = state.matchOnDetail === true
   const onItemRemove = state.onItemRemove
   const filterExternally = state.filterExternally === true
+  const autoFocusFirstItem = state.autoFocusFirstItem !== false
   const compact = state.presentation === 'compact'
   const hasIconColumn = useMemo(
     () => (state.items ?? []).some((item) => !isSeparator(item) && item.iconId !== undefined),
@@ -357,26 +358,57 @@ export function QuickPickPanel({
     inputRef.current?.focus()
   }, [])
 
+  // Controlled value: when the host drives state.value (the simple file dialog's
+  // path autocomplete / directory navigation), follow it. The panel is otherwise
+  // uncontrolled — typing updates `query` locally and reports via onValueChange.
+  useEffect(() => {
+    if (state.value !== undefined && state.value !== query) setQuery(state.value)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.value])
+
+  // Controlled cursor / selection — applied after the value lands in the DOM so
+  // setSelectionRange isn't reset by React's value commit. Re-runs on `query` so
+  // a value change followed by the same selection still re-applies.
+  const valueSelection = state.valueSelection
+  useLayoutEffect(() => {
+    if (!valueSelection) return
+    inputRef.current?.setSelectionRange(valueSelection[0], valueSelection[1])
+  }, [valueSelection, query])
+
   const prefixActive = prefix.length > 0 && query.startsWith(prefix)
   const prefixMissing = prefix.length > 0 && !query.startsWith(prefix)
   const filterText = prefixActive ? query.slice(prefix.length) : prefix.length > 0 ? '' : query
 
   const deferredFilterText = useDeferredValue(filterText)
 
+  // Base list with removed items filtered out, memoized on its inputs only. In
+  // filterExternally mode this reference must stay stable as the user types (the
+  // host autocompletes the value → `query` changes, items don't), otherwise the
+  // focus-reset effect below would fire on every keystroke and fight host-driven
+  // navigation.
+  const baseItems = useMemo(
+    () => (state.items ?? []).filter((item) => !removedIds.has(item.id)),
+    [state.items, removedIds],
+  )
+
   const filtered = useMemo(() => {
     if (prefixMissing) return []
-    const items = (state.items ?? []).filter((item) => !removedIds.has(item.id))
-    if (filterExternally) return items
+    if (filterExternally) return baseItems
     if (filterMode === 'word') {
-      return filterWithSeparators(items, deferredFilterText, matchOnDescription, matchOnDetail)
+      return filterWithSeparators(baseItems, deferredFilterText, matchOnDescription, matchOnDetail)
     }
-    return fuzzyFilterAndSort(items, deferredFilterText, matchOnDescription, matchOnDetail, mruIds)
+    return fuzzyFilterAndSort(
+      baseItems,
+      deferredFilterText,
+      matchOnDescription,
+      matchOnDetail,
+      mruIds,
+    )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     prefixMissing,
     filterExternally,
-    state.items,
-    removedIds,
+    baseItems,
     deferredFilterText,
     filterMode,
     matchOnDescription,
@@ -415,13 +447,38 @@ export function QuickPickPanel({
     overscan: 5,
   })
 
+  // Reset focus to the first selectable item when the list itself changes. In
+  // filterExternally mode (the simple file dialog) the host autocompletes the
+  // value as the user types — that changes `query` but not the items, so this must
+  // NOT depend on `query`, or the programmatic value update would yank focus back
+  // to the top and fight host-driven navigation.
   useEffect(() => {
     if (quickNavigate) {
       setFocusedIdx((idx) => normalizeSelectableIndex(sortedFiltered, idx))
       return
     }
+    // Host-managed selection (simple file dialog): don't auto-highlight the first
+    // row. Focus is placed only by the activeItems effect below or by user
+    // arrow/mouse, so Enter on a trailing-separator path falls through to onOk
+    // (open the folder) instead of acting on a stray first item.
+    if (!autoFocusFirstItem) {
+      setFocusedIdx(-1)
+      return
+    }
     setFocusedIdx(firstSelectableIndex(sortedFiltered))
-  }, [query, quickNavigate, sortedFiltered])
+  }, [quickNavigate, sortedFiltered, autoFocusFirstItem])
+
+  // Host-driven focus: when the host sets activeItems (path autocomplete /
+  // directory navigation), move focus to the first matching item by id. Runs
+  // after the reset effect above so it wins when both fire on a list change.
+  const activeItems = state.activeItems
+  useEffect(() => {
+    if (!activeItems || activeItems.length === 0) return
+    const targetId = activeItems[0]?.id
+    if (targetId === undefined) return
+    const idx = sortedFiltered.findIndex((item) => !isSeparator(item) && item.id === targetId)
+    if (idx >= 0) setFocusedIdx(idx)
+  }, [activeItems, sortedFiltered])
 
   useEffect(() => {
     if (sortedFiltered.length > 0) {
@@ -454,7 +511,7 @@ export function QuickPickPanel({
   const accept = useCallback(
     (items: IQuickPickItem[], mods?: IKeyMods) => {
       state.onAccept?.(items, mods)
-      onClose()
+      if (!state.keepOpenOnAccept) onClose()
     },
     [state, onClose],
   )
@@ -537,6 +594,9 @@ export function QuickPickPanel({
       e.preventDefault()
       const item = sortedFiltered[focusedIdx]
       if (isSelectable(item)) accept([item], { ctrl: e.ctrlKey, alt: e.altKey })
+      // No selectable item (e.g. an empty directory in the file dialog): fall back
+      // to the host's OK handler so a trailing-separator path can still be opened.
+      else state.onOk?.()
     }
   }
 
@@ -548,6 +608,11 @@ export function QuickPickPanel({
       data-testid="quick-input"
       {...(contentWidth !== undefined ? { style: { width: contentWidth } } : {})}
     >
+      {state.title !== undefined && state.title !== '' && (
+        <div className={styles['titleBar']} data-testid="quick-input-title">
+          {state.title}
+        </div>
+      )}
       <div className={styles['inputRow']}>
         <input
           ref={inputRef}
@@ -564,6 +629,37 @@ export function QuickPickPanel({
           spellCheck={false}
           data-testid="quick-input-field"
         />
+        {(state.buttons ?? []).map((button, i) => (
+          <button
+            // Buttons are a small static toolbar; index keys are stable enough.
+            key={`qp-btn-${i}`}
+            type="button"
+            className={styles['inputButton']}
+            title={button.tooltip}
+            aria-label={button.tooltip ?? 'Quick pick button'}
+            data-testid="quick-input-button"
+            onClick={() => state.onTriggerButton?.(button)}
+          >
+            {renderIcon?.(button.iconId, 16)}
+          </button>
+        ))}
+        {state.okLabel !== undefined && state.okLabel !== '' && (
+          <button
+            type="button"
+            className={styles['okButton']}
+            data-testid="quick-input-ok"
+            onClick={() => {
+              if (state.onOk) {
+                state.onOk()
+                return
+              }
+              const item = sortedFiltered[focusedIdx]
+              if (isSelectable(item)) accept([item])
+            }}
+          >
+            {state.okLabel}
+          </button>
+        )}
       </div>
       {state.busy === true && (
         <div className={styles['progress']} data-testid="quick-input-busy">
@@ -611,7 +707,11 @@ export function QuickPickPanel({
                       role="option"
                       aria-selected={focused}
                       onClick={(e) => accept([item], { ctrl: e.ctrlKey, alt: e.altKey })}
-                      onMouseMove={() => setFocusedIdx(idx)}
+                      // Host-managed selection (file dialog): mouse hover must not
+                      // move focus, or a stray mousemove over the re-rendered list
+                      // after navigation would autocomplete the path input. Keyboard
+                      // and click still drive selection; CSS :hover gives feedback.
+                      {...(autoFocusFirstItem ? { onMouseMove: () => setFocusedIdx(idx) } : {})}
                     >
                       {!query && mruIds.includes(item.id) && <span className={styles['mruDot']} />}
                       {hasIconColumn && (

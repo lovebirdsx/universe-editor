@@ -8,8 +8,8 @@ import {
   GroupsOrder,
   ICommandService,
   IEditorGroupsService,
+  IFileDialogService,
   IFileService,
-  IHostService,
   IInstantiationService,
   IWorkspaceService,
   MenuId,
@@ -21,7 +21,6 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
-import { reviveUri } from './fileActionsCommon.js'
 
 export class SaveFileAction extends Action2 {
   static readonly ID = 'workbench.action.files.save'
@@ -63,12 +62,18 @@ export class SaveFileAsAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const active = groups.activeGroup.activeEditor
     if (!(active instanceof FileEditorInput) && !(active instanceof UntitledEditorInput)) return
-    const host = accessor.get(IHostService)
+    const fileDialog = accessor.get(IFileDialogService)
     const fileService = accessor.get(IFileService)
     const inst = accessor.get(IInstantiationService)
 
     const defaultPath = resolveDefaultSavePath(active, groups, accessor)
-    const picked = reviveUri(await host.showSaveFileDialog({ defaultPath }))
+    const picked = await fileDialog.showSaveDialog({
+      title: localize('fileDialog.saveAs.title', 'Save As'),
+      canSelectFiles: true,
+      canSelectFolders: false,
+      openLabel: localize('fileDialog.save', 'Save'),
+      defaultUri: URI.file(defaultPath),
+    })
     if (!picked) return
 
     // Resolve current text via the existing model; fall back to disk (file) or

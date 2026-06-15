@@ -150,6 +150,24 @@ export class FileSystemMainService implements IFileService {
     }
   }
 
+  async listDrives(): Promise<string[]> {
+    if (process.platform !== 'win32') return []
+    const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+    const probed = await Promise.all(
+      letters.map(async (letter) => {
+        try {
+          await fs.access(`${letter}:\\`)
+          return `${letter}:`
+        } catch {
+          return undefined
+        }
+      }),
+    )
+    const drives = probed.filter((d): d is string => d !== undefined)
+    this._logger.debug(`listDrives count=${drives.length}`)
+    return drives
+  }
+
   async createDirectory(resource: RawUri): Promise<void> {
     const uri = ensureFile(reviveUri(resource))
     try {

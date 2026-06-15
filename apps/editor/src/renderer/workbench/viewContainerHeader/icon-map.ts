@@ -13,6 +13,7 @@ import {
   Columns2,
   Download,
   Eye,
+  EyeOff,
   FileSymlink,
   FolderTree,
   GitBranch,
@@ -89,6 +90,9 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // Editor title actions.
   'open-preview': Eye,
   'open-preview-side': Columns2,
+  // Simple file dialog — toggle hidden files.
+  eye: Eye,
+  'eye-off': EyeOff,
   // Agent session editor — timeline navigation.
   'go-to-plan': ListChecks,
   'timeline-prev': ChevronUp,

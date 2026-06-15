@@ -38,12 +38,6 @@ export interface IConfigLocationService {
   /** Clear the persisted pointer, reverting to userData. No-op when locked. */
   resetToDefault(): Promise<boolean>
 
-  /**
-   * Show a native folder picker. Returns the chosen absolute path, or null if
-   * cancelled. Does not apply the choice — call setConfigDir with the result.
-   */
-  pickConfigDir(): Promise<string | null>
-
   /** True when `dir` exists and contains at least one entry. */
   isDirNonEmpty(dir: string): Promise<boolean>
 }

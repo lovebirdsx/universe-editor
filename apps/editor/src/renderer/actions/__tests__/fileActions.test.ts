@@ -13,6 +13,7 @@ import {
   ICommandService,
   IDialogService,
   IEditorGroupsService,
+  IFileDialogService,
   IFileSearchService,
   IFileService,
   IFileWatcherService,
@@ -33,12 +34,15 @@ import {
   type IDirectoryEntry,
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
+  type IFileDialogOptions,
+  type IFileDialogService as IFileDialogServiceType,
   type IFileService as IFileServiceType,
   type IFileSearchComplete,
   type IFileSearchService as IFileSearchServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type IHostService as IHostServiceType,
   type IQuickInputService as IQuickInputServiceType,
+  type IQuickInputButton,
   type IQuickPick,
   type IQuickPickItem,
   type QuickPickInput,
@@ -242,6 +246,23 @@ class FakeHostService implements IHostServiceType {
   async focusWindow() {}
 }
 
+class FakeFileDialogService implements IFileDialogServiceType {
+  declare readonly _serviceBrand: undefined
+  openResult: URI | undefined
+  saveResult: URI | undefined
+  readonly openCalls: IFileDialogOptions[] = []
+  readonly saveCalls: IFileDialogOptions[] = []
+
+  async showOpenDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+    this.openCalls.push(opts)
+    return this.openResult
+  }
+  async showSaveDialog(opts: IFileDialogOptions): Promise<URI | undefined> {
+    this.saveCalls.push(opts)
+    return this.saveResult
+  }
+}
+
 class FakeCommandService implements ICommandServiceType {
   declare readonly _serviceBrand: undefined
   readonly calls: Array<{ id: string; args: unknown[] }> = []
@@ -288,6 +309,17 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidHide = this._onDidHide.event
   readonly onDidChangeValue = this._onDidChangeValue.event
   readonly onDidChangeActive = this._onDidChangeActive.event
+
+  private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
+  private readonly _onDidTriggerOk = new Emitter<void>()
+  readonly onDidTriggerButton = this._onDidTriggerButton.event
+  readonly onDidTriggerOk = this._onDidTriggerOk.event
+  valueSelection: [number, number] | undefined
+  activeItems: readonly T[] = []
+  title: string | undefined
+  buttons: readonly IQuickInputButton[] = []
+  okLabel: string | undefined
+  keepOpenOnAccept = false
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[] = []
   prefix = ''
@@ -325,6 +357,8 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidHide.dispose()
     this._onDidChangeValue.dispose()
     this._onDidChangeActive.dispose()
+    this._onDidTriggerButton.dispose()
+    this._onDidTriggerOk.dispose()
   }
 }
 
@@ -457,6 +491,7 @@ interface Harness {
   ws: FakeWorkspaceService
   dialog: FakeDialogService
   host: FakeHostService
+  fileDialog: FakeFileDialogService
   tree: ExplorerTreeService
   group: FakeGroup
   groupsService: IEditorGroupsServiceType
@@ -474,6 +509,7 @@ function makeHarness(
   const ws = new FakeWorkspaceService(root)
   const dialog = new FakeDialogService()
   const host = new FakeHostService()
+  const fileDialog = new FakeFileDialogService()
   const cmd = new FakeCommandService()
   const quickInput = new FakeQuickInputService()
   const recentFiles = new FakeRecentFilesService()
@@ -488,6 +524,7 @@ function makeHarness(
   services.set(IWorkspaceService, ws)
   services.set(IDialogService, dialog)
   services.set(IHostService, host)
+  services.set(IFileDialogService, fileDialog)
   services.set(IEditorGroupsService, groupsService)
   services.set(IQuickInputService, quickInput)
   services.set(IRecentFilesService, recentFiles)
@@ -505,6 +542,7 @@ function makeHarness(
     ws,
     dialog,
     host,
+    fileDialog,
     tree,
     group,
     groupsService,
@@ -572,7 +610,7 @@ describe('fileActions', () => {
     it('opens the picked file in the active group', async () => {
       const h = makeHarness()
       const picked = URI.file('/picked.txt')
-      h.host.openResult = picked.toJSON()
+      h.fileDialog.openResult = picked
       await run(h, OpenFileAction.ID)
       expect(h.group.opened).toHaveLength(1)
       expect(h.group.opened[0]?.resource?.toString()).toBe(picked.toString())
@@ -580,7 +618,7 @@ describe('fileActions', () => {
 
     it('does nothing when the user cancels the picker', async () => {
       const h = makeHarness()
-      h.host.openResult = null
+      h.fileDialog.openResult = undefined
       await run(h, OpenFileAction.ID)
       expect(h.group.opened).toHaveLength(0)
     })
@@ -717,7 +755,7 @@ describe('fileActions', () => {
       const active = { isDirty: false, typeId: 'welcome' } as unknown as EditorInput
       const h = makeHarness({ activeEditor: active })
       await expect(run(h, SaveFileAsAction.ID)).resolves.toBeUndefined()
-      expect(h.host.saveCalls).toHaveLength(0)
+      expect(h.fileDialog.saveCalls).toHaveLength(0)
     })
   })
 

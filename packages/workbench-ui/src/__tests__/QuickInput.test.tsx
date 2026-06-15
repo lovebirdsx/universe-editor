@@ -525,3 +525,188 @@ describe('QuickPickPanel active item (live preview)', () => {
     expect(onActiveChange).toHaveBeenLastCalledWith(undefined)
   })
 })
+
+describe('QuickPickPanel simple-file-dialog extras', () => {
+  it('renders a title bar only when state.title is a non-empty string', () => {
+    const { rerender } = render(
+      <QuickPickPanel state={makeState({ prefix: undefined })} onClose={() => undefined} />,
+    )
+    expect(screen.queryByTestId('quick-input-title')).toBeNull()
+
+    rerender(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, title: 'Open Folder' })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(screen.getByTestId('quick-input-title').textContent).toBe('Open Folder')
+  })
+
+  it('renders toolbar buttons and fires onTriggerButton on click', () => {
+    const onTriggerButton = vi.fn()
+    const button = { iconId: 'eye', tooltip: 'Toggle hidden files' }
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, buttons: [button], onTriggerButton })}
+        onClose={() => undefined}
+      />,
+    )
+    const btn = screen.getByTestId('quick-input-button')
+    expect(btn.getAttribute('title')).toBe('Toggle hidden files')
+    fireEvent.click(btn)
+    expect(onTriggerButton).toHaveBeenCalledWith(button)
+  })
+
+  it('renders an OK button that fires onOk in preference to accepting an item', () => {
+    const onOk = vi.fn()
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, okLabel: 'Open', onOk, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    const ok = screen.getByTestId('quick-input-ok')
+    expect(ok.textContent).toBe('Open')
+    fireEvent.click(ok)
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('OK falls back to accepting the focused item when onOk is absent', () => {
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, okLabel: 'Open', onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.click(screen.getByTestId('quick-input-ok'))
+    expect(onAccept).toHaveBeenCalledWith([items[0]], undefined)
+  })
+
+  it('applies state.valueSelection to the input selection', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          value: '/foo/apps',
+          valueSelection: [5, 9],
+          filterExternally: true,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    expect(input.value).toBe('/foo/apps')
+    expect(input.selectionStart).toBe(5)
+    expect(input.selectionEnd).toBe(9)
+  })
+
+  it('moves focus to the item named by state.activeItems', () => {
+    const folders = [
+      { id: 'a', label: 'apps' },
+      { id: 'b', label: 'src' },
+    ]
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folders,
+          filterExternally: true,
+          activeItems: [folders[1]!],
+          onAccept,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([folders[1]], { ctrl: false, alt: false })
+  })
+
+  it('does not reset focus to the top when only the value changes (filterExternally)', () => {
+    const folders = [
+      { id: 'a', label: 'apps' },
+      { id: 'b', label: 'src' },
+    ]
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: folders, filterExternally: true, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.keyDown(input, { key: 'ArrowDown' }) // focus -> src
+    // The host autocompletes the input as the user types: query changes, items do
+    // not. Focus must stay on `src`, not snap back to the first item.
+    fireEvent.change(input, { target: { value: '/foo/src' } })
+    fireEvent.keyDown(input, { key: 'Enter' })
+    expect(onAccept).toHaveBeenCalledWith([folders[1]], { ctrl: false, alt: false })
+  })
+
+  it('Enter on an empty list falls back to onOk (open a trailing-separator path)', () => {
+    const onOk = vi.fn()
+    const onAccept = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, items: [], filterExternally: true, onOk, onAccept })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('autoFocusFirstItem=false: Enter without a selection opens the path via onOk', () => {
+    const onOk = vi.fn()
+    const onAccept = vi.fn()
+    const folders = [
+      { id: 'a', label: '..' },
+      { id: 'b', label: 'childdir' },
+    ]
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folders,
+          filterExternally: true,
+          autoFocusFirstItem: false,
+          onOk,
+          onAccept,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    // No row is auto-highlighted, so Enter resolves the typed value (the current
+    // folder) rather than acting on a stray first item.
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('autoFocusFirstItem=false: clicking a row still accepts that row', () => {
+    const onAccept = vi.fn()
+    const folders = [
+      { id: 'a', label: '..' },
+      { id: 'b', label: 'childdir' },
+    ]
+    render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folders,
+          filterExternally: true,
+          autoFocusFirstItem: false,
+          keepOpenOnAccept: true,
+          onAccept,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    fireEvent.click(screen.getByRole('option', { name: 'childdir' }))
+    expect(onAccept).toHaveBeenCalledWith([folders[1]], { ctrl: false, alt: false })
+  })
+})

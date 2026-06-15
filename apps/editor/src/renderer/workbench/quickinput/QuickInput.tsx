@@ -50,12 +50,12 @@ export function QuickInputPortal() {
             state={panelState}
             onClose={close}
             renderIcon={(id, size, className) => {
-              const resource = parseResourceIconId(id)
-              if (resource) {
+              const parsed = parseResourceIconId(id)
+              if (parsed) {
                 return (
                   <FileIcon
-                    resource={resource}
-                    isDirectory={false}
+                    resource={parsed.resource}
+                    isDirectory={parsed.isDirectory}
                     size={size}
                     className={className}
                   />

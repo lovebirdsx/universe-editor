@@ -8,13 +8,22 @@
 import { URI } from '@universe-editor/platform'
 
 export const QUICK_PICK_RESOURCE_ICON_PREFIX = 'resource:'
+const DIRECTORY_MARKER = 'dir:'
 
-export function resourceIconId(resource: URI): string {
-  return QUICK_PICK_RESOURCE_ICON_PREFIX + resource.toString()
+export function resourceIconId(resource: URI, isDirectory = false): string {
+  const marker = isDirectory ? DIRECTORY_MARKER : ''
+  return QUICK_PICK_RESOURCE_ICON_PREFIX + marker + resource.toString()
 }
 
-export function parseResourceIconId(iconId: string): URI | undefined {
-  return iconId.startsWith(QUICK_PICK_RESOURCE_ICON_PREFIX)
-    ? URI.parse(iconId.slice(QUICK_PICK_RESOURCE_ICON_PREFIX.length))
-    : undefined
+export function parseResourceIconId(
+  iconId: string,
+): { resource: URI; isDirectory: boolean } | undefined {
+  if (!iconId.startsWith(QUICK_PICK_RESOURCE_ICON_PREFIX)) return undefined
+  let rest = iconId.slice(QUICK_PICK_RESOURCE_ICON_PREFIX.length)
+  let isDirectory = false
+  if (rest.startsWith(DIRECTORY_MARKER)) {
+    isDirectory = true
+    rest = rest.slice(DIRECTORY_MARKER.length)
+  }
+  return { resource: URI.parse(rest), isDirectory }
 }

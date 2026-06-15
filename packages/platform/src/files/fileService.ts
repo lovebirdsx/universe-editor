@@ -53,6 +53,14 @@ export interface IFileService {
   exists(resource: URI): Promise<boolean>
   stat(resource: URI): Promise<IFileStat>
   list(resource: URI): Promise<IDirectoryEntry[]>
+
+  /**
+   * Enumerates the available drive roots (e.g. `['C:', 'D:']`) on Windows. On
+   * other platforms there is a single filesystem root, so this returns `[]`.
+   * Optional: filesystems without the notion of drives may omit it.
+   */
+  listDrives?(): Promise<string[]>
+
   createDirectory(resource: URI): Promise<void>
 
   /**

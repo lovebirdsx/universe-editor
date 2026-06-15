@@ -16,6 +16,7 @@ import {
   type IInputOptions,
   type IPickOptions,
   type IQuickInputService,
+  type IQuickInputButton,
   type IQuickPick,
   type IQuickPickItem,
   type QuickPickInput,
@@ -41,6 +42,17 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
   readonly onDidHide = this._onDidHide.event
   readonly onDidChangeValue = this._onDidChangeValue.event
   readonly onDidChangeActive = this._onDidChangeActive.event
+
+  private readonly _onDidTriggerButton = new Emitter<IQuickInputButton>()
+  private readonly _onDidTriggerOk = new Emitter<void>()
+  readonly onDidTriggerButton = this._onDidTriggerButton.event
+  readonly onDidTriggerOk = this._onDidTriggerOk.event
+  valueSelection: [number, number] | undefined
+  activeItems: readonly T[] = []
+  title: string | undefined
+  buttons: readonly IQuickInputButton[] = []
+  okLabel: string | undefined
+  keepOpenOnAccept = false
 
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[] = []
@@ -79,6 +91,8 @@ class FakeQuickPick<T extends IQuickPickItem> implements IQuickPick<T> {
     this._onDidHide.dispose()
     this._onDidChangeValue.dispose()
     this._onDidChangeActive.dispose()
+    this._onDidTriggerButton.dispose()
+    this._onDidTriggerOk.dispose()
   }
 }
 

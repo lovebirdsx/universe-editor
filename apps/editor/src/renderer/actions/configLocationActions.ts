@@ -7,10 +7,12 @@
 import {
   Action2,
   IDialogService,
+  IFileDialogService,
   IHostService,
   INotificationService,
   MenuId,
   Severity,
+  URI,
   localize,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -33,6 +35,7 @@ export class SetConfigLocationAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const configLocation = accessor.get(IConfigLocationService)
     const dialog = accessor.get(IDialogService)
+    const fileDialog = accessor.get(IFileDialogService)
     const notification = accessor.get(INotificationService)
 
     const info = await configLocation.getInfo()
@@ -47,8 +50,14 @@ export class SetConfigLocationAction extends Action2 {
       return
     }
 
-    const dir = await configLocation.pickConfigDir()
-    if (!dir) return
+    const picked = await fileDialog.showOpenDialog({
+      title: localize('action.setConfigLocation.title', 'Set Config Directory…'),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      ...(info.dir ? { defaultUri: URI.file(info.dir) } : {}),
+    })
+    if (!picked) return
+    const dir = picked.fsPath
     if (dir === info.dir) return
 
     const result = await dialog.confirm({

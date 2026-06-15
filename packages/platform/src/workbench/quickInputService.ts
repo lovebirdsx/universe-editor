@@ -114,6 +114,16 @@ export interface IInputOptions {
   readonly validateInput?: (value: string) => string | undefined
 }
 
+/**
+ * A toolbar button rendered in the quick pick's input row (e.g. the simple file
+ * dialog's "toggle hidden files"). `iconId` is resolved to a concrete icon by the
+ * renderer, same contract as `IQuickPickItem.iconId`.
+ */
+export interface IQuickInputButton {
+  readonly iconId: string
+  readonly tooltip?: string
+}
+
 export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
   placeholder: string | undefined
   items: readonly QuickPickInput<T>[]
@@ -142,6 +152,42 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    * Used while resolving items asynchronously (search results, dynamic completion, ...).
    */
   busy: boolean
+  /**
+   * Controlled cursor / selection in the input box as `[start, end]` offsets.
+   * Used by the simple file dialog to select the autocompleted path segment.
+   * `undefined` leaves the cursor under DOM control. Defaults to undefined.
+   */
+  valueSelection: [number, number] | undefined
+  /**
+   * Programmatically set the active (highlighted) item(s). The panel moves focus
+   * to the first matching item. Used for path autocomplete / directory navigation.
+   * Defaults to [].
+   */
+  activeItems: readonly T[]
+  /** Optional title bar text shown above the input. Defaults to undefined. */
+  title: string | undefined
+  /** Toolbar buttons rendered in the input row. Defaults to []. */
+  buttons: readonly IQuickInputButton[]
+  /**
+   * When set, a confirm button with this label is shown; clicking it accepts the
+   * focused item (same as Enter). Defaults to undefined.
+   */
+  okLabel: string | undefined
+  /**
+   * When true, accepting an item (Enter / click) fires `onDidAccept` but does NOT
+   * dismiss the panel — the consumer owns the lifecycle and calls `hide()` itself.
+   * Used by the simple file dialog, where accepting a folder navigates into it
+   * rather than closing. Defaults to false (accept auto-closes).
+   */
+  keepOpenOnAccept: boolean
+  /**
+   * When false, the list does not auto-highlight the first item as items change;
+   * focus is driven solely by `activeItems` and user arrow/mouse. Used by the
+   * simple file dialog so that Enter on a path with no explicit selection resolves
+   * the typed value (open the folder) instead of acting on a stray first row.
+   * Defaults to true (auto-highlight the first item).
+   */
+  autoFocusFirstItem?: boolean
 
   readonly onDidAccept: Event<T[]>
   readonly onDidHide: Event<void>
@@ -153,6 +199,10 @@ export interface IQuickPick<T extends IQuickPickItem> extends IDisposable {
    * Symbol revealing the symbol as you move through results).
    */
   readonly onDidChangeActive: Event<T | undefined>
+  /** Fires when a toolbar button is triggered. */
+  readonly onDidTriggerButton: Event<IQuickInputButton>
+  /** Fires when the confirm (OK) button is clicked. Distinct from accepting an item. */
+  readonly onDidTriggerOk: Event<void>
 
   show(): void
   hide(): void

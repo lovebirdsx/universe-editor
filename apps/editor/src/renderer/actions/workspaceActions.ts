@@ -6,6 +6,7 @@
 
 import {
   Action2,
+  IFileDialogService,
   IHostService,
   ILifecycleService,
   INotificationService,
@@ -41,6 +42,16 @@ export class OpenFolderAction extends Action2 {
     const lifecycle = accessor.get(ILifecycleService)
     const workspace = accessor.get(IWorkspaceService)
     const progress = accessor.get(IProgressService)
+    const fileDialog = accessor.get(IFileDialogService)
+
+    const folder = await fileDialog.showOpenDialog({
+      title: localize('fileDialog.openFolder.title', 'Open Folder'),
+      canSelectFiles: false,
+      canSelectFolders: true,
+      openLabel: localize('fileDialog.openFolderButton', 'Open'),
+      ...(workspace.current ? { defaultUri: workspace.current.folder } : {}),
+    })
+    if (!folder) return
     if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
     await progress.withProgress(
       {
@@ -48,7 +59,7 @@ export class OpenFolderAction extends Action2 {
         title: localize('progress.openFolder', 'Opening folder…'),
         source: 'workspace',
       },
-      () => workspace.openFolder(),
+      () => workspace.openFolder(folder),
     )
   }
 }
