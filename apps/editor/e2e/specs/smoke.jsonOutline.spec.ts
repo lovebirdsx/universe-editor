@@ -14,7 +14,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { test, expect } from '../fixtures/sharedApp.js'
+import { test, expect } from '../fixtures/electronApp.js'
 
 function writeWorkspace(): { dir: string; jsonPath: string } {
   const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-jsonoutline-'))

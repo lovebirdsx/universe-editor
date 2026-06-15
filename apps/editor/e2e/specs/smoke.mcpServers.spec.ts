@@ -14,7 +14,7 @@
 
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { test, expect } from '../fixtures/sharedApp.js'
+import { test, expect } from '../fixtures/electronApp.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const MCP_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'mcpAgent.cjs')

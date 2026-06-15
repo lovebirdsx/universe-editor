@@ -214,6 +214,12 @@ export class AcpClientService extends Disposable implements IAcpClientService {
    *  concurrent `connect()` calls share the same spawn. On creation failure
    *  the catch handler evicts the entry. */
   private readonly _pool = new Map<string, Promise<PoolEntry>>()
+  /** Resolved spawn handles still alive, tracked synchronously so a window
+   *  reload's `beforeunload` can kill the child processes without awaiting the
+   *  Promise-keyed `_pool`. Without this, a reload orphans every agent child
+   *  (main holds their stdin open) until app quit — they pile up across the
+   *  shared-app E2E suite and starve later spawns. */
+  private readonly _liveHandles = new Set<string>()
   private readonly _entriesStore = this._register(new DisposableStore())
   private _sink: IAcpClientNotificationSink | undefined
   private _protocolChannel: IOutputChannel | undefined
@@ -241,6 +247,25 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       name: 'ACP Protocol',
     })
     this._platform = hostService.platform
+
+    // A window reload destroys this renderer without disposing its services
+    // (that's what the leak detector watches for), so the async dispose() path
+    // below never runs on reload. Synchronously stop every live child here:
+    // ProxyChannel dispatches host.stop via ipcRenderer.send before teardown,
+    // so main reaps the processes instead of leaking them until app quit.
+    if (typeof window !== 'undefined') {
+      const onBeforeUnload = (): void => {
+        for (const handle of this._liveHandles) {
+          void this._host.stop(handle).catch(() => {
+            // best-effort — the renderer is going away
+          })
+        }
+      }
+      window.addEventListener('beforeunload', onBeforeUnload)
+      this._register({
+        dispose: () => window.removeEventListener('beforeunload', onBeforeUnload),
+      })
+    }
   }
 
   override dispose(): void {
@@ -265,6 +290,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       )
     }
     this._pool.clear()
+    this._liveHandles.clear()
     super.dispose()
   }
 
@@ -460,6 +486,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     }
     this._logger.info(`spawned agent=${agentId} handle=${handle} cwd=${cwd || '<none>'}`)
     this._telemetry.publicLog('acp.spawned', { agentId })
+    this._liveHandles.add(handle)
 
     const stderr = this._output.createChannel(`acp/${agentId}/${handle}`)
     const entryStore = new DisposableStore()
@@ -478,7 +505,10 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     )
     entryStore.add(
       this._host.onExit((evt) => {
-        if (evt.handle === handle) lastExit = evt
+        if (evt.handle === handle) {
+          lastExit = evt
+          this._liveHandles.delete(handle)
+        }
       }),
     )
     const terminalsBySession = new Map<string, Set<string>>()
@@ -711,6 +741,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     void this._host.stop(entry.handle).catch(() => {
       // best-effort
     })
+    this._liveHandles.delete(entry.handle)
     this._entriesStore.delete(entry.entryStore)
     try {
       entry.stderr.dispose()

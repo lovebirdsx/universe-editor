@@ -1,11 +1,15 @@
 /*---------------------------------------------------------------------------------------------
- *  Regression test: HostConnection must be _register-ed in ExtensionHostClientService
- *  so that service.dispose() cascades the release. A connection that is only stored in
- *  _byHandle (Map) but not in the Disposable _store would be silently leaked at shutdown.
+ *  ExtensionHostClientService regressions:
+ *  1. HostConnection must be _register-ed so service.dispose() cascades the release.
+ *     A connection only stored in _byHandle (Map) would be silently leaked at shutdown.
+ *  2. A workspace-swap restart must re-emit the merged contributions via
+ *     onDidChangeContributions, so the translator can re-register contributed commands
+ *     that a restart racing the initial boot would otherwise drop.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it, vi } from 'vitest'
 import {
+  Emitter,
   Event,
   type IAiModelService,
   type ICommandService,
@@ -19,22 +23,43 @@ import {
   type IStatusBarService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
+import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
 import type { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 import type { IScmService } from '../ScmService.js'
 
-// Replace HostConnection with a minimal tracked fake so we can assert disposal
-// without relying on prototype-chain spy interception of inherited Disposable.dispose.
+const CONTRIBUTIONS: IExtensionDescriptionDto[] = [
+  {
+    id: 'universe.ai',
+    name: 'ai',
+    activationEvents: ['onCommand:ai.generateCommitMessage'],
+    contributes: { commands: [{ command: 'ai.generateCommitMessage', title: 'Generate' }] },
+  },
+]
+
+// Replace HostConnection with a minimal tracked fake so we can assert disposal +
+// drive the restart path without prototype-chain spying on inherited Disposable.dispose.
 const disposed: string[] = []
 vi.mock('../HostConnection.js', () => {
   class FakeHostConnection {
-    commands = {}
-    extensions = { $getContributions: vi.fn().mockResolvedValue([]) }
-    readonly dead = false
-    markDead(): void {}
+    readonly kind: string
+    readonly handle: string
+    dead = false
+    commands = { $executeContributedCommand: vi.fn().mockResolvedValue(undefined) }
+    extensions = {
+      $getContributions: vi.fn().mockResolvedValue(CONTRIBUTIONS),
+      $activateByEvent: vi.fn().mockResolvedValue(undefined),
+    }
+    constructor(kind: string, handle: string) {
+      this.kind = kind
+      this.handle = handle
+    }
+    markDead(): void {
+      this.dead = true
+    }
     dispose(): void {
-      disposed.push('disposed')
+      disposed.push(this.handle)
     }
   }
   return { HostConnection: FakeHostConnection }
@@ -43,18 +68,19 @@ vi.mock('../HostConnection.js', () => {
 const { ExtensionHostClientService } = await import('../ExtensionHostClientService.js')
 
 function fakeHost(): IExtensionHostService {
+  let n = 0
   return {
     onExit: Event.None,
     onStdout: Event.None,
     onStderr: Event.None,
-    start: vi.fn().mockResolvedValue({ handle: 'h1' }),
+    start: vi.fn().mockImplementation(() => Promise.resolve({ handle: `h${++n}` })),
     hasUserExtensions: vi.fn().mockResolvedValue(false),
     writeStdin: vi.fn().mockResolvedValue(undefined),
     stop: vi.fn().mockResolvedValue(undefined),
   } as unknown as IExtensionHostService
 }
 
-function makeService(host: IExtensionHostService) {
+function makeService(host: IExtensionHostService, workspaceChange = Event.None) {
   const nullLogger = {
     info: vi.fn(),
     warn: vi.fn(),
@@ -70,9 +96,9 @@ function makeService(host: IExtensionHostService) {
     {} as IQuickInputService,
     {} as IStatusBarService,
     {} as IDialogService,
-    {} as IScmService,
+    { resetSourceControls: vi.fn() } as unknown as IScmService,
     {
-      onDidChangeWorkspace: Event.None,
+      onDidChangeWorkspace: workspaceChange,
       whenReady: Promise.resolve(),
       current: undefined,
     } as unknown as IWorkspaceService,
@@ -97,5 +123,28 @@ describe('ExtensionHostClientService', () => {
 
     svc.dispose()
     expect(disposed).toHaveLength(1)
+  })
+
+  it('re-emits contributions after a workspace-swap restart', async () => {
+    disposed.length = 0
+    const host = fakeHost()
+    const workspaceChange = new Emitter<void>()
+    const svc = makeService(host, workspaceChange.event)
+
+    await svc.start()
+    const seen: (readonly IExtensionDescriptionDto[])[] = []
+    svc.onDidChangeContributions((c) => seen.push(c))
+
+    workspaceChange.fire()
+    // Let the async restart chain (stop → relaunch → fetch → emit) settle.
+    await vi.waitFor(() => expect(seen).toHaveLength(1))
+
+    expect(seen[0]).toEqual(CONTRIBUTIONS)
+    // The old trusted connection was torn down and a fresh one launched.
+    expect(disposed).toContain('h1')
+    expect(host.stop).toHaveBeenCalledWith('h1')
+    expect(host.start).toHaveBeenCalledTimes(2)
+
+    svc.dispose()
   })
 })

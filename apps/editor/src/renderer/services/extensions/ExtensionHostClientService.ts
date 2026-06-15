@@ -15,6 +15,7 @@
 import {
   createDecorator,
   Disposable,
+  Emitter,
   IAiModelService,
   ICommandService,
   IDialogService,
@@ -27,6 +28,7 @@ import {
   IStatusBarService,
   IWorkspaceService,
   Severity,
+  type Event,
   type ILogger,
 } from '@universe-editor/platform'
 import {
@@ -53,6 +55,13 @@ export interface IExtensionHostClientService {
   start(): Promise<void>
   /** All scanned extensions' static contributions across both tiers, for the translator. */
   getContributions(): Promise<IExtensionDescriptionDto[]>
+  /**
+   * Fires the merged static contributions whenever the live host set changes —
+   * i.e. after a tier is relaunched (workspace swap or crash recovery). The
+   * translator re-applies them so contributed commands survive a restart that
+   * raced the initial boot's one-shot translation.
+   */
+  readonly onDidChangeContributions: Event<readonly IExtensionDescriptionDto[]>
   /** Activate every extension whose activationEvents match `event`, in both tiers. */
   activateByEvent(event: string): Promise<void>
   /** Execute a command contributed by an activated extension, via its owning tier. */
@@ -90,6 +99,12 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private readonly _byHandle = new Map<string, HostConnection>()
   /** Contributed-command id → owning connection. */
   private readonly _commandOwner = new Map<string, HostConnection>()
+  /** Per-handle static contributions, so a restart can re-emit the merged set. */
+  private readonly _contributionsByHandle = new Map<string, readonly IExtensionDescriptionDto[]>()
+  private readonly _onDidChangeContributions = this._register(
+    new Emitter<readonly IExtensionDescriptionDto[]>(),
+  )
+  readonly onDidChangeContributions = this._onDidChangeContributions.event
   /** Handles we asked to stop (planned restarts) — their exit must not trigger crash handling. */
   private readonly _stopping = new Set<string>()
   private readonly _restartState: Record<ExtHostKind, RestartState> = {
@@ -118,6 +133,27 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
     this._register(this._host.onExit((evt) => this._onHostExit(evt)))
     this._register(this._workspace.onDidChangeWorkspace(() => void this._onWorkspaceChanged()))
+
+    // A window reload destroys this renderer without disposing its services, so
+    // the async dispose() path never runs on reload. Synchronously stop every
+    // live host child here: ProxyChannel dispatches host.stop via
+    // ipcRenderer.send before teardown, so main reaps the (heavy — the
+    // typescript plugin self-spawns tsserver) processes instead of orphaning a
+    // fresh trusted host on every reload. Across the shared-app E2E suite those
+    // orphans pile up and starve later spawns (ACP initialize, etc.).
+    if (typeof window !== 'undefined') {
+      const onBeforeUnload = (): void => {
+        for (const handle of this._byHandle.keys()) {
+          void this._host.stop(handle).catch(() => {
+            // best-effort — the renderer is going away
+          })
+        }
+      }
+      window.addEventListener('beforeunload', onBeforeUnload)
+      this._register({
+        dispose: () => window.removeEventListener('beforeunload', onBeforeUnload),
+      })
+    }
   }
 
   start(): Promise<void> {
@@ -214,12 +250,20 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   /** Fetch a connection's contributions and record which tier owns each command. */
   private async _fetchAndIndex(conn: HostConnection): Promise<IExtensionDescriptionDto[]> {
     const list = await conn.extensions.$getContributions()
+    this._contributionsByHandle.set(conn.handle, list)
     for (const ext of list) {
       for (const command of ext.contributes.commands ?? []) {
         this._commandOwner.set(command.command, conn)
       }
     }
     return list
+  }
+
+  /** Merged contributions across every live tier, from the per-handle cache. */
+  private _mergedContributions(): IExtensionDescriptionDto[] {
+    return this._liveConnections().flatMap((c) => [
+      ...(this._contributionsByHandle.get(c.handle) ?? []),
+    ])
   }
 
   async activateByEvent(event: string): Promise<void> {
@@ -272,6 +316,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private _teardownConnection(conn: HostConnection): void {
     conn.markDead()
     this._byHandle.delete(conn.handle)
+    this._contributionsByHandle.delete(conn.handle)
     for (const [id, owner] of this._commandOwner) {
       if (owner === conn) this._commandOwner.delete(id)
     }
@@ -358,6 +403,11 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     const conn = kind === 'trusted' ? this._trusted : this._restricted
     if (!conn) return
     await this._fetchAndIndex(conn)
+    // Re-translate before activation: the new host's commands must be back in the
+    // core registries before any onCommand proxy can be hit. This also recovers
+    // the case where a workspace swap raced — and aborted — the initial boot's
+    // one-shot translation, leaving contributed commands unregistered.
+    this._onDidChangeContributions.fire(this._mergedContributions())
     await conn.extensions.$activateByEvent(STARTUP_ACTIVATION)
     await conn.extensions.$activateByEvent(STARTUP_FINISHED_ACTIVATION)
     this._logger.info(`${kind} extension host restarted (${reason})`)
