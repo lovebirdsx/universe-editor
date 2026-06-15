@@ -145,16 +145,27 @@ export function parseMarkdown(input: string): readonly MdNode[] {
     }
 
     // Lists — homogeneous run of `- ` / `* ` / `+ ` (unordered) or `<n>. `
-    // (ordered) lines. A blank line ends the list.
+    // (ordered) lines. Blank lines between same-kind items make a loose list.
     const ul = /^\s*[-*+]\s+(.*)$/.exec(line)
     const ol = /^\s*\d+\.\s+(.*)$/.exec(line)
     if (ul || ol) {
       const ordered = !!ol
+      const itemPattern = ordered ? /^\s*\d+\.\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/
       const items: { inline: MdInline[]; checked: boolean | null }[] = []
       while (i < lines.length) {
         const cur = lines[i] ?? ''
-        const m = ordered ? /^\s*\d+\.\s+(.*)$/.exec(cur) : /^\s*[-*+]\s+(.*)$/.exec(cur)
-        if (!m) break
+        const m = itemPattern.exec(cur)
+        if (!m) {
+          if (cur.trim() === '') {
+            let next = i + 1
+            while (next < lines.length && (lines[next] ?? '').trim() === '') next++
+            if (next < lines.length && itemPattern.test(lines[next] ?? '')) {
+              i = next
+              continue
+            }
+          }
+          break
+        }
         const rawText = m[1] ?? ''
         const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(rawText)
         if (taskMatch) {

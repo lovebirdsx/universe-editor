@@ -101,7 +101,22 @@ describe('parseMarkdown — block layer', () => {
     ])
   })
 
-  it('ends a list at the first blank line', () => {
+  it('keeps loose ordered lists as one list', () => {
+    expect(parseMarkdown('1. a\n\n2. b\n\n3. c')).toEqual<readonly MdNode[]>([
+      {
+        type: 'list',
+        ordered: true,
+        items: [
+          { inline: [text('a')], checked: null },
+          { inline: [text('b')], checked: null },
+          { inline: [text('c')], checked: null },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
+  it('ends a list when a blank line is not followed by another list item', () => {
     const md = '- a\n- b\n\nparagraph'
     const nodes = parseMarkdown(md)
     expect(nodes).toHaveLength(2)

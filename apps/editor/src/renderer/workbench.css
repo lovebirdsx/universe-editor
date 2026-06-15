@@ -26,6 +26,7 @@ html, body, #root {
   /* Base */
   --color-background: #1a1a1c;
   --color-foreground: #c8c8c8;
+  --color-foreground-bright: #ffffff;
   --color-foreground-muted: #8a8a92;
   --color-border: #0f0f11;
   --color-focus-border: #0070e0;
@@ -199,6 +200,7 @@ html, body, #root {
 :root[data-theme='light'] {
   --color-background: #f4f4f5;
   --color-foreground: #24262b;
+  --color-foreground-bright: #111318;
   --color-foreground-muted: #666b76;
   --color-border: #d6d8de;
   --color-focus-border: #0067c0;
@@ -460,6 +462,5 @@ html, body, #root {
   opacity: 1;
   text-decoration: underline;
 }
-
 
 

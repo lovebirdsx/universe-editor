@@ -78,8 +78,10 @@ describe('MarkdownView', () => {
   })
 
   it('renders ordered and unordered lists', () => {
-    renderMarkdown('- a\n- b')
-    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    const { container } = renderMarkdown('1. a\n\n2. b\n\n3. c\n\n- x\n- y')
+    expect(container.querySelector('ol')).toBeTruthy()
+    expect(container.querySelector('ul')).toBeTruthy()
+    expect(screen.getAllByRole('listitem')).toHaveLength(5)
   })
 
   it('renders a code fence with a language attribute', () => {

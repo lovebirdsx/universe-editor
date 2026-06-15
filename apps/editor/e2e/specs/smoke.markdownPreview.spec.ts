@@ -16,7 +16,7 @@ import { test, expect } from '../fixtures/electronApp.js'
 function writeTempMarkdown(): string {
   const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
   const file = join(dir, 'note.md')
-  writeFileSync(file, '# Title\n\nsome **bold** text\n')
+  writeFileSync(file, '# Title\n\nsome **bold** text\n\n1. Alpha\n\n2. Beta\n\n3. Gamma\n')
   return file.replace(/\\/g, '/')
 }
 
@@ -98,6 +98,52 @@ test.describe('@p1 markdown preview', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
       .toBe('markdown.preview')
+  })
+
+  test('Light theme keeps headings and ordered lists readable in preview', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    await page.evaluate(() => window.__E2E__!.updateConfigValue('workbench.colorTheme', 'light'))
+    await expect
+      .poll(() => page.evaluate(() => document.documentElement.dataset.theme))
+      .toBe('light')
+
+    const mdFsPath = writeTempMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    const styles = await page.evaluate(() => {
+      const preview = document.querySelector('[data-testid="markdown-preview"]')
+      const heading = preview?.querySelector('h1')
+      const strong = preview?.querySelector('strong')
+      const ol = preview?.querySelector('ol')
+      const items = Array.from(ol?.querySelectorAll('li') ?? [])
+      return {
+        headingColor: heading ? getComputedStyle(heading).color : '',
+        strongColor: strong ? getComputedStyle(strong).color : '',
+        olDisplay: ol ? getComputedStyle(ol).display : '',
+        liDisplays: items.map((item) => getComputedStyle(item).display),
+        listStyleTypes: items.map((item) => getComputedStyle(item).listStyleType),
+      }
+    })
+
+    expect(styles.headingColor).toBe('rgb(17, 19, 24)')
+    expect(styles.strongColor).toBe('rgb(17, 19, 24)')
+    expect(styles.olDisplay).toBe('block')
+    expect(styles.liDisplays).toEqual(['list-item', 'list-item', 'list-item'])
+    expect(styles.listStyleTypes).toEqual(['decimal', 'decimal', 'decimal'])
   })
 
   test('Outline stays populated after switching to preview', async ({ page, workbench }) => {
