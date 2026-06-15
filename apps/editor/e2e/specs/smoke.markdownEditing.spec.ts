@@ -126,6 +126,24 @@ test.describe('@p1 markdown editing commands', () => {
       command: 'markdown.editing.toggleBold',
     }).toBe('hello world')
 
+    // Toggle off with an empty cursor anywhere inside the wrapped span.
+    await expectEdit(workbench, {
+      text: '*hello, world*',
+      selection: [1, 11, 1, 11],
+      command: 'markdown.editing.toggleItalic',
+    }).toBe('hello, world')
+
+    await expectEdit(workbench, {
+      text: '*hello, world*',
+      selection: [1, 9, 1, 14],
+      command: 'markdown.editing.toggleItalic',
+    }).toBe('hello, world')
+
+    await workbench.setActiveEditorText('*hello, world*')
+    await workbench.setActiveEditorCursor(1, 11)
+    await page.keyboard.press('Control+I')
+    await expect.poll(() => workbench.getActiveEditorText()).toBe('hello, world')
+
     // ---- B4: heading level up / down -----------------------------------------
     await expectEdit(workbench, {
       text: 'title',

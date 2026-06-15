@@ -64,6 +64,42 @@ describe('toggleDelimiter', () => {
     expect(apply(lines, r)).toEqual(['*hello* world'])
   })
 
+  it.each([
+    ['bold', '**', '**hello, world**'],
+    ['italic', '*', '*hello, world*'],
+    ['inline code', '`', '`hello, world`'],
+    ['strikethrough', '~~', '~~hello, world~~'],
+    ['math', '$', '$hello, world$'],
+  ])('unwraps an enclosing %s span under an empty cursor', (_, delim, line) => {
+    const lines = [line]
+    const r = toggleDelimiter(lines, [sel(0, line.indexOf('world') + 2)], delim)
+    expect(apply(lines, r)).toEqual(['hello, world'])
+  })
+
+  it('unwraps an enclosing span when the selection is inside it', () => {
+    const lines = ['*hello, world*']
+    const r = toggleDelimiter(lines, [sel(0, 8, 0, 13)], '*')
+    expect(apply(lines, r)).toEqual(['hello, world'])
+  })
+
+  it('does not unwrap across separate spans', () => {
+    const lines = ['*one* plain *two*']
+    const r = toggleDelimiter(lines, [sel(0, 7)], '*')
+    expect(apply(lines, r)).toEqual(['*one* *plain* *two*'])
+  })
+
+  it('unwraps italic inside a `*` bullet list item without mistaking the bullet', () => {
+    const lines = ['* *hello, world*']
+    const r = toggleDelimiter(lines, [sel(0, 13)], '*')
+    expect(apply(lines, r)).toEqual(['* hello, world'])
+  })
+
+  it('wraps a word in a `*` bullet list item without mistaking the bullet', () => {
+    const lines = ['* hello world']
+    const r = toggleDelimiter(lines, [sel(0, 4)], '*')
+    expect(apply(lines, r)).toEqual(['* *hello* world'])
+  })
+
   it('inserts an empty pair when there is no word', () => {
     const lines = ['  ']
     const r = toggleDelimiter(lines, [sel(0, 1)], '`')
