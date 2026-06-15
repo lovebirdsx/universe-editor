@@ -5,23 +5,39 @@
 
 type Listener = () => void
 
+function normalizeModelText(initial: string): string {
+  const crlf = initial.match(/\r\n/g)?.length ?? 0
+  const lf = initial.match(/(?<!\r)\n/g)?.length ?? 0
+  const cr = initial.match(/\r(?!\n)/g)?.length ?? 0
+  const total = crlf + lf + cr
+  if (total === 0) return initial
+  const eol = cr + crlf > total / 2 ? '\r\n' : '\n'
+  return initial.replace(/\r\n|\r|\n/g, eol)
+}
+
 function makeModel(initial: string, language: string, uri: unknown) {
-  let value = initial
+  let value = normalizeModelText(initial)
+  let versionId = 1
   const listeners = new Set<Listener>()
-  const lines = () => value.split('\n')
+  const lines = () => value.split(/\r\n|\r|\n/)
   return {
     uri,
     getValue: () => value,
+    getVersionId: () => versionId,
+    getAlternativeVersionId: () => versionId,
     setValue: (next: string) => {
-      if (next === value) return
-      value = next
+      const normalized = normalizeModelText(next)
+      if (normalized === value) return
+      value = normalized
+      versionId++
       for (const l of listeners) l()
     },
     getLanguageId: () => language,
     getLineCount: () => lines().length,
     getLineContent: (n: number) => lines()[n - 1] ?? '',
     applyEdits: (edits: Array<{ text: string }>) => {
-      for (const e of edits) value += e.text
+      for (const e of edits) value += normalizeModelText(e.text)
+      versionId++
       for (const l of listeners) l()
     },
     onDidChangeContent: (cb: Listener) => {

@@ -323,7 +323,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
 
       // Initialise dirty state: covers hot-exit restore (pending dirty content)
       // and shared models that are already dirty in another split.
-      fileInput.setDirty(model.getValue() !== fileInput.backupContent)
+      fileInput.updateDirtyFromModel(model)
 
       // Restore previously saved viewState (cursor, selection, scroll).
       if (groupId !== undefined && editorRef.current) {
@@ -361,7 +361,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       }
 
       contentSub = model.onDidChangeContent(() => {
-        fileInput.setDirty(model.getValue() !== fileInput.backupContent)
+        fileInput.updateDirtyFromModel(model)
         // First edit upgrades a preview tab to pinned. pinEditor is a no-op
         // when the input isn't currently the group's preview slot.
         for (const g of groupsService.groups) {

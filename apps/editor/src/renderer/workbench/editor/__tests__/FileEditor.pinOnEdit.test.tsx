@@ -15,15 +15,31 @@ const monacoMockState = vi.hoisted(() => ({
 }))
 
 vi.mock('../monaco/MonacoLoader.js', () => {
+  const normalizeModelText = (initial: string) => {
+    const text = initial.startsWith('\uFEFF') ? initial.slice(1) : initial
+    const crlf = text.match(/\r\n/g)?.length ?? 0
+    const lf = text.match(/(?<!\r)\n/g)?.length ?? 0
+    const cr = text.match(/\r(?!\n)/g)?.length ?? 0
+    const total = crlf + lf + cr
+    if (total === 0) return text
+    const eol = cr + crlf > total / 2 ? '\r\n' : '\n'
+    return text.replace(/\r\n|\r|\n/g, eol)
+  }
+
   const makeModel = (initial: string, language: string, uri: unknown) => {
-    let value = initial.startsWith('\uFEFF') ? initial.slice(1) : initial
+    let value = normalizeModelText(initial)
+    let alternativeVersionId = 1
     const listeners = new Set<() => void>()
     return {
       uri,
       getValue: () => value,
+      getVersionId: () => alternativeVersionId,
+      getAlternativeVersionId: () => alternativeVersionId,
       setValue: (next: string) => {
-        if (next === value) return
-        value = next
+        const normalized = normalizeModelText(next)
+        if (normalized === value) return
+        value = normalized
+        alternativeVersionId++
         for (const listener of listeners) listener()
       },
       getLanguageId: () => language,
@@ -249,6 +265,34 @@ describe('FileEditor — auto-pin on first edit', () => {
     })
     expect(MonacoModelRegistry.peek(input.resource)?.getValue()).toBe('body')
     expect(input.backupContent).toBe('body')
+    expect(input.isDirty).toBe(false)
+  })
+
+  it('does not mark a mixed-EOL file dirty on open', async () => {
+    const mixed = 'a\r\nb\nc\r\nd\ne\r\n'
+    const services = new ServiceCollection()
+    services.set(IFileService, makeFs(mixed))
+    services.set(ICommandService, {
+      _serviceBrand: undefined,
+      executeCommand: async () => undefined,
+    } as never)
+    services.set(IConfigurationService, new FakeConfigurationService() as never)
+    services.set(IContextKeyService, new ContextKeyService())
+    const inst = new InstantiationService(services)
+    const input = inst.createInstance(FileEditorInput, URI.file('/ws/mixed.md'))
+    services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
+    services.set(IOutlineService, makeOutlineStub() as never)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <FileEditor input={input} />
+      </ServicesContext.Provider>,
+    )
+
+    await vi.waitFor(() => {
+      expect(monacoMockState.registerCount).toBeGreaterThan(0)
+    })
+    expect(MonacoModelRegistry.peek(input.resource)?.getValue()).toBe('a\r\nb\r\nc\r\nd\r\ne\r\n')
     expect(input.isDirty).toBe(false)
   })
 

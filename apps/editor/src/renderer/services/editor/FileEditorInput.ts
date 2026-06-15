@@ -46,6 +46,8 @@ export class FileEditorInput extends EditorInput {
   private _isReadonly = false
   private _hasLeadingBom = false
   private _modelRefAcquired = false
+  /** VSCode-style clean model version; avoids false dirty from Monaco EOL normalization. */
+  private _savedAlternativeVersionId: number | undefined
 
   constructor(
     private readonly _resource: URI,
@@ -94,6 +96,7 @@ export class FileEditorInput extends EditorInput {
     const content = splitLeadingBom(diskText)
     this._hasLeadingBom = content.hadBom
     this._backupContent = content.text
+    this._savedAlternativeVersionId = undefined
     this._resolved = true
     await this._refreshMtime()
     if (this._pendingDirtyContent !== undefined) {
@@ -110,9 +113,13 @@ export class FileEditorInput extends EditorInput {
       if (existing) return existing
       this._modelRefAcquired = false
     }
+    const hadPendingDirtyContent = this._pendingDirtyContent !== undefined
     const text = await this.resolve().catch(() => '')
     const model = MonacoModelRegistry.acquire(this._resource, text)
     this._modelRefAcquired = true
+    if (!hadPendingDirtyContent) {
+      this.markModelClean(model)
+    }
     return model
   }
 
@@ -142,8 +149,7 @@ export class FileEditorInput extends EditorInput {
     if (!model) return true
     const text = model.getValue()
     await this._fileService.writeFile(this._resource, this._hasLeadingBom ? UTF8_BOM + text : text)
-    this._backupContent = text
-    this.setDirty(false)
+    this.markModelClean(model)
     await this._refreshMtime()
     return true
   }
@@ -155,7 +161,21 @@ export class FileEditorInput extends EditorInput {
       return
     }
     model.setValue(this._backupContent)
+    this.markModelClean(model)
+  }
+
+  markModelClean(model: monaco.editor.ITextModel): void {
+    this._backupContent = model.getValue()
+    this._savedAlternativeVersionId = model.getAlternativeVersionId()
     this.setDirty(false)
+  }
+
+  updateDirtyFromModel(model: monaco.editor.ITextModel): void {
+    if (this._savedAlternativeVersionId !== undefined) {
+      this.setDirty(model.getAlternativeVersionId() !== this._savedAlternativeVersionId)
+      return
+    }
+    this.setDirty(model.getValue() !== this._backupContent)
   }
 
   /**
@@ -181,8 +201,14 @@ export class FileEditorInput extends EditorInput {
     if (!this.isDirty) {
       this._hasLeadingBom = content.hadBom
       this._backupContent = content.text
+      this._savedAlternativeVersionId = undefined
       this._lastKnownMtime = stat.mtime
-      if (model && model.getValue() !== content.text) model.setValue(content.text)
+      if (model) {
+        if (model.getValue() !== content.text) model.setValue(content.text)
+        this.markModelClean(model)
+      } else {
+        this.setDirty(false)
+      }
       return 'reloaded'
     }
 
@@ -196,9 +222,14 @@ export class FileEditorInput extends EditorInput {
     if (result.confirmed) {
       this._hasLeadingBom = content.hadBom
       this._backupContent = content.text
+      this._savedAlternativeVersionId = undefined
       this._lastKnownMtime = stat.mtime
-      if (model) model.setValue(content.text)
-      this.setDirty(false)
+      if (model) {
+        model.setValue(content.text)
+        this.markModelClean(model)
+      } else {
+        this.setDirty(false)
+      }
       return 'reloaded'
     }
     return 'kept'

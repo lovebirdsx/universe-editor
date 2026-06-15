@@ -20,13 +20,17 @@ vi.mock('../monaco/MonacoLoader.js', () => {
 
   function makeModel(initial: string, language: string, uri: unknown) {
     let value = initial
+    let alternativeVersionId = 1
     const listeners = new Set<Listener>()
     return {
       uri,
       getValue: () => value,
+      getVersionId: () => alternativeVersionId,
+      getAlternativeVersionId: () => alternativeVersionId,
       setValue: (next: string) => {
         if (next === value) return
         value = next
+        alternativeVersionId++
         for (const listener of listeners) listener()
       },
       getLanguageId: () => language,
