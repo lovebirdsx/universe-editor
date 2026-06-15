@@ -30,6 +30,10 @@ import {
   ToggleMaximizedPanelAction,
   ToggleSecondarySidebarVisibilityAction,
   ToggleSidebarVisibilityAction,
+  IncreaseViewWidthAction,
+  DecreaseViewWidthAction,
+  IncreaseViewHeightAction,
+  DecreaseViewHeightAction,
 } from './layoutActions.js'
 import {
   CloseActiveEditorAction,
@@ -229,6 +233,10 @@ registerAction2(ToggleSidebarVisibilityAction)
 registerAction2(ToggleSecondarySidebarVisibilityAction)
 registerAction2(TogglePanelAction)
 registerAction2(ToggleMaximizedPanelAction)
+registerAction2(IncreaseViewWidthAction)
+registerAction2(DecreaseViewWidthAction)
+registerAction2(IncreaseViewHeightAction)
+registerAction2(DecreaseViewHeightAction)
 registerAction2(ShowCommandsAction)
 registerAction2(ShowExplorerAction)
 registerAction2(ShowScmAction)

@@ -725,7 +725,7 @@ export class MoveEditorToLeftGroupAction extends Action2 {
       id: MoveEditorToLeftGroupAction.ID,
       title: localize('action.moveEditorToLeftGroup.title', 'Move Editor into Left Group'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+shift+alt+left' },
+      keybinding: { primary: ['ctrl+k', 'ctrl+shift+left'] },
       precondition: 'hasActiveEditor',
       f1: true,
     })
@@ -742,7 +742,7 @@ export class MoveEditorToRightGroupAction extends Action2 {
       id: MoveEditorToRightGroupAction.ID,
       title: localize('action.moveEditorToRightGroup.title', 'Move Editor into Right Group'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+shift+alt+right' },
+      keybinding: { primary: ['ctrl+k', 'ctrl+shift+right'] },
       precondition: 'hasActiveEditor',
       f1: true,
     })
@@ -759,7 +759,7 @@ export class MoveEditorToAboveGroupAction extends Action2 {
       id: MoveEditorToAboveGroupAction.ID,
       title: localize('action.moveEditorToAboveGroup.title', 'Move Editor into Above Group'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+shift+alt+up' },
+      keybinding: { primary: ['ctrl+k', 'ctrl+shift+up'] },
       precondition: 'hasActiveEditor',
       f1: true,
     })
@@ -776,7 +776,7 @@ export class MoveEditorToBelowGroupAction extends Action2 {
       id: MoveEditorToBelowGroupAction.ID,
       title: localize('action.moveEditorToBelowGroup.title', 'Move Editor into Below Group'),
       category: localize('command.category.view', 'View'),
-      keybinding: { primary: 'ctrl+shift+alt+down' },
+      keybinding: { primary: ['ctrl+k', 'ctrl+shift+down'] },
       precondition: 'hasActiveEditor',
       f1: true,
     })

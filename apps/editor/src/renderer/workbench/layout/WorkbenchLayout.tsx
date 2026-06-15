@@ -5,6 +5,12 @@ import type { LayoutSizes } from '@universe-editor/platform'
 import styles from './WorkbenchLayout.module.css'
 import './allotment-theme.css'
 import { computeResizeAfterSecondaryToggle } from '../../services/layout/resizeUtils.js'
+import {
+  SIDEBAR_MIN,
+  SIDEBAR_MAX,
+  PANEL_MIN,
+  PANEL_MAX,
+} from '../../services/layout/layoutConstraints.js'
 
 interface WorkbenchLayoutProps {
   titlebar: ReactNode
@@ -25,11 +31,6 @@ interface WorkbenchLayoutProps {
   onPanelResize: (px: number) => void
 }
 
-const SIDEBAR_MIN = 170
-const SIDEBAR_MAX = 600
-const PANEL_MIN = 100
-const PANEL_MAX = 800
-
 export function WorkbenchLayout({
   titlebar,
   activitybar,
@@ -49,6 +50,7 @@ export function WorkbenchLayout({
   onPanelResize,
 }: WorkbenchLayoutProps) {
   const allotmentRef = useRef<AllotmentHandle>(null)
+  const verticalAllotmentRef = useRef<AllotmentHandle>(null)
   // Maximizing the panel hides the editor pane so the panel fills the center
   // column (mirrors VSCode's "Maximize Panel Size"). Only meaningful while the
   // panel is actually visible.
@@ -64,6 +66,8 @@ export function WorkbenchLayout({
 
   // Track live [sidebar, editor, secondary] sizes reported by Allotment.
   const currentSizesRef = useRef<[number, number, number]>([sizes.sidebar, 0, 0])
+  // Track live [editor, panel] sizes reported by the vertical Allotment.
+  const currentVerticalRef = useRef<[number, number]>([0, sizes.panel])
 
   // When secondarySidebarVisible changes, capture the pre-change sizes so
   // we can override Allotment's redistribution (which gives freed space to
@@ -88,9 +92,16 @@ export function WorkbenchLayout({
   // While maximized the panel's height is the whole column, not the user's
   // chosen size — never persist it, or restoring would lose the real size.
   const panelMaximizedRef = useRef(panelMaximized)
+  // Visibility read inside the keyboard-resize effects via refs, so those
+  // effects can depend only on the size values (a pure visibility toggle must
+  // not trigger them — that case is owned by the secondary-toggle effect below).
+  const sidebarVisibleRef = useRef(sidebarVisible)
+  const secondarySidebarVisibleRef = useRef(secondarySidebarVisible)
   panelVisibleRef.current = panelVisible
   onPanelResizeRef.current = onPanelResize
   panelMaximizedRef.current = panelMaximized
+  sidebarVisibleRef.current = sidebarVisible
+  secondarySidebarVisibleRef.current = secondarySidebarVisible
 
   if (prevPanelVisibleRef.current !== panelVisible) {
     if (!prevPanelVisibleRef.current && panelVisible) panelJustShownRef.current = true
@@ -119,6 +130,37 @@ export function WorkbenchLayout({
     )
     if (correction) allotmentRef.current?.resize(correction)
   }, [secondarySidebarVisible])
+
+  // Allotment is uncontrolled: changing the `preferredSize` props after the
+  // panes are mounted does NOT relayout. So programmatic size changes (keyboard
+  // resize commands writing to the layout service) must be applied imperatively.
+  // A drag updates currentSizesRef in onChange before sizes propagates back, so
+  // the values already match here and we skip — no feedback loop.
+  useEffect(() => {
+    if (!isInitializedRef.current) return
+    const [curSidebar, curEditor, curSecondary] = currentSizesRef.current
+    const total = curSidebar + curEditor + curSecondary
+    if (total <= 0) return
+    const targetSidebar = sidebarVisibleRef.current ? sizes.sidebar : 0
+    const targetSecondary = secondarySidebarVisibleRef.current ? sizes.secondarySidebar : 0
+    if (Math.abs(curSidebar - targetSidebar) < 1 && Math.abs(curSecondary - targetSecondary) < 1)
+      return
+    const center = total - targetSidebar - targetSecondary
+    if (center <= 0) return
+    allotmentRef.current?.resize([targetSidebar, center, targetSecondary])
+  }, [sizes.sidebar, sizes.secondarySidebar])
+
+  useEffect(() => {
+    if (!isInitializedRef.current) return
+    if (!panelVisibleRef.current || panelMaximizedRef.current) return
+    const [curEditor, curPanel] = currentVerticalRef.current
+    const total = curEditor + curPanel
+    if (total <= 0) return
+    if (Math.abs(curPanel - sizes.panel) < 1) return
+    const editor = total - sizes.panel
+    if (editor <= 0) return
+    verticalAllotmentRef.current?.resize([editor, sizes.panel])
+  }, [sizes.panel])
 
   return (
     <div className={styles['workbench']}>
@@ -169,10 +211,12 @@ export function WorkbenchLayout({
             <Allotment.Pane>
               <Allotment
                 vertical
+                ref={verticalAllotmentRef}
                 proportionalLayout={false}
                 onChange={(s) => {
                   const second = s[1]
                   if (typeof second !== 'number' || !panelVisibleRef.current) return
+                  if (typeof s[0] === 'number') currentVerticalRef.current = [s[0], second]
                   // Don't persist the panel's height while maximized — it's the
                   // full column, not the user's preferred size.
                   if (panelMaximizedRef.current) return

@@ -13,12 +13,20 @@ import {
   PartId,
   ViewContainerLocation,
   localize,
+  type LayoutSizes,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { scmViewState } from '../workbench/scm/scmViewState.js'
+import {
+  SIDEBAR_MIN,
+  SIDEBAR_MAX,
+  PANEL_MIN,
+  PANEL_MAX,
+  RESIZE_STEP,
+} from '../services/layout/layoutConstraints.js'
 
 export class ShowExplorerAction extends Action2 {
   static readonly ID = 'workbench.view.explorer'
@@ -221,5 +229,155 @@ export class ShowCommandsAction extends Action2 {
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
     await accessor.get(IQuickAccessController).show('>')
+  }
+}
+
+// -- Keyboard resize of the focused part -------------------------------------
+//
+// `ctrl+alt+shift+{right,left,down,up}` grows/shrinks whichever resizable part
+// currently holds focus. Direction semantics are uniform: right/down enlarge,
+// left/up shrink (matches VSCode's increase/decrease View Width/Height).
+
+const RESIZE_WHEN = 'sideBarFocus || secondarySideBarFocus || panelFocus || editorAreaFocus'
+
+const RESIZABLE_PARTS = [
+  PartId.SideBar,
+  PartId.SecondarySideBar,
+  PartId.Panel,
+  PartId.EditorArea,
+] as const
+
+function focusedResizablePart(layout: ILayoutService): PartId | undefined {
+  for (const id of RESIZABLE_PARTS) {
+    if (layout.getPart(id)?.isFocused()) return id
+  }
+  return undefined
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value))
+}
+
+function setClamped(
+  layout: ILayoutService,
+  key: keyof LayoutSizes,
+  value: number,
+  min: number,
+  max: number,
+): void {
+  layout.setSize(key, clamp(value, min, max))
+}
+
+// Editor and Panel share the center column's width. Growing the center
+// (delta > 0) shrinks the secondary sidebar, or the primary sidebar when the
+// secondary is hidden; no-op when both are hidden.
+function resizeCenterWidth(layout: ILayoutService, delta: 1 | -1): void {
+  const sizes = layout.sizes.get()
+  const step = RESIZE_STEP * delta
+  if (layout.getVisible(PartId.SecondarySideBar)) {
+    setClamped(layout, 'secondarySidebar', sizes.secondarySidebar - step, SIDEBAR_MIN, SIDEBAR_MAX)
+  } else if (layout.getVisible(PartId.SideBar)) {
+    setClamped(layout, 'sidebar', sizes.sidebar - step, SIDEBAR_MIN, SIDEBAR_MAX)
+  }
+}
+
+function resizeFocusedPart(
+  accessor: ServicesAccessor,
+  dim: 'width' | 'height',
+  delta: 1 | -1,
+): void {
+  const layout = accessor.get(ILayoutService)
+  const part = focusedResizablePart(layout)
+  if (!part) return
+  const sizes = layout.sizes.get()
+  const step = RESIZE_STEP * delta
+  switch (part) {
+    case PartId.SideBar:
+      if (dim === 'width')
+        setClamped(layout, 'sidebar', sizes.sidebar + step, SIDEBAR_MIN, SIDEBAR_MAX)
+      return
+    case PartId.SecondarySideBar:
+      if (dim === 'width')
+        setClamped(
+          layout,
+          'secondarySidebar',
+          sizes.secondarySidebar + step,
+          SIDEBAR_MIN,
+          SIDEBAR_MAX,
+        )
+      return
+    case PartId.Panel:
+      if (dim === 'height') setClamped(layout, 'panel', sizes.panel + step, PANEL_MIN, PANEL_MAX)
+      else resizeCenterWidth(layout, delta)
+      return
+    case PartId.EditorArea:
+      // Editor taller = panel shorter (and vice versa).
+      if (dim === 'height') setClamped(layout, 'panel', sizes.panel - step, PANEL_MIN, PANEL_MAX)
+      else resizeCenterWidth(layout, delta)
+      return
+  }
+}
+
+export class IncreaseViewWidthAction extends Action2 {
+  static readonly ID = 'workbench.action.increaseViewWidth'
+  constructor() {
+    super({
+      id: IncreaseViewWidthAction.ID,
+      title: localize('action.increaseViewWidth.title', 'Increase Current View Width'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+alt+shift+right', when: RESIZE_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resizeFocusedPart(accessor, 'width', 1)
+  }
+}
+
+export class DecreaseViewWidthAction extends Action2 {
+  static readonly ID = 'workbench.action.decreaseViewWidth'
+  constructor() {
+    super({
+      id: DecreaseViewWidthAction.ID,
+      title: localize('action.decreaseViewWidth.title', 'Decrease Current View Width'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+alt+shift+left', when: RESIZE_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resizeFocusedPart(accessor, 'width', -1)
+  }
+}
+
+export class IncreaseViewHeightAction extends Action2 {
+  static readonly ID = 'workbench.action.increaseViewHeight'
+  constructor() {
+    super({
+      id: IncreaseViewHeightAction.ID,
+      title: localize('action.increaseViewHeight.title', 'Increase Current View Height'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+alt+shift+down', when: RESIZE_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resizeFocusedPart(accessor, 'height', 1)
+  }
+}
+
+export class DecreaseViewHeightAction extends Action2 {
+  static readonly ID = 'workbench.action.decreaseViewHeight'
+  constructor() {
+    super({
+      id: DecreaseViewHeightAction.ID,
+      title: localize('action.decreaseViewHeight.title', 'Decrease Current View Height'),
+      category: localize('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+alt+shift+up', when: RESIZE_WHEN },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resizeFocusedPart(accessor, 'height', -1)
   }
 }
