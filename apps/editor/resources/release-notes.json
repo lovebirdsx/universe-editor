@@ -1,5 +1,37 @@
 [
   {
+    "version": "0.1.18",
+    "date": "2026-06-15",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "优化ext-host的报错提示，可捕获的异常不会导致ext-host奔溃",
+          "tab可以显示tips，提示文件路径等状态",
+          "使用更丰富的上下文重构 AI 提交信息生成",
+          "支持ai生成提交消息",
+          "加强markdown文本模式下不同类型token的颜色表达",
+          "优化md的渲染，加强特殊格式的表达",
+          "Panel关闭时，之前的Session Editor可以自动获得焦点",
+          "markdown预览模式支持outline",
+          "支持vscode的配置",
+          "优化git长时间操作的动画表达",
+          "支持monaco editor中的所有配置",
+          "markdown加入折叠的支持",
+          "加入冲突合并编辑支持"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "优化切换session弹窗的对齐效果"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.17",
     "date": "2026-06-13",
     "groups": [
