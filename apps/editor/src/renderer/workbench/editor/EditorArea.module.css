@@ -189,7 +189,7 @@
   flex-direction: column;
   gap: 4px;
   min-width: 160px;
-  max-width: 320px;
+  max-width: 600px;
   line-height: 1.35;
 }
 
@@ -201,7 +201,10 @@
 
 .tabTooltipDescription {
   color: var(--color-editor-fg-muted, #888888);
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .tabTooltipStatuses {

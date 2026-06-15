@@ -77,14 +77,14 @@ export function useHover(delay = 500): UseHoverResult {
             top: state.y,
             left: state.x,
             zIndex: 10000,
-            background: 'var(--workbench-hover-bg, #1e1e1e)',
-            border: '1px solid var(--workbench-hover-border, #454545)',
+            background: 'var(--color-tooltip-bg, #2f2f35)',
+            border: '1px solid var(--color-border, #3c3c3c)',
             borderRadius: 4,
             padding: '4px 8px',
             fontSize: 12,
-            color: 'var(--workbench-hover-fg, #cccccc)',
+            color: 'var(--color-tooltip-fg, #c8c8c8)',
             pointerEvents: 'none',
-            maxWidth: 320,
+            boxShadow: 'var(--shadow-md, 0 2px 8px rgba(0, 0, 0, 0.28))',
           }}
         >
           {children}
