@@ -5,6 +5,7 @@ const showInformationMessage = vi.fn()
 const showWarningMessage = vi.fn()
 const showErrorMessage = vi.fn()
 const getModels = vi.fn()
+const getActiveModelId = vi.fn()
 const sendRequest = vi.fn()
 const getConfig = vi.fn()
 
@@ -12,6 +13,7 @@ vi.mock('@universe-editor/extension-api', () => ({
   AiMessageRole: { System: 0, User: 1, Assistant: 2 },
   ai: {
     getModels: () => getModels(),
+    getActiveModelId: () => getActiveModelId(),
     sendRequest: (...args: unknown[]) => sendRequest(...args),
   },
   commands: { executeCommand: (...args: unknown[]) => executeCommand(...args) },
@@ -45,6 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   getConfig.mockImplementation((_key: string, def: unknown) => Promise.resolve(def))
   getModels.mockResolvedValue([{ id: 'm1' }])
+  getActiveModelId.mockResolvedValue(undefined)
 })
 
 describe('generateCommitMessage', () => {
@@ -88,6 +91,15 @@ describe('generateCommitMessage', () => {
     await generateCommitMessage({ rootUri: '/r' })
     expect(getModels).not.toHaveBeenCalled()
     expect(sendRequest.mock.calls[0]?.[1]).toMatchObject({ modelId: 'custom-model' })
+  })
+
+  it('prefers the active model over the first available when none is configured', async () => {
+    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
+    getActiveModelId.mockResolvedValueOnce('openai/default/active')
+    sendRequest.mockReturnValue(streamFrom(['x']))
+    await generateCommitMessage({ rootUri: '/r' })
+    expect(getModels).not.toHaveBeenCalled()
+    expect(sendRequest.mock.calls[0]?.[1]).toMatchObject({ modelId: 'openai/default/active' })
   })
 
   it('includes recent commits and custom instructions in the prompt', async () => {

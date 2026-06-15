@@ -3,7 +3,9 @@ import {
   AiMessageRole,
   Event,
   type AiMessage,
+  type AiModelConfiguration,
   type AiModelSelector,
+  type AiProviderGroup,
   type AiRequestOptions,
   type AiResponse,
   type CancellationToken,
@@ -14,6 +16,7 @@ import { MainThreadAi } from '../MainThreadAi.js'
 const fakeAi: IAiModelService = {
   _serviceBrand: undefined,
   onDidChangeModels: Event.None,
+  onDidChangeActiveModel: Event.None,
   getModels: () => Promise.resolve([]),
   selectModels: (_selector: AiModelSelector) => Promise.resolve([]),
   computeTokenLength: (_modelId: string, _text: string, _token: CancellationToken) =>
@@ -25,9 +28,15 @@ const fakeAi: IAiModelService = {
   ): AiResponse => {
     throw new Error('sync main fail')
   },
-  setApiKey: (_vendor: string, _key: string) => Promise.resolve(),
-  deleteApiKey: (_vendor: string) => Promise.resolve(),
-  hasApiKey: (_vendor: string) => Promise.resolve(false),
+  getActiveModelId: () => Promise.resolve(undefined),
+  setActiveModelId: (_modelId: string | undefined) => Promise.resolve(),
+  getModelConfiguration: (_modelId: string) => Promise.resolve({}),
+  setModelConfiguration: (_modelId: string, _config: AiModelConfiguration) => Promise.resolve(),
+  getGroups: () => Promise.resolve([]),
+  updateGroups: (_groups: readonly AiProviderGroup[]) => Promise.resolve(),
+  setApiKey: (_vendor: string, _group: string, _key: string) => Promise.resolve(),
+  deleteApiKey: (_vendor: string, _group: string) => Promise.resolve(),
+  hasApiKey: (_vendor: string, _group: string) => Promise.resolve(false),
 }
 
 describe('MainThreadAi', () => {

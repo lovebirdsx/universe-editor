@@ -151,7 +151,13 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
-import { SetOpenAiApiKeyAction, ClearOpenAiApiKeyAction } from './aiActions.js'
+import {
+  PickModelAction,
+  ManageModelsAction,
+  OpenModelsJsonAction,
+  SetApiKeyAction,
+  ClearApiKeyAction,
+} from './aiActions.js'
 import {
   ViewGitGraphAction,
   GitGraphFocusSearchAction,
@@ -390,8 +396,11 @@ registerAction2(TestNotificationAction)
 registerAction2(ReopenWithAction)
 
 // AI
-registerAction2(SetOpenAiApiKeyAction)
-registerAction2(ClearOpenAiApiKeyAction)
+registerAction2(PickModelAction)
+registerAction2(ManageModelsAction)
+registerAction2(OpenModelsJsonAction)
+registerAction2(SetApiKeyAction)
+registerAction2(ClearApiKeyAction)
 
 // Git Graph
 registerAction2(ViewGitGraphAction)

@@ -13,8 +13,10 @@
 import { createDecorator } from '@universe-editor/platform'
 import type {
   AiMessageRole,
+  AiModelConfiguration,
   AiModelMetadata,
   AiModelSelector,
+  AiProviderGroup,
   AiRequestOptions,
   AiResponseChunk,
   Event,
@@ -43,25 +45,10 @@ export interface AiEndEvent {
   readonly error?: SerializedError
 }
 
-/** Non-secret config resolved by the renderer and pushed to main (no API key). */
-export interface AiVendorConfigDto {
-  readonly baseUrl?: string
-  readonly defaultModel?: string
-}
-
-export interface AiResolvedConfigDto {
-  /** Keyed by vendor, e.g. { ollama: { baseUrl, defaultModel } }. */
-  readonly vendors: Readonly<Record<string, AiVendorConfigDto>>
-  /** Global request defaults (overridable per request). */
-  readonly request: {
-    readonly temperature?: number
-    readonly maxTokens?: number
-  }
-}
-
 /**
  * Transport-level main service. `on*` properties are bridged to `listen` by
- * ProxyChannel; everything else is a `call`.
+ * ProxyChannel; everything else is a `call`. Provider groups & per-model config
+ * are read by main directly from aiModels.json — no renderer push.
  */
 export interface IAiModelMainService {
   readonly _serviceBrand: undefined
@@ -83,15 +70,22 @@ export interface IAiModelMainService {
   /** Cancel an in-flight request — aborts the underlying network call in main. */
   cancelRequest(requestId: string): Promise<void>
 
-  /** Push the renderer-resolved non-secret config (schema default + user layers). */
-  setConfig(config: AiResolvedConfigDto): Promise<void>
+  /** Resolved per-model configuration (schema default → user settings). */
+  getModelConfiguration(modelId: string): Promise<AiModelConfiguration>
+  /** Persist per-model configuration into aiModels.json (defaults dropped). */
+  setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
 
-  /** Store a vendor's API key in encrypted secret storage (plaintext stays in main). */
-  setApiKey(vendor: string, key: string): Promise<void>
-  /** Remove a vendor's stored API key. */
-  deleteApiKey(vendor: string): Promise<void>
-  /** Whether a vendor currently has an API key stored. */
-  hasApiKey(vendor: string): Promise<boolean>
+  /** The persisted provider groups (secret-free) backing aiModels.json. */
+  getGroups(): Promise<readonly AiProviderGroup[]>
+  /** Replace the persisted provider groups (rewrites aiModels.json; no secrets). */
+  updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
+
+  /** Store a group's API key in encrypted secret storage (plaintext stays in main). */
+  setApiKey(vendor: string, group: string, key: string): Promise<void>
+  /** Remove a group's stored API key. */
+  deleteApiKey(vendor: string, group: string): Promise<void>
+  /** Whether a group currently has an API key stored. */
+  hasApiKey(vendor: string, group: string): Promise<boolean>
 }
 
 export const IAiModelMainService = createDecorator<IAiModelMainService>('aiModelMainService')

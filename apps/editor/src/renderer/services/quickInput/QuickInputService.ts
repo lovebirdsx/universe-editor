@@ -302,6 +302,15 @@ export class QuickInputService implements IQuickInputService {
         quickNavigate: options?.quickNavigate,
         busy: options?.busy,
         onItemRemove: options?.onItemRemove,
+        buttons: options?.buttons,
+        onTriggerButton: options?.onDidTriggerButton
+          ? (button) => {
+              this._currentOnHide = undefined
+              this._setState(null)
+              resolve(undefined)
+              options.onDidTriggerButton?.(button)
+            }
+          : undefined,
         onAccept: (selected, mods) => {
           this._currentOnHide = undefined
           this._setState(null)

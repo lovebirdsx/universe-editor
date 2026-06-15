@@ -26,6 +26,7 @@ import {
   IIpcService,
   IConfigurationService,
   IAiModelService,
+  IStorageService,
   IUserDataFilesService,
   IWorkspaceService,
   IFocusTrackerService,
@@ -311,16 +312,14 @@ async function bootstrapWorkbench(): Promise<void> {
   const configurationService = workbenchStore.add(new ConfigurationService())
   services.set(IConfigurationService, configurationService)
 
-  // AI model facade: wraps the main-process transport proxy, reassembles streams,
-  // and mirrors the resolved non-secret config to main. Consumers depend only on
-  // IAiModelService.
+  // AI model facade: wraps the main-process transport proxy and reassembles
+  // streams. Provider groups & per-model config live in aiModels.json (read by
+  // main); the only renderer-owned state is the active model id (UI state in
+  // IStorageService), so the facade is constructed via DI after the container
+  // below. Consumers depend only on IAiModelService.
   const aiModelMainProxy = ProxyChannel.toService<IAiModelMainService>(
     ipcService.getChannel(ServiceChannels.AiModel),
   )
-  const aiModelService = workbenchStore.add(
-    new AiModelClientService(aiModelMainProxy, configurationService),
-  )
-  services.set(IAiModelService, aiModelService)
 
   // Feed all declaratively-registered singletons into the collection. The
   // `has` guard lets explicitly-set instances win, so this coexists with the
@@ -333,6 +332,16 @@ async function bootstrapWorkbench(): Promise<void> {
   // workbenchStore so the container — and every service it materializes — is
   // disposed on unload (the kernel marks materialized services as singletons).
   const instantiation = workbenchStore.add(new InstantiationService(services))
+
+  // AI facade needs IStorageService (available only through the container), but
+  // its other dependency is a transport proxy (not a DI service), so resolve the
+  // storage service explicitly and construct it by hand.
+  const aiModelService = workbenchStore.add(
+    instantiation.invokeFunction(
+      (accessor) => new AiModelClientService(aiModelMainProxy, accessor.get(IStorageService)),
+    ),
+  )
+  services.set(IAiModelService, aiModelService)
 
   // Renderer-only service implementations (pure local state, no IPC).
   const editorGroupsService = workbenchStore.add(

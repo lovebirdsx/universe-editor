@@ -18,6 +18,7 @@ import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
 import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
 import { ConfigInitContribution } from './ConfigInitContribution.js'
 import { AiConfigurationContribution } from './AiConfigurationContribution.js'
+import { AiModelStatusContribution } from './AiModelStatusContribution.js'
 import { AcpInitContribution } from './AcpInitContribution.js'
 import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
@@ -185,6 +186,14 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.aiConfiguration',
   AiConfigurationContribution,
   WorkbenchPhase.BlockStartup,
+)
+
+// Active-model status bar entry → opens the model picker. AfterRestore so the
+// status bar exists when the entry is added.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aiModelStatus',
+  AiModelStatusContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 ContributionsRegistry.registerContribution(

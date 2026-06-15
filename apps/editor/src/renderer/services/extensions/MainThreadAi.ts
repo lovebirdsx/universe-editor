@@ -51,6 +51,10 @@ export class MainThreadAi extends Disposable implements IMainThreadAi {
     return this._ai.computeTokenLength(modelId, text, cts.token).finally(() => cts.dispose())
   }
 
+  getActiveModelId(): Promise<string | undefined> {
+    return this._ai.getActiveModelId()
+  }
+
   async startRequest(
     requestId: string,
     messages: readonly AiMessageDto[],

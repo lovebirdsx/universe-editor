@@ -41,6 +41,17 @@ export interface IQuickPickSeparator {
   readonly description?: string
 }
 
+/**
+ * A button rendered at the right edge of the quick pick's input row (VSCode-style
+ * title button). Triggering it dismisses the picker and invokes the handler.
+ */
+export interface IQuickInputButton {
+  readonly id: string
+  /** String icon id, resolved to a concrete component by the renderer. */
+  readonly iconId: string
+  readonly tooltip?: string
+}
+
 export interface IQuickItemHighlight {
   readonly start: number
   readonly end: number
@@ -104,6 +115,12 @@ export interface IPickOptions {
    * the item is also removed from the visible list locally.
    */
   readonly onItemRemove?: (item: IQuickPickItem) => void
+  /**
+   * Buttons shown at the right edge of the input row. Triggering one dismisses
+   * the picker (so `pick` resolves `undefined`) and invokes `onDidTriggerButton`.
+   */
+  readonly buttons?: readonly IQuickInputButton[]
+  readonly onDidTriggerButton?: (button: IQuickInputButton) => void
 }
 
 export interface IInputOptions {

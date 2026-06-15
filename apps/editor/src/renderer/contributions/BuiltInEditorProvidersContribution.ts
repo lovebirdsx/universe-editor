@@ -24,6 +24,7 @@ import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInpu
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
+import { AiModelsEditorInput } from '../services/editor/AiModelsEditorInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
 import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
@@ -48,6 +49,13 @@ export class BuiltInEditorProvidersContribution
         typeId: SettingsEditorInput.TYPE_ID,
         componentKey: 'settings',
         deserialize: () => SettingsEditorInput.deserialize(),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: AiModelsEditorInput.TYPE_ID,
+        componentKey: 'aiModels',
+        deserialize: () => AiModelsEditorInput.deserialize(),
       }),
     )
     this._register(

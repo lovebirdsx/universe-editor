@@ -94,6 +94,37 @@
   color: var(--color-input-placeholder-fg, #5a5a5e);
 }
 
+.inputButtons {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 6px;
+}
+
+.inputButton {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-foreground-muted, #8a8a92);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+}
+
+.inputButton:hover {
+  background: var(--color-list-hover-bg, #2f2f35);
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.inputButtonIcon {
+  opacity: 0.9;
+}
+
 .list {
   overflow-y: auto;
   flex: 1;

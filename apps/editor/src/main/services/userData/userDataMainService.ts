@@ -135,6 +135,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     const userFilesDir = configDir && configDir.length > 0 ? configDir : userData
     this._installSlot(UserDataFile.Settings, join(userFilesDir, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(userFilesDir, 'keybindings.json'))
+    this._installSlot(UserDataFile.AiModels, join(userFilesDir, 'aiModels.json'))
     this._installSlot(UserDataFile.VSCodeUserSettings, defaultVSCodeUserSettingsPath(), true)
     this._installSlot(UserDataFile.VSCodeKeybindings, defaultVSCodeKeybindingsPath(), true)
 
@@ -238,9 +239,10 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   /**
-   * Point the user-level slots (settings/keybindings) at a new directory and
-   * fire change events so the renderer hot-reloads. Workspace-tracked slots are
-   * untouched. No-op when the directory is unchanged.
+   * Point the user-level slots (settings/keybindings/aiModels) at a new
+   * directory and fire change events so the renderer hot-reloads.
+   * Workspace-tracked slots are untouched. No-op when the directory is
+   * unchanged.
    */
   relocate(configDir: string): void {
     const userData = app.getPath('userData')
@@ -249,10 +251,13 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     if (settings && dirname(settings.fullPath) === resolvePath(dir)) return
     this._teardownSlot(UserDataFile.Settings)
     this._teardownSlot(UserDataFile.Keybindings)
+    this._teardownSlot(UserDataFile.AiModels)
     this._installSlot(UserDataFile.Settings, join(dir, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(dir, 'keybindings.json'))
+    this._installSlot(UserDataFile.AiModels, join(dir, 'aiModels.json'))
     this._onDidChangeFile.fire(UserDataFile.Settings)
     this._onDidChangeFile.fire(UserDataFile.Keybindings)
+    this._onDidChangeFile.fire(UserDataFile.AiModels)
   }
 
   private _installSlot(file: UserDataFile, fullPath: string, readOnly = false): void {

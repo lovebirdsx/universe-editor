@@ -76,6 +76,14 @@ test.describe('@p0 ai commit message generation', () => {
       JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
       'utf8',
     )
+    // Point the Ollama provider group at the mock server via aiModels.json (the
+    // config dir defaults to userData). commitMessage.modelId stays empty so
+    // resolveModelId auto-picks the first available model.
+    writeFileSync(
+      join(userDataDir, 'aiModels.json'),
+      JSON.stringify([{ name: 'default', vendor: 'ollama', baseUrl: ollama.url }], null, 2),
+      'utf8',
+    )
 
     // A real git repo with one uncommitted change so there is a diff to summarize.
     const repoDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-aigen-repo-'))
@@ -104,13 +112,6 @@ test.describe('@p0 ai commit message generation', () => {
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
       await page.evaluate(() => window.__E2E__!.whenRestored())
-
-      // Point the Ollama provider at the mock server; leave commitMessage.modelId
-      // empty so resolveModelId auto-picks the first available model.
-      await page.evaluate(
-        (url) => window.__E2E__!.updateConfigValue('ai.ollama.baseUrl', url),
-        ollama.url,
-      )
 
       // Open the git workspace and wait for the SCM provider to register.
       await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)

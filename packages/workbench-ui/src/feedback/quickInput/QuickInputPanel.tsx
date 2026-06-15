@@ -42,6 +42,8 @@ export interface QuickInputPanelProps {
   onClose: () => void
   renderIcon?: RenderQuickIcon | undefined
   renderStatusIcon?: RenderQuickIcon | undefined
+  /** Resolves a title-button icon id (right edge of the input row). */
+  renderTitleButton?: RenderQuickIcon | undefined
 }
 
 function wordItemMatches(
@@ -298,6 +300,7 @@ export function QuickPickPanel({
   onClose,
   renderIcon,
   renderStatusIcon,
+  renderTitleButton,
 }: QuickInputPanelProps) {
   const prefix = state.prefix ?? ''
   const [query, setQuery] = useState(state.value ?? prefix)
@@ -834,6 +837,7 @@ export function QuickInputPanel({
   onClose,
   renderIcon,
   renderStatusIcon,
+  renderTitleButton,
 }: QuickInputPanelProps) {
   return state.type === 'pick' ? (
     <QuickPickPanel
@@ -841,6 +845,7 @@ export function QuickInputPanel({
       onClose={onClose}
       renderIcon={renderIcon}
       renderStatusIcon={renderStatusIcon}
+      renderTitleButton={renderTitleButton}
     />
   ) : (
     <InputPanel state={state} onClose={onClose} />

@@ -1,27 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pure provider registry: vendor → provider, lazy model resolution with cache,
- *  per-vendor invalidation, and per-vendor concurrency dedup. No IPC / Electron
- *  dependency, so it can be unit-tested in plain node. Held by AiModelMainService.
+ *  Pure provider registry: vendor → provider, plus a set of active provider
+ *  groups (vendor/name) whose models are resolved lazily and cached per group,
+ *  with per-group concurrency dedup. No IPC / Electron dependency, so it can be
+ *  unit-tested in plain node. Held by AiModelMainService.
  *--------------------------------------------------------------------------------------------*/
 
 import type { CancellationToken } from '../base/cancellation.js'
 import { Emitter, type Event } from '../base/event.js'
 import { Disposable, type IDisposable, toDisposable } from '../base/lifecycle.js'
+import { groupKey, type AiResolvedGroup } from './aiModelConfiguration.js'
 import type { IAiModelProvider } from './aiModelProvider.js'
 import type { AiModelMetadata, AiModelSelector } from './aiModelTypes.js'
 
-interface ProviderEntry {
-  readonly provider: IAiModelProvider
-  readonly sub?: IDisposable
-  /** Resolved models for this vendor, or undefined when not yet resolved. */
+interface GroupEntry {
+  readonly group: AiResolvedGroup
+  /** Resolved models for this group, or undefined when not yet resolved. */
   models: readonly AiModelMetadata[] | undefined
   /** In-flight resolution, shared across concurrent callers (dedup). */
   pending: Promise<readonly AiModelMetadata[]> | undefined
 }
 
 export class AiModelRegistry extends Disposable {
-  private readonly _providers = new Map<string, ProviderEntry>()
+  private readonly _providers = new Map<string, IAiModelProvider>()
+  private readonly _groups = new Map<string, GroupEntry>()
 
   private readonly _onDidChangeModels = this._register(new Emitter<void>())
   readonly onDidChangeModels: Event<void> = this._onDidChangeModels.event
@@ -30,29 +32,36 @@ export class AiModelRegistry extends Disposable {
     if (this._providers.has(vendor)) {
       throw new Error(`AI provider for vendor '${vendor}' is already registered`)
     }
-    const sub = provider.onDidChange?.(() => this._invalidate(vendor))
-    const entry: ProviderEntry = sub
-      ? { provider, sub, models: undefined, pending: undefined }
-      : { provider, models: undefined, pending: undefined }
-    this._providers.set(vendor, entry)
+    this._providers.set(vendor, provider)
     this._onDidChangeModels.fire()
     return toDisposable(() => {
-      const current = this._providers.get(vendor)
-      if (current !== entry) return
+      if (this._providers.get(vendor) !== provider) return
       this._providers.delete(vendor)
-      current.sub?.dispose()
       this._onDidChangeModels.fire()
     })
   }
 
   getProvider(vendor: string): IAiModelProvider | undefined {
-    return this._providers.get(vendor)?.provider
+    return this._providers.get(vendor)
   }
 
-  /** Resolve (lazily, cached, dedup'd) all models across every provider. */
+  /**
+   * Replace the active group set, invalidating all cached model lists (a group
+   * change is typically a config or key change, both of which require re-enumeration).
+   * Always fires onDidChangeModels.
+   */
+  setGroups(groups: readonly AiResolvedGroup[]): void {
+    this._groups.clear()
+    for (const group of groups) {
+      this._groups.set(groupKey(group), freshEntry(group))
+    }
+    this._onDidChangeModels.fire()
+  }
+
+  /** Resolve (lazily, cached, dedup'd) all models across every active group. */
   async getModels(token: CancellationToken): Promise<readonly AiModelMetadata[]> {
     const lists = await Promise.all(
-      [...this._providers.keys()].map((vendor) => this._resolveVendor(vendor, token)),
+      [...this._groups.values()].map((entry) => this._resolveGroup(entry, token)),
     )
     return lists.flat()
   }
@@ -61,47 +70,48 @@ export class AiModelRegistry extends Disposable {
     selector: AiModelSelector,
     token: CancellationToken,
   ): Promise<readonly string[]> {
-    const models = selector.vendor
-      ? await this._resolveVendor(selector.vendor, token)
-      : await this.getModels(token)
+    const models = await this.getModels(token)
     return models.filter((m) => matchesSelector(m, selector)).map((m) => m.id)
   }
 
-  /** Find the provider that owns `modelId` (resolving caches as needed). */
-  async providerForModel(
+  /** Find the provider + group that own `modelId` (resolving caches as needed). */
+  async resolveModel(
     modelId: string,
     token: CancellationToken,
-  ): Promise<IAiModelProvider | undefined> {
-    for (const vendor of this._providers.keys()) {
-      const models = await this._resolveVendor(vendor, token)
+  ): Promise<{ readonly provider: IAiModelProvider; readonly group: AiResolvedGroup } | undefined> {
+    for (const entry of this._groups.values()) {
+      const provider = this._providers.get(entry.group.vendor)
+      if (!provider) continue
+      const models = await this._resolveGroup(entry, token)
       if (models.some((m) => m.id === modelId)) {
-        return this._providers.get(vendor)?.provider
+        return { provider, group: entry.group }
       }
     }
     return undefined
   }
 
-  private _resolveVendor(
-    vendor: string,
+  private _resolveGroup(
+    entry: GroupEntry,
     token: CancellationToken,
   ): Promise<readonly AiModelMetadata[]> {
-    const entry = this._providers.get(vendor)
-    if (!entry) return Promise.resolve([])
+    const provider = this._providers.get(entry.group.vendor)
+    if (!provider) return Promise.resolve([])
     if (entry.models) return Promise.resolve(entry.models)
     if (entry.pending) return entry.pending
 
-    const pending = entry.provider
-      .provideModels(token)
+    const key = groupKey(entry.group)
+    const pending = provider
+      .provideModels(entry.group, token)
       .then((models) => {
-        // Only commit the cache if this resolution wasn't invalidated meanwhile.
-        if (this._providers.get(vendor) === entry && entry.pending === pending) {
+        // Only commit the cache if this entry is still the active one for its key.
+        if (this._groups.get(key) === entry && entry.pending === pending) {
           entry.models = models
           entry.pending = undefined
         }
         return models
       })
       .catch((err: unknown) => {
-        if (this._providers.get(vendor) === entry && entry.pending === pending) {
+        if (this._groups.get(key) === entry && entry.pending === pending) {
           entry.pending = undefined
         }
         throw err
@@ -110,21 +120,15 @@ export class AiModelRegistry extends Disposable {
     return pending
   }
 
-  private _invalidate(vendor: string): void {
-    const entry = this._providers.get(vendor)
-    if (!entry) return
-    entry.models = undefined
-    entry.pending = undefined
-    this._onDidChangeModels.fire()
-  }
-
   override dispose(): void {
-    for (const entry of this._providers.values()) {
-      entry.sub?.dispose()
-    }
     this._providers.clear()
+    this._groups.clear()
     super.dispose()
   }
+}
+
+function freshEntry(group: AiResolvedGroup): GroupEntry {
+  return { group, models: undefined, pending: undefined }
 }
 
 function matchesSelector(model: AiModelMetadata, selector: AiModelSelector): boolean {

@@ -36,6 +36,10 @@ export class HostAi implements AiApi {
     return this._ai.computeTokenLength(modelId, text)
   }
 
+  getActiveModelId(): Promise<string | undefined> {
+    return this._ai.getActiveModelId()
+  }
+
   sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse {
     const requestId = generateUuid()
     const reassembler = new AiResponseReassembler()

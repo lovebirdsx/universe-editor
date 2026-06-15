@@ -33,7 +33,7 @@
         "ai.commitMessage.modelId": {
           "type": "string",
           "default": "",
-          "description": "Model id used to generate commit messages. Empty selects the first available model."
+          "description": "Model id used to generate commit messages. Empty uses the currently active model, falling back to the first available model."
         },
         "ai.commitMessage.maxDiffChars": {
           "type": "number",

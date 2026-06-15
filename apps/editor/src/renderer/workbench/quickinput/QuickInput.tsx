@@ -70,6 +70,10 @@ export function QuickInputPortal() {
               const Icon = resolveSessionStatusIcon(id)
               return <Icon size={size} className={className} />
             }}
+            renderTitleButton={(id, size, className) => {
+              const Icon = resolveFallbackIcon(id)
+              return <Icon size={size} className={className} />
+            }}
           />
         </div>
       </div>

@@ -2,64 +2,54 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Renderer-side AI model facade. Wraps the main-process transport proxy: turns
  *  requestId-keyed chunk events back into a clean AsyncIterable (via
- *  AiResponseReassembler), routes cancellation back to main, and pushes the
- *  resolved non-secret config (schema default + user settings) down to main so
- *  providers can read baseUrl / defaults. Consumers depend only on IAiModelService.
+ *  AiResponseReassembler) and routes cancellation back to main. Provider groups &
+ *  per-model config live in aiModels.json (read by main); the only renderer-owned
+ *  state is the active model id (UI state in IStorageService). Consumers depend
+ *  only on IAiModelService.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   AiResponseReassembler,
   combinedDisposable,
   Disposable,
+  Emitter,
   generateUuid,
   reviveError,
+  StorageScope,
   type AiMessage,
+  type AiModelConfiguration,
   type AiModelMetadata,
   type AiModelSelector,
+  type AiProviderGroup,
   type AiRequestOptions,
   type AiResponse,
   type CancellationToken,
   type IAiModelService,
-  type IConfigurationService,
+  type IStorageService,
   type Event,
 } from '@universe-editor/platform'
 import type {
   AiMessageDto,
   AiMessagePartDto,
-  AiResolvedConfigDto,
   IAiModelMainService,
 } from '../../../shared/ipc/aiModelService.js'
 
-/** Vendors whose config the renderer mirrors to main. Extend as providers land. */
-const KNOWN_VENDORS = ['ollama', 'openai'] as const
-
-/** Exact ai.* keys we read; the platform's affectsConfiguration is exact-match. */
-const CONFIG_KEYS = [
-  ...KNOWN_VENDORS.flatMap((v) => [`ai.${v}.baseUrl`, `ai.${v}.defaultModel`]),
-  'ai.request.temperature',
-  'ai.request.maxTokens',
-]
+const ACTIVE_MODEL_KEY = 'ai.activeModelId'
 
 export class AiModelClientService extends Disposable implements IAiModelService {
   declare readonly _serviceBrand: undefined
 
   readonly onDidChangeModels: Event<void>
 
+  private readonly _onDidChangeActiveModel = this._register(new Emitter<void>())
+  readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
+
   constructor(
     private readonly _main: IAiModelMainService,
-    private readonly _configuration: IConfigurationService,
+    private readonly _storage: IStorageService,
   ) {
     super()
     this.onDidChangeModels = this._main.onDidChangeModels
-
-    // Push config now and whenever any ai.* setting we read changes, so main-side
-    // providers always see the merged (schema default → user) non-secret config.
-    void this._pushConfig()
-    this._register(
-      this._configuration.onDidChangeConfiguration((e) => {
-        if (CONFIG_KEYS.some((key) => e.affectsConfiguration(key))) void this._pushConfig()
-      }),
-    )
   }
 
   getModels(): Promise<readonly AiModelMetadata[]> {
@@ -74,16 +64,42 @@ export class AiModelClientService extends Disposable implements IAiModelService 
     return this._main.computeTokenLength(modelId, text)
   }
 
-  setApiKey(vendor: string, key: string): Promise<void> {
-    return this._main.setApiKey(vendor, key)
+  getActiveModelId(): Promise<string | undefined> {
+    return this._storage.get<string>(ACTIVE_MODEL_KEY, StorageScope.GLOBAL)
   }
 
-  deleteApiKey(vendor: string): Promise<void> {
-    return this._main.deleteApiKey(vendor)
+  async setActiveModelId(modelId: string | undefined): Promise<void> {
+    if (modelId === undefined) await this._storage.remove(ACTIVE_MODEL_KEY, StorageScope.GLOBAL)
+    else await this._storage.set(ACTIVE_MODEL_KEY, modelId, StorageScope.GLOBAL)
+    this._onDidChangeActiveModel.fire()
   }
 
-  hasApiKey(vendor: string): Promise<boolean> {
-    return this._main.hasApiKey(vendor)
+  getModelConfiguration(modelId: string): Promise<AiModelConfiguration> {
+    return this._main.getModelConfiguration(modelId)
+  }
+
+  setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void> {
+    return this._main.setModelConfiguration(modelId, config)
+  }
+
+  getGroups(): Promise<readonly AiProviderGroup[]> {
+    return this._main.getGroups()
+  }
+
+  updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
+    return this._main.updateGroups(groups)
+  }
+
+  setApiKey(vendor: string, group: string, key: string): Promise<void> {
+    return this._main.setApiKey(vendor, group, key)
+  }
+
+  deleteApiKey(vendor: string, group: string): Promise<void> {
+    return this._main.deleteApiKey(vendor, group)
+  }
+
+  hasApiKey(vendor: string, group: string): Promise<boolean> {
+    return this._main.hasApiKey(vendor, group)
   }
 
   sendRequest(
@@ -111,26 +127,6 @@ export class AiModelClientService extends Disposable implements IAiModelService 
     })
 
     return reassembler.response
-  }
-
-  private async _pushConfig(): Promise<void> {
-    const vendors: Record<string, { baseUrl?: string; defaultModel?: string }> = {}
-    for (const vendor of KNOWN_VENDORS) {
-      const baseUrl = this._configuration.get<string>(`ai.${vendor}.baseUrl`)
-      const defaultModel = this._configuration.get<string>(`ai.${vendor}.defaultModel`)
-      const entry: { baseUrl?: string; defaultModel?: string } = {}
-      if (baseUrl !== undefined) entry.baseUrl = baseUrl
-      if (defaultModel !== undefined) entry.defaultModel = defaultModel
-      vendors[vendor] = entry
-    }
-    const request: { temperature?: number; maxTokens?: number } = {}
-    const temperature = this._configuration.get<number>('ai.request.temperature')
-    const maxTokens = this._configuration.get<number>('ai.request.maxTokens')
-    if (temperature !== undefined) request.temperature = temperature
-    if (maxTokens !== undefined) request.maxTokens = maxTokens
-
-    const config: AiResolvedConfigDto = { vendors, request }
-    await this._main.setConfig(config)
   }
 }
 

@@ -7,10 +7,12 @@
 
 /** Self-describing model metadata, so consumers can pick a model by capability. */
 export interface AiModelMetadata {
-  /** Globally unique id, e.g. 'openai/gpt-4o'. */
+  /** Globally unique id, three-segment `vendor/group/model`, e.g. 'openai/default/gpt-4o'. */
   readonly id: string
   /** Registration key / namespace, e.g. 'openai'. */
   readonly vendor: string
+  /** Provider group this model belongs to, e.g. 'default'. */
+  readonly groupName?: string
   /** Display name. */
   readonly name: string
   /** Family groups versions of the same model, e.g. 'gpt-4o'. */
@@ -19,7 +21,28 @@ export interface AiModelMetadata {
   readonly maxInputTokens: number
   readonly maxOutputTokens: number
   readonly capabilities: AiModelCapabilities
+  /** Per-model configurable parameters, surfaced in the picker / management UI. */
+  readonly configurationSchema?: AiModelConfigSchema
 }
+
+/**
+ * Lightweight per-model configuration schema (distilled from VSCode's
+ * `configurationSchema`). Each property describes one tunable request parameter.
+ */
+export type AiModelConfigSchema = Readonly<Record<string, AiModelConfigProperty>>
+
+export interface AiModelConfigProperty {
+  readonly type: 'string' | 'number' | 'boolean' | 'enum'
+  /** Allowed values when `type` is 'enum'. */
+  readonly enum?: readonly string[]
+  readonly default?: string | number | boolean
+  readonly description?: string
+  /** 'navigation' hints the UI to surface this property in the picker's main area. */
+  readonly group?: 'navigation'
+}
+
+/** Resolved per-model configuration values (schema default → user settings). */
+export type AiModelConfiguration = Readonly<Record<string, string | number | boolean>>
 
 export interface AiModelCapabilities {
   readonly streaming: boolean
@@ -51,6 +74,8 @@ export interface AiRequestOptions {
   readonly temperature?: number
   readonly maxTokens?: number
   readonly stop?: readonly string[]
+  /** Resolved per-model configuration (schema default → user settings) for this model. */
+  readonly modelConfiguration?: AiModelConfiguration
   /** Vendor-specific extras passed through to the provider after config merge. */
   readonly extra?: Readonly<Record<string, unknown>>
 }

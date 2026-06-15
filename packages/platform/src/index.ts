@@ -120,6 +120,7 @@ export * from './telemetry/noopTelemetryService.js'
 
 // AI model service (contracts + registry + stream reassembly)
 export * from './ai/aiModelTypes.js'
+export * from './ai/aiModelConfiguration.js'
 export * from './ai/aiModelService.js'
 export * from './ai/aiModelProvider.js'
 export * from './ai/aiModelRegistry.js'

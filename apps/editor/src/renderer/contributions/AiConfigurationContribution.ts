@@ -1,76 +1,87 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  AI configuration schema — registers the non-secret `ai.*` settings consumed by
- *  the AI model service: per-vendor baseUrl / defaultModel and global request
- *  defaults. API keys are NEVER declared here; they live in encrypted secret
- *  storage (ISecretStorageService), out of settings.json and the renderer.
+ *  Registers the JSON schema for aiModels.json (the provider-group configuration
+ *  file), so editing it gets completion + validation in Monaco. The non-secret
+ *  AI configuration now lives in this dedicated file rather than settings.json;
+ *  API keys are NEVER part of it — they live in encrypted secret storage.
  *--------------------------------------------------------------------------------------------*/
 
 import {
-  ConfigurationRegistry,
   Disposable,
   IWorkbenchContribution,
-  localize,
+  JSONContributionRegistry,
+  type IJSONSchema,
 } from '@universe-editor/platform'
+
+const AI_MODELS_SCHEMA_URI = 'universe-editor://schemas/ai/models'
+
+const MODEL_SCHEMA: IJSONSchema = {
+  type: 'object',
+  required: ['id'],
+  properties: {
+    id: { type: 'string', description: 'Bare model id the endpoint expects, e.g. "qwen3-coder".' },
+    name: { type: 'string', description: 'Display name.' },
+    family: { type: 'string', description: 'Model family, e.g. "gpt-4o".' },
+    maxInputTokens: { type: 'number', description: 'Maximum input context size, in tokens.' },
+    maxOutputTokens: { type: 'number', description: 'Maximum number of tokens to generate.' },
+    capabilities: {
+      type: 'object',
+      properties: {
+        streaming: { type: 'boolean' },
+        vision: { type: 'boolean' },
+        toolCalling: { type: 'boolean' },
+      },
+    },
+    supportsReasoningEffort: {
+      type: 'array',
+      items: { type: 'string' },
+      description: 'Reasoning-effort levels this model accepts (drives a reasoningEffort setting).',
+    },
+  },
+}
+
+const GROUP_SCHEMA: IJSONSchema = {
+  type: 'object',
+  required: ['name', 'vendor'],
+  properties: {
+    name: {
+      type: 'string',
+      description: "Group name, unique within a vendor (must not contain '/').",
+    },
+    vendor: {
+      type: 'string',
+      description: 'Vendor this group binds to, e.g. "openai" or "ollama".',
+    },
+    baseUrl: {
+      type: 'string',
+      description: "Endpoint override; falls back to the provider's default.",
+    },
+    models: {
+      type: 'array',
+      description: 'Hand-declared models, merged with whatever the endpoint enumerates.',
+      items: MODEL_SCHEMA,
+    },
+    settings: {
+      type: 'object',
+      description: 'Per-model configuration, keyed by full model id (vendor/group/model).',
+      additionalProperties: { type: 'object' },
+    },
+  },
+}
+
+const AI_MODELS_SCHEMA: IJSONSchema = {
+  type: 'array',
+  items: GROUP_SCHEMA,
+}
 
 export class AiConfigurationContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
     super()
     this._register(
-      ConfigurationRegistry.registerConfiguration({
-        id: 'ai',
-        title: localize('settings.ai', 'AI'),
-        properties: {
-          'ai.ollama.baseUrl': {
-            type: 'string',
-            default: 'http://127.0.0.1:11434',
-            description: localize(
-              'settings.ai.ollama.baseUrl',
-              'Base URL of the Ollama server used by the built-in Ollama provider.',
-            ),
-          },
-          'ai.ollama.defaultModel': {
-            type: 'string',
-            default: '',
-            description: localize(
-              'settings.ai.ollama.defaultModel',
-              'Default Ollama model id (e.g. "ollama/llama3") used when a request does not specify one.',
-            ),
-          },
-          'ai.openai.baseUrl': {
-            type: 'string',
-            default: '',
-            description: localize(
-              'settings.ai.openai.baseUrl',
-              'Base URL for an OpenAI-compatible endpoint. Leave empty to use the provider default. The API key is stored encrypted, never here.',
-            ),
-          },
-          'ai.openai.defaultModel': {
-            type: 'string',
-            default: '',
-            description: localize(
-              'settings.ai.openai.defaultModel',
-              'Default OpenAI model id used when a request does not specify one.',
-            ),
-          },
-          'ai.request.temperature': {
-            type: 'number',
-            minimum: 0,
-            maximum: 2,
-            description: localize(
-              'settings.ai.request.temperature',
-              'Default sampling temperature applied to AI requests when the caller does not override it. Leave unset to use the provider default.',
-            ),
-          },
-          'ai.request.maxTokens': {
-            type: 'number',
-            minimum: 1,
-            description: localize(
-              'settings.ai.request.maxTokens',
-              'Default maximum number of tokens to generate per AI request when the caller does not override it. Leave unset to use the provider default.',
-            ),
-          },
-        },
+      JSONContributionRegistry.registerSchema({
+        uri: AI_MODELS_SCHEMA_URI,
+        fileMatch: ['**/aiModels.json'],
+        schema: AI_MODELS_SCHEMA,
       }),
     )
   }

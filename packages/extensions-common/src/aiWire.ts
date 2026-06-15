@@ -51,6 +51,9 @@ export interface IMainThreadAi {
   selectModels(selector: AiModelSelector): Promise<readonly string[]>
   computeTokenLength(modelId: string, text: string): Promise<number>
 
+  /** The user's currently selected model id (UI state), if any. */
+  getActiveModelId(): Promise<string | undefined>
+
   /** Fire a request; chunks/end come back via the events keyed by `requestId`. */
   startRequest(
     requestId: string,

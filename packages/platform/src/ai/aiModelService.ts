@@ -10,11 +10,13 @@ import type { Event } from '../base/event.js'
 import { createDecorator } from '../di/instantiation.js'
 import type {
   AiMessage,
+  AiModelConfiguration,
   AiModelMetadata,
   AiModelSelector,
   AiRequestOptions,
   AiResponseChunk,
 } from './aiModelTypes.js'
+import type { AiProviderGroup } from './aiModelConfiguration.js'
 
 /** Mirrors VSCode's ILanguageModelChatResponse: stream + final result split. */
 export interface AiResponse {
@@ -33,6 +35,9 @@ export interface IAiModelService {
 
   /** Fires when the set of available models changes (e.g. a key was configured). */
   readonly onDidChangeModels: Event<void>
+
+  /** Fires when the user's active model selection changes (UI state). */
+  readonly onDidChangeActiveModel: Event<void>
 
   /** List currently available models (resolved, with metadata). */
   getModels(): Promise<readonly AiModelMetadata[]>
@@ -54,12 +59,27 @@ export interface IAiModelService {
   /** Count tokens for `text` under `modelId` (to trim context to maxInputTokens). */
   computeTokenLength(modelId: string, text: string, token: CancellationToken): Promise<number>
 
-  /** Store a vendor's API key in encrypted secret storage (plaintext stays in main). */
-  setApiKey(vendor: string, key: string): Promise<void>
-  /** Remove a vendor's stored API key. */
-  deleteApiKey(vendor: string): Promise<void>
-  /** Whether a vendor currently has an API key stored. */
-  hasApiKey(vendor: string): Promise<boolean>
+  /** The user's currently selected model id (UI state), or undefined if none. */
+  getActiveModelId(): Promise<string | undefined>
+  /** Set the user's currently selected model id (UI state). */
+  setActiveModelId(modelId: string | undefined): Promise<void>
+
+  /** Resolved per-model configuration (schema default → user settings). */
+  getModelConfiguration(modelId: string): Promise<AiModelConfiguration>
+  /** Persist per-model configuration; values equal to the schema default are dropped. */
+  setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
+
+  /** The persisted provider groups (secret-free) backing aiModels.json. */
+  getGroups(): Promise<readonly AiProviderGroup[]>
+  /** Replace the persisted provider groups (rewrites aiModels.json; no secrets). */
+  updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
+
+  /** Store a group's API key in encrypted secret storage (plaintext stays in main). */
+  setApiKey(vendor: string, group: string, key: string): Promise<void>
+  /** Remove a group's stored API key. */
+  deleteApiKey(vendor: string, group: string): Promise<void>
+  /** Whether a group currently has an API key stored. */
+  hasApiKey(vendor: string, group: string): Promise<boolean>
 }
 
 export const IAiModelService = createDecorator<IAiModelService>('aiModelService')

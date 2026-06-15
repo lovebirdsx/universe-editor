@@ -1,26 +1,29 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AiModelClientService — the renderer half of the chain: requestId-keyed
  *  chunk events reassembled into a clean AsyncIterable, cancellation routed back to
- *  main, serialized errors revived, and the non-secret config push on construct +
- *  on ai.* changes. Stubs the main transport; uses the real ConfigurationService.
+ *  main, serialized errors revived, and the renderer-owned active model id stored in
+ *  IStorageService (never in main / aiModels.json). Stubs the main transport and a
+ *  minimal in-memory storage service.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
 import {
   CancellationTokenSource,
-  ConfigurationService,
-  ConfigurationTarget,
   Emitter,
+  Event,
   getTextResponse,
+  StorageScope,
   transformErrorForSerialization,
   AiMessageRole,
   type AiMessage,
+  type AiModelConfiguration,
+  type AiProviderGroup,
+  type IStorageService,
 } from '@universe-editor/platform'
 import { AiModelClientService } from '../aiModelClientService.js'
 import type {
   AiChunkEvent,
   AiEndEvent,
-  AiResolvedConfigDto,
   IAiModelMainService,
 } from '../../../../shared/ipc/aiModelService.js'
 
@@ -34,9 +37,9 @@ class FakeMain implements IAiModelMainService {
   readonly onDidEndRequest = this.onDidEndRequestEmitter.event
   readonly onDidChangeModels = this.onDidChangeModelsEmitter.event
 
-  configs: AiResolvedConfigDto[] = []
   startedRequestId: string | undefined
   cancelledRequestId: string | undefined
+  groups: readonly AiProviderGroup[] = []
 
   getModels() {
     return Promise.resolve([])
@@ -55,8 +58,17 @@ class FakeMain implements IAiModelMainService {
     this.cancelledRequestId = requestId
     return Promise.resolve()
   }
-  setConfig(config: AiResolvedConfigDto): Promise<void> {
-    this.configs.push(config)
+  getModelConfiguration(): Promise<AiModelConfiguration> {
+    return Promise.resolve({})
+  }
+  setModelConfiguration(): Promise<void> {
+    return Promise.resolve()
+  }
+  getGroups(): Promise<readonly AiProviderGroup[]> {
+    return Promise.resolve(this.groups)
+  }
+  updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
+    this.groups = groups
     return Promise.resolve()
   }
   setApiKey(): Promise<void> {
@@ -70,6 +82,24 @@ class FakeMain implements IAiModelMainService {
   }
 }
 
+class FakeStorage implements IStorageService {
+  declare readonly _serviceBrand: undefined
+  readonly onDidChangeWorkspaceScope = Event.None
+  private readonly _store = new Map<string, unknown>()
+
+  get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
+    return Promise.resolve(this._store.get(key) as T | undefined)
+  }
+  set(key: string, value: unknown, _scope?: StorageScope): Promise<void> {
+    this._store.set(key, value)
+    return Promise.resolve()
+  }
+  remove(key: string, _scope?: StorageScope): Promise<void> {
+    this._store.delete(key)
+    return Promise.resolve()
+  }
+}
+
 const userMsg: readonly AiMessage[] = [
   { role: AiMessageRole.User, content: [{ type: 'text', value: 'hi' }] },
 ]
@@ -79,41 +109,37 @@ function flush() {
 }
 
 describe('AiModelClientService', () => {
-  it('pushes resolved non-secret config on construct', async () => {
-    const config = new ConfigurationService()
-    config.update('ai.ollama.baseUrl', 'http://localhost:9', ConfigurationTarget.User)
-    config.update('ai.request.temperature', 0.5, ConfigurationTarget.User)
+  it('stores and reads the active model id through IStorageService', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(main, config)
-    await flush()
+    const storage = new FakeStorage()
+    const client = new AiModelClientService(main, storage)
 
-    expect(main.configs.length).toBeGreaterThanOrEqual(1)
-    const last = main.configs[main.configs.length - 1]!
-    expect(last.vendors.ollama?.baseUrl).toBe('http://localhost:9')
-    expect(last.request.temperature).toBe(0.5)
+    expect(await client.getActiveModelId()).toBeUndefined()
+
+    await client.setActiveModelId('openai/default/gpt-4o')
+    expect(await client.getActiveModelId()).toBe('openai/default/gpt-4o')
+    expect(await storage.get('ai.activeModelId', StorageScope.GLOBAL)).toBe('openai/default/gpt-4o')
+
+    await client.setActiveModelId(undefined)
+    expect(await client.getActiveModelId()).toBeUndefined()
     client.dispose()
-    config.dispose()
   })
 
-  it('re-pushes config when ai.* settings change', async () => {
-    const config = new ConfigurationService()
+  it('fires onDidChangeActiveModel when the active model changes', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(main, config)
-    await flush()
-    const before = main.configs.length
+    const client = new AiModelClientService(main, new FakeStorage())
+    let fired = 0
+    client.onDidChangeActiveModel(() => fired++)
 
-    config.update('ai.openai.defaultModel', 'gpt-4o', ConfigurationTarget.User)
-    await flush()
-    expect(main.configs.length).toBeGreaterThan(before)
-    expect(main.configs[main.configs.length - 1]!.vendors.openai?.defaultModel).toBe('gpt-4o')
+    await client.setActiveModelId('openai/default/gpt-4o')
+    await client.setActiveModelId(undefined)
+    expect(fired).toBe(2)
     client.dispose()
-    config.dispose()
   })
 
   it('reassembles chunk events keyed by requestId into a clean stream', async () => {
-    const config = new ConfigurationService()
     const main = new FakeMain()
-    const client = new AiModelClientService(main, config)
+    const client = new AiModelClientService(main, new FakeStorage())
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -128,13 +154,11 @@ describe('AiModelClientService', () => {
     const text = await getTextResponse(response)
     expect(text).toBe('Hello')
     client.dispose()
-    config.dispose()
   })
 
   it('routes cancellation back to main with the same requestId', async () => {
-    const config = new ConfigurationService()
     const main = new FakeMain()
-    const client = new AiModelClientService(main, config)
+    const client = new AiModelClientService(main, new FakeStorage())
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -148,13 +172,11 @@ describe('AiModelClientService', () => {
     main.onDidEndRequestEmitter.fire({ requestId: id })
     await getTextResponse(response)
     client.dispose()
-    config.dispose()
   })
 
   it('revives a serialized error from the end event into the result rejection', async () => {
-    const config = new ConfigurationService()
     const main = new FakeMain()
-    const client = new AiModelClientService(main, config)
+    const client = new AiModelClientService(main, new FakeStorage())
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -168,6 +190,5 @@ describe('AiModelClientService', () => {
 
     await expect(response.result).rejects.toThrow('upstream failed')
     client.dispose()
-    config.dispose()
   })
 })

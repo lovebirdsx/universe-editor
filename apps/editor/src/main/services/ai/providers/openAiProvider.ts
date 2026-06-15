@@ -12,13 +12,17 @@ import {
   AiErrorCode,
   AiMessageRole,
   AsyncIterableSource,
+  bareModelName,
+  buildModelConfigSchema,
   CancellationError,
+  composeModelId,
   DeferredPromise,
   DisposableStore,
-  Emitter,
-  type Event,
+  type AiCustomModelConfig,
   type AiMessage,
+  type AiModelConfigSchema,
   type AiRequestOptions,
+  type AiResolvedGroup,
   type AiResponse,
   type AiRequestResult,
   type AiModelMetadata,
@@ -26,14 +30,39 @@ import {
   type CancellationToken,
   type IAiModelProvider,
 } from '@universe-editor/platform'
-import type { AiProviderContext } from '../aiModelMainService.js'
 import { retryWithBackoff } from './retry.js'
 
 const VENDOR = 'openai'
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
-const SECRET_KEY = `ai.secret.${VENDOR}.apiKey`
 // OpenAI exposes per-model context windows only out-of-band; use a safe default.
 const DEFAULT_MAX_TOKENS = 8192
+
+/** Tunable request parameters shared by every OpenAI-compatible model. */
+const BASE_SCHEMA: AiModelConfigSchema = {
+  temperature: { type: 'number', description: 'Sampling temperature (0–2).', group: 'navigation' },
+  maxTokens: { type: 'number', description: 'Maximum tokens to generate.' },
+  topP: { type: 'number', description: 'Nucleus sampling probability (0–1).' },
+  frequencyPenalty: {
+    type: 'number',
+    description: 'Penalize tokens by their existing frequency (−2 to 2).',
+  },
+  presencePenalty: {
+    type: 'number',
+    description: 'Penalize tokens that have already appeared (−2 to 2).',
+  },
+  seed: { type: 'number', description: 'Seed for (best-effort) deterministic sampling.' },
+}
+
+/** Maps camelCase config keys to the snake_case fields the OpenAI API expects. */
+const PARAM_TO_BODY: Readonly<Record<string, string>> = {
+  temperature: 'temperature',
+  maxTokens: 'max_tokens',
+  topP: 'top_p',
+  frequencyPenalty: 'frequency_penalty',
+  presencePenalty: 'presence_penalty',
+  seed: 'seed',
+  reasoningEffort: 'reasoning_effort',
+}
 
 interface OpenAiModelEntry {
   readonly id: string
@@ -45,54 +74,36 @@ interface OpenAiChatStreamChunk {
 }
 
 export class OpenAiProvider implements IAiModelProvider {
-  private readonly _onDidChange = new Emitter<void>()
-  readonly onDidChange: Event<void> = this._onDidChange.event
-
-  constructor(private readonly _context: AiProviderContext) {}
-
-  /** Call after the API key changes so the registry re-resolves the model list. */
-  notifyConfigChanged(): void {
-    this._onDidChange.fire()
-  }
-
-  dispose(): void {
-    this._onDidChange.dispose()
-  }
-
-  private get _baseUrl(): string {
-    const configured = this._context.getVendorConfig(VENDOR)?.baseUrl?.trim()
-    return (configured || DEFAULT_BASE_URL).replace(/\/+$/, '')
-  }
-
-  private _apiKey(): Promise<string | undefined> {
-    return this._context.secrets.get(SECRET_KEY)
-  }
-
-  async provideModels(token: CancellationToken): Promise<readonly AiModelMetadata[]> {
-    const apiKey = await this._apiKey()
-    if (!apiKey) return []
+  async provideModels(
+    group: AiResolvedGroup,
+    token: CancellationToken,
+  ): Promise<readonly AiModelMetadata[]> {
+    const apiKey = await group.getApiKey()
     const signals = new DisposableStore()
-    let res: Response
+    let res: Response | undefined
     try {
-      res = await fetch(`${this._baseUrl}/models`, {
-        headers: { authorization: `Bearer ${apiKey}` },
+      res = await fetch(`${baseUrl(group)}/models`, {
+        headers: authHeaders(apiKey),
         signal: toAbortSignal(token, signals),
       })
     } catch {
-      // Endpoint unreachable — no models, not a hard error.
-      return []
+      // Endpoint unreachable — fall back to declared models only.
+      res = undefined
     } finally {
       signals.dispose()
     }
-    if (!res.ok) return []
-    const body = (await res.json()) as { data?: OpenAiModelEntry[] }
-    const entries = body.data ?? []
-    return entries.map((entry) => toMetadata(entry.id))
+    const enumerated =
+      res && res.ok ? (((await res.json()) as { data?: OpenAiModelEntry[] }).data ?? []) : []
+    return mergeModels(
+      group,
+      enumerated.map((entry) => entry.id),
+    )
   }
 
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
+    group: AiResolvedGroup,
     token: CancellationToken,
   ): AiResponse {
     const source = new AsyncIterableSource<AiResponseChunk>()
@@ -100,13 +111,14 @@ export class OpenAiProvider implements IAiModelProvider {
     // A consumer may read only `stream`; keep result from surfacing unhandled.
     result.p.catch(() => undefined)
 
-    void this._run(messages, options, token, source, result)
+    void this._run(messages, options, group, token, source, result)
     return { stream: source.asyncIterable, result: result.p }
   }
 
   private async _run(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
+    group: AiResolvedGroup,
     token: CancellationToken,
     source: AsyncIterableSource<AiResponseChunk>,
     result: DeferredPromise<AiRequestResult>,
@@ -114,20 +126,16 @@ export class OpenAiProvider implements IAiModelProvider {
     let usage: { inputTokens: number; outputTokens: number } | undefined
     const signals = new DisposableStore()
     try {
-      const apiKey = await this._apiKey()
-      if (!apiKey) {
-        throw new AiError(AiErrorCode.ConfigurationRequired, 'OpenAI API key is not configured.')
-      }
+      const apiKey = await group.getApiKey()
 
       const res = await retryWithBackoff(
         () =>
-          fetch(`${this._baseUrl}/chat/completions`, {
+          fetch(`${baseUrl(group)}/chat/completions`, {
             method: 'POST',
-            headers: {
-              'content-type': 'application/json',
-              authorization: `Bearer ${apiKey}`,
-            },
-            body: JSON.stringify(buildChatBody(toModelName(options.modelId), messages, options)),
+            headers: { 'content-type': 'application/json', ...authHeaders(apiKey) },
+            body: JSON.stringify(
+              buildChatBody(bareModelName(options.modelId, VENDOR, group.name), messages, options),
+            ),
             signal: toAbortSignal(token, signals),
           }),
         token,
@@ -167,6 +175,28 @@ export class OpenAiProvider implements IAiModelProvider {
   }
 }
 
+function baseUrl(group: AiResolvedGroup): string {
+  return (group.baseUrl?.trim() || DEFAULT_BASE_URL).replace(/\/+$/, '')
+}
+
+function authHeaders(apiKey: string | undefined): Record<string, string> {
+  return apiKey ? { authorization: `Bearer ${apiKey}` } : {}
+}
+
+/** Endpoint-enumerated ids + hand-declared models (declared wins on id clash). */
+function mergeModels(group: AiResolvedGroup, ids: readonly string[]): AiModelMetadata[] {
+  const declared = new Map((group.declaredModels ?? []).map((m) => [m.id, m]))
+  const out: AiModelMetadata[] = []
+  for (const id of ids) {
+    if (declared.has(id)) continue
+    out.push(toMetadata(group, id))
+  }
+  for (const config of group.declaredModels ?? []) {
+    out.push(declaredMetadata(group, config))
+  }
+  return out
+}
+
 function buildChatBody(
   model: string,
   messages: readonly AiMessage[],
@@ -183,6 +213,13 @@ function buildChatBody(
         .map((p) => p.value)
         .join(''),
     })),
+  }
+  // Per-model configuration first, then per-request options override it. Known
+  // keys map to their snake_case body field; any other key (a hand-declared
+  // model's custom parameter) is passed through under its own name.
+  const cfg = options.modelConfiguration ?? {}
+  for (const [key, value] of Object.entries(cfg)) {
+    body[PARAM_TO_BODY[key] ?? key] = value
   }
   if (options.temperature !== undefined) body.temperature = options.temperature
   if (options.maxTokens !== undefined) body.max_tokens = options.maxTokens
@@ -201,21 +238,33 @@ function roleToString(role: AiMessageRole): string {
   }
 }
 
-function toMetadata(id: string): AiModelMetadata {
+function toMetadata(group: AiResolvedGroup, id: string): AiModelMetadata {
   return {
-    id: `${VENDOR}/${id}`,
+    id: composeModelId(VENDOR, group.name, id),
     vendor: VENDOR,
+    groupName: group.name,
     name: id,
     family: id,
     maxInputTokens: DEFAULT_MAX_TOKENS,
     maxOutputTokens: DEFAULT_MAX_TOKENS,
     capabilities: { streaming: true },
+    configurationSchema: BASE_SCHEMA,
   }
 }
 
-/** Strip the `openai/` prefix back to the bare model name the API expects. */
-function toModelName(modelId: string): string {
-  return modelId.startsWith(`${VENDOR}/`) ? modelId.slice(VENDOR.length + 1) : modelId
+function declaredMetadata(group: AiResolvedGroup, config: AiCustomModelConfig): AiModelMetadata {
+  const schema = buildModelConfigSchema(config, BASE_SCHEMA)
+  return {
+    id: composeModelId(VENDOR, group.name, config.id),
+    vendor: VENDOR,
+    groupName: group.name,
+    name: config.name ?? config.id,
+    family: config.family ?? config.id,
+    maxInputTokens: config.maxInputTokens ?? DEFAULT_MAX_TOKENS,
+    maxOutputTokens: config.maxOutputTokens ?? DEFAULT_MAX_TOKENS,
+    capabilities: config.capabilities ?? { streaming: true },
+    ...(schema ? { configurationSchema: schema } : {}),
+  }
 }
 
 async function* readSse(

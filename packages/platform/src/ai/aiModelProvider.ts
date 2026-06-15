@@ -6,23 +6,24 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { CancellationToken } from '../base/cancellation.js'
-import type { Event } from '../base/event.js'
+import type { AiResolvedGroup } from './aiModelConfiguration.js'
 import type { AiResponse } from './aiModelService.js'
 import type { AiMessage, AiModelMetadata, AiRequestOptions } from './aiModelTypes.js'
 
 export interface IAiModelProvider {
-  /** Fires when the provider's model list changes (e.g. a key was configured). */
-  readonly onDidChange?: Event<void>
-
   /**
-   * Which models this vendor currently offers. May depend on a configured API
-   * key — return an empty list when no key is available.
+   * Which models this group currently offers. May depend on a configured API
+   * key — return an empty list when no key is available. Endpoint-enumerated
+   * models are merged with the group's hand-declared `declaredModels`.
    */
-  provideModels(token: CancellationToken): Promise<readonly AiModelMetadata[]>
+  provideModels(
+    group: AiResolvedGroup,
+    token: CancellationToken,
+  ): Promise<readonly AiModelMetadata[]>
 
   /**
-   * Execute one request. The provider:
-   *  - reads its own key / baseUrl
+   * Execute one request against `group`. The provider:
+   *  - reads the group's key / baseUrl
    *  - translates AiMessage[] into the vendor HTTP body
    *  - translates the streamed response back into AiResponseChunk, yielding each
    *  - listens to `token.onCancellationRequested` to abort the network request
@@ -30,8 +31,14 @@ export interface IAiModelProvider {
   sendRequest(
     messages: readonly AiMessage[],
     options: AiRequestOptions,
+    group: AiResolvedGroup,
     token: CancellationToken,
   ): AiResponse
 
-  provideTokenCount(modelId: string, text: string, token: CancellationToken): Promise<number>
+  provideTokenCount(
+    modelId: string,
+    text: string,
+    group: AiResolvedGroup,
+    token: CancellationToken,
+  ): Promise<number>
 }

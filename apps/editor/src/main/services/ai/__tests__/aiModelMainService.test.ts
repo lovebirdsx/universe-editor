@@ -1,36 +1,46 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AiModelMainService — the stream pump (provider stream → requestId-keyed
- *  chunk events), the error and cancellation paths, the unknown-model guard, and the
- *  schema/user → per-request config merge.
+ *  chunk events), the error and cancellation paths, the unknown-model guard, the
+ *  schema/user → per-request config merge, group persistence, and per-(vendor,group)
+ *  secret storage. Provider groups are read from a temp aiModels.json.
  *--------------------------------------------------------------------------------------------*/
 
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   AiErrorCode,
   AsyncIterableSource,
   DeferredPromise,
+  Emitter,
   type AiModelMetadata,
+  type AiProviderGroup,
   type AiRequestOptions,
   type AiRequestResult,
+  type AiResolvedGroup,
   type AiResponse,
   type AiResponseChunk,
   type CancellationToken,
   type IAiModelProvider,
   type IDisposable,
+  type ISecretStorageService,
 } from '@universe-editor/platform'
 import { AiModelMainService } from '../aiModelMainService.js'
-import type { ISecretStorageService } from '@universe-editor/platform'
+import { IConfigLocationService } from '../../../../shared/ipc/configLocationService.js'
 import type {
   AiChunkEvent,
   AiEndEvent,
   AiMessageDto,
 } from '../../../../shared/ipc/aiModelService.js'
 
-function model(id: string, vendor: string): AiModelMetadata {
+function model(id: string): AiModelMetadata {
+  const parts = id.split('/')
   return {
     id,
-    vendor,
-    name: id,
+    vendor: parts[0]!,
+    ...(parts[1] !== undefined ? { groupName: parts[1] } : {}),
+    name: parts.slice(2).join('/') || id,
     family: id,
     maxInputTokens: 1000,
     maxOutputTokens: 1000,
@@ -45,11 +55,33 @@ const secretsStub: ISecretStorageService = {
   delete: () => Promise.resolve(),
 }
 
+function makeConfigLocation(dir: string): IConfigLocationService {
+  const emitter = new Emitter<string>()
+  return {
+    _serviceBrand: undefined,
+    onDidChangeConfigDir: emitter.event,
+    getInfo: () => Promise.resolve({ dir, origin: 'default', locked: false }),
+    setConfigDir: () => Promise.resolve(false),
+    resetToDefault: () => Promise.resolve(false),
+    pickConfigDir: () => Promise.resolve(null),
+    isDirNonEmpty: () => Promise.resolve(false),
+  }
+}
+
+function makeService(
+  groups: readonly AiProviderGroup[],
+  secrets: ISecretStorageService = secretsStub,
+): AiModelMainService {
+  const dir = mkdtempSync(join(tmpdir(), 'ai-models-test-'))
+  writeFileSync(join(dir, 'aiModels.json'), JSON.stringify(groups), 'utf8')
+  return new AiModelMainService(secrets, makeConfigLocation(dir))
+}
+
+const FAKE_GROUP: AiProviderGroup = { vendor: 'fake', name: 'default' }
+
 interface FakeProviderHandle {
   readonly provider: IAiModelProvider
-  /** The options the last sendRequest received (to assert config merge). */
   lastOptions(): AiRequestOptions | undefined
-  /** Resolves to the token passed to sendRequest, once a request starts. */
   tokenStarted(): Promise<CancellationToken>
 }
 
@@ -63,8 +95,8 @@ function fakeStreamingProvider(
   let lastOptions: AiRequestOptions | undefined
   const tokenDeferred = new DeferredPromise<CancellationToken>()
   const provider: IAiModelProvider = {
-    provideModels: () => Promise.resolve(models),
-    sendRequest: (_messages, options, token): AiResponse => {
+    provideModels: (_group: AiResolvedGroup) => Promise.resolve(models),
+    sendRequest: (_messages, options, _group, token): AiResponse => {
       lastOptions = options
       tokenDeferred.complete(token)
       const source = new AsyncIterableSource<AiResponseChunk>()
@@ -106,11 +138,11 @@ function collectEnd(service: AiModelMainService): Promise<AiEndEvent> {
 
 describe('AiModelMainService', () => {
   it('pumps provider stream into requestId-keyed chunk events then ends without error', async () => {
-    const service = new AiModelMainService(secretsStub)
+    const service = makeService([FAKE_GROUP])
     addProvider(
       service,
       'fake',
-      fakeStreamingProvider([model('fake/m', 'fake')], (source, result) => {
+      fakeStreamingProvider([model('fake/default/m')], (source, result) => {
         source.emitOne({ type: 'text', value: 'Hel' })
         source.emitOne({ type: 'text', value: 'lo' })
         source.resolve()
@@ -122,7 +154,7 @@ describe('AiModelMainService', () => {
     service.onDidEmitChunk((e) => chunks.push(e))
     const ended = collectEnd(service)
 
-    await service.startRequest('r1', userMsg, { modelId: 'fake/m' })
+    await service.startRequest('r1', userMsg, { modelId: 'fake/default/m' })
     const end = await ended
 
     expect(chunks.map((c) => c.requestId)).toEqual(['r1', 'r1'])
@@ -133,11 +165,11 @@ describe('AiModelMainService', () => {
   })
 
   it('reports a serialized error when the provider stream fails', async () => {
-    const service = new AiModelMainService(secretsStub)
+    const service = makeService([FAKE_GROUP])
     addProvider(
       service,
       'fake',
-      fakeStreamingProvider([model('fake/m', 'fake')], (source, result) => {
+      fakeStreamingProvider([model('fake/default/m')], (source, result) => {
         const err = new Error('boom')
         source.reject(err)
         result.error(err)
@@ -145,7 +177,7 @@ describe('AiModelMainService', () => {
     )
     const ended = collectEnd(service)
 
-    await service.startRequest('r2', userMsg, { modelId: 'fake/m' })
+    await service.startRequest('r2', userMsg, { modelId: 'fake/default/m' })
     const end = await ended
 
     expect(end.requestId).toBe('r2')
@@ -155,36 +187,30 @@ describe('AiModelMainService', () => {
   })
 
   it('cancelRequest cancels the token the provider received', async () => {
-    const service = new AiModelMainService(secretsStub)
-    const handle = fakeStreamingProvider([model('fake/m', 'fake')], (source, result) => {
-      // Never completes on its own; only cancellation ends it.
+    const service = makeService([FAKE_GROUP])
+    const handle = fakeStreamingProvider([model('fake/default/m')], (source, result) => {
       void source
       void result
     })
     addProvider(service, 'fake', handle.provider)
     const ended = collectEnd(service)
 
-    await service.startRequest('r3', userMsg, { modelId: 'fake/m' })
+    await service.startRequest('r3', userMsg, { modelId: 'fake/default/m' })
     const token = await handle.tokenStarted()
     expect(token.isCancellationRequested).toBe(false)
 
-    // Wire the provider to terminate when cancelled, mirroring a real provider.
-    token.onCancellationRequested(() => {
-      // no-op: presence of the event is what we assert
-    })
     await service.cancelRequest('r3')
     expect(token.isCancellationRequested).toBe(true)
 
-    // Drain: a real provider would reject; here we just ensure no lingering inflight.
     void ended
     service.dispose()
   })
 
   it('ends with an error when no provider owns the model', async () => {
-    const service = new AiModelMainService(secretsStub)
+    const service = makeService([{ vendor: 'nope', name: 'default' }])
     const ended = collectEnd(service)
     await expect(
-      service.startRequest('r4', userMsg, { modelId: 'nope/x' }),
+      service.startRequest('r4', userMsg, { modelId: 'nope/default/x' }),
     ).resolves.toBeUndefined()
     const end = await ended
     expect(end.error?.$isError).toBe(true)
@@ -193,33 +219,10 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
-  it('routes vendor-prefixed model ids to their provider even when not listed in the model cache', async () => {
-    const service = new AiModelMainService(secretsStub)
-    addProvider(
-      service,
-      'fake',
-      fakeStreamingProvider([], (source, result) => {
-        source.emitOne({ type: 'text', value: 'ok' })
-        source.resolve()
-        result.complete({})
-      }).provider,
-    )
-    const chunks: AiChunkEvent[] = []
-    service.onDidEmitChunk((e) => chunks.push(e))
-    const ended = collectEnd(service)
-
-    await service.startRequest('r4b', userMsg, { modelId: 'fake/not-listed' })
-    const end = await ended
-
-    expect(chunks.map((c) => c.chunk)).toEqual([{ type: 'text', value: 'ok' }])
-    expect(end.error).toBeUndefined()
-    service.dispose()
-  })
-
   it('reports provider synchronous failures through the end event instead of rejecting startRequest', async () => {
-    const service = new AiModelMainService(secretsStub)
+    const service = makeService([FAKE_GROUP])
     addProvider(service, 'fake', {
-      provideModels: () => Promise.resolve([model('fake/m', 'fake')]),
+      provideModels: () => Promise.resolve([model('fake/default/m')]),
       sendRequest: () => {
         throw new Error('sync boom')
       },
@@ -228,7 +231,7 @@ describe('AiModelMainService', () => {
     const ended = collectEnd(service)
 
     await expect(
-      service.startRequest('r4c', userMsg, { modelId: 'fake/m' }),
+      service.startRequest('r4c', userMsg, { modelId: 'fake/default/m' }),
     ).resolves.toBeUndefined()
     const end = await ended
 
@@ -236,58 +239,70 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
-  it('reports OpenAI key misconfiguration instead of treating an explicit OpenAI model as provider-missing', async () => {
-    const service = new AiModelMainService(secretsStub)
-    const ended = collectEnd(service)
-
-    await expect(
-      service.startRequest('r4d', userMsg, { modelId: 'openai/gpt-5-nano' }),
-    ).resolves.toBeUndefined()
-    const end = await ended
-
-    expect(end.error?.code).toBe(AiErrorCode.ConfigurationRequired)
-    expect(end.error?.message).toBe('OpenAI API key is not configured.')
-    service.dispose()
-  })
-
-  it('merges config: schema/user defaults fill in, per-request options win', async () => {
-    const service = new AiModelMainService(secretsStub)
-    const handle = fakeStreamingProvider([model('fake/m', 'fake')], (source, result) => {
-      source.resolve()
-      result.complete({})
-    })
-    addProvider(service, 'fake', handle.provider)
-    await service.setConfig({ vendors: {}, request: { temperature: 0.2, maxTokens: 100 } })
-
-    const ended = collectEnd(service)
-    await service.startRequest('r5', userMsg, { modelId: 'fake/m', temperature: 0.9 })
-    await ended
-
-    const opts = handle.lastOptions()
-    expect(opts?.temperature).toBe(0.9) // per-request wins
-    expect(opts?.maxTokens).toBe(100) // default fills in
-    service.dispose()
-  })
-
-  it('drops undefined-valued options after merge (exactOptionalPropertyTypes)', async () => {
-    const service = new AiModelMainService(secretsStub)
-    const handle = fakeStreamingProvider([model('fake/m', 'fake')], (source, result) => {
+  it('merges config: group settings fill in, per-request options win', async () => {
+    const service = makeService([
+      { vendor: 'fake', name: 'default', settings: { 'fake/default/m': { maxTokens: 100 } } },
+    ])
+    const handle = fakeStreamingProvider([model('fake/default/m')], (source, result) => {
       source.resolve()
       result.complete({})
     })
     addProvider(service, 'fake', handle.provider)
 
     const ended = collectEnd(service)
-    await service.startRequest('r6', userMsg, { modelId: 'fake/m' })
+    await service.startRequest('r5', userMsg, { modelId: 'fake/default/m', temperature: 0.9 })
     await ended
 
     const opts = handle.lastOptions()
-    expect(opts && 'temperature' in opts).toBe(false)
-    expect(opts && 'maxTokens' in opts).toBe(false)
+    expect(opts?.temperature).toBe(0.9) // per-request passes through
+    expect(opts?.modelConfiguration?.maxTokens).toBe(100) // group setting fills in
     service.dispose()
   })
 
-  it('stores, reports, and clears a vendor API key via secret storage', async () => {
+  it('exposes an empty model configuration when no settings are stored', async () => {
+    const service = makeService([FAKE_GROUP])
+    addProvider(
+      service,
+      'fake',
+      fakeStreamingProvider([model('fake/default/m')], () => undefined).provider,
+    )
+
+    const config = await service.getModelConfiguration('fake/default/m')
+    expect(config).toEqual({})
+    service.dispose()
+  })
+
+  it('round-trips per-model configuration through aiModels.json', async () => {
+    const service = makeService([FAKE_GROUP])
+    addProvider(
+      service,
+      'fake',
+      fakeStreamingProvider([model('fake/default/m')], () => undefined).provider,
+    )
+
+    await service.setModelConfiguration('fake/default/m', { maxTokens: 256 })
+    const config = await service.getModelConfiguration('fake/default/m')
+    expect(config.maxTokens).toBe(256)
+
+    const groups = await service.getGroups()
+    const group = groups.find((g) => g.vendor === 'fake' && g.name === 'default')
+    expect(group?.settings?.['fake/default/m']).toEqual({ maxTokens: 256 })
+    service.dispose()
+  })
+
+  it('replaces persisted groups via updateGroups', async () => {
+    const service = makeService([FAKE_GROUP])
+    await service.updateGroups([
+      { vendor: 'openai', name: 'custom', baseUrl: 'http://localhost:1234/v1' },
+    ])
+    const groups = await service.getGroups()
+    expect(groups).toEqual([
+      { vendor: 'openai', name: 'custom', baseUrl: 'http://localhost:1234/v1' },
+    ])
+    service.dispose()
+  })
+
+  it('stores, reports, and clears an API key per (vendor, group) via secret storage', async () => {
     const store = new Map<string, string>()
     const secrets: ISecretStorageService = {
       _serviceBrand: undefined,
@@ -301,27 +316,27 @@ describe('AiModelMainService', () => {
         return Promise.resolve()
       },
     }
-    const service = new AiModelMainService(secrets)
+    const service = makeService([{ vendor: 'openai', name: 'default' }], secrets)
 
-    expect(await service.hasApiKey('openai')).toBe(false)
+    expect(await service.hasApiKey('openai', 'default')).toBe(false)
 
-    await service.setApiKey('openai', 'sk-123')
-    expect(store.get('ai.secret.openai.apiKey')).toBe('sk-123')
-    expect(await service.hasApiKey('openai')).toBe(true)
+    await service.setApiKey('openai', 'default', 'sk-123')
+    expect(store.get('ai.secret.openai.default.apiKey')).toBe('sk-123')
+    expect(await service.hasApiKey('openai', 'default')).toBe(true)
 
-    await service.deleteApiKey('openai')
-    expect(store.has('ai.secret.openai.apiKey')).toBe(false)
-    expect(await service.hasApiKey('openai')).toBe(false)
+    await service.deleteApiKey('openai', 'default')
+    expect(store.has('ai.secret.openai.default.apiKey')).toBe(false)
+    expect(await service.hasApiKey('openai', 'default')).toBe(false)
 
     service.dispose()
   })
 
-  it('fires onDidChangeModels when the openai key changes', async () => {
-    const service = new AiModelMainService(secretsStub)
+  it('fires onDidChangeModels when a key changes', async () => {
+    const service = makeService([{ vendor: 'openai', name: 'default' }])
     let fired = 0
     service.onDidChangeModels(() => fired++)
 
-    await service.setApiKey('openai', 'sk-123')
+    await service.setApiKey('openai', 'default', 'sk-123')
     expect(fired).toBeGreaterThan(0)
 
     service.dispose()

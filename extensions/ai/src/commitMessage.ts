@@ -82,9 +82,11 @@ function buildUserPrompt(ctx: CommitGenContext, budget: number, instructions: st
   return parts.join('\n')
 }
 
-/** Resolve the model id from config, falling back to the first available model. */
+/** Resolve the model id: explicit config → active model → first available. */
 async function resolveModelId(configured: string): Promise<string | undefined> {
   if (configured) return configured
+  const active = await ai.getActiveModelId()
+  if (active) return active
   const models = await ai.getModels()
   return models[0]?.id
 }
