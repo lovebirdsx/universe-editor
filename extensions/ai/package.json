@@ -39,7 +39,12 @@
           "type": "number",
           "default": 12000,
           "minimum": 1000,
-          "description": "Maximum number of diff characters sent to the model. Larger diffs are truncated."
+          "description": "Maximum number of combined diff characters sent to the model across all changed files. The tail is dropped once this budget is spent."
+        },
+        "ai.commitMessage.instructions": {
+          "type": "string",
+          "default": "",
+          "description": "Custom instructions appended to the commit-message prompt (e.g. enforce a format or language)."
         }
       }
     }

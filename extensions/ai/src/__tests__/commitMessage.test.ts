@@ -37,6 +37,10 @@ function streamFrom(values: string[]) {
   }
 }
 
+function contextWith(files: { path: string; diff: string }[]) {
+  return { repoName: 'r', branch: 'main', recentCommits: [], userCommits: [], files }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   getConfig.mockImplementation((_key: string, def: unknown) => Promise.resolve(def))
@@ -44,15 +48,15 @@ beforeEach(() => {
 })
 
 describe('generateCommitMessage', () => {
-  it('bails out with an info message when there is no diff', async () => {
-    executeCommand.mockResolvedValueOnce('   ')
+  it('bails out with an info message when there are no changes', async () => {
+    executeCommand.mockResolvedValueOnce(contextWith([]))
     await generateCommitMessage({ rootUri: '/r' })
     expect(showInformationMessage).toHaveBeenCalledOnce()
     expect(sendRequest).not.toHaveBeenCalled()
   })
 
   it('errors when no model is available', async () => {
-    executeCommand.mockResolvedValueOnce('diff --git a b')
+    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
     getModels.mockResolvedValueOnce([])
     await generateCommitMessage({ rootUri: '/r' })
     expect(showErrorMessage).toHaveBeenCalledOnce()
@@ -60,7 +64,7 @@ describe('generateCommitMessage', () => {
   })
 
   it('streams the generated message back via git.setCommitMessage', async () => {
-    executeCommand.mockResolvedValueOnce('diff --git a b')
+    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
     sendRequest.mockReturnValue(streamFrom(['feat: ', 'add thing']))
     await generateCommitMessage({ rootUri: '/r' })
     const writes = executeCommand.mock.calls.filter((c) => c[0] === 'git.setCommitMessage')
@@ -69,14 +73,14 @@ describe('generateCommitMessage', () => {
   })
 
   it('warns when the model returns an empty message', async () => {
-    executeCommand.mockResolvedValueOnce('diff --git a b')
+    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
     sendRequest.mockReturnValue(streamFrom(['', '   ']))
     await generateCommitMessage({ rootUri: '/r' })
     expect(showWarningMessage).toHaveBeenCalledOnce()
   })
 
   it('passes the configured model id to the request', async () => {
-    executeCommand.mockResolvedValueOnce('diff --git a b')
+    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
     getConfig.mockImplementation((key: string, def: unknown) =>
       Promise.resolve(key === 'commitMessage.modelId' ? 'custom-model' : def),
     )
@@ -84,5 +88,24 @@ describe('generateCommitMessage', () => {
     await generateCommitMessage({ rootUri: '/r' })
     expect(getModels).not.toHaveBeenCalled()
     expect(sendRequest.mock.calls[0]?.[1]).toMatchObject({ modelId: 'custom-model' })
+  })
+
+  it('includes recent commits and custom instructions in the prompt', async () => {
+    executeCommand.mockResolvedValueOnce({
+      repoName: 'r',
+      branch: 'main',
+      recentCommits: ['feat: prior work'],
+      userCommits: [],
+      files: [{ path: 'a.ts', diff: 'diff --git a b' }],
+    })
+    getConfig.mockImplementation((key: string, def: unknown) =>
+      Promise.resolve(key === 'commitMessage.instructions' ? 'Write in Chinese.' : def),
+    )
+    sendRequest.mockReturnValue(streamFrom(['x']))
+    await generateCommitMessage({ rootUri: '/r' })
+    const userMessage = sendRequest.mock.calls[0]?.[0]?.[1]?.content as string
+    expect(userMessage).toContain('feat: prior work')
+    expect(userMessage).toContain('Write in Chinese.')
+    expect(userMessage).toContain('### a.ts')
   })
 })

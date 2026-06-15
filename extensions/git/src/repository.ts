@@ -8,7 +8,7 @@
  */
 import { basename, join, relative } from 'node:path'
 import { watch, type FSWatcher } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import {
   commands,
@@ -23,6 +23,14 @@ import {
 } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
 import { parseStatus, type GitFileStatus } from './statusParser.js'
+import {
+  selectChangedFiles,
+  truncateFileDiff,
+  buildUntrackedPatch,
+  MAX_UNTRACKED_READ_BYTES,
+  type ChangeEntry,
+  type CommitGenContext,
+} from './commitContext.js'
 
 interface Decoration {
   readonly color: string
@@ -584,6 +592,80 @@ export class Repository {
     if (staged.exitCode === 0 && staged.stdout.trim()) return staged.stdout
     const working = await gitExec(['diff'], this.root, this._log)
     return working.exitCode === 0 ? working.stdout : ''
+  }
+
+  /**
+   * Structured context for AI commit-message generation, mirroring VSCode: the
+   * staged file set when anything is staged, otherwise working-tree changes plus
+   * untracked files (read as synthetic "new file" patches). Each file diff is
+   * truncated; recent repository / author commit subjects are included so the
+   * model can learn this repo's style.
+   */
+  async getCommitGenerationContext(): Promise<CommitGenContext> {
+    const statusRes = await gitExec(
+      ['status', '--porcelain=v2', '--branch', '-z', '-uall'],
+      this.root,
+      this._log,
+    )
+    const status = parseStatus(statusRes.exitCode === 0 ? statusRes.stdout : '')
+    const entries = selectChangedFiles(status.files)
+
+    const [files, recentCommits, userCommits] = await Promise.all([
+      Promise.all(entries.map(async (e) => ({ path: e.path, diff: await this._entryDiff(e) }))),
+      this._recentSubjects(),
+      this._authorSubjects(),
+    ])
+
+    return {
+      repoName: basename(this.root),
+      branch: status.branch,
+      recentCommits,
+      userCommits,
+      files: files.filter((f) => f.diff.trim().length > 0),
+    }
+  }
+
+  private async _entryDiff(entry: ChangeEntry): Promise<string> {
+    if (entry.source === 'untracked') {
+      const abs = join(this.root, entry.path)
+      try {
+        const info = await stat(abs)
+        if (info.size > MAX_UNTRACKED_READ_BYTES) {
+          return `[untracked file omitted: ${entry.path} (${info.size} bytes)]`
+        }
+        return truncateFileDiff(buildUntrackedPatch(entry.path, await readFile(abs, 'utf8')))
+      } catch {
+        return ''
+      }
+    }
+    const args =
+      entry.source === 'index' ? ['diff', '--cached', '--', entry.path] : ['diff', '--', entry.path]
+    const res = await gitExec(args, this.root, this._log)
+    return res.exitCode === 0 ? truncateFileDiff(res.stdout) : ''
+  }
+
+  private async _recentSubjects(): Promise<string[]> {
+    const res = await gitExec(['log', '-5', '--format=%s'], this.root, this._log)
+    return this._splitSubjects(res.exitCode === 0 ? res.stdout : '')
+  }
+
+  private async _authorSubjects(): Promise<string[]> {
+    const name = await gitExec(['config', 'user.name'], this.root, this._log)
+    const author = name.exitCode === 0 ? name.stdout.trim() : ''
+    if (!author) return []
+    const res = await gitExec(
+      ['log', `--author=${author}`, '-5', '--format=%s'],
+      this.root,
+      this._log,
+    )
+    return this._splitSubjects(res.exitCode === 0 ? res.stdout : '')
+  }
+
+  private _splitSubjects(raw: string): string[] {
+    return raw
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
   }
 
   /** The file's content at HEAD, or null when it has no HEAD revision (new / untracked). */

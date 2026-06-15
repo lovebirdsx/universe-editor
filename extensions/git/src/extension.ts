@@ -337,6 +337,9 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
 
     commands.registerCommand('git.getCommitDiff', (arg) => mgr.resolveRepo(arg)?.getCommitDiff()),
+    commands.registerCommand('git.getCommitGenerationContext', (arg) =>
+      mgr.resolveRepo(arg)?.getCommitGenerationContext(),
+    ),
     commands.registerCommand('git.setCommitMessage', (...args: unknown[]) => {
       const [arg, message] = args as [unknown, string]
       const repo = mgr.resolveRepo(arg)
