@@ -240,6 +240,33 @@ describe('parseInline — inline layer', () => {
     ])
   })
 
+  it('does not treat intraword underscores as emphasis (GFM rule)', () => {
+    expect(parseInline('foo_bar_1')).toEqual<readonly MdInline[]>([text('foo_bar_1')])
+    expect(parseInline('foo__bar__baz')).toEqual<readonly MdInline[]>([text('foo__bar__baz')])
+    expect(parseInline('a_b_c_d')).toEqual<readonly MdInline[]>([text('a_b_c_d')])
+  })
+
+  it('still applies underscore emphasis at word boundaries', () => {
+    expect(parseInline('an _italic_ word')).toEqual<readonly MdInline[]>([
+      text('an '),
+      { type: 'italic', children: [text('italic')] },
+      text(' word'),
+    ])
+    expect(parseInline('a __bold__ word')).toEqual<readonly MdInline[]>([
+      text('a '),
+      { type: 'bold', children: [text('bold')] },
+      text(' word'),
+    ])
+  })
+
+  it('still applies intraword emphasis with asterisks', () => {
+    expect(parseInline('foo*bar*baz')).toEqual<readonly MdInline[]>([
+      text('foo'),
+      { type: 'italic', children: [text('bar')] },
+      text('baz'),
+    ])
+  })
+
   it('parses inline code, escaping special markdown inside', () => {
     expect(parseInline('see `**raw**` not bold')).toEqual<readonly MdInline[]>([
       text('see '),

@@ -300,7 +300,12 @@ export function parseInline(text: string): readonly MdInline[] {
 
     // Strong (** or __). Look for a matching pair of identical delimiters that
     // isn't part of a triple (`***` is bold+italic, handled by the recursion).
-    if ((ch === '*' || ch === '_') && text[i + 1] === ch) {
+    // `_` does not open mid-word (GFM intraword rule), so `foo__bar__` stays literal.
+    if (
+      (ch === '*' || ch === '_') &&
+      text[i + 1] === ch &&
+      !(ch === '_' && isWordChar(text[i - 1]))
+    ) {
       const end = findBoldClose(text, i + 2, ch)
       if (end !== -1 && end > i + 2) {
         flush()
@@ -312,8 +317,9 @@ export function parseInline(text: string): readonly MdInline[] {
 
     // Emphasis (* or _). Find the next *single* delimiter — skip over `**`
     // sequences so `*a **b** c*` parses to italic(a, bold(b), c) rather than
-    // grabbing the inner `**` as the closing delimiter.
-    if (ch === '*' || ch === '_') {
+    // grabbing the inner `**` as the closing delimiter. `_` does not open
+    // mid-word (GFM intraword rule), so `foo_bar_1` keeps its underscores.
+    if ((ch === '*' || ch === '_') && !(ch === '_' && isWordChar(text[i - 1]))) {
       const end = findItalicClose(text, i + 1, ch)
       if (end !== -1 && end > i + 1) {
         flush()
@@ -400,7 +406,8 @@ function findMatching(text: string, start: number, open: string, close: string):
 /**
  * Scan forward for the closing `**` (or `__`) bold delimiter, skipping
  * escaped chars. Returns the index of the first `delim` char of the closing
- * pair, or -1 if none found.
+ * pair, or -1 if none found. For `_`, the closing pair must not be followed by
+ * a word char (GFM intraword rule).
  */
 function findBoldClose(text: string, start: number, delim: string): number {
   let j = start
@@ -410,7 +417,13 @@ function findBoldClose(text: string, start: number, delim: string): number {
       j += 2
       continue
     }
-    if (cj === delim && text[j + 1] === delim) return j
+    if (cj === delim && text[j + 1] === delim) {
+      if (delim === '_' && isWordChar(text[j + 2])) {
+        j += 2
+        continue
+      }
+      return j
+    }
     j++
   }
   return -1
@@ -419,7 +432,8 @@ function findBoldClose(text: string, start: number, delim: string): number {
 /**
  * Scan forward for the closing single-char italic delimiter. Skip over `**`
  * sequences so they bind to the bold parser instead of getting swallowed as
- * the italic boundary.
+ * the italic boundary. For `_`, the closing delimiter must not be followed by
+ * a word char (GFM intraword rule).
  */
 function findItalicClose(text: string, start: number, delim: string): number {
   let j = start
@@ -434,11 +448,20 @@ function findItalicClose(text: string, start: number, delim: string): number {
         j += 2
         continue
       }
+      if (delim === '_' && isWordChar(text[j + 1])) {
+        j++
+        continue
+      }
       return j
     }
     j++
   }
   return -1
+}
+
+/** A word char for GFM intraword emphasis: ASCII letters, digits, underscore. */
+function isWordChar(ch: string | undefined): boolean {
+  return ch !== undefined && /[A-Za-z0-9_]/.test(ch)
 }
 
 /** Allow only http(s) and file URLs. */
