@@ -239,8 +239,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   private async _spawn(spec?: ITerminalNewSpec): Promise<string | null> {
     const target: TerminalTarget = spec?.target ?? 'panel'
 
-    const shell =
-      spec?.shell || this._config.get<string>('terminal.integrated.shell') || undefined || undefined
+    const shell = spec?.shell || this._config.get<string>('terminal.integrated.shell') || undefined
     const args =
       spec?.shellArgs ??
       (this._config.get<readonly string[]>('terminal.integrated.shellArgs') || undefined) ??

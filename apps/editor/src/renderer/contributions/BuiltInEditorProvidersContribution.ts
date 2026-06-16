@@ -123,6 +123,7 @@ export class BuiltInEditorProvidersContribution
       EditorRegistry.registerEditorProvider({
         typeId: TerminalEditorInput.TYPE_ID,
         componentKey: 'terminal.editor',
+        deserialize: (data, accessor) => TerminalEditorInput.deserialize(data, accessor),
       }),
     )
     this._register(

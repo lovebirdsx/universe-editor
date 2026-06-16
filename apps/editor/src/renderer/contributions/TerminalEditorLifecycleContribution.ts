@@ -25,7 +25,7 @@ export class TerminalEditorLifecycleContribution
         if (target !== 'editor') return
         for (const group of this._editorGroups.groups) {
           const editor = group.editors.find(
-            (e) => e instanceof TerminalEditorInput && e.terminalId === id,
+            (e) => e instanceof TerminalEditorInput && e.terminalId.get() === id,
           )
           if (editor) {
             group.closeEditor(editor as TerminalEditorInput)

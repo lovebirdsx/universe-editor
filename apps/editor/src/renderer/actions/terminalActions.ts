@@ -195,7 +195,7 @@ export class OpenTerminalInEditorAction extends Action2 {
     if (!id) return
     const info = manager.terminals.get().find((t) => t.id === id)
     if (!info) return
-    const input = inst.createInstance(TerminalEditorInput, id, info.name)
+    const input = inst.createInstance(TerminalEditorInput, id, info.name, undefined)
     editorService.openEditor(input, { pinned: true })
   }
 }

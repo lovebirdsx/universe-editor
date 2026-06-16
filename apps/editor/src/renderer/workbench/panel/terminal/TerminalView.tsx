@@ -17,12 +17,16 @@ export function TerminalView() {
   const activeGroupId = useObservable(manager.activeGroupId)
   const activeId = useObservable(manager.activeTerminalId)
 
-  // Spawn an initial terminal the first time the view mounts with none open.
+  // Spawn an initial terminal only on the very first mount with none open.
+  // We mark didInit on the first frame regardless of outcome: once the view has
+  // mounted, closing the last terminal must NOT auto-respawn one. (Restored
+  // terminals already exist on first frame, so we don't create — and later
+  // closing them all leaves the empty state, as expected.)
   const didInit = useRef(false)
   useEffect(() => {
     if (didInit.current) return
+    didInit.current = true
     if (terminals.length === 0) {
-      didInit.current = true
       void manager.newTerminal({ target: 'panel' })
     }
   }, [terminals, manager])

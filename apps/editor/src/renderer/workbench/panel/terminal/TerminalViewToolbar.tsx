@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { ChevronDown, ExternalLink, Plus, SplitSquareHorizontal, Trash2 } from 'lucide-react'
+import {
+  ChevronDown,
+  ExternalLink,
+  Plus,
+  SplitSquareHorizontal,
+  TerminalSquare,
+  Trash2,
+} from 'lucide-react'
 import { ICommandService } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService, useObservable } from '../../useService.js'
@@ -18,8 +25,11 @@ export function TerminalViewToolbar() {
   const terminals = useObservable(manager.panelTerminals)
   const activeId = useObservable(manager.activeTerminalId)
   const [showShellMenu, setShowShellMenu] = useState(false)
+  const [showInstanceMenu, setShowInstanceMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
   const chevronRef = useRef<HTMLButtonElement>(null)
+  const instanceRef = useRef<HTMLDivElement>(null)
+  const instanceBtnRef = useRef<HTMLButtonElement>(null)
 
   useEffect(() => {
     if (!showShellMenu) return
@@ -37,6 +47,22 @@ export function TerminalViewToolbar() {
     return () => document.removeEventListener('mousedown', handleMouseDown)
   }, [showShellMenu])
 
+  useEffect(() => {
+    if (!showInstanceMenu) return
+    const handleMouseDown = (e: MouseEvent) => {
+      if (
+        instanceRef.current &&
+        !instanceRef.current.contains(e.target as Node) &&
+        instanceBtnRef.current &&
+        !instanceBtnRef.current.contains(e.target as Node)
+      ) {
+        setShowInstanceMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handleMouseDown)
+    return () => document.removeEventListener('mousedown', handleMouseDown)
+  }, [showInstanceMenu])
+
   const handleNewDefault = () => void manager.newTerminal({ target: 'panel' })
 
   const handleNewShell = (shell: string) => {
@@ -53,25 +79,57 @@ export function TerminalViewToolbar() {
   const handleOpenInEditor = () =>
     void commandService.executeCommand('workbench.action.createTerminalEditor')
 
+  const handleSelectInstance = (id: string) => {
+    setShowInstanceMenu(false)
+    manager.setActiveTerminal(id)
+  }
+
   const shells = shellsForPlatform()
+  const activeTerminal = terminals.find((t) => t.id === activeId)
+  const activeLabel = activeTerminal?.name ?? 'No terminals'
 
   return (
     <div className={styles['toolbar']}>
-      <select
-        className={styles['instanceSelect']}
-        value={activeId ?? ''}
-        onChange={(e) => manager.setActiveTerminal(e.target.value)}
-        aria-label="Select terminal instance"
-        data-testid="terminal-instance-select"
-        disabled={terminals.length === 0}
-      >
-        {terminals.map((t) => (
-          <option key={t.id} value={t.id}>
-            {t.name}
-          </option>
-        ))}
-        {terminals.length === 0 && <option value="">No terminals</option>}
-      </select>
+      <div className={styles['instancePicker']}>
+        <button
+          ref={instanceBtnRef}
+          type="button"
+          className={styles['instanceBtn']}
+          onClick={() => setShowInstanceMenu((v) => !v)}
+          disabled={terminals.length === 0}
+          title={activeLabel}
+          aria-label="Select terminal instance"
+          aria-haspopup="listbox"
+          aria-expanded={showInstanceMenu}
+          data-testid="terminal-instance-select"
+        >
+          <TerminalSquare size={13} className={styles['instanceIcon']} aria-hidden="true" />
+          <span className={styles['instanceLabel']}>{activeLabel}</span>
+          <ChevronDown size={12} aria-hidden="true" />
+        </button>
+
+        {showInstanceMenu && terminals.length > 0 && (
+          <div ref={instanceRef} className={styles['instanceMenu']} role="listbox">
+            {terminals.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="option"
+                aria-selected={t.id === activeId}
+                className={`${styles['instanceItem']} ${
+                  t.id === activeId ? styles['instanceItemActive'] : ''
+                }`}
+                title={t.name}
+                onClick={() => handleSelectInstance(t.id)}
+                data-testid={`terminal-instance-item-${t.id}`}
+              >
+                <TerminalSquare size={13} className={styles['instanceIcon']} aria-hidden="true" />
+                <span className={styles['instanceLabel']}>{t.name}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
 
       <button
         type="button"
@@ -129,6 +187,7 @@ export function TerminalViewToolbar() {
               key={shell}
               type="button"
               className={styles['shellItem']}
+              title={shell}
               onClick={() => handleNewShell(shell)}
             >
               {shell}
