@@ -134,12 +134,24 @@ jobs:
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert @visual --shard=${{ matrix.shard }}/2
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial" --shard=${{ matrix.shard }}/2
+
+      # @serial cases switch the workspace twice and trip a cross-process race in
+      # @parcel/watcher's windows backend under parallel workers; pin to one
+      # worker. Run only on shard 1 so the (small) serial set isn't duplicated.
+      - name: Run E2E smoke serial (Linux, xvfb)
+        if: runner.os == 'Linux' && matrix.shard == 1
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @serial --workers=1
 
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert @visual --shard=${{ matrix.shard }}/2
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial" --shard=${{ matrix.shard }}/2
+
+      - name: Run E2E smoke serial (Windows)
+        if: runner.os == 'Windows' && matrix.shard == 1
+        shell: bash
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @serial --workers=1
 
       # - name: Run visual regression (Linux only)
       #   if: runner.os == 'Linux'

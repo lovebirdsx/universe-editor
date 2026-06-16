@@ -229,6 +229,29 @@ pnpm e2e
 18. **报错是 `Test timeout of 30000ms exceeded`（而非 poll 自己的自定义 message）+ received 是初值 = test 级超时击穿,不是被测断言失败**(案例 10,速记 9/10 家族)。重 spec（自己 `electron.launch`、不走 fixture 的）前置开销大（launch+firstWindow+whenRestored+openWorkspace），若 poll 窗口 `timeout` ≥ 全局 test `timeout`（30s），test 天花板先到、poll 是摆设。最常见成因:**该 spec 从兄弟 spec 裁剪复制而来,漏抄了兄弟的 `test.setTimeout`/更大 poll 窗口**——裁剪常砍掉「看起来多余」的 `setTimeout`。修法:diff 兄弟 spec,对齐 `test.setTimeout` + poll 窗口（< test budget）,断言不动。鉴别「环境慢 vs 产物缺口」:**Ubuntu CI ✓ 但 Windows CI ✗ = 纯 Windows 环境慢**（进程创建贵 + Defender 扫每个 `git`/host spawn + 2 核抢 worker），不是产物缺失（那会两端都挂,见速记 12）,别动产品代码。
 19. **同一 flaky spec 二进宫、报错形态从「`Test timeout`」变成「poll 自己的窗口超时 + received 恒初值」= 上一轮只治了天花板(速记 18),真根因还在,且这次八成是产品 bug**(案例 11)。60s poll 对一次性动作(如 git activate 注册 SCM)恒 0 ≠ 等不够,而是**那次动作根本没发生且永不重试**(案例 17/速记 17 家族:fire-once 动作依赖异步前置)。别再加宽窗口(无效)。查链路:**「响应事件去操作某个异步启动的资源」时,若资源的 in-flight 启动 Promise 没被 await,启动期事件会被静默丢弃**。本例:git 扩展 fire-once activate 依赖 host relaunch,`_onWorkspaceChanged` 只重启已 live 的 tier,而启动期 swap 落在 host `spawn` 未返回(`this._trusted` 未赋值)的窗口→事件被丢→host pin 空 workspace→SCM 恒 0;Windows 慢 spawn 放大窗口。修法范式:**操作前先 `await Promise.allSettled([...in-flight 启动 Promise])` 再读资源句柄**;这是真产品 bug(用户启动后立刻开文件夹也会踩),修产品 + 加回归单测(用 pending 的 spawn mock 模拟「事件撞 in-flight 启动」),别动 spec。锚点 `ExtensionHostClientService._onWorkspaceChanged`。
 
+### 案例 12：simpleFileDialog「`Target page has been closed` / waitForHidden 挂」——根因是 @parcel/watcher windows backend 的跨进程 native 竞态，单实例永不触发
+- **现象**：`smoke.simpleFileDialog.spec.ts` `@p1`「openFolder navigates into a folder and OK switches the workspace」在**本地全量 e2e** 偶发挂（约 1/5～1/36），报 `locator.waitFor: Target page, context or browser has been closed`，栈在 `QuickInputPO.waitForHidden`（`dialog.waitFor({state:'hidden'})`）。同文件另两个用例（openFile、toggle dotfiles，**都不切 workspace**）从不挂。
+- **判定关键——"page has been closed" 不一定是 harness flake，先验证是不是进程真崩**：速记 14 说 `Execution context was destroyed` 类是 harness 时序 flake，但本案的 `Target page has been closed` 形态不同——加诊断捕获 main 进程退出码，是 **Windows `3221225477` = `0xC0000005` ACCESS_VIOLATION**（main 进程直接段错误，**无** `render-process-gone`/`child-process-gone` 事件、**无** stderr 输出、`crashReporter.start()` 一开就不复现的典型 native heisenbug）。报错的"page closed"只是 main 崩了之后 renderer page 跟着没了的**表象**，不是 harness 评估时序问题。
+- **判定关键——三组对照实验定位「真回归 vs 环境放大」**（这是本案核心方法）：
+  1. **单实例**（`--workers=1 --repeat-each=60`）watch 开启 → **0 崩**。
+  2. **多实例**（`--workers=6 --repeat-each=48`）watch 开启 → **2～3 崩**。
+  3. 多实例 watch **禁用**（main 侧 env gate 掉 `watcher.subscribe`，重 build）→ **0 崩**。
+  结论：崩溃**同时需要** (a) 多个 Electron 实例并发 + (b) parcel watcher 被调用。**单实例无论跑多少次都不崩** = 不是产品 bug，是测试环境（`--workers>1` 冷启动多个打包实例）放大的第三方 native 跨进程竞态。
+- **根因（第三方 native 库的跨进程竞态，产品代码无 bug）**：只有「切 workspace」用例会崩，因为只有它在 main 侧触发 `@parcel/watcher` 的 `unsubscribe→subscribe` 重订阅（`fileWatcherMainService._subscribe`）；且该用例**单测试内切两次** workspace（`openWorkspace` + 对话框 OK 确认子目录），两次 back-to-back 重订阅。`@parcel/watcher` 2.5.6 的 windows backend 在**多进程并发**订阅时存在 native 层资源竞争（疑似全局 IOCP/ReadDirectoryChangesW 状态），并发实例同时重订阅会 fault 掉 main 进程。真实用户只跑单实例，永不触发。
+- **试过但无效的修复（重要负结果）**：在 `_subscribe`/`_teardown` 外加进程内串行队列（保证单进程内任意时刻只有一个 native 订阅操作）→ 仍 3/144 崩。这证明**不是进程内重入竞态**，而是**进程间**竞争——进程内串行管不了别的进程。已还原该改动（避免引入无谓复杂度）。
+- **修法（不改产品代码、不削弱被测断言）**：给该用例打 `tag: '@serial'`，`pnpm e2e` 拆两趟跑——并行趟 `--grep-invert "@visual|@serial"`、串行趟 `--grep @serial --workers=1`；CI（`ci.yml`）同样拆两步，串行步只在 `matrix.shard == 1` 跑（避免 shard 重复执行）。被测断言（进入子目录保持对话框开 + OK 切 workspace）一字未改，只是把这个**单实例就稳过**的用例钉到单 worker，避开多实例 native 竞态。串行趟 `--workers=1 --repeat-each=40` 全绿，完整 `pnpm e2e` 两趟 102+1 全绿。
+- **为何不选「e2e 禁用 watch」或「产品侧加防御」**：禁用 watch（案例 2 式从源头禁噪音）会让 watch 路径在 e2e 零覆盖，而 watch 是真功能；产品侧 try/catch 包 `_subscribe` 对**访问违例**无效（native 段错误无法被 JS catch）。隔离到单 worker 是唯一既不削弱断言、又不为测试改产品、又保留 watch 覆盖的解。
+- **锚点**：
+  - spec + tag：`apps/editor/e2e/specs/smoke.simpleFileDialog.spec.ts`（切 workspace 用例 `tag: '@serial'` + 头注释）
+  - e2e 脚本拆两趟：`apps/editor/package.json`（`"e2e"`：grep-invert 并行趟 `&&` `--grep @serial --workers=1` 串行趟）
+  - CI 拆两步：`.github/workflows/ci.yml`（e2e job：并行步 `--grep-invert "@visual|@serial"` + 串行步 `--grep @serial --workers=1`，`if: matrix.shard == 1`）
+  - native 噪音源：`apps/editor/src/main/services/fileWatcher/fileWatcherMainService.ts`（`_subscribe`：`@parcel/watcher` 2.5.6 windows backend，`unsubscribe→subscribe` 重订阅）
+  - 触发路径：`workspaceActions.ts` `OpenFolderAction` → `RendererWorkspaceService.openFolder` → main `WorkspaceMainService.openFolder` → `onDidChangeWorkspace.fire` → renderer `ExplorerTreeService._setRoot`（`_watcher.watch`）
+- **教训**：见速记 20。
+
+#### 速记（接上）
+20. **报错 `Target page/context/browser has been closed`（区别于速记 14 的 `Execution context was destroyed`）要先验证是不是 main 进程真崩，而非 harness 时序**：加诊断抓 main 退出码,Windows `3221225477`=`0xC0000005` 访问违例 = native 段错误(无 `render/child-process-gone` 事件、无 stderr、`crashReporter.start` 一开就不复现的 heisenbug),"page closed" 只是 main 崩后 renderer 跟着没的表象。**定位「真回归 vs 环境放大」的决定性方法是三组对照**:①单实例(`--workers=1`)重复多次 ②多实例(`--workers=6`)重复多次 ③多实例+禁用嫌疑子系统。**若单实例无论多少次都不崩、只有多实例才崩 = 不是产品 bug,是测试并发放大的(常为第三方 native 库的)跨进程竞态**——真实用户单实例永不触发。此时**进程内**串行化修复无效(管不了别的进程,实测仍崩,是强力负结果证据),产品侧 try/catch 也接不住 native 访问违例。正解:**把触发该 native 路径的用例 `tag: '@serial'` 隔离到 `--workers=1`**(`pnpm e2e` 与 `ci.yml` 各拆并行趟+串行趟,CI 串行步限 `matrix.shard==1`),不改产品、不削弱断言、保留该功能的 e2e 覆盖。别选「e2e 禁用该子系统」(会丢覆盖)或「产品加防御」(catch 不住段错误)。本案触发者是 `@parcel/watcher` windows backend 在多实例并发重订阅(切 workspace)时的 native 竞态,且该用例单测试内切两次 workspace 放大之。
+
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
 - `apps/editor/e2e/fixtures/electronApp.ts` —— `workbench` fixture、`runCommand` / `waitForRestored` / `statusBar` 等封装

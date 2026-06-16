@@ -18,7 +18,7 @@
     "bench": "vitest bench --config bench/vitest.bench.config.ts",
     "test:visual": "playwright test -c e2e/playwright.config.ts --grep @visual",
     "visual:update": "playwright test -c e2e/playwright.config.ts --grep @visual --update-snapshots",
-    "e2e": "playwright test -c e2e/playwright.config.ts --grep-invert @visual",
+    "e2e": "playwright test -c e2e/playwright.config.ts --grep-invert \"@visual|@serial\" && playwright test -c e2e/playwright.config.ts --grep @serial --workers=1",
     "e2e:headed": "playwright test -c e2e/playwright.config.ts --headed",
     "e2e:ui": "playwright test -c e2e/playwright.config.ts --ui",
     "e2e:install": "playwright install-deps",

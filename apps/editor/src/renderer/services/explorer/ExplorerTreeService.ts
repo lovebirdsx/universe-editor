@@ -394,12 +394,12 @@ export class ExplorerTreeService extends Disposable {
     this._nodes.clear()
     this._activeEditorResource = null
     this._model.reset()
-    if (root) {
-      void this._model.expand(this._rootEntry(root))
+    if (normalized) {
+      void this._model.expand(this._rootEntry(normalized))
       void this._watcher
-        .watch(root.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
+        .watch(normalized.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
         .catch(() => {
-          this._logger.warn(`watch failed ${root.toString()}`)
+          this._logger.warn(`watch failed ${normalized.toString()}`)
         })
     } else {
       void this._watcher.unwatch().catch(() => {})
@@ -428,8 +428,9 @@ export class ExplorerTreeService extends Disposable {
     if (!this._root || events.length === 0) return
     const seen = new Set<string>()
     for (const ev of events) {
-      const resource = URI.revive(ev.resource)
-      if (!resource) continue
+      const raw = URI.revive(ev.resource)
+      if (!raw) continue
+      const resource = normalizeUri(raw)
       const parent = parentOf(resource)
       if (!parent) continue
       const key = parent.toString()

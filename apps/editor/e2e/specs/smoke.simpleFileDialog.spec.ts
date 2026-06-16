@@ -32,37 +32,47 @@ async function makeTree(): Promise<string> {
 }
 
 test.describe('@p1 simple file dialog', () => {
-  test('openFolder navigates into a folder and OK switches the workspace', async ({
-    page,
-    workbench,
-  }) => {
-    const tmpDir = await makeTree()
-    await workbench.waitForRestored()
-    await workbench.openWorkspace(tmpDir)
-    await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
+  // @serial: this case switches the workspace twice in one test (openWorkspace
+  // then OK-confirm a subfolder), driving two back-to-back parcel watcher
+  // re-subscribes on the main process. @parcel/watcher's windows backend has a
+  // cross-process native race — when several Electron instances (e2e workers)
+  // re-subscribe concurrently it can fault (0xC0000005) the main process, which
+  // surfaces here as "Target page has been closed". Single-instance runs never
+  // trip it, so we pin this case to a single worker. See `pnpm e2e` (serial pass).
+  test(
+    'openFolder navigates into a folder and OK switches the workspace',
+    {
+      tag: '@serial',
+    },
+    async ({ page, workbench }) => {
+      const tmpDir = await makeTree()
+      await workbench.waitForRestored()
+      await workbench.openWorkspace(tmpDir)
+      await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('ue2-sfd-')
 
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('workbench.action.files.openFolder')
-    })
-    await workbench.quickInput.waitForVisible()
-    await expect(workbench.quickInput.input).toBeFocused()
-    await expect(page.getByTestId('quick-input-title')).toBeVisible()
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('workbench.action.files.openFolder')
+      })
+      await workbench.quickInput.waitForVisible()
+      await expect(workbench.quickInput.input).toBeFocused()
+      await expect(page.getByTestId('quick-input-title')).toBeVisible()
 
-    // Folder mode lists folders, not files.
-    await expect(page.getByRole('option').filter({ hasText: 'childdir' })).toBeVisible()
-    await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toHaveCount(0)
+      // Folder mode lists folders, not files.
+      await expect(page.getByRole('option').filter({ hasText: 'childdir' })).toBeVisible()
+      await expect(page.getByRole('option').filter({ hasText: 'top.txt' })).toHaveCount(0)
 
-    // Entering a folder must keep the dialog open (regression: Enter used to close it).
-    await page.getByRole('option').filter({ hasText: 'childdir' }).click()
-    await expect(workbench.quickInput.dialog).toBeVisible()
-    await expect(workbench.quickInput.input).toHaveValue(/childdir[\\/]$/)
-    await expect(page.getByRole('option').filter({ hasText: 'grandchild' })).toBeVisible()
+      // Entering a folder must keep the dialog open (regression: Enter used to close it).
+      await page.getByRole('option').filter({ hasText: 'childdir' }).click()
+      await expect(workbench.quickInput.dialog).toBeVisible()
+      await expect(workbench.quickInput.input).toHaveValue(/childdir[\\/]$/)
+      await expect(page.getByRole('option').filter({ hasText: 'grandchild' })).toBeVisible()
 
-    // OK confirms the current folder (childdir) as the selection.
-    await workbench.quickInput.dialog.getByTestId('quick-input-ok').click()
-    await workbench.quickInput.waitForHidden()
-    await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('childdir')
-  })
+      // OK confirms the current folder (childdir) as the selection.
+      await workbench.quickInput.dialog.getByTestId('quick-input-ok').click()
+      await workbench.quickInput.waitForHidden()
+      await expect.poll(() => workbench.getCurrentWorkspacePath()).toContain('childdir')
+    },
+  )
 
   test('openFile navigates into a folder and selecting a file opens it', async ({
     page,
