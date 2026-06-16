@@ -21,6 +21,7 @@ export interface ClosedEditorEntry {
   readonly resource: URI
   readonly typeId: string
   readonly groupId: number
+  readonly serializedData: unknown
 }
 
 export interface IClosedEditorsService {
@@ -81,6 +82,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
           resource: event.editor.resource,
           typeId: event.editor.typeId,
           groupId: group.id,
+          serializedData: event.editor.serialize?.() ?? null,
         })
         if (this._stack.length > MAX_ENTRIES) this._stack.shift()
       }),

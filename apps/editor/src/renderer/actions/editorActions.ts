@@ -7,6 +7,7 @@
 import {
   Action2,
   ConfigurationTarget,
+  EditorRegistry,
   type EditorInput,
   GroupDirection,
   GroupLocation,
@@ -16,7 +17,6 @@ import {
   IEditorGroupsService,
   type IEditorGroup,
   IFocusStackService,
-  IInstantiationService,
   IQuickInputService,
   type IQuickPickItem,
   MenuId,
@@ -835,9 +835,8 @@ export class ReopenClosedEditorAction extends Action2 {
     const entry = closedService.popMostRecent()
     if (!entry) return
     const group = groups.getGroup(entry.groupId) ?? groups.activeGroup
-    const input = accessor
-      .get(IInstantiationService)
-      .createInstance(FileEditorInput, entry.resource)
+    const input = EditorRegistry.deserialize(entry.typeId, entry.serializedData, accessor)
+    if (!input) return
     group.openEditor(input, { activate: true, pinned: true })
     activateGroupAndFocus(groups, group, accessor.get(IFocusStackService))
   }
