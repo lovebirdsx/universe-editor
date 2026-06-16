@@ -155,4 +155,64 @@ describe('WorkbenchLayout – panel resize deferral', () => {
 
     vi.unstubAllGlobals()
   })
+
+  it('does not call onPanelResize when panel is maximized (Allotment fills full height)', () => {
+    const onPanelResize = vi.fn()
+
+    // 面板已可见、已初始化，再最大化
+    const { rerender } = render(
+      <WorkbenchLayout
+        {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: false })}
+      />,
+    )
+    // 模拟初始化后的 onChange，让 isInitializedRef 置真
+    captured.verticalOnChange?.([400, 200])
+    expect(onPanelResize).toHaveBeenCalledWith(200)
+    onPanelResize.mockClear()
+
+    // 最大化面板
+    rerender(
+      <WorkbenchLayout
+        {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: true })}
+      />,
+    )
+
+    // Allotment 将 panel pane 扩展到全高后触发 onChange（editor=0, panel=全高）
+    captured.verticalOnChange?.([0, 700])
+
+    // 最大化期间不应持久化 panel 高度（否则 restore 时会丢失用户的真实尺寸）
+    expect(onPanelResize).not.toHaveBeenCalled()
+  })
+
+  it('resumes persisting panel size after un-maximizing', () => {
+    const onPanelResize = vi.fn()
+
+    const { rerender } = render(
+      <WorkbenchLayout
+        {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: false })}
+      />,
+    )
+    captured.verticalOnChange?.([400, 200])
+    onPanelResize.mockClear()
+
+    // 最大化
+    rerender(
+      <WorkbenchLayout
+        {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: true })}
+      />,
+    )
+    captured.verticalOnChange?.([0, 700])
+    expect(onPanelResize).not.toHaveBeenCalled()
+
+    // 取消最大化
+    rerender(
+      <WorkbenchLayout
+        {...makeProps({ onPanelResize, panelVisible: true, panelMaximized: false })}
+      />,
+    )
+    captured.verticalOnChange?.([400, 200])
+
+    // 取消最大化后恢复正常持久化
+    expect(onPanelResize).toHaveBeenCalledWith(200)
+  })
 })

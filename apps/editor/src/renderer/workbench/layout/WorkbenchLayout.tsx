@@ -240,7 +240,7 @@ export function WorkbenchLayout({
                 </Allotment.Pane>
                 <Allotment.Pane
                   minSize={PANEL_MIN}
-                  {...(editorPaneVisible ? { maxSize: PANEL_MAX } : {})}
+                  maxSize={editorPaneVisible ? PANEL_MAX : Number.POSITIVE_INFINITY}
                   preferredSize={sizes.panel}
                   visible={panelVisible}
                 >

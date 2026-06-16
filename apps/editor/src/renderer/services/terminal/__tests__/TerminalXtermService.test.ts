@@ -188,6 +188,46 @@ describe('TerminalXtermService', () => {
     expect(svc.get('t1')).toBeUndefined()
   })
 
+  it('scheduleFit deduplicates and triggers fit after requestAnimationFrame', async () => {
+    const rafCallbacks: FrameRequestCallback[] = []
+    let rafId = 0
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      rafCallbacks.push(cb)
+      return ++rafId
+    })
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+
+    const h = makeHarness()
+    const svc = await makeService(h)
+    const holder = svc.acquire('t1')
+    sizeWrapper(holder.wrapper, 400, 200)
+
+    // initial fit to get a baseline
+    holder.fit()
+    expect(h.resizes).toHaveLength(1)
+
+    // simulate panel maximize: wrapper grows to a taller height
+    proposed = { cols: 100, rows: 50 }
+    sizeWrapper(holder.wrapper, 400, 600)
+
+    // scheduleFit should not resize synchronously
+    holder.scheduleFit()
+    holder.scheduleFit() // second call should be a no-op (deduplication)
+    expect(h.resizes).toHaveLength(1)
+
+    // only one RAF should have been scheduled
+    expect(rafCallbacks).toHaveLength(1)
+
+    // RAF fires → fit() runs → resize with new row count
+    rafCallbacks[0]!(0)
+    expect(h.resizes).toEqual([
+      { id: 't1', cols: 100, rows: 30 },
+      { id: 't1', cols: 100, rows: 50 },
+    ])
+
+    vi.unstubAllGlobals()
+  })
+
   it('dispose() cascades to all acquired holders (registered on the service store)', async () => {
     const svc = await makeService(makeHarness())
     const a = svc.acquire('a').term as unknown as { disposed: boolean }
