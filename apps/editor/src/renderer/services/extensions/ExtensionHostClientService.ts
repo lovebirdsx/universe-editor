@@ -372,6 +372,15 @@ export class ExtensionHostClientService extends Disposable implements IExtension
   private async _onWorkspaceChanged(): Promise<void> {
     // The host pins the workspace folder at launch; relaunch live tiers so
     // `workspace.rootPath` and the fs gateway's containment root update.
+    //
+    // A swap can land while the initial boot is still spawning a tier — the
+    // Electron-as-node spawn is slow enough on Windows CI to widen this window.
+    // At that point `this._trusted` isn't assigned yet (the `_connect` await
+    // hasn't returned), so reading it directly would drop the swap and leave the
+    // host pinned to the launch-time (empty) workspace forever — git then sees no
+    // rootPath and never registers its SCM provider. Wait for any in-flight start
+    // to settle first so the relaunch sees the freshly-connected tiers.
+    await Promise.allSettled([this._startingTrusted, this._startingRestricted])
     const kinds: ExtHostKind[] = []
     if (this._trusted) kinds.push('trusted')
     if (this._restricted) kinds.push('restricted')

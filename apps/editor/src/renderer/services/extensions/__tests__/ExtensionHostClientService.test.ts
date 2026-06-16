@@ -147,4 +147,44 @@ describe('ExtensionHostClientService', () => {
 
     svc.dispose()
   })
+
+  it('relaunches the tier when a workspace swap races the initial spawn', async () => {
+    // Regression: a swap fired while the first `host.start` is still pending must
+    // not be dropped. Before the fix `_onWorkspaceChanged` read `this._trusted`
+    // (still undefined mid-spawn), saw no live tier, and silently skipped the
+    // relaunch — leaving the host pinned to the launch-time (empty) workspace, so
+    // git never registered its SCM provider (Windows-CI-only flake, slow spawn).
+    disposed.length = 0
+    let releaseFirstStart!: () => void
+    const firstStarted = new Promise<void>((r) => (releaseFirstStart = r))
+    let n = 0
+    const host = {
+      onExit: Event.None,
+      onStdout: Event.None,
+      onStderr: Event.None,
+      start: vi.fn().mockImplementation(() => {
+        n++
+        // Hold the initial trusted spawn open so the swap lands mid-flight.
+        if (n === 1) return firstStarted.then(() => ({ handle: `h${n}` }))
+        return Promise.resolve({ handle: `h${n}` })
+      }),
+      hasUserExtensions: vi.fn().mockResolvedValue(false),
+      writeStdin: vi.fn().mockResolvedValue(undefined),
+      stop: vi.fn().mockResolvedValue(undefined),
+    } as unknown as IExtensionHostService
+    const workspaceChange = new Emitter<void>()
+    const svc = makeService(host, workspaceChange.event)
+
+    const starting = svc.start()
+    // Swap arrives before the first spawn resolves: `this._trusted` is unset.
+    workspaceChange.fire()
+    releaseFirstStart()
+    await starting
+
+    // The relaunch must still happen: original tier stopped, a fresh one spawned.
+    await vi.waitFor(() => expect(host.start).toHaveBeenCalledTimes(2))
+    expect(host.stop).toHaveBeenCalledWith('h1')
+
+    svc.dispose()
+  })
 })
