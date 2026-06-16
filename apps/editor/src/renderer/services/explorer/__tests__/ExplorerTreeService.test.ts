@@ -522,6 +522,69 @@ describe('ExplorerTreeService', () => {
   })
 })
 
+describe('ExplorerTreeService — Windows drive letter case mismatch', () => {
+  // Use URI paths with Windows-style drive letters to simulate case mismatch
+  const winRoot = URI.from({ scheme: 'file', path: '/C:/ws' })
+  const winRootLower = URI.from({ scheme: 'file', path: '/c:/ws' })
+
+  function makeWinFs() {
+    return makeFs({
+      [winRoot.toString()]: [
+        { name: 'src', isFile: false, isDirectory: true },
+        { name: 'README.md', isFile: true, isDirectory: false },
+      ],
+      [URI.joinPath(winRoot, 'src').toString()]: [
+        { name: 'index.ts', isFile: true, isDirectory: false },
+      ],
+    })
+  }
+
+  function makeWinInst(fs: ReturnType<typeof makeFs>) {
+    const ws = new FakeWorkspaceService(winRoot)
+    const watcher = new FakeWatcher()
+    return makeInst(fs, ws, watcher)
+  }
+
+  it('reveal succeeds when target path has different drive letter case than root', async () => {
+    const inst = makeWinInst(makeWinFs())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+
+    // Tree root was set with uppercase C:, reveal with lowercase c:
+    const target = URI.from({ scheme: 'file', path: '/c:/ws/README.md' })
+    const ok = await tree.reveal(target)
+    expect(ok).toBe(true)
+    expect(tree.selectedResource).not.toBeNull()
+  })
+
+  it('reveal expands ancestors when target drive letter case differs from root', async () => {
+    const inst = makeWinInst(makeWinFs())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+
+    const target = URI.from({ scheme: 'file', path: '/c:/ws/src/index.ts' })
+    const ok = await tree.reveal(target)
+    expect(ok).toBe(true)
+    const srcLower = URI.from({ scheme: 'file', path: '/c:/ws/src' })
+    const srcUpper = URI.from({ scheme: 'file', path: '/C:/ws/src' })
+    expect(tree.isExpanded(srcLower) || tree.isExpanded(srcUpper)).toBe(true)
+  })
+
+  it('setActiveEditorResource deduplicates URIs that differ only in drive letter case', async () => {
+    const inst = makeWinInst(makeWinFs())
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+
+    tree.setActiveEditorResource(winRoot)
+    let fired = 0
+    tree.onDidChange(() => fired++)
+
+    // Same path, different drive letter case — should be treated as identical
+    tree.setActiveEditorResource(winRootLower)
+    expect(fired).toBe(0)
+  })
+})
+
 describe('ExplorerTreeService — compact folders', () => {
   const root = URI.file('/compact')
   const src = URI.joinPath(root, 'src')

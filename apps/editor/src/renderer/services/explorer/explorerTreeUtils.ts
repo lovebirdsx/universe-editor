@@ -10,6 +10,12 @@
 
 import { URI } from '@universe-editor/platform'
 
+/** Normalize Windows drive letter to lowercase. No-op on non-Windows paths. */
+export function normalizeUri(uri: URI): URI {
+  const path = uri.path.replace(/^\/([A-Za-z]):/, (_, d: string) => `/${d.toLowerCase()}:`)
+  return path !== uri.path ? uri.with({ path }) : uri
+}
+
 export function parentOf(resource: URI): URI | null {
   const path = resource.path
   const slash = path.lastIndexOf('/')
@@ -25,9 +31,10 @@ export function parentOf(resource: URI): URI | null {
 export function isDescendant(root: URI, target: URI): boolean {
   if (root.scheme !== target.scheme) return false
   if (root.authority !== target.authority) return false
-  const rootPath = root.path.endsWith('/') ? root.path : root.path + '/'
-  const targetPath = target.path
-  return targetPath === root.path || targetPath.startsWith(rootPath)
+  const rootPath = normalizeUri(root).path
+  const rootPrefix = rootPath.endsWith('/') ? rootPath : rootPath + '/'
+  const targetPath = normalizeUri(target).path
+  return targetPath === rootPath || targetPath.startsWith(rootPrefix)
 }
 
 /**
@@ -36,18 +43,19 @@ export function isDescendant(root: URI, target: URI): boolean {
  * lies outside `root`.
  */
 export function relativeTo(root: URI, child: URI): string {
-  const rootPath = root.path.endsWith('/') ? root.path : root.path + '/'
-  const cp = child.path
-  if (cp === root.path) return ''
-  if (cp.startsWith(rootPath)) return cp.slice(rootPath.length)
-  return cp
+  const rootPath = normalizeUri(root).path
+  const rootPrefix = rootPath.endsWith('/') ? rootPath : rootPath + '/'
+  const cp = normalizeUri(child).path
+  if (cp === rootPath) return ''
+  if (cp.startsWith(rootPrefix)) return cp.slice(rootPrefix.length)
+  return child.path
 }
 
 export function dedupe(resources: readonly URI[]): URI[] {
   const seen = new Set<string>()
   const out: URI[] = []
   for (const r of resources) {
-    const k = r.toString()
+    const k = normalizeUri(r).toString()
     if (seen.has(k)) continue
     seen.add(k)
     out.push(r)
@@ -58,13 +66,13 @@ export function dedupe(resources: readonly URI[]): URI[] {
 export function sameUri(a: URI | null, b: URI | null): boolean {
   if (a === b) return true
   if (!a || !b) return false
-  return a.toString() === b.toString()
+  return normalizeUri(a).toString() === normalizeUri(b).toString()
 }
 
 export function sameUriList(a: readonly URI[], b: readonly URI[]): boolean {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i++) {
-    if (a[i]!.toString() !== b[i]!.toString()) return false
+    if (normalizeUri(a[i]!).toString() !== normalizeUri(b[i]!).toString()) return false
   }
   return true
 }

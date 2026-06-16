@@ -27,7 +27,7 @@ import {
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
 import { TreeModel, type ITreeDataSource } from '@universe-editor/workbench-ui'
-import { isDescendant, parentOf, relativeTo, sameUri } from './explorerTreeUtils.js'
+import { isDescendant, normalizeUri, parentOf, relativeTo, sameUri } from './explorerTreeUtils.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
 
 export interface IExplorerEntry {
@@ -96,8 +96,7 @@ export class ExplorerTreeService extends Disposable {
         cursor = this.getParent(cursor)
       }
       if (!cursor) return null
-      if (this._root && cursor.toString() === this._root.toString())
-        return this._rootEntry(this._root)
+      if (this._root && sameUri(cursor, this._root)) return this._rootEntry(this._root)
       return { resource: cursor, name: basename(cursor), isDirectory: true }
     },
   }
@@ -198,10 +197,10 @@ export class ExplorerTreeService extends Disposable {
    */
   getParent(resource: URI): URI | null {
     if (!this._root) return null
-    if (resource.toString() === this._root.toString()) return null
+    if (sameUri(resource, this._root)) return null
     const parent = parentOf(resource)
     if (!parent) return null
-    if (!isDescendant(this._root, parent) && parent.toString() !== this._root.toString()) {
+    if (!isDescendant(this._root, parent) && !sameUri(parent, this._root)) {
       return null
     }
     return parent
@@ -242,8 +241,9 @@ export class ExplorerTreeService extends Disposable {
   }
 
   setActiveEditorResource(resource: URI | null): void {
-    if (sameUri(this._activeEditorResource, resource)) return
-    this._activeEditorResource = resource
+    const normalized = resource ? normalizeUri(resource) : null
+    if (sameUri(this._activeEditorResource, normalized)) return
+    this._activeEditorResource = normalized
     this._onDidChangeSelection.fire()
     this._onDidChange.fire()
   }
@@ -255,8 +255,9 @@ export class ExplorerTreeService extends Disposable {
    */
   async reveal(target: URI): Promise<boolean> {
     if (!this._root) return false
-    if (!isDescendant(this._root, target)) return false
-    await this._model.reveal(this._leafEntry(target))
+    const normalized = normalizeUri(target)
+    if (!isDescendant(this._root, normalized)) return false
+    await this._model.reveal(this._leafEntry(normalized))
     return true
   }
 
@@ -297,8 +298,7 @@ export class ExplorerTreeService extends Disposable {
   }
 
   private _dirEntry(resource: URI): IExplorerEntry {
-    if (this._root && resource.toString() === this._root.toString())
-      return this._rootEntry(this._root)
+    if (this._root && sameUri(resource, this._root)) return this._rootEntry(this._root)
     return { resource, name: basename(resource), isDirectory: true }
   }
 
@@ -388,8 +388,9 @@ export class ExplorerTreeService extends Disposable {
   }
 
   private _setRoot(root: URI | null): void {
-    this._logger.info(`setRoot ${root?.toString() ?? '<none>'}`)
-    this._root = root
+    const normalized = root ? normalizeUri(root) : null
+    this._logger.info(`setRoot ${normalized?.toString() ?? '<none>'}`)
+    this._root = normalized
     this._nodes.clear()
     this._activeEditorResource = null
     this._model.reset()
@@ -453,7 +454,7 @@ export class ExplorerTreeService extends Disposable {
   }
 
   private _isSingleDirChild(resource: URI): boolean {
-    if (this._root && resource.toString() === this._root.toString()) return false
+    if (this._root && sameUri(resource, this._root)) return false
     const ch = this._nodes.get(resource.toString())?.children
     return ch !== null && ch !== undefined && ch.length === 1 && (ch[0]?.isDirectory ?? false)
   }
