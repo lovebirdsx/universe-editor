@@ -228,29 +228,36 @@ async function bootstrapWorkbench(): Promise<void> {
   const rendererLeakService = new RendererDisposableLeakService(disposableLeakProxy)
   services.set(IRendererDisposableLeakService, rendererLeakService)
 
+  // Unmount React (so useEffect cleanups run and their subscriptions don't
+  // show up as false leaks) then snapshot the tracker. Shared by the
+  // beforeunload handler and the E2E teardown probe. Idempotent: clears
+  // reactRoot so a second call is a no-op unmount. Returns null when the
+  // tracker is absent or nothing leaked.
+  const snapshotLeaks = (): { count: number; details: string } | null => {
+    reactRoot?.unmount()
+    reactRoot = null
+    if (!tracker) return null
+    const report = tracker.computeLeakingDisposables()
+    return report ? { count: report.leaks.length, details: report.details } : null
+  }
+
   if (tracker) {
     window.addEventListener('beforeunload', () => {
-      reactRoot?.unmount()
-      const report = tracker.computeLeakingDisposables()
-      if (report) {
+      const snap = snapshotLeaks()
+      if (snap) {
         if (import.meta.env.DEV) {
-          console.warn(
-            `[renderer] ${report.leaks.length} Disposable leak(s) detected:\n${report.details}`,
-          )
+          console.warn(`[renderer] ${snap.count} Disposable leak(s) detected:\n${snap.details}`)
         }
         if (isE2E) {
-          sessionStorage.setItem(
-            DISPOSABLE_LEAK_REPORT_KEY,
-            JSON.stringify({ count: report.leaks.length, details: report.details }),
-          )
+          sessionStorage.setItem(DISPOSABLE_LEAK_REPORT_KEY, JSON.stringify(snap))
         }
         // Fire-and-forget cross-process write. ProxyChannel dispatches the
         // request synchronously via ipcRenderer.send; the main process queues
         // it before the renderer is torn down, even though we cannot await
         // here. Skipped in production (tracker === null).
         void rendererLeakService.reportLeaks({
-          count: report.leaks.length,
-          details: report.details,
+          count: snap.count,
+          details: snap.details,
           capturedAt: Date.now(),
           source: rendererLeakService.readUnloadReason(),
         })
@@ -551,6 +558,7 @@ async function bootstrapWorkbench(): Promise<void> {
     scmService,
     languageFeaturesService: services.get(ILanguageFeaturesService) as ILanguageFeaturesService,
     outlineService,
+    computeTeardownLeakReport: snapshotLeaks,
   })
   workbenchStore.add(d)
 

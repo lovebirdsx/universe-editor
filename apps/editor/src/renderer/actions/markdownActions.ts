@@ -59,6 +59,9 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   // it) so the held Monaco model survives until the user switches back.
   target.openEditor(input, { activate: true, pinned: true, index: sourceIndex })
   target.detachEditor(active)
+  // detachEditor cut `active` from the group store without disposing it; the
+  // preview now owns its lifecycle.
+  input.adoptSource()
 }
 
 export class OpenMarkdownPreviewAction extends Action2 {

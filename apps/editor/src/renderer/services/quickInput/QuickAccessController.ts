@@ -8,10 +8,12 @@
 
 import {
   CancellationTokenSource,
+  Disposable,
   DisposableStore,
   IInstantiationService,
   IQuickInputService,
   InstantiationType,
+  MutableDisposable,
   QuickAccessRegistry,
   createDecorator,
   registerSingleton,
@@ -31,16 +33,26 @@ export interface IQuickAccessController {
 export const IQuickAccessController =
   createDecorator<IQuickAccessController>('quickAccessController')
 
-export class QuickAccessController implements IQuickAccessController {
+export class QuickAccessController extends Disposable implements IQuickAccessController {
   declare readonly _serviceBrand: undefined
+
+  // Anchors the current show() session to this singleton service. Cleanup
+  // normally fires on onDidHide; rooting here means an E2E teardown that tears
+  // down the window mid-show still disposes the in-flight picker + subscriptions.
+  private readonly _session = this._register(new MutableDisposable<DisposableStore>())
 
   constructor(
     @IQuickInputService private readonly _quickInput: IQuickInputService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
-  ) {}
+  ) {
+    super()
+  }
 
   show(value = ''): Promise<void> {
-    const picker = this._quickInput.createQuickPick<IQuickPickItem>()
+    const rootStore = new DisposableStore()
+    this._session.value = rootStore
+
+    const picker = rootStore.add(this._quickInput.createQuickPick<IQuickPickItem>())
     // Prefill before show(): while hidden, value writes are swallowed, so the
     // first pushed state (on show) already carries `value` and the input box
     // renders it. Reversing the order would drop the initial value.
@@ -72,7 +84,7 @@ export class QuickAccessController implements IQuickAccessController {
           return
         }
         activeDescriptor = descriptor
-        const store = new DisposableStore()
+        const store = rootStore.add(new DisposableStore())
         const source = new CancellationTokenSource()
         providerStore = store
         tokenSource = source
@@ -96,12 +108,11 @@ export class QuickAccessController implements IQuickAccessController {
         if (didResolve) return
         didResolve = true
         disposeActiveProvider()
-        rootStore.dispose()
-        picker.dispose()
+        if (this._session.value === rootStore) this._session.clear()
+        else rootStore.dispose()
         resolve()
       }
 
-      const rootStore = new DisposableStore()
       rootStore.add(picker.onDidChangeValue((v) => route(v)))
       rootStore.add(picker.onDidHide(() => finish()))
 

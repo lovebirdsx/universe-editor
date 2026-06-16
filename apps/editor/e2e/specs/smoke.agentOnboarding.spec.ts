@@ -13,6 +13,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 test.describe('@p1 first-run agent onboarding', () => {
   test('reveals the Agents secondary sidebar on a brand-new install', async () => {
@@ -46,6 +47,7 @@ test.describe('@p1 first-run agent onboarding', () => {
           message: 'secondary sidebar should auto-reveal on first run',
         })
         .toBe(true)
+      await expectNoLeaks(page)
     } finally {
       await app.close()
     }

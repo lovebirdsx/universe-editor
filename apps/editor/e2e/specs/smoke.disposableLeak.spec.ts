@@ -6,13 +6,14 @@
  *  modes; on beforeunload it stores a JSON report in sessionStorage. The
  *  probe reads that key after the page reloads.
  *
- *  Tagged @p1 — reports failures but does not block CI.
+ *  Tagged @p0 — leaks now block CI (the teardown gate in the fixtures asserts
+ *  no leaks for every spec; this dedicated spec covers the Restart Editor path).
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect } from '../fixtures/electronApp.js'
 import { DISPOSABLE_LEAK_REPORT_KEY } from '../../src/shared/e2e/contract.js'
 
-test.describe('@p1 disposable leak detection', () => {
+test.describe('@p0 disposable leak detection', () => {
   test('Restart Editor leaves no un-disposed Disposables', async ({ workbench }) => {
     await workbench.waitForRestored()
 

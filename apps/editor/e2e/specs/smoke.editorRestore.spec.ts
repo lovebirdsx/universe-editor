@@ -15,6 +15,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 /** Convert a filesystem path to the UriComponents format used by URI.file(). */
 function fsPathToUriComponents(fsPath: string) {
@@ -131,6 +132,7 @@ test.describe('@p1 editor restore', () => {
             timeout: 5000,
           })
           .toContain('hello.json')
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }
@@ -185,6 +187,7 @@ test.describe('@p1 editor restore', () => {
             timeout: 5000,
           })
           .toContain('a.json')
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }

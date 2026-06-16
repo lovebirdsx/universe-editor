@@ -73,6 +73,8 @@ export interface E2EProbeServices {
   readonly scmService: IScmService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
+  /** Tears down React + snapshots the Disposable tracker; see E2EProbe. */
+  readonly computeTeardownLeakReport: () => E2EDisposableLeakReport | null
 }
 
 const NONE_TOKEN = {
@@ -174,11 +176,13 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       onUnexpectedError(new Error(message))
     },
     registerDummyEditor: (glob: string, typeId: string) => {
-      EditorRegistry.registerEditorProvider({ typeId, componentKey: 'dummy' })
-      services.editorResolverService.registerEditor(
-        glob,
-        { typeId, displayName: `Dummy (${typeId})`, priority: 100 },
-        (uri) => new DummyEditorInput(uri, typeId),
+      ds.add(EditorRegistry.registerEditorProvider({ typeId, componentKey: 'dummy' }))
+      ds.add(
+        services.editorResolverService.registerEditor(
+          glob,
+          { typeId, displayName: `Dummy (${typeId})`, priority: 100 },
+          (uri) => new DummyEditorInput(uri, typeId),
+        ),
       )
     },
     getActiveEditorTypeId: () => {
@@ -339,6 +343,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!raw) return null
       return JSON.parse(raw) as E2EDisposableLeakReport
     },
+    computeTeardownLeakReport: (): E2EDisposableLeakReport | null =>
+      services.computeTeardownLeakReport(),
     getScmSourceControlCount: (): number => services.scmService.sourceControls.get().length,
     getScmInputBoxValue: (): string | undefined =>
       services.scmService.sourceControls.get()[0]?.inputValue.get(),

@@ -11,6 +11,31 @@ import { QuickInputPO } from './QuickInputPO.js'
 import { EditorAreaPO } from './EditorAreaPO.js'
 import { PanelPO } from './PanelPO.js'
 
+/**
+ * Teardown gate: unmount React + snapshot the Disposable tracker on `page`, and
+ * fail the test if anything leaked. Shared by the fixtures' teardown and by
+ * self-launching specs (which build their own Electron instance and must invoke
+ * this on the final live window before closing it). Destructive — unmounts the
+ * workbench, so call it last, after the test body has finished.
+ *
+ * Tolerates a destroyed execution context (the window may already be navigating
+ * away on a reload-based teardown): a missing probe means there is nothing left
+ * to assert.
+ */
+export async function expectNoLeaks(page: Page): Promise<void> {
+  let report: E2EDisposableLeakReport | null
+  try {
+    report = await page.evaluate(() => window.__E2E__?.computeTeardownLeakReport() ?? null)
+  } catch (err) {
+    if (/Execution context was destroyed|Target (page|closed)/.test(String(err))) return
+    throw err
+  }
+  expect(
+    report,
+    report ? `${report.count} Disposable leak(s) detected at teardown:\n${report.details}` : '',
+  ).toBeNull()
+}
+
 export class WorkbenchPO {
   readonly activityBar: ActivityBarPO
   readonly sideBar: SideBarPO
@@ -181,6 +206,14 @@ export class WorkbenchPO {
    */
   async getLeakReport(): Promise<E2EDisposableLeakReport | null> {
     return this.page.evaluate(() => window.__E2E__!.getStoredLeakReport())
+  }
+
+  /**
+   * Teardown gate — unmount React, snapshot the tracker, and fail if anything
+   * leaked. Thin wrapper over the module-level {@link expectNoLeaks}.
+   */
+  async expectNoLeaks(): Promise<void> {
+    await expectNoLeaks(this.page)
   }
 
   /** Number of currently registered SCM source controls. */

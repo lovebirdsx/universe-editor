@@ -23,7 +23,12 @@ function makeModified(): string {
 }
 
 test.describe('@p0 diff auto reveal', () => {
-  test('scrolls the modified side to the first change on open', async ({ page }) => {
+  // Depend on `workbench` (not just `page`): the worker fixture's per-test
+  // resetWindow — which reloads the window and re-mounts React after the prior
+  // test's teardown gate unmounted it — only runs for tests that pull the
+  // `workbench` fixture. Without it this spec inherits a dead (unmounted) page.
+  test('scrolls the modified side to the first change on open', async ({ page, workbench }) => {
+    await workbench.waitForRestored()
     const original = makeOriginal()
     const modified = makeModified()
 

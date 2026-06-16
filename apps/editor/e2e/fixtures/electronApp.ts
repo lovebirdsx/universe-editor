@@ -15,7 +15,7 @@ import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { WorkbenchPO } from '../pages/WorkbenchPO.js'
+import { WorkbenchPO, expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 export const APP_ROOT = resolve(__dirname, '..', '..')
@@ -101,6 +101,10 @@ export const test = base.extend<E2EFixtures>({
       Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
     )
     await use(page)
+    // Teardown gate: fail the test if the session leaked any Disposables. The
+    // probe unmounts React first so React subscriptions don't count as leaks.
+    // Tolerates a window already torn down by workbench.action.quit.
+    await expectNoLeaks(page)
   },
   workbench: async ({ page }, use) => {
     await use(new WorkbenchPO(page))

@@ -22,6 +22,7 @@ import { execFileSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const GENERATED_MESSAGE = 'feat: add greeting'
 
@@ -144,6 +145,7 @@ test.describe('@p0 ai commit message generation', () => {
           message: 'generated commit message should be written to the input box',
         })
         .toContain(GENERATED_MESSAGE)
+      await expectNoLeaks(page)
     } finally {
       await app.close()
       await ollama.close()

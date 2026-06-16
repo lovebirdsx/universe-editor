@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'ignore' })
@@ -89,6 +90,7 @@ test.describe('@p1 ai commit message', () => {
       await page.evaluate(() => window.__E2E__!.runCommand('workbench.view.scm'))
       const button = page.getByRole('button', { name: 'Generate Commit Message' })
       await expect(button).toBeVisible({ timeout: 15_000 })
+      await expectNoLeaks(page)
     } finally {
       await app.close()
     }

@@ -24,7 +24,7 @@ import {
 import { join } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { WorkbenchPO } from '../pages/WorkbenchPO.js'
+import { WorkbenchPO, expectNoLeaks } from '../pages/WorkbenchPO.js'
 import { APP_ROOT, MAIN_ENTRY } from './electronApp.js'
 
 // Initial userData content every test starts from. Mirrors electronApp.ts:
@@ -140,6 +140,11 @@ export const test = base.extend<SharedE2EFixtures, SharedWorkerFixtures>({
       await resetWindow(sharedApp.page, sharedApp.userDataDir)
     }
     await use(new WorkbenchPO(sharedApp.page))
+    // Teardown gate: fail the test if the session leaked any Disposables. This
+    // unmounts React on the shared page; the next test's resetWindow reloads the
+    // window (rebuilding the UI), and the worker fixture closes the app after the
+    // last test — so every test, including the last, is covered.
+    await expectNoLeaks(sharedApp.page)
   },
 })
 

@@ -6,12 +6,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  Disposable,
+  DisposableStore,
   IDialogService,
   IFileService,
   IFileDialogService,
   IQuickInputService,
   IWorkspaceService,
   InstantiationType,
+  MutableDisposable,
   URI,
   localize,
   registerSingleton,
@@ -37,11 +40,16 @@ interface ResolvedEntry {
 
 const PARENT_ID = '..'
 
-export class SimpleFileDialog implements IFileDialogService {
+export class SimpleFileDialog extends Disposable implements IFileDialogService {
   declare readonly _serviceBrand: undefined
 
   private readonly _sep: string
   private readonly _home: string
+
+  // Anchors the current dialog session to this singleton service. Cleanup
+  // normally fires on onDidHide; rooting here means an E2E teardown that tears
+  // down the window mid-dialog still disposes the in-flight quick pick + subs.
+  private readonly _session = this._register(new MutableDisposable<DisposableStore>())
 
   constructor(
     @IQuickInputService private readonly _quickInput: IQuickInputService,
@@ -49,6 +57,7 @@ export class SimpleFileDialog implements IFileDialogService {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IDialogService private readonly _dialog: IDialogService,
   ) {
+    super()
     const ipc = typeof window !== 'undefined' ? window.ipc : undefined
     this._sep = ipc?.platform === 'win32' ? '\\' : '/'
     this._home = typeof ipc?.home === 'string' ? ipc.home : ''
@@ -67,7 +76,9 @@ export class SimpleFileDialog implements IFileDialogService {
     const start = await this._resolveStart(opts, mode)
 
     return new Promise<URI | undefined>((resolve) => {
-      const qp = this._quickInput.createQuickPick<IQuickPickItem>()
+      const session = new DisposableStore()
+      this._session.value = session
+      const qp = session.add(this._quickInput.createQuickPick<IQuickPickItem>())
       qp.filterExternally = true
       qp.keepOpenOnAccept = true
       qp.autoFocusFirstItem = false
@@ -104,7 +115,8 @@ export class SimpleFileDialog implements IFileDialogService {
         if (settled) return
         settled = true
         qp.hide()
-        qp.dispose()
+        if (this._session.value === session) this._session.clear()
+        else session.dispose()
         resolve(uri)
       }
 
@@ -323,16 +335,20 @@ export class SimpleFileDialog implements IFileDialogService {
         await acceptValue(qp.value)
       }
 
-      qp.onDidAccept((items) => void onAccept(items))
-      qp.onDidChangeValue((value) => void onValueChange(value))
-      qp.onDidChangeActive((item) => onActiveChange(item))
-      qp.onDidTriggerOk(() => void acceptValue(qp.value))
-      qp.onDidTriggerButton(() => {
-        showDotFiles = !showDotFiles
-        syncHiddenButton()
-        void updateItems(currentFolder, { resetInput: false })
-      })
-      qp.onDidHide(() => finish(undefined))
+      qp.onDidAccept((items) => void onAccept(items), undefined, session)
+      qp.onDidChangeValue((value) => void onValueChange(value), undefined, session)
+      qp.onDidChangeActive((item) => onActiveChange(item), undefined, session)
+      qp.onDidTriggerOk(() => void acceptValue(qp.value), undefined, session)
+      qp.onDidTriggerButton(
+        () => {
+          showDotFiles = !showDotFiles
+          syncHiddenButton()
+          void updateItems(currentFolder, { resetInput: false })
+        },
+        undefined,
+        session,
+      )
+      qp.onDidHide(() => finish(undefined), undefined, session)
 
       qp.show()
       void (async () => {

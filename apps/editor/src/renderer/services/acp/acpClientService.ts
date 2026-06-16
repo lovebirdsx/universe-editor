@@ -390,24 +390,26 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       { location: ProgressLocation.Notification, title: 'Preparing Claude…', source: 'acp' },
       async (progress) => {
         let lastPct = 0
-        const sub = this._claudeBinary.onDidChangeProgress(({ received, total }) => {
-          if (total > 0) {
-            const pct = Math.min(100, Math.floor((received / total) * 100))
-            progress.report({
-              message: `Downloading Claude binary… ${pct}%`,
-              increment: pct - lastPct,
-            })
-            lastPct = pct
-          } else {
-            progress.report({
-              message: `Downloading Claude binary… ${Math.floor(received / 1048576)} MB`,
-            })
-          }
-        })
+        const sub = this._entriesStore.add(
+          this._claudeBinary.onDidChangeProgress(({ received, total }) => {
+            if (total > 0) {
+              const pct = Math.min(100, Math.floor((received / total) * 100))
+              progress.report({
+                message: `Downloading Claude binary… ${pct}%`,
+                increment: pct - lastPct,
+              })
+              lastPct = pct
+            } else {
+              progress.report({
+                message: `Downloading Claude binary… ${Math.floor(received / 1048576)} MB`,
+              })
+            }
+          }),
+        )
         try {
           return await this._claudeBinary.resolve(opts)
         } finally {
-          sub.dispose()
+          this._entriesStore.delete(sub)
         }
       },
     )
@@ -434,24 +436,26 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       { location: ProgressLocation.Notification, title: 'Preparing Codex…', source: 'acp' },
       async (progress) => {
         let lastPct = 0
-        const sub = this._codexBinary.onDidChangeProgress(({ received, total }) => {
-          if (total > 0) {
-            const pct = Math.min(100, Math.floor((received / total) * 100))
-            progress.report({
-              message: `Downloading codex-acp… ${pct}%`,
-              increment: pct - lastPct,
-            })
-            lastPct = pct
-          } else {
-            progress.report({
-              message: `Downloading codex-acp… ${Math.floor(received / 1048576)} MB`,
-            })
-          }
-        })
+        const sub = this._entriesStore.add(
+          this._codexBinary.onDidChangeProgress(({ received, total }) => {
+            if (total > 0) {
+              const pct = Math.min(100, Math.floor((received / total) * 100))
+              progress.report({
+                message: `Downloading codex-acp… ${pct}%`,
+                increment: pct - lastPct,
+              })
+              lastPct = pct
+            } else {
+              progress.report({
+                message: `Downloading codex-acp… ${Math.floor(received / 1048576)} MB`,
+              })
+            }
+          }),
+        )
         try {
           return await this._codexBinary.resolve(opts)
         } finally {
-          sub.dispose()
+          this._entriesStore.delete(sub)
         }
       },
     )

@@ -26,6 +26,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const KEY = 'ctrl+shift+d'
 const COMMAND = 'editor.action.copyLinesDownAction'
@@ -101,6 +102,7 @@ test.describe('@p1 vscode keybindings', () => {
           message: `${KEY} should be bound to ${COMMAND} after the monaco action bridge`,
         })
         .toContain(COMMAND)
+      await expectNoLeaks(page)
     } finally {
       await app.close()
     }
@@ -191,6 +193,7 @@ test.describe('@p1 vscode keybindings', () => {
           },
         )
         .toContain(COMMAND)
+      await expectNoLeaks(page)
     } finally {
       await app.close()
     }

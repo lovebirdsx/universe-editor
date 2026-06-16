@@ -270,6 +270,16 @@ export interface E2EProbe {
    * (or if the tracker was not installed, e.g. in production builds).
    */
   getStoredLeakReport(): E2EDisposableLeakReport | null
+  /**
+   * Tear down React and compute the live Disposable leak report for the current
+   * session WITHOUT waiting for unload. Replicates the beforeunload handler
+   * (unmount React so useEffect cleanups run, then snapshot the tracker), so the
+   * E2E fixture can assert "no leaks" at teardown for every spec — not just the
+   * dedicated restart spec. Destructive: unmounts the workbench, so it must only
+   * be called once, in fixture teardown, after the test body has finished.
+   * Returns null when the tracker is not installed or no leaks were found.
+   */
+  computeTeardownLeakReport(): E2EDisposableLeakReport | null
   /** Number of currently registered SCM source controls. */
   getScmSourceControlCount(): number
   /** Commit input box value of the first SCM source control (undefined if none). */

@@ -64,6 +64,16 @@ export class MarkdownPreviewInput extends EditorInput {
   }
 
   /**
+   * Take ownership of the held source's lifecycle after it has been detached
+   * from its editor group (detachEditor cuts the source's parent chain without
+   * disposing it). Rooting it here keeps it off the leak tracker's parentless
+   * set and ties its disposal to the preview's.
+   */
+  adoptSource(): void {
+    if (this._sourceInput) this._register(this._sourceInput)
+  }
+
+  /**
    * Hands back the held FileEditorInput and clears the internal reference so
    * that dispose() won't touch it. Called by OpenMarkdownSourceAction before
    * re-adding the source to the editor group.
@@ -71,6 +81,7 @@ export class MarkdownPreviewInput extends EditorInput {
   releaseSource(): FileEditorInput | undefined {
     const input = this._sourceInput
     this._sourceInput = undefined
+    if (input) this._store.deleteAndLeak(input)
     return input
   }
 
@@ -93,10 +104,10 @@ export class MarkdownPreviewInput extends EditorInput {
   }
 
   override dispose(): void {
-    if (this._sourceInput) {
-      this._sourceInput.dispose()
-      this._sourceInput = undefined
-    }
+    // The held source (when in toggle mode) is registered via adoptSource(), so
+    // super.dispose() releases it through the store. releaseSource() detaches it
+    // first when toggling back.
+    this._sourceInput = undefined
     super.dispose()
   }
 }

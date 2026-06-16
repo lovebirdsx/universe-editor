@@ -22,6 +22,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const EMPTY_SESSION_ID = 'echo-empty-session-1'
 const ACP_RESOURCE = `universe:/acp/session/${EMPTY_SESSION_ID}`
@@ -165,6 +166,7 @@ test.describe('@p1 empty agent session restore', () => {
 
         // It must never surface a resume error in the editor body.
         expect(await page.locator('[data-testid="acp-session-resume-error"]').count()).toBe(0)
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }

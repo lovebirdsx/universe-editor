@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { URI } from '@universe-editor/platform'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const SAVED_SIDEBAR_PX = 400
 
@@ -122,6 +123,7 @@ test.describe('@p1 layout persistence', () => {
           return el ? Math.round(el.getBoundingClientRect().width) : null
         })
         expect(sidebarWidth).toBeLessThan(SAVED_SIDEBAR_PX + 20)
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }

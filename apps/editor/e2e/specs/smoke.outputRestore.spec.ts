@@ -16,6 +16,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 function seedUserSettings(userDataDir: string): void {
   writeFileSync(
@@ -121,6 +122,7 @@ test.describe('@p1 output channel restore', () => {
             timeout: 5000,
           })
           .toBe('Main')
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }
@@ -162,6 +164,7 @@ test.describe('@p1 output channel restore', () => {
             timeout: 3000,
           })
           .toBe('TestChannel')
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }
@@ -215,6 +218,7 @@ test.describe('@p1 output channel restore', () => {
             timeout: 3000,
           })
           .toBe('acp/claude/new-handle')
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }
