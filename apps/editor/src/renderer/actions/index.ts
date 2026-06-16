@@ -151,6 +151,7 @@ import {
   ToggleNotificationsCenterAction,
 } from './notificationActions.js'
 import { ReopenWithAction } from './editorResolverActions.js'
+import { MoveViewAction, ResetViewLocationsAction } from './viewActions.js'
 import {
   PickModelAction,
   ManageModelsAction,
@@ -395,6 +396,10 @@ registerAction2(TestNotificationAction)
 
 // Editor resolver
 registerAction2(ReopenWithAction)
+
+// Views — move / reset view locations
+registerAction2(MoveViewAction)
+registerAction2(ResetViewLocationsAction)
 
 // AI
 registerAction2(PickModelAction)

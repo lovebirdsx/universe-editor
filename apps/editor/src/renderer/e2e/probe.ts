@@ -29,6 +29,8 @@ import {
   type ILifecycleService,
   type IOutputService,
   type IStatusBarService,
+  type IViewDescriptorService,
+  type IViewsService,
   type IWindowsService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
@@ -65,6 +67,8 @@ export interface E2EProbeServices {
   readonly workspaceService: IWorkspaceService
   readonly windowsService: IWindowsService
   readonly layoutService: ILayoutService
+  readonly viewsService: IViewsService
+  readonly viewDescriptorService: IViewDescriptorService
   readonly configurationService: IConfigurationService
   readonly acpSessionService: IAcpSessionService
   readonly outputService: IOutputService
@@ -444,6 +448,24 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     updateConfigValue: (key: string, value: unknown): void =>
       services.configurationService.update(key, value, ConfigurationTarget.Memory),
+    getViewContainerByViewId: (viewId: string) =>
+      services.viewDescriptorService.getViewContainerByViewId(viewId)?.id,
+    getViewIdsByContainer: (containerId: string) =>
+      services.viewDescriptorService.getViewsByContainer(containerId).map((v) => v.id),
+    getViewContainerIdsByLocation: (location: number) =>
+      services.viewDescriptorService.getViewContainersByLocation(location).map((c) => c.id),
+    moveViewsToContainer: (viewIds: readonly string[], targetContainerId: string) =>
+      services.viewDescriptorService.moveViewsToContainer(viewIds, targetContainerId),
+    moveViewToLocation: (viewId: string, location: number) =>
+      services.viewDescriptorService.moveViewToLocation(viewId, location),
+    moveViewContainerToLocation: (containerId: string, location: number) =>
+      services.viewDescriptorService.moveViewContainerToLocation(containerId, location),
+    getViewCollapsed: (viewId: string) =>
+      services.viewDescriptorService.getViewState(viewId).collapsed === true,
+    setViewCollapsed: (viewId: string, collapsed: boolean) =>
+      services.viewDescriptorService.setViewCollapsed(viewId, collapsed),
+    flushViewCustomizationsSave: () => services.viewDescriptorService.save(),
+    resetViewLocations: () => services.viewDescriptorService.reset(),
   }
 
   window[E2E_PROBE_KEY] = probe

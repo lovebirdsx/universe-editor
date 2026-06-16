@@ -7,6 +7,7 @@ import {
   Puzzle,
   Settings,
   FileStack,
+  AppWindow,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -26,6 +27,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   extensions: Puzzle,
   'settings-gear': Settings,
   diff: FileStack,
+  window: AppWindow,
 }
 
 export function resolveActivityIcon(name: string): LucideIcon {

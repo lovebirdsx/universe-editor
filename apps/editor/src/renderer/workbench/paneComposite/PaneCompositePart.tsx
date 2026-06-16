@@ -8,10 +8,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { createElement, type ComponentType, type ReactNode } from 'react'
-import { IViewsService, ViewContainerRegistry, ViewRegistry } from '@universe-editor/platform'
+import { IViewsService } from '@universe-editor/platform'
 import type { IPart } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
+import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { ViewPaneContainer } from '../sidebar/ViewPaneContainer.js'
 import { viewToolbarMap } from '../viewRegistry/viewToolbarMap.js'
 import { ViewComponentRegistry } from '../../services/views/ViewComponentRegistry.js'
@@ -30,12 +31,13 @@ interface Props {
 
 export function PaneCompositePart({ part, config }: Props) {
   const viewsService = useService(IViewsService)
+  const viewDescriptors = useViewDescriptors()
   const activeByLocation = useObservable(viewsService.activeContainerByLocation)
   const activeId = activeByLocation[config.location]
-  const activeContainer = activeId ? ViewContainerRegistry.getViewContainer(activeId) : undefined
+  const activeContainer = activeId ? viewDescriptors.getViewContainerById(activeId) : undefined
   const containerRef = usePartContainer<HTMLElement>(part)
 
-  const views = activeContainer ? ViewRegistry.getViewsForContainer(activeContainer.id) : []
+  const views = activeContainer ? viewDescriptors.getViewsByContainer(activeContainer.id) : []
   const onlyView = views.length === 1 ? views[0] : undefined
 
   const rootProps: Record<string, unknown> = {
@@ -64,19 +66,19 @@ export function PaneCompositePart({ part, config }: Props) {
     />
   )
 
-  const content: ReactNode =
-    config.content === 'stack' ? (
-      <div className={styles['views']}>
-        <ViewPaneContainer
-          views={views}
-          resolve={resolveViewComponent}
-          toolbarMap={viewToolbarMap}
-          {...(config.emptyMessage ? { emptyMessage: config.emptyMessage } : {})}
-        />
-      </div>
-    ) : (
-      <TiledViews views={views} resolve={resolveViewComponent} />
-    )
+  const content: ReactNode = !activeContainer ? null : config.content === 'stack' ? (
+    <div className={styles['views']}>
+      <ViewPaneContainer
+        containerId={activeContainer.id}
+        views={views}
+        resolve={resolveViewComponent}
+        toolbarMap={viewToolbarMap}
+        {...(config.emptyMessage ? { emptyMessage: config.emptyMessage } : {})}
+      />
+    </div>
+  ) : (
+    <TiledViews views={views} resolve={resolveViewComponent} />
+  )
 
   return createElement(config.rootTag, rootProps, header, content)
 }

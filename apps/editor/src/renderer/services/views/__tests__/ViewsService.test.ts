@@ -4,7 +4,9 @@ import {
   Event,
   ViewContainerLocation,
   ViewContainerRegistry,
+  constObservable,
   type IStorageService,
+  type IViewDescriptorService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import { ViewsService } from '../ViewsService.js'
@@ -21,11 +23,22 @@ const stubStorage: IStorageService = {
 // so a hydrated workspace (current non-null) keeps load() from waiting.
 const stubWorkspace = { current: {} } as unknown as IWorkspaceService
 
+// Stub the mapping layer with the static registry defaults — these tests predate
+// runtime view↔container customization and only need each container's home
+// location, which the registry already records.
+const stubViewDescriptors = {
+  _serviceBrand: undefined,
+  version: constObservable(0),
+  getViewContainerLocation: (id: string) => ViewContainerRegistry.getViewContainer(id)?.location,
+  getViewContainersByLocation: (location: ViewContainerLocation) =>
+    ViewContainerRegistry.getViewContainers(location),
+} as unknown as IViewDescriptorService
+
 function makeService(
   storage: IStorageService = stubStorage,
   workspace: IWorkspaceService = stubWorkspace,
 ): ViewsService {
-  return new ViewsService(storage, workspace)
+  return new ViewsService(storage, workspace, stubViewDescriptors)
 }
 
 describe('ViewsService', () => {
@@ -116,7 +129,7 @@ describe('ViewsService', () => {
         onDidChangeWorkspaceScope: emitter.event,
       }
       const workspace = { current: null } as unknown as IWorkspaceService
-      const svc = new ViewsService(storage, workspace)
+      const svc = new ViewsService(storage, workspace, stubViewDescriptors)
 
       const loadPromise = svc.load()
       emitter.fire() // hydration lands; consumed by load()'s settle, not a reload
@@ -137,7 +150,7 @@ describe('ViewsService', () => {
         onDidChangeWorkspaceScope: emitter.event,
       }
       const workspace = { current: null } as unknown as IWorkspaceService
-      const svc = new ViewsService(storage, workspace)
+      const svc = new ViewsService(storage, workspace, stubViewDescriptors)
 
       const loadPromise = svc.load()
       emitter.fire()

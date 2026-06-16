@@ -6,8 +6,10 @@
 import {
   Disposable,
   IStorageService,
+  IViewDescriptorService,
   IWorkspaceService,
   StorageScope,
+  autorun,
   observableValue,
 } from '@universe-editor/platform'
 import type { IViewsService } from '@universe-editor/platform'
@@ -41,6 +43,7 @@ export class ViewsService extends Disposable implements IViewsService {
   constructor(
     @IStorageService private readonly _storage: IStorageService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
+    @IViewDescriptorService private readonly _viewDescriptors: IViewDescriptorService,
   ) {
     super()
     this._register(
@@ -57,6 +60,19 @@ export class ViewsService extends Disposable implements IViewsService {
     this._register(
       ViewContainerRegistry.onDidRegisterViewContainer(() => {
         this._seedDefaults()
+      }),
+    )
+    // A container moving between locations (drag) can leave its old location's
+    // active pointer dangling; re-seed so every location keeps a valid active.
+    this._register(
+      ViewContainerRegistry.onDidDeregisterViewContainer(() => {
+        this._reconcileActive()
+      }),
+    )
+    this._register(
+      autorun((r) => {
+        this._viewDescriptors.version.read(r)
+        this._reconcileActive()
       }),
     )
   }
@@ -173,8 +189,8 @@ export class ViewsService extends Disposable implements IViewsService {
   }
 
   private _getLocation(id: string): number {
-    const descriptor = ViewContainerRegistry.getViewContainer(id)
-    return descriptor?.location ?? ViewContainerLocation.SideBar
+    const location = this._viewDescriptors.getViewContainerLocation(id)
+    return location ?? ViewContainerLocation.SideBar
   }
 
   /**
@@ -188,7 +204,7 @@ export class ViewsService extends Disposable implements IViewsService {
     let changed = false
     for (const loc of ALL_LOCATIONS) {
       if (next[loc]) continue
-      const first = ViewContainerRegistry.getViewContainers(loc)[0]
+      const first = this._viewDescriptors.getViewContainersByLocation(loc)[0]
       if (!first) continue
       next[loc] = first.id
       changed = true
@@ -200,5 +216,33 @@ export class ViewsService extends Disposable implements IViewsService {
     } finally {
       this._suspendPersist = false
     }
+  }
+
+  /**
+   * After a container moves between locations or is removed, the active pointer
+   * for a location may reference a container that no longer lives there. Drop
+   * stale pointers and re-seed so each location resolves to a valid container.
+   */
+  private _reconcileActive(): void {
+    const cur = this.activeContainerByLocation.get()
+    const next: Record<number, string | undefined> = { ...cur }
+    let changed = false
+    for (const loc of ALL_LOCATIONS) {
+      const activeId = next[loc]
+      if (!activeId) continue
+      if (this._viewDescriptors.getViewContainerLocation(activeId) !== loc) {
+        delete next[loc]
+        changed = true
+      }
+    }
+    if (changed) {
+      this._suspendPersist = true
+      try {
+        this.activeContainerByLocation.set(next, undefined)
+      } finally {
+        this._suspendPersist = false
+      }
+    }
+    this._seedDefaults()
   }
 }

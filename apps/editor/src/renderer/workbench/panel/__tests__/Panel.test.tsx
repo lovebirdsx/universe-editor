@@ -3,6 +3,7 @@ import { render, screen } from '@testing-library/react'
 import {
   IConfigurationService,
   IOutputService,
+  IViewDescriptorService,
   InstantiationService,
   ServiceCollection,
   ViewContainerLocation,
@@ -15,6 +16,7 @@ import {
 import { ILayoutService, IViewsService } from '@universe-editor/platform'
 import { OutputService } from '../../../services/output/OutputService.js'
 import { ViewsService } from '../../../services/views/ViewsService.js'
+import { ViewDescriptorService } from '../../../services/views/ViewDescriptorService.js'
 import { ViewComponentRegistry } from '../../../services/views/ViewComponentRegistry.js'
 import { ServicesContext } from '../../useService.js'
 import { PaneCompositePart } from '../../paneComposite/PaneCompositePart.js'
@@ -49,7 +51,9 @@ const stubWorkspace = { current: {} } as unknown as IWorkspaceService
 
 function renderPanel(activeContainerId: string | undefined) {
   const services = new ServiceCollection()
-  const viewsService = new ViewsService(makeStorage(), stubWorkspace)
+  const viewDescriptorService = new ViewDescriptorService(makeStorage(), stubWorkspace)
+  services.set(IViewDescriptorService, viewDescriptorService)
+  const viewsService = new ViewsService(makeStorage(), stubWorkspace, viewDescriptorService)
   if (activeContainerId) viewsService.openViewContainer(activeContainerId)
   services.set(IViewsService, viewsService)
   services.set(IOutputService, new OutputService(makeStorage()))
@@ -118,8 +122,8 @@ describe('Panel', () => {
     expect(screen.getByTestId('output-view')).toBeTruthy()
   })
 
-  it('renders no view content when no container is active', () => {
-    registerOutput()
+  it('renders no view content when no container exists at the location', () => {
+    // No container registered for the Panel location → nothing to seed/show.
     renderPanel(undefined)
     expect(screen.queryByTestId('output-view')).toBeNull()
     expect(screen.getByTestId('part-panel').getAttribute('data-active-view-container')).toBe('')

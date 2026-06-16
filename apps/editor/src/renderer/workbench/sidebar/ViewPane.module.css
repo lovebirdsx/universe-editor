@@ -62,3 +62,32 @@
 .body.collapsed {
   display: none;
 }
+
+.dragging {
+  opacity: 0.5;
+}
+
+.dropTop::before,
+.dropBottom::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--color-tab-active-border, #0070e0);
+  z-index: 10;
+  pointer-events: none;
+}
+
+.dropTop::before {
+  top: 0;
+}
+
+.dropBottom::after {
+  bottom: 0;
+}
+
+.viewPane {
+  position: relative;
+}
+

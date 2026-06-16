@@ -24,6 +24,8 @@ export function ViewTitleActions({ menuId, contextKeyService, group }: Props) {
 
   if (actions.length === 0) return null
 
+  const viewId = contextKeyService.get('view')
+
   return (
     <>
       {actions.map((a) => {
@@ -32,7 +34,7 @@ export function ViewTitleActions({ menuId, contextKeyService, group }: Props) {
           <button
             key={a.command}
             className={styles['actionBtn']}
-            onClick={() => void commandService.executeCommand(a.command)}
+            onClick={() => void commandService.executeCommand(a.command, viewId)}
             title={a.label}
             aria-label={a.label}
             data-testid={`view-title-action-${a.command}`}

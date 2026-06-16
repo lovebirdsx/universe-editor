@@ -63,6 +63,29 @@
   border-radius: 0 2px 2px 0;
 }
 
+.dragging {
+  opacity: 0.4;
+}
+
+.dropBefore::after,
+.dropAfter::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  background: var(--color-activitybar-active-border, #0070e0);
+  pointer-events: none;
+}
+
+.dropBefore::after {
+  top: -1px;
+}
+
+.dropAfter::after {
+  bottom: -1px;
+}
+
 .badge {
   position: absolute;
   right: 4px;

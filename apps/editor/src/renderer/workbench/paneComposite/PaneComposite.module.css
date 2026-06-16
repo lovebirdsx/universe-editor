@@ -172,6 +172,19 @@
   font-size: 12px;
 }
 
+.emptyDrop {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.emptyDropOver {
+  outline: 2px dashed var(--color-tab-active-border, #0070e0);
+  outline-offset: -4px;
+  background: var(--color-tab-hover-bg, #1f1f22);
+}
+
 .viewBody {
   display: contents;
 }

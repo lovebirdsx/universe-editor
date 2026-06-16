@@ -19,6 +19,7 @@ import {
   IHistoryService,
   IStatusBarService,
   IViewsService,
+  IViewDescriptorService,
   IOutputService,
   ILayoutService,
   PartId,
@@ -69,6 +70,7 @@ import { EditorService } from './services/editor/EditorService.js'
 import { EditorGroupsService } from './services/editor/EditorGroupsService.js'
 import { StatusBarService } from './services/statusbar/StatusBarService.js'
 import { ViewsService } from './services/views/ViewsService.js'
+import { ViewDescriptorService } from './services/views/ViewDescriptorService.js'
 import { OutputService } from './services/output/OutputService.js'
 import {
   IKeyboardDebugService,
@@ -400,6 +402,10 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(IOutlineService, outlineService)
 
   // Services with @IStorageService dependencies go through DI.
+  const viewDescriptorService = workbenchStore.add(
+    instantiation.createInstance(ViewDescriptorService),
+  )
+  services.set(IViewDescriptorService, viewDescriptorService)
   const viewsService = workbenchStore.add(instantiation.createInstance(ViewsService))
   services.set(IViewsService, viewsService)
   const layoutService = workbenchStore.add(instantiation.createInstance(LayoutService))
@@ -550,6 +556,8 @@ async function bootstrapWorkbench(): Promise<void> {
     workspaceService,
     windowsService: services.get(IWindowsService) as IWindowsService,
     layoutService,
+    viewsService,
+    viewDescriptorService,
     configurationService,
     acpSessionService,
     outputService,
@@ -567,7 +575,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // (or pane-show); changing it after mount is silently ignored.
   // Also restore panel terminals for the current workspace.
   const terminalManagerService = instantiation.invokeFunction((a) => a.get(ITerminalManagerService))
-  await Promise.all([layoutService.load(), viewsService.load(), terminalManagerService.load()])
+  await Promise.all([
+    layoutService.load(),
+    viewDescriptorService.load(),
+    viewsService.load(),
+    terminalManagerService.load(),
+  ])
   rootLogger.info('bootstrap services restored')
   mark(PerfMarks.rendererDidRestoreServices)
 

@@ -29,6 +29,7 @@ import {
   ListTree,
   Minus,
   MoreHorizontal,
+  Move,
   Package,
   Plus,
   Puzzle,
@@ -89,6 +90,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'tree-view': FolderTree,
   'collapse-all': ChevronsDownUp,
   more: MoreHorizontal,
+  move: Move,
   // Editor title actions.
   'open-preview': Eye,
   'open-preview-side': Columns2,

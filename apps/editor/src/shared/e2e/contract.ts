@@ -344,6 +344,27 @@ export interface E2EProbe {
    * the virtual-scroll path) without shipping fixtures of thousands of items.
    */
   updateConfigValue(key: string, value: unknown): void
+  // -- Views / view-container customization probe ---------------------------
+  /** Id of the container a view currently lives in (custom location aware). */
+  getViewContainerByViewId(viewId: string): string | undefined
+  /** Ids of the views in a container, in display order. */
+  getViewIdsByContainer(containerId: string): readonly string[]
+  /** Container ids at a location, in display order. */
+  getViewContainerIdsByLocation(location: number): readonly string[]
+  /** Move views into an existing container. */
+  moveViewsToContainer(viewIds: readonly string[], targetContainerId: string): void
+  /** Move a view to a location, generating a new container there. */
+  moveViewToLocation(viewId: string, location: number): void
+  /** Move a whole container to another location. */
+  moveViewContainerToLocation(containerId: string, location: number): void
+  /** A view's collapsed flag (defaults to false when unset). */
+  getViewCollapsed(viewId: string): boolean
+  /** Set a view's collapsed flag (persisted). */
+  setViewCollapsed(viewId: string, collapsed: boolean): void
+  /** Force-flush any pending view-customization save. Resolves when on disk. */
+  flushViewCustomizationsSave(): Promise<void>
+  /** Reset all view-container customizations to defaults. */
+  resetViewLocations(): void
 }
 
 declare global {

@@ -18,11 +18,11 @@ import {
   MenuId,
   PartId,
   ViewContainerLocation,
-  ViewContainerRegistry,
   localize,
 } from '@universe-editor/platform'
 import type { IViewContainerDescriptor, IViewDescriptor } from '@universe-editor/platform'
 import { useService, useObservable } from '../useService.js'
+import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
@@ -40,6 +40,7 @@ interface Props {
 export function PaneCompositeHeader({ mode, location, partId, activeContainer, onlyView }: Props) {
   const viewsService = useService(IViewsService)
   const layoutService = useService(ILayoutService)
+  const viewDescriptors = useViewDescriptors()
   const panelMaximized = useObservable(layoutService.panelMaximized)
   const ctx = useViewScopedContextKey(onlyView?.id)
   const Custom = onlyView ? viewToolbarMap.get(onlyView.id) : undefined
@@ -61,7 +62,7 @@ export function PaneCompositeHeader({ mode, location, partId, activeContainer, o
   }
 
   const activeId = activeContainer?.id
-  const containers = ViewContainerRegistry.getViewContainers(location)
+  const containers = viewDescriptors.getViewContainersByLocation(location)
   const isSingle = containers.length <= 1
   const isPanel = location === ViewContainerLocation.Panel
 
