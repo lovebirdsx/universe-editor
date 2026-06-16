@@ -666,6 +666,30 @@ export class JumpToAcpPlanAction extends Action2 {
   }
 }
 
+export class ShowAcpSessionChangesAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.showSessionChanges'
+  constructor() {
+    super({
+      id: ShowAcpSessionChangesAction.ID,
+      title: localize('action.agent.showSessionChanges', 'Show Session Changes'),
+      category: CATEGORY,
+      icon: 'diff',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: 'navigation',
+          order: 0,
+        },
+      ],
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IViewsService).openViewContainer('workbench.view.sessionChanges')
+  }
+}
+
 export class ScrollAcpTimelineUpAction extends Action2 {
   static readonly ID = 'workbench.action.agent.scrollTimelineUp'
   constructor() {

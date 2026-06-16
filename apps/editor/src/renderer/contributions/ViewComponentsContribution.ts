@@ -15,6 +15,7 @@ import { SearchView } from '../workbench/search/SearchView.js'
 import { ScmView } from '../workbench/scm/ScmView.js'
 import { AgentsView } from '../workbench/agents/AgentsView.js'
 import { McpServersView } from '../workbench/agents/McpServersView.js'
+import { SessionChangesView } from '../workbench/agents/SessionChangesView.js'
 import { OutputView } from '../workbench/panel/output/OutputView.js'
 import { TerminalView } from '../workbench/panel/terminal/TerminalView.js'
 
@@ -28,6 +29,7 @@ export class ViewComponentsContribution extends Disposable implements IWorkbench
     this._register(ViewComponentRegistry.register('scm.main', ScmView))
     this._register(ViewComponentRegistry.register('agents.main', AgentsView))
     this._register(ViewComponentRegistry.register('agents.mcp', McpServersView))
+    this._register(ViewComponentRegistry.register('sessionChanges.main', SessionChangesView))
     this._register(ViewComponentRegistry.register('output.main', OutputView))
     this._register(ViewComponentRegistry.register('terminal.main', TerminalView))
   }

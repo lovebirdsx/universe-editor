@@ -6,6 +6,7 @@ import {
   Bug,
   Puzzle,
   Settings,
+  FileStack,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -24,6 +25,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'debug-alt': Bug,
   extensions: Puzzle,
   'settings-gear': Settings,
+  diff: FileStack,
 }
 
 export function resolveActivityIcon(name: string): LucideIcon {

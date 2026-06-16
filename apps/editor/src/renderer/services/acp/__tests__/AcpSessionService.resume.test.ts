@@ -75,6 +75,7 @@ import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
 // ---------------------------------------------------------------------------
@@ -423,6 +424,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     history,
     storage,
     agentDefaults,
+    new StubSessionChangeTracker(),
     FAKE_HOST,
   )
   return { svc, client, history, agentDefaults, notifications, storage }
@@ -877,6 +879,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubSessionChangeTracker(),
       FAKE_HOST,
     )
     // Kick off history hydration but DO NOT await — race the resume call.
@@ -982,6 +985,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubSessionChangeTracker(),
       FAKE_HOST,
     )
     expect(svc.activeSession.get()).toBeUndefined()
@@ -1029,6 +1033,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubSessionChangeTracker(),
       FAKE_HOST,
     )
     // Let _loadPendingRestore() resolve.
@@ -1072,6 +1077,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubSessionChangeTracker(),
       FAKE_HOST,
     )
     await Promise.resolve()
@@ -1119,6 +1125,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubSessionChangeTracker(),
       FAKE_HOST,
     )
     await Promise.resolve()

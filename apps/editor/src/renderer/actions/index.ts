@@ -209,6 +209,7 @@ import {
   FocusBottomAcpTimelineAction,
   FocusTopAcpTimelineAction,
   JumpToAcpPlanAction,
+  ShowAcpSessionChangesAction,
   SelectAgentAction,
   SelectAgentModeAction,
   SelectAgentModelAction,
@@ -470,6 +471,7 @@ registerAction2(FocusPreviousAcpTimelineItemAction)
 registerAction2(FocusTopAcpTimelineAction)
 registerAction2(FocusBottomAcpTimelineAction)
 registerAction2(JumpToAcpPlanAction)
+registerAction2(ShowAcpSessionChangesAction)
 registerAction2(ScrollAcpTimelineUpAction)
 registerAction2(ScrollAcpTimelineDownAction)
 registerAction2(ScrollAcpTimelinePageUpAction)

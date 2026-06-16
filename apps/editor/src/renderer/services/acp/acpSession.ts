@@ -26,6 +26,8 @@ import type {
 import type { IAcpClientConnection } from './acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
+import type { ISessionChangeTrackerService } from './sessionChangeTracker.js'
+import type { DiffHunk } from './diff/reconstructBaseline.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
@@ -360,6 +362,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     initialCollapseMode: CollapseMode = 'default',
     private readonly _history?: IAcpSessionHistoryService,
     private readonly _agentDefaults?: IAcpAgentDefaultsService,
+    private readonly _changeTracker?: ISessionChangeTrackerService,
   ) {
     super()
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
@@ -646,6 +649,12 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   applyUpdate(update: SessionUpdate): void {
     const parentId = readParentToolUseId(update)
+    if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
+      const change = readStructuredPatch(update)
+      if (change) {
+        this._changeTracker?.record(this.id, change.path, update.toolCallId, change.hunks)
+      }
+    }
     switch (update.sessionUpdate) {
       case 'user_message_chunk':
         this._appendChunk('user', update.content, parentId)
@@ -1060,11 +1069,60 @@ function readMcpServer(update: SessionUpdate): string | undefined {
   return parseMcpToolName(toolName)?.server
 }
 
+/**
+ * Extract a whole-file change descriptor from the agent fork's PostToolUse hook
+ * payload: `_meta.claudeCode.toolResponse.{filePath, structuredPatch}`, present
+ * only for `Edit`/`Write` tools. Returns undefined for any other tool / shape.
+ */
+function readStructuredPatch(
+  update: SessionUpdate,
+): { readonly path: string; readonly hunks: readonly DiffHunk[] } | undefined {
+  const meta = (
+    update as {
+      _meta?: {
+        claudeCode?: {
+          toolName?: unknown
+          toolResponse?: {
+            filePath?: unknown
+            structuredPatch?: unknown
+          }
+        }
+      } | null
+    }
+  )._meta
+  const cc = meta?.claudeCode
+  if (cc?.toolName !== 'Edit' && cc?.toolName !== 'Write') return undefined
+  const resp = cc?.toolResponse
+  const path = resp?.filePath
+  const patch = resp?.structuredPatch
+  if (typeof path !== 'string' || path.length === 0 || !Array.isArray(patch)) return undefined
+  const hunks: DiffHunk[] = []
+  for (const h of patch) {
+    if (
+      h &&
+      typeof h.newStart === 'number' &&
+      typeof h.newLines === 'number' &&
+      typeof h.oldStart === 'number' &&
+      typeof h.oldLines === 'number' &&
+      Array.isArray(h.lines)
+    ) {
+      hunks.push({
+        oldStart: h.oldStart,
+        oldLines: h.oldLines,
+        newStart: h.newStart,
+        newLines: h.newLines,
+        lines: h.lines.filter((l: unknown): l is string => typeof l === 'string'),
+      })
+    }
+  }
+  if (hunks.length === 0) return undefined
+  return { path, hunks }
+}
+
 /** True when at least one block would render visible content. */
 export function hasVisibleMessageContent(blocks: readonly ContentBlock[]): boolean {
   return blocks.some((b) => (b.type === 'text' ? b.text.trim().length > 0 : true))
 }
-
 export function blocksToText(blocks: readonly ContentBlock[] | undefined): string {
   if (!blocks) return ''
   return blocks

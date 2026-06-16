@@ -10,6 +10,7 @@ import {
   Disposable,
   EditorRegistry,
   IEditorGroupsService,
+  IEditorService,
   ILayoutService,
   IStatusBarService,
   IViewsService,
@@ -342,6 +343,37 @@ export class AgentsSessionEditorLifecycleContribution
           if (!session) return
           void this._sessions.closeSession(session.id)
         })
+      }),
+    )
+  }
+}
+
+/**
+ * Keeps `IAcpSessionService.activeSession` in sync with the focused session
+ * editor. Multiple session editors can be open at once; whichever tab the user
+ * focuses should become the active session so session-scoped UI (the Session
+ * Changes view, the status-bar MCP summary, …) tracks the editor in front of
+ * them. Without this, `activeSession` only moves on explicit list/new actions
+ * and stale-looks when the user clicks between session tabs.
+ */
+export class AgentsActiveSessionSyncContribution
+  extends Disposable
+  implements IWorkbenchContribution
+{
+  constructor(
+    @IEditorService private readonly _editor: IEditorService,
+    @IAcpSessionService private readonly _sessions: IAcpSessionService,
+  ) {
+    super()
+    this._register(
+      autorun((r) => {
+        const active = this._editor.activeEditor.read(r)
+        if (!(active instanceof AcpSessionEditorInput)) return
+        if (this._sessions.activeSessionId.read(r) === active.sessionId) return
+        // Only retarget to a live session; a not-yet-resumed editor leaves the
+        // pointer alone until AcpSessionResumer brings it up (which itself calls
+        // setActive on success).
+        if (this._sessions.getById(active.sessionId)) this._sessions.setActive(active.sessionId)
       }),
     )
   }

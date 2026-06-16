@@ -1,0 +1,153 @@
+.view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: auto;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 2px 0;
+}
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 12px 0 16px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--color-sidebar-fg, #cccccc);
+}
+
+.row:hover {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+.folderRow {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 22px;
+  padding-right: 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--color-sidebar-fg, #cccccc);
+}
+
+.folderRow:hover {
+  background: var(--color-list-hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+.chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+
+.folderName {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.icon {
+  flex-shrink: 0;
+}
+
+.name {
+  flex: 0 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dir {
+  flex: 1 100 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+  font-size: 12px;
+}
+
+.badge {
+  flex-shrink: 0;
+  width: 14px;
+  margin-left: auto;
+  text-align: center;
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--color-scm-modified, #e2c08d);
+}
+
+/* With a dir label the row already grows to fill; keep the badge flush right. */
+.dir ~ .badge {
+  margin-left: 0;
+}
+
+.badge[data-status='added'] {
+  color: var(--color-scm-added, #73c991);
+}
+
+.badge[data-status='deleted'] {
+  color: var(--color-scm-deleted, #c74e39);
+}
+
+.badge[data-status='degraded'] {
+  color: var(--color-scm-conflict, #e2c08d);
+}
+
+/* Floating row actions — overlaid on the right edge, revealed on hover, mirroring
+   the SCM resource row. The opaque backdrop hides the status badge underneath. */
+.actions {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  z-index: 1;
+  display: none;
+  gap: 2px;
+  transform: translateY(-50%);
+}
+
+.row:hover .actions,
+.row:focus-within .actions {
+  display: flex;
+}
+
+.row:hover .actions {
+  background: var(--color-list-hover-bg, #2a2d2e);
+}
+
+.actionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--color-foreground-muted, #8a8a92);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 3px;
+}
+
+.actionButton:hover {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: 16px;
+  text-align: center;
+  color: var(--color-foreground-muted, #8a8a92);
+  font-size: 13px;
+}

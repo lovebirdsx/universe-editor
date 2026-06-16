@@ -15,16 +15,19 @@ import { Disposable, type IWorkbenchContribution } from '@universe-editor/platfo
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from '../services/acp/acpAgentDefaultsService.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
+import { ISessionChangeTrackerService } from '../services/acp/sessionChangeTracker.js'
 
 export class AcpInitContribution extends Disposable implements IWorkbenchContribution {
   constructor(
     @IAcpSessionHistoryService history: IAcpSessionHistoryService,
     @IAcpAgentDefaultsService agentDefaults: IAcpAgentDefaultsService,
     @IAcpChatLocationService chatLocation: IAcpChatLocationService,
+    @ISessionChangeTrackerService changeTracker: ISessionChangeTrackerService,
   ) {
     super()
     void history.initialize()
     void agentDefaults.initialize()
     void chatLocation.initialize()
+    void changeTracker.initialize()
   }
 }

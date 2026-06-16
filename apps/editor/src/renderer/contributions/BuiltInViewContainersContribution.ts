@@ -53,6 +53,16 @@ export class BuiltInViewContainersContribution
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.sessionChanges',
+        label: localize('viewContainer.sessionChanges', 'Session Changes'),
+        icon: 'diff',
+        order: 4,
+        location: ViewContainerLocation.SideBar,
+      }),
+    )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.outline',
         label: localize('viewContainer.outline', 'Outline'),
         icon: 'outline',

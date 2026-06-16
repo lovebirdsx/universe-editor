@@ -7,6 +7,12 @@ export default [
   },
   ...reactConfig,
   {
+    files: ['**/*.cjs'],
+    rules: {
+      '@typescript-eslint/no-require-imports': 'off',
+    },
+  },
+  {
     files: ['src/renderer/**/*.{ts,tsx}'],
     rules: {
       'no-restricted-imports': [

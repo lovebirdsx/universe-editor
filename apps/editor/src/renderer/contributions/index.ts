@@ -52,6 +52,7 @@ import { ErrorLogAutoRevealContribution } from './ErrorLogAutoRevealContribution
 import {
   AgentsConfigurationContribution,
   AgentsEditorProviderContribution,
+  AgentsActiveSessionSyncContribution,
   AgentsSessionEditorLifecycleContribution,
   AgentsSessionRestoreContribution,
   AgentsStatusBarContribution,
@@ -435,6 +436,11 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsSessionEditorLifecycle',
   AgentsSessionEditorLifecycleContribution,
+  WorkbenchPhase.AfterRestore,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentsActiveSessionSync',
+  AgentsActiveSessionSyncContribution,
   WorkbenchPhase.AfterRestore,
 )
 

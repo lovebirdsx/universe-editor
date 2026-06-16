@@ -49,6 +49,16 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
 
     this._register(
       ViewRegistry.registerView({
+        id: 'workbench.view.sessionChanges.main',
+        name: localize('view.sessionChanges', 'Session Changes'),
+        containerId: 'workbench.view.sessionChanges',
+        componentKey: 'sessionChanges.main',
+        order: 1,
+      }),
+    )
+
+    this._register(
+      ViewRegistry.registerView({
         id: 'workbench.view.outline.main',
         name: localize('view.outline', 'Outline'),
         containerId: 'workbench.view.outline',

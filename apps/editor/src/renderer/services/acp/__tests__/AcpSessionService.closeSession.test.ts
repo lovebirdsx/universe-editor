@@ -56,6 +56,7 @@ import {
 import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
+import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -316,6 +317,7 @@ describe('AcpSessionService — onDidCloseSession', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      new StubSessionChangeTracker(),
       FAKE_HOST,
     )
   })

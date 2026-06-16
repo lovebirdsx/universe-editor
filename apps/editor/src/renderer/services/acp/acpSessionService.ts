@@ -60,6 +60,7 @@ import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService, type AcpSessionHistoryEntry } from './acpSessionHistory.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
+import { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { AcpPromptDraftCache } from './acpPromptDraftCache.js'
@@ -214,6 +215,7 @@ export class AcpSessionService
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IStorageService private readonly _storage: IStorageService,
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
+    @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
     @IHostService hostService: IHostService,
   ) {
     super()
@@ -389,6 +391,7 @@ export class AcpSessionService
             initialCollapseMode,
             this._history,
             this._agentDefaults,
+            this._changeTracker,
           )
           this._register(session)
           transaction((tx) => {
@@ -506,6 +509,7 @@ export class AcpSessionService
         entry.collapseMode ?? 'default',
         this._history,
         this._agentDefaults,
+        this._changeTracker,
       )
       this._register(session)
       const captured = session
