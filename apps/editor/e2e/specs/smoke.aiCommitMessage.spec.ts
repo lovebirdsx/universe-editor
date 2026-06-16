@@ -22,6 +22,12 @@ function git(cwd: string, ...args: string[]): void {
 
 test.describe('@p1 ai commit message', () => {
   test('contributes an inline generate button next to the commit input', async () => {
+    // Boots Electron and activates the git + ai extensions in a real repo. On
+    // Windows CI (2 cores, Defender scanning every `git` spawn, Electron-as-node
+    // host startup) the cold boot before the SCM poll can eat most of a 30s test
+    // budget, tripping the test timeout before the poll fills. Give headroom —
+    // mirrors the heavier @p0 generation spec.
+    test.setTimeout(120_000)
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ai-'))
     writeFileSync(
       join(userDataDir, 'settings.json'),
@@ -66,7 +72,7 @@ test.describe('@p1 ai commit message', () => {
       await page.evaluate((p) => window.__E2E__!.openWorkspace(p), repoDir)
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.getScmSourceControlCount()), {
-          timeout: 30_000,
+          timeout: 60_000,
           message: 'git extension should register a source control for the workspace',
         })
         .toBeGreaterThan(0)
@@ -74,7 +80,7 @@ test.describe('@p1 ai commit message', () => {
       // Wait for the ai extension to contribute its command.
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('ai.generateCommitMessage')), {
-          timeout: 30_000,
+          timeout: 60_000,
           message: 'ai extension should contribute ai.generateCommitMessage',
         })
         .toBe(true)

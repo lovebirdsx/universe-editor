@@ -44,8 +44,11 @@ test.describe('@p1 json outline', () => {
 
     // Symbols resolve from the in-renderer JSON worker; the provider registers
     // AfterRestore, so the first pull may precede it — OutlineService retries.
+    // The Monaco JSON worker still has a first-init cost; on Windows CI (2 cores,
+    // contending Electron instances) it can outlast a 10s window, so match the
+    // TS outline spec's 20s budget. OutlineService's retry then carries it.
     await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 10000 })
+      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
       .toEqual(expect.arrayContaining(['name', 'version', 'scripts']))
 
     // The view itself must render the rows, not just the service observable.
