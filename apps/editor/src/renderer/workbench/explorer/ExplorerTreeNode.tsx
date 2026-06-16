@@ -17,6 +17,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from 'react'
 import { type IFileService, type URI } from '@universe-editor/platform'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
@@ -184,8 +185,13 @@ function ExplorerTreeNodeImpl({
       {...dragHandleProps}
       {...(isDirectory ? dropTargetProps : {})}
     >
-      <span className={styles['twisty']} aria-hidden="true">
-        {isDirectory ? (expanded ? '▾' : '▸') : ''}
+      <span className={styles['chevron']} aria-hidden="true">
+        {isDirectory &&
+          (expanded ? (
+            <ChevronDown size={16} strokeWidth={1.75} />
+          ) : (
+            <ChevronRight size={16} strokeWidth={1.75} />
+          ))}
       </span>
       <span className={styles['icon']} aria-hidden="true">
         <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />

@@ -46,6 +46,7 @@ import {
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
@@ -472,7 +473,21 @@ const ScmFolderRow = memo(function ScmFolderRow({
       style={{ paddingLeft: indentPadding }}
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
     >
-      <span className={styles['twistie']}>{expanded ? '▾' : '▸'}</span>
+      {expanded ? (
+        <ChevronDown
+          size={16}
+          strokeWidth={1.75}
+          className={styles['chevron']}
+          aria-hidden="true"
+        />
+      ) : (
+        <ChevronRight
+          size={16}
+          strokeWidth={1.75}
+          className={styles['chevron']}
+          aria-hidden="true"
+        />
+      )}
       <FileIcon
         resource={folderUri}
         className={styles['fileIcon']}
@@ -535,7 +550,14 @@ const ScmGroupRow = memo(function ScmGroupRow({
       style={{ paddingLeft: indentPadding }}
       onClick={(e) => rowClick(model, node, e, () => void model.toggle(node))}
     >
-      <span className={styles['twistie']}>{hasChildren ? (expanded ? '▾' : '▸') : ''}</span>
+      <span className={styles['chevron']} aria-hidden="true">
+        {hasChildren &&
+          (expanded ? (
+            <ChevronDown size={16} strokeWidth={1.75} />
+          ) : (
+            <ChevronRight size={16} strokeWidth={1.75} />
+          ))}
+      </span>
       <span className={styles['groupLabel']}>{node.label}</span>
       <span className={styles['groupActions']}>
         {groupActions.map((a) => (
@@ -875,7 +897,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
               disabled={isCommitting}
               onClick={openCommitMenu}
             >
-              ▾
+              <ChevronDown size={12} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
         </div>

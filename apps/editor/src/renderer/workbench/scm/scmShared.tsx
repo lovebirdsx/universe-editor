@@ -13,6 +13,7 @@ import {
   useState,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
+import { ChevronRight } from 'lucide-react'
 import { createPortal } from 'react-dom'
 import {
   CommandsRegistry,
@@ -230,7 +231,12 @@ export function TitleOverflowMenu({
               >
                 {iconEl}
                 <span className={styles['overflowItemLabel']}>{row.label}</span>
-                <span className={styles['overflowSubmenuArrow']}>▸</span>
+                <ChevronRight
+                  size={12}
+                  strokeWidth={1.75}
+                  className={styles['overflowSubmenuArrow']}
+                  aria-hidden="true"
+                />
               </li>
             )
           }

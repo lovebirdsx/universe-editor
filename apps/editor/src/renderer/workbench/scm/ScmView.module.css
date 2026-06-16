@@ -44,8 +44,9 @@
 
 .repoSelectorChevron {
   flex: none;
-  font-size: 9px;
   opacity: 0.8;
+  display: flex;
+  align-items: center;
 }
 
 .commitInputWrapper {
@@ -228,7 +229,9 @@
   cursor: pointer;
   background: var(--color-button-bg, #0e639c);
   color: var(--color-button-fg, #ffffff);
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .commitDropdown:hover {
@@ -322,12 +325,13 @@
   outline: none;
 }
 
-.twistie {
-  flex: 0 0 auto;
-  width: 12px;
-  text-align: center;
-  font-size: 10px;
-  color: var(--color-description-fg, #8a8a92);
+.chevron {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  opacity: 0.7;
 }
 
 .fileIcon {
@@ -487,8 +491,9 @@
 .overflowSubmenuArrow {
   flex: 0 0 auto;
   margin-left: 8px;
-  font-size: 10px;
   opacity: 0.7;
+  display: flex;
+  align-items: center;
 }
 
 .overflowItem:hover {

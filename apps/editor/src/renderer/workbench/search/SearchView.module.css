@@ -28,6 +28,9 @@
   color: inherit;
   border: none;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 0;
   font: inherit;
   line-height: 1;
@@ -302,7 +305,7 @@
   outline: none;
 }
 
-.twisty {
+.chevron {
   flex: 0 0 16px;
   width: 16px;
   background: transparent;
@@ -310,9 +313,10 @@
   border: none;
   cursor: pointer;
   padding: 0;
-  font: inherit;
-  line-height: 1;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
 }
 
 .rowIcon {

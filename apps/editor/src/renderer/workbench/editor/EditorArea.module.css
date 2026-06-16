@@ -62,8 +62,6 @@
   border: none;
   color: var(--color-tab-inactive-fg, #888888);
   cursor: pointer;
-  font-size: 18px;
-  line-height: 1;
   padding: 0;
   user-select: none;
 }

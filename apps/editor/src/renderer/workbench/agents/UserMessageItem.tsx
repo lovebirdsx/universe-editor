@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useRef, useState } from 'react'
+import { ChevronDown, ChevronUp } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
@@ -55,7 +56,13 @@ export function UserMessageItem({ blocks }: { blocks: readonly ContentBlock[] })
           onClick={() => setExpanded((v) => !v)}
           data-testid="acp-user-message-toggle"
         >
-          <span aria-hidden="true">{expanded ? '▴' : '▾'}</span>
+          <span aria-hidden="true">
+            {expanded ? (
+              <ChevronUp size={14} strokeWidth={1.75} />
+            ) : (
+              <ChevronDown size={14} strokeWidth={1.75} />
+            )}
+          </span>
           <span>{toggleLabel}</span>
         </button>
       )}

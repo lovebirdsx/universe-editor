@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import { Check, CircleX, Loader2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronUp, CircleX, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
 import type { AcpToolCallStatus } from '../../services/acp/acpSessionService.js'
@@ -59,7 +59,13 @@ export function TerminalOutput({ text }: { text: string }) {
           onClick={() => setExpanded((v) => !v)}
           data-testid="acp-terminal-output-toggle"
         >
-          <span aria-hidden="true">{expanded ? '▴' : '▾'}</span>
+          <span aria-hidden="true">
+            {expanded ? (
+              <ChevronUp size={14} strokeWidth={1.75} />
+            ) : (
+              <ChevronDown size={14} strokeWidth={1.75} />
+            )}
+          </span>
           <span>{toggleLabel}</span>
         </button>
       )}

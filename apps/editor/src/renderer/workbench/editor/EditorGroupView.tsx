@@ -60,6 +60,7 @@ import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
 import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
@@ -616,7 +617,7 @@ export function EditorGroupView({
               aria-label="Scroll tabs left"
               tabIndex={-1}
             >
-              ‹
+              <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
           <div
@@ -680,7 +681,7 @@ export function EditorGroupView({
               aria-label="Scroll tabs right"
               tabIndex={-1}
             >
-              ›
+              <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
             </button>
           )}
           <div className={styles['editorActionsBar']}>

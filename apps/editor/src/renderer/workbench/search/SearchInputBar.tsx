@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { forwardRef, useRef, type RefObject } from 'react'
-import { FileX2, SlidersHorizontal } from 'lucide-react'
+import { ChevronDown, ChevronRight, FileX2, SlidersHorizontal } from 'lucide-react'
 import styles from './SearchView.module.css'
 
 export interface SearchInputBarProps {
@@ -105,7 +105,11 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
             aria-pressed={props.replaceVisible}
             onClick={props.onToggleReplace}
           >
-            {props.replaceVisible ? '▾' : '▸'}
+            {props.replaceVisible ? (
+              <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
+            ) : (
+              <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+            )}
           </button>
           <div className={styles['inputBox']}>
             <input

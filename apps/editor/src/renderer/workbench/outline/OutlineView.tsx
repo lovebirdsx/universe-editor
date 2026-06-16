@@ -30,6 +30,7 @@ import {
   useOwnedTreeModel,
   type ITreeDataSource,
 } from '@universe-editor/workbench-ui'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
 import { useViewFocusable } from '../useViewFocusable.js'
 import { type monaco } from '../editor/monaco/MonacoLoader.js'
@@ -358,14 +359,19 @@ export function OutlineView() {
                 onClick={onClick}
               >
                 <span
-                  className={styles['twisty']}
+                  className={styles['chevron']}
                   aria-hidden="true"
                   onClick={(e) => {
                     e.stopPropagation()
                     ctx.onToggle()
                   }}
                 >
-                  {node.hasChildren ? (node.expanded ? '▾' : '▸') : ''}
+                  {node.hasChildren &&
+                    (node.expanded ? (
+                      <ChevronDown size={16} strokeWidth={1.75} />
+                    ) : (
+                      <ChevronRight size={16} strokeWidth={1.75} />
+                    ))}
                 </span>
                 <span className={styles['icon']} aria-hidden="true">
                   <SymbolIcon

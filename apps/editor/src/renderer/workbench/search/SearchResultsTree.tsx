@@ -32,7 +32,7 @@ import {
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
-import { Folder, FolderOpen } from 'lucide-react'
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from 'lucide-react'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { useObservable } from '../useService.js'
 import { searchViewState } from './searchViewState.js'
@@ -297,14 +297,18 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           >
             <button
               type="button"
-              className={styles['twisty']}
+              className={styles['chevron']}
               aria-label={`Toggle ${n.name}`}
               onClick={(e) => {
                 e.stopPropagation()
                 ctx.onToggle()
               }}
             >
-              {ctx.node.expanded ? '▾' : '▸'}
+              {ctx.node.expanded ? (
+                <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
+              ) : (
+                <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+              )}
             </button>
             <span className={styles['rowIcon']} aria-hidden="true">
               {ctx.node.expanded ? (
@@ -336,14 +340,18 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           >
             <button
               type="button"
-              className={styles['twisty']}
+              className={styles['chevron']}
               aria-label={`Toggle ${n.name}`}
               onClick={(e) => {
                 e.stopPropagation()
                 ctx.onToggle()
               }}
             >
-              {ctx.node.expanded ? '▾' : '▸'}
+              {ctx.node.expanded ? (
+                <ChevronDown size={16} strokeWidth={1.75} aria-hidden="true" />
+              ) : (
+                <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />
+              )}
             </button>
             <FileIcon
               resource={n.resource}

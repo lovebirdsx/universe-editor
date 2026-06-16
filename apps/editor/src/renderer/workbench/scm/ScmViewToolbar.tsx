@@ -7,6 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { ChevronDown } from 'lucide-react'
 import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { resolveHeaderIcon } from '../viewContainerHeader/icon-map.js'
@@ -127,7 +128,12 @@ export function ScmViewToolbar() {
           onClick={openRepoMenu}
         >
           <span className={styles['repoSelectorLabel']}>{repoShortName(selected)}</span>
-          <span className={styles['repoSelectorChevron']}>▾</span>
+          <ChevronDown
+            size={12}
+            strokeWidth={1.75}
+            className={styles['repoSelectorChevron']}
+            aria-hidden="true"
+          />
         </button>
       )}
       {navActions.map((a) => (

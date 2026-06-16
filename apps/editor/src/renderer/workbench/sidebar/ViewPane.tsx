@@ -1,5 +1,6 @@
 import { type ComponentType, type ReactNode } from 'react'
 import { MenuId } from '@universe-editor/platform'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { ViewTitleActions } from '../viewContainerHeader/ViewTitleActions.js'
 import { useViewScopedContextKey } from '../viewContainerHeader/useViewScopedContextKey.js'
 import styles from './ViewPane.module.css'
@@ -20,7 +21,21 @@ export function ViewPane({ viewId, title, children, open, onToggle, toolbar }: V
     <section className={styles['viewPane']}>
       <div className={styles['header']}>
         <button className={styles['headerToggle']} onClick={onToggle} aria-expanded={open}>
-          <span className={`${styles['chevron']} ${open ? styles['open'] : ''}`}>›</span>
+          {open ? (
+            <ChevronDown
+              size={16}
+              strokeWidth={1.75}
+              className={styles['chevron']}
+              aria-hidden="true"
+            />
+          ) : (
+            <ChevronRight
+              size={16}
+              strokeWidth={1.75}
+              className={styles['chevron']}
+              aria-hidden="true"
+            />
+          )}
           {title}
         </button>
         <div className={styles['headerActions']}>
