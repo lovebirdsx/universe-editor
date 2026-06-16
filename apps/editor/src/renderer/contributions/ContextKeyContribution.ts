@@ -181,6 +181,12 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // and extension keybindings (e.g. smart Enter/Tab) can yield to accept.
     contextKeyService.createKey<boolean>('suggestWidgetVisible', false)
 
+    // True while an inline suggestion (ghost text) is visible. Monaco keeps this
+    // on the editor's scoped context-key service; FileEditor mirrors it here so
+    // our Tab binding (ai.inlineCompletion.commit) can outrank the editor's
+    // indent and accept the suggestion.
+    contextKeyService.createKey<boolean>('inlineSuggestionVisible', false)
+
     // True when an xterm.js terminal instance holds DOM focus (panel or editor tab).
     // Written by TerminalInstance via xterm's onFocus/onBlur events.
     contextKeyService.createKey<boolean>('terminalFocus', false)

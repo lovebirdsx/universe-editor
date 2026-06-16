@@ -36,6 +36,7 @@ import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import {
+  bridgeInlineSuggestionVisible,
   bridgeSuggestWidgetVisible,
   focusStandaloneEditor,
   syncEditorFocusContext,
@@ -209,6 +210,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // accept while the widget is open. Monaco keeps this key only on its own scoped
     // context-key service; the global handler can't see it otherwise.
     const suggestSub = bridgeSuggestWidgetVisible(ed, contextKeyService)
+    // Mirror inline-suggestion (ghost text) visibility so our Tab binding can
+    // accept it; Monaco's own editContext Tab dispatch can't be relied on.
+    const inlineSuggestSub = bridgeInlineSuggestionVisible(ed, contextKeyService)
     editorRef.current = ed
     return () => {
       focusSub.dispose()
@@ -217,6 +221,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       textBlurSub.dispose()
       modelChangeSub.dispose()
       suggestSub.dispose()
+      inlineSuggestSub.dispose()
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null

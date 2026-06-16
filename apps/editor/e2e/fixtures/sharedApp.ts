@@ -25,7 +25,7 @@ import { join } from 'node:path'
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO, expectNoLeaks } from '../pages/WorkbenchPO.js'
-import { APP_ROOT, MAIN_ENTRY } from './electronApp.js'
+import { APP_ROOT, MAIN_ENTRY, closeApp } from './electronApp.js'
 
 // Initial userData content every test starts from. Mirrors electronApp.ts:
 // pin language + disable auto-update, and mark Agent onboarding as seen so the
@@ -123,7 +123,11 @@ export const test = base.extend<SharedE2EFixtures, SharedWorkerFixtures>({
       await page.waitForLoadState('domcontentloaded')
       await waitForProbe(page)
       await use({ app, page, userDataDir, firstTest: { value: true } })
-      await app.close().catch(() => {})
+      // A still-running ACP session / node-pty child can wedge a graceful
+      // app.close() past the worker-teardown budget (the SessionShutdownParticipant
+      // veto needs a confirm dialog no one can answer headlessly). Bound it and
+      // force-kill, exactly as the cold-launch fixture does.
+      await closeApp(app)
     },
     { scope: 'worker' },
   ],

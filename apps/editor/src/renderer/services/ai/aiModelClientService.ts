@@ -4,18 +4,18 @@
  *  requestId-keyed chunk events back into a clean AsyncIterable (via
  *  AiResponseReassembler) and routes cancellation back to main. Provider groups &
  *  per-model config live in aiModels.json (read by main); the only renderer-owned
- *  state is the active model id (UI state in IStorageService). Consumers depend
- *  only on IAiModelService.
+ *  state is the active model id, persisted as the `ai.chat.model` setting so it
+ *  lives in settings.json. Consumers depend only on IAiModelService.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   AiResponseReassembler,
   combinedDisposable,
+  ConfigurationTarget,
   Disposable,
   Emitter,
   generateUuid,
   reviveError,
-  StorageScope,
   type AiMessage,
   type AiModelConfiguration,
   type AiModelMetadata,
@@ -25,7 +25,7 @@ import {
   type AiResponse,
   type CancellationToken,
   type IAiModelService,
-  type IStorageService,
+  type IConfigurationService,
   type Event,
 } from '@universe-editor/platform'
 import type {
@@ -34,7 +34,7 @@ import type {
   IAiModelMainService,
 } from '../../../shared/ipc/aiModelService.js'
 
-const ACTIVE_MODEL_KEY = 'ai.activeModelId'
+const ACTIVE_MODEL_KEY = 'ai.chat.model'
 
 export class AiModelClientService extends Disposable implements IAiModelService {
   declare readonly _serviceBrand: undefined
@@ -46,10 +46,17 @@ export class AiModelClientService extends Disposable implements IAiModelService 
 
   constructor(
     private readonly _main: IAiModelMainService,
-    private readonly _storage: IStorageService,
+    private readonly _config: IConfigurationService,
   ) {
     super()
     this.onDidChangeModels = this._main.onDidChangeModels
+    // Fire on any change to the persisted chat model — covers both our own
+    // update() calls and the user hand-editing settings.json.
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration(ACTIVE_MODEL_KEY)) this._onDidChangeActiveModel.fire()
+      }),
+    )
   }
 
   getModels(): Promise<readonly AiModelMetadata[]> {
@@ -65,13 +72,13 @@ export class AiModelClientService extends Disposable implements IAiModelService 
   }
 
   getActiveModelId(): Promise<string | undefined> {
-    return this._storage.get<string>(ACTIVE_MODEL_KEY, StorageScope.GLOBAL)
+    const value = this._config.get<string>(ACTIVE_MODEL_KEY)
+    return Promise.resolve(value === undefined || value === '' ? undefined : value)
   }
 
-  async setActiveModelId(modelId: string | undefined): Promise<void> {
-    if (modelId === undefined) await this._storage.remove(ACTIVE_MODEL_KEY, StorageScope.GLOBAL)
-    else await this._storage.set(ACTIVE_MODEL_KEY, modelId, StorageScope.GLOBAL)
-    this._onDidChangeActiveModel.fire()
+  setActiveModelId(modelId: string | undefined): Promise<void> {
+    this._config.update(ACTIVE_MODEL_KEY, modelId ?? '', ConfigurationTarget.User)
+    return Promise.resolve()
   }
 
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration> {

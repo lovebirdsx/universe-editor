@@ -104,6 +104,18 @@ class DummyEditorInput extends EditorInput {
   }
 }
 
+/** Minimal shape of Monaco's inline-completions controller for ghost-text probing. */
+interface GhostTextLike {
+  readonly parts: ReadonlyArray<{ readonly text: string }>
+}
+interface InlineCompletionsModelLike {
+  readonly primaryGhostText?: { get?: () => GhostTextLike | undefined }
+}
+interface InlineCompletionsControllerLike {
+  dispose(): void
+  readonly model?: { get?: () => InlineCompletionsModelLike | undefined }
+}
+
 function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
   switch (phase) {
     case LifecyclePhase.Starting:
@@ -122,6 +134,10 @@ function phaseToName(phase: LifecyclePhase): E2ELifecyclePhase {
 export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposable {
   const ds = new DisposableStore()
   if (typeof window === 'undefined' || window[E2E_PROBE_ENABLED_KEY] !== true) return ds
+
+  // The fake inline-completion provider installed by installFakeInlineCompletion,
+  // replaced on each call and disposed with the probe.
+  let fakeInlineCompletion: IDisposable | undefined
 
   // Accumulate every terminal's output so specs can poll it. Lives for the app's
   // lifetime — acceptable for the probe (only present under UNIVERSE_E2E=1).
@@ -466,6 +482,49 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.viewDescriptorService.setViewCollapsed(viewId, collapsed),
     flushViewCustomizationsSave: () => services.viewDescriptorService.save(),
     resetViewLocations: () => services.viewDescriptorService.reset(),
+    installFakeInlineCompletion: (text: string): boolean => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return false
+      const editor = FileEditorRegistry.get(active)
+      const model = editor?.getModel()
+      if (!editor || !model) return false
+      fakeInlineCompletion?.dispose()
+      fakeInlineCompletion = services.languageFeaturesService.registerInlineCompletionsProvider(
+        '*',
+        {
+          provideInlineCompletions: (_m, position) => ({
+            items: [
+              {
+                insertText: text,
+                range: {
+                  startLineNumber: position.lineNumber,
+                  startColumn: position.column,
+                  endLineNumber: position.lineNumber,
+                  endColumn: position.column,
+                },
+              },
+            ],
+          }),
+          disposeInlineCompletions: () => {
+            // No per-completion resources to release.
+          },
+        },
+      )
+      ds.add(fakeInlineCompletion)
+      return true
+    },
+    getActiveInlineSuggestionText: (): string | undefined => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const editor = FileEditorRegistry.get(active)
+      if (!editor || typeof editor.getContribution !== 'function') return undefined
+      const controller = editor.getContribution<InlineCompletionsControllerLike>(
+        'editor.contrib.inlineCompletionsController',
+      )
+      const ghost = controller?.model?.get?.()?.primaryGhostText?.get?.()
+      if (!ghost || ghost.parts.length === 0) return undefined
+      return ghost.parts.map((p) => p.text).join('')
+    },
   }
 
   window[E2E_PROBE_KEY] = probe

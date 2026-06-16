@@ -28,7 +28,7 @@ export const MAIN_ENTRY = resolve(APP_ROOT, 'out', 'main', 'index.js')
 // graceful close doesn't finish promptly.
 const CLOSE_TIMEOUT_MS = 10_000
 
-async function closeApp(app: ElectronApplication): Promise<void> {
+export async function closeApp(app: ElectronApplication): Promise<void> {
   let proc: ReturnType<ElectronApplication['process']>
   try {
     // workbench.action.quit already tore the process down; the Playwright

@@ -27,7 +27,6 @@ import {
   IIpcService,
   IConfigurationService,
   IAiModelService,
-  IStorageService,
   IUserDataFilesService,
   IWorkspaceService,
   IFocusTrackerService,
@@ -110,6 +109,10 @@ import {
   ILanguageFeaturesService,
   LanguageFeaturesService,
 } from './services/languageFeatures/LanguageFeaturesService.js'
+import {
+  IInlineCompletionService,
+  InlineCompletionService,
+} from './services/ai/InlineCompletionService.js'
 import { IOutlineService, OutlineService } from './services/languageFeatures/OutlineService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
@@ -323,9 +326,9 @@ async function bootstrapWorkbench(): Promise<void> {
 
   // AI model facade: wraps the main-process transport proxy and reassembles
   // streams. Provider groups & per-model config live in aiModels.json (read by
-  // main); the only renderer-owned state is the active model id (UI state in
-  // IStorageService), so the facade is constructed via DI after the container
-  // below. Consumers depend only on IAiModelService.
+  // main); the only renderer-owned state is the active model id (the
+  // `ai.chat.model` setting), so the facade is constructed via DI after the
+  // container below. Consumers depend only on IAiModelService.
   const aiModelMainProxy = ProxyChannel.toService<IAiModelMainService>(
     ipcService.getChannel(ServiceChannels.AiModel),
   )
@@ -342,12 +345,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // disposed on unload (the kernel marks materialized services as singletons).
   const instantiation = workbenchStore.add(new InstantiationService(services))
 
-  // AI facade needs IStorageService (available only through the container), but
-  // its other dependency is a transport proxy (not a DI service), so resolve the
-  // storage service explicitly and construct it by hand.
+  // AI facade needs IConfigurationService (available only through the container),
+  // but its other dependency is a transport proxy (not a DI service), so resolve
+  // the configuration service explicitly and construct it by hand.
   const aiModelService = workbenchStore.add(
     instantiation.invokeFunction(
-      (accessor) => new AiModelClientService(aiModelMainProxy, accessor.get(IStorageService)),
+      (accessor) => new AiModelClientService(aiModelMainProxy, accessor.get(IConfigurationService)),
     ),
   )
   services.set(IAiModelService, aiModelService)
@@ -395,6 +398,13 @@ async function bootstrapWorkbench(): Promise<void> {
   // forwarding to Monaco (so built-in F12 / Shift+F12 peek works). No deps.
   const languageFeaturesService = workbenchStore.add(new LanguageFeaturesService())
   services.set(ILanguageFeaturesService, languageFeaturesService)
+
+  // Inline (ghost-text) AI completions. Depends on IAiModelService (set above),
+  // plus config/storage/logger from the container — go through DI.
+  const inlineCompletionService = workbenchStore.add(
+    instantiation.createInstance(InlineCompletionService),
+  )
+  services.set(IInlineCompletionService, inlineCompletionService)
 
   // OutlineService: derives the active editor's symbol tree + cursor symbol from
   // the facade. Needs IEditorService + ILanguageFeaturesService, both set above.

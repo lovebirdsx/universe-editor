@@ -365,6 +365,19 @@ export interface E2EProbe {
   flushViewCustomizationsSave(): Promise<void>
   /** Reset all view-container customizations to defaults. */
   resetViewLocations(): void
+  /**
+   * Register a fake inline-completion provider on the active Monaco editor that
+   * always offers `text` at the cursor. Returns false when no file editor is
+   * active. Lets the inline-completion spec exercise the ghost-text → Tab accept
+   * path without a live AI model. Idempotent: a second call replaces the first.
+   */
+  installFakeInlineCompletion(text: string): boolean
+  /**
+   * The inline suggestion (ghost text) currently shown by the active editor's
+   * inline-completions controller, or undefined when none is visible. Used to
+   * assert a suggestion appeared before pressing Tab and disappeared after.
+   */
+  getActiveInlineSuggestionText(): string | undefined
 }
 
 declare global {

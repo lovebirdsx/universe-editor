@@ -160,6 +160,12 @@ import {
   ClearApiKeyAction,
 } from './aiActions.js'
 import {
+  TriggerInlineCompletionAction,
+  CommitInlineCompletionAction,
+  ToggleInlineCompletionAction,
+  PickInlineCompletionModelAction,
+} from './inlineCompletionActions.js'
+import {
   ViewGitGraphAction,
   GitGraphFocusSearchAction,
   GitGraphToggleRemoteBranchesAction,
@@ -407,6 +413,10 @@ registerAction2(ManageModelsAction)
 registerAction2(OpenModelsJsonAction)
 registerAction2(SetApiKeyAction)
 registerAction2(ClearApiKeyAction)
+registerAction2(TriggerInlineCompletionAction)
+registerAction2(CommitInlineCompletionAction)
+registerAction2(ToggleInlineCompletionAction)
+registerAction2(PickInlineCompletionModelAction)
 
 // Git Graph
 registerAction2(ViewGitGraphAction)

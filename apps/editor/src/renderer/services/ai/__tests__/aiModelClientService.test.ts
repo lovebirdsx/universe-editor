@@ -1,24 +1,23 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AiModelClientService — the renderer half of the chain: requestId-keyed
  *  chunk events reassembled into a clean AsyncIterable, cancellation routed back to
- *  main, serialized errors revived, and the renderer-owned active model id stored in
- *  IStorageService (never in main / aiModels.json). Stubs the main transport and a
- *  minimal in-memory storage service.
+ *  main, serialized errors revived, and the renderer-owned active model id stored as
+ *  the `ai.chat.model` setting (never in main / aiModels.json). Stubs the main
+ *  transport and a minimal in-memory configuration service.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
 import {
   CancellationTokenSource,
+  ConfigurationTarget,
   Emitter,
-  Event,
   getTextResponse,
-  StorageScope,
   transformErrorForSerialization,
   AiMessageRole,
   type AiMessage,
   type AiModelConfiguration,
   type AiProviderGroup,
-  type IStorageService,
+  type IConfigurationService,
 } from '@universe-editor/platform'
 import { AiModelClientService } from '../aiModelClientService.js'
 import type {
@@ -82,21 +81,18 @@ class FakeMain implements IAiModelMainService {
   }
 }
 
-class FakeStorage implements IStorageService {
-  declare readonly _serviceBrand: undefined
-  readonly onDidChangeWorkspaceScope = Event.None
-  private readonly _store = new Map<string, unknown>()
+class FakeConfig implements Partial<IConfigurationService> {
+  readonly values = new Map<string, unknown>()
+  private readonly _onDidChange = new Emitter<{ affectsConfiguration: (k: string) => boolean }>()
+  readonly onDidChangeConfiguration = this._onDidChange.event
 
-  get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
-    return Promise.resolve(this._store.get(key) as T | undefined)
+  get<T>(key: string): T | undefined {
+    return this.values.get(key) as T | undefined
   }
-  set(key: string, value: unknown, _scope?: StorageScope): Promise<void> {
-    this._store.set(key, value)
-    return Promise.resolve()
-  }
-  remove(key: string, _scope?: StorageScope): Promise<void> {
-    this._store.delete(key)
-    return Promise.resolve()
+  update(key: string, value: unknown, _target?: ConfigurationTarget): void {
+    const old = this.values.get(key)
+    this.values.set(key, value)
+    if (old !== value) this._onDidChange.fire({ affectsConfiguration: (k) => k === key })
   }
 }
 
@@ -109,25 +105,29 @@ function flush() {
 }
 
 describe('AiModelClientService', () => {
-  it('stores and reads the active model id through IStorageService', async () => {
+  it('stores and reads the active model id through the ai.chat.model setting', async () => {
     const main = new FakeMain()
-    const storage = new FakeStorage()
-    const client = new AiModelClientService(main, storage)
+    const config = new FakeConfig()
+    const client = new AiModelClientService(main, config as unknown as IConfigurationService)
 
     expect(await client.getActiveModelId()).toBeUndefined()
 
     await client.setActiveModelId('openai/default/gpt-4o')
     expect(await client.getActiveModelId()).toBe('openai/default/gpt-4o')
-    expect(await storage.get('ai.activeModelId', StorageScope.GLOBAL)).toBe('openai/default/gpt-4o')
+    expect(config.values.get('ai.chat.model')).toBe('openai/default/gpt-4o')
 
+    // Clearing writes an empty string (so the key still round-trips through
+    // settings.json) but reads back as undefined.
     await client.setActiveModelId(undefined)
+    expect(config.values.get('ai.chat.model')).toBe('')
     expect(await client.getActiveModelId()).toBeUndefined()
     client.dispose()
   })
 
-  it('fires onDidChangeActiveModel when the active model changes', async () => {
+  it('fires onDidChangeActiveModel when the setting changes', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(main, new FakeStorage())
+    const config = new FakeConfig()
+    const client = new AiModelClientService(main, config as unknown as IConfigurationService)
     let fired = 0
     client.onDidChangeActiveModel(() => fired++)
 
@@ -139,7 +139,10 @@ describe('AiModelClientService', () => {
 
   it('reassembles chunk events keyed by requestId into a clean stream', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(main, new FakeStorage())
+    const client = new AiModelClientService(
+      main,
+      new FakeConfig() as unknown as IConfigurationService,
+    )
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -158,7 +161,10 @@ describe('AiModelClientService', () => {
 
   it('routes cancellation back to main with the same requestId', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(main, new FakeStorage())
+    const client = new AiModelClientService(
+      main,
+      new FakeConfig() as unknown as IConfigurationService,
+    )
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -176,7 +182,10 @@ describe('AiModelClientService', () => {
 
   it('revives a serialized error from the end event into the result rejection', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(main, new FakeStorage())
+    const client = new AiModelClientService(
+      main,
+      new FakeConfig() as unknown as IConfigurationService,
+    )
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)

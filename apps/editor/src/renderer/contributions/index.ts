@@ -18,7 +18,11 @@ import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
 import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
 import { ConfigInitContribution } from './ConfigInitContribution.js'
 import { AiConfigurationContribution } from './AiConfigurationContribution.js'
+import { AiChatConfigurationContribution } from './AiChatConfigurationContribution.js'
 import { AiModelStatusContribution } from './AiModelStatusContribution.js'
+import { InlineCompletionConfigurationContribution } from './InlineCompletionConfigurationContribution.js'
+import { InlineCompletionContribution } from './InlineCompletionContribution.js'
+import { InlineCompletionStatusContribution } from './InlineCompletionStatusContribution.js'
 import { AcpInitContribution } from './AcpInitContribution.js'
 import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
@@ -228,6 +232,30 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.jsonLanguageFeatures',
   JsonLanguageFeaturesContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// AI inline completions. The config schema must register early (BlockStartup) so
+// the Settings editor sees it; the Monaco provider + status bar come up
+// AfterRestore once Monaco and the status bar exist.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aiChatConfiguration',
+  AiChatConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.inlineCompletionConfiguration',
+  InlineCompletionConfigurationContribution,
+  WorkbenchPhase.BlockStartup,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.inlineCompletion',
+  InlineCompletionContribution,
+  WorkbenchPhase.AfterRestore,
+)
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.inlineCompletionStatus',
+  InlineCompletionStatusContribution,
   WorkbenchPhase.AfterRestore,
 )
 

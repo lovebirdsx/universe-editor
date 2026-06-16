@@ -1,4 +1,5 @@
 import type { EditorInput, IContextKeyService, IDisposable } from '@universe-editor/platform'
+import { autorun } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorRegistry } from './FileEditorRegistry.js'
 import { DiffEditorRegistry } from './DiffEditorRegistry.js'
@@ -47,6 +48,57 @@ export function bridgeSuggestWidgetVisible(
       show.dispose()
       hide.dispose()
       contextKeyService.set('suggestWidgetVisible', false)
+    },
+  }
+}
+
+/** Minimal observable shape of Monaco's inline-completions model for visibility tracking. */
+interface ObservableLike<T> {
+  read(reader: unknown): T
+  get(): T
+}
+interface GhostTextLike {
+  isEmpty(): boolean
+}
+interface InlineStateLike {
+  readonly primaryGhostText?: GhostTextLike
+}
+interface InlineModelLike {
+  readonly inlineCompletionState: ObservableLike<InlineStateLike | undefined>
+}
+interface InlineControllerLike {
+  readonly model: ObservableLike<InlineModelLike | undefined>
+  dispose(): void
+}
+
+/**
+ * Mirror Monaco's inline-suggestion (ghost text) visibility onto the global
+ * `inlineSuggestionVisible` context key. Monaco keeps that key only on the
+ * editor's own scoped context-key service, so the global keybinding handler
+ * can't see it — and with `editContext: true` Monaco's internal Tab dispatch
+ * can't be relied on to commit. Mirroring the key lets our Tab binding
+ * (`ai.inlineCompletion.commit`) outrank the editor's indent and accept the
+ * suggestion through the command we control. We follow the same observable the
+ * controller itself binds the key to: a non-empty primary ghost text.
+ */
+export function bridgeInlineSuggestionVisible(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  contextKeyService: IContextKeyService,
+): IDisposable {
+  if (typeof editor.getContribution !== 'function') return { dispose: () => undefined }
+  const controller = editor.getContribution<InlineControllerLike>(
+    'editor.contrib.inlineCompletionsController',
+  )
+  if (!controller?.model) return { dispose: () => undefined }
+  const sub = autorun((reader) => {
+    const model = controller.model.read(reader)
+    const ghost = model?.inlineCompletionState.read(reader)?.primaryGhostText
+    contextKeyService.set('inlineSuggestionVisible', !!ghost && !ghost.isEmpty())
+  })
+  return {
+    dispose: () => {
+      sub.dispose()
+      contextKeyService.set('inlineSuggestionVisible', false)
     },
   }
 }

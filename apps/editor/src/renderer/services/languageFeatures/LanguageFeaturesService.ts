@@ -77,6 +77,10 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.FoldingRangeProvider,
   ): IDisposable
+  registerInlineCompletionsProvider(
+    languageSelector: monaco.languages.LanguageSelector,
+    provider: monaco.languages.InlineCompletionsProvider,
+  ): IDisposable
   getDocumentSymbolProviders(languageId: string): readonly monaco.languages.DocumentSymbolProvider[]
   getDefinitionProviders(languageId: string): readonly monaco.languages.DefinitionProvider[]
   getFoldingRangeProviders(languageId: string): readonly monaco.languages.FoldingRangeProvider[]
@@ -293,6 +297,19 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
     return toDisposable(() => {
       this._workspaceSymbolProviders.delete(provider)
     })
+  }
+
+  registerInlineCompletionsProvider(
+    languageSelector: monaco.languages.LanguageSelector,
+    provider: monaco.languages.InlineCompletionsProvider,
+  ): IDisposable {
+    // Inline completions are not mirrored in a table — the Outline view doesn't
+    // need them and the selector may be '*' (all languages), which doesn't fit
+    // the per-languageId map. Forward straight to Monaco.
+    return MonacoLoader.get().languages.registerInlineCompletionsProvider(
+      languageSelector,
+      provider,
+    )
   }
 
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[] {
