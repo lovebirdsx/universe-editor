@@ -72,7 +72,27 @@ export function focusEditorInput(
   }
   // Non-Monaco editors (e.g. React-based) may implement focus() directly.
   if (input.focus?.()) return true
-  return false
+  // Otherwise pull DOM focus into the group's editor body so keyboard input
+  // leaves wherever it was (often the terminal — which leaves terminalFocus
+  // stuck true and blocks Ctrl+W). Covers every non-text editor that doesn't
+  // manage its own focus (Git Graph, AI Models, Settings, Keybindings, …).
+  return focusGroupBody(contextKeyService, groupId)
+}
+
+function focusGroupBody(contextKeyService: IContextKeyService, groupId?: number): boolean {
+  const body = findGroupBody(groupId)
+  if (!body) return false
+  body.focus()
+  syncEditorFocusContext(contextKeyService)
+  return true
+}
+
+function findGroupBody(groupId?: number): HTMLElement | null {
+  const selector =
+    groupId !== undefined
+      ? `[data-group-id="${groupId}"] [data-testid="editor-group-body"]`
+      : '[data-testid="editor-group-body"]'
+  return document.querySelector<HTMLElement>(selector)
 }
 
 export function focusStandaloneEditor(

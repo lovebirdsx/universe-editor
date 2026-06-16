@@ -692,6 +692,7 @@ export function EditorGroupView({
         ref={bodyRef}
         className={styles['editorContent']}
         data-testid="editor-group-body"
+        tabIndex={-1}
         onDragOver={handleBodyDragOver}
         onDragLeave={handleBodyDragLeave}
         onDrop={handleBodyDrop}

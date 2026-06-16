@@ -228,6 +228,10 @@
   position: relative;
 }
 
+.editorContent:focus {
+  outline: none;
+}
+
 .dropZoneOverlay {
   position: absolute;
   background: rgba(0, 112, 224, 0.18);
