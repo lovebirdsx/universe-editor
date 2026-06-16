@@ -166,11 +166,12 @@ class TerminalXtermHolder extends Disposable implements ITerminalXtermHolder {
     this.wrapper = document.createElement('div')
     this.wrapper.style.position = 'absolute'
     this.wrapper.style.inset = '0'
-    // No padding here on purpose: padding lives on the host (.instance) instead.
-    // FitAddon measures this wrapper, and when the panel is CSS-hidden (Allotment
-    // sets the pane to height:0) a wrapper with its own padding would still report
-    // padding height as clientHeight, defeating fit()'s zero-size guard and
-    // collapsing the terminal to 1 row on every toggle.
+    // Margin (not padding) creates visual breathing room around the terminal.
+    // Padding would add to clientHeight/clientWidth even when the pane is
+    // CSS-hidden (Allotment sets height:0), causing FitAddon's zero-size guard
+    // to miss and collapsing the terminal to 1 row on every toggle.
+    // Margin keeps clientHeight=0 when the container is 0-height. ✓
+    this.wrapper.style.margin = '4px 6px'
 
     this.term = new Terminal({
       fontFamily: normalizeFontFamily(

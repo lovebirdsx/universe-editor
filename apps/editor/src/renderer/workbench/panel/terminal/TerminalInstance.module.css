@@ -2,10 +2,6 @@
   position: absolute;
   inset: 0;
   display: none;
-  /* Padding lives here, not on the xterm wrapper: when the panel is CSS-hidden
-     (Allotment pane height:0) the wrapper's content area collapses to 0 so
-     FitAddon won't clamp the terminal to a single row. */
-  padding: 4px 6px;
   box-sizing: border-box;
 }
 
