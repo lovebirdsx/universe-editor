@@ -1,23 +1,10 @@
 import type { Terminal, ILinkProvider, ILink } from '@xterm/xterm'
 import { type URI, normalizeFsPath } from '@universe-editor/platform'
+import { FILE_PATH_PATTERN } from '../../../services/acp/filePathLink.js'
 
-const EXTS =
-  'ts|tsx|js|jsx|mjs|cjs|vue|svelte|py|go|rs|c|cpp|cs|java|kt|rb|php|swift|yaml|yml|json|toml|md|css|scss|less|html'
-
-// Segment: non-whitespace, non-quote, non-angle-bracket
-const SEG = '[^\\s"\'<>|*?]'
-
-// Windows absolute:   C:\path\file.ts  or  C:/path/file.ts
-const WIN_ABS = `[A-Za-z]:[/\\\\](?:${SEG}+[/\\\\])*${SEG}+\\.(?:${EXTS})`
-// Unix absolute or relative dot-slash:  /path/file.ts  ./path/file.ts  ../path/file.ts
-const UNIX_ABS = `\\.{0,2}/(?:${SEG}+/)*${SEG}+\\.(?:${EXTS})`
-// Relative with at least one dir component:  src/foo/bar.ts
-const REL = `(?:[^\\s"'<>|*?:/\\\\]+[/\\\\])+[^\\s"'<>|*?:/\\\\]+\\.(?:${EXTS})`
-
-// Optional :line:col  or  (line,col)
-const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
-
-const FILE_LINK_RE = new RegExp(`(${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`, 'g')
+// Reuse the same path grammar as rendered markdown so terminal and markdown
+// links recognize exactly the same set of files (extensions, location suffixes).
+const FILE_LINK_RE = new RegExp(FILE_PATH_PATTERN, 'g')
 
 function resolvePath(cwd: string, filePath: string): string {
   if (/^[A-Za-z]:[/\\]/.test(filePath) || filePath.startsWith('/')) return normalizeFsPath(filePath)

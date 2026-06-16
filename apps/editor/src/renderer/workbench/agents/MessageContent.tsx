@@ -16,11 +16,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo } from 'react'
-import { IEditorResolverService, URI } from '@universe-editor/platform'
+import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
-import { useService } from '../useService.js'
+import { useOptionalService, useService } from '../useService.js'
 import { CommandInvocationBadge } from './CommandInvocationBadge.js'
 import styles from './agents.module.css'
 
@@ -110,7 +110,9 @@ function BlockNode({ block }: { block: NonTextBlock }) {
 // ---------------------------------------------------------------------------
 
 function MarkdownBlock({ text }: { text: string }) {
-  return <MarkdownView text={text} testId="acp-markdown" />
+  const workspaceService = useOptionalService(IWorkspaceService)
+  const baseUri = workspaceService?.current?.folder
+  return <MarkdownView text={text} testId="acp-markdown" {...(baseUri ? { baseUri } : {})} />
 }
 
 // ---------------------------------------------------------------------------

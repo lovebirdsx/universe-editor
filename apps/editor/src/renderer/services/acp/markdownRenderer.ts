@@ -26,6 +26,8 @@
  *    - `\\` escapes the next punctuation char
  *--------------------------------------------------------------------------------------------*/
 
+import { looksLikeFilePath, matchFilePathAt } from './filePathLink.js'
+
 export type MdNode =
   | { readonly type: 'paragraph'; readonly children: readonly MdInline[]; readonly line?: number }
   | {
@@ -68,6 +70,12 @@ export type MdInline =
   | { readonly type: 'strike'; readonly children: readonly MdInline[] }
   | { readonly type: 'code'; readonly text: string }
   | { readonly type: 'link'; readonly href: string; readonly children: readonly MdInline[] }
+  | {
+      readonly type: 'filepath'
+      readonly path: string
+      readonly line?: number
+      readonly col?: number
+    }
   | { readonly type: 'image'; readonly src: string; readonly alt: string }
   | { readonly type: 'softbreak' }
 
@@ -337,7 +345,7 @@ export function parseInline(text: string): readonly MdInline[] {
         if (urlEnd !== -1) {
           const label = text.slice(i + 1, labelEnd)
           const href = text.slice(labelEnd + 2, urlEnd).trim()
-          if (isSafeHref(href)) {
+          if (isSafeHref(href) || looksLikeFilePath(href)) {
             flush()
             out.push({ type: 'link', href, children: parseInline(label) })
             i = urlEnd + 1
@@ -371,6 +379,21 @@ export function parseInline(text: string): readonly MdInline[] {
       flush()
       out.push({ type: 'link', href: url, children: [{ type: 'text', text: url }] })
       i += url.length
+      continue
+    }
+
+    // Bare file path: `src/foo/bar.ts:10:5`. Requires a dir separator (see
+    // filePathLink) so plain words aren't mistaken for links.
+    const fp = matchFilePathAt(text, i)
+    if (fp) {
+      flush()
+      out.push({
+        type: 'filepath',
+        path: fp.path,
+        ...(fp.line !== undefined ? { line: fp.line } : {}),
+        ...(fp.col !== undefined ? { col: fp.col } : {}),
+      })
+      i += fp.full.length
       continue
     }
 

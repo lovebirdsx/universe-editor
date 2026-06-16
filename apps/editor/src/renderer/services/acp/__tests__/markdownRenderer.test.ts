@@ -292,6 +292,26 @@ describe('parseInline — inline layer', () => {
     expect(hasLink).toBe(false)
   })
 
+  it('keeps explicit links with relative file-path hrefs', () => {
+    expect(parseInline('[doc](../foo.md)')).toEqual<readonly MdInline[]>([
+      { type: 'link', href: '../foo.md', children: [text('doc')] },
+    ])
+  })
+
+  it('detects a bare file path with a dir separator and location', () => {
+    expect(parseInline('see src/foo/bar.ts:10:5 now')).toEqual<readonly MdInline[]>([
+      text('see '),
+      { type: 'filepath', path: 'src/foo/bar.ts', line: 10, col: 5 },
+      text(' now'),
+    ])
+  })
+
+  it('does not treat a bare filename as a file path', () => {
+    expect(parseInline('edit package.json please')).toEqual<readonly MdInline[]>([
+      text('edit package.json please'),
+    ])
+  })
+
   it('parses autolinks <url> only for safe schemes', () => {
     expect(parseInline('see <https://example.com>')).toEqual<readonly MdInline[]>([
       text('see '),

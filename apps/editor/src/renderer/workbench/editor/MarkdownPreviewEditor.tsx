@@ -11,6 +11,7 @@ import {
   IEditorGroupsService,
   IEditorInput,
   IFileService,
+  URI,
 } from '@universe-editor/platform'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
@@ -162,7 +163,11 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
       data-testid="markdown-preview"
       tabIndex={0}
     >
-      <MarkdownView text={content} className={styles['previewBody'] ?? ''} />
+      <MarkdownView
+        text={content}
+        className={styles['previewBody'] ?? ''}
+        baseUri={URI.joinPath(sourceUri, '..')}
+      />
     </div>
   )
 }

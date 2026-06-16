@@ -7,7 +7,7 @@
  *  same component fits both the compact ACP chat and the roomier doc preview.
  *--------------------------------------------------------------------------------------------*/
 
-import { Fragment, useMemo, type ReactNode } from 'react'
+import { createContext, Fragment, useContext, useMemo, type ReactNode } from 'react'
 import { IEditorResolverService, URI } from '@universe-editor/platform'
 import {
   parseMarkdown,
@@ -15,30 +15,43 @@ import {
   type MdNode,
   type TableAlign,
 } from '../../services/acp/markdownRenderer.js'
+import {
+  looksLikeFilePath,
+  matchFullFilePath,
+  splitFilePathLocation,
+} from '../../services/acp/filePathLink.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { MermaidBlock } from './MermaidBlock.js'
 import { useService } from '../useService.js'
+import { useMarkdownFileLink } from './useMarkdownFileLink.js'
 import styles from './markdown.module.css'
 
 interface MarkdownViewProps {
   readonly text: string
   readonly className?: string
   readonly testId?: string
+  /** Base URI for resolving relative file-path links (markdown source dir or workspace root). */
+  readonly baseUri?: URI
 }
 
-export function MarkdownView({ text, className, testId }: MarkdownViewProps) {
+export function MarkdownView({ text, className, testId, baseUri }: MarkdownViewProps) {
   const nodes = useMemo(() => parseMarkdown(text), [text])
+  const openFileLink = useMarkdownFileLink(baseUri)
   return (
-    <div
-      className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-      {...(testId !== undefined ? { 'data-testid': testId } : {})}
-    >
-      {nodes.map((node, i) => (
-        <Block key={i} node={node} />
-      ))}
-    </div>
+    <FileLinkContext.Provider value={openFileLink}>
+      <div
+        className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
+        {...(testId !== undefined ? { 'data-testid': testId } : {})}
+      >
+        {nodes.map((node, i) => (
+          <Block key={i} node={node} />
+        ))}
+      </div>
+    </FileLinkContext.Provider>
   )
 }
+
+const FileLinkContext = createContext<(path: string, line?: number, col?: number) => void>(() => {})
 
 function Block({ node }: { node: MdNode }): ReactNode {
   const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
@@ -147,21 +160,59 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
     case 'strike':
       return <del>{renderInline(node.children)}</del>
     case 'code':
-      return <code className={styles['inlineCode']}>{node.text}</code>
+      return <InlineCode text={node.text} />
     case 'image':
       return <img src={node.src} alt={node.alt} className={styles['mdImage']} />
     case 'softbreak':
       return <Fragment>{'\n'}</Fragment>
+    case 'filepath':
+      return (
+        <FilePathLink
+          path={node.path}
+          {...(node.line !== undefined ? { line: node.line } : {})}
+          {...(node.col !== undefined ? { col: node.col } : {})}
+        />
+      )
     case 'link':
       return <SafeLink href={node.href}>{renderInline(node.children)}</SafeLink>
   }
 }
 
-function SafeLink({ href, children }: { href: string; children: ReactNode }) {
-  const editorResolver = useService(IEditorResolverService)
-  const isFile = href.startsWith('file:')
+// Inline code that is exactly one file path becomes a clickable monospace link
+// (the common case: agents/docs wrap paths in backticks). Anything else stays a
+// plain `<code>` so prose and snippets are unaffected.
+function InlineCode({ text }: { text: string }) {
+  const openFileLink = useContext(FileLinkContext)
+  const match = matchFullFilePath(text)
+  if (!match) return <code className={styles['inlineCode']}>{text}</code>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
+    openFileLink(match.path, match.line, match.col)
+  }
+  return (
+    <a
+      href={text}
+      onClick={onClick}
+      className={`${styles['inlineCode']} ${styles['mdLink']}`}
+      data-testid="md-filepath"
+    >
+      {text}
+    </a>
+  )
+}
+
+function SafeLink({ href, children }: { href: string; children: ReactNode }) {
+  const editorResolver = useService(IEditorResolverService)
+  const openFileLink = useContext(FileLinkContext)
+  const isFile = href.startsWith('file:')
+  const isFilePath = !isFile && looksLikeFilePath(href)
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    e.preventDefault()
+    if (isFilePath) {
+      const { path, line, col } = splitFilePathLocation(href)
+      openFileLink(path, line, col)
+      return
+    }
     if (isFile) {
       try {
         const uri = URI.parse(href)
@@ -179,11 +230,25 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     <a
       href={href}
       onClick={onClick}
-      target={isFile ? undefined : '_blank'}
+      target={isFile || isFilePath ? undefined : '_blank'}
       rel="noopener noreferrer"
       className={styles['mdLink']}
     >
       {children}
+    </a>
+  )
+}
+
+function FilePathLink({ path, line, col }: { path: string; line?: number; col?: number }) {
+  const openFileLink = useContext(FileLinkContext)
+  const label = line !== undefined ? `${path}:${line}${col !== undefined ? `:${col}` : ''}` : path
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
+    e.preventDefault()
+    openFileLink(path, line, col)
+  }
+  return (
+    <a href={label} onClick={onClick} className={styles['mdLink']} data-testid="md-filepath">
+      {label}
     </a>
   )
 }
