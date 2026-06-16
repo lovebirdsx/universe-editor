@@ -71,6 +71,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const scanOpts = await readScanConfig()
   const { repos, mainRoot } = await discoverRepos(root, scanOpts, log)
   if (repos.length === 0) {
+    // Register a stub so DirtyDiffContribution doesn't warn "command not found"
+    // on every file switch. Files outside a git repo have no HEAD content → null.
+    context.subscriptions.push(commands.registerCommand('git.getHeadContent', () => null))
+
     console.error(`[git] no git repository found under ${root}; source control disabled`)
     return
   }
