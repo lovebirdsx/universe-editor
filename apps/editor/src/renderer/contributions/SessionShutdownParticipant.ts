@@ -15,6 +15,7 @@ import {
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 
 export class SessionShutdownParticipant extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -32,6 +33,14 @@ export class SessionShutdownParticipant extends Disposable implements IWorkbench
   private async _maybeVeto(reason: ShutdownReason): Promise<boolean> {
     const running = this._sessions.sessions.get().filter((s) => s.status.get() === 'running')
     if (running.length === 0) return false
+
+    // E2E runs headless: a modal confirm has no one to answer it and would hang
+    // app.close() until SIGKILL, which orphans child processes (node-pty / ACP
+    // agents / extension host) on Windows and blows the worker teardown budget.
+    // Proceed without prompting so graceful quit + will-quit dispose can run.
+    // Mirrors ReloadWindowAction's isE2E modal skip in windowActions.ts.
+    const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
+    if (isE2E) return false
 
     const { confirmed } = await this._dialog.confirm({
       type: 'warning',

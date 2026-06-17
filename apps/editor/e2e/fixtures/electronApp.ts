@@ -14,6 +14,7 @@ import {
 import { dirname, resolve, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { mkdtempSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { WorkbenchPO, expectNoLeaks } from '../pages/WorkbenchPO.js'
 
@@ -27,6 +28,26 @@ export const MAIN_ENTRY = resolve(APP_ROOT, 'out', 'main', 'index.js')
 // the terminal spec. Fall back to force-killing the underlying process if the
 // graceful close doesn't finish promptly.
 const CLOSE_TIMEOUT_MS = 10_000
+
+// Force-kill the Electron process AND its child tree (node-pty / ACP agents /
+// extension host). On Windows, SIGKILL to the parent PID leaves children as
+// orphans holding pipes open, which blocks Playwright worker teardown past the
+// 30s budget; `taskkill /T` tears down the whole tree. Elsewhere a parent
+// SIGKILL is sufficient (the bug is Windows-only).
+function forceKillTree(proc: ReturnType<ElectronApplication['process']>): void {
+  const pid = proc.pid
+  if (pid === undefined) return
+  if (process.platform === 'win32') {
+    try {
+      execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { stdio: 'ignore' })
+    } catch {
+      // Already exited, partial tree, or taskkill unavailable — nothing
+      // actionable for teardown.
+    }
+  } else {
+    proc.kill('SIGKILL')
+  }
+}
 
 export async function closeApp(app: ElectronApplication): Promise<void> {
   let proc: ReturnType<ElectronApplication['process']>
@@ -48,7 +69,7 @@ export async function closeApp(app: ElectronApplication): Promise<void> {
     }),
   ])
   if (timer) clearTimeout(timer)
-  if (timedOut && proc.pid !== undefined && proc.exitCode === null) proc.kill('SIGKILL')
+  if (timedOut && proc.pid !== undefined && proc.exitCode === null) forceKillTree(proc)
 }
 
 export type E2EFixtures = {
