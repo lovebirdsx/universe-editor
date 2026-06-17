@@ -18,7 +18,7 @@ import {
 } from 'react'
 import { localize, type IFileService, type URI } from '@universe-editor/platform'
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
+import { useDragHandle, useDropTarget, selectionDragUris } from '@universe-editor/workbench-ui'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './ExplorerView.module.css'
@@ -136,15 +136,11 @@ function ExplorerTreeNodeImpl({
       isDirectory,
     },
     {
-      uriList: () => {
-        const self = compactRoot ?? resource
-        const selfKey = self.toString()
-        const selection = tree.selection
-        if (selection.length > 1 && selection.some((u) => u.toString() === selfKey)) {
-          return selection.map((u) => u.toString())
-        }
-        return [selfKey]
-      },
+      uriList: () =>
+        selectionDragUris(
+          (compactRoot ?? resource).toString(),
+          tree.selection.map((u) => u.toString()),
+        ),
     },
   )
 

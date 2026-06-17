@@ -43,6 +43,8 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  resourceDragProps,
+  selectionDragUris,
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
@@ -327,10 +329,12 @@ const ScmFileRow = memo(function ScmFileRow({
   isSelected,
   isFocused,
   revision,
+  getSelectedUris,
 }: SharedRowProps & {
   node: Extract<ScmNode, { kind: 'file' }>
   providerId: string
   revision: number
+  getSelectedUris: () => readonly string[]
 }) {
   const commandService = useService(ICommandService)
   const editorResolverService = useService(IEditorResolverService)
@@ -381,6 +385,7 @@ const ScmFileRow = memo(function ScmFileRow({
       title={resource.decorations?.tooltip ?? resource.resourceUri}
       onClick={(e) => rowClick(model, node, e, openChange)}
       onDoubleClick={openChangePinned}
+      {...resourceDragProps(() => selectionDragUris(uri.toString(), getSelectedUris()))}
     >
       <FileIcon resource={uri} className={styles['fileIcon']} isDirectory={false} size={16} />
       <span className={styles['resourceLabel']} style={decorationStyle(resource)}>
@@ -756,6 +761,21 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     treeModel.setExpansion(folderIds.map((id) => [id, false] as const))
   }
 
+  // Selected file URIs, read lazily at dragstart so a multi-selection drags all
+  // of them. Stable identity (treeModel never changes) keeps ScmFileRow memoized.
+  const getSelectedUris = useCallback((): string[] => {
+    const ids = new Set(treeModel.selection)
+    const out: string[] = []
+    for (const children of snapshotRef.current.childrenMap.values()) {
+      for (const n of children) {
+        if (n.kind === 'file' && ids.has(n.id)) {
+          out.push(URI.file(n.resource.resourceUri).toString())
+        }
+      }
+    }
+    return out
+  }, [treeModel])
+
   const renderRow = (ctx: ITreeRowRenderContext<ScmNode>) => {
     const n = ctx.node.element
     const shared = {
@@ -781,7 +801,16 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
       return (
         <ScmFolderRow key={n.id} {...shared} node={n} rootUri={model.rootUri} revision={revision} />
       )
-    return <ScmFileRow key={n.id} {...shared} node={n} providerId={model.id} revision={revision} />
+    return (
+      <ScmFileRow
+        key={n.id}
+        {...shared}
+        node={n}
+        providerId={model.id}
+        revision={revision}
+        getSelectedUris={getSelectedUris}
+      />
+    )
   }
 
   // Collapse-all is driven from the title toolbar via a shared signal counter;

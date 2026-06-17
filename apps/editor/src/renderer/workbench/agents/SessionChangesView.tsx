@@ -21,6 +21,7 @@ import {
   type IObservable,
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
+import { resourceDragProps } from '@universe-editor/workbench-ui'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import {
   ISessionChangeTrackerService,
@@ -283,6 +284,7 @@ function ChangeRow({
       onClick={isDeleted ? undefined : () => onOpen(change, true)}
       onDoubleClick={isDeleted ? undefined : () => onOpen(change, false)}
       title={change.path}
+      {...resourceDragProps(() => [change.uri.toString()])}
     >
       <FileIcon resource={change.uri} isDirectory={false} className={styles['icon']} />
       <span className={styles['name']}>{basenameOfResource(change.uri)}</span>

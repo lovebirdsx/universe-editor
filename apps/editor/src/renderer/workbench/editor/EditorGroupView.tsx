@@ -27,7 +27,9 @@ import {
   IContextKeyService,
   IDialogService,
   IEditorResolverService,
+  IFileService,
   IInstantiationService,
+  IWindowsService,
   localize,
   markAsSingleton,
   MenuId,
@@ -51,6 +53,7 @@ import { closeEditorWithConfirm } from '../../services/editor/closeEditorWithCon
 import { cloneEditorInputForSplit } from '../../services/editor/cloneEditorInput.js'
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
+import { openDroppedResource } from '../../services/dnd/openDroppedResource.js'
 import {
   IScmDecorationsService,
   scmPathKey,
@@ -351,6 +354,8 @@ export function EditorGroupView({
   const commandService = useService(ICommandService)
   const contextKeyService = useService(IContextKeyService)
   const editorResolverService = useService(IEditorResolverService)
+  const fileService = useService(IFileService)
+  const windowsService = useService(IWindowsService)
   const instantiationService = useService(IInstantiationService)
   const dragSession = useContext(DragSessionContext)
   const [tabMenu, setTabMenu] = useState<TabMenuState | null>(null)
@@ -425,7 +430,7 @@ export function EditorGroupView({
 
   const openDroppedResources = (e: ReactDragEvent): void => {
     for (const resource of readDroppedResources(e)) {
-      void editorResolverService.openEditor(resource)
+      void openDroppedResource(resource, { fileService, windowsService, editorResolverService })
     }
   }
 

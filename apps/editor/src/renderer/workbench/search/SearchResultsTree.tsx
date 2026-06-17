@@ -12,6 +12,7 @@ import {
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   forwardRef,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -29,6 +30,8 @@ import {
   Tree,
   TreeModel,
   useOwnedTreeModel,
+  resourceDragProps,
+  selectionDragUris,
   type ITreeDataSource,
   type ITreeRowRenderContext,
 } from '@universe-editor/workbench-ui'
@@ -164,6 +167,18 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
     }, [snapshot])
     const nodeByIdRef = useRef(nodeById)
     nodeByIdRef.current = nodeById
+
+    // Selected file URIs (deduped), read lazily at dragstart so a multi-selection
+    // drags all of them. A match contributes its file; folders are skipped.
+    const getSelectedUris = useCallback((): string[] => {
+      const ids = new Set(model.selection)
+      const seen = new Set<string>()
+      for (const n of nodeByIdRef.current.values()) {
+        if (!ids.has(n.id)) continue
+        if (n.kind === 'file' || n.kind === 'match') seen.add(n.resource.toString())
+      }
+      return [...seen]
+    }, [model])
 
     useImperativeHandle(
       handleRef,
@@ -337,6 +352,9 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             title={n.relPath}
             onClick={ctx.onClickRow}
             onContextMenu={(e) => openRowMenu(e, n)}
+            {...resourceDragProps(() =>
+              selectionDragUris(n.resource.toString(), getSelectedUris()),
+            )}
           >
             <button
               type="button"
@@ -394,6 +412,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           onClick={ctx.onClickRow}
           onDoubleClick={() => onActivateMatch(n.resource, n.match, n.rangeIndex, false)}
           onContextMenu={(e) => openRowMenu(e, n)}
+          {...resourceDragProps(() => selectionDragUris(n.resource.toString(), getSelectedUris()))}
         >
           <span className={styles['lineNumber']}>{n.match.lineNumber}</span>
           <span className={styles['matchPreview']}>

@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { URI } from '@universe-editor/platform'
-import { parseUriList } from '@universe-editor/workbench-ui'
+import { readUriList } from '@universe-editor/workbench-ui'
 
 /**
  * Extract the dropped resources as URIs. OS-external files take priority (they
@@ -37,7 +37,7 @@ export function readDroppedResources(e: { dataTransfer: DataTransfer | null }): 
   }
 
   if (out.length === 0) {
-    for (const line of parseUriList(dt.getData('text/uri-list'))) {
+    for (const line of readUriList(dt)) {
       try {
         push(URI.parse(line))
       } catch {

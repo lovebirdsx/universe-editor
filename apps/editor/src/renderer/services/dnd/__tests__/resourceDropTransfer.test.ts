@@ -6,13 +6,18 @@ import {
   toMentionName,
 } from '../resourceDropTransfer.js'
 
-function dropEvent(opts: { files?: readonly File[]; uriList?: string }): {
+function dropEvent(opts: { files?: readonly File[]; uriList?: string; internalUriList?: string }): {
   dataTransfer: DataTransfer
 } {
   const files = opts.files ?? []
   const dataTransfer = {
     files: files as unknown as FileList,
-    getData: (type: string) => (type === 'text/uri-list' ? (opts.uriList ?? '') : ''),
+    getData: (type: string) =>
+      type === 'text/uri-list'
+        ? (opts.uriList ?? '')
+        : type === 'application/vnd.universe-editor.uri-list'
+          ? (opts.internalUriList ?? '')
+          : '',
   } as unknown as DataTransfer
   return { dataTransfer }
 }
@@ -50,8 +55,37 @@ describe('resourceDropTransfer', () => {
       expect(out).toHaveLength(1)
     })
 
+    // Repro: dragging several OS files lands a CR-separated uri-list. Before the
+    // fix this collapsed to a single (garbage) URI, so the editor opened one
+    // file and the prompt input inserted one mangled @mention.
+    it('splits a CR-separated uri-list into every resource', () => {
+      vi.stubGlobal('window', { ipc: { getPathForFile: () => '' } })
+      const out = readDroppedResources(
+        dropEvent({ uriList: 'file:///x/a.ts\rfile:///x/b.ts\rfile:///x/c.ts' }),
+      )
+      expect(out.map((u) => u.toString())).toEqual([
+        'file:///x/a.ts',
+        'file:///x/b.ts',
+        'file:///x/c.ts',
+      ])
+    })
+
     it('returns empty when there is no dataTransfer', () => {
       expect(readDroppedResources({ dataTransfer: null })).toEqual([])
+    })
+
+    // In-app drags publish a private mirror that survives the OS round-trip;
+    // when the standard text/uri-list arrives glued into one line, the mirror
+    // still yields every resource.
+    it('reads the private mirror when text/uri-list is glued into one entry', () => {
+      vi.stubGlobal('window', { ipc: { getPathForFile: () => '' } })
+      const out = readDroppedResources(
+        dropEvent({
+          uriList: 'file:///x/a.tsfile:///x/b.ts',
+          internalUriList: 'file:///x/a.ts\nfile:///x/b.ts',
+        }),
+      )
+      expect(out.map((u) => u.toString())).toEqual(['file:///x/a.ts', 'file:///x/b.ts'])
     })
   })
 
