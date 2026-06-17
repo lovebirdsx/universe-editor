@@ -948,9 +948,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
               preserveFocus: true,
             })
           } else {
-            void commandService.executeCommand(n.resource.command.command, n.resource, {
-              pinned: true,
-            })
+            void commandService.executeCommand(n.resource.command.command, n.resource)
           }
         }}
       />
