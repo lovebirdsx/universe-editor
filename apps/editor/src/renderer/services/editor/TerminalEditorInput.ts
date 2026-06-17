@@ -88,6 +88,13 @@ export class TerminalEditorInput extends EditorInput {
     return 'terminal'
   }
 
+  override focus(): boolean {
+    const id = this._terminalId.get()
+    if (!id) return false
+    this._manager.focusTerminal(id)
+    return true
+  }
+
   override serialize(): string {
     return JSON.stringify({
       label: this._label,

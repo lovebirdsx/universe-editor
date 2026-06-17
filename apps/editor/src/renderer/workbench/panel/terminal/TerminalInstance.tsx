@@ -112,6 +112,17 @@ export function TerminalInstance({
     return () => d.dispose()
   }, [isFocused, manager])
 
+  // Respond to targeted focus requests by terminal id (e.g. FocusActiveEditorGroupAction
+  // when a terminal editor is active — the handler must reach the exact xterm instance).
+  useEffect(() => {
+    const d = markAsSingleton(
+      manager.onFocusRequestById((targetId) => {
+        if (targetId === id) holderRef.current?.focus()
+      }),
+    )
+    return () => d.dispose()
+  }, [id, manager])
+
   // Dismiss context menu on Escape.
   useEffect(() => {
     if (!contextMenu) return

@@ -88,6 +88,10 @@ export interface ITerminalManagerService {
   resize(id: string, cols: number, rows: number): void
   /** Trigger xterm focus on the active panel terminal. */
   focus(): void
+  /** Fires when a specific terminal should receive xterm focus. */
+  readonly onFocusRequestById: Event<string>
+  /** Trigger xterm focus on the terminal with the given id. */
+  focusTerminal(id: string): void
   /** Load persisted panel terminals for the current workspace. */
   load(): Promise<void>
 }
@@ -159,6 +163,9 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   private readonly _onFocusRequest = this._register(new Emitter<void>())
   readonly onFocusRequest: Event<void> = this._onFocusRequest.event
+
+  private readonly _onFocusRequestById = this._register(new Emitter<string>())
+  readonly onFocusRequestById: Event<string> = this._onFocusRequestById.event
 
   private readonly _onDidTerminalExit = this._register(new Emitter<ITerminalExitEvent>())
   readonly onDidTerminalExit: Event<ITerminalExitEvent> = this._onDidTerminalExit.event
@@ -311,6 +318,10 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   focus(): void {
     this._onFocusRequest.fire()
+  }
+
+  focusTerminal(id: string): void {
+    this._onFocusRequestById.fire(id)
   }
 
   async load(): Promise<void> {

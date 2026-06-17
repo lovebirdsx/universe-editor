@@ -26,6 +26,7 @@ interface ManagerHarness {
   service: ITerminalManagerServiceType
   created: ITerminalNewSpec[]
   closed: string[]
+  focused: string[]
   terminals: ISettableObservable<readonly ITerminalCreatedInfo[]>
   nextId: () => string
 }
@@ -33,6 +34,7 @@ interface ManagerHarness {
 function makeManager(): ManagerHarness {
   const created: ITerminalNewSpec[] = []
   const closed: string[] = []
+  const focused: string[] = []
   const terminals = observableValue<readonly ITerminalCreatedInfo[]>('test.terminals', [])
   let counter = 0
   const nextId = () => `t${counter++}`
@@ -45,6 +47,7 @@ function makeManager(): ManagerHarness {
     activeGroupId: observableValue<string | null>('test.activeGroup', null),
     activeTerminalId: observableValue<string | null>('test.active', null),
     onFocusRequest: () => ({ dispose() {} }),
+    onFocusRequestById: () => ({ dispose() {} }),
     onDidTerminalExit: () => ({ dispose() {} }),
     onDidRemoveTerminal: () => ({ dispose() {} }),
     async newTerminal(spec?: ITerminalNewSpec): Promise<string | null> {
@@ -70,10 +73,13 @@ function makeManager(): ManagerHarness {
     input() {},
     resize() {},
     focus() {},
+    focusTerminal(id: string) {
+      focused.push(id)
+    },
     async load() {},
   } as unknown as ITerminalManagerServiceType
 
-  return { service, created, closed, terminals, nextId }
+  return { service, created, closed, focused, terminals, nextId }
 }
 
 function makeAccessor(harness: ManagerHarness): {
@@ -141,5 +147,24 @@ describe('TerminalEditorInput', () => {
     const { accessor } = makeAccessor(h)
     expect(TerminalEditorInput.deserialize('not-json', accessor)).toBeNull()
     expect(TerminalEditorInput.deserialize(42 as unknown, accessor)).toBeNull()
+  })
+
+  it('focus() returns false and does not call focusTerminal when terminalId is not yet set', () => {
+    const h = makeManager()
+    const { accessor } = makeAccessor(h)
+    // Restored input: terminalId is undefined until respawn resolves.
+    const input = TerminalEditorInput.deserialize(JSON.stringify({ label: 'bash' }), accessor)!
+    expect(input.terminalId.get()).toBeUndefined()
+    expect(input.focus()).toBe(false)
+    expect(h.focused).toHaveLength(0)
+  })
+
+  it('focus() calls focusTerminal with the terminal id and returns true', () => {
+    const h = makeManager()
+    const { inst } = makeAccessor(h)
+    const input = inst.createInstance(TerminalEditorInput, 't-live', 'bash', undefined)
+    expect(input.terminalId.get()).toBe('t-live')
+    expect(input.focus()).toBe(true)
+    expect(h.focused).toEqual(['t-live'])
   })
 })
