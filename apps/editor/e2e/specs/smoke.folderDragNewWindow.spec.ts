@@ -8,6 +8,7 @@
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { test, expect } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
@@ -33,9 +34,8 @@ test.describe('@p1 folder drag → new window', () => {
     await expect(tabBar).toBeVisible({ timeout: 5000 })
 
     const newWindow = electronApp.waitForEvent('window')
-    await page.evaluate((subUri) => {
+    await page.evaluate((uri) => {
       const bar = document.querySelector<HTMLElement>('[data-testid="editor-group-tabbar"]')!
-      const uri = `file:///${subUri}`
       const dt = new DataTransfer()
       dt.setData('text/uri-list', uri)
       dt.setData('application/vnd.universe-editor.uri-list', uri)
@@ -55,7 +55,7 @@ test.describe('@p1 folder drag → new window', () => {
       fire('dragenter')
       fire('dragover')
       fire('drop')
-    }, subFs)
+    }, pathToFileURL(sub).href)
 
     const newPage = await newWindow
     await newPage.waitForFunction(() =>
