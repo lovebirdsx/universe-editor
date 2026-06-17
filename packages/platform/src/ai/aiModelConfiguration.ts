@@ -56,12 +56,13 @@ export interface AiResolvedGroup {
 }
 
 /** Which active-model slot a selection occupies. */
-export type AiActiveModelKind = 'chat' | 'inlineCompletion'
+export type AiActiveModelKind = 'chat' | 'inlineCompletion' | 'commit'
 
 /** The user's active model selections, persisted in aiSettings.json. */
 export interface AiActiveModels {
   readonly chat?: string
   readonly inlineCompletion?: string
+  readonly commit?: string
 }
 
 /** Top-level shape of aiSettings.json: provider groups plus active selections. */

@@ -54,6 +54,9 @@ export interface IMainThreadAi {
   /** The user's currently selected model id (UI state), if any. */
   getActiveModelId(): Promise<string | undefined>
 
+  /** The user's currently selected commit-message model id, if any. */
+  getCommitModelId(): Promise<string | undefined>
+
   /** Fire a request; chunks/end come back via the events keyed by `requestId`. */
   startRequest(
     requestId: string,

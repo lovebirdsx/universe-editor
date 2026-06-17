@@ -42,6 +42,9 @@ export interface IAiModelService {
   /** Fires when the active inline-completion model selection changes (persisted in aiSettings.json). */
   readonly onDidChangeInlineCompletionModel: Event<void>
 
+  /** Fires when the active commit-message model selection changes (persisted in aiSettings.json). */
+  readonly onDidChangeCommitModel: Event<void>
+
   /** List currently available models (resolved, with metadata). */
   getModels(): Promise<readonly AiModelMetadata[]>
 
@@ -71,6 +74,11 @@ export interface IAiModelService {
   getInlineCompletionModelId(): Promise<string | undefined>
   /** Set the active inline-completion model id (persisted in aiSettings.json by main). */
   setInlineCompletionModelId(modelId: string | undefined): Promise<void>
+
+  /** The active commit-message model id, or undefined if none (persisted in aiSettings.json by main). */
+  getCommitModelId(): Promise<string | undefined>
+  /** Set the active commit-message model id (persisted in aiSettings.json by main). */
+  setCommitModelId(modelId: string | undefined): Promise<void>
 
   /** Resolved per-model configuration (schema default → user settings). */
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration>

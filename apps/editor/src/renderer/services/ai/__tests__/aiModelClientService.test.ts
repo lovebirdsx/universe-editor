@@ -40,7 +40,7 @@ class FakeMain implements IAiModelMainService {
   startedRequestId: string | undefined
   cancelledRequestId: string | undefined
   groups: readonly AiProviderGroup[] = []
-  readonly activeModels: { chat?: string; inlineCompletion?: string } = {}
+  readonly activeModels: { chat?: string; inlineCompletion?: string; commit?: string } = {}
 
   getModels() {
     return Promise.resolve([])

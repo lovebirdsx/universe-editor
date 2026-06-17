@@ -236,7 +236,9 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   async setActiveModel(kind: AiActiveModelKind, modelId: string | undefined): Promise<void> {
     await this._ready
-    const next: { chat?: string; inlineCompletion?: string } = { ...this._activeModels }
+    const next: { chat?: string; inlineCompletion?: string; commit?: string } = {
+      ...this._activeModels,
+    }
     if (modelId === undefined) delete next[kind]
     else next[kind] = modelId
     this._activeModels = next

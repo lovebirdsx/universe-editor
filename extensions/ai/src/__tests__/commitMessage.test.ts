@@ -6,6 +6,7 @@ const showWarningMessage = vi.fn()
 const showErrorMessage = vi.fn()
 const getModels = vi.fn()
 const getActiveModelId = vi.fn()
+const getCommitModelId = vi.fn()
 const sendRequest = vi.fn()
 const getConfig = vi.fn()
 
@@ -14,6 +15,7 @@ vi.mock('@universe-editor/extension-api', () => ({
   ai: {
     getModels: () => getModels(),
     getActiveModelId: () => getActiveModelId(),
+    getCommitModelId: () => getCommitModelId(),
     sendRequest: (...args: unknown[]) => sendRequest(...args),
   },
   commands: { executeCommand: (...args: unknown[]) => executeCommand(...args) },
@@ -44,10 +46,11 @@ function contextWith(files: { path: string; diff: string }[]) {
 }
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   getConfig.mockImplementation((_key: string, def: unknown) => Promise.resolve(def))
   getModels.mockResolvedValue([{ id: 'm1' }])
   getActiveModelId.mockResolvedValue(undefined)
+  getCommitModelId.mockResolvedValue(undefined)
 })
 
 describe('generateCommitMessage', () => {
@@ -91,6 +94,16 @@ describe('generateCommitMessage', () => {
     await generateCommitMessage({ rootUri: '/r' })
     expect(getModels).not.toHaveBeenCalled()
     expect(sendRequest.mock.calls[0]?.[1]).toMatchObject({ modelId: 'custom-model' })
+  })
+
+  it('prefers the commit model over the active chat model when none is configured', async () => {
+    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
+    getCommitModelId.mockResolvedValueOnce('openai/default/commit-model')
+    getActiveModelId.mockResolvedValueOnce('openai/default/chat-model')
+    sendRequest.mockReturnValue(streamFrom(['x']))
+    await generateCommitMessage({ rootUri: '/r' })
+    expect(getModels).not.toHaveBeenCalled()
+    expect(sendRequest.mock.calls[0]?.[1]).toMatchObject({ modelId: 'openai/default/commit-model' })
   })
 
   it('prefers the active model over the first available when none is configured', async () => {

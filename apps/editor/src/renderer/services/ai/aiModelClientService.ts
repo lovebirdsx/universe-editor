@@ -43,13 +43,17 @@ export class AiModelClientService extends Disposable implements IAiModelService 
   private readonly _onDidChangeInlineCompletionModel = this._register(new Emitter<void>())
   readonly onDidChangeInlineCompletionModel = this._onDidChangeInlineCompletionModel.event
 
+  private readonly _onDidChangeCommitModel = this._register(new Emitter<void>())
+  readonly onDidChangeCommitModel = this._onDidChangeCommitModel.event
+
   constructor(private readonly _main: IAiModelMainService) {
     super()
     this.onDidChangeModels = this._main.onDidChangeModels
     this._register(
       this._main.onDidChangeActiveModel((e) => {
         if (e.kind === 'chat') this._onDidChangeActiveModel.fire()
-        else this._onDidChangeInlineCompletionModel.fire()
+        else if (e.kind === 'inlineCompletion') this._onDidChangeInlineCompletionModel.fire()
+        else this._onDidChangeCommitModel.fire()
       }),
     )
   }
@@ -80,6 +84,14 @@ export class AiModelClientService extends Disposable implements IAiModelService 
 
   setInlineCompletionModelId(modelId: string | undefined): Promise<void> {
     return this._main.setActiveModel('inlineCompletion', modelId)
+  }
+
+  getCommitModelId(): Promise<string | undefined> {
+    return this._main.getActiveModel('commit')
+  }
+
+  setCommitModelId(modelId: string | undefined): Promise<void> {
+    return this._main.setActiveModel('commit', modelId)
   }
 
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration> {

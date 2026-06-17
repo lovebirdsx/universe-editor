@@ -87,9 +87,11 @@ function buildUserPrompt(ctx: CommitGenContext, budget: number, instructions: st
   return parts.join('\n')
 }
 
-/** Resolve the model id: explicit config → active model → first available. */
+/** Resolve the model id: explicit config → commit model → active chat model → first available. */
 async function resolveModelId(configured: string): Promise<string | undefined> {
   if (configured) return configured
+  const commit = await ai.getCommitModelId()
+  if (commit) return commit
   const active = await ai.getActiveModelId()
   if (active) return active
   const models = await ai.getModels()

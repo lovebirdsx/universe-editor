@@ -94,10 +94,14 @@ function buildSchema(modelIds: readonly string[]): IJSONSchema {
         type: 'object',
         description: 'The active model selection for each feature.',
         properties: {
-          chat: { ...modelRef, description: 'Active model id for chat / commit messages.' },
+          chat: { ...modelRef, description: 'Active model id for chat.' },
           inlineCompletion: {
             ...modelRef,
             description: 'Active model id for inline (ghost-text) completions.',
+          },
+          commit: {
+            ...modelRef,
+            description: 'Active model id for commit message generation.',
           },
         },
       },
