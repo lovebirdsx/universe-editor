@@ -911,6 +911,21 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             if (local?.trim()) runOp(GitGraphCommands.checkoutRemote, name, local.trim())
           },
         },
+        { kind: 'sep' },
+        {
+          kind: 'item',
+          label: 'Delete remote branch…',
+          danger: true,
+          run: async () => {
+            const r = await dialog.confirm({
+              message: `Delete remote branch '${name}'?`,
+              detail: 'This will delete the branch from the remote server.',
+              primaryButton: 'Delete',
+              type: 'warning',
+            })
+            if (r.confirmed) runOp(GitGraphCommands.deleteRemoteBranch, name)
+          },
+        },
       ]
       setMenu({ x: e.clientX, y: e.clientY, items })
     },

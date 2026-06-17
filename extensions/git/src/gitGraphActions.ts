@@ -74,6 +74,13 @@ export const checkoutRemote = (
   log: Log,
 ): Promise<boolean> => run(root, ['checkout', '-b', localName, '--track', remoteRef], log)
 
+export const deleteRemoteBranch = (
+  root: string,
+  remote: string,
+  branch: string,
+  log: Log,
+): Promise<boolean> => run(root, ['push', remote, '--delete', branch], log)
+
 export const createTag = (
   root: string,
   hash: string,

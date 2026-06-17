@@ -301,6 +301,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git-graph.checkoutRemote', (...a: unknown[]) =>
       finishOp('checkout', gga.checkoutRemote(gitGraphRoot, a[0] as string, a[1] as string, log)),
     ),
+    commands.registerCommand('git-graph.deleteRemoteBranch', (...a: unknown[]) => {
+      const name = a[0] as string
+      const slashIdx = name.indexOf('/')
+      if (slashIdx === -1) return false
+      const remote = name.slice(0, slashIdx)
+      const branch = name.slice(slashIdx + 1)
+      return finishOp(
+        'delete remote branch',
+        gga.deleteRemoteBranch(gitGraphRoot, remote, branch, log),
+      )
+    }),
     commands.registerCommand('git-graph.createTag', (...a: unknown[]) =>
       finishOp(
         'create tag',
