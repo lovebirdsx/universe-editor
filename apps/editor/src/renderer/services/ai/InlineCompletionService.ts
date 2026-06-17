@@ -203,7 +203,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     } catch (err) {
       if (!cts.token.isCancellationRequested) {
         this._logger.warn('inline completion failed', err)
-        this._notifyError(err)
+        this._notifyError(err, modelId)
       }
       return null
     } finally {
@@ -310,18 +310,20 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     }
   }
 
-  private _notifyError(err: unknown): void {
+  private _notifyError(err: unknown, modelId: string): void {
     const message = err instanceof Error ? err.message : String(err)
     const code = getAiErrorCode(err)
-    // One toast per distinct failure; cleared on the next success.
-    const key = `${code ?? 'unknown'}:${message}`
+    // One toast per distinct failure (keyed by model too, so switching the
+    // completion model surfaces its own error); cleared on the next success.
+    const key = `${modelId}:${code ?? 'unknown'}:${message}`
     if (key === this._lastErrorKey) return
     this._lastErrorKey = key
 
     this._notification.notify({
       severity: Severity.Error,
-      message: localize('inlineCompletion.error', 'Inline completion failed: {0}', {
-        0: describeAiError(code, message),
+      message: localize('inlineCompletion.error', 'Inline completion failed for model "{0}": {1}', {
+        0: modelId,
+        1: describeAiError(code, message),
       }),
       actions: [
         {

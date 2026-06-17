@@ -399,13 +399,6 @@ async function bootstrapWorkbench(): Promise<void> {
   const languageFeaturesService = workbenchStore.add(new LanguageFeaturesService())
   services.set(ILanguageFeaturesService, languageFeaturesService)
 
-  // Inline (ghost-text) AI completions. Depends on IAiModelService (set above),
-  // plus config/storage/logger from the container — go through DI.
-  const inlineCompletionService = workbenchStore.add(
-    instantiation.createInstance(InlineCompletionService),
-  )
-  services.set(IInlineCompletionService, inlineCompletionService)
-
   // OutlineService: derives the active editor's symbol tree + cursor symbol from
   // the facade. Needs IEditorService + ILanguageFeaturesService, both set above.
   const outlineService = workbenchStore.add(instantiation.createInstance(OutlineService))
@@ -464,6 +457,13 @@ async function bootstrapWorkbench(): Promise<void> {
       sticky: true,
     })
   })
+
+  // Inline (ghost-text) AI completions. Depends on IAiModelService + config/
+  // logger from the container, plus INotificationService (registered above).
+  const inlineCompletionService = workbenchStore.add(
+    instantiation.createInstance(InlineCompletionService),
+  )
+  services.set(IInlineCompletionService, inlineCompletionService)
 
   // Explorer tree state — single instance for the renderer; depends on
   // IWorkspaceService + IFileService so it must be created via DI.
