@@ -24,6 +24,19 @@ async function writeFile(root: string, relPath: string): Promise<void> {
   await fs.writeFile(target, '')
 }
 
+async function trySymlink(
+  target: string,
+  linkPath: string,
+  type: 'file' | 'dir',
+): Promise<boolean> {
+  try {
+    await fs.symlink(target, linkPath, type)
+    return true
+  } catch {
+    return false // Windows 无 symlink 权限 → 跳过
+  }
+}
+
 afterEach(async () => {
   const prefix = path.resolve(os.tmpdir(), 'universe-file-search-')
   for (const root of roots.splice(0)) {
@@ -68,5 +81,58 @@ describe('FileSearchMainService', () => {
     })
 
     expect(complete.results.map((r) => r.relativePath)).toEqual(['src/main.ts'])
+  })
+
+  it('finds a file symbolic link by following its target type', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'real.ts')
+    if (!(await trySymlink(path.join(root, 'real.ts'), path.join(root, 'link.ts'), 'file'))) return
+
+    const service = new FileSearchMainService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: '',
+      matchAll: true,
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath).sort()).toEqual(['link.ts', 'real.ts'])
+  })
+
+  it('traverses a directory symbolic link', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'target/inside.ts')
+    if (!(await trySymlink(path.join(root, 'target'), path.join(root, 'linkdir'), 'dir'))) return
+
+    const service = new FileSearchMainService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: 'inside.ts',
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath).sort()).toEqual([
+      'linkdir/inside.ts',
+      'target/inside.ts',
+    ])
+  })
+
+  it('skips a dangling symbolic link without throwing', async () => {
+    const root = await makeRoot()
+    await writeFile(root, 'real.ts')
+    if (
+      !(await trySymlink(path.join(root, 'does-not-exist'), path.join(root, 'broken.ts'), 'file'))
+    )
+      return
+
+    const service = new FileSearchMainService()
+    const complete = await service.search({
+      root: URI.file(root),
+      pattern: '',
+      matchAll: true,
+      maxResults: 10,
+    })
+
+    expect(complete.results.map((r) => r.relativePath)).toEqual(['real.ts'])
   })
 })

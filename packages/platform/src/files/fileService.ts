@@ -27,6 +27,8 @@ export interface IFileStat {
   readonly resource: URI
   readonly isFile: boolean
   readonly isDirectory: boolean
+  /** True when the entry is a symbolic link. `isFile`/`isDirectory` then reflect the link target. */
+  readonly isSymbolicLink?: boolean
   readonly size: number
   /** Last-modified time as epoch milliseconds. */
   readonly mtime: number
@@ -36,6 +38,8 @@ export interface IDirectoryEntry {
   readonly name: string
   readonly isFile: boolean
   readonly isDirectory: boolean
+  /** True when the entry is a symbolic link. `isFile`/`isDirectory` then reflect the link target. */
+  readonly isSymbolicLink?: boolean
 }
 
 /**

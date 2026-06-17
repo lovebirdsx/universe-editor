@@ -148,13 +148,28 @@ export class FileSearchMainService implements IFileSearchService {
           const absPath = path.join(dir, d.name)
           const relPath = normalizeRel(path.relative(root.fsPath, absPath))
 
-          if (d.isDirectory()) {
+          let isDirectory = d.isDirectory()
+          let isFile = d.isFile()
+          if (d.isSymbolicLink()) {
+            // Dirent carries lstat semantics: a symlink reports neither file
+            // nor directory. Follow it to surface the target's type so links
+            // join the walk like any other entry.
+            try {
+              const s = await fs.stat(absPath)
+              isDirectory = s.isDirectory()
+              isFile = s.isFile()
+            } catch {
+              continue
+            }
+          }
+
+          if (isDirectory) {
             if (ignore.has(d.name) || excludeMatcher?.(relPath)) continue
             await scan(absPath, depth + 1)
             continue
           }
 
-          if (!d.isFile()) continue
+          if (!isFile) continue
           filesWalked++
           if (excludeMatcher?.(relPath)) continue
           const score = matchAll ? 0 : scoreFileMatch(d.name, relPath, pattern)

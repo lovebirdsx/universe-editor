@@ -98,6 +98,7 @@ function expandExcludeGlob(value: string): string[] {
 
 function buildRgArgs(query: ITextSearchMainQuery): string[] {
   const args = ['--hidden', '--no-require-git', '--no-ignore', '--no-ignore-global', '--json']
+  args.push('--follow')
   args.push(query.matchCase ? '--case-sensitive' : '--ignore-case')
   args.push('--crlf')
   args.push('--max-filesize', String(query.maxFileSizeBytes ?? DEFAULT_MAX_FILE_SIZE_BYTES))

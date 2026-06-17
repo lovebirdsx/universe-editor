@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { URI } from '@universe-editor/platform'
@@ -15,6 +15,20 @@ async function makeTempRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'ue-text-search-'))
   tempRoots.push(root)
   return root
+}
+
+async function tryDirLink(target: string, linkPath: string): Promise<boolean> {
+  // 'dir' for POSIX symlinks; 'junction' is the privilege-free fallback on
+  // Windows (real symlinks there need developer mode / elevation).
+  for (const type of ['dir', 'junction'] as const) {
+    try {
+      await symlink(target, linkPath, type)
+      return true
+    } catch {
+      // try the next link flavour
+    }
+  }
+  return false
 }
 
 function baseQuery(root: string, pattern: string) {
@@ -63,6 +77,25 @@ describe('TextSearchMainService', () => {
         path.normalize(target),
       )
       expect(complete.progress.limitHit).toBeUndefined()
+    } finally {
+      svc.dispose()
+    }
+  }, 15_000)
+
+  it('follows symbolic links so matches reachable only through a link are found', async () => {
+    const root = await makeTempRoot()
+    const external = await makeTempRoot()
+    await writeFile(path.join(external, 'data.txt'), 'symlink-needle\n')
+    if (!(await tryDirLink(external, path.join(root, 'linkdir')))) return // 无 symlink 权限 → 跳过
+
+    const svc = new TextSearchMainService()
+    try {
+      const complete = await svc.search(baseQuery(root, 'symlink-needle'))
+
+      expect(complete.results).toHaveLength(1)
+      expect(path.normalize(URI.revive(complete.results[0]!.resource)!.fsPath)).toBe(
+        path.normalize(path.join(root, 'linkdir', 'data.txt')),
+      )
     } finally {
       svc.dispose()
     }

@@ -3,7 +3,23 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  position: relative;
   color: var(--color-file-icon-default, var(--color-foreground-muted, #8a8a92));
+}
+
+/* Symbolic-link overlay: a small link arrow tucked into the icon's lower-right
+   corner, mirroring VSCode's symlink decoration. */
+.symlinkBadge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-sidebar-fg, #cccccc);
+  background: var(--color-sidebar-bg, #252526);
+  border-radius: 2px;
+  pointer-events: none;
 }
 
 .tone-folder {

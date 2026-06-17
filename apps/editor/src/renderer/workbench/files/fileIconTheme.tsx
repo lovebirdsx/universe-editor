@@ -1,5 +1,6 @@
 import type { JSX } from 'react'
 import {
+  CornerDownRight,
   File,
   FileCode2,
   FileJson2,
@@ -128,6 +129,8 @@ export interface FileIconProps extends ResolveFileIconOptions {
   readonly resource: URI
   readonly className?: string | undefined
   readonly size?: number | undefined
+  /** Overlays a small link badge to mark the entry as a symbolic link. */
+  readonly symbolicLink?: boolean | undefined
 }
 
 export function FileIcon({
@@ -137,6 +140,7 @@ export function FileIcon({
   languageId,
   className,
   size = 16,
+  symbolicLink,
 }: FileIconProps): JSX.Element {
   const resolved = resolveFileIcon(resource, { isDirectory, expanded, languageId })
   const Icon = resolved.icon
@@ -154,6 +158,11 @@ export function FileIcon({
       aria-hidden="true"
     >
       <Icon size={size} strokeWidth={1.75} />
+      {symbolicLink && (
+        <span className={styles['symlinkBadge']} data-symlink-badge="true">
+          <CornerDownRight size={9} strokeWidth={2.5} />
+        </span>
+      )}
     </span>
   )
 }

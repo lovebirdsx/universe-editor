@@ -146,6 +146,7 @@ export function ExplorerView() {
         resource={entry.resource}
         name={key === rootKey ? workspaceName : (entry.compactName ?? entry.name)}
         isDirectory={entry.isDirectory}
+        {...(entry.isSymbolicLink ? { isSymbolicLink: true } : {})}
         expanded={ctx.node.expanded}
         indentPadding={ctx.indentPadding}
         isSelected={ctx.isSelected}

@@ -116,12 +116,17 @@ export class FileSystemMainService implements IFileService {
   async stat(resource: RawUri): Promise<IFileStat> {
     const uri = ensureFile(reviveUri(resource))
     try {
-      const s = await fs.stat(uri.fsPath)
+      const lst = await fs.lstat(uri.fsPath)
+      const isSymbolicLink = lst.isSymbolicLink()
+      // Follow the link to report the target's type; fall back to the link
+      // itself for dangling links (stat throws).
+      const s = isSymbolicLink ? await fs.stat(uri.fsPath).catch(() => lst) : lst
       this._logger.debug(`stat ${uri.fsPath} size=${s.size} directory=${s.isDirectory()}`)
       return {
         resource: uri,
         isFile: s.isFile(),
         isDirectory: s.isDirectory(),
+        isSymbolicLink,
         size: s.size,
         mtime: s.mtimeMs,
       }
@@ -136,11 +141,32 @@ export class FileSystemMainService implements IFileService {
     const uri = ensureFile(reviveUri(resource))
     try {
       const dirents = await fs.readdir(uri.fsPath, { withFileTypes: true })
-      const entries = dirents.map((d) => ({
-        name: d.name,
-        isFile: d.isFile(),
-        isDirectory: d.isDirectory(),
-      }))
+      const entries = await Promise.all(
+        dirents.map(async (d) => {
+          // readdir Dirents carry lstat semantics: a symlink reports neither
+          // file nor directory. Follow it to surface the target's type so a
+          // directory link renders (and expands) as a folder.
+          if (d.isSymbolicLink()) {
+            try {
+              const s = await fs.stat(path.join(uri.fsPath, d.name))
+              return {
+                name: d.name,
+                isFile: s.isFile(),
+                isDirectory: s.isDirectory(),
+                isSymbolicLink: true,
+              }
+            } catch {
+              return { name: d.name, isFile: false, isDirectory: false, isSymbolicLink: true }
+            }
+          }
+          return {
+            name: d.name,
+            isFile: d.isFile(),
+            isDirectory: d.isDirectory(),
+            isSymbolicLink: false,
+          }
+        }),
+      )
       this._logger.debug(`list ${uri.fsPath} entries=${entries.length}`)
       return entries
     } catch (err) {

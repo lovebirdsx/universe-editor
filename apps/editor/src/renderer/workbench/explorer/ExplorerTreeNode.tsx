@@ -16,17 +16,20 @@ import {
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { type IFileService, type URI } from '@universe-editor/platform'
+import { localize, type IFileService, type URI } from '@universe-editor/platform'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useDragHandle, useDropTarget } from '@universe-editor/workbench-ui'
 import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './ExplorerView.module.css'
 
+const SYMLINK_LABEL = localize('explorer.symbolicLink', 'Symbolic Link')
+
 interface Props {
   readonly resource: URI
   readonly name: string
   readonly isDirectory: boolean
+  readonly isSymbolicLink?: boolean
   readonly expanded: boolean
   readonly indentPadding: number
   readonly isSelected: boolean
@@ -55,6 +58,7 @@ function ExplorerTreeNodeImpl({
   resource,
   name,
   isDirectory,
+  isSymbolicLink,
   expanded,
   indentPadding,
   isSelected,
@@ -193,8 +197,18 @@ function ExplorerTreeNodeImpl({
             <ChevronRight size={16} strokeWidth={1.75} />
           ))}
       </span>
-      <span className={styles['icon']} aria-hidden="true">
-        <FileIcon resource={resource} isDirectory={isDirectory} expanded={expanded} size={15} />
+      <span
+        className={styles['icon']}
+        aria-hidden="true"
+        title={isSymbolicLink ? SYMLINK_LABEL : undefined}
+      >
+        <FileIcon
+          resource={resource}
+          isDirectory={isDirectory}
+          expanded={expanded}
+          size={15}
+          {...(isSymbolicLink ? { symbolicLink: true } : {})}
+        />
       </span>
       {segments ? (
         <span className={styles['label']} style={labelStyle} title={decoTooltip}>

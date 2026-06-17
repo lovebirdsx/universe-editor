@@ -34,6 +34,7 @@ export interface IExplorerEntry {
   readonly resource: URI
   readonly name: string
   readonly isDirectory: boolean
+  readonly isSymbolicLink?: boolean
   readonly compactName?: string
   /** The topmost directory in the compact chain — used as drag source. */
   readonly compactRoot?: URI
@@ -58,6 +59,7 @@ function sortEntries(entries: readonly IDirectoryEntry[], parent: URI): IExplore
       resource: URI.joinPath(parent, e.name),
       name: e.name,
       isDirectory: e.isDirectory,
+      ...(e.isSymbolicLink ? { isSymbolicLink: true } : {}),
     }))
     .sort((a, b) => {
       if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1
