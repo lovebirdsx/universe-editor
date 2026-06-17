@@ -94,6 +94,14 @@ export function computeSmartEnter(
 
   const col = sel.active.character
 
+  // Cursor at the very start of a list line → don't continue the list; insert a
+  // blank line above and push the item down, matching a plain line's Enter.
+  if (col === 0) {
+    const working = [...lines]
+    working.splice(lineIndex, 0, '')
+    return withRenumber(lines, working, [cursor(lineIndex + 1, 0)])
+  }
+
   // Empty item → exit the list: clear the marker, leave a blank line.
   if (isEmptyItem(parsed)) {
     const working = [...lines]

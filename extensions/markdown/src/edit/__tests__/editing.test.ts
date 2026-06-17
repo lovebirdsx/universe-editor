@@ -188,6 +188,24 @@ describe('computeSmartEnter', () => {
     const r = computeSmartEnter(lines, [sel(0, 4)])
     expect(apply(lines, r as EditResult)).toEqual(['1. a', '2. ', '3. c', 'tail'])
   })
+
+  it('inserts a blank line above when the cursor is at the start of a task line', () => {
+    const lines = ['- [ ] a', '- [ ] b']
+    const r = computeSmartEnter(lines, [sel(1, 0)])
+    expect(apply(lines, r as EditResult)).toEqual(['- [ ] a', '', '- [ ] b'])
+  })
+
+  it('inserts a blank line above when the cursor is at the start of a bullet line', () => {
+    const lines = ['- item']
+    const r = computeSmartEnter(lines, [sel(0, 0)])
+    expect(apply(lines, r as EditResult)).toEqual(['', '- item'])
+  })
+
+  it('splits an ordered list at a line start, leaving the item as a new run', () => {
+    const lines = ['1. a', '2. b']
+    const r = computeSmartEnter(lines, [sel(1, 0)])
+    expect(apply(lines, r as EditResult)).toEqual(['1. a', '', '2. b'])
+  })
 })
 
 describe('computeIndent / computeOutdent', () => {
