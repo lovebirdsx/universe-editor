@@ -27,15 +27,26 @@ export const enum UserDataFile {
   VSCodeKeybindings = 'vscodeKeybindings',
 }
 
+/** Describes who triggered a user-data file change. */
+export interface IUserDataFileChange {
+  readonly file: UserDataFile
+  /**
+   * 'self' — written by this service (write()/setValue()); 'external' — an
+   * on-disk edit from outside, a workspace switch, or a config-dir relocate.
+   * Config-layer subscribers ignore 'self' (the in-memory layer is already
+   * current) while open editors reload on both so their buffer tracks disk.
+   */
+  readonly source: 'self' | 'external'
+}
+
 export interface IUserDataFilesService {
   readonly _serviceBrand: undefined
 
   /**
-   * Fired when a watched file changes on disk *from outside this service*.
-   * Self-writes via write()/setValue() are suppressed within a short window so
-   * subscribers see one logical change at a time.
+   * Fired when a watched file changes, carrying the source so subscribers can
+   * tell self-writes from external edits.
    */
-  readonly onDidChangeFile: Event<UserDataFile>
+  readonly onDidChangeFile: Event<IUserDataFileChange>
 
   /**
    * Read raw file text. Returns '' if the file does not exist (or, for

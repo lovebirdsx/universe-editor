@@ -16,6 +16,7 @@ import {
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
 import { languageForResource } from '../../workbench/files/resourceLanguage.js'
 import { MonacoModelRegistry } from '../../workbench/editor/monaco/MonacoModelRegistry.js'
+import { applyMinimalTextEdit } from './minimalModelEdit.js'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 interface ISerializedFileEditor {
@@ -160,7 +161,7 @@ export class FileEditorInput extends EditorInput {
       this.setDirty(false)
       return
     }
-    model.setValue(this._backupContent)
+    applyMinimalTextEdit(model, this._backupContent)
     this.markModelClean(model)
   }
 
@@ -182,9 +183,14 @@ export class FileEditorInput extends EditorInput {
    * Compare the on-disk mtime to the last-known one. If the file changed and
    * the buffer is clean, silently reload it; if dirty, prompt the user to
    * discard local changes. Returns the action taken.
+   *
+   * `force` skips the mtime short-circuit and reconciles against disk content
+   * directly — used for atomic self-writes (e.g. settings written by the app)
+   * where mtime granularity could otherwise falsely report 'unchanged'.
    */
   async checkExternalChange(
     dialog: IDialogService,
+    force = false,
   ): Promise<'unchanged' | 'reloaded' | 'kept' | 'gone'> {
     let stat
     try {
@@ -192,11 +198,16 @@ export class FileEditorInput extends EditorInput {
     } catch {
       return 'gone'
     }
-    if (stat.mtime === this._lastKnownMtime) return 'unchanged'
+    if (!force && stat.mtime === this._lastKnownMtime) return 'unchanged'
 
     const diskText = await this._fileService.readFileText(this._resource)
     const content = splitLeadingBom(diskText)
     const model = MonacoModelRegistry.peek(this._resource)
+
+    if (force && !this.isDirty && model && model.getValue() === content.text) {
+      this._lastKnownMtime = stat.mtime
+      return 'unchanged'
+    }
 
     if (!this.isDirty) {
       this._hasLeadingBom = content.hadBom
@@ -204,7 +215,9 @@ export class FileEditorInput extends EditorInput {
       this._savedAlternativeVersionId = undefined
       this._lastKnownMtime = stat.mtime
       if (model) {
-        if (model.getValue() !== content.text) model.setValue(content.text)
+        // Reconcile with a minimal edit, not setValue: a flush would drop the
+        // viewer's folding/decorations on lines that did not even change.
+        applyMinimalTextEdit(model, content.text)
         this.markModelClean(model)
       } else {
         this.setDirty(false)
@@ -225,7 +238,7 @@ export class FileEditorInput extends EditorInput {
       this._savedAlternativeVersionId = undefined
       this._lastKnownMtime = stat.mtime
       if (model) {
-        model.setValue(content.text)
+        applyMinimalTextEdit(model, content.text)
         this.markModelClean(model)
       } else {
         this.setDirty(false)

@@ -6,8 +6,9 @@
  *  - project settings live at <workspace>/.universe-editor/settings.json
  *  - We watch the *parent directory* (not the file directly) so a save-rename
  *    sequence from editors doesn't disconnect the watcher.
- *  - write()/setValue() are followed by a ~200ms self-write window during which
- *    inbound fs events for that file are dropped — keeps the round trip quiet.
+ *  - write()/setValue() suppress the watcher's own rename event, then fire an
+ *    explicit { source: 'self' } change so open editors reload while config-layer
+ *    subscribers (which already hold the value) skip a redundant re-read.
  *  - Writes are atomic (temp file + rename) so readers never see partial JSON.
  *--------------------------------------------------------------------------------------------*/
 
@@ -20,6 +21,7 @@ import {
   Disposable,
   Emitter,
   type Event,
+  type IUserDataFileChange,
   type IUserDataFilesService,
   URI,
   UserDataFile,
@@ -118,8 +120,8 @@ interface WatchSlot {
 export class UserDataMainService extends Disposable implements IUserDataFilesService {
   declare readonly _serviceBrand: undefined
 
-  private readonly _onDidChangeFile = this._register(new Emitter<UserDataFile>())
-  readonly onDidChangeFile: Event<UserDataFile> = this._onDidChangeFile.event
+  private readonly _onDidChangeFile = this._register(new Emitter<IUserDataFileChange>())
+  readonly onDidChangeFile: Event<IUserDataFileChange> = this._onDidChangeFile.event
 
   private readonly _slots = new Map<UserDataFile, WatchSlot>()
 
@@ -148,14 +150,14 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
         if (ws) {
           const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
           this._installSlot(UserDataFile.ProjectSettings, projectPath)
-          this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
+          this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
           const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
           this._installSlot(UserDataFile.VSCodeSettings, vscodePath, true)
-          this._onDidChangeFile.fire(UserDataFile.VSCodeSettings)
+          this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
         } else {
           // Workspace closed — let subscribers reset their workspace layers.
-          this._onDidChangeFile.fire(UserDataFile.ProjectSettings)
-          this._onDidChangeFile.fire(UserDataFile.VSCodeSettings)
+          this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
+          this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
         }
       }),
     )
@@ -203,7 +205,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     if (!slot) {
       throw new Error(`UserData: no workspace open (cannot write ${file})`)
     }
-    await this._atomicWrite(slot, content)
+    await this._atomicWrite(file, slot, content)
   }
 
   async setValue(
@@ -228,7 +230,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     })
     const next = applyEdits(current, edits)
     if (next === current) return true
-    await this._atomicWrite(slot, next)
+    await this._atomicWrite(file, slot, next)
     return true
   }
 
@@ -255,9 +257,9 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._installSlot(UserDataFile.Settings, join(dir, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(dir, 'keybindings.json'))
     this._installSlot(UserDataFile.AiSettings, join(dir, 'aiSettings.json'))
-    this._onDidChangeFile.fire(UserDataFile.Settings)
-    this._onDidChangeFile.fire(UserDataFile.Keybindings)
-    this._onDidChangeFile.fire(UserDataFile.AiSettings)
+    this._onDidChangeFile.fire({ file: UserDataFile.Settings, source: 'external' })
+    this._onDidChangeFile.fire({ file: UserDataFile.Keybindings, source: 'external' })
+    this._onDidChangeFile.fire({ file: UserDataFile.AiSettings, source: 'external' })
   }
 
   private _installSlot(file: UserDataFile, fullPath: string, readOnly = false): void {
@@ -299,7 +301,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
             slot.pendingFlush = setTimeout(() => {
               slot.pendingFlush = null
               if (Date.now() < slot.suppressUntil) return
-              this._onDidChangeFile.fire(file)
+              this._onDidChangeFile.fire({ file, source: 'external' })
             }, FLUSH_DEBOUNCE_MS)
           })
           slot.watcher.on('error', () => {
@@ -344,7 +346,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._slots.delete(file)
   }
 
-  private async _atomicWrite(slot: WatchSlot, content: string): Promise<void> {
+  private async _atomicWrite(file: UserDataFile, slot: WatchSlot, content: string): Promise<void> {
     slot.suppressUntil = Date.now() + SELF_WRITE_SUPPRESS_MS
     await fs.mkdir(slot.dir, { recursive: true })
     const tmp = `${slot.fullPath}.${process.pid}.${Date.now()}.tmp`
@@ -360,8 +362,11 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       }
       throw err
     }
-    // Re-arm: the rename itself fires events.
+    // Re-arm so the rename's own fs event is swallowed by the watcher; we fire
+    // the self-write change explicitly so open editors reload without the
+    // config layer treating it as an external edit to re-read.
     slot.suppressUntil = Date.now() + SELF_WRITE_SUPPRESS_MS
+    this._onDidChangeFile.fire({ file, source: 'self' })
   }
 }
 

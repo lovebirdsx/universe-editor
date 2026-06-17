@@ -15,10 +15,13 @@ import {
   type IFileService as IFileServiceType,
   type IFileWatcherService as IFileWatcherServiceType,
   type ILoggerService as ILoggerServiceType,
+  type IUserDataFileChange,
+  type IUserDataFilesService,
   LogLevel,
   NullLogger,
   URI,
   type UriComponents,
+  type UserDataFile,
 } from '@universe-editor/platform'
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -34,6 +37,33 @@ class FakeWatcher implements IFileWatcherServiceType {
   async unwatch(): Promise<void> {}
   fire(events: readonly IFileChangeEvent[]): void {
     this._emitter.fire(events)
+  }
+}
+
+/**
+ * Fake user-data service. `uris` maps a UserDataFile to its backing URI so the
+ * watcher can resolve change events to an open editor's resource.
+ */
+class FakeUserData implements IUserDataFilesService {
+  declare readonly _serviceBrand: undefined
+  private readonly _emitter = new Emitter<IUserDataFileChange>()
+  readonly onDidChangeFile = this._emitter.event
+  private readonly _uris = new Map<UserDataFile, URI>()
+  constructor(uris?: Iterable<[UserDataFile, URI]>) {
+    for (const [f, u] of uris ?? []) this._uris.set(f, u)
+  }
+  async read(): Promise<string> {
+    return ''
+  }
+  async write(): Promise<void> {}
+  async setValue(): Promise<boolean> {
+    return true
+  }
+  async getFileUri(file: UserDataFile): Promise<UriComponents | null> {
+    return this._uris.get(file)?.toJSON() ?? null
+  }
+  fire(file: UserDataFile, source: 'self' | 'external' = 'external'): void {
+    this._emitter.fire({ file, source })
   }
 }
 
@@ -113,11 +143,12 @@ function makeFileInput(uri: URI): FileEditorInput {
   Object.defineProperty(fake, 'resource', { get: () => uri })
   Object.defineProperty(fake, 'typeId', { get: () => 'file' })
   fake.checks = checks
-  ;(fake as { checkExternalChange: (d: IDialogService) => Promise<string> }).checkExternalChange =
-    async () => {
-      checks.push(Date.now())
-      return 'unchanged'
-    }
+  ;(
+    fake as { checkExternalChange: (d: IDialogService, force?: boolean) => Promise<string> }
+  ).checkExternalChange = async () => {
+    checks.push(Date.now())
+    return 'unchanged'
+  }
   return fake
 }
 
@@ -133,7 +164,14 @@ describe('ExternalChangeWatcher', () => {
     const inputB = makeFileInput(uriB) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([inputA, inputB])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
 
     watcher.fire([{ type: 'modified', resource: uriA.toJSON() }])
     await flush()
@@ -147,7 +185,14 @@ describe('ExternalChangeWatcher', () => {
     const untitled = new UntitledEditorInput()
     const groups = makeGroups([fileInput, untitled])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
 
     watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt').toJSON() }])
     await flush()
@@ -159,7 +204,14 @@ describe('ExternalChangeWatcher', () => {
     const fileInput = makeFileInput(uri) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([fileInput])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
 
     watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
     await flush()
@@ -179,6 +231,7 @@ describe('ExternalChangeWatcher', () => {
       makeDialog(),
       makeFileService({ existing: [uri] }),
       makeLoggerService(),
+      new FakeUserData(),
     )
 
     watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
@@ -194,7 +247,14 @@ describe('ExternalChangeWatcher', () => {
     const inputOutside = makeFileInput(outside) as FileEditorInput & { checks: number[] }
     const groups = makeGroups([inputInside, inputOutside])
     const watcher = new FakeWatcher()
-    new ExternalChangeWatcher(watcher, groups, makeDialog(), makeFileService(), makeLoggerService())
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
 
     watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder').toJSON() }])
     await flush()
@@ -213,6 +273,7 @@ describe('ExternalChangeWatcher', () => {
       makeDialog(),
       makeFileService({ existing: [uri], contents: [[uri, 'head']] }),
       makeLoggerService(),
+      new FakeUserData(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
@@ -220,5 +281,50 @@ describe('ExternalChangeWatcher', () => {
     // Discard reverts working tree to HEAD → modified side now equals original.
     expect(diff.modifiedContent).toBe('head')
     expect(diff.originalContent).toBe('head')
+  })
+
+  it('reloads an open editor when its user-data file changes', async () => {
+    // aiSettings.json lives outside the workspace, so only the userData service
+    // reports its change — the parcel watcher never sees it.
+    const aiSettings = 'aiSettings' as UserDataFile
+    const uri = URI.file('/config/aiSettings.json')
+    const other = URI.file('/config/settings.json')
+    const input = makeFileInput(uri) as FileEditorInput & { checks: number[] }
+    const otherInput = makeFileInput(other) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([input, otherInput])
+    const userData = new FakeUserData([[aiSettings, uri]])
+    new ExternalChangeWatcher(
+      new FakeWatcher(),
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri] }),
+      makeLoggerService(),
+      userData,
+    )
+
+    userData.fire(aiSettings)
+    await flush()
+    expect(input.checks).toHaveLength(1)
+    expect(otherInput.checks).toHaveLength(0)
+  })
+
+  it('refreshes on self-writes too (settings written by the app)', async () => {
+    const settings = 'settings' as UserDataFile
+    const uri = URI.file('/config/settings.json')
+    const input = makeFileInput(uri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([input])
+    const userData = new FakeUserData([[settings, uri]])
+    new ExternalChangeWatcher(
+      new FakeWatcher(),
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri] }),
+      makeLoggerService(),
+      userData,
+    )
+
+    userData.fire(settings, 'self')
+    await flush()
+    expect(input.checks).toHaveLength(1)
   })
 })

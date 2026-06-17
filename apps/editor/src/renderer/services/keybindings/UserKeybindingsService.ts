@@ -243,7 +243,9 @@ export class UserKeybindingsService extends Disposable implements IUserKeybindin
     await this._reloadFromFile()
 
     this._register(
-      this._files.onDidChangeFile((file) => {
+      this._files.onDidChangeFile(({ file, source }) => {
+        // Self-writes already applied the change in memory; skip the re-read.
+        if (source === 'self') return
         if (file === UserDataFile.VSCodeKeybindings) {
           void this._reloadVSCodeAndUser()
         } else if (file === UserDataFile.Keybindings) {

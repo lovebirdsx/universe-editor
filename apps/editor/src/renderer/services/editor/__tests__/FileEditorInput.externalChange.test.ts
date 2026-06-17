@@ -179,4 +179,30 @@ describe('FileEditorInput.checkExternalChange', () => {
     expect(dialog.calls).toHaveLength(0)
     input.dispose()
   })
+
+  it('force reloads a clean buffer even when mtime is unchanged', async () => {
+    const input = inst.createInstance(FileEditorInput, uri)
+    await input.resolve()
+    const model = MonacoModelRegistry.acquire(input.resource, input.backupContent)
+    // Content changed but mtime did not move (atomic same-tick self-write).
+    fs.state[uri.toString()] = { text: 'TWO', mtime: 100 }
+    const dialog = makeDialog([])
+    const out = await input.checkExternalChange(dialog, true)
+    expect(out).toBe('reloaded')
+    expect(model.getValue()).toBe('TWO')
+    MonacoModelRegistry.release(input.resource)
+    input.dispose()
+  })
+
+  it('force is a no-op when disk content already matches the buffer', async () => {
+    const input = inst.createInstance(FileEditorInput, uri)
+    await input.resolve()
+    MonacoModelRegistry.acquire(input.resource, input.backupContent)
+    const dialog = makeDialog([])
+    const out = await input.checkExternalChange(dialog, true)
+    expect(out).toBe('unchanged')
+    expect(dialog.calls).toHaveLength(0)
+    MonacoModelRegistry.release(input.resource)
+    input.dispose()
+  })
 })

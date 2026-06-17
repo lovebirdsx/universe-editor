@@ -8,6 +8,7 @@ import {
   URI,
   UserDataFile,
   type IDisposable,
+  type IUserDataFileChange,
   type IStorageService,
   type IUserDataFilesService,
   type StorageScope,
@@ -36,7 +37,7 @@ class FakeStorage implements IStorageService {
 class FakeUserData implements IUserDataFilesService {
   declare readonly _serviceBrand: undefined
   readonly files = new Map<UserDataFile, string>()
-  private readonly _emitter = new Emitter<UserDataFile>()
+  private readonly _emitter = new Emitter<IUserDataFileChange>()
   readonly onDidChangeFile = this._emitter.event
 
   async read(file: UserDataFile): Promise<string> {

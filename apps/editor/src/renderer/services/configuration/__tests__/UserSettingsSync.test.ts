@@ -6,6 +6,7 @@ import {
   Event,
   IConfigurationService,
   IStorageService,
+  type IUserDataFileChange,
   IUserDataFilesService,
   InstantiationService,
   ServiceCollection,
@@ -41,7 +42,7 @@ class FakeUserData implements IUserDataFilesService {
   writeCalls: Array<{ file: UserDataFile; content: string }> = []
   setValueCalls: Array<{ file: UserDataFile; path: readonly (string | number)[]; value: unknown }> =
     []
-  private readonly _emitter = new Emitter<UserDataFile>()
+  private readonly _emitter = new Emitter<IUserDataFileChange>()
   readonly onDidChangeFile = this._emitter.event
 
   async read(file: UserDataFile): Promise<string> {
@@ -80,8 +81,8 @@ class FakeUserData implements IUserDataFilesService {
   async getFileUri(_file: UserDataFile): Promise<UriComponents | null> {
     return URI.file('/fake/path').toJSON()
   }
-  fire(file: UserDataFile): void {
-    this._emitter.fire(file)
+  fire(file: UserDataFile, source: 'self' | 'external' = 'external'): void {
+    this._emitter.fire({ file, source })
   }
 }
 

@@ -56,7 +56,10 @@ export class UserSettingsSync extends Disposable {
     await this._reloadVSCodeLayer()
 
     this._register(
-      this._files.onDidChangeFile((file) => {
+      this._files.onDidChangeFile(({ file, source }) => {
+        // Self-writes already updated the in-memory layer; re-reading is a no-op
+        // round trip. Open editors are refreshed separately by ExternalChangeWatcher.
+        if (source === 'self') return
         if (file === UserDataFile.Settings) {
           void this._reloadUserLayer()
         } else if (file === UserDataFile.ProjectSettings) {

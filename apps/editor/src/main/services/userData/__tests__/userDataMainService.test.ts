@@ -2,7 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { promises as fs } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Emitter, type Event, URI, UserDataFile, type IWorkspace } from '@universe-editor/platform'
+import {
+  Emitter,
+  type Event,
+  type IUserDataFileChange,
+  URI,
+  UserDataFile,
+  type IWorkspace,
+} from '@universe-editor/platform'
 
 let currentUserData = ''
 
@@ -134,6 +141,42 @@ describe('UserDataMainService', () => {
     await expect(svc.write(UserDataFile.VSCodeSettings, '{"a":1}')).rejects.toThrow()
     expect(await svc.setValue(UserDataFile.VSCodeSettings, ['a'], 1)).toBe(false)
     expect(await svc.read(UserDataFile.VSCodeSettings)).toBe('{}\n')
+    svc.dispose()
+  })
+
+  it('fires a self-write change so open editors reload after setValue()', async () => {
+    const ws = new FakeWorkspace()
+    const svc = new UserDataMainService(ws as never)
+    const events: IUserDataFileChange[] = []
+    svc.onDidChangeFile((e) => events.push(e))
+
+    await svc.setValue(UserDataFile.Settings, ['foo'], 1)
+    // Past the self-write suppress window + flush debounce: the fs.watch event
+    // is swallowed, leaving only the explicit self-write fire.
+    await new Promise((r) => setTimeout(r, 400))
+
+    const settings = events.filter((e) => e.file === UserDataFile.Settings)
+    expect(settings).toHaveLength(1)
+    expect(settings[0]!.source).toBe('self')
+    svc.dispose()
+  })
+
+  it('fires an external change when the file is edited from outside', async () => {
+    const ws = new FakeWorkspace()
+    const svc = new UserDataMainService(ws as never)
+    // Seed the file so the watcher is armed, settling any self-write first.
+    await svc.write(UserDataFile.Settings, '{}\n')
+    await new Promise((r) => setTimeout(r, 400))
+
+    const events: IUserDataFileChange[] = []
+    svc.onDidChangeFile((e) => events.push(e))
+
+    await fs.writeFile(join(currentUserData, 'settings.json'), '{"foo":2}\n')
+    await new Promise((r) => setTimeout(r, 400))
+
+    const settings = events.filter((e) => e.file === UserDataFile.Settings)
+    expect(settings.length).toBeGreaterThanOrEqual(1)
+    expect(settings.every((e) => e.source === 'external')).toBe(true)
     svc.dispose()
   })
 })

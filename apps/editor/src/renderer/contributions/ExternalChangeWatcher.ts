@@ -14,12 +14,14 @@ import {
   IFileService,
   IFileWatcherService,
   ILoggerService,
+  IUserDataFilesService,
   NullLogger,
   URI,
   type IFileChangeEvent,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
   type IWorkbenchContribution,
+  type UserDataFile,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -34,6 +36,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     @IDialogService private readonly _dialog: IDialogService,
     @IFileService private readonly _fileService: IFileService,
     @ILoggerService loggerService: ILoggerServiceType,
+    @IUserDataFilesService private readonly _userData: IUserDataFilesService,
   ) {
     super()
     this._logger =
@@ -45,6 +48,24 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
         void this._handle(events)
       }),
     )
+    // User-data files (settings/keybindings/aiSettings) live outside the
+    // workspace, so the parcel watcher never sees them. Bridge their change
+    // events here so an open editor on those files reloads too.
+    this._register(
+      this._userData.onDidChangeFile((change) => {
+        void this._handleUserDataChange(change.file)
+      }),
+    )
+  }
+
+  private async _handleUserDataChange(file: UserDataFile): Promise<void> {
+    const components = await this._userData.getFileUri(file)
+    if (!components) return
+    const uri = URI.revive(components as Parameters<typeof URI.revive>[0])
+    if (!uri) return
+    // force: a same-content atomic rewrite can leave mtime unchanged at coarse
+    // filesystem granularity, so reconcile against disk content directly.
+    await this._reloadChangedFileEditors(new Set([uri.toString()]), true)
   }
 
   private async _handle(events: readonly IFileChangeEvent[]): Promise<void> {
@@ -93,7 +114,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     }
   }
 
-  private async _reloadChangedFileEditors(changedKeys: Set<string>): Promise<void> {
+  private async _reloadChangedFileEditors(changedKeys: Set<string>, force = false): Promise<void> {
     const matches: FileEditorInput[] = []
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
@@ -113,7 +134,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       if (seen.has(key)) continue
       seen.add(key)
       try {
-        await input.checkExternalChange(this._dialog)
+        await input.checkExternalChange(this._dialog, force)
       } catch (err) {
         // Best-effort: a failure on one input must not stall the others.
         this._logger.warn(`externalChange check failed ${key}`, err)
