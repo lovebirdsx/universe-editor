@@ -13,7 +13,7 @@ import type {
   AiModelConfigSchema,
 } from './aiModelTypes.js'
 
-/** Persisted form of one provider group, as stored in aiModels.json. */
+/** Persisted form of one provider group, as stored in aiSettings.json. */
 export interface AiProviderGroup {
   /** Group name, unique within a vendor, e.g. 'default'. Must not contain '/'. */
   readonly name: string
@@ -53,6 +53,21 @@ export interface AiResolvedGroup {
   readonly baseUrl?: string
   readonly declaredModels?: readonly AiCustomModelConfig[]
   getApiKey(): Promise<string | undefined>
+}
+
+/** Which active-model slot a selection occupies. */
+export type AiActiveModelKind = 'chat' | 'inlineCompletion'
+
+/** The user's active model selections, persisted in aiSettings.json. */
+export interface AiActiveModels {
+  readonly chat?: string
+  readonly inlineCompletion?: string
+}
+
+/** Top-level shape of aiSettings.json: provider groups plus active selections. */
+export interface AiSettingsFile {
+  readonly groups: readonly AiProviderGroup[]
+  readonly activeModels?: AiActiveModels
 }
 
 /** Stable cache / lookup key for a group: `vendor/name`. */

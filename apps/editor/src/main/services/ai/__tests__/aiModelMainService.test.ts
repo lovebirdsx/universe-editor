@@ -1,11 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AiModelMainService — the stream pump (provider stream → requestId-keyed
  *  chunk events), the error and cancellation paths, the unknown-model guard, the
- *  schema/user → per-request config merge, group persistence, and per-(vendor,group)
- *  secret storage. Provider groups are read from a temp aiModels.json.
+ *  schema/user → per-request config merge, group persistence, active-model
+ *  persistence, and per-(vendor,group) secret storage. Provider groups + active
+ *  selections are read from a temp aiSettings.json.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -71,9 +72,16 @@ function makeService(
   groups: readonly AiProviderGroup[],
   secrets: ISecretStorageService = secretsStub,
 ): AiModelMainService {
-  const dir = mkdtempSync(join(tmpdir(), 'ai-models-test-'))
-  writeFileSync(join(dir, 'aiModels.json'), JSON.stringify(groups), 'utf8')
+  const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+  writeFileSync(join(dir, 'aiSettings.json'), JSON.stringify({ groups }), 'utf8')
   return new AiModelMainService(secrets, makeConfigLocation(dir))
+}
+
+/** Like makeService but writes a raw aiSettings.json body (for parse tests). */
+function makeServiceFromFile(body: string): { service: AiModelMainService; dir: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'ai-settings-test-'))
+  writeFileSync(join(dir, 'aiSettings.json'), body, 'utf8')
+  return { service: new AiModelMainService(secretsStub, makeConfigLocation(dir)), dir }
 }
 
 const FAKE_GROUP: AiProviderGroup = { vendor: 'fake', name: 'default' }
@@ -271,7 +279,7 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
-  it('round-trips per-model configuration through aiModels.json', async () => {
+  it('round-trips per-model configuration through aiSettings.json', async () => {
     const service = makeService([FAKE_GROUP])
     addProvider(
       service,
@@ -338,6 +346,77 @@ describe('AiModelMainService', () => {
     await service.setApiKey('openai', 'default', 'sk-123')
     expect(fired).toBeGreaterThan(0)
 
+    service.dispose()
+  })
+
+  it('parses groups and activeModels from a top-level object', async () => {
+    const { service } = makeServiceFromFile(
+      JSON.stringify({
+        groups: [{ vendor: 'openai', name: 'default' }],
+        activeModels: { chat: 'openai/default/gpt-4o', inlineCompletion: 'ollama/default/qc' },
+      }),
+    )
+    expect(await service.getActiveModel('chat')).toBe('openai/default/gpt-4o')
+    expect(await service.getActiveModel('inlineCompletion')).toBe('ollama/default/qc')
+    service.dispose()
+  })
+
+  it('falls back to default groups when the file is a bare array (no longer supported)', async () => {
+    const { service } = makeServiceFromFile(JSON.stringify([{ vendor: 'openai', name: 'default' }]))
+    const groups = await service.getGroups()
+    // A top-level array is rejected → default ollama/openai groups synthesized.
+    expect(groups.length).toBe(2)
+    expect(await service.getActiveModel('chat')).toBeUndefined()
+    service.dispose()
+  })
+
+  it('persists setActiveModel into aiSettings.json and fires the change event', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({ groups: [{ vendor: 'openai', name: 'default' }] }),
+    )
+    const events: string[] = []
+    service.onDidChangeActiveModel((e) => events.push(e.kind))
+
+    await service.setActiveModel('chat', 'openai/default/gpt-4o')
+    expect(await service.getActiveModel('chat')).toBe('openai/default/gpt-4o')
+    expect(events).toEqual(['chat'])
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(onDisk.activeModels.chat).toBe('openai/default/gpt-4o')
+    // Groups are preserved alongside the active selection.
+    expect(onDisk.groups).toEqual([{ vendor: 'openai', name: 'default' }])
+    service.dispose()
+  })
+
+  it('clears an active-model slot by deleting the key', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        groups: [{ vendor: 'openai', name: 'default' }],
+        activeModels: { chat: 'openai/default/gpt-4o' },
+      }),
+    )
+    await service.setActiveModel('chat', undefined)
+    expect(await service.getActiveModel('chat')).toBeUndefined()
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    // No active selections left → the activeModels key is omitted entirely.
+    expect(onDisk.activeModels).toBeUndefined()
+    service.dispose()
+  })
+
+  it('updateGroups preserves the active-model selections', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        groups: [{ vendor: 'openai', name: 'default' }],
+        activeModels: { chat: 'openai/default/gpt-4o' },
+      }),
+    )
+    await service.updateGroups([{ vendor: 'ollama', name: 'default' }])
+    expect(await service.getActiveModel('chat')).toBe('openai/default/gpt-4o')
+
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(onDisk.activeModels.chat).toBe('openai/default/gpt-4o')
+    expect(onDisk.groups).toEqual([{ vendor: 'ollama', name: 'default' }])
     service.dispose()
   })
 })

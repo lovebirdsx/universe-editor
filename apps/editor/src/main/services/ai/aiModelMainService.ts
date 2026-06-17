@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Main-process AI model facade: reads provider groups from <configDir>/aiModels.json,
+ *  Main-process AI model facade: reads provider groups from <configDir>/aiSettings.json,
  *  resolves them into runtime groups (with lazy secret-backed getApiKey), feeds them
  *  to the registry, schedules requests, and pumps each provider stream into
  *  requestId-keyed chunk events. Per-model configuration (schema default → user
@@ -23,6 +23,8 @@ import {
   ILoggerService,
   ISecretStorageService,
   transformErrorForSerialization,
+  type AiActiveModelKind,
+  type AiActiveModels,
   type AiCustomModelConfig,
   type AiMessage,
   type AiMessagePart,
@@ -34,10 +36,12 @@ import {
   type AiRequestOptions,
   type AiResolvedGroup,
   type AiResponse,
+  type AiSettingsFile,
 } from '@universe-editor/platform'
 import { type ParseError, parse } from 'jsonc-parser'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
 import type {
+  AiActiveModelChangeEvent,
   AiChunkEvent,
   AiEndEvent,
   AiMessageDto,
@@ -46,9 +50,9 @@ import type {
 import { OllamaProvider } from './providers/ollamaProvider.js'
 import { OpenAiProvider } from './providers/openAiProvider.js'
 
-const AI_MODELS_FILE = 'aiModels.json'
+const AI_SETTINGS_FILE = 'aiSettings.json'
 
-/** Out-of-box groups synthesized when aiModels.json is missing or empty. */
+/** Out-of-box groups synthesized when aiSettings.json is missing or empty. */
 const DEFAULT_GROUPS: readonly AiProviderGroup[] = [
   { name: 'default', vendor: 'ollama' },
   { name: 'default', vendor: 'openai' },
@@ -79,8 +83,12 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   readonly onDidChangeModels = this._registry.onDidChangeModels
 
+  private readonly _onDidChangeActiveModel = this._register(new Emitter<AiActiveModelChangeEvent>())
+  readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
+
   private readonly _inflight = new Map<string, CancellationTokenSource>()
   private _persistedGroups: readonly AiProviderGroup[] = DEFAULT_GROUPS
+  private _activeModels: AiActiveModels = {}
   private readonly _ready: Promise<void>
 
   private _watcher: FSWatcher | undefined
@@ -158,7 +166,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     if (Object.keys(settings).length === 0) delete group.settings
     else group.settings = settings
 
-    await this._writeGroups(groups)
+    await this._writeSettings(groups, this._activeModels)
     await this._reload()
   }
 
@@ -169,7 +177,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   async updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
     await this._ready
-    await this._writeGroups(groups)
+    await this._writeSettings(groups, this._activeModels)
     await this._reload()
   }
 
@@ -221,6 +229,21 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     this._inflight.get(requestId)?.cancel()
   }
 
+  async getActiveModel(kind: AiActiveModelKind): Promise<string | undefined> {
+    await this._ready
+    return this._activeModels[kind]
+  }
+
+  async setActiveModel(kind: AiActiveModelKind, modelId: string | undefined): Promise<void> {
+    await this._ready
+    const next: { chat?: string; inlineCompletion?: string } = { ...this._activeModels }
+    if (modelId === undefined) delete next[kind]
+    else next[kind] = modelId
+    this._activeModels = next
+    await this._writeSettings(this._persistedGroups, next)
+    this._onDidChangeActiveModel.fire({ kind })
+  }
+
   private async _schemaFor(modelId: string): Promise<AiModelConfigSchema | undefined> {
     const models = await this._withTimeoutToken((token) => this._registry.getModels(token))
     return models.find((m) => m.id === modelId)?.configurationSchema
@@ -229,25 +252,33 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   private async _reload(): Promise<void> {
     const { dir } = await this._configLocation.getInfo()
     this._setupWatcher(dir)
-    const path = join(dir, AI_MODELS_FILE)
+    const path = join(dir, AI_SETTINGS_FILE)
     let text = ''
     try {
       text = await readFile(path, 'utf8')
     } catch {
       text = ''
     }
-    const parsed = parseGroups(text)
-    this._persistedGroups = parsed.length > 0 ? parsed : DEFAULT_GROUPS
+    const parsed = parseSettings(text)
+    this._persistedGroups = parsed.groups.length > 0 ? parsed.groups : DEFAULT_GROUPS
+    this._activeModels = parsed.activeModels
     this._registry.setGroups(this._toResolved(this._persistedGroups))
   }
 
-  private async _writeGroups(groups: readonly AiProviderGroup[]): Promise<void> {
+  private async _writeSettings(
+    groups: readonly AiProviderGroup[],
+    activeModels: AiActiveModels,
+  ): Promise<void> {
     const { dir } = await this._configLocation.getInfo()
     await mkdir(dir, { recursive: true })
-    const path = join(dir, AI_MODELS_FILE)
+    const path = join(dir, AI_SETTINGS_FILE)
     this._suppressUntil = Date.now() + 500
+    const file: AiSettingsFile = {
+      groups,
+      ...(hasAnyActive(activeModels) ? { activeModels } : {}),
+    }
     const tmp = `${path}.${process.pid}.tmp`
-    await writeFile(tmp, JSON.stringify(groups, null, 2) + '\n', 'utf8')
+    await writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8')
     await rename(tmp, path)
   }
 
@@ -269,7 +300,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     this._watchedDir = dir
     try {
       this._watcher = fsWatch(dir, (_event, filename) => {
-        if (filename && filename.toString() !== AI_MODELS_FILE) return
+        if (filename && filename.toString() !== AI_SETTINGS_FILE) return
         if (Date.now() < this._suppressUntil) return
         if (this._reloadTimer) clearTimeout(this._reloadTimer)
         this._reloadTimer = setTimeout(() => void this._reload(), 200)
@@ -352,23 +383,46 @@ function missingProviderError(modelId: string): AiError {
   return new AiError(AiErrorCode.ModelNotFound, `No AI model provider found for '${modelId}'.`)
 }
 
-function parseGroups(text: string): AiProviderGroup[] {
-  if (text.trim() === '') return []
+function parseSettings(text: string): { groups: AiProviderGroup[]; activeModels: AiActiveModels } {
+  const empty = { groups: [] as AiProviderGroup[], activeModels: {} as AiActiveModels }
+  if (text.trim() === '') return empty
   const errors: ParseError[] = []
   const parsed: unknown = parse(text, errors, { allowTrailingComma: true })
-  if (errors.length > 0 || !Array.isArray(parsed)) return []
-  const out: AiProviderGroup[] = []
-  for (const item of parsed) {
-    if (
-      item &&
-      typeof item === 'object' &&
-      typeof (item as { name?: unknown }).name === 'string' &&
-      typeof (item as { vendor?: unknown }).vendor === 'string'
-    ) {
-      out.push(item as AiProviderGroup)
+  if (errors.length > 0 || !parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return empty
+  }
+  const groupsRaw = (parsed as { groups?: unknown }).groups
+  const groups: AiProviderGroup[] = []
+  if (Array.isArray(groupsRaw)) {
+    for (const item of groupsRaw) {
+      if (
+        item &&
+        typeof item === 'object' &&
+        typeof (item as { name?: unknown }).name === 'string' &&
+        typeof (item as { vendor?: unknown }).vendor === 'string'
+      ) {
+        groups.push(item as AiProviderGroup)
+      }
     }
   }
+  return {
+    groups,
+    activeModels: parseActiveModels((parsed as { activeModels?: unknown }).activeModels),
+  }
+}
+
+function parseActiveModels(raw: unknown): AiActiveModels {
+  if (!raw || typeof raw !== 'object') return {}
+  const out: { chat?: string; inlineCompletion?: string } = {}
+  const chat = (raw as { chat?: unknown }).chat
+  const inline = (raw as { inlineCompletion?: unknown }).inlineCompletion
+  if (typeof chat === 'string') out.chat = chat
+  if (typeof inline === 'string') out.inlineCompletion = inline
   return out
+}
+
+function hasAnyActive(active: AiActiveModels): boolean {
+  return active.chat !== undefined || active.inlineCompletion !== undefined
 }
 
 function cloneGroup(g: AiProviderGroup): MutableGroup {

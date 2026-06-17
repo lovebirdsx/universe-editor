@@ -60,11 +60,22 @@ class FakeAiModel implements Partial<IAiModelService> {
   lastOptions: AiRequestOptions | undefined
   reply = 'hello'
   error: unknown
+  inlineModelId: string | undefined
   private readonly _onDidChangeModels = new Emitter<void>()
   readonly onDidChangeModels = this._onDidChangeModels.event
+  private readonly _onDidChangeInlineCompletionModel = new Emitter<void>()
+  readonly onDidChangeInlineCompletionModel = this._onDidChangeInlineCompletionModel.event
 
   getModels(): Promise<readonly AiModelMetadata[]> {
     return Promise.resolve(this.models)
+  }
+  getInlineCompletionModelId(): Promise<string | undefined> {
+    return Promise.resolve(this.inlineModelId)
+  }
+  setInlineCompletionModelId(modelId: string | undefined): Promise<void> {
+    this.inlineModelId = modelId
+    this._onDidChangeInlineCompletionModel.fire()
+    return Promise.resolve()
   }
   sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse {
     this.lastMessages = messages
@@ -182,8 +193,8 @@ describe('sanitizeCompletion', () => {
 
 describe('InlineCompletionService.provide', () => {
   it('returns null when the feature is disabled', async () => {
-    const { service, config } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai } = createService()
+    ai.inlineModelId = MODEL.id
     service.setEnabled(false)
     const result = await provide(service, fakeMonacoModel({ value: 'abc', cursorOffset: 3 }))
     expect(result).toBeNull()
@@ -196,8 +207,8 @@ describe('InlineCompletionService.provide', () => {
   })
 
   it('returns null for a disabled language', async () => {
-    const { service, config } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai, config } = createService()
+    ai.inlineModelId = MODEL.id
     config.values['ai.inlineCompletion.disabledLanguages'] = ['json']
     const result = await provide(
       service,
@@ -207,16 +218,16 @@ describe('InlineCompletionService.provide', () => {
   })
 
   it('drops a stale model id that is no longer available', async () => {
-    const { service, ai, config } = createService()
-    config.values['ai.inlineCompletion.model'] = 'removed/group/model'
+    const { service, ai } = createService()
+    ai.inlineModelId = 'removed/group/model'
     ai.models = [MODEL]
     const result = await provide(service, fakeMonacoModel({ value: 'abc', cursorOffset: 3 }))
     expect(result).toBeNull()
   })
 
   it('produces a completion item from the model reply', async () => {
-    const { service, ai, config } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai } = createService()
+    ai.inlineModelId = MODEL.id
     ai.reply = 'world'
     const result = await provide(service, fakeMonacoModel({ value: 'hello ', cursorOffset: 6 }))
     expect(result?.items[0]?.insertText).toBe('world')
@@ -229,15 +240,15 @@ describe('InlineCompletionService.provide', () => {
 
   it('honors maxTokens from config', async () => {
     const { service, ai, config } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    ai.inlineModelId = MODEL.id
     config.values['ai.inlineCompletion.maxTokens'] = 42
     await provide(service, fakeMonacoModel({ value: 'hello ', cursorOffset: 6 }))
     expect(ai.lastOptions?.maxTokens).toBe(42)
   })
 
   it('returns null when cancelled before issuing the request', async () => {
-    const { service, config } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai } = createService()
+    ai.inlineModelId = MODEL.id
     const cts = new CancellationTokenSource()
     cts.cancel()
     const result = await provide(
@@ -249,21 +260,20 @@ describe('InlineCompletionService.provide', () => {
     expect(result).toBeNull()
   })
 
-  it('persists the selected model id to the ai.inlineCompletion.model setting', async () => {
-    const { service, config } = createService()
+  it('persists the selected model id through the AI facade (aiSettings.json)', async () => {
+    const { service, ai } = createService()
     await service.setModelId(MODEL.id)
-    expect(config.values['ai.inlineCompletion.model']).toBe(MODEL.id)
+    expect(ai.inlineModelId).toBe(MODEL.id)
     expect(await service.getModelId()).toBe(MODEL.id)
 
-    // Clearing writes '' but reads back undefined.
     await service.setModelId(undefined)
-    expect(config.values['ai.inlineCompletion.model']).toBe('')
+    expect(ai.inlineModelId).toBeUndefined()
     expect(await service.getModelId()).toBeUndefined()
   })
 
   it('surfaces a request failure as an error notification', async () => {
-    const { service, ai, config, notification } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai, notification } = createService()
+    ai.inlineModelId = MODEL.id
     ai.error = new AiError(AiErrorCode.QuotaExceeded, 'no balance')
     const result = await provide(service, fakeMonacoModel({ value: 'abc', cursorOffset: 3 }))
     expect(result).toBeNull()
@@ -272,8 +282,8 @@ describe('InlineCompletionService.provide', () => {
   })
 
   it('shows the same error only once until the next success', async () => {
-    const { service, ai, config, notification } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai, notification } = createService()
+    ai.inlineModelId = MODEL.id
     ai.error = new AiError(AiErrorCode.QuotaExceeded, 'no balance')
     const model = fakeMonacoModel({ value: 'abc', cursorOffset: 3 })
     await provide(service, model)
@@ -289,8 +299,8 @@ describe('InlineCompletionService.provide', () => {
   })
 
   it('does not notify when the request was cancelled', async () => {
-    const { service, ai, config, notification } = createService()
-    config.values['ai.inlineCompletion.model'] = MODEL.id
+    const { service, ai, notification } = createService()
+    ai.inlineModelId = MODEL.id
     ai.error = new AiError(AiErrorCode.NetworkError, 'aborted')
     const cts = new CancellationTokenSource()
     cts.cancel()

@@ -77,12 +77,16 @@ test.describe('@p0 ai commit message generation', () => {
       JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2),
       'utf8',
     )
-    // Point the Ollama provider group at the mock server via aiModels.json (the
+    // Point the Ollama provider group at the mock server via aiSettings.json (the
     // config dir defaults to userData). commitMessage.modelId stays empty so
     // resolveModelId auto-picks the first available model.
     writeFileSync(
-      join(userDataDir, 'aiModels.json'),
-      JSON.stringify([{ name: 'default', vendor: 'ollama', baseUrl: ollama.url }], null, 2),
+      join(userDataDir, 'aiSettings.json'),
+      JSON.stringify(
+        { groups: [{ name: 'default', vendor: 'ollama', baseUrl: ollama.url }] },
+        null,
+        2,
+      ),
       'utf8',
     )
 

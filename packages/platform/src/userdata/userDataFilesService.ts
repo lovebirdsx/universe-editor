@@ -15,8 +15,8 @@ export const enum UserDataFile {
   Settings = 'settings',
   /** Global keybinding overrides: `<userData>/keybindings.json`. */
   Keybindings = 'keybindings',
-  /** AI provider groups & per-model config: `<userData>/aiModels.json`. */
-  AiModels = 'aiModels',
+  /** AI configuration (provider groups, per-model config, active models): `<userData>/aiSettings.json`. */
+  AiSettings = 'aiSettings',
   /** Project-level settings: `<workspace>/.universe-editor/settings.json`. */
   ProjectSettings = 'projectSettings',
   /** Read-only VSCode-compatible workspace settings: `<workspace>/.vscode/settings.json`. */

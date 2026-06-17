@@ -129,7 +129,7 @@ schema 定义在 `contributions/InlineCompletionConfigurationContribution.ts`（
 ## 与 AI 模型层的关系
 
 - 补全文本来自 `IAiModelService.sendRequest(messages, { modelId, maxTokens }, token)`，返回 `AiResponse`（流 + result promise），用 `getTextResponse(response)` 合并。`IAiModelService` 由 main 进程实现、经 ProxyChannel 暴露给 renderer。
-- **补全模型 id 与 chat 模型 id 是两套**：补全存 `ai.inlineCompletion.model`（`pickModel` 选），chat/ACP 走自己的配置与命令。改「选模型」时别串台。
+- **补全模型 id 与 chat 模型 id 是两套**：补全存 `aiSettings.json` 的 `activeModels.inlineCompletion`（`pickModel` 选，经 `IAiModelService.get/setInlineCompletionModelId` 读写），chat 存同文件的 `activeModels.chat`，ACP 走自己的配置与命令。改「选模型」时别串台。
 - 加新 AI provider（让模型列表多出可选项）属于 AI 模型层，见 apps/editor/CLAUDE.md **套路 I**——密钥只走 `ISecretStorageService`，绝不进 renderer/settings.json。
 
 ## 常见任务 → 改哪里

@@ -1,15 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Tests for AiModelClientService — the renderer half of the chain: requestId-keyed
  *  chunk events reassembled into a clean AsyncIterable, cancellation routed back to
- *  main, serialized errors revived, and the renderer-owned active model id stored as
- *  the `ai.chat.model` setting (never in main / aiModels.json). Stubs the main
- *  transport and a minimal in-memory configuration service.
+ *  main, serialized errors revived, and the active model selections proxied to main
+ *  (persisted in aiSettings.json). Stubs the main transport.
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
 import {
   CancellationTokenSource,
-  ConfigurationTarget,
   Emitter,
   getTextResponse,
   transformErrorForSerialization,
@@ -17,14 +15,15 @@ import {
   type AiMessage,
   type AiModelConfiguration,
   type AiProviderGroup,
-  type IConfigurationService,
 } from '@universe-editor/platform'
 import { AiModelClientService } from '../aiModelClientService.js'
 import type {
+  AiActiveModelChangeEvent,
   AiChunkEvent,
   AiEndEvent,
   IAiModelMainService,
 } from '../../../../shared/ipc/aiModelService.js'
+import type { AiActiveModelKind } from '@universe-editor/platform'
 
 class FakeMain implements IAiModelMainService {
   declare readonly _serviceBrand: undefined
@@ -32,13 +31,16 @@ class FakeMain implements IAiModelMainService {
   readonly onDidEmitChunkEmitter = new Emitter<AiChunkEvent>()
   readonly onDidEndRequestEmitter = new Emitter<AiEndEvent>()
   readonly onDidChangeModelsEmitter = new Emitter<void>()
+  readonly onDidChangeActiveModelEmitter = new Emitter<AiActiveModelChangeEvent>()
   readonly onDidEmitChunk = this.onDidEmitChunkEmitter.event
   readonly onDidEndRequest = this.onDidEndRequestEmitter.event
   readonly onDidChangeModels = this.onDidChangeModelsEmitter.event
+  readonly onDidChangeActiveModel = this.onDidChangeActiveModelEmitter.event
 
   startedRequestId: string | undefined
   cancelledRequestId: string | undefined
   groups: readonly AiProviderGroup[] = []
+  readonly activeModels: { chat?: string; inlineCompletion?: string } = {}
 
   getModels() {
     return Promise.resolve([])
@@ -48,6 +50,15 @@ class FakeMain implements IAiModelMainService {
   }
   computeTokenLength() {
     return Promise.resolve(0)
+  }
+  getActiveModel(kind: AiActiveModelKind): Promise<string | undefined> {
+    return Promise.resolve(this.activeModels[kind])
+  }
+  setActiveModel(kind: AiActiveModelKind, modelId: string | undefined): Promise<void> {
+    if (modelId === undefined) delete this.activeModels[kind]
+    else this.activeModels[kind] = modelId
+    this.onDidChangeActiveModelEmitter.fire({ kind })
+    return Promise.resolve()
   }
   startRequest(requestId: string): Promise<void> {
     this.startedRequestId = requestId
@@ -81,21 +92,6 @@ class FakeMain implements IAiModelMainService {
   }
 }
 
-class FakeConfig implements Partial<IConfigurationService> {
-  readonly values = new Map<string, unknown>()
-  private readonly _onDidChange = new Emitter<{ affectsConfiguration: (k: string) => boolean }>()
-  readonly onDidChangeConfiguration = this._onDidChange.event
-
-  get<T>(key: string): T | undefined {
-    return this.values.get(key) as T | undefined
-  }
-  update(key: string, value: unknown, _target?: ConfigurationTarget): void {
-    const old = this.values.get(key)
-    this.values.set(key, value)
-    if (old !== value) this._onDidChange.fire({ affectsConfiguration: (k) => k === key })
-  }
-}
-
 const userMsg: readonly AiMessage[] = [
   { role: AiMessageRole.User, content: [{ type: 'text', value: 'hi' }] },
 ]
@@ -105,44 +101,55 @@ function flush() {
 }
 
 describe('AiModelClientService', () => {
-  it('stores and reads the active model id through the ai.chat.model setting', async () => {
+  it('proxies the active chat model id to main (persisted in aiSettings.json)', async () => {
     const main = new FakeMain()
-    const config = new FakeConfig()
-    const client = new AiModelClientService(main, config as unknown as IConfigurationService)
+    const client = new AiModelClientService(main)
 
     expect(await client.getActiveModelId()).toBeUndefined()
 
     await client.setActiveModelId('openai/default/gpt-4o')
     expect(await client.getActiveModelId()).toBe('openai/default/gpt-4o')
-    expect(config.values.get('ai.chat.model')).toBe('openai/default/gpt-4o')
+    expect(main.activeModels.chat).toBe('openai/default/gpt-4o')
 
-    // Clearing writes an empty string (so the key still round-trips through
-    // settings.json) but reads back as undefined.
     await client.setActiveModelId(undefined)
-    expect(config.values.get('ai.chat.model')).toBe('')
+    expect(main.activeModels.chat).toBeUndefined()
     expect(await client.getActiveModelId()).toBeUndefined()
     client.dispose()
   })
 
-  it('fires onDidChangeActiveModel when the setting changes', async () => {
+  it('proxies the inline-completion model id to main, independent of chat', async () => {
     const main = new FakeMain()
-    const config = new FakeConfig()
-    const client = new AiModelClientService(main, config as unknown as IConfigurationService)
-    let fired = 0
-    client.onDidChangeActiveModel(() => fired++)
+    const client = new AiModelClientService(main)
 
-    await client.setActiveModelId('openai/default/gpt-4o')
-    await client.setActiveModelId(undefined)
-    expect(fired).toBe(2)
+    await client.setInlineCompletionModelId('ollama/default/qwen2.5-coder')
+    expect(await client.getInlineCompletionModelId()).toBe('ollama/default/qwen2.5-coder')
+    expect(main.activeModels.inlineCompletion).toBe('ollama/default/qwen2.5-coder')
+    // The chat slot is untouched.
+    expect(await client.getActiveModelId()).toBeUndefined()
+    client.dispose()
+  })
+
+  it('dispatches main change events to the matching facade event by kind', async () => {
+    const main = new FakeMain()
+    const client = new AiModelClientService(main)
+    let chat = 0
+    let inline = 0
+    client.onDidChangeActiveModel(() => chat++)
+    client.onDidChangeInlineCompletionModel(() => inline++)
+
+    main.onDidChangeActiveModelEmitter.fire({ kind: 'chat' })
+    expect(chat).toBe(1)
+    expect(inline).toBe(0)
+
+    main.onDidChangeActiveModelEmitter.fire({ kind: 'inlineCompletion' })
+    expect(chat).toBe(1)
+    expect(inline).toBe(1)
     client.dispose()
   })
 
   it('reassembles chunk events keyed by requestId into a clean stream', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(
-      main,
-      new FakeConfig() as unknown as IConfigurationService,
-    )
+    const client = new AiModelClientService(main)
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -161,10 +168,7 @@ describe('AiModelClientService', () => {
 
   it('routes cancellation back to main with the same requestId', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(
-      main,
-      new FakeConfig() as unknown as IConfigurationService,
-    )
+    const client = new AiModelClientService(main)
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)
@@ -182,10 +186,7 @@ describe('AiModelClientService', () => {
 
   it('revives a serialized error from the end event into the result rejection', async () => {
     const main = new FakeMain()
-    const client = new AiModelClientService(
-      main,
-      new FakeConfig() as unknown as IConfigurationService,
-    )
+    const client = new AiModelClientService(main)
 
     const token = new CancellationTokenSource()
     const response = client.sendRequest(userMsg, { modelId: 'm' }, token.token)

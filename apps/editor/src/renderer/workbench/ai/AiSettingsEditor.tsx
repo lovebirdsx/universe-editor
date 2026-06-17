@@ -4,7 +4,7 @@
  *  Reads provider groups + resolved models live from IAiModelService; edits to
  *  groups / baseUrl / custom models are written back through updateGroups, while
  *  API keys go through the secret-backed setApiKey / clearApiKey path (never into
- *  aiModels.json). Per-model parameters are edited from each model's
+ *  aiSettings.json). Per-model parameters are edited from each model's
  *  configurationSchema and persisted via setModelConfiguration.
  *--------------------------------------------------------------------------------------------*/
 
@@ -31,7 +31,7 @@ import {
 import { Button, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import styles from './AiModelsEditor.module.css'
+import styles from './AiSettingsEditor.module.css'
 
 interface GroupState {
   readonly group: AiProviderGroup
@@ -39,7 +39,7 @@ interface GroupState {
   readonly models: readonly AiModelMetadata[]
 }
 
-export function AiModelsEditor() {
+export function AiSettingsEditor() {
   const aiModel = useService(IAiModelService)
   const quickInput = useService(IQuickInputService)
   const dialog = useService(IDialogService)
@@ -151,7 +151,7 @@ export function AiModelsEditor() {
       const key = await quickInput.input({
         prompt: localize(
           'aiModels.setApiKey.prompt',
-          'Enter the API key for {group} (stored encrypted; never written to aiModels.json).',
+          'Enter the API key for {group} (stored encrypted; never written to aiSettings.json).',
           { group: groupKey(group) },
         ),
         placeholder: 'sk-…',
@@ -265,7 +265,7 @@ export function AiModelsEditor() {
 
   const openJson = useCallback(async () => {
     await aiModel.updateGroups(await aiModel.getGroups())
-    const uri = await userData.getFileUri(UserDataFile.AiModels)
+    const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = instantiation.createInstance(FileEditorInput, URI.revive(uri) as URI)
     void editorGroups.activeGroup.openEditor(input, { activate: true })
@@ -280,7 +280,7 @@ export function AiModelsEditor() {
             {localize('aiModels.addGroup', 'Add Provider Group')}
           </Button>
           <Button variant="ghost" onClick={() => void openJson()}>
-            {localize('aiModels.openJson', 'Open aiModels.json')}
+            {localize('aiSettings.openJson', 'Open aiSettings.json')}
           </Button>
         </div>
       </div>

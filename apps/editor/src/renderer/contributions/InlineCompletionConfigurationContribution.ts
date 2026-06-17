@@ -32,14 +32,6 @@ export class InlineCompletionConfigurationContribution
               'Enable AI inline completions (ghost text) while editing.',
             ),
           },
-          'ai.inlineCompletion.model': {
-            type: 'string',
-            default: '',
-            description: localize(
-              'settings.ai.inlineCompletion.model',
-              'The AI model id used for inline completions (e.g. "openai/default/gpt-4o"). Leave empty to pick one from the status bar or the "Inline Completion: Select Model" command.',
-            ),
-          },
           'ai.inlineCompletion.debounceDelay': {
             type: 'number',
             default: 300,

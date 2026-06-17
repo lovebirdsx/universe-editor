@@ -13,7 +13,6 @@ import {
   AiErrorCode,
   AiMessageRole,
   CancellationTokenSource,
-  ConfigurationTarget,
   Disposable,
   Emitter,
   IAiModelService,
@@ -34,7 +33,6 @@ import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 
 const CONFIG = {
   enabled: 'ai.inlineCompletion.enabled',
-  model: 'ai.inlineCompletion.model',
   debounceDelay: 'ai.inlineCompletion.debounceDelay',
   prefixChars: 'ai.inlineCompletion.maxContextPrefixChars',
   suffixChars: 'ai.inlineCompletion.maxContextSuffixChars',
@@ -116,14 +114,13 @@ export class InlineCompletionService extends Disposable implements IInlineComple
         if (e.affectsConfiguration(CONFIG.enabled)) {
           this._enabled = this._config.get<boolean>(CONFIG.enabled) ?? DEFAULTS.enabled
           this._onDidChange.fire()
-        } else if (e.affectsConfiguration(CONFIG.model)) {
-          // Keep the status bar / pick-model UI in sync when the model setting
-          // changes — including the user hand-editing settings.json.
-          this._onDidChange.fire()
         }
       }),
     )
-    // A model removed from aiModels.json should stop being advertised.
+    // Keep the status bar / pick-model UI in sync when the completion model
+    // selection changes — including the user hand-editing aiSettings.json.
+    this._register(this._aiModel.onDidChangeInlineCompletionModel(() => this._onDidChange.fire()))
+    // A model removed from aiSettings.json should stop being advertised.
     this._register(this._aiModel.onDidChangeModels(() => this._onDidChange.fire()))
     this._register({ dispose: () => this._cancelInFlight() })
   }
@@ -137,13 +134,11 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   }
 
   getModelId(): Promise<string | undefined> {
-    const value = this._config.get<string>(CONFIG.model)
-    return Promise.resolve(value === undefined || value === '' ? undefined : value)
+    return this._aiModel.getInlineCompletionModelId()
   }
 
   setModelId(modelId: string | undefined): Promise<void> {
-    this._config.update(CONFIG.model, modelId ?? '', ConfigurationTarget.User)
-    return Promise.resolve()
+    return this._aiModel.setInlineCompletionModelId(modelId)
   }
 
   toggleEnabled(): void {
@@ -230,7 +225,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   private async _resolveModelId(): Promise<string | undefined> {
     const chosen = await this.getModelId()
     if (!chosen) return undefined
-    // Drop a stale selection (model removed from aiModels.json).
+    // Drop a stale selection (model removed from aiSettings.json).
     const models = await this._aiModel.getModels()
     return models.some((m) => m.id === chosen) ? chosen : undefined
   }

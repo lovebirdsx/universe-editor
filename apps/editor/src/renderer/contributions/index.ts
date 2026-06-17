@@ -18,7 +18,6 @@ import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
 import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
 import { ConfigInitContribution } from './ConfigInitContribution.js'
 import { AiConfigurationContribution } from './AiConfigurationContribution.js'
-import { AiChatConfigurationContribution } from './AiChatConfigurationContribution.js'
 import { AiModelStatusContribution } from './AiModelStatusContribution.js'
 import { InlineCompletionConfigurationContribution } from './InlineCompletionConfigurationContribution.js'
 import { InlineCompletionContribution } from './InlineCompletionContribution.js'
@@ -184,9 +183,10 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
-// AI service config schema (ai.<vendor>.baseUrl / defaultModel, ai.request.*).
-// No API keys — those live in encrypted secret storage. BlockStartup so the
-// schema is registered before the Settings editor or the AI client read it.
+// JSON schema for aiSettings.json (provider groups + active model selections,
+// the latter with model-id completion). No API keys — those live in encrypted
+// secret storage. BlockStartup so the schema is registered before the AI client
+// or any aiSettings.json editor reads it.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.aiConfiguration',
   AiConfigurationContribution,
@@ -238,11 +238,6 @@ ContributionsRegistry.registerContribution(
 // AI inline completions. The config schema must register early (BlockStartup) so
 // the Settings editor sees it; the Monaco provider + status bar come up
 // AfterRestore once Monaco and the status bar exist.
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.aiChatConfiguration',
-  AiChatConfigurationContribution,
-  WorkbenchPhase.BlockStartup,
-)
 ContributionsRegistry.registerContribution(
   'workbench.contrib.inlineCompletionConfiguration',
   InlineCompletionConfigurationContribution,

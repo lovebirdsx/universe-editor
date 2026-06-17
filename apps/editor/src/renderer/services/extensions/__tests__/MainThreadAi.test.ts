@@ -17,6 +17,7 @@ const fakeAi: IAiModelService = {
   _serviceBrand: undefined,
   onDidChangeModels: Event.None,
   onDidChangeActiveModel: Event.None,
+  onDidChangeInlineCompletionModel: Event.None,
   getModels: () => Promise.resolve([]),
   selectModels: (_selector: AiModelSelector) => Promise.resolve([]),
   computeTokenLength: (_modelId: string, _text: string, _token: CancellationToken) =>
@@ -30,6 +31,8 @@ const fakeAi: IAiModelService = {
   },
   getActiveModelId: () => Promise.resolve(undefined),
   setActiveModelId: (_modelId: string | undefined) => Promise.resolve(),
+  getInlineCompletionModelId: () => Promise.resolve(undefined),
+  setInlineCompletionModelId: (_modelId: string | undefined) => Promise.resolve(),
   getModelConfiguration: (_modelId: string) => Promise.resolve({}),
   setModelConfiguration: (_modelId: string, _config: AiModelConfiguration) => Promise.resolve(),
   getGroups: () => Promise.resolve([]),

@@ -155,7 +155,7 @@ import { ResetViewLocationsAction } from './viewActions.js'
 import {
   PickModelAction,
   ManageModelsAction,
-  OpenModelsJsonAction,
+  OpenAiSettingsJsonAction,
   SetApiKeyAction,
   ClearApiKeyAction,
 } from './aiActions.js'
@@ -409,7 +409,7 @@ registerAction2(ResetViewLocationsAction)
 // AI
 registerAction2(PickModelAction)
 registerAction2(ManageModelsAction)
-registerAction2(OpenModelsJsonAction)
+registerAction2(OpenAiSettingsJsonAction)
 registerAction2(SetApiKeyAction)
 registerAction2(ClearApiKeyAction)
 registerAction2(TriggerInlineCompletionAction)

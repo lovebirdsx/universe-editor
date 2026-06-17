@@ -2,16 +2,15 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Renderer-side AI model facade. Wraps the main-process transport proxy: turns
  *  requestId-keyed chunk events back into a clean AsyncIterable (via
- *  AiResponseReassembler) and routes cancellation back to main. Provider groups &
- *  per-model config live in aiModels.json (read by main); the only renderer-owned
- *  state is the active model id, persisted as the `ai.chat.model` setting so it
- *  lives in settings.json. Consumers depend only on IAiModelService.
+ *  AiResponseReassembler) and routes cancellation back to main. Provider groups,
+ *  per-model config and the active model selections all live in aiSettings.json
+ *  (read/written by main); this client just proxies. Consumers depend only on
+ *  IAiModelService.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   AiResponseReassembler,
   combinedDisposable,
-  ConfigurationTarget,
   Disposable,
   Emitter,
   generateUuid,
@@ -25,7 +24,6 @@ import {
   type AiResponse,
   type CancellationToken,
   type IAiModelService,
-  type IConfigurationService,
   type Event,
 } from '@universe-editor/platform'
 import type {
@@ -33,8 +31,6 @@ import type {
   AiMessagePartDto,
   IAiModelMainService,
 } from '../../../shared/ipc/aiModelService.js'
-
-const ACTIVE_MODEL_KEY = 'ai.chat.model'
 
 export class AiModelClientService extends Disposable implements IAiModelService {
   declare readonly _serviceBrand: undefined
@@ -44,17 +40,16 @@ export class AiModelClientService extends Disposable implements IAiModelService 
   private readonly _onDidChangeActiveModel = this._register(new Emitter<void>())
   readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
 
-  constructor(
-    private readonly _main: IAiModelMainService,
-    private readonly _config: IConfigurationService,
-  ) {
+  private readonly _onDidChangeInlineCompletionModel = this._register(new Emitter<void>())
+  readonly onDidChangeInlineCompletionModel = this._onDidChangeInlineCompletionModel.event
+
+  constructor(private readonly _main: IAiModelMainService) {
     super()
     this.onDidChangeModels = this._main.onDidChangeModels
-    // Fire on any change to the persisted chat model — covers both our own
-    // update() calls and the user hand-editing settings.json.
     this._register(
-      this._config.onDidChangeConfiguration((e) => {
-        if (e.affectsConfiguration(ACTIVE_MODEL_KEY)) this._onDidChangeActiveModel.fire()
+      this._main.onDidChangeActiveModel((e) => {
+        if (e.kind === 'chat') this._onDidChangeActiveModel.fire()
+        else this._onDidChangeInlineCompletionModel.fire()
       }),
     )
   }
@@ -72,13 +67,19 @@ export class AiModelClientService extends Disposable implements IAiModelService 
   }
 
   getActiveModelId(): Promise<string | undefined> {
-    const value = this._config.get<string>(ACTIVE_MODEL_KEY)
-    return Promise.resolve(value === undefined || value === '' ? undefined : value)
+    return this._main.getActiveModel('chat')
   }
 
   setActiveModelId(modelId: string | undefined): Promise<void> {
-    this._config.update(ACTIVE_MODEL_KEY, modelId ?? '', ConfigurationTarget.User)
-    return Promise.resolve()
+    return this._main.setActiveModel('chat', modelId)
+  }
+
+  getInlineCompletionModelId(): Promise<string | undefined> {
+    return this._main.getActiveModel('inlineCompletion')
+  }
+
+  setInlineCompletionModelId(modelId: string | undefined): Promise<void> {
+    return this._main.setActiveModel('inlineCompletion', modelId)
   }
 
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration> {

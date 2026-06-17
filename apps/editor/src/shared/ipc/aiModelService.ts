@@ -12,6 +12,7 @@
 
 import { createDecorator } from '@universe-editor/platform'
 import type {
+  AiActiveModelKind,
   AiMessageRole,
   AiModelConfiguration,
   AiModelMetadata,
@@ -45,10 +46,15 @@ export interface AiEndEvent {
   readonly error?: SerializedError
 }
 
+/** Signals which active-model slot changed. */
+export interface AiActiveModelChangeEvent {
+  readonly kind: AiActiveModelKind
+}
+
 /**
  * Transport-level main service. `on*` properties are bridged to `listen` by
  * ProxyChannel; everything else is a `call`. Provider groups & per-model config
- * are read by main directly from aiModels.json — no renderer push.
+ * are read by main directly from aiSettings.json — no renderer push.
  */
 export interface IAiModelMainService {
   readonly _serviceBrand: undefined
@@ -56,6 +62,7 @@ export interface IAiModelMainService {
   readonly onDidEmitChunk: Event<AiChunkEvent>
   readonly onDidEndRequest: Event<AiEndEvent>
   readonly onDidChangeModels: Event<void>
+  readonly onDidChangeActiveModel: Event<AiActiveModelChangeEvent>
 
   getModels(): Promise<readonly AiModelMetadata[]>
   selectModels(selector: AiModelSelector): Promise<readonly string[]>
@@ -70,14 +77,19 @@ export interface IAiModelMainService {
   /** Cancel an in-flight request — aborts the underlying network call in main. */
   cancelRequest(requestId: string): Promise<void>
 
+  /** The active model id for a slot, or undefined if none. */
+  getActiveModel(kind: AiActiveModelKind): Promise<string | undefined>
+  /** Set the active model id for a slot (writes aiSettings.json, fires onDidChangeActiveModel). */
+  setActiveModel(kind: AiActiveModelKind, modelId: string | undefined): Promise<void>
+
   /** Resolved per-model configuration (schema default → user settings). */
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration>
-  /** Persist per-model configuration into aiModels.json (defaults dropped). */
+  /** Persist per-model configuration into aiSettings.json (defaults dropped). */
   setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
 
-  /** The persisted provider groups (secret-free) backing aiModels.json. */
+  /** The persisted provider groups (secret-free) backing aiSettings.json. */
   getGroups(): Promise<readonly AiProviderGroup[]>
-  /** Replace the persisted provider groups (rewrites aiModels.json; no secrets). */
+  /** Replace the persisted provider groups (rewrites aiSettings.json; no secrets). */
   updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
 
   /** Store a group's API key in encrypted secret storage (plaintext stays in main). */

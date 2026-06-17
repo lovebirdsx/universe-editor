@@ -9,7 +9,7 @@ import { DragSessionProvider, GridLayout } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
 import { SettingsEditor } from '../preferences/SettingsEditor.js'
-import { AiModelsEditor } from '../ai/AiModelsEditor.js'
+import { AiSettingsEditor } from '../ai/AiSettingsEditor.js'
 import { KeybindingsEditor } from '../keybindings/KeybindingsEditor.js'
 import { WelcomeEditor } from './WelcomeEditor.js'
 import { FileEditor } from './FileEditor.js'
@@ -31,7 +31,7 @@ export const editorComponentMap = new Map<string, ComponentType<{ input: IEditor
 
 editorComponentMap.set('welcome', WelcomeEditor)
 editorComponentMap.set('settings', SettingsEditor as ComponentType<{ input: IEditorInput }>)
-editorComponentMap.set('aiModels', AiModelsEditor as ComponentType<{ input: IEditorInput }>)
+editorComponentMap.set('aiSettings', AiSettingsEditor as ComponentType<{ input: IEditorInput }>)
 editorComponentMap.set('keybindings', KeybindingsEditor as ComponentType<{ input: IEditorInput }>)
 editorComponentMap.set('file', FileEditor)
 editorComponentMap.set('diff', DiffEditor)

@@ -1,9 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  AI-related Action2 definitions: pick the active model, open the model manager
- *  / aiModels.json, and store / clear a provider group's API key. Keys are handed
+ *  / aiSettings.json, and store / clear a provider group's API key. Keys are handed
  *  to the AI model service, which persists them in encrypted secret storage in
- *  main — they never land in aiModels.json or the renderer's state.
+ *  main — they never land in aiSettings.json or the renderer's state.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -27,7 +27,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { AiModelsEditorInput } from '../services/editor/AiModelsEditorInput.js'
+import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 
 const CATEGORY = localize('command.category.ai', 'AI')
 
@@ -89,23 +89,23 @@ export class ManageModelsAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     for (const group of groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof AiModelsEditorInput) {
+        if (editor instanceof AiSettingsEditorInput) {
           groups.activateGroup(group)
           group.setActive(editor)
           return
         }
       }
     }
-    groups.activeGroup.openEditor(new AiModelsEditorInput())
+    groups.activeGroup.openEditor(new AiSettingsEditorInput())
   }
 }
 
-export class OpenModelsJsonAction extends Action2 {
-  static readonly ID = 'ai.openModelsJson'
+export class OpenAiSettingsJsonAction extends Action2 {
+  static readonly ID = 'ai.openSettingsJson'
   constructor() {
     super({
-      id: OpenModelsJsonAction.ID,
-      title: localize('action.ai.openModelsJson', 'Open AI Models (JSON)'),
+      id: OpenAiSettingsJsonAction.ID,
+      title: localize('action.ai.openSettingsJson', 'Open AI Settings (JSON)'),
       category: CATEGORY,
       f1: true,
     })
@@ -118,7 +118,7 @@ export class OpenModelsJsonAction extends Action2 {
 
     // Materialize the file (seeds defaults when missing) so it opens with content.
     await aiModel.updateGroups(await aiModel.getGroups())
-    const uri = await userData.getFileUri(UserDataFile.AiModels)
+    const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = inst.createInstance(FileEditorInput, URI.revive(uri) as URI)
     groups.activeGroup.openEditor(input, { activate: true })
@@ -146,7 +146,7 @@ export class SetApiKeyAction extends Action2 {
     const key = await quickInput.input({
       prompt: localize(
         'ai.setApiKey.prompt',
-        'Enter the API key for {group} (stored encrypted; never written to aiModels.json).',
+        'Enter the API key for {group} (stored encrypted; never written to aiSettings.json).',
         { group: groupKey(group) },
       ),
       placeholder: 'sk-…',

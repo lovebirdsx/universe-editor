@@ -36,8 +36,11 @@ export interface IAiModelService {
   /** Fires when the set of available models changes (e.g. a key was configured). */
   readonly onDidChangeModels: Event<void>
 
-  /** Fires when the user's active model selection changes (UI state). */
+  /** Fires when the active chat model selection changes (persisted in aiSettings.json). */
   readonly onDidChangeActiveModel: Event<void>
+
+  /** Fires when the active inline-completion model selection changes (persisted in aiSettings.json). */
+  readonly onDidChangeInlineCompletionModel: Event<void>
 
   /** List currently available models (resolved, with metadata). */
   getModels(): Promise<readonly AiModelMetadata[]>
@@ -59,19 +62,24 @@ export interface IAiModelService {
   /** Count tokens for `text` under `modelId` (to trim context to maxInputTokens). */
   computeTokenLength(modelId: string, text: string, token: CancellationToken): Promise<number>
 
-  /** The user's currently selected model id (UI state), or undefined if none. */
+  /** The active chat model id, or undefined if none (persisted in aiSettings.json by main). */
   getActiveModelId(): Promise<string | undefined>
-  /** Set the user's currently selected model id (UI state). */
+  /** Set the active chat model id (persisted in aiSettings.json by main). */
   setActiveModelId(modelId: string | undefined): Promise<void>
+
+  /** The active inline-completion model id, or undefined if none (persisted in aiSettings.json by main). */
+  getInlineCompletionModelId(): Promise<string | undefined>
+  /** Set the active inline-completion model id (persisted in aiSettings.json by main). */
+  setInlineCompletionModelId(modelId: string | undefined): Promise<void>
 
   /** Resolved per-model configuration (schema default → user settings). */
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration>
   /** Persist per-model configuration; values equal to the schema default are dropped. */
   setModelConfiguration(modelId: string, config: AiModelConfiguration): Promise<void>
 
-  /** The persisted provider groups (secret-free) backing aiModels.json. */
+  /** The persisted provider groups (secret-free) backing aiSettings.json. */
   getGroups(): Promise<readonly AiProviderGroup[]>
-  /** Replace the persisted provider groups (rewrites aiModels.json; no secrets). */
+  /** Replace the persisted provider groups (rewrites aiSettings.json; no secrets). */
   updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
 
   /** Store a group's API key in encrypted secret storage (plaintext stays in main). */

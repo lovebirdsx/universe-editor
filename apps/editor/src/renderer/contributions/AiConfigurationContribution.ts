@@ -1,19 +1,23 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Registers the JSON schema for aiModels.json (the provider-group configuration
- *  file), so editing it gets completion + validation in Monaco. The non-secret
- *  AI configuration now lives in this dedicated file rather than settings.json;
- *  API keys are NEVER part of it — they live in encrypted secret storage.
+ *  Registers the JSON schema for aiSettings.json (the AI configuration file:
+ *  provider groups + active model selections), so editing it gets completion +
+ *  validation in Monaco. The `activeModels.{chat,inlineCompletion}` enums are
+ *  rebuilt from the currently-available models whenever that set changes. API
+ *  keys are NEVER part of this file — they live in encrypted secret storage.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Disposable,
+  IAiModelService,
+  type IDisposable,
   IWorkbenchContribution,
   JSONContributionRegistry,
+  MutableDisposable,
   type IJSONSchema,
 } from '@universe-editor/platform'
 
-const AI_MODELS_SCHEMA_URI = 'universe-editor://schemas/ai/models'
+const AI_SETTINGS_SCHEMA_URI = 'universe-editor://schemas/ai/settings'
 
 const MODEL_SCHEMA: IJSONSchema = {
   type: 'object',
@@ -69,20 +73,53 @@ const GROUP_SCHEMA: IJSONSchema = {
   },
 }
 
-const AI_MODELS_SCHEMA: IJSONSchema = {
-  type: 'array',
-  items: GROUP_SCHEMA,
+function buildSchema(modelIds: readonly string[]): IJSONSchema {
+  // Omit the enum when there are no models — an empty enum would mark every
+  // value invalid. With ids present, suggest them while still allowing a
+  // hand-typed id (Monaco treats enum as suggestions + a warning, not a hard
+  // error, for string types).
+  const modelRef: IJSONSchema = {
+    type: 'string',
+    ...(modelIds.length > 0 ? { enum: [...modelIds] } : {}),
+  }
+  return {
+    type: 'object',
+    properties: {
+      groups: {
+        type: 'array',
+        description: 'Provider groups (vendor + named group) backing the available models.',
+        items: GROUP_SCHEMA,
+      },
+      activeModels: {
+        type: 'object',
+        description: 'The active model selection for each feature.',
+        properties: {
+          chat: { ...modelRef, description: 'Active model id for chat / commit messages.' },
+          inlineCompletion: {
+            ...modelRef,
+            description: 'Active model id for inline (ghost-text) completions.',
+          },
+        },
+      },
+    },
+  }
 }
 
 export class AiConfigurationContribution extends Disposable implements IWorkbenchContribution {
-  constructor() {
+  private readonly _schema = this._register(new MutableDisposable<IDisposable>())
+
+  constructor(@IAiModelService private readonly _aiModel: IAiModelService) {
     super()
-    this._register(
-      JSONContributionRegistry.registerSchema({
-        uri: AI_MODELS_SCHEMA_URI,
-        fileMatch: ['**/aiModels.json'],
-        schema: AI_MODELS_SCHEMA,
-      }),
-    )
+    void this._refresh()
+    this._register(this._aiModel.onDidChangeModels(() => void this._refresh()))
+  }
+
+  private async _refresh(): Promise<void> {
+    const ids = (await this._aiModel.getModels()).map((m) => m.id)
+    this._schema.value = JSONContributionRegistry.registerSchema({
+      uri: AI_SETTINGS_SCHEMA_URI,
+      fileMatch: ['**/aiSettings.json'],
+      schema: buildSchema(ids),
+    })
   }
 }

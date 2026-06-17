@@ -304,23 +304,23 @@ AI 服务分三层：platform 出契约（`IAiModelService` 门面 + `IAiModelPr
 - **Provider Group**：一个 vendor 可有多个**命名 group**（持久化形态 `AiProviderGroup`，运行时形态 `AiResolvedGroup` 带 `baseUrl?` / `declaredModels?` / 闭包 `getApiKey()`）。group 是配置单位，承载 `baseUrl` / 手写 `models[]` / 单模型 `settings`。
 - **模型标识符**：`vendor/group/model` 三段（如 `openai/default/gpt-4o`）。helper 在 `packages/platform/src/ai/aiModelConfiguration.ts`：`composeModelId` / `bareModelName` / `groupKey` / `vendorFromModelId`。
 - **单模型配置**：模型 metadata 可带 `configurationSchema`；用户值存 `group.settings[modelId]`；解析时 `schema 默认 → settings → per-request` 三层合并（在 main `getModelConfiguration` 内完成，下发给 provider 的 `options.modelConfiguration`）。
-- **激活模型**：用户当前选中的 model id，是 renderer 侧 UI 状态，存 `IStorageService`（key `ai.activeModelId`，`StorageScope.GLOBAL`），**不进 main / IPC**。
+- **激活模型**：用户为 chat 与 inline completion 各自选中的 model id，存 main 端 `aiSettings.json` 的 `activeModels.{chat,inlineCompletion}`（与 groups 同文件、单一事实源），经门面 `IAiModelService.get/setActiveModelId`（chat）与 `get/setInlineCompletionModelId` 读写，变更分别由 `onDidChangeActiveModel` / `onDidChangeInlineCompletionModel` 通知；**不进 settings.json**。
 
-**配置来源 `aiModels.json`**（对标 VSCode `chatLanguageModels.json`）：位于 `<configDir>/aiModels.json`（configDir 默认 = userData），main 直接读文件解析为 `AiProviderGroup[]`，监听文件变更后 `registry.setGroups(...)`；缺失/空时合成默认 group（`ollama/default` + `openai/default`）。**renderer 不再推配置**。
+**配置来源 `aiSettings.json`**（对标 VSCode `chatLanguageModels.json`）：位于 `<configDir>/aiSettings.json`（configDir 默认 = userData），顶层对象 `{ groups: AiProviderGroup[], activeModels?: { chat?, inlineCompletion? } }`，main 直接读文件解析后 `registry.setGroups(...)`，监听文件变更热重载；缺失/空/非对象时合成默认 group（`ollama/default` + `openai/default`）。**renderer 不再推配置**。
 
 **加一个新 vendor（如 openai）= 一个文件 + 一行注册**：
 
 1. 在 `main/services/ai/providers/` 写 `XxxProvider implements IAiModelProvider`，三个方法都吃 group 上下文：`provideModels(group, token)` / `sendRequest(messages, options, group, token)` / `provideTokenCount(modelId, text, group?, token?)`。baseUrl 取 `group.baseUrl ?? 默认`；密钥取 `await group.getApiKey()`；**端点枚举的模型 + `group.declaredModels` 合并**（手写优先）；`sendRequest` 读 `options.modelConfiguration` 映射到请求体。用 `AsyncIterableSource` + `DeferredPromise` 产流，监听 `token.onCancellationRequested` 中止 fetch，HTTP 状态映射到 `AiErrorCode`。参考 `ollamaProvider.ts` / `openAiProvider.ts`。
 2. 在 `AiModelMainService._registerBuiltInProviders` 加一行 `this._register(this._registry.registerProvider('xxx', new XxxProvider()))`（**无构造参数**，密钥/baseUrl 都从 group 走）。
-3. 若想给该 vendor 的 `aiModels.json` 结构提供补全/校验，schema 在 `contributions/AiConfigurationContribution.ts`（`JSONContributionRegistry.registerSchema` + `fileMatch:['**/aiModels.json']`）。
+3. 若想给该 vendor 的 `aiSettings.json` 结构提供补全/校验，schema 在 `contributions/AiConfigurationContribution.ts`（`JSONContributionRegistry.registerSchema` + `fileMatch:['**/aiSettings.json']`；`activeModels.{chat,inlineCompletion}` 的 enum 随可用模型动态刷新）。
 
-**密钥红线**：API key 只经 `ISecretStorageService`（main 侧 `safeStorage` 加密落盘，键名 `ai.secret.<vendor>.<group>.apiKey`，构造见 `secretKey(vendor, group)`），**绝不进 renderer / settings.json / aiModels.json / 线协议 DTO**（`getGroups`/`updateGroups` DTO 显式无密钥）；`safeStorage` 不可用时报错，不静默落明文。录入 key 经 `IAiModelService.setApiKey/deleteApiKey/hasApiKey(vendor, group)`（门面方法）→ main 内部读写；命令 `ai.setApiKey` / `ai.clearApiKey`（先 QuickPick 选 group）即走此路。
+**密钥红线**：API key 只经 `ISecretStorageService`（main 侧 `safeStorage` 加密落盘，键名 `ai.secret.<vendor>.<group>.apiKey`，构造见 `secretKey(vendor, group)`），**绝不进 renderer / settings.json / aiSettings.json / 线协议 DTO**（`getGroups`/`updateGroups` DTO 显式无密钥）；`safeStorage` 不可用时报错，不静默落明文。录入 key 经 `IAiModelService.setApiKey/deleteApiKey/hasApiKey(vendor, group)`（门面方法）→ main 内部读写；命令 `ai.setApiKey` / `ai.clearApiKey`（先 QuickPick 选 group）即走此路。
 
 **已落地 provider**：`ollama`（本地，无需 key，`/api/chat` NDJSON 流）、`openai`（baseUrl 可指向任何 OpenAI 兼容端点如 LM Studio/vLLM/DeepSeek，`/chat/completions` SSE 流，无 key 时省略 auth 头不报错）。改密钥/配置后由 main 显式 `setGroups` 失效注册表缓存、重新枚举模型并 `fire onDidChangeModels`。
 
-**模型选择 UI**：命令 `ai.pickModel`（状态栏 model picker + QuickPick，输入框右侧 "Manage Models…" 按钮）、`ai.manageModels`（图形化管理页 `workbench/ai/AiModelsEditor.tsx`，虚拟 `AiModelsEditorInput`）、`ai.openModelsJson`（直接编辑 `aiModels.json`）。状态栏条目见 `contributions/AiModelStatusContribution.ts`。
+**模型选择 UI**：命令 `ai.pickModel`（状态栏 model picker + QuickPick，输入框右侧 "Manage Models…" 按钮）、`ai.manageModels`（图形化管理页 `workbench/ai/AiSettingsEditor.tsx`，虚拟 `AiSettingsEditorInput`）、`ai.openSettingsJson`（直接编辑 `aiSettings.json`）。状态栏条目见 `contributions/AiModelStatusContribution.ts`。
 
-参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`、`renderer/workbench/ai/AiModelsEditor.tsx`
+参考：`packages/platform/src/ai/*`、`main/services/ai/aiModelMainService.ts`、`renderer/services/ai/aiModelClientService.ts`、`renderer/workbench/ai/AiSettingsEditor.tsx`
 
 ## 编辑器输入三件套
 
