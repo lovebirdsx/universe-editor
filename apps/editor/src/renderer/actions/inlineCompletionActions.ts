@@ -13,6 +13,7 @@ import {
   IInstantiationService,
   INotificationService,
   IQuickInputService,
+  KeybindingWeight,
   Severity,
   localize,
   type AiModelMetadata,
@@ -88,11 +89,15 @@ export class CommitInlineCompletionAction extends Action2 {
       // Claim Tab while ghost text is visible. Monaco confines its own
       // inlineSuggestionVisible key to the editor's scoped context-key service
       // and, with editContext: true, can't be relied on to commit on Tab — so we
-      // outrank the editor's indent (default WorkbenchContrib weight beats the
-      // bridged MonacoDefault) and run the commit command ourselves. The
-      // suggest-widget guard keeps Tab accepting an open IntelliSense pick first.
+      // run the commit command ourselves and must outrank every other Tab binding
+      // that could be active in the editor. That includes extension-contributed
+      // Tab handlers (e.g. markdown.editing.onTab at ExternalExtension=400), not
+      // just Monaco's bridged default — hence ExternalExtension + 1. It stays
+      // below User (1000) so a user override still wins. The suggest-widget guard
+      // keeps Tab accepting an open IntelliSense pick first.
       keybinding: {
         primary: 'tab',
+        weight: KeybindingWeight.ExternalExtension + 1,
         when: 'inlineSuggestionVisible && editorTextFocus && !suggestWidgetVisible',
       },
     })

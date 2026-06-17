@@ -249,3 +249,83 @@ describe('KeybindingsRegistry weight', () => {
     expect(resolved.kind === 'execute' && resolved.command).toBe('defaulted')
   })
 })
+
+// Regression for "Tab does not accept the AI inline completion in markdown".
+// markdown's own Tab handler is contributed by an extension (ExternalExtension
+// weight 400); the inline-completion commit must outrank it whenever ghost text
+// is visible, otherwise Tab indents instead of accepting the suggestion.
+describe('KeybindingsRegistry: inline-completion Tab vs extension Tab', () => {
+  const disposables: IDisposable[] = []
+
+  afterEach(() => {
+    while (disposables.length > 0) disposables.pop()?.dispose()
+  })
+
+  function ghostVisibleMarkdownContext(): ContextKeyService {
+    const ctx = new ContextKeyService()
+    ctx.createKey<boolean>('editorTextFocus', true)
+    ctx.createKey<string>('editorLangId', 'markdown')
+    ctx.createKey<boolean>('suggestWidgetVisible', false)
+    ctx.createKey<boolean>('inlineSuggestionVisible', true)
+    return ctx
+  }
+
+  function registerMarkdownOnTab(): void {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'tab',
+        command: 'markdown.editing.onTab',
+        when: 'editorTextFocus && editorLangId == markdown && !suggestWidgetVisible',
+        weight: KeybindingWeight.ExternalExtension,
+      }),
+    )
+  }
+
+  function registerCommit(weight: number): void {
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'tab',
+        command: 'ai.inlineCompletion.commit',
+        when: 'inlineSuggestionVisible && editorTextFocus && !suggestWidgetVisible',
+        weight,
+      }),
+    )
+  }
+
+  it('reproduces the bug: WorkbenchContrib commit loses Tab to the extension', () => {
+    const ctx = ghostVisibleMarkdownContext()
+    registerMarkdownOnTab()
+    registerCommit(KeybindingWeight.WorkbenchContrib)
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('tab', ctx)
+    expect(resolved.kind === 'execute' && resolved.command).toBe('markdown.editing.onTab')
+    ctx.dispose()
+  })
+
+  it('commit at ExternalExtension+1 wins Tab while ghost text is visible', () => {
+    const ctx = ghostVisibleMarkdownContext()
+    registerMarkdownOnTab()
+    registerCommit(KeybindingWeight.ExternalExtension + 1)
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('tab', ctx)
+    expect(resolved.kind === 'execute' && resolved.command).toBe('ai.inlineCompletion.commit')
+    ctx.dispose()
+  })
+
+  it('a user keybinding still outranks the boosted commit', () => {
+    const ctx = ghostVisibleMarkdownContext()
+    registerCommit(KeybindingWeight.ExternalExtension + 1)
+    disposables.push(
+      KeybindingsRegistry.registerKeybinding({
+        key: 'tab',
+        command: 'user.customTab',
+        when: 'editorTextFocus',
+        weight: KeybindingWeight.User,
+      }),
+    )
+
+    const resolved = KeybindingsRegistry.resolveKeystroke('tab', ctx)
+    expect(resolved.kind === 'execute' && resolved.command).toBe('user.customTab')
+    ctx.dispose()
+  })
+})
