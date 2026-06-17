@@ -84,7 +84,10 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
   }
 
   private _refreshSettingsSchema(): void {
-    const schema: IJSONSchema = buildSettingsJsonSchema()
+    // All layers use strict mode so unsupported keys surface as warnings in
+    // Monaco, mirroring how unknown command ids are flagged in keybindings.json.
+    // Dynamic contributions trigger onDidRegisterConfiguration → _scheduleSettingsRefresh(),
+    // so the schema rebuilds before any warning persists.
     const strictSchema: IJSONSchema = buildSettingsJsonSchema({ strict: true })
 
     this._settingsDisposables.user?.dispose()
@@ -95,20 +98,16 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
       JSONContributionRegistry.registerSchema({
         uri: SETTINGS_USER_URI,
         fileMatch: ['**/settings.json'],
-        schema,
+        schema: strictSchema,
       }),
     )
     this._settingsDisposables.project = this._register(
       JSONContributionRegistry.registerSchema({
         uri: SETTINGS_PROJECT_URI,
         fileMatch: ['**/.universe-editor/settings.json'],
-        schema,
+        schema: strictSchema,
       }),
     )
-    // Read-only VSCode settings layers (user-global Code/User/settings.json and
-    // workspace .vscode/settings.json). The strict variant rejects keys this
-    // editor doesn't support so they surface as warnings, mirroring how an
-    // unknown command id is flagged in VSCode keybindings.json.
     this._settingsDisposables.vscode = this._register(
       JSONContributionRegistry.registerSchema({
         uri: SETTINGS_VSCODE_URI,

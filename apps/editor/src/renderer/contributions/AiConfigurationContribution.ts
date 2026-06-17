@@ -21,6 +21,7 @@ const AI_SETTINGS_SCHEMA_URI = 'universe-editor://schemas/ai/settings'
 
 const MODEL_SCHEMA: IJSONSchema = {
   type: 'object',
+  additionalProperties: false,
   required: ['id'],
   properties: {
     id: { type: 'string', description: 'Bare model id the endpoint expects, e.g. "qwen3-coder".' },
@@ -30,6 +31,7 @@ const MODEL_SCHEMA: IJSONSchema = {
     maxOutputTokens: { type: 'number', description: 'Maximum number of tokens to generate.' },
     capabilities: {
       type: 'object',
+      additionalProperties: false,
       properties: {
         streaming: { type: 'boolean' },
         vision: { type: 'boolean' },
@@ -46,6 +48,7 @@ const MODEL_SCHEMA: IJSONSchema = {
 
 const GROUP_SCHEMA: IJSONSchema = {
   type: 'object',
+  additionalProperties: false,
   required: ['name', 'vendor'],
   properties: {
     name: {
@@ -84,6 +87,7 @@ function buildSchema(modelIds: readonly string[]): IJSONSchema {
   }
   return {
     type: 'object',
+    additionalProperties: false,
     properties: {
       groups: {
         type: 'array',
@@ -92,6 +96,7 @@ function buildSchema(modelIds: readonly string[]): IJSONSchema {
       },
       activeModels: {
         type: 'object',
+        additionalProperties: false,
         description: 'The active model selection for each feature.',
         properties: {
           chat: { ...modelRef, description: 'Active model id for chat.' },

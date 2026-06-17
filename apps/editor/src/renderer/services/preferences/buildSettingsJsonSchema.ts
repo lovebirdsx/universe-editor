@@ -42,10 +42,9 @@ function toJsonSchemaNode(prop: IConfigurationPropertySchema): IJSONSchema {
 
 export interface IBuildSettingsJsonSchemaOptions {
   /**
-   * Reject unknown keys (`additionalProperties: false`). Used for the read-only
-   * VSCode settings layer so settings this editor doesn't support surface as
-   * warnings, mirroring keybindings.json. The editor's own settings.json stays
-   * permissive — a key whose contribution registers later must not be flagged.
+   * Reject unknown keys (`additionalProperties: false`). Used for all settings.json
+   * variants so unsupported keys surface as warnings in Monaco, mirroring how
+   * unknown command ids are flagged in keybindings.json.
    */
   strict?: boolean
 }
@@ -62,10 +61,6 @@ export function buildSettingsJsonSchema(
   return {
     type: 'object',
     properties,
-    // settings.json is jsonc (comments + trailing commas). The editor's own file
-    // permits any extra keys to avoid spurious "unknown property" errors when a
-    // setting's contribution registers later; the strict VSCode variant rejects
-    // them so unsupported settings surface as warnings.
     additionalProperties: options.strict ? false : true,
   }
 }
