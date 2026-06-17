@@ -369,7 +369,7 @@ export class AgentsActiveSessionSyncContribution
       autorun((r) => {
         const active = this._editor.activeEditor.read(r)
         if (!(active instanceof AcpSessionEditorInput)) return
-        if (this._sessions.activeSessionId.read(r) === active.sessionId) return
+        if (this._sessions.activeSessionId.get() === active.sessionId) return
         // Only retarget to a live session; a not-yet-resumed editor leaves the
         // pointer alone until AcpSessionResumer brings it up (which itself calls
         // setActive on success).

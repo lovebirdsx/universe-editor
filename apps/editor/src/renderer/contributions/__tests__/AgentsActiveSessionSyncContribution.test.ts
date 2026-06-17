@@ -122,4 +122,23 @@ describe('AgentsActiveSessionSyncContribution', () => {
     expect(h.sessions.setActiveCalls).toEqual([])
     h.contrib.dispose()
   })
+
+  it('does not revert activeSessionId when setActive is called externally while editor stays on the previous tab', () => {
+    // Regression: autorun subscribed to activeSessionId.read(r) which caused it
+    // to re-run on every setActive call, see activeEditor still pointing at the
+    // old tab, and call setActive back — undoing the switch on first click.
+    const h = makeHarness()
+    h.sessions.register('s1')
+    h.sessions.register('s2')
+    // Focus s1 — autorun fires and syncs activeSessionId to s1.
+    h.editor.activeEditor.set(makeInput(h.inst, 's1'), undefined)
+    expect(h.sessions.activeSessionId.get()).toBe('s1')
+
+    // AGENTS panel click: setActive('s2') must not be reverted by the autorun
+    // seeing activeEditor still on s1 and calling setActive('s1') again.
+    h.sessions.setActive('s2')
+    expect(h.sessions.activeSessionId.get()).toBe('s2')
+    expect(h.sessions.setActiveCalls).toEqual(['s1', 's2'])
+    h.contrib.dispose()
+  })
 })

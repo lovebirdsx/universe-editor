@@ -96,6 +96,7 @@ function SessionRow({
       className={styles['sessionRow']}
       data-active={isActive ? 'true' : 'false'}
       data-running={isRunning ? 'true' : 'false'}
+      data-testid={`session-row-${entry.id}`}
       onClick={onActivate}
     >
       <div className={styles['sessionRowTitle']}>
