@@ -274,37 +274,34 @@ function ChangeRow({
   onOpen: (c: SessionFileChange, preview: boolean) => void
   onOpenFile: (c: SessionFileChange) => void
 }) {
-  const isDeleted = change.status === 'deleted'
   return (
     <li
       className={styles['row']}
       style={{ paddingLeft: 8 + depth * 12 }}
       data-status={change.status}
       data-testid="acp-changes-row"
-      onClick={isDeleted ? undefined : () => onOpen(change, true)}
-      onDoubleClick={isDeleted ? undefined : () => onOpen(change, false)}
+      onClick={() => onOpen(change, true)}
+      onDoubleClick={() => onOpen(change, false)}
       title={change.path}
       {...resourceDragProps(() => [change.uri.toString()])}
     >
       <FileIcon resource={change.uri} isDirectory={false} className={styles['icon']} />
       <span className={styles['name']}>{basenameOfResource(change.uri)}</span>
       {showDir && <span className={styles['dir']}>{dirnameOfResource(change.uri)}</span>}
-      {change.status !== 'deleted' && (
-        <span className={styles['actions']}>
-          <button
-            type="button"
-            className={styles['actionButton']}
-            title={localize('acp.changes.openFile', 'Open File')}
-            data-testid="acp-changes-open-file"
-            onClick={(e) => {
-              e.stopPropagation()
-              onOpenFile(change)
-            }}
-          >
-            <FileSymlink size={16} strokeWidth={1.6} />
-          </button>
-        </span>
-      )}
+      <span className={styles['actions']}>
+        <button
+          type="button"
+          className={styles['actionButton']}
+          title={localize('acp.changes.openFile', 'Open File')}
+          data-testid="acp-changes-open-file"
+          onClick={(e) => {
+            e.stopPropagation()
+            onOpenFile(change)
+          }}
+        >
+          <FileSymlink size={16} strokeWidth={1.6} />
+        </button>
+      </span>
       <span className={styles['badge']} data-status={change.status} aria-hidden="true">
         {statusLetter(change.status)}
       </span>

@@ -140,10 +140,10 @@ describe('SessionChangesView — open file action', () => {
     expect(editor.opened).toHaveLength(0)
   })
 
-  it('deleted files have no open-file button', async () => {
+  it('deleted files also show the open-file button', async () => {
     renderView([change('/ws/src/gone.ts', 'deleted')])
     await screen.findByText('gone.ts')
-    expect(screen.queryByTestId('acp-changes-open-file')).toBeNull()
+    expect(screen.queryByTestId('acp-changes-open-file')).not.toBeNull()
   })
 })
 

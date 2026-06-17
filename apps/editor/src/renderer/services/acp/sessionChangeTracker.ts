@@ -63,13 +63,6 @@ export interface ISessionChangeTrackerService {
   ): void
   /** Observable list of whole-file changes for a session (empty if none/unknown). */
   changesFor(sessionId: string): IObservable<readonly SessionFileChange[]>
-  /**
-   * Mark a path as deleted on disk during the session. Surfaces as a `deleted`
-   * entry with no baseline diff. No-op if already marked.
-   */
-  markDeleted(sessionId: string, path: string): void
-  /** Clear a deletion mark when the file reappears (e.g. agent re-created it). */
-  unmarkDeleted(sessionId: string, path: string): void
   /** Drop all tracked changes for a session (e.g. on user-initiated clear). */
   clear(sessionId: string): void
 }
@@ -81,11 +74,9 @@ export const ISessionChangeTrackerService = createDecorator<ISessionChangeTracke
 const STORAGE_KEY = 'acp.sessionChanges'
 const SCHEMA_VERSION = 2
 
-/** Per-file tracking record: accumulated hunk batches plus a deletion flag. */
+/** Per-file tracking record: accumulated hunk batches. */
 interface FileRecord {
   batches: DiffBatch[]
-  /** Set when the file was deleted on disk while the session was active. */
-  deleted?: boolean
 }
 
 /** Tracker state keyed by sessionId → path → record. */
@@ -98,7 +89,6 @@ interface PersistedShape {
     readonly files: ReadonlyArray<{
       readonly path: string
       readonly batches: readonly DiffBatch[]
-      readonly deleted?: boolean
     }>
   }>
 }
@@ -150,7 +140,6 @@ export class SessionChangeTrackerService
         files: [...files.entries()].map(([path, rec]) => ({
           path,
           batches: rec.batches,
-          ...(rec.deleted ? { deleted: true } : {}),
         })),
       })),
     }
@@ -171,7 +160,7 @@ export class SessionChangeTrackerService
       const files = new Map<string, FileRecord>()
       for (const f of s.files) {
         const batches = Array.isArray(f.batches) ? [...f.batches] : []
-        files.set(f.path, f.deleted ? { batches, deleted: true } : { batches })
+        files.set(f.path, { batches })
       }
       state.set(s.sessionId, files)
     }
@@ -207,8 +196,6 @@ export class SessionChangeTrackerService
       rec = { batches: [] }
       files.set(p, rec)
     }
-    // Re-writing/editing a previously-deleted path revives it.
-    if (rec.deleted) rec.deleted = false
     const batches = rec.batches
     const idx = batches.findIndex((b) => b.toolCallId === toolCallId)
     const batch: DiffBatch = created
@@ -216,36 +203,6 @@ export class SessionChangeTrackerService
       : { toolCallId, hunks: [...hunks] }
     if (idx >= 0) batches[idx] = batch
     else batches.push(batch)
-    this._scheduleWrite()
-    void this._recompute(sessionId, files)
-  }
-
-  markDeleted(sessionId: string, path: string): void {
-    const p = normalizePath(path)
-    let files = this._state.get(sessionId)
-    if (!files) {
-      files = new Map()
-      this._state.set(sessionId, files)
-    }
-    let rec = files.get(p)
-    if (!rec) {
-      rec = { batches: [] }
-      files.set(p, rec)
-    }
-    if (rec.deleted) return
-    rec.deleted = true
-    this._scheduleWrite()
-    void this._recompute(sessionId, files)
-  }
-
-  unmarkDeleted(sessionId: string, path: string): void {
-    const p = normalizePath(path)
-    const files = this._state.get(sessionId)
-    const rec = files?.get(p)
-    if (!files || !rec || !rec.deleted) return
-    rec.deleted = false
-    // A pure deletion marker (no edits) disappears entirely once the file is back.
-    if (rec.batches.length === 0) files.delete(p)
     this._scheduleWrite()
     void this._recompute(sessionId, files)
   }
@@ -300,11 +257,6 @@ export class SessionChangeTrackerService
       existed = false
     }
     const batches = record.batches
-    // Deleted on disk during the session: surface it without a baseline diff.
-    if (record.deleted && !existed) {
-      return { uri, path, baseline: '', current: '', status: 'deleted', batchCount: batches.length }
-    }
-    // A pure deletion marker whose file came back (never edited) drops out.
     if (batches.length === 0) return undefined
     const created = batches.some((b) => b.created)
     const { baseline, degraded } = reconstructBaseline(current, batches)

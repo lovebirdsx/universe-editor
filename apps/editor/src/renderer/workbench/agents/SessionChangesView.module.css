@@ -96,10 +96,6 @@
   color: var(--color-scm-added, #73c991);
 }
 
-.badge[data-status='deleted'] {
-  color: var(--color-scm-deleted, #c74e39);
-}
-
 .badge[data-status='degraded'] {
   color: var(--color-scm-conflict, #e2c08d);
 }
@@ -112,15 +108,6 @@
 
 .row[data-status='modified'] .name {
   color: var(--color-scm-modified, #e2c08d);
-}
-
-.row[data-status='deleted'] {
-  cursor: default;
-}
-
-.row[data-status='deleted'] .name {
-  color: var(--color-scm-deleted, #c74e39);
-  text-decoration: line-through;
 }
 
 .row[data-status='degraded'] .name {
