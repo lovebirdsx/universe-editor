@@ -104,6 +104,29 @@
   color: var(--color-scm-conflict, #e2c08d);
 }
 
+/* Mirror the SCM resource row: tint the filename by status and strike through
+   deletions. Colors come from the same --color-scm-* tokens as the badge. */
+.row[data-status='added'] .name {
+  color: var(--color-scm-added, #73c991);
+}
+
+.row[data-status='modified'] .name {
+  color: var(--color-scm-modified, #e2c08d);
+}
+
+.row[data-status='deleted'] {
+  cursor: default;
+}
+
+.row[data-status='deleted'] .name {
+  color: var(--color-scm-deleted, #c74e39);
+  text-decoration: line-through;
+}
+
+.row[data-status='degraded'] .name {
+  color: var(--color-scm-conflict, #e2c08d);
+}
+
 /* Floating row actions — overlaid on the right edge, revealed on hover, mirroring
    the SCM resource row. The opaque backdrop hides the status badge underneath. */
 .actions {

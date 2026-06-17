@@ -147,6 +147,20 @@ describe('SessionChangesView — open file action', () => {
   })
 })
 
+describe('SessionChangesView — status decoration (SCM-aligned)', () => {
+  it('tags an added row with data-status="added"', async () => {
+    renderView([change('/ws/src/new.ts', 'added')])
+    await screen.findByText('new.ts')
+    expect(screen.getByTestId('acp-changes-row').getAttribute('data-status')).toBe('added')
+  })
+
+  it('tags a deleted row with data-status="deleted" (drives the strike-through)', async () => {
+    renderView([change('/ws/src/gone.ts', 'deleted')])
+    await screen.findByText('gone.ts')
+    expect(screen.getByTestId('acp-changes-row').getAttribute('data-status')).toBe('deleted')
+  })
+})
+
 describe('SessionChangesView — list/tree mode', () => {
   it('list mode shows the file directory inline; no folder rows', async () => {
     renderView([change('/ws/src/a.ts')])

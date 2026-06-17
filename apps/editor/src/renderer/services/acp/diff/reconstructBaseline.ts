@@ -33,6 +33,13 @@ export interface DiffBatch {
   /** The originating tool call id, used by the tracker to dedupe re-delivered updates. */
   readonly toolCallId?: string
   readonly hunks: readonly DiffHunk[]
+  /**
+   * True when this batch came from a Write that created the file (SDK
+   * `type: 'create'` / `originalFile: null`). The tracker uses it to force an
+   * `added` status with an empty baseline even when the hunks are empty (an
+   * empty-content Write reports zero hunks).
+   */
+  readonly created?: boolean
 }
 
 export interface ReconstructResult {

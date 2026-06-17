@@ -51,10 +51,25 @@ export interface ISessionChangeTrackerService {
   /**
    * Record one Edit/Write tool call's hunks against a file. Re-delivered updates
    * for the same `toolCallId` replace the prior batch rather than duplicating.
+   * `created` marks a Write that created the file (forces `added` even with no
+   * hunks, e.g. an empty-content Write).
    */
-  record(sessionId: string, path: string, toolCallId: string, hunks: readonly DiffHunk[]): void
+  record(
+    sessionId: string,
+    path: string,
+    toolCallId: string,
+    hunks: readonly DiffHunk[],
+    created?: boolean,
+  ): void
   /** Observable list of whole-file changes for a session (empty if none/unknown). */
   changesFor(sessionId: string): IObservable<readonly SessionFileChange[]>
+  /**
+   * Mark a path as deleted on disk during the session. Surfaces as a `deleted`
+   * entry with no baseline diff. No-op if already marked.
+   */
+  markDeleted(sessionId: string, path: string): void
+  /** Clear a deletion mark when the file reappears (e.g. agent re-created it). */
+  unmarkDeleted(sessionId: string, path: string): void
   /** Drop all tracked changes for a session (e.g. on user-initiated clear). */
   clear(sessionId: string): void
 }
@@ -64,17 +79,34 @@ export const ISessionChangeTrackerService = createDecorator<ISessionChangeTracke
 )
 
 const STORAGE_KEY = 'acp.sessionChanges'
-const SCHEMA_VERSION = 1
+const SCHEMA_VERSION = 2
 
-/** Persisted batches keyed by sessionId → path → ordered batches. */
-type TrackerState = Map<string, Map<string, DiffBatch[]>>
+/** Per-file tracking record: accumulated hunk batches plus a deletion flag. */
+interface FileRecord {
+  batches: DiffBatch[]
+  /** Set when the file was deleted on disk while the session was active. */
+  deleted?: boolean
+}
+
+/** Tracker state keyed by sessionId → path → record. */
+type TrackerState = Map<string, Map<string, FileRecord>>
 
 interface PersistedShape {
   readonly schemaVersion: number
   readonly sessions: ReadonlyArray<{
     readonly sessionId: string
-    readonly files: ReadonlyArray<{ readonly path: string; readonly batches: readonly DiffBatch[] }>
+    readonly files: ReadonlyArray<{
+      readonly path: string
+      readonly batches: readonly DiffBatch[]
+      readonly deleted?: boolean
+    }>
   }>
+}
+
+/** Canonicalize a file path so agent-reported paths and fs-watch paths key the
+ *  same record (e.g. Windows drive-letter casing). Non-file URIs pass through. */
+function normalizePath(path: string): string {
+  return path.includes('://') ? path : URI.file(path).fsPath
 }
 
 export class SessionChangeTrackerService
@@ -115,7 +147,11 @@ export class SessionChangeTrackerService
       schemaVersion: SCHEMA_VERSION,
       sessions: [...state.entries()].map(([sessionId, files]) => ({
         sessionId,
-        files: [...files.entries()].map(([path, batches]) => ({ path, batches })),
+        files: [...files.entries()].map(([path, rec]) => ({
+          path,
+          batches: rec.batches,
+          ...(rec.deleted ? { deleted: true } : {}),
+        })),
       })),
     }
   }
@@ -123,11 +159,20 @@ export class SessionChangeTrackerService
   protected _deserialize(raw: unknown): TrackerState | undefined {
     if (!raw || typeof raw !== 'object') return undefined
     const shape = raw as Partial<PersistedShape>
-    if (shape.schemaVersion !== SCHEMA_VERSION || !Array.isArray(shape.sessions)) return undefined
+    // v1 had no `deleted` flag; its file entries deserialize cleanly here.
+    if (
+      (shape.schemaVersion !== 1 && shape.schemaVersion !== SCHEMA_VERSION) ||
+      !Array.isArray(shape.sessions)
+    ) {
+      return undefined
+    }
     const state: TrackerState = new Map()
     for (const s of shape.sessions) {
-      const files = new Map<string, DiffBatch[]>()
-      for (const f of s.files) files.set(f.path, [...f.batches])
+      const files = new Map<string, FileRecord>()
+      for (const f of s.files) {
+        const batches = Array.isArray(f.batches) ? [...f.batches] : []
+        files.set(f.path, f.deleted ? { batches, deleted: true } : { batches })
+      }
       state.set(s.sessionId, files)
     }
     return state
@@ -143,19 +188,64 @@ export class SessionChangeTrackerService
 
   // -- public API -----------------------------------------------------
 
-  record(sessionId: string, path: string, toolCallId: string, hunks: readonly DiffHunk[]): void {
-    if (hunks.length === 0) return
+  record(
+    sessionId: string,
+    path: string,
+    toolCallId: string,
+    hunks: readonly DiffHunk[],
+    created = false,
+  ): void {
+    if (hunks.length === 0 && !created) return
+    const p = normalizePath(path)
     let files = this._state.get(sessionId)
     if (!files) {
       files = new Map()
       this._state.set(sessionId, files)
     }
-    const batches = files.get(path) ?? []
+    let rec = files.get(p)
+    if (!rec) {
+      rec = { batches: [] }
+      files.set(p, rec)
+    }
+    // Re-writing/editing a previously-deleted path revives it.
+    if (rec.deleted) rec.deleted = false
+    const batches = rec.batches
     const idx = batches.findIndex((b) => b.toolCallId === toolCallId)
-    const batch: DiffBatch = { toolCallId, hunks: [...hunks] }
+    const batch: DiffBatch = created
+      ? { toolCallId, hunks: [...hunks], created: true }
+      : { toolCallId, hunks: [...hunks] }
     if (idx >= 0) batches[idx] = batch
     else batches.push(batch)
-    files.set(path, batches)
+    this._scheduleWrite()
+    void this._recompute(sessionId, files)
+  }
+
+  markDeleted(sessionId: string, path: string): void {
+    const p = normalizePath(path)
+    let files = this._state.get(sessionId)
+    if (!files) {
+      files = new Map()
+      this._state.set(sessionId, files)
+    }
+    let rec = files.get(p)
+    if (!rec) {
+      rec = { batches: [] }
+      files.set(p, rec)
+    }
+    if (rec.deleted) return
+    rec.deleted = true
+    this._scheduleWrite()
+    void this._recompute(sessionId, files)
+  }
+
+  unmarkDeleted(sessionId: string, path: string): void {
+    const p = normalizePath(path)
+    const files = this._state.get(sessionId)
+    const rec = files?.get(p)
+    if (!files || !rec || !rec.deleted) return
+    rec.deleted = false
+    // A pure deletion marker (no edits) disappears entirely once the file is back.
+    if (rec.batches.length === 0) files.delete(p)
     this._scheduleWrite()
     void this._recompute(sessionId, files)
   }
@@ -180,7 +270,7 @@ export class SessionChangeTrackerService
 
   private async _recompute(
     sessionId: string,
-    files: Map<string, DiffBatch[]> | undefined,
+    files: Map<string, FileRecord> | undefined,
   ): Promise<void> {
     const obs = this._observables.get(sessionId)
     if (!obs) return
@@ -189,7 +279,7 @@ export class SessionChangeTrackerService
       return
     }
     const changes = await Promise.all(
-      [...files.entries()].map(([path, batches]) => this._buildChange(path, batches)),
+      [...files.entries()].map(([path, rec]) => this._buildChange(path, rec)),
     )
     obs.set(
       changes.filter((c): c is SessionFileChange => c !== undefined),
@@ -199,7 +289,7 @@ export class SessionChangeTrackerService
 
   private async _buildChange(
     path: string,
-    batches: readonly DiffBatch[],
+    record: FileRecord,
   ): Promise<SessionFileChange | undefined> {
     const uri = path.includes('://') ? URI.parse(path) : URI.file(path)
     let current = ''
@@ -209,16 +299,27 @@ export class SessionChangeTrackerService
     } catch {
       existed = false
     }
+    const batches = record.batches
+    // Deleted on disk during the session: surface it without a baseline diff.
+    if (record.deleted && !existed) {
+      return { uri, path, baseline: '', current: '', status: 'deleted', batchCount: batches.length }
+    }
+    // A pure deletion marker whose file came back (never edited) drops out.
+    if (batches.length === 0) return undefined
+    const created = batches.some((b) => b.created)
     const { baseline, degraded } = reconstructBaseline(current, batches)
-    if (baseline === current && existed) return undefined
-    const status: SessionFileChangeStatus = degraded
-      ? 'degraded'
-      : !existed
-        ? 'deleted'
-        : baseline === ''
-          ? 'added'
-          : 'modified'
-    return { uri, path, baseline, current, status, batchCount: batches.length }
+    if (baseline === current && existed && !created) return undefined
+    const status: SessionFileChangeStatus = !existed
+      ? 'deleted'
+      : created
+        ? 'added'
+        : degraded
+          ? 'degraded'
+          : baseline === ''
+            ? 'added'
+            : 'modified'
+    const effectiveBaseline = created && existed ? '' : baseline
+    return { uri, path, baseline: effectiveBaseline, current, status, batchCount: batches.length }
   }
 }
 

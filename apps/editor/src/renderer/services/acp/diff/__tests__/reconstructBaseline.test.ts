@@ -48,6 +48,24 @@ describe('reconstructBaseline', () => {
     expect(baseline).toBe('')
   })
 
+  it('handles the real `diff`-shaped create hunk (oldStart:1, "\\ No newline" markers)', () => {
+    // The `diff` package emits oldStart:1/oldLines:0 for a created file and may
+    // interleave `\ No newline at end of file` marker lines (tag '\'), which
+    // afterLines/beforeLines must ignore. current carries a trailing newline.
+    const current = ['alpha', 'beta'].join('\n') + '\n'
+    const { baseline, degraded } = single(current, [
+      {
+        oldStart: 1,
+        oldLines: 0,
+        newStart: 1,
+        newLines: 2,
+        lines: ['+alpha', '+beta', '\\ No newline at end of file'],
+      },
+    ])
+    expect(degraded).toBe(false)
+    expect(baseline).toBe('')
+  })
+
   it('handles a pure insertion (added lines, context preserved)', () => {
     const current = ['head', 'inserted', 'tail'].join('\n')
     const { baseline, degraded } = single(current, [

@@ -21,5 +21,7 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   changesFor(): IObservable<readonly SessionFileChange[]> {
     return this._empty
   }
+  markDeleted(): void {}
+  unmarkDeleted(): void {}
   clear(): void {}
 }

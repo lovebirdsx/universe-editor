@@ -273,14 +273,15 @@ function ChangeRow({
   onOpen: (c: SessionFileChange, preview: boolean) => void
   onOpenFile: (c: SessionFileChange) => void
 }) {
+  const isDeleted = change.status === 'deleted'
   return (
     <li
       className={styles['row']}
       style={{ paddingLeft: 8 + depth * 12 }}
       data-status={change.status}
       data-testid="acp-changes-row"
-      onClick={() => onOpen(change, true)}
-      onDoubleClick={() => onOpen(change, false)}
+      onClick={isDeleted ? undefined : () => onOpen(change, true)}
+      onDoubleClick={isDeleted ? undefined : () => onOpen(change, false)}
       title={change.path}
     >
       <FileIcon resource={change.uri} isDirectory={false} className={styles['icon']} />

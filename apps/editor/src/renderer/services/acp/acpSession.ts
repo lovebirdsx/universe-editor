@@ -652,7 +652,13 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       const change = readStructuredPatch(update)
       if (change) {
-        this._changeTracker?.record(this.id, change.path, update.toolCallId, change.hunks)
+        this._changeTracker?.record(
+          this.id,
+          change.path,
+          update.toolCallId,
+          change.hunks,
+          change.isCreate,
+        )
       }
     }
     switch (update.sessionUpdate) {
@@ -1071,12 +1077,20 @@ function readMcpServer(update: SessionUpdate): string | undefined {
 
 /**
  * Extract a whole-file change descriptor from the agent fork's PostToolUse hook
- * payload: `_meta.claudeCode.toolResponse.{filePath, structuredPatch}`, present
- * only for `Edit`/`Write` tools. Returns undefined for any other tool / shape.
+ * payload: `_meta.claudeCode.toolResponse.{filePath, structuredPatch, type,
+ * originalFile}`, present only for `Edit`/`Write` tools. Returns undefined for
+ * any other tool / shape.
+ *
+ * `isCreate` is derived from the authoritative SDK signals (`type: 'create'` or
+ * `originalFile: null`); when set we keep the descriptor even with zero hunks,
+ * because an empty-content Write reports an empty `structuredPatch` yet still
+ * created a file the tracker must surface.
  */
 function readStructuredPatch(
   update: SessionUpdate,
-): { readonly path: string; readonly hunks: readonly DiffHunk[] } | undefined {
+):
+  | { readonly path: string; readonly hunks: readonly DiffHunk[]; readonly isCreate: boolean }
+  | undefined {
   const meta = (
     update as {
       _meta?: {
@@ -1085,6 +1099,8 @@ function readStructuredPatch(
           toolResponse?: {
             filePath?: unknown
             structuredPatch?: unknown
+            type?: unknown
+            originalFile?: unknown
           }
         }
       } | null
@@ -1096,6 +1112,7 @@ function readStructuredPatch(
   const path = resp?.filePath
   const patch = resp?.structuredPatch
   if (typeof path !== 'string' || path.length === 0 || !Array.isArray(patch)) return undefined
+  const isCreate = resp?.type === 'create' || resp?.originalFile === null
   const hunks: DiffHunk[] = []
   for (const h of patch) {
     if (
@@ -1115,8 +1132,8 @@ function readStructuredPatch(
       })
     }
   }
-  if (hunks.length === 0) return undefined
-  return { path, hunks }
+  if (hunks.length === 0 && !isCreate) return undefined
+  return { path, hunks, isCreate }
 }
 
 /** True when at least one block would render visible content. */

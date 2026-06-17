@@ -30,6 +30,7 @@ import { GitBlameContribution } from './GitBlameContribution.js'
 import { GitMergeConflictContribution } from './GitMergeConflictContribution.js'
 import { DirtyDiffContribution } from './DirtyDiffContribution.js'
 import { ExternalChangeWatcher } from './ExternalChangeWatcher.js'
+import { SessionDeletedFilesWatcher } from './SessionDeletedFilesWatcher.js'
 import { GlobalDragAndDropContribution } from './GlobalDragAndDropContribution.js'
 import { WorkspaceRecentMenuContribution } from './WorkspaceRecentMenuContribution.js'
 import { WorkspaceRestoreContribution } from './WorkspaceRestoreContribution.js'
@@ -295,6 +296,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.externalChangeWatcher',
   ExternalChangeWatcher,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Records files deleted on disk during an active agent session as `deleted`
+// entries in Session Changes (the agent has no Delete tool to report them).
+// AfterRestore so the file watcher + ACP session service are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.sessionDeletedFilesWatcher',
+  SessionDeletedFilesWatcher,
   WorkbenchPhase.AfterRestore,
 )
 
