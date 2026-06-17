@@ -94,6 +94,22 @@ describe('OpenAiProvider', () => {
     expect(models[0]!.name).toBe('gpt-4o-mini')
   })
 
+  it('deduplicates ids the endpoint enumerates more than once', async () => {
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(
+        JSON.stringify({ data: [{ id: 'Kling-O1' }, { id: 'Kling-O1' }, { id: 'gpt-4o' }] }),
+        { status: 200 },
+      ),
+    )
+    const provider = new OpenAiProvider()
+    const cts = new CancellationTokenSource()
+
+    const group = makeGroup({ apiKey: 'sk-test', name: 'kuro' })
+    const models = await provider.provideModels(group, cts.token)
+
+    expect(models.map((m) => m.id)).toEqual(['openai/kuro/Kling-O1', 'openai/kuro/gpt-4o'])
+  })
+
   it('parses SSE deltas into text chunks and stops at [DONE]', async () => {
     const body = streamFromChunks([
       sseLine('Hel'),

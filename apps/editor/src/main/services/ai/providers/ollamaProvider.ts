@@ -149,9 +149,11 @@ function baseUrl(group: AiResolvedGroup): string {
 /** Endpoint-enumerated names + hand-declared models (declared wins on id clash). */
 function mergeModels(group: AiResolvedGroup, names: readonly string[]): AiModelMetadata[] {
   const declared = new Map((group.declaredModels ?? []).map((m) => [m.id, m]))
+  const seen = new Set<string>()
   const out: AiModelMetadata[] = []
   for (const name of names) {
-    if (declared.has(name)) continue
+    if (declared.has(name) || seen.has(name)) continue
+    seen.add(name)
     out.push(toMetadata(group, name))
   }
   for (const config of group.declaredModels ?? []) {

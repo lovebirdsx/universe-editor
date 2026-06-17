@@ -186,9 +186,11 @@ function authHeaders(apiKey: string | undefined): Record<string, string> {
 /** Endpoint-enumerated ids + hand-declared models (declared wins on id clash). */
 function mergeModels(group: AiResolvedGroup, ids: readonly string[]): AiModelMetadata[] {
   const declared = new Map((group.declaredModels ?? []).map((m) => [m.id, m]))
+  const seen = new Set<string>()
   const out: AiModelMetadata[] = []
   for (const id of ids) {
-    if (declared.has(id)) continue
+    if (declared.has(id) || seen.has(id)) continue
+    seen.add(id)
     out.push(toMetadata(group, id))
   }
   for (const config of group.declaredModels ?? []) {
