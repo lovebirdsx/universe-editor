@@ -74,12 +74,23 @@ export const checkoutRemote = (
   log: Log,
 ): Promise<boolean> => run(root, ['checkout', '-b', localName, '--track', remoteRef], log)
 
-export const deleteRemoteBranch = (
+export const deleteRemoteBranch = async (
   root: string,
   remote: string,
   branch: string,
   log: Log,
-): Promise<boolean> => run(root, ['push', remote, '--delete', branch], log)
+): Promise<boolean> => {
+  const res = await gitExec(['push', remote, '--delete', branch], root, log)
+  if (res.exitCode === 0) return true
+
+  // Branch already gone on remote (stale local tracking ref) — prune to clean up
+  if (res.stderr.includes('remote ref does not exist')) {
+    const pruneRes = await gitExec(['fetch', '--prune', remote], root, log)
+    return pruneRes.exitCode === 0
+  }
+
+  return false
+}
 
 export const createTag = (
   root: string,
