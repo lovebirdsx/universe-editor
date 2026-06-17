@@ -11,11 +11,16 @@ import {
   Disposable,
   IAiModelService,
   type IDisposable,
+  IUserDataFilesService,
   IWorkbenchContribution,
   JSONContributionRegistry,
   MutableDisposable,
+  URI,
+  UserDataFile,
   type IJSONSchema,
 } from '@universe-editor/platform'
+import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
+import { schemaFileMatchForUri } from '../services/preferences/schemaFileMatch.js'
 
 const AI_SETTINGS_SCHEMA_URI = 'universe-editor://schemas/ai/settings'
 
@@ -117,17 +122,30 @@ function buildSchema(modelIds: readonly string[]): IJSONSchema {
 export class AiConfigurationContribution extends Disposable implements IWorkbenchContribution {
   private readonly _schema = this._register(new MutableDisposable<IDisposable>())
 
-  constructor(@IAiModelService private readonly _aiModel: IAiModelService) {
+  constructor(
+    @IAiModelService private readonly _aiModel: IAiModelService,
+    @IUserDataFilesService private readonly _userDataFiles: IUserDataFilesService,
+    @IConfigLocationService private readonly _configLocation: IConfigLocationService,
+  ) {
     super()
     void this._refresh()
     this._register(this._aiModel.onDidChangeModels(() => void this._refresh()))
+    // aiSettings.json lives in the active config dir, so retarget the exact
+    // fileMatch when that dir moves.
+    this._register(this._configLocation.onDidChangeConfigDir(() => void this._refresh()))
   }
 
   private async _refresh(): Promise<void> {
+    const components = await this._userDataFiles.getFileUri(UserDataFile.AiSettings)
+    if (!components) {
+      this._schema.clear()
+      return
+    }
+    const fileMatch = schemaFileMatchForUri(URI.revive(components) as URI)
     const ids = (await this._aiModel.getModels()).map((m) => m.id)
     this._schema.value = JSONContributionRegistry.registerSchema({
       uri: AI_SETTINGS_SCHEMA_URI,
-      fileMatch: ['**/aiSettings.json'],
+      fileMatch: [fileMatch],
       schema: buildSchema(ids),
     })
   }
