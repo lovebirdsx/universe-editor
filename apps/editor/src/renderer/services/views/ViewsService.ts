@@ -219,9 +219,10 @@ export class ViewsService extends Disposable implements IViewsService {
   }
 
   /**
-   * After a container moves between locations or is removed, the active pointer
-   * for a location may reference a container that no longer lives there. Drop
-   * stale pointers and re-seed so each location resolves to a valid container.
+   * After a container moves between locations, is removed, or is emptied (its
+   * last view dragged out / merged away), the active pointer for a location may
+   * reference a container that no longer shows there. Drop stale pointers and
+   * re-seed so each location resolves to a visible container.
    */
   private _reconcileActive(): void {
     const cur = this.activeContainerByLocation.get()
@@ -230,7 +231,10 @@ export class ViewsService extends Disposable implements IViewsService {
     for (const loc of ALL_LOCATIONS) {
       const activeId = next[loc]
       if (!activeId) continue
-      if (this._viewDescriptors.getViewContainerLocation(activeId) !== loc) {
+      const visible = this._viewDescriptors
+        .getViewContainersByLocation(loc)
+        .some((c) => c.id === activeId)
+      if (!visible) {
         delete next[loc]
         changed = true
       }

@@ -101,6 +101,7 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   ): readonly IViewContainerDescriptor[] {
     return ViewContainerRegistry.getAllViewContainers()
       .filter((c) => this.getViewContainerLocation(c.id) === location)
+      .filter((c) => this.getViewsByContainer(c.id).length > 0)
       .sort((a, b) => this._containerSortKey(a) - this._containerSortKey(b))
   }
 

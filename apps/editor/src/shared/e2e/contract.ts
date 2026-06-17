@@ -357,6 +357,8 @@ export interface E2EProbe {
   moveViewToLocation(viewId: string, location: number): void
   /** Move a whole container to another location. */
   moveViewContainerToLocation(containerId: string, location: number): void
+  /** Merge every view of one container into another (the drag-to-centre gesture). */
+  mergeViewContainerInto(sourceContainerId: string, targetContainerId: string): void
   /** A view's collapsed flag (defaults to false when unset). */
   getViewCollapsed(viewId: string): boolean
   /** Set a view's collapsed flag (persisted). */

@@ -1,10 +1,18 @@
-import { useLayoutEffect, useRef, useState, type ComponentType, type DragEvent } from 'react'
+import {
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ComponentType,
+  type DragEvent,
+  type ReactNode,
+} from 'react'
 import { Allotment, type AllotmentHandle } from 'allotment'
 import 'allotment/dist/style.css'
 import type { IViewDescriptor } from '@universe-editor/platform'
 import { ViewPane } from './ViewPane.js'
 import { useViewDescriptors } from '../dnd/useViewDescriptors.js'
-import { dragContainsView, viewDragData } from '../dnd/viewDragData.js'
+import { dragContainsView, viewDragData, type ViewDragPayload } from '../dnd/viewDragData.js'
+import { applyViewDrop } from '../dnd/applyViewDrop.js'
 import '../layout/allotment-theme.css'
 import styles from '../paneComposite/PaneComposite.module.css'
 
@@ -26,6 +34,12 @@ interface Props {
  * adjacent open panes are resizable via the sashes between them. Collapse and
  * size are persisted through IViewDescriptorService; views can be dragged within
  * and across containers.
+ *
+ * The whole container is also a drop target for *merging* into it: dropping a
+ * view from another container, or a whole container's activity-bar icon / tab,
+ * folds the dragged views in (a translucent overlay marks the target). Within a
+ * multi-view container, fine-grained view re-ordering is left to each ViewPane's
+ * before/after insertion line instead.
  */
 export function ViewPaneContainer({
   containerId,
@@ -37,7 +51,7 @@ export function ViewPaneContainer({
   const viewDescriptors = useViewDescriptors()
   const allotmentRef = useRef<AllotmentHandle>(null)
   const sizesRef = useRef<number[]>([])
-  const [overEmpty, setOverEmpty] = useState(false)
+  const [mergeActive, setMergeActive] = useState(false)
 
   const collapsed = (id: string) => viewDescriptors.getViewState(id).collapsed === true
   const toggle = (id: string) => viewDescriptors.setViewCollapsed(id, !collapsed(id))
@@ -67,12 +81,18 @@ export function ViewPaneContainer({
 
   // After a collapse/expand toggle, hand collapsed panes their header height and
   // split the rest equally among the open panes — Allotment alone would leave the
-  // freed space on the just-collapsed pane. The length guard skips runs where
-  // Allotment hasn't yet committed its view items for the current `views`.
+  // freed space on the just-collapsed pane. Only run when the view *set* is
+  // unchanged: on add/remove/replace (e.g. a view dragged in or out) Allotment is
+  // mid-reconcile and its viewItems don't yet match `views`, so we let its own
+  // layout + onChange rebalance instead of resizing against a stale geometry.
   const collapsedKey = views.map((v) => (collapsed(v.id) ? '1' : '0')).join('')
+  const viewIdsKey = views.map((v) => v.id).join('\n')
+  const prevViewIdsRef = useRef(viewIdsKey)
   useLayoutEffect(() => {
     const handle = allotmentRef.current
-    if (!handle) return
+    const sameViewSet = prevViewIdsRef.current === viewIdsKey
+    prevViewIdsRef.current = viewIdsKey
+    if (!handle || !sameViewSet) return
     const sizes = sizesRef.current
     if (sizes.length !== views.length) return
     const total = sizes.reduce((sum, n) => sum + n, 0)
@@ -82,94 +102,118 @@ export function ViewPaneContainer({
     const each = (total - HEADER_H * (views.length - openCount)) / openCount
     handle.resize(views.map((v) => (collapsed(v.id) ? HEADER_H : each)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [collapsedKey])
+  }, [collapsedKey, viewIdsKey])
 
-  const acceptsContainerDrop = (e: DragEvent): boolean => {
-    if (!dragContainsView(e.dataTransfer)) return false
+  // A drag that this container would *merge* in: another container's icon/tab, or
+  // a view from another container. A multi-view container leaves single-view
+  // placement to its ViewPanes' before/after lines, so it ignores view payloads
+  // here and only takes whole-container merges.
+  const mergePayload = (e: DragEvent): ViewDragPayload | undefined => {
+    if (!dragContainsView(e.dataTransfer)) return undefined
     const payload = viewDragData.get()
-    if (payload?.kind !== 'view') return false
-    return viewDescriptors.getViewContainerByViewId(payload.id)?.id !== containerId
+    if (!payload) return undefined
+    if (payload.kind === 'container') {
+      return payload.id === containerId ? undefined : payload
+    }
+    if (views.length > 1) return undefined
+    const sameContainer = viewDescriptors.getViewContainerByViewId(payload.id)?.id === containerId
+    return sameContainer ? undefined : payload
   }
 
-  const onEmptyDragOver = (e: DragEvent) => {
-    if (!acceptsContainerDrop(e)) return
+  const onMergeDragOver = (e: DragEvent) => {
+    if (!mergePayload(e)) return
     e.preventDefault()
     e.dataTransfer.dropEffect = 'move'
-    setOverEmpty(true)
+    if (!mergeActive) setMergeActive(true)
   }
 
-  const onEmptyDrop = (e: DragEvent) => {
-    if (!acceptsContainerDrop(e)) return
+  const onMergeDragLeave = (e: DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setMergeActive(false)
+  }
+
+  const onMergeDrop = (e: DragEvent) => {
+    const payload = mergePayload(e)
+    setMergeActive(false)
+    if (!payload) return
     e.preventDefault()
-    setOverEmpty(false)
-    const payload = viewDragData.get()
-    if (payload) viewDescriptors.moveViewsToContainer([payload.id], containerId)
+    applyViewDrop(viewDescriptors, payload, {
+      kind: 'container',
+      containerId,
+      merge: payload.kind === 'container',
+    })
   }
 
+  let body: ReactNode
   if (views.length === 0) {
-    return (
-      <div
-        className={`${styles['emptyDrop']} ${overEmpty ? styles['emptyDropOver'] : ''}`}
-        onDragOver={onEmptyDragOver}
-        onDragLeave={() => setOverEmpty(false)}
-        onDrop={onEmptyDrop}
-        data-empty-drop={containerId}
-      >
+    body = (
+      <div className={styles['emptyDrop']}>
         <p className={styles['empty']}>{emptyMessage}</p>
       </div>
     )
-  }
-
-  if (views.length === 1) {
+  } else if (views.length === 1) {
     const v = views[0]!
     const Component = resolve(v.componentKey)
-    return (
-      <div
-        data-view-id={v.id}
-        className={styles['viewBody']}
-        style={{ flex: 1, minHeight: 0 }}
-        onDragOver={onEmptyDragOver}
-        onDrop={onEmptyDrop}
-      >
+    body = (
+      <div data-view-id={v.id} className={styles['viewBody']} style={{ flex: 1, minHeight: 0 }}>
         {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
       </div>
+    )
+  } else {
+    body = (
+      <Allotment
+        ref={allotmentRef}
+        className={styles['paneContainerAllotment'] ?? ''}
+        vertical
+        onChange={(s) => {
+          sizesRef.current = s
+          viewDescriptors.setViewSizes(views.map((v, i) => ({ id: v.id, size: s[i] ?? 0 })))
+        }}
+      >
+        {views.map((v) => {
+          const isCollapsed = collapsed(v.id)
+          const Component = resolve(v.componentKey)
+          return (
+            <Allotment.Pane
+              key={v.id}
+              minSize={isCollapsed ? HEADER_H : OPEN_MIN}
+              maxSize={isCollapsed ? HEADER_H : Infinity}
+            >
+              <ViewPane
+                viewId={v.id}
+                title={v.name}
+                open={!isCollapsed}
+                onToggle={() => toggle(v.id)}
+                toolbar={toolbarMap?.get(v.id)}
+                draggable={v.canMoveView !== false}
+                onDropView={(sourceViewId, position) => moveHere(sourceViewId, v.id, position)}
+              >
+                <div data-view-id={v.id} className={styles['viewBody']}>
+                  {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
+                </div>
+              </ViewPane>
+            </Allotment.Pane>
+          )
+        })}
+      </Allotment>
     )
   }
 
   return (
-    <Allotment
-      ref={allotmentRef}
-      vertical
-      onChange={(s) => {
-        sizesRef.current = s
-        viewDescriptors.setViewSizes(views.map((v, i) => ({ id: v.id, size: s[i] ?? 0 })))
-      }}
+    <div
+      className={styles['paneContainer']}
+      data-container-drop={containerId}
+      onDragOver={onMergeDragOver}
+      onDragLeave={onMergeDragLeave}
+      onDrop={onMergeDrop}
     >
-      {views.map((v) => {
-        const isCollapsed = collapsed(v.id)
-        const Component = resolve(v.componentKey)
-        return (
-          <Allotment.Pane
-            key={v.id}
-            minSize={isCollapsed ? HEADER_H : OPEN_MIN}
-            maxSize={isCollapsed ? HEADER_H : Infinity}
-          >
-            <ViewPane
-              viewId={v.id}
-              title={v.name}
-              open={!isCollapsed}
-              onToggle={() => toggle(v.id)}
-              toolbar={toolbarMap?.get(v.id)}
-              draggable={v.canMoveView !== false}
-              onDropView={(sourceViewId, position) => moveHere(sourceViewId, v.id, position)}
-            >
-              <div data-view-id={v.id} className={styles['viewBody']}>
-                {Component ? <Component /> : <span className={styles['empty']}>{v.name}</span>}
-              </div>
-            </ViewPane>
-          </Allotment.Pane>
-        )
-      })}
-    </Allotment>
+      {body}
+      {mergeActive ? (
+        <div
+          className={styles['mergeOverlay']}
+          data-testid={`view-merge-overlay-${containerId}`}
+          aria-hidden="true"
+        />
+      ) : null}
+    </div>
   )
 }

@@ -86,10 +86,10 @@ export function useViewDescriptors(): IViewDescriptorService {
 | `ActivityBar.tsx` | `workbench/activitybar/` | SideBar 区容器图标。点选激活；图标拖拽重排（`moveContainerInLocation`，before/after 边缘命中）；接收 view 投放（`moveViewsToContainer`）。状态 `draggingId` / `dropTarget:{id,edge}` |
 | `PaneCompositePart.tsx` | `workbench/paneComposite/` | 某 location 活跃容器的内容宿主。`content==='stack'` → `ViewPaneContainer`；否则 `TiledViews`。null-guard `activeContainer` |
 | `PaneCompositeHeader.tsx` | `workbench/paneComposite/` | SecondarySideBar/Panel 区的容器标签条（`getViewContainersByLocation(location)`） |
-| `ViewPaneContainer.tsx` | `workbench/sidebar/` | 一个容器内多 view 的纵向 `Allotment`。折叠读写 `getViewState/setViewCollapsed`；尺寸在 `onChange` → `setViewSizes`；`moveHere` 处理跨容器+容器内重排；**空容器渲染放置区**（`data-empty-drop`）；每个 ViewPane `draggable={v.canMoveView !== false}` |
+| `ViewPaneContainer.tsx` | `workbench/sidebar/` | 一个容器内多 view 的纵向 `Allotment`。折叠读写 `getViewState/setViewCollapsed`；尺寸在 `onChange` → `setViewSizes`；`moveHere` 处理跨容器+容器内重排；**整个容器是「合并」放置区**（`data-container-drop`）：拖入他容器的 view（仅单/空容器场景）或 container 图标/标签 → `applyViewDrop`，叠加 `.mergeOverlay` 高亮；多 view 容器把单 view 精细插入留给各 ViewPane 的 before/after 线；每个 ViewPane `draggable={v.canMoveView !== false}` |
 | `ViewPane.tsx` | `workbench/sidebar/` | 单 view 面板。拖源（`onDragStart` 写 `viewDragData` + `dataTransfer.setData(VIEW_DRAG_MIME, viewId)`）；放置目标（hit-test `clientY` vs 中点得 `dropEdge` 'before'/'after'，叠加 overlay） |
 
-CSS 状态类：`ViewPane.module.css`(`.dragging` / `.dropTop::before` / `.dropBottom::after`)、`PaneComposite.module.css`(`.emptyDrop` / `.emptyDropOver`)、`ActivityBar.module.css`(`.dragging` / `.dropBefore::after` / `.dropAfter::after`)。
+CSS 状态类：`ViewPane.module.css`(`.dragging` / `.dropTop::before` / `.dropBottom::after`)、`PaneComposite.module.css`(`.paneContainer` / `.mergeOverlay` 容器级合并高亮 / `.emptyDrop`)、`ActivityBar.module.css`(`.dragging` / `.dropBefore::after` / `.dropAfter::after` / `.dropMerge`)。
 
 ## 原生 DnD 套路（workbench/dnd/viewDragData.ts）
 
@@ -129,7 +129,7 @@ HTML5 DnD 在 **dragover 阶段读不到 `dataTransfer` 的 payload**（只在 d
 
 ## 常见任务 → 改哪里
 
-- **改拖拽放置的判定/高亮（边缘命中、放置区样式）**：`ViewPane.tsx`（before/after hit-test + overlay）/ `ViewPaneContainer.tsx`（空容器放置区）/ `ActivityBar.tsx`（容器重排边缘）+ 对应 `.module.css`。
+- **改拖拽放置的判定/高亮（边缘命中、放置区样式）**：`ViewPane.tsx`（before/after hit-test + overlay）/ `ViewPaneContainer.tsx`（容器级合并放置区 + `.mergeOverlay`）/ `ActivityBar.tsx`、`PaneCompositeHeader.tsx`（容器重排/合并边缘三段命中）+ 对应 `.module.css`。统一放置语义收口在 `workbench/dnd/applyViewDrop.ts`。
 - **新增一种 mutation（如「克隆 view 到另一容器」）**：先在 `IViewDescriptorService` 接口加方法（platform）→ rebuild + re-export → 实现 → UI/命令调用 → 加单测。**记得自增 version**，否则 UI 不刷新。
 - **改持久化内容（多存一个 per-view 字段）**：`IViewState` 加字段 → 实现里 `getViewState/set*` + `PersistedCustomizations` 序列化往返 → 单测加 round-trip。
 - **改 view 移动命令的交互**：`actions/viewActions.ts`（QuickPick 流程）；要让标题栏 action 拿到 viewId 看 `ViewTitleActions.tsx` 的 context key 传参。

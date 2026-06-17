@@ -4,7 +4,6 @@ import {
   ArrowDownToLine,
   ArrowUp,
   ArrowUpToLine,
-  Bug,
   Check,
   ChevronDown,
   ChevronsDownUp,
@@ -14,54 +13,37 @@ import {
   Download,
   Eye,
   EyeOff,
-  FileDiff,
   FileSymlink,
   FolderTree,
   GitBranch,
   GitBranchPlus,
   GitGraph,
   GitMerge,
-  GitPullRequest,
   List,
   ListChecks,
   ListMinus,
   ListPlus,
-  ListTree,
   Minus,
   MoreHorizontal,
   Move,
   Package,
   Plus,
-  Puzzle,
   RefreshCw,
-  Search,
-  Settings,
-  Sparkles,
-  SquareTerminal,
   Tag,
-  Terminal,
   Trash2,
   Undo2,
   type LucideIcon,
 } from 'lucide-react'
+import { CONTAINER_ICON_MAP } from '../icons/containerIcons.js'
 
 /**
  * Unified icon resolver shared by ViewContainerHeader (left container icons +
- * right command icons). Keys are the string `icon` identifiers carried by
- * `IViewContainerDescriptor` and by `IMenuItem.icon` (set via Action2's `icon`).
+ * right command icons). Container icons come from the shared
+ * {@link CONTAINER_ICON_MAP}; command icons (MenuId.ViewTitle actions, set via
+ * Action2's `icon`) are defined locally below.
  */
 const ICON_MAP: Record<string, LucideIcon> = {
-  files: FolderTree,
-  search: Search,
-  'git-pull-request': GitPullRequest,
-  'debug-alt': Bug,
-  extensions: Puzzle,
-  'settings-gear': Settings,
-  output: SquareTerminal,
-  terminal: Terminal,
-  outline: ListTree,
-  sparkle: Sparkles,
-  diff: FileDiff,
+  ...CONTAINER_ICON_MAP,
   'trash-2': Trash2,
   check: Check,
   refresh: RefreshCw,

@@ -192,4 +192,72 @@ test.describe('@p0 view move persistence', () => {
       }
     }
   })
+
+  test('merging a view container folds all its views into the target and persists', async () => {
+    const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-viewmerge-'))
+    const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-viewmerge-'))
+    try {
+      seedGlobalState(userDataDir, workspaceFolder)
+      const { app, page } = await launchWithState(userDataDir)
+      try {
+        // Default home: each container owns exactly its own view.
+        const explorerBefore = await page.evaluate(
+          (id) => window.__E2E__!.getViewIdsByContainer(id),
+          EXPLORER_CONTAINER,
+        )
+        const searchBefore = await page.evaluate(
+          (id) => window.__E2E__!.getViewIdsByContainer(id),
+          SEARCH_CONTAINER,
+        )
+        expect(searchBefore).toContain(SEARCH_VIEW)
+
+        // Merge the Search container into the Explorer container (drag-to-centre).
+        await page.evaluate(
+          ({ source, target }) => window.__E2E__!.mergeViewContainerInto(source, target),
+          { source: SEARCH_CONTAINER, target: EXPLORER_CONTAINER },
+        )
+
+        // Explorer now holds both containers' views; Search is left empty.
+        const explorerAfter = await page.evaluate(
+          (id) => window.__E2E__!.getViewIdsByContainer(id),
+          EXPLORER_CONTAINER,
+        )
+        expect(explorerAfter).toEqual([...explorerBefore, ...searchBefore])
+        const searchAfter = await page.evaluate(
+          (id) => window.__E2E__!.getViewIdsByContainer(id),
+          SEARCH_CONTAINER,
+        )
+        expect(searchAfter).toEqual([])
+
+        await page.evaluate(() => window.__E2E__!.flushViewCustomizationsSave())
+
+        // Reload; the merged layout must survive (workspace-scoped persistence).
+        const loaded = page.waitForEvent('load')
+        void page
+          .evaluate(() => void window.__E2E__!.runCommand('workbench.action.reloadWindow'))
+          .catch(() => {})
+        await loaded
+        await waitForRestored(page)
+
+        await expect
+          .poll(
+            () =>
+              page.evaluate((id) => window.__E2E__!.getViewIdsByContainer(id), EXPLORER_CONTAINER),
+            { timeout: 5000 },
+          )
+          .toEqual([...explorerBefore, ...searchBefore])
+        await expectNoLeaks(page)
+      } finally {
+        await app.close()
+      }
+    } finally {
+      for (const dir of [workspaceFolder, userDataDir]) {
+        try {
+          rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+  })
 })

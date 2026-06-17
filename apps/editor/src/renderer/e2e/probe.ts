@@ -44,6 +44,7 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {
   E2E_PROBE_ENABLED_KEY,
   E2E_PROBE_KEY,
@@ -476,6 +477,12 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.viewDescriptorService.moveViewToLocation(viewId, location),
     moveViewContainerToLocation: (containerId: string, location: number) =>
       services.viewDescriptorService.moveViewContainerToLocation(containerId, location),
+    mergeViewContainerInto: (sourceContainerId: string, targetContainerId: string) =>
+      applyViewDrop(
+        services.viewDescriptorService,
+        { kind: 'container', id: sourceContainerId },
+        { kind: 'container', containerId: targetContainerId, merge: true },
+      ),
     getViewCollapsed: (viewId: string) =>
       services.viewDescriptorService.getViewState(viewId).collapsed === true,
     setViewCollapsed: (viewId: string, collapsed: boolean) =>
