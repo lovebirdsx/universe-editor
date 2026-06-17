@@ -18,6 +18,7 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 import type { Page } from '@playwright/test'
 
 // URI.fsPath returns forward slashes in this codebase; normalize to match.
@@ -51,6 +52,10 @@ test.describe('@p0 windows', () => {
         timeout: 8000,
       })
       .toBe(folder.fsPath)
+
+    // The fixture's teardown gate only covers the primary window; the second
+    // window is fixture-unmanaged, so leak-check it here while it is still live.
+    await expectNoLeaks(newPage)
   })
 
   test('getOpenWindows tracks every open window', async ({ electronApp, workbench }) => {
@@ -59,13 +64,16 @@ test.describe('@p0 windows', () => {
 
     const newWindow = electronApp.waitForEvent('window')
     await workbench.openFolderInNewWindow(folder.dir)
-    await waitForProbe(await newWindow)
+    const newPage = await newWindow
+    await waitForProbe(newPage)
 
     await expect
       .poll(() => workbench.getOpenWindows().then((w) => w.length), { timeout: 8000 })
       .toBe(2)
     const windows = await workbench.getOpenWindows()
     expect(windows.map((w) => w.folder)).toContain(folder.fsPath)
+
+    await expectNoLeaks(newPage)
   })
 
   test('Open Recent marks the workspace already open in a window', async ({ workbench, page }) => {

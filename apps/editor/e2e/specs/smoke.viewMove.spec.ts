@@ -14,6 +14,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const SEARCH_VIEW = 'workbench.view.search.results'
 const EXPLORER_CONTAINER = 'workbench.view.explorer'
@@ -128,6 +129,7 @@ test.describe('@p0 view move persistence', () => {
             { timeout: 5000 },
           )
           .toBe(EXPLORER_CONTAINER)
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }
@@ -176,6 +178,7 @@ test.describe('@p0 view move persistence', () => {
           window.__E2E__!.getViewContainerIdsByLocation(1),
         )
         expect(secondaryEnd.length).toBe(secondaryBefore.length)
+        await expectNoLeaks(page)
       } finally {
         await app.close()
       }

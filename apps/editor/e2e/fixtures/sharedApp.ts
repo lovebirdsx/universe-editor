@@ -98,6 +98,11 @@ export type SharedE2EFixtures = {
   electronApp: ElectronApplication
   page: Page
   workbench: WorkbenchPO
+  // Auto fixture (runs for every test even when unused): resets the shared
+  // window before the body and asserts no Disposable leaks after it. Hanging the
+  // gate here — rather than on `workbench` — means a spec that only pulls `page`
+  // or `electronApp` (e.g. smoke.startup) is still reset and still leak-checked.
+  _leakGate: void
 }
 
 type SharedWorkerFixtures = {
@@ -138,18 +143,27 @@ export const test = base.extend<SharedE2EFixtures, SharedWorkerFixtures>({
     await use(sharedApp.page)
   },
   workbench: async ({ sharedApp }, use) => {
-    if (sharedApp.firstTest.value) {
-      sharedApp.firstTest.value = false
-    } else {
-      await resetWindow(sharedApp.page, sharedApp.userDataDir)
-    }
     await use(new WorkbenchPO(sharedApp.page))
-    // Teardown gate: fail the test if the session leaked any Disposables. This
-    // unmounts React on the shared page; the next test's resetWindow reloads the
-    // window (rebuilding the UI), and the worker fixture closes the app after the
-    // last test — so every test, including the last, is covered.
-    await expectNoLeaks(sharedApp.page)
   },
+  _leakGate: [
+    async ({ sharedApp }, use) => {
+      // Setup (before the test body): reset the shared window to a clean
+      // first-frame. The very first test skips this — the freshly launched
+      // window is already clean.
+      if (sharedApp.firstTest.value) {
+        sharedApp.firstTest.value = false
+      } else {
+        await resetWindow(sharedApp.page, sharedApp.userDataDir)
+      }
+      await use()
+      // Teardown gate: fail the test if the session leaked any Disposables. This
+      // unmounts React on the shared page; the next test's resetWindow reloads
+      // the window (rebuilding the UI), and the worker fixture closes the app
+      // after the last test — so every test, including the last, is covered.
+      await expectNoLeaks(sharedApp.page)
+    },
+    { auto: true },
+  ],
 })
 
 export { expect } from '@playwright/test'

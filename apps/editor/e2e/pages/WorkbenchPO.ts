@@ -18,16 +18,25 @@ import { PanelPO } from './PanelPO.js'
  * this on the final live window before closing it). Destructive — unmounts the
  * workbench, so call it last, after the test body has finished.
  *
- * Tolerates a destroyed execution context (the window may already be navigating
- * away on a reload-based teardown): a missing probe means there is nothing left
- * to assert.
+ * If the execution context is already gone (the window was reloaded, closed, or
+ * quit before we could snapshot it) we cannot inspect it synchronously. Rather
+ * than pass silently, we log a visible note: the renderer's beforeunload handler
+ * still captured any leak and persisted it to <userData>/last-disposable-leak.json,
+ * which the next bootstrap consumes and surfaces. Non-teardown errors re-throw.
  */
 export async function expectNoLeaks(page: Page): Promise<void> {
   let report: E2EDisposableLeakReport | null
   try {
     report = await page.evaluate(() => window.__E2E__?.computeTeardownLeakReport() ?? null)
   } catch (err) {
-    if (/Execution context was destroyed|Target (page|closed)/.test(String(err))) return
+    if (/Execution context was destroyed|Target (page|closed)/.test(String(err))) {
+      console.warn(
+        '[expectNoLeaks] window already torn down before the in-process leak snapshot; ' +
+          'any leak from this session was persisted to last-disposable-leak.json ' +
+          '(surfaced on next bootstrap).',
+      )
+      return
+    }
     throw err
   }
   expect(
