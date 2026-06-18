@@ -3,6 +3,7 @@ import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
 import { Bell, Loader2, RefreshCw, Sparkles, type LucideIcon } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
 import { usePartContainer } from '../usePartContainer.js'
+import { StatusBarComponentRegistry } from '../../services/statusbar/StatusBarComponentRegistry.js'
 import styles from './StatusBar.module.css'
 
 const ICON_MAP: Record<string, LucideIcon> = {
@@ -12,6 +13,11 @@ const ICON_MAP: Record<string, LucideIcon> = {
 
 function StatusBarItem({ entry }: { entry: IStatusBarEntry }) {
   const commandService = useService(ICommandService)
+
+  if (entry.componentKey) {
+    const Comp = StatusBarComponentRegistry.get(entry.componentKey)
+    if (Comp) return <Comp entry={entry} />
+  }
 
   const handleClick = () => {
     if (entry.command) {

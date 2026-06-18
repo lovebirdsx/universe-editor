@@ -25,6 +25,12 @@ export interface IStatusBarEntry {
   readonly priority: number
   /** Icon identifier (e.g. 'bell'). Renderer maps it to an SVG; platform stays icon-agnostic. */
   readonly icon?: string
+  /**
+   * When set, the renderer replaces the default text/icon rendering with a custom
+   * component registered under this key. Still pure data (a registry key) — the
+   * component itself lives in the renderer, keeping this interface serializable.
+   */
+  readonly componentKey?: string
   /** 'prominent' uses an attention foreground (e.g. unread counts). Defaults to inherited statusbar fg. */
   readonly kind?: StatusBarEntryKind
   /**

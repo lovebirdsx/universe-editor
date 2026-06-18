@@ -1,0 +1,44 @@
+.toggle {
+  flex: none;
+  inline-size: 28px;
+  block-size: 16px;
+  padding: 0;
+  border: 1px solid var(--color-input-border, #555);
+  border-radius: var(--radius-pill);
+  background: var(--color-input-bg, #3c3c3c);
+  position: relative;
+  cursor: pointer;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+
+.toggle.on {
+  background: var(--color-accent, #0070e0);
+  border-color: var(--color-accent, #0070e0);
+}
+
+.toggle.disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.toggle:focus-visible {
+  outline: 1px solid var(--color-focus-border, #0070e0);
+  outline-offset: 1px;
+}
+
+.thumb {
+  position: absolute;
+  inset-block-start: 1px;
+  inset-inline-start: 1px;
+  inline-size: 12px;
+  block-size: 12px;
+  border-radius: var(--radius-pill);
+  background: var(--color-button-fg, #ffffff);
+  transition: transform 120ms ease;
+}
+
+.toggle.on .thumb {
+  transform: translateX(12px);
+}

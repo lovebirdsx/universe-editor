@@ -6,8 +6,8 @@
  *    - the contributed commands are registered (trigger / commit / toggle / pickModel)
  *    - `Alt+\` resolves to the trigger command via KeybindingsRegistry
  *    - ghost text appears and **Tab accepts it** (commits the suggestion)
- *    - the status bar shows the "Completions" entry
- *    - toggling flips the status bar icon ($(sparkle) ⇄ $(circle-slash))
+ *    - the AI status bar entry is present
+ *    - the AI quick-settings popover reflects the inline-completion toggle state
  *
  *  The model-dependent ranking/streaming path is covered by unit tests on
  *  InlineCompletionService.
@@ -31,9 +31,9 @@ function writeWorkspace(): { dir: string; filePath: string } {
   return { dir: dir.replace(/\\/g, '/'), filePath: filePath.replace(/\\/g, '/') }
 }
 
-async function completionEntry(workbench: WorkbenchPO) {
+async function aiEntry(workbench: WorkbenchPO) {
   const entries = await workbench.statusBar.entriesFromProbe()
-  return entries.find((e) => e.text.includes('Completions'))
+  return entries.find((e) => e.icon === 'sparkle' && e.alignment === 'right')
 }
 
 test.describe('@p1 inline completion', () => {
@@ -86,29 +86,29 @@ test.describe('@p1 inline completion', () => {
     expect(await workbench.getKeybindingCommandsForKey('alt+\\')).toContain(TRIGGER)
   })
 
-  test('shows a Completions status bar entry', async ({ workbench }) => {
+  test('shows the AI status bar entry', async ({ workbench }) => {
     await workbench.waitForRestored()
-    const entry = await completionEntry(workbench)
+    const entry = await aiEntry(workbench)
     expect(entry).toBeDefined()
     expect(entry!.alignment).toBe('right')
   })
 
-  test('toggling flips the status bar icon', async ({ workbench }) => {
+  test('quick-settings toggle reflects inline-completion state', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 
-    const before = await completionEntry(workbench)
-    expect(before).toBeDefined()
-    const enabledIcon = before!.text
+    const aiButton = page.getByTestId('statusbar-entry-ai')
+    await expect(aiButton).toBeVisible()
+    await aiButton.click()
+
+    const toggle = page.getByTestId('ai-quick-settings-inline-toggle')
+    await expect(toggle).toBeVisible()
+    const before = await toggle.getAttribute('aria-checked')
 
     await workbench.runCommand(TOGGLE)
-    await expect
-      .poll(async () => (await completionEntry(workbench))?.text, {
-        message: 'icon should change after toggle',
-      })
-      .not.toBe(enabledIcon)
+    await expect.poll(() => toggle.getAttribute('aria-checked')).not.toBe(before)
 
     // Toggle back so the shared worker instance is left in its default state.
     await workbench.runCommand(TOGGLE)
-    await expect.poll(async () => (await completionEntry(workbench))?.text).toBe(enabledIcon)
+    await expect.poll(() => toggle.getAttribute('aria-checked')).toBe(before)
   })
 })

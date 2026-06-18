@@ -18,10 +18,10 @@ import { FocusContextKeyContribution } from './FocusContextKeyContribution.js'
 import { WorkbenchPartsContribution } from './WorkbenchPartsContribution.js'
 import { ConfigInitContribution } from './ConfigInitContribution.js'
 import { AiConfigurationContribution } from './AiConfigurationContribution.js'
-import { AiModelStatusContribution } from './AiModelStatusContribution.js'
+import { AiStatusContribution } from './AiStatusContribution.js'
+import { StatusBarComponentsContribution } from './StatusBarComponentsContribution.js'
 import { InlineCompletionConfigurationContribution } from './InlineCompletionConfigurationContribution.js'
 import { InlineCompletionContribution } from './InlineCompletionContribution.js'
-import { InlineCompletionStatusContribution } from './InlineCompletionStatusContribution.js'
 import { AcpInitContribution } from './AcpInitContribution.js'
 import { HistoryContribution } from './HistoryContribution.js'
 import { SettingsContribution } from './SettingsContribution.js'
@@ -58,7 +58,6 @@ import {
   AgentsActiveSessionSyncContribution,
   AgentsSessionEditorLifecycleContribution,
   AgentsSessionRestoreContribution,
-  AgentsStatusBarContribution,
   AgentsViewContainerContribution,
 } from './AgentsContributions.js'
 import { AgentNotificationContribution } from './AgentNotificationContribution.js'
@@ -193,11 +192,19 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.BlockStartup,
 )
 
-// Active-model status bar entry → opens the model picker. AfterRestore so the
-// status bar exists when the entry is added.
+// Status-bar componentKey → React component bindings. BlockStartup so the mapping
+// exists before the status bar first paints.
 ContributionsRegistry.registerContribution(
-  'workbench.contrib.aiModelStatus',
-  AiModelStatusContribution,
+  'workbench.contrib.statusBarComponents',
+  StatusBarComponentsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// The single AI status-bar entry (sparkle + quick-settings popover). AfterRestore
+// so the status bar exists when the entry is added.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.aiStatus',
+  AiStatusContribution,
   WorkbenchPhase.AfterRestore,
 )
 
@@ -246,11 +253,6 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.inlineCompletion',
   InlineCompletionContribution,
-  WorkbenchPhase.AfterRestore,
-)
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.inlineCompletionStatus',
-  InlineCompletionStatusContribution,
   WorkbenchPhase.AfterRestore,
 )
 
@@ -445,11 +447,6 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsEditorProvider',
   AgentsEditorProviderContribution,
   WorkbenchPhase.BlockStartup,
-)
-ContributionsRegistry.registerContribution(
-  'workbench.contrib.agentsStatusBar',
-  AgentsStatusBarContribution,
-  WorkbenchPhase.AfterRestore,
 )
 ContributionsRegistry.registerContribution(
   'workbench.contrib.agentsSessionRestore',
