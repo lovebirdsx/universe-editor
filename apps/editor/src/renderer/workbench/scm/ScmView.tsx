@@ -690,7 +690,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     if (!node) return // snapshot not ready yet — retry when it next changes
     handledRevealRef.current = revealRequest.tick
     revealHitRef.current = true
-    void treeModel.reveal(node).then(() => treeRef.current?.focus())
+    void treeModel.reveal(node).then(() => treeRef.current?.focus({ preventScroll: true }))
   }, [revealRequest, snapshot, treeModel])
 
   // Persist the commit message per repository so it survives a window reload.
@@ -874,7 +874,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
             }
             if (e.key === 'Tab' && !e.shiftKey) {
               e.preventDefault()
-              treeRef.current?.focus()
+              treeRef.current?.focus({ preventScroll: true })
               // Give keyboard navigation an anchor: select the first row if none focused.
               if (!treeModel.focused) {
                 const first = treeModel.getVisibleNodes()[0]

@@ -275,7 +275,7 @@ export function Tree<T>(props: ITreeProps<T>) {
       tabIndex={0}
       data-focused={hasFocus}
       onKeyDown={onKeyDown}
-      onMouseDown={() => containerRef.current?.focus()}
+      onMouseDown={() => containerRef.current?.focus({ preventScroll: true })}
       onFocus={() => {
         setHasFocus(true)
         onFocus?.()
