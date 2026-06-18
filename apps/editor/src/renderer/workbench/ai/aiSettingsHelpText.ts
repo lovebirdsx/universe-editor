@@ -1,8 +1,9 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  Help copy (markdown) shown by the "?" button on each AI settings category.
- *  Wrapped in localize so the strings stay translatable; the markdown is
- *  rendered by the shared MarkdownView.
+ *  The default message is English (the NLS fallback); the Chinese translation
+ *  lives under the same key in apps/editor/src/shared/i18n/messages/zh-CN.ts.
+ *  Rendering is done by the shared MarkdownView.
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '@universe-editor/platform'
@@ -11,16 +12,17 @@ export function aiModelsHelpText(): string {
   return localize(
     'aiSettings.help.models',
     [
-      '## 模型配置',
+      '## Model Configuration',
       '',
-      '在这里管理 AI 服务的 **Provider Group**。每个 group 是一组配置单位，包含：',
+      'Manage your AI service **provider groups** here. Each group is a configuration unit that holds:',
       '',
-      '- **Base URL**：留空使用 provider 默认地址；指向任意 OpenAI 兼容端点（LM Studio / vLLM / DeepSeek 等）即可复用 `openai` provider。',
-      '- **API Key**：仅加密存储于本机，**绝不**写入 `aiSettings.json`。',
-      '- **Models**：端点枚举出的模型与你手写声明的模型合并展示，手写优先。',
+      '- **Base URL**: leave empty to use the provider default; point it at any OpenAI-compatible endpoint (LM Studio / vLLM / DeepSeek, …) to reuse the `openai` provider.',
+      '- **API Key**: stored encrypted on this machine only — **never** written to `aiSettings.json`.',
+      '- **Models**: models enumerated from the endpoint are merged with the ones you declare by hand; hand-written entries win and float to the top.',
       '',
-      '部分模型可在 **Configure** 中调整参数（如 temperature）。',
-      '需要直接编辑原始配置时，点右上角 **Open aiSettings.json**。',
+      'Some models expose parameters you can tune via **Configure** (e.g. temperature).',
+      'Each group can be collapsed, and its model list can be filtered — both are remembered.',
+      'To edit the raw configuration directly, use **Open aiSettings.json**.',
     ].join('\n'),
   )
 }
@@ -29,15 +31,15 @@ export function aiFeatureModelsHelpText(): string {
   return localize(
     'aiSettings.help.features',
     [
-      '## 功能模型',
+      '## Feature Models',
       '',
-      '为不同 AI 功能分别指定使用的模型，互不影响：',
+      'Assign a model to each AI feature independently:',
       '',
-      '- **对话（Chat）**：AGENTS 会话与对话补全使用的主模型。',
-      '- **内联补全**：编辑器幽灵文本补全（可选更小更快的模型）。',
-      '- **Commit 信息**：生成 Git 提交信息使用的模型。',
+      '- **Chat**: the main model used by AGENTS sessions and chat completions.',
+      '- **Inline Completion**: editor ghost-text suggestions (can be a smaller, faster model).',
+      '- **Commit Message**: the model used to generate Git commit messages.',
       '',
-      '点击任意一行会弹出模型选择器，选中后即时生效——与状态栏的模型选择体验一致。',
+      'Click any row to open the model picker; the selection takes effect immediately — the same experience as the status-bar model picker.',
     ].join('\n'),
   )
 }

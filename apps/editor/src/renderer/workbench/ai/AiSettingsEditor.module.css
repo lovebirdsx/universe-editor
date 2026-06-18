@@ -121,7 +121,8 @@
   top: calc(100% + var(--spacing-3));
   right: 0;
   z-index: calc(var(--z-popover) + 1);
-  width: 360px;
+  width: 540px;
+  max-width: calc(100vw - 48px);
   max-height: 60vh;
   overflow-y: auto;
   padding: var(--spacing-5) var(--spacing-6);
