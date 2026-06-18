@@ -1,5 +1,34 @@
 [
   {
+    "version": "0.1.21",
+    "date": "2026-06-18",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "统一AI状态栏入口为Sparkle图标",
+          "优化ai设定界面，提供较为完善的可视化ai配置方案",
+          "优化mark回车自动加列表的体验",
+          "用户数据文件外部变更时自动重载编辑器",
+          "拖动操作的完善，搜索，scm，session changes等地方的文件也支持拖动；多个文件，文件夹的拖动也一并支持。",
+          "git graph加入删除远程分支的支持",
+          "加入update-claude-agent-acp的skill",
+          "简化ai配置，统一在aiSettings.json中进行"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "scm输入框的生成消息按钮，避免和输入消息重叠",
+          "树组件点击时禁止滚动容器",
+          "修复session changes中新建和删除没有跟踪的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.20",
     "date": "2026-06-17",
     "groups": [
