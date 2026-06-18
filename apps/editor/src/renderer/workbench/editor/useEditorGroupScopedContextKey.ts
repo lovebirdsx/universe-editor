@@ -10,12 +10,14 @@ import { useEffect, useReducer, useRef } from 'react'
 import {
   combinedDisposable,
   IContextKeyService,
+  JSONContributionRegistry,
   markAsSingleton,
   type IEditorGroup,
   type IScopedContextKeyService,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
+import { matchSchemasForUri } from '../../services/preferences/schemaMatch.js'
 import { useService } from '../useService.js'
 
 export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKeyService {
@@ -46,6 +48,12 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       s.set('activeEditorLanguageId', active instanceof FileEditorInput ? active.language : '')
       s.set('hasActiveEditor', active !== undefined)
       s.set('isInDiffEditor', active instanceof DiffEditorInput)
+      s.set(
+        'activeEditorHasJsonSchema',
+        active instanceof FileEditorInput &&
+          active.language === 'json' &&
+          matchSchemasForUri(active.resource).length > 0,
+      )
       if (active) {
         s.set('activeEditorId', active.id)
         s.set('activeEditorType', active.typeId)
@@ -56,7 +64,13 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
     }
     sync()
     const d = markAsSingleton(
-      combinedDisposable(group.onDidActiveEditorChange(sync), group.onDidChangeModel(sync)),
+      combinedDisposable(
+        group.onDidActiveEditorChange(sync),
+        group.onDidChangeModel(sync),
+        // Remote schemas (e.g. claude-helper's http schema) register asynchronously
+        // after the file opens — re-evaluate so the icon appears once they land.
+        JSONContributionRegistry.onDidChangeContributions(sync),
+      ),
     )
     return () => {
       d.dispose()

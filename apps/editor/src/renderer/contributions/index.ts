@@ -38,6 +38,8 @@ import { WindowTitleContribution } from './WindowTitleContribution.js'
 import { ExplorerAutoRevealContribution } from './ExplorerAutoRevealContribution.js'
 import { RecentFilesContribution } from './RecentFilesContribution.js'
 import { JsonSchemaBridgeContribution } from './JsonSchemaBridgeContribution.js'
+import { JsonSchemaAssociationsContribution } from './JsonSchemaAssociationsContribution.js'
+import { JsonSchemaContextContribution } from './JsonSchemaContextContribution.js'
 import { JsonLanguageFeaturesContribution } from './JsonLanguageFeaturesContribution.js'
 import { ThemeContribution } from './ThemeContribution.js'
 import { WorkbenchFontContribution } from './WorkbenchFontContribution.js'
@@ -230,6 +232,25 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.jsonSchemaBridge',
   JsonSchemaBridgeContribution,
   WorkbenchPhase.BlockStartup,
+)
+
+// JSON schema associations from the built-in declaration table + the user
+// `json.schemas` setting. Funnels into the same JSONContributionRegistry the
+// bridge consumes. BlockStartup so associations are registered before any JSON
+// editor opens.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.jsonSchemaAssociations',
+  JsonSchemaAssociationsContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
+// `activeEditorHasJsonSchema` context key — drives the editor-title "Show JSON
+// Schema" action. AfterRestore: the editor service + schema registry are live,
+// and it only gates an editor-title affordance (not first-paint).
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.jsonSchemaContext',
+  JsonSchemaContextContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 // JSON document symbols (Outline / breadcrumbs / Go to Symbol in File) via a

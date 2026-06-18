@@ -9,7 +9,12 @@
 
 import {
   Disposable,
+  IConfigurationService,
+  IFileService,
+  ILoggerService,
   MutableDisposable,
+  NullLogger,
+  type ILogger,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
@@ -20,15 +25,25 @@ import {
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
 import { ExtensionPointTranslator } from '../services/extensions/ExtensionPointTranslator.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
+import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
+import { resolveSchemaFromUrl } from '../services/preferences/schemaUrlResolver.js'
 
 export class ExtensionsContribution extends Disposable implements IWorkbenchContribution {
   private readonly _translator = this._register(new MutableDisposable<ExtensionPointTranslator>())
+  private readonly _logger: ILogger
 
   constructor(
     @IExtensionHostClientService private readonly _client: IExtensionHostClientService,
     @IUserKeybindingsService private readonly _userKeybindings: IUserKeybindingsService,
+    @IConfigurationService private readonly _configuration: IConfigurationService,
+    @IFileService private readonly _fileService: IFileService,
+    @IRemoteSchemaService private readonly _remoteSchema: IRemoteSchemaService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+    this._logger =
+      loggerService?.createLogger({ id: 'extensionSchemas', name: 'Extension Schemas' }) ??
+      new NullLogger()
     void this._boot()
   }
 
@@ -59,6 +74,18 @@ export class ExtensionsContribution extends Disposable implements IWorkbenchCont
     const translator = new ExtensionPointTranslator(
       (event) => this._client.activateByEvent(event),
       (id, args) => this._client.executeContributedCommand(id, args),
+      (url) =>
+        resolveSchemaFromUrl(
+          url,
+          {
+            configuration: this._configuration,
+            fileService: this._fileService,
+            remoteSchema: this._remoteSchema,
+            logger: this._logger,
+          },
+          'jsonValidation',
+        ),
+      this._logger,
     )
     translator.translate(contributions)
     this._translator.value = translator

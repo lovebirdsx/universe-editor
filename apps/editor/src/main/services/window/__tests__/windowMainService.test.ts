@@ -109,6 +109,7 @@ function makeOpts() {
         currentDir: '',
       } as never,
       aiModel: {} as never,
+      remoteSchema: {} as never,
     },
     logService,
     e2eEnabled: false,

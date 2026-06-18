@@ -183,6 +183,7 @@ import {
   OpenMarkdownPreviewToSideAction,
   OpenMarkdownSourceAction,
 } from './markdownActions.js'
+import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
 import {
   CheckForUpdatesAction,
   DownloadUpdateAction,
@@ -436,6 +437,8 @@ registerAction2(ToggleKeybindingsTroubleshootingAction)
 registerAction2(OpenMarkdownPreviewAction)
 registerAction2(OpenMarkdownPreviewToSideAction)
 registerAction2(OpenMarkdownSourceAction)
+
+registerAction2(ShowJsonSchemaAction)
 
 // Diff (internal, invoked by the extension host)
 registerAction2(OpenDiffAction)

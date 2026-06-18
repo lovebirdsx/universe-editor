@@ -19,12 +19,16 @@ import {
   CommandsRegistry,
   ConfigurationRegistry,
   Disposable,
+  JSONContributionRegistry,
   KeybindingsRegistry,
   KeybindingWeight,
   MenuId,
   MenuRegistry,
   type ICommandMetadata,
+  type IJSONSchema,
   type IKeybindingItem,
+  type ILogger,
+  NullLogger,
 } from '@universe-editor/platform'
 import {
   commandActivationEvent,
@@ -33,6 +37,7 @@ import {
   type IExtensionDescriptionDto,
   type IKeybindingContribution,
   type IMenuContribution,
+  type IResolvedJsonValidation,
   type ISubmenuContribution,
 } from '@universe-editor/extensions-common'
 
@@ -63,6 +68,9 @@ export class ExtensionPointTranslator extends Disposable {
   constructor(
     private readonly _activateByEvent: (event: string) => Promise<void>,
     private readonly _executeContributedCommand: (id: string, args: unknown[]) => Promise<unknown>,
+    /** Resolves an http(s) jsonValidation url into an inline schema (renderer-side download). */
+    private readonly _resolveRemoteSchema?: (url: string) => Promise<IJSONSchema | undefined>,
+    private readonly _logger: ILogger = new NullLogger(),
   ) {
     super()
   }
@@ -88,6 +96,7 @@ export class ExtensionPointTranslator extends Disposable {
         this._registerKeybinding(keybinding)
       }
       this._registerConfiguration(ext.id, contributes.configuration)
+      this._registerJsonValidation(ext.id, contributes.jsonValidation ?? [])
     }
   }
 
@@ -197,6 +206,56 @@ export class ExtensionPointTranslator extends Disposable {
           properties: node.properties,
         }),
       )
+    })
+  }
+
+  private _registerJsonValidation(
+    extId: string,
+    entries: readonly IResolvedJsonValidation[],
+  ): void {
+    entries.forEach((entry, index) => {
+      const uri = `extension://${extId}/jsonvalidation/${index}`
+      const fileMatch = [...entry.fileMatch]
+      if (entry.schema !== undefined) {
+        this._logger.debug(
+          `${extId}: registering inline jsonValidation schema for [${fileMatch.join(', ')}]`,
+        )
+        this._register(
+          JSONContributionRegistry.registerSchema({
+            uri,
+            fileMatch,
+            schema: entry.schema as IJSONSchema,
+          }),
+        )
+        return
+      }
+      if (entry.url !== undefined) {
+        this._registerRemoteJsonValidation(uri, fileMatch, entry.url)
+      }
+    })
+  }
+
+  /**
+   * Resolve an http(s) jsonValidation url (renderer-side download) then register
+   * the inlined schema. The dispose guard handles the translator being torn down
+   * while the async download is still in flight: register only if still live,
+   * else dispose the handle immediately to avoid leaking a registration.
+   */
+  private _registerRemoteJsonValidation(uri: string, fileMatch: string[], url: string): void {
+    this._logger.debug(
+      `resolving remote jsonValidation schema ${url} for [${fileMatch.join(', ')}]`,
+    )
+    void this._resolveRemoteSchema?.(url).then((schema) => {
+      if (schema === undefined) {
+        this._logger.warn(`failed to resolve remote jsonValidation schema ${url}; not registered`)
+        return
+      }
+      const handle = JSONContributionRegistry.registerSchema({ uri, fileMatch, schema })
+      if (this._store.isDisposed) handle.dispose()
+      else {
+        this._register(handle)
+        this._logger.debug(`registered remote jsonValidation schema ${url}`)
+      }
     })
   }
 }

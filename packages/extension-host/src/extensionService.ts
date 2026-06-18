@@ -821,13 +821,25 @@ export class ExtensionService implements IExtensionHostBridge {
 
   /** IExtHostExtensions.$getContributions */
   getContributions(): IExtensionDescriptionDto[] {
-    return this._extensions.map((ext) => ({
-      id: ext.id,
-      name: ext.manifest.name,
-      ...(ext.manifest.displayName !== undefined ? { displayName: ext.manifest.displayName } : {}),
-      activationEvents: ext.manifest.activationEvents ?? [],
-      contributes: ext.manifest.contributes ?? {},
-    }))
+    return this._extensions.map((ext) => {
+      // Drop the manifest-form jsonValidation (file urls) — the DTO carries the
+      // host-resolved inline schemas instead, if any resolved successfully.
+      const { jsonValidation: _urls, ...contributes } = ext.manifest.contributes ?? {}
+      return {
+        id: ext.id,
+        name: ext.manifest.name,
+        ...(ext.manifest.displayName !== undefined
+          ? { displayName: ext.manifest.displayName }
+          : {}),
+        activationEvents: ext.manifest.activationEvents ?? [],
+        contributes: {
+          ...contributes,
+          ...(ext.resolvedJsonValidation !== undefined
+            ? { jsonValidation: ext.resolvedJsonValidation }
+            : {}),
+        },
+      }
+    })
   }
 
   /** IExtHostExtensions.$activateByEvent */

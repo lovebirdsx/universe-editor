@@ -1,0 +1,186 @@
+import { afterEach, describe, expect, it } from 'vitest'
+import {
+  ConfigurationService,
+  ConfigurationTarget,
+  JSONContributionRegistry,
+  URI,
+  type IFileService,
+} from '@universe-editor/platform'
+import type {
+  IRemoteSchemaService,
+  RemoteSchemaResult,
+} from '../../../shared/ipc/remoteSchemaService.js'
+import { JsonSchemaAssociationsContribution } from '../JsonSchemaAssociationsContribution.js'
+
+function fakeFileService(files: Record<string, string>): IFileService {
+  return {
+    readFileText: async (resource: URI) => {
+      const text = files[resource.fsPath] ?? files[resource.path]
+      if (text === undefined) throw new Error(`ENOENT: ${resource.fsPath}`)
+      return text
+    },
+  } as unknown as IFileService
+}
+
+function fakeRemoteSchema(byUrl: Record<string, string>): IRemoteSchemaService {
+  return {
+    fetchSchema: async (url: string): Promise<RemoteSchemaResult> => {
+      const content = byUrl[url]
+      if (content === undefined) return { ok: false, error: `no mock for ${url}` }
+      return { ok: true, content }
+    },
+  } as IRemoteSchemaService
+}
+
+/** Let the contribution's queued microtask + async refresh settle. */
+async function settle(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
+function userContribs() {
+  return JSONContributionRegistry.getContributions().filter((c) => c.uri.startsWith('user://'))
+}
+
+describe('JsonSchemaAssociationsContribution', () => {
+  const disposables: { dispose(): void }[] = []
+  afterEach(() => {
+    for (const d of disposables.splice(0)) d.dispose()
+  })
+
+  it('registers an inline user json.schemas entry', async () => {
+    const config = new ConfigurationService()
+    config.update(
+      'json.schemas',
+      [{ fileMatch: ['**/*.foo.json'], schema: { type: 'object' } }],
+      ConfigurationTarget.User,
+    )
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      undefined as never,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+
+    const entry = userContribs()[0]
+    expect(entry?.fileMatch).toEqual(['**/*.foo.json'])
+    expect(entry?.schema).toEqual({ type: 'object' })
+  })
+
+  it('reads a local schema file for a url entry', async () => {
+    const config = new ConfigurationService()
+    config.update(
+      'json.schemas',
+      [{ fileMatch: ['**/*.bar.json'], url: '/schemas/bar.json' }],
+      ConfigurationTarget.User,
+    )
+    const fs = fakeFileService({
+      [URI.file('/schemas/bar.json').fsPath]: JSON.stringify({ type: 'array' }),
+    })
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fs,
+      undefined as never,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+
+    expect(userContribs()[0]?.schema).toEqual({ type: 'array' })
+  })
+
+  it('skips an entry whose url cannot be read', async () => {
+    const config = new ConfigurationService()
+    config.update(
+      'json.schemas',
+      [{ fileMatch: ['**/*.bar.json'], url: '/missing.json' }],
+      ConfigurationTarget.User,
+    )
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      undefined as never,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+
+    expect(userContribs()).toHaveLength(0)
+  })
+
+  it('re-derives on json.schemas change, clearing the previous entries', async () => {
+    const config = new ConfigurationService()
+    config.update(
+      'json.schemas',
+      [{ fileMatch: ['**/*.a.json'], schema: { type: 'object' } }],
+      ConfigurationTarget.User,
+    )
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      undefined as never,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+    expect(userContribs()).toHaveLength(1)
+
+    config.update('json.schemas', [], ConfigurationTarget.User)
+    await settle()
+    expect(userContribs()).toHaveLength(0)
+  })
+
+  it('downloads a trusted http(s) url through the remote service', async () => {
+    const url = 'https://json.schemastore.org/claude-code-settings.json'
+    const config = new ConfigurationService()
+    config.update('json.schemas', [{ fileMatch: ['**/*.c.json'], url }], ConfigurationTarget.User)
+    const remote = fakeRemoteSchema({ [url]: JSON.stringify({ type: 'object', title: 'claude' }) })
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      remote,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+
+    expect(userContribs()[0]?.schema).toEqual({ type: 'object', title: 'claude' })
+  })
+
+  it('skips an http(s) url when schema download is disabled', async () => {
+    const url = 'https://json.schemastore.org/claude-code-settings.json'
+    const config = new ConfigurationService()
+    config.update('json.schemaDownload.enable', false, ConfigurationTarget.User)
+    config.update('json.schemas', [{ fileMatch: ['**/*.c.json'], url }], ConfigurationTarget.User)
+    const remote = fakeRemoteSchema({ [url]: JSON.stringify({ type: 'object' }) })
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      remote,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+
+    expect(userContribs()).toHaveLength(0)
+  })
+
+  it('skips an http(s) url that is not in the trusted domains list', async () => {
+    const url = 'https://evil.example/schema.json'
+    const config = new ConfigurationService()
+    config.update('json.schemas', [{ fileMatch: ['**/*.c.json'], url }], ConfigurationTarget.User)
+    const remote = fakeRemoteSchema({ [url]: JSON.stringify({ type: 'object' }) })
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      remote,
+      undefined as never,
+    )
+    disposables.push(c)
+    await settle()
+
+    expect(userContribs()).toHaveLength(0)
+  })
+})

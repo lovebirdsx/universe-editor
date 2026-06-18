@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ConfigurationRegistry,
+  JSONContributionRegistry,
   KeybindingsRegistry,
   MenuId,
   MenuRegistry,
@@ -148,6 +149,88 @@ describe('ExtensionPointTranslator', () => {
     ])
 
     expect(ConfigurationRegistry.getDefaultValue('cfg.autofetch')).toBe(true)
+  })
+
+  it('registers resolved jsonValidation schemas into the JSONContributionRegistry', () => {
+    const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+    disposables.push(t)
+    const schema = { type: 'object' as const, required: ['id'] }
+    t.translate([
+      dto({
+        id: 'gc.ext',
+        contributes: {
+          jsonValidation: [{ fileMatch: ['**/*.entity.json'], schema }],
+        },
+      }),
+    ])
+
+    const contrib = JSONContributionRegistry.getContributions().find(
+      (c) => c.uri === 'extension://gc.ext/jsonvalidation/0',
+    )
+    expect(contrib?.fileMatch).toEqual(['**/*.entity.json'])
+    expect(contrib?.schema).toEqual(schema)
+  })
+
+  it('unregisters its jsonValidation schemas on dispose', () => {
+    const t = new ExtensionPointTranslator(vi.fn(), vi.fn())
+    t.translate([
+      dto({
+        id: 'gc.ext',
+        contributes: {
+          jsonValidation: [{ fileMatch: ['**/*.entity.json'], schema: { type: 'object' } }],
+        },
+      }),
+    ])
+    const uri = 'extension://gc.ext/jsonvalidation/0'
+    expect(JSONContributionRegistry.getContributions().some((c) => c.uri === uri)).toBe(true)
+    t.dispose()
+    expect(JSONContributionRegistry.getContributions().some((c) => c.uri === uri)).toBe(false)
+  })
+
+  it('resolves an http jsonValidation url via the injected resolver, then registers it', async () => {
+    const schema = { type: 'object' as const, properties: { permissions: { type: 'object' } } }
+    const resolve = vi.fn().mockResolvedValue(schema)
+    const t = new ExtensionPointTranslator(vi.fn(), vi.fn(), resolve)
+    disposables.push(t)
+    t.translate([
+      dto({
+        id: 'claude.ext',
+        contributes: {
+          jsonValidation: [
+            { fileMatch: ['**/.claude/settings.json'], url: 'https://example.com/s.json' },
+          ],
+        },
+      }),
+    ])
+
+    await vi.waitFor(() => {
+      const contrib = JSONContributionRegistry.getContributions().find(
+        (c) => c.uri === 'extension://claude.ext/jsonvalidation/0',
+      )
+      expect(contrib?.schema).toEqual(schema)
+    })
+    expect(resolve).toHaveBeenCalledWith('https://example.com/s.json')
+  })
+
+  it('does not register an http jsonValidation url the resolver cannot resolve', async () => {
+    const resolve = vi.fn().mockResolvedValue(undefined)
+    const t = new ExtensionPointTranslator(vi.fn(), vi.fn(), resolve)
+    disposables.push(t)
+    t.translate([
+      dto({
+        id: 'claude.ext',
+        contributes: {
+          jsonValidation: [
+            { fileMatch: ['**/.claude/settings.json'], url: 'https://blocked.example/s.json' },
+          ],
+        },
+      }),
+    ])
+
+    await Promise.resolve()
+    await Promise.resolve()
+    const uri = 'extension://claude.ext/jsonvalidation/0'
+    expect(JSONContributionRegistry.getContributions().some((c) => c.uri === uri)).toBe(false)
   })
 })
 

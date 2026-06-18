@@ -87,4 +87,59 @@ describe('scanExtensions', () => {
     const ids = (await scanExtensions(dir)).map((e) => e.id)
     expect(ids).toEqual(['future'])
   })
+
+  it('reads + inlines jsonValidation schema files, normalizing fileMatch to an array', async () => {
+    const root = join(dir, 'gc')
+    await mkdir(join(root, 'schemas'), { recursive: true })
+    await writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({
+        ...goodManifest,
+        name: 'gc',
+        contributes: {
+          jsonValidation: [{ fileMatch: '**/*.entity.json', url: './schemas/entity.json' }],
+        },
+      }),
+      'utf8',
+    )
+    await writeFile(
+      join(root, 'schemas', 'entity.json'),
+      JSON.stringify({ type: 'object', required: ['id'] }),
+      'utf8',
+    )
+    const [ext] = await scanExtensions(dir)
+    expect(ext?.resolvedJsonValidation).toEqual([
+      { fileMatch: ['**/*.entity.json'], schema: { type: 'object', required: ['id'] } },
+    ])
+  })
+
+  it('skips a jsonValidation entry whose schema file is missing, keeping the extension', async () => {
+    await writeExtension('gc', {
+      ...goodManifest,
+      name: 'gc',
+      contributes: {
+        jsonValidation: [{ fileMatch: ['**/*.entity.json'], url: './schemas/missing.json' }],
+      },
+    })
+    const [ext, ...rest] = await scanExtensions(dir)
+    expect(rest).toHaveLength(0)
+    expect(ext?.id).toBe('gc')
+    expect(ext?.resolvedJsonValidation).toBeUndefined()
+  })
+
+  it('passes an http(s) jsonValidation url through unresolved (no disk read)', async () => {
+    await writeExtension('gc', {
+      ...goodManifest,
+      name: 'gc',
+      contributes: {
+        jsonValidation: [
+          { fileMatch: '**/.claude/settings.json', url: 'https://example.com/schema.json' },
+        ],
+      },
+    })
+    const [ext] = await scanExtensions(dir)
+    expect(ext?.resolvedJsonValidation).toEqual([
+      { fileMatch: ['**/.claude/settings.json'], url: 'https://example.com/schema.json' },
+    ])
+  })
 })

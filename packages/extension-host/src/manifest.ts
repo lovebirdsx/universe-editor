@@ -55,6 +55,11 @@ const configurationSchema = z.object({
   properties: z.record(configPropertySchema),
 })
 
+const jsonValidationSchema = z.object({
+  fileMatch: z.union([z.string().min(1), z.array(z.string().min(1))]),
+  url: z.string().min(1),
+})
+
 const contributesSchema = z
   .object({
     commands: z.array(commandContributionSchema).optional(),
@@ -62,6 +67,7 @@ const contributesSchema = z
     submenus: z.array(submenuSchema).optional(),
     keybindings: z.array(keybindingSchema).optional(),
     configuration: z.union([configurationSchema, z.array(configurationSchema)]).optional(),
+    jsonValidation: z.array(jsonValidationSchema).optional(),
   })
   // Tolerate contribution points we don't understand yet (forward-compat).
   .passthrough()

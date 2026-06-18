@@ -24,6 +24,7 @@ import type { SessionSwitcherMainService } from './services/sessionSwitcher/sess
 import type { ConfigLocationMainService } from './services/configLocation/configLocationMainService.js'
 import { IConfigLocationService } from '../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../shared/ipc/aiModelService.js'
+import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
@@ -204,6 +205,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       performance: accessor.get(IPerformanceMarksService),
       usage: accessor.get(IUsageService),
       aiModel: accessor.get(IAiModelMainService),
+      remoteSchema: accessor.get(IRemoteSchemaService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
     }))

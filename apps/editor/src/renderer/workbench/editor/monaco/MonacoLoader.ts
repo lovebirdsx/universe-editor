@@ -75,6 +75,11 @@ const BASE_JSON_DIAGNOSTICS: Omit<monaco.json.DiagnosticsOptions, 'schemas'> = {
 
 function pushJsonDiagnostics(): void {
   if (!_monaco) return
+  _logger.debug(
+    `applying ${_extraSchemas.length} JSON schema(s) to Monaco diagnostics: ${_extraSchemas
+      .map((s) => `${s.uri} → [${s.fileMatch?.join(', ') ?? ''}]`)
+      .join('; ')}`,
+  )
   _monaco.json.jsonDefaults.setDiagnosticsOptions({
     ...BASE_JSON_DIAGNOSTICS,
     schemas: _extraSchemas,
@@ -250,6 +255,9 @@ export const MonacoLoader = {
    */
   setJsonSchemas(schemas: JsonSchemas): void {
     _extraSchemas = schemas
+    if (!_monaco) {
+      _logger.trace(`setJsonSchemas: Monaco not loaded yet, stored ${schemas.length} schema(s)`)
+    }
     pushJsonDiagnostics()
   },
   /**

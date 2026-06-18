@@ -57,6 +57,7 @@ import { IDisposableLeakService, ILogChannelService } from '../shared/ipc/servic
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
+import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { AiModelClientService } from './services/ai/aiModelClientService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
@@ -333,6 +334,16 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   const aiModelService = workbenchStore.add(new AiModelClientService(aiModelMainProxy))
   services.set(IAiModelService, aiModelService)
+
+  // Remote JSON schema downloader (main-side fetch + cache). Used by the JSON
+  // schema association sources to resolve http(s) schema urls; trust/enable
+  // policy is applied renderer-side before calling it.
+  services.set(
+    IRemoteSchemaService,
+    ProxyChannel.toService<IRemoteSchemaService>(
+      ipcService.getChannel(ServiceChannels.RemoteSchema),
+    ),
+  )
 
   // Feed all declaratively-registered singletons into the collection. The
   // `has` guard lets explicitly-set instances win, so this coexists with the

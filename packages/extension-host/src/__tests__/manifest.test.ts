@@ -38,4 +38,26 @@ describe('parseManifest', () => {
   it('rejects a non-object', () => {
     expect(() => parseManifest(null)).toThrow(/invalid manifest/)
   })
+
+  it('accepts a jsonValidation contribution (string or array fileMatch)', () => {
+    const m = parseManifest({
+      ...valid,
+      contributes: {
+        jsonValidation: [
+          { fileMatch: '**/*.entity.json', url: './schemas/entity.json' },
+          { fileMatch: ['**/*.a.json', '**/*.b.json'], url: './schemas/ab.json' },
+        ],
+      },
+    })
+    expect(m.contributes?.jsonValidation).toHaveLength(2)
+  })
+
+  it('rejects a jsonValidation entry missing url', () => {
+    expect(() =>
+      parseManifest({
+        ...valid,
+        contributes: { jsonValidation: [{ fileMatch: '**/*.entity.json' }] },
+      }),
+    ).toThrow(/invalid manifest/)
+  })
 })

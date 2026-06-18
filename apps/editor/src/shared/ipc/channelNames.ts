@@ -36,6 +36,7 @@ export const ServiceChannels = {
   RendererSessions: 'rendererSessions',
   Usage: 'usage',
   AiModel: 'aiModel',
+  RemoteSchema: 'remoteSchema',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

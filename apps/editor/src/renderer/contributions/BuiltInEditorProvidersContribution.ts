@@ -25,6 +25,7 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
 import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
@@ -56,6 +57,14 @@ export class BuiltInEditorProvidersContribution
         typeId: AiSettingsEditorInput.TYPE_ID,
         componentKey: 'aiSettings',
         deserialize: () => AiSettingsEditorInput.deserialize(),
+      }),
+    )
+    // Transient read-only schema viewer — no deserialize: it carries in-memory
+    // schema text that isn't persisted, so a restored window simply drops it.
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: SchemaViewerInput.TYPE_ID,
+        componentKey: 'file',
       }),
     )
     this._register(

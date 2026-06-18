@@ -71,7 +71,32 @@ export interface IConfigurationContribution {
   properties: Record<string, IConfigurationPropertyContribution>
 }
 
-/** The `contributes` block. Grows phase by phase. */
+/**
+ * A single `contributes.jsonValidation[]` entry: associates a JSON schema with
+ * the files matched by `fileMatch`. `url` is a path relative to the extension
+ * root (e.g. `./schemas/entity.json`), mirroring VSCode's jsonValidation point.
+ */
+export interface IJsonValidationContribution {
+  fileMatch: string | string[]
+  url: string
+}
+
+/**
+ * The host-resolved form of a jsonValidation entry. `fileMatch` is normalized to
+ * an array. Exactly one of `schema` / `url` is set: a local file is read + parsed
+ * by the host into an inline `schema` (Monaco's JSON worker can't fetch files);
+ * an http(s) `url` is passed through verbatim for the renderer to download via
+ * IRemoteSchemaService. `schema` is `unknown` so this shared package needn't
+ * depend on platform's `IJSONSchema`.
+ */
+export interface IResolvedJsonValidation {
+  fileMatch: string[]
+  schema?: unknown
+  /** Http(s) url passed through unresolved (renderer downloads it). */
+  url?: string
+}
+
+/** The `contributes` block as declared in a manifest. Grows phase by phase. */
 export interface IExtensionContributions {
   commands?: ICommandContribution[]
   /** Keyed by menu location, e.g. `commandPalette`, `scm/title`. */
@@ -80,6 +105,19 @@ export interface IExtensionContributions {
   submenus?: ISubmenuContribution[]
   keybindings?: IKeybindingContribution[]
   configuration?: IConfigurationContribution | IConfigurationContribution[]
+  jsonValidation?: IJsonValidationContribution[]
+}
+
+/**
+ * The `contributes` block as the renderer sees it: identical to
+ * {@link IExtensionContributions} except `jsonValidation` carries the
+ * host-resolved (inlined) schemas rather than file-relative urls.
+ */
+export interface IExtensionContributionsDto extends Omit<
+  IExtensionContributions,
+  'jsonValidation'
+> {
+  jsonValidation?: IResolvedJsonValidation[]
 }
 
 /** The subset of an extension `package.json` the host cares about. */
@@ -106,5 +144,5 @@ export interface IExtensionDescriptionDto {
   readonly name: string
   readonly displayName?: string
   readonly activationEvents: readonly string[]
-  readonly contributes: IExtensionContributions
+  readonly contributes: IExtensionContributionsDto
 }

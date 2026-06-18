@@ -11,7 +11,11 @@
 import { readdir, readFile } from 'node:fs/promises'
 import type { Dirent } from 'node:fs'
 import * as path from 'node:path'
-import { satisfies, type IExtensionManifest } from '@universe-editor/extensions-common'
+import {
+  satisfies,
+  type IExtensionManifest,
+  type IResolvedJsonValidation,
+} from '@universe-editor/extensions-common'
 import { parseManifest } from './manifest.js'
 
 export interface IScannedExtension {
@@ -21,10 +25,50 @@ export interface IScannedExtension {
   readonly extensionPath: string
   /** Absolute path to the entry module, or undefined for a declaration-only extension. */
   readonly mainPath?: string
+  /**
+   * jsonValidation entries with their `url` already read from disk + parsed into
+   * an inline schema. Monaco's JSON worker can't fetch files, so the renderer
+   * needs the resolved schema, not a path.
+   */
+  readonly resolvedJsonValidation?: IResolvedJsonValidation[]
 }
 
 function extensionId(manifest: IExtensionManifest): string {
   return manifest.publisher ? `${manifest.publisher}.${manifest.name}` : manifest.name
+}
+
+/**
+ * Resolve every `contributes.jsonValidation` entry. Local schema files are read +
+ * parsed into an inline schema (Monaco's JSON worker can't fetch files); http(s)
+ * urls are passed through verbatim for the renderer to download. A single bad
+ * local entry (missing / unparseable) is skipped with a logged error so it never
+ * blocks the rest of the extension, mirroring how a bad manifest is skipped.
+ */
+async function resolveJsonValidation(
+  extensionPath: string,
+  manifest: IExtensionManifest,
+): Promise<IResolvedJsonValidation[]> {
+  const entries = manifest.contributes?.jsonValidation ?? []
+  const resolved: IResolvedJsonValidation[] = []
+  for (const entry of entries) {
+    const fileMatch = Array.isArray(entry.fileMatch) ? entry.fileMatch : [entry.fileMatch]
+    if (/^https?:\/\//i.test(entry.url)) {
+      resolved.push({ fileMatch, url: entry.url })
+      continue
+    }
+    const schemaPath = path.resolve(extensionPath, entry.url)
+    try {
+      const schema: unknown = JSON.parse(await readFile(schemaPath, 'utf8'))
+      resolved.push({ fileMatch, schema })
+    } catch (err) {
+      console.error(
+        `[ext-host] ${extensionId(manifest)}: skipping jsonValidation "${entry.url}": ${
+          (err as Error).message
+        }`,
+      )
+    }
+  }
+  return resolved
 }
 
 async function scanOne(extensionPath: string, hostApiVersion?: string): Promise<IScannedExtension> {
@@ -34,6 +78,7 @@ async function scanOne(extensionPath: string, hostApiVersion?: string): Promise<
   if (hostApiVersion !== undefined && !satisfies(hostApiVersion, manifest.engines.universe)) {
     throw new Error(`requires universe ${manifest.engines.universe}, host API is ${hostApiVersion}`)
   }
+  const resolvedJsonValidation = await resolveJsonValidation(extensionPath, manifest)
   return {
     id: extensionId(manifest),
     manifest,
@@ -41,6 +86,7 @@ async function scanOne(extensionPath: string, hostApiVersion?: string): Promise<
     ...(manifest.main !== undefined
       ? { mainPath: path.resolve(extensionPath, manifest.main) }
       : {}),
+    ...(resolvedJsonValidation.length > 0 ? { resolvedJsonValidation } : {}),
   }
 }
 

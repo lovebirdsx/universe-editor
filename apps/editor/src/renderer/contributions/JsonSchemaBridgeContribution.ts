@@ -19,17 +19,21 @@ import {
   CommandsRegistry,
   ConfigurationRegistry,
   Disposable,
+  ILoggerService,
   IUserDataFilesService,
   IWorkspaceService,
   IWorkbenchContribution,
   JSONContributionRegistry,
+  NullLogger,
   URI,
   UserDataFile,
   type IJSONSchema,
+  type ILogger,
+  type ILoggerService as ILoggerServiceType,
   type ISchemaContribution,
 } from '@universe-editor/platform'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
-import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import { MonacoLoader, setMonacoLoaderLogger } from '../workbench/editor/monaco/MonacoLoader.js'
 import { buildSettingsJsonSchema } from '../services/preferences/buildSettingsJsonSchema.js'
 import { buildKeybindingsJsonSchema } from '../services/keybindings/buildKeybindingsJsonSchema.js'
 import { schemaFileMatchForUri } from '../services/preferences/schemaFileMatch.js'
@@ -50,13 +54,20 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
   private _keybindingsDisposable: SchemaDisposable | undefined
   private _settingsPending = false
   private _keybindingsPending = false
+  private readonly _logger: ILogger
 
   constructor(
     @IUserDataFilesService private readonly _userDataFiles: IUserDataFilesService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IConfigLocationService private readonly _configLocation: IConfigLocationService,
+    @ILoggerService loggerService: ILoggerServiceType,
   ) {
     super()
+
+    this._logger =
+      loggerService?.createLogger({ id: 'jsonSchemas', name: 'JSON Schemas' }) ?? new NullLogger()
+    // Route Monaco's schema-push logging through the same channel.
+    setMonacoLoaderLogger(this._logger)
 
     void this._refreshSettingsSchema()
     void this._refreshKeybindingsSchema()
@@ -185,9 +196,15 @@ export class JsonSchemaBridgeContribution extends Disposable implements IWorkben
     try {
       MonacoLoader.get()
     } catch {
+      this._logger.trace('Monaco not ready; deferring schema push')
       return // Monaco not ready yet; ensureInitialized() will trigger a push.
     }
     const contributions = JSONContributionRegistry.getContributions()
+    this._logger.debug(
+      `pushing ${contributions.length} schema(s) to Monaco: ${contributions
+        .map((c) => `${c.uri} → [${c.fileMatch.join(', ')}]`)
+        .join('; ')}`,
+    )
     MonacoLoader.setJsonSchemas(contributions.map(toMonacoSchema))
   }
 }
