@@ -20,22 +20,16 @@ import {
   URI,
   UserDataFile,
   localize,
-  type AiModelMetadata,
   type AiProviderGroup,
-  type IQuickPickItem,
-  type QuickPickInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize('command.category.ai', 'AI')
 
 const MANAGE_ITEM_ID = '__manage__'
-
-interface ModelPickItem extends IQuickPickItem {
-  readonly modelId?: string
-}
 
 export class PickModelAction extends Action2 {
   static readonly ID = 'ai.pickModel'
@@ -63,7 +57,7 @@ export class PickModelAction extends Action2 {
         {
           id: MANAGE_ITEM_ID,
           iconId: 'gear',
-          tooltip: localize('ai.pickModel.manage', 'Manage Models…'),
+          tooltip: localize('ai.pickModel.manage', 'Open AI Settings…'),
         },
       ],
       onDidTriggerButton: () => {
@@ -80,7 +74,7 @@ export class ManageModelsAction extends Action2 {
   constructor() {
     super({
       id: ManageModelsAction.ID,
-      title: localize('action.ai.manageModels', 'Manage AI Models'),
+      title: localize('action.ai.openSettings', 'Open AI Settings'),
       category: CATEGORY,
       f1: true,
     })
@@ -214,29 +208,6 @@ export class ClearApiKeyAction extends Action2 {
       }),
     })
   }
-}
-
-function buildModelPickItems(
-  models: readonly AiModelMetadata[],
-  active: string | undefined,
-): QuickPickInput<ModelPickItem>[] {
-  const items: QuickPickInput<ModelPickItem>[] = []
-  let lastGroup: string | undefined
-  for (const model of models) {
-    const label = `${model.vendor}/${model.groupName ?? 'default'}`
-    if (label !== lastGroup) {
-      items.push({ type: 'separator', id: `sep:${label}`, label })
-      lastGroup = label
-    }
-    items.push({
-      id: model.id,
-      modelId: model.id,
-      label: model.name,
-      description: model.family,
-      ...(model.id === active ? { statusIconId: 'check' } : {}),
-    })
-  }
-  return items
 }
 
 async function pickGroup(

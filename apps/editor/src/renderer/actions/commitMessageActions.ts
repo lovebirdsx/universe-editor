@@ -8,17 +8,11 @@ import {
   IAiModelService,
   IQuickInputService,
   localize,
-  type AiModelMetadata,
-  type IQuickPickItem,
-  type QuickPickInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize('command.category.ai', 'AI')
-
-interface ModelPickItem extends IQuickPickItem {
-  readonly modelId?: string
-}
 
 export class PickCommitModelAction extends Action2 {
   static readonly ID = 'ai.commitMessage.pickModel'
@@ -46,27 +40,4 @@ export class PickCommitModelAction extends Action2 {
     if (!picked) return
     await aiModel.setCommitModelId(picked.modelId)
   }
-}
-
-function buildModelPickItems(
-  models: readonly AiModelMetadata[],
-  active: string | undefined,
-): QuickPickInput<ModelPickItem>[] {
-  const items: QuickPickInput<ModelPickItem>[] = []
-  let lastGroup: string | undefined
-  for (const model of models) {
-    const label = `${model.vendor}/${model.groupName ?? 'default'}`
-    if (label !== lastGroup) {
-      items.push({ type: 'separator', id: `sep:${label}`, label })
-      lastGroup = label
-    }
-    items.push({
-      id: model.id,
-      modelId: model.id,
-      label: model.name,
-      description: model.family,
-      ...(model.id === active ? { statusIconId: 'check' } : {}),
-    })
-  }
-  return items
 }

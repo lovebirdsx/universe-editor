@@ -16,20 +16,14 @@ import {
   KeybindingWeight,
   Severity,
   localize,
-  type AiModelMetadata,
-  type IQuickPickItem,
-  type QuickPickInput,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IInlineCompletionService } from '../services/ai/InlineCompletionService.js'
+import { buildModelPickItems } from './aiModelPickItems.js'
 
 const CATEGORY = localize('command.category.ai', 'AI')
-
-interface ModelPickItem extends IQuickPickItem {
-  readonly modelId?: string
-}
 
 export class TriggerInlineCompletionAction extends Action2 {
   static readonly ID = 'ai.inlineCompletion.trigger'
@@ -162,27 +156,4 @@ export class PickInlineCompletionModelAction extends Action2 {
     if (!picked) return
     await inline.setModelId(picked.modelId)
   }
-}
-
-function buildModelPickItems(
-  models: readonly AiModelMetadata[],
-  active: string | undefined,
-): QuickPickInput<ModelPickItem>[] {
-  const items: QuickPickInput<ModelPickItem>[] = []
-  let lastGroup: string | undefined
-  for (const model of models) {
-    const label = `${model.vendor}/${model.groupName ?? 'default'}`
-    if (label !== lastGroup) {
-      items.push({ type: 'separator', id: `sep:${label}`, label })
-      lastGroup = label
-    }
-    items.push({
-      id: model.id,
-      modelId: model.id,
-      label: model.name,
-      description: model.family,
-      ...(model.id === active ? { statusIconId: 'check' } : {}),
-    })
-  }
-  return items
 }
