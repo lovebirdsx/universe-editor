@@ -52,6 +52,14 @@
 .commitInputWrapper {
   position: relative;
   display: flex;
+  align-items: center;
+  border: 1px solid var(--color-input-border, #555);
+  background: var(--color-input-bg, #3c3c3c);
+  border-radius: 2px;
+}
+
+.commitInputWrapper:focus-within {
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 /* While AI generation is in progress, wrap the input in a spinning border ring,
@@ -96,7 +104,6 @@
   position: relative;
   z-index: 2;
   background: transparent;
-  border-color: transparent;
 }
 
 .commitInputWrapper.generating .inputBoxActions {
@@ -104,7 +111,8 @@
 }
 
 .commitInput {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   box-sizing: border-box;
   resize: none;
   field-sizing: content;
@@ -115,24 +123,27 @@
   padding: 4px 6px;
   font-family: inherit;
   font-size: 13px;
-  background: var(--color-input-bg, #3c3c3c);
+  background: transparent;
   color: var(--color-input-fg, #d4d4d4);
-  border: 1px solid var(--color-input-border, #555);
-  border-radius: 2px;
+  border: none;
+  border-radius: 0;
+  outline: none;
 }
 
 .commitInput:focus {
   outline: none;
-  border-color: var(--color-focus-border, #0070e0);
 }
 
-/* Inline actions (e.g. AI generate) overlaid in the input's bottom-right. */
+/* Inline actions (e.g. AI generate) as flex sibling to the right of the input. */
 .inputBoxActions {
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
+  flex: 0 0 auto;
   display: flex;
   gap: 2px;
+  padding: 0 3px 0 0;
+}
+
+.inputBoxActions .actionButton {
+  padding: 0;
 }
 
 .commitBar {
