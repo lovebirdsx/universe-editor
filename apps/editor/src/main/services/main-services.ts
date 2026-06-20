@@ -34,6 +34,7 @@ import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
+import { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
 import { MainPingService } from './ping/pingMainService.js'
 import { FileSystemMainService } from './files/fileSystemMainService.js'
@@ -57,6 +58,8 @@ import { ConfigLocationMainService } from './configLocation/configLocationMainSe
 import { UsageMainService } from './usage/usageMainService.js'
 import { SecretStorageMainService } from './ai/secretStorageMainService.js'
 import { AiModelMainService } from './ai/aiModelMainService.js'
+import { AiDebugRecorder, IAiDebugRecorderService } from './ai/aiDebugRecorder.js'
+import { AiDebugMainService } from './ai/aiDebugService.js'
 import { RemoteSchemaMainService } from './remoteSchema/remoteSchemaMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
@@ -141,9 +144,14 @@ registerSingleton(
   // 1 leading static param (safeStorage) before @IMainStorageService / @ILoggerService.
   new SyncDescriptor<ISecretStorageService>(SecretStorageMainService, [undefined], false),
 )
+registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(
   IAiModelMainService,
   new SyncDescriptor<IAiModelMainService>(AiModelMainService, [], false),
+)
+registerSingleton(
+  IAiDebugService,
+  new SyncDescriptor<IAiDebugService>(AiDebugMainService, [], false),
 )
 registerSingleton(
   IRemoteSchemaService,

@@ -69,7 +69,8 @@ export class MainThreadAi extends Disposable implements IMainThreadAi {
 
     let response: ReturnType<IAiModelService['sendRequest']>
     try {
-      response = this._ai.sendRequest(messages.map(reviveMessage), options, cts.token)
+      const withPurpose: AiRequestOptions = { ...options, purpose: options.purpose ?? 'extension' }
+      response = this._ai.sendRequest(messages.map(reviveMessage), withPurpose, cts.token)
     } catch (err) {
       this._onDidEndRequest.fire({ requestId, error: transformErrorForSerialization(err) })
       this._disposeInflight(requestId)

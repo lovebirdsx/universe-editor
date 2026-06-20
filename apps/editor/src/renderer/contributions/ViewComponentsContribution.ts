@@ -18,6 +18,7 @@ import { McpServersView } from '../workbench/agents/McpServersView.js'
 import { SessionChangesView } from '../workbench/agents/SessionChangesView.js'
 import { OutputView } from '../workbench/panel/output/OutputView.js'
 import { TerminalView } from '../workbench/panel/terminal/TerminalView.js'
+import { AiDebugView } from '../workbench/aiDebug/AiDebugView.js'
 
 export class ViewComponentsContribution extends Disposable implements IWorkbenchContribution {
   constructor() {
@@ -32,5 +33,6 @@ export class ViewComponentsContribution extends Disposable implements IWorkbench
     this._register(ViewComponentRegistry.register('sessionChanges.main', SessionChangesView))
     this._register(ViewComponentRegistry.register('output.main', OutputView))
     this._register(ViewComponentRegistry.register('terminal.main', TerminalView))
+    this._register(ViewComponentRegistry.register('aiDebug.main', AiDebugView))
   }
 }

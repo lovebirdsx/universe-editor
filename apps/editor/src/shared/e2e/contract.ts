@@ -61,6 +61,14 @@ export interface E2EMarker {
   readonly startLineNumber: number
 }
 
+export interface E2EAiDebugRecord {
+  readonly id: string
+  readonly purpose?: string
+  readonly modelId: string
+  readonly status: string
+  readonly responsePreview: string
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -380,6 +388,21 @@ export interface E2EProbe {
    * assert a suggestion appeared before pressing Tab and disappeared after.
    */
   getActiveInlineSuggestionText(): string | undefined
+  // -- AI debug probe -------------------------------------------------------
+  /**
+   * Summaries of every recorded "direct provider" AI request, newest first, via
+   * IAiDebugService. Each AI call (inline completion / session title / commit /
+   * extension) lands here once it finishes. Backs the AI Debug panel.
+   */
+  getAiDebugRecords(): Promise<readonly E2EAiDebugRecord[]>
+  /** Clear all recorded AI requests. */
+  clearAiDebugRecords(): Promise<void>
+  /**
+   * Replay a recorded AI request as offline mock data (no model call) and return
+   * the concatenated text emitted by its replayed chunks. Resolves once the
+   * replay ends. Returns undefined when the record id is unknown.
+   */
+  replayAiDebugRecord(id: string): Promise<string | undefined>
 }
 
 declare global {

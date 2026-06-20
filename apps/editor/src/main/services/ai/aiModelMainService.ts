@@ -49,6 +49,7 @@ import type {
 } from '../../../shared/ipc/aiModelService.js'
 import { OllamaProvider } from './providers/ollamaProvider.js'
 import { OpenAiProvider } from './providers/openAiProvider.js'
+import { AiDebugRecorder, IAiDebugRecorderService } from './aiDebugRecorder.js'
 
 const AI_SETTINGS_FILE = 'aiSettings.json'
 
@@ -108,6 +109,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     @ISecretStorageService secrets: ISecretStorageService,
     @IConfigLocationService configLocation: IConfigLocationService,
     @ILoggerService loggerService?: ILoggerService,
+    @IAiDebugRecorderService private readonly _recorder?: AiDebugRecorder,
   ) {
     super()
     this._logger = createNamedLogger(loggerService, { id: 'aiModel', name: 'AI Model' })
@@ -211,6 +213,8 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     await this._ready
     const cts = new CancellationTokenSource()
     this._inflight.set(requestId, cts)
+    const domainMessages = messages.map(reviveMessage)
+    this._recorder?.begin(requestId, domainMessages, options)
 
     try {
       const resolved = await this._registry.resolveModel(options.modelId, cts.token)
@@ -220,7 +224,6 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
         return
       }
 
-      const domainMessages = messages.map(reviveMessage)
       const modelConfiguration = await this.getModelConfiguration(options.modelId)
       const merged: AiRequestOptions = { ...options, modelConfiguration }
       this._pumpResponse(
@@ -331,9 +334,11 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     void (async () => {
       try {
         for await (const chunk of response.stream) {
+          this._recorder?.recordChunk(requestId, chunk)
           this._onDidEmitChunk.fire({ requestId, chunk })
         }
         await response.result
+        this._recorder?.finish(requestId)
         this._onDidEndRequest.fire({ requestId })
       } catch (err) {
         this._endRequestWithError(requestId, err)
@@ -357,7 +362,9 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   private _endRequestWithError(requestId: string, error: unknown): void {
     const message = error instanceof Error ? error.message : String(error)
     this._logger.warn(`request ${requestId} failed: ${message}`)
-    this._onDidEndRequest.fire({ requestId, error: transformErrorForSerialization(error) })
+    const serialized = transformErrorForSerialization(error)
+    this._recorder?.finish(requestId, serialized)
+    this._onDidEndRequest.fire({ requestId, error: serialized })
   }
 
   private _disposeInflight(requestId: string): void {

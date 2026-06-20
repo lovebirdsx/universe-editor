@@ -68,6 +68,18 @@ export type AiMessagePart =
   // serializable form (see shared/ipc/aiModelService DTO conversion).
   | { readonly type: 'image'; readonly mimeType: string; readonly data: Uint8Array }
 
+/**
+ * What a request is for. Surfaced in the AI debug recorder so each recorded call
+ * is attributable to the feature that issued it. Carried on {@link AiRequestOptions}
+ * and threaded transparently through every transport boundary.
+ */
+export type AiRequestPurpose =
+  | 'chat'
+  | 'inline-completion'
+  | 'session-title'
+  | 'commit'
+  | 'extension'
+
 /** Per-request options that override the merged defaults for a single call. */
 export interface AiRequestOptions {
   readonly modelId: string
@@ -78,6 +90,10 @@ export interface AiRequestOptions {
   readonly modelConfiguration?: AiModelConfiguration
   /** Vendor-specific extras passed through to the provider after config merge. */
   readonly extra?: Readonly<Record<string, unknown>>
+  /** Feature that issued this request; used to attribute debug recordings. */
+  readonly purpose?: AiRequestPurpose
+  /** Free-form sub-label (e.g. an extension id) shown alongside the purpose. */
+  readonly debugLabel?: string
 }
 
 /** Smallest unit of a streamed response; this is what crosses the IPC boundary. */

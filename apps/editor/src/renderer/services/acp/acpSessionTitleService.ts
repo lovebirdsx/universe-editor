@@ -88,7 +88,7 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
             content: [{ type: 'text', value: buildUserPrompt(user, agent) }],
           },
         ],
-        { modelId, maxTokens: 32, temperature: 0.2 },
+        { modelId, maxTokens: 32, temperature: 0.2, purpose: 'session-title' },
         cts.token,
       )
       const raw = await getTextResponse(response)

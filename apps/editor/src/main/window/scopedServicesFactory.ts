@@ -32,6 +32,7 @@ import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import type { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
+import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 import type { IRemoteSchemaService } from '../../shared/ipc/remoteSchemaService.js'
 import type { IHostServiceWire } from '@universe-editor/platform'
 import type { RecentWorkspacesMainService } from '../services/workspace/recentWorkspacesMainService.js'
@@ -56,6 +57,7 @@ export interface ApplicationServices {
   readonly performance: IPerformanceMarksService
   readonly usage: IUsageService
   readonly aiModel: IAiModelMainService
+  readonly aiDebug: IAiDebugService
   readonly remoteSchema: IRemoteSchemaService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /

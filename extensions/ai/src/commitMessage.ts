@@ -124,7 +124,7 @@ export async function generateCommitMessage(arg: unknown): Promise<void> {
       { role: AiMessageRole.System, content: SYSTEM_PROMPT },
       { role: AiMessageRole.User, content: buildUserPrompt(ctx, maxDiffChars, instructions) },
     ],
-    { modelId, temperature: 0.2 },
+    { modelId, temperature: 0.2, purpose: 'commit' },
   )
 
   let message = ''

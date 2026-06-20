@@ -36,6 +36,7 @@ export const ServiceChannels = {
   RendererSessions: 'rendererSessions',
   Usage: 'usage',
   AiModel: 'aiModel',
+  AiDebug: 'aiDebug',
   RemoteSchema: 'remoteSchema',
 } as const
 

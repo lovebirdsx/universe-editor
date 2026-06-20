@@ -190,6 +190,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
         {
           modelId,
           maxTokens: this._config.get<number>(CONFIG.maxTokens) ?? DEFAULTS.maxTokens,
+          purpose: 'inline-completion',
         },
         cts.token,
       )

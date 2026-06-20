@@ -406,6 +406,10 @@ export interface AiRequestOptions {
   readonly temperature?: number
   readonly maxTokens?: number
   readonly stop?: readonly string[]
+  /** Feature/extension attribution shown in the AI debug recorder. */
+  readonly purpose?: 'chat' | 'inline-completion' | 'session-title' | 'commit' | 'extension'
+  /** Free-form sub-label (e.g. an extension id) shown alongside the purpose. */
+  readonly debugLabel?: string
 }
 
 /** Self-describing model metadata, so an extension can pick a model by capability. */

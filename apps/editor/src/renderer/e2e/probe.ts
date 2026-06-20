@@ -54,8 +54,10 @@ import {
   type E2EProbe,
   type E2EStatusBarEntry,
   type E2EUpdateState,
+  type E2EAiDebugRecord,
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
+import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -78,6 +80,7 @@ export interface E2EProbeServices {
   readonly scmService: IScmService
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
+  readonly aiDebugService: IAiDebugService
   /** Tears down React + snapshots the Disposable tracker; see E2EProbe. */
   readonly computeTeardownLeakReport: () => E2EDisposableLeakReport | null
 }
@@ -532,6 +535,57 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!ghost || ghost.parts.length === 0) return undefined
       return ghost.parts.map((p) => p.text).join('')
     },
+    getAiDebugRecords: async (): Promise<readonly E2EAiDebugRecord[]> => {
+      const records = await services.aiDebugService.listRecords()
+      return records.map((r) => ({
+        id: r.id,
+        ...(r.purpose !== undefined && { purpose: r.purpose }),
+        modelId: r.modelId,
+        status: r.status,
+        responsePreview: r.responsePreview,
+      }))
+    },
+    clearAiDebugRecords: () => services.aiDebugService.clearRecords(),
+    replayAiDebugRecord: (id: string): Promise<string | undefined> =>
+      new Promise<string | undefined>((resolve) => {
+        // Buffer chunks/ends per replayId: over IPC the replayId returned by
+        // replayRecord() can arrive after the first replayed chunk, so we can't
+        // assume it is known when events start flowing.
+        const textByReplay = new Map<string, string>()
+        const ended = new Set<string>()
+        let myReplayId: string | undefined
+        let settled = false
+
+        const finish = (rid: string): void => {
+          if (settled) return
+          settled = true
+          subChunk.dispose()
+          subEnd.dispose()
+          resolve(textByReplay.get(rid) ?? '')
+        }
+
+        const subChunk = services.aiDebugService.onDidReplayChunk((e) => {
+          if (e.chunk.type !== 'text') return
+          textByReplay.set(e.replayId, (textByReplay.get(e.replayId) ?? '') + e.chunk.value)
+        })
+        const subEnd = services.aiDebugService.onDidReplayEnd((e) => {
+          ended.add(e.replayId)
+          if (myReplayId === e.replayId) finish(e.replayId)
+        })
+
+        void services.aiDebugService.replayRecord(id).then((rid) => {
+          if (rid === undefined) {
+            if (settled) return
+            settled = true
+            subChunk.dispose()
+            subEnd.dispose()
+            resolve(undefined)
+            return
+          }
+          myReplayId = rid
+          if (ended.has(rid)) finish(rid)
+        })
+      }),
   }
 
   window[E2E_PROBE_KEY] = probe

@@ -63,6 +63,17 @@ export class BuiltInViewsContribution extends Disposable implements IWorkbenchCo
 
     this._register(
       ViewRegistry.registerView({
+        id: 'workbench.view.aiDebug.main',
+        name: localize('view.aiDebug', 'AI Debug'),
+        containerId: 'workbench.view.aiDebug',
+        componentKey: 'aiDebug.main',
+        icon: 'debug-alt',
+        order: 1,
+      }),
+    )
+
+    this._register(
+      ViewRegistry.registerView({
         id: 'workbench.view.outline.main',
         name: localize('view.outline', 'Outline'),
         containerId: 'workbench.view.outline',

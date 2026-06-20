@@ -63,6 +63,16 @@ export class BuiltInViewContainersContribution
 
     this._register(
       ViewContainerRegistry.registerViewContainer({
+        id: 'workbench.view.aiDebug',
+        label: localize('viewContainer.aiDebug', 'AI Debug'),
+        icon: 'debug-alt',
+        order: 5,
+        location: ViewContainerLocation.SideBar,
+      }),
+    )
+
+    this._register(
+      ViewContainerRegistry.registerViewContainer({
         id: 'workbench.view.outline',
         label: localize('viewContainer.outline', 'Outline'),
         icon: 'outline',
