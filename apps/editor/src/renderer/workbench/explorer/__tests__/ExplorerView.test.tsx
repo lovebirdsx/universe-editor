@@ -167,10 +167,10 @@ afterEach(() => cleanup())
 
 describe('ExplorerView', () => {
   it('shows the empty state when there is no workspace', () => {
-    const { ws } = renderView({ folder: null })
+    const { command } = renderView({ folder: null })
     expect(screen.getByText(/You have not yet opened a folder/i)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: /Open Folder/i }))
-    expect(ws.openFolderCalls).toBe(1)
+    expect(command.calls.map((c) => c.id)).toContain('workbench.action.files.openFolder')
   })
 
   it('renders root + children when a folder is open', async () => {

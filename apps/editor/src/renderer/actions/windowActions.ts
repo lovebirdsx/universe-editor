@@ -18,7 +18,6 @@ import {
   URI,
   localize,
   localize2,
-  type DisposableTracker,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -162,45 +161,14 @@ export class ReloadWindowAction extends Action2 {
     // during invokeFunction's call, not across awaits.
     const hostService = accessor.get(IHostService)
     const lifecycleService = accessor.get(ILifecycleService)
-    const tracker = getDisposableTracker() as DisposableTracker | null
-    // E2E spec has its own sessionStorage-based leak detection and runs
-    // headless, so a modal would hang the test. Skip the modal in E2E.
+    // Label the leak report that the beforeunload handler will persist. The
+    // detection itself runs there (main.tsx), which unmounts React *before*
+    // snapshotting so active useEffect subscriptions aren't counted as false
+    // leaks — doing it here (React still mounted) would report every live
+    // subscription. E2E has its own sessionStorage-based detection, so skip.
     const isE2E = typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true
-    const trackerActive =
-      tracker !== null && !isE2E && typeof tracker.computeLeakingDisposables === 'function'
-    const dialogService = trackerActive ? accessor.get(IDialogService) : null
-    const leakService = trackerActive ? accessor.get(IRendererDisposableLeakService) : null
-
-    // Dev/E2E only: surface any pending Disposable leaks with a modal before
-    // reloading, since beforeunload's console.warn is too easy to miss.
-    // Production has no tracker installed, so this branch is skipped.
-    if (trackerActive && tracker) {
-      const report = tracker.computeLeakingDisposables()
-      if (report) {
-        // Echo to the `pnpm dev` terminal: renderer console output never reaches
-        // it, so without this the leaks shown in the modal would only ever live
-        // in this window. Fire-and-forget; the modal is the dev-facing surface.
-        void leakService!.printLeaks({
-          count: report.leaks.length,
-          details: report.details,
-          capturedAt: Date.now(),
-          source: 'reload',
-        })
-        const choice = await dialogService!.confirm({
-          type: 'warning',
-          message: localize(
-            'reload.leakDetected.message',
-            'Detected {count} un-disposed Disposable(s)',
-            { count: report.leaks.length },
-          ),
-          detail: report.details,
-          primaryButton: localize('reload.leakDetected.reload', 'Reload Anyway'),
-          cancelButton: localize('common.cancel', 'Cancel'),
-          copyButton: localize('common.copy', 'Copy'),
-        })
-        if (!choice.confirmed) return
-      }
-      leakService!.markUnloadReason('reload')
+    if (!isE2E && getDisposableTracker() !== null) {
+      accessor.get(IRendererDisposableLeakService).markUnloadReason('reload')
     }
     if (await lifecycleService.confirmBeforeShutdown(ShutdownReason.Reload)) return
     await hostService.restart()

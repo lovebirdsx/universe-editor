@@ -16,7 +16,8 @@ disable-model-invocation: true
 - **判定“未泄漏”的唯一条件**：该对象已被 `dispose()`，**或**它的根祖先被 `markAsSingleton` 标记。
 - **父子链只由 `DisposableStore.add(o)` / `this._register(o)` 建立**（内部调 `setParentOfDisposable`）。⚠️ **闭包里引用一个 disposable 不会建立父链** —— 仅仅 `() => foo.dispose()` 持有引用，`foo` 的根仍是它自己，照样会被上报。要消除泄漏，**必须真正 `_register` / `add`**。
 - 渲染进程 tracker 在 **DEV / E2E** 安装：`apps/editor/src/renderer/main.tsx`。所有根服务挂在单例 `workbenchStore = markAsSingleton(new DisposableStore())` 下，因此根服务即使不显式 dispose 也不会被报。
-- 报告时机：`beforeunload` 里**先 `reactRoot.unmount()` 再 `computeLeakingDisposables()`**。意味着 React `useEffect` 的 cleanup 已经跑过——**正常的 React 订阅不会是元凶**；元凶是没挂上父链、或挂错地方的对象。
+- 报告时机：`beforeunload` 里**先 `reactRoot.unmount()` 再 `computeLeakingDisposables()`**（main.tsx 的 `snapshotLeaks`）。意味着 React `useEffect` 的 cleanup 已经跑过——**正常关窗路径下 React 订阅不会是元凶**；元凶是没挂上父链、或挂错地方的对象。
+- ⚠️ **但 reload 路径（Ctrl+Alt+R / `ReloadWindowAction`）历史上有第二条检测点**：它曾在弹"检测到 N 个泄漏"确认框前直接 `tracker.computeLeakingDisposables()`，**此时 React 还挂载着**，于是把所有活跃的 useEffect 订阅（OutlineView/AiStatusBarItem 的 `onDidChangeXxx` 等）全误报成泄漏。报告头 `[renderer:reload]`（来自 `printLeaks` 的 `source`）就是这条路径的指纹。**判据**：若同一批泄漏里 React useEffect 订阅扎堆、且报告来自 reload，先怀疑"检测时机错"（没先 unmount），而非订阅本身漏了——这类是假阳性。已修复为"reload 只 `markUnloadReason`，检测交给 beforeunload"。
 - 主进程也有 tracker（`apps/editor/src/main/index.ts`，`process.on('exit')` 时报告）。
 
 ## 排查流程
@@ -25,7 +26,8 @@ disable-model-invocation: true
 - 每条泄漏有 `idx`（创建序号）和创建堆栈。**自底向上读堆栈**：最靠近业务的那一帧（`new XxxService` / `new XxxSession` / `someService.onDidChangeXxx`）就是拥有者/创建点。
 - 连续 idx + 同一构造点 = 同一对象的 Disposable/`_store` 对，合并看。
 - idx 相差很大 = 不同事件、可能是**互相独立**的泄漏，分别处理，不要强行归因到一起。
-- **核对路径与版本**：堆栈里的绝对路径和行号必须对得上当前工作目录。本仓库常有并行 checkout（如 `universe-editor` vs `universe-editorN`），`lifecycle.ts` 行号不同就说明**代码版本不同**，先和用户确认改哪一份，否则改了不生效。
+- **核对路径与版本**：堆栈里的绝对路径必须对得上当前工作目录。本仓库常有并行 checkout（如 `universe-editor` vs `universe-editorN`）；**路径** 指向哪份就改哪份。
+  - ⚠️ **行号陷阱**：dev 下 vite 会把 `.ts/.tsx` transform（剥离 `interface`/`type`/JSDoc）后再发给浏览器，所以栈里 `lifecycle.ts:42` 这种行号**通常比源文件（如 164）小一截，这是正常的，不代表旧代码**。不要因为"行号对不上源文件"就断定报告陈旧——先看**路径**对不对。只有路径都指向另一份 checkout 时才是版本问题。
 - 堆栈被截断（结尾像 `(h`）无法定位时，**找用户要完整堆栈**，不要瞎猜。
 
 ### 2. 定位创建点（用 Explore / Grep 并行扫）
@@ -69,10 +71,11 @@ pnpm --filter @universe-editor/editor lint
 ## 易踩坑速记
 1. 一个泄漏报两条（对象 + 其 `_store`），idx 连续，别当成两个 bug。
 2. 闭包引用 ≠ 建立父链，消不掉泄漏。
-3. React 订阅不是元凶（报告前已 unmount）；盯没进父链的对象。
+3. React 订阅在**正常关窗**路径下不是元凶（报告前已 unmount）；但 **reload（`[renderer:reload]`）路径**可能在 unmount 前检测，把活跃订阅全误报——这类是假阳性，修检测时机而非订阅。
 4. 根服务在单例下不被报——所以“没被报”不代表“被释放”。
-5. 堆栈路径/行号要对上当前 checkout，否则在改一份没运行的代码。
+5. 只用**路径**判断改哪份 checkout；dev 栈的**行号是 transform 后的**（比源文件小），不能据此判定报告陈旧。
 6. 横向对比同类创建路径，漏 `_register` 的那条就是 bug。
+7. 用 tracker 写回归测试时，`computeLeakingDisposables()` 无泄漏返回 **`undefined`（非 `null`）**；contribution 回退 `new NullLogger()` 等桩对象自身会被算泄漏，给个返回 `markAsSingleton` logger 的 loggerService 桩绕开。
 
 ## 其它
 

@@ -35,6 +35,11 @@ function startCollecting(svc: FileWatcherMainService): {
 }
 
 const WAIT = { timeout: 5000, interval: 50 } as const
+// The native (parcel) watcher's delivery latency spikes under parallel CI load.
+// WAIT.timeout equals vitest's default 5s testTimeout, so a slow batch can trip
+// the overall test timeout before vi.waitFor gets to report. Give watcher-backed
+// tests headroom beyond WAIT so a real miss surfaces as the waitFor assertion.
+const WATCHER_TEST_TIMEOUT = 15000
 // Fixed window for "no event should arrive": an ignored change never fires, so
 // waiting longer can't make it appear — this stays deterministic under load.
 const NO_EVENT_WINDOW_MS = 800
@@ -53,34 +58,42 @@ describe('FileWatcherMainService', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  it('emits an event when a file is created', async () => {
-    await svc.watch(URI.file(root).toJSON())
-    const target = join(root, 'new.txt')
-    const c = startCollecting(svc)
-    await fs.writeFile(target, 'hello')
-    await vi.waitFor(() => {
-      svc._flushForTests()
-      const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
-      expect(matched).toBeDefined()
-      // create + write may collapse to create or update depending on platform/timing.
-      expect(['added', 'modified']).toContain(matched?.type)
-    }, WAIT)
-    c.stop()
-  })
+  it(
+    'emits an event when a file is created',
+    async () => {
+      await svc.watch(URI.file(root).toJSON())
+      const target = join(root, 'new.txt')
+      const c = startCollecting(svc)
+      await fs.writeFile(target, 'hello')
+      await vi.waitFor(() => {
+        svc._flushForTests()
+        const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
+        expect(matched).toBeDefined()
+        // create + write may collapse to create or update depending on platform/timing.
+        expect(['added', 'modified']).toContain(matched?.type)
+      }, WAIT)
+      c.stop()
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
 
-  it('emits a deleted event when a file is removed', async () => {
-    const target = join(root, 'gone.txt')
-    await fs.writeFile(target, 'x')
-    await svc.watch(URI.file(root).toJSON())
-    const c = startCollecting(svc)
-    await fs.rm(target)
-    await vi.waitFor(() => {
-      svc._flushForTests()
-      const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
-      expect(matched?.type).toBe('deleted')
-    }, WAIT)
-    c.stop()
-  })
+  it(
+    'emits a deleted event when a file is removed',
+    async () => {
+      const target = join(root, 'gone.txt')
+      await fs.writeFile(target, 'x')
+      await svc.watch(URI.file(root).toJSON())
+      const c = startCollecting(svc)
+      await fs.rm(target)
+      await vi.waitFor(() => {
+        svc._flushForTests()
+        const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(target))
+        expect(matched?.type).toBe('deleted')
+      }, WAIT)
+      c.stop()
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
 
   it('ignores changes inside node_modules', async () => {
     await fs.mkdir(join(root, 'node_modules'), { recursive: true })
@@ -110,36 +123,44 @@ describe('FileWatcherMainService', () => {
     expect(inside.length).toBe(0)
   })
 
-  it('setExcludes re-applies the ignore set on the active watch', async () => {
-    await svc.watch(URI.file(root).toJSON())
-    // node_modules is no longer ignored once we install an empty exclude set.
-    await svc.setExcludes([])
-    await fs.mkdir(join(root, 'node_modules'), { recursive: true })
-    const c = startCollecting(svc)
-    await fs.writeFile(join(root, 'node_modules', 'pkg.json'), '{}')
-    await vi.waitFor(() => {
-      svc._flushForTests()
-      const inside = c.events.filter((e) =>
-        normPath(reviveFsPath(e)).includes(normPath(`${root}${pathSep}node_modules`)),
-      )
-      expect(inside.length).toBeGreaterThan(0)
-    }, WAIT)
-    c.stop()
-  })
+  it(
+    'setExcludes re-applies the ignore set on the active watch',
+    async () => {
+      await svc.watch(URI.file(root).toJSON())
+      // node_modules is no longer ignored once we install an empty exclude set.
+      await svc.setExcludes([])
+      await fs.mkdir(join(root, 'node_modules'), { recursive: true })
+      const c = startCollecting(svc)
+      await fs.writeFile(join(root, 'node_modules', 'pkg.json'), '{}')
+      await vi.waitFor(() => {
+        svc._flushForTests()
+        const inside = c.events.filter((e) =>
+          normPath(reviveFsPath(e)).includes(normPath(`${root}${pathSep}node_modules`)),
+        )
+        expect(inside.length).toBeGreaterThan(0)
+      }, WAIT)
+      c.stop()
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
 
-  it('debounces rapid writes into a small number of batches', async () => {
-    await svc.watch(URI.file(root).toJSON())
-    const target = join(root, 'rapid.txt')
-    const batches: number[] = []
-    const sub = svc.onDidChangeFiles((batch) => batches.push(batch.length))
-    for (let i = 0; i < 5; i++) {
-      await fs.writeFile(target, String(i))
-    }
-    // Poll for the debounced batch instead of relying on a fixed sleep.
-    await vi.waitFor(() => expect(batches.length).toBeGreaterThan(0), WAIT)
-    // Allow a moment for any trailing batch, then assert writes coalesced.
-    await new Promise((r) => setTimeout(r, 100))
-    sub.dispose()
-    expect(batches.length).toBeLessThanOrEqual(2)
-  })
+  it(
+    'debounces rapid writes into a small number of batches',
+    async () => {
+      await svc.watch(URI.file(root).toJSON())
+      const target = join(root, 'rapid.txt')
+      const batches: number[] = []
+      const sub = svc.onDidChangeFiles((batch) => batches.push(batch.length))
+      for (let i = 0; i < 5; i++) {
+        await fs.writeFile(target, String(i))
+      }
+      // Poll for the debounced batch instead of relying on a fixed sleep.
+      await vi.waitFor(() => expect(batches.length).toBeGreaterThan(0), WAIT)
+      // Allow a moment for any trailing batch, then assert writes coalesced.
+      await new Promise((r) => setTimeout(r, 100))
+      sub.dispose()
+      expect(batches.length).toBeLessThanOrEqual(2)
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
 })

@@ -9,7 +9,7 @@
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   AiErrorCode,
   AsyncIterableSource,
@@ -418,5 +418,47 @@ describe('AiModelMainService', () => {
     expect(onDisk.activeModels.chat).toBe('openai/default/gpt-4o')
     expect(onDisk.groups).toEqual([{ vendor: 'ollama', name: 'default' }])
     service.dispose()
+  })
+
+  it('cancels a metadata request whose provider never responds (no leak on a hung endpoint)', async () => {
+    // Regression: getModels has no per-call deadline, so a provider whose fetch
+    // never settles leaves its abort store + cancellation listener pending until
+    // the process exits (reported as a main-process Disposable leak). The
+    // _withTimeoutToken deadline must cancel the token so the provider unwinds.
+    const service = makeService([FAKE_GROUP])
+    const tokenStarted = new DeferredPromise<CancellationToken>()
+    addProvider(service, 'fake', {
+      // Hangs until cancelled, then resolves empty — mirrors a provider that
+      // aborts its fetch on token cancellation and falls back to no models.
+      provideModels: (_group: AiResolvedGroup, token: CancellationToken) =>
+        new Promise<AiModelMetadata[]>((resolve) => {
+          tokenStarted.complete(token)
+          token.onCancellationRequested(() => resolve([]))
+        }),
+      sendRequest: () => {
+        throw new Error('unused')
+      },
+      provideTokenCount: () => Promise.resolve(0),
+    })
+
+    // Drain _ready (a real fs read) under real timers before faking the clock,
+    // so the deadline timer is the only thing the fake clock has to advance.
+    await service.getActiveModel('chat')
+
+    vi.useFakeTimers()
+    try {
+      const modelsPromise = service.getModels()
+      const token = await tokenStarted.p
+      expect(token.isCancellationRequested).toBe(false)
+
+      // Crossing the deadline must cancel the token and let getModels settle.
+      // Advance past the service's metadata deadline (10s) by a safe margin.
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(token.isCancellationRequested).toBe(true)
+      await expect(modelsPromise).resolves.toEqual([])
+    } finally {
+      vi.useRealTimers()
+      service.dispose()
+    }
   })
 })

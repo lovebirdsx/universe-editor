@@ -126,7 +126,6 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.rename.title': 'Rename…',
   'action.reloadWindow.title': 'Reload Window',
   'reload.leakDetected.message': 'Detected {count} un-disposed Disposable(s)',
-  'reload.leakDetected.reload': 'Reload Anyway',
   'action.replace.title': 'Replace',
   'action.revealActiveFileInExplorer.title': 'Reveal Active File in Explorer',
   'action.save.title': 'Save',

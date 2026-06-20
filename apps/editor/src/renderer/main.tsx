@@ -613,10 +613,6 @@ async function bootstrapWorkbench(): Promise<void> {
         )
         channel.appendLine(report.details)
         channel.appendLine('')
-        // 'reload' means the user already saw the modal in the previous session
-        // (ReloadWindowAction). Skip the notification to avoid duplicate noise;
-        // the Output channel still has the details for reference.
-        if (report.source === 'reload') return
         notificationService.notify({
           severity: Severity.Warning,
           message: localize(

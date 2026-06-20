@@ -52,6 +52,14 @@ import { OpenAiProvider } from './providers/openAiProvider.js'
 
 const AI_SETTINGS_FILE = 'aiSettings.json'
 
+/**
+ * Upper bound for one-shot metadata calls (model enumeration, token counting,
+ * model selection). Without it, a provider whose endpoint never responds (e.g. a
+ * misconfigured baseUrl) keeps its fetch — and the cancellation listener / abort
+ * store it registers — pending forever, surfacing as a leak on process exit.
+ */
+const METADATA_REQUEST_TIMEOUT_MS = 10_000
+
 /** Out-of-box groups synthesized when aiSettings.json is missing or empty. */
 const DEFAULT_GROUPS: readonly AiProviderGroup[] = [
   { name: 'default', vendor: 'ollama' },
@@ -332,9 +340,11 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   private async _withTimeoutToken<T>(fn: (token: CancellationToken) => Promise<T>): Promise<T> {
     const cts = new CancellationTokenSource()
+    const timer = setTimeout(() => cts.cancel(), METADATA_REQUEST_TIMEOUT_MS)
     try {
       return await fn(cts.token)
     } finally {
+      clearTimeout(timer)
       cts.dispose()
     }
   }

@@ -1056,7 +1056,7 @@ export class SwitchSessionAction extends Action2 {
     const activeItemId = items.find((it) => it.sessionId === activeSessionId)?.id
     const pick = await quickInput.pick<SessionSwitchPickItem>(items, {
       placeholder: localize('agent.switchSession.placeholder', 'Switch to a session in any window'),
-      activeItemId,
+      ...(activeItemId !== undefined ? { activeItemId } : {}),
     })
     if (!pick) return
     await switcher.reveal(pick.windowId, pick.sessionId)

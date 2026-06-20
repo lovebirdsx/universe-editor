@@ -2,9 +2,16 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   ConfigurationService,
   ConfigurationTarget,
+  DisposableStore,
+  DisposableTracker,
   JSONContributionRegistry,
+  LogLevel,
+  markAsSingleton,
+  NullLogger,
+  setDisposableTracker,
   URI,
   type IFileService,
+  type ILoggerService,
 } from '@universe-editor/platform'
 import type {
   IRemoteSchemaService,
@@ -208,5 +215,51 @@ describe('JsonSchemaAssociationsContribution', () => {
     await settle()
 
     expect(userContribs()).toHaveLength(0)
+  })
+
+  it('keeps user schema handles in the disposable parent chain (no leak while alive)', async () => {
+    // Regression: user-schema registry handles were pushed into a plain array,
+    // so they never joined the parent chain and the leak tracker flagged them
+    // as orphans for the whole life of the contribution (surfaced on reload).
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      // Mirror main.tsx: the contribution lives under a singleton root store,
+      // so only un-parented disposables (the bug) get reported as leaks. The
+      // logger service owns its loggers, so model that with a singleton logger
+      // (otherwise the stub logger itself would surface as noise).
+      const root = markAsSingleton(new DisposableStore())
+      const loggerService = {
+        _serviceBrand: undefined,
+        createLogger: () => markAsSingleton(new NullLogger()),
+        setLevel: () => {},
+        getLevel: () => LogLevel.Info,
+      } as unknown as ILoggerService
+      const config = new ConfigurationService()
+      config.update(
+        'json.schemas',
+        [{ fileMatch: ['**/*.foo.json'], schema: { type: 'object' } }],
+        ConfigurationTarget.User,
+      )
+      const c = root.add(
+        new JsonSchemaAssociationsContribution(
+          config,
+          fakeFileService({}),
+          undefined as never,
+          loggerService,
+        ),
+      )
+      root.add(config)
+      await settle()
+      expect(userContribs()).toHaveLength(1)
+
+      // The handle is alive (not disposed) but must not be reported as a leak.
+      const report = tracker.computeLeakingDisposables()
+      expect(report).toBeUndefined()
+
+      void c
+    } finally {
+      setDisposableTracker(null)
+    }
   })
 })

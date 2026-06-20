@@ -128,7 +128,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.rename.title': '重命名…',
   'action.reloadWindow.title': '重载窗口',
   'reload.leakDetected.message': '检测到 {count} 个未释放的 Disposable',
-  'reload.leakDetected.reload': '仍然重载',
   'action.replace.title': '替换',
   'action.revealActiveFileInExplorer.title': '在资源管理器中定位当前文件',
   'action.save.title': '保存',

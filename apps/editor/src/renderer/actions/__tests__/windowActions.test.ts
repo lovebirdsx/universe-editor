@@ -15,7 +15,6 @@ import {
   NullLogger,
   ServiceCollection,
   ShutdownReason,
-  toDisposable,
   registerAction2,
   setDisposableTracker,
   type IConfirmResult,
@@ -221,13 +220,11 @@ describe('ReloadWindowAction leak-detection path', () => {
 
   async function runRestart(
     host: IHostServiceType,
-    dialog: IDialogService,
     leak: IRendererDisposableLeakService,
     lifecycle = new FakeLifecycleService(),
   ): Promise<void> {
     const services = new ServiceCollection()
     services.set(IHostService, host)
-    services.set(IDialogService, dialog)
     services.set(IRendererDisposableLeakService, leak)
     services.set(ILifecycleService, lifecycle)
     const inst = new InstantiationService(services)
@@ -237,67 +234,41 @@ describe('ReloadWindowAction leak-detection path', () => {
     })
   }
 
-  it('skips confirm and restarts when no tracker is installed (production path)', async () => {
+  it('restarts without marking a reason when no tracker is installed (production path)', async () => {
     disposables.push(registerAction2(ReloadWindowAction))
     const host = makeHostStub()
-    const dialog = new FakeDialogService()
-    const confirm = vi.spyOn(dialog, 'confirm')
     const leak = new RendererDisposableLeakService(stubProxy)
 
-    await runRestart(host, dialog, leak)
+    await runRestart(host, leak)
 
-    expect(confirm).not.toHaveBeenCalled()
     expect(host.restart).toHaveBeenCalledTimes(1)
     expect(leak.readUnloadReason()).toBe('unknown')
   })
 
-  it('skips confirm when tracker installed but no leaks', async () => {
+  it('marks the unload reason as reload and restarts when a tracker is installed', async () => {
     disposables.push(registerAction2(ReloadWindowAction))
     setDisposableTracker(new DisposableTracker())
     const host = makeHostStub()
-    const dialog = new FakeDialogService()
-    const confirm = vi.spyOn(dialog, 'confirm')
     const leak = new RendererDisposableLeakService(stubProxy)
 
-    await runRestart(host, dialog, leak)
+    await runRestart(host, leak)
 
-    expect(confirm).not.toHaveBeenCalled()
     expect(host.restart).toHaveBeenCalledTimes(1)
     expect(leak.readUnloadReason()).toBe('reload')
   })
 
-  it('shows confirm modal with leak details when tracker reports leaks', async () => {
+  it('does not restart when shutdown is vetoed', async () => {
     disposables.push(registerAction2(ReloadWindowAction))
-    const tracker = new DisposableTracker()
-    setDisposableTracker(tracker)
-    disposables.push(toDisposable(() => {}))
-
+    setDisposableTracker(new DisposableTracker())
     const host = makeHostStub()
-    const dialog = new FakeDialogService()
-    dialog.result = { confirmed: true, choice: 'primary' }
     const leak = new RendererDisposableLeakService(stubProxy)
+    const lifecycle = new FakeLifecycleService()
+    lifecycle.vetoed = true
 
-    await runRestart(host, dialog, leak)
-
-    expect(dialog.lastDetail).toBeTruthy()
-    expect(host.restart).toHaveBeenCalledTimes(1)
-    expect(leak.readUnloadReason()).toBe('reload')
-  })
-
-  it('does not restart when user cancels the leak confirm', async () => {
-    disposables.push(registerAction2(ReloadWindowAction))
-    const tracker = new DisposableTracker()
-    setDisposableTracker(tracker)
-    disposables.push(toDisposable(() => {}))
-
-    const host = makeHostStub()
-    const dialog = new FakeDialogService()
-    dialog.result = { confirmed: false, choice: 'cancel' }
-    const leak = new RendererDisposableLeakService(stubProxy)
-
-    await runRestart(host, dialog, leak)
+    await runRestart(host, leak, lifecycle)
 
     expect(host.restart).not.toHaveBeenCalled()
-    expect(leak.readUnloadReason()).toBe('unknown')
+    // The reason is marked before the veto check; harmless since no reload occurs.
+    expect(leak.readUnloadReason()).toBe('reload')
   })
 })
