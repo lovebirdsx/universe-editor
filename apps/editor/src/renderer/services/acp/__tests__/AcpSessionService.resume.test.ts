@@ -76,6 +76,7 @@ import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
 // ---------------------------------------------------------------------------
@@ -425,6 +426,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     storage,
     agentDefaults,
     new StubSessionChangeTracker(),
+    new StubSessionTitleService(),
     FAKE_HOST,
   )
   return { svc, client, history, agentDefaults, notifications, storage }
@@ -880,6 +882,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
         new StubLoggerService(),
       ),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     // Kick off history hydration but DO NOT await — race the resume call.
@@ -986,6 +989,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         new StubLoggerService(),
       ),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     expect(svc.activeSession.get()).toBeUndefined()
@@ -1034,6 +1038,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         new StubLoggerService(),
       ),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     // Let _loadPendingRestore() resolve.
@@ -1078,6 +1083,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         new StubLoggerService(),
       ),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     await Promise.resolve()
@@ -1126,6 +1132,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         new StubLoggerService(),
       ),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     await Promise.resolve()

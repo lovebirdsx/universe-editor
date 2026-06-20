@@ -361,6 +361,23 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
+  it('parses and persists the commit and sessionTitle slots round-trip', async () => {
+    const { service, dir } = makeServiceFromFile(
+      JSON.stringify({
+        groups: [{ vendor: 'openai', name: 'default' }],
+        activeModels: { commit: 'openai/default/gpt-4o', sessionTitle: 'ollama/default/qc' },
+      }),
+    )
+    expect(await service.getActiveModel('commit')).toBe('openai/default/gpt-4o')
+    expect(await service.getActiveModel('sessionTitle')).toBe('ollama/default/qc')
+
+    await service.setActiveModel('sessionTitle', 'openai/default/gpt-4o-mini')
+    const onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
+    expect(onDisk.activeModels.commit).toBe('openai/default/gpt-4o')
+    expect(onDisk.activeModels.sessionTitle).toBe('openai/default/gpt-4o-mini')
+    service.dispose()
+  })
+
   it('falls back to default groups when the file is a bare array (no longer supported)', async () => {
     const { service } = makeServiceFromFile(JSON.stringify([{ vendor: 'openai', name: 'default' }]))
     const groups = await service.getGroups()

@@ -59,6 +59,7 @@ import {
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService, type AcpSessionHistoryEntry } from './acpSessionHistory.js'
+import { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
@@ -216,6 +217,7 @@ export class AcpSessionService
     @IStorageService private readonly _storage: IStorageService,
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
     @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
+    @IAcpSessionTitleService private readonly _titleService: IAcpSessionTitleService,
     @IHostService hostService: IHostService,
   ) {
     super()
@@ -392,6 +394,7 @@ export class AcpSessionService
             this._history,
             this._agentDefaults,
             this._changeTracker,
+            this._titleService,
           )
           this._register(session)
           transaction((tx) => {
@@ -510,6 +513,8 @@ export class AcpSessionService
         this._history,
         this._agentDefaults,
         this._changeTracker,
+        // No title service on resume: restored sessions already carry a durable
+        // title, so we must not regenerate (and overwrite) it on the next turn.
       )
       this._register(session)
       const captured = session

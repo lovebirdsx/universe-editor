@@ -37,6 +37,7 @@ const PICK_MODEL_COMMANDS: Record<AiSlotKey, string> = {
   chat: 'ai.pickModel',
   inline: 'ai.inlineCompletion.pickModel',
   commit: 'ai.commitMessage.pickModel',
+  sessionTitle: 'ai.sessionTitle.pickModel',
 }
 
 interface AiSnapshot {
@@ -44,6 +45,7 @@ interface AiSnapshot {
   chat?: string | undefined
   inline?: string | undefined
   commit?: string | undefined
+  sessionTitle?: string | undefined
 }
 
 const EMPTY: AiSnapshot = { models: [] }
@@ -71,13 +73,14 @@ export function AiStatusBarItem({ entry }: StatusBarItemProps) {
   const popRef = useRef<HTMLDivElement>(null)
 
   const refresh = useCallback(async () => {
-    const [models, chat, inlineModel, commit] = await Promise.all([
+    const [models, chat, inlineModel, commit, sessionTitle] = await Promise.all([
       ai.getModels(),
       ai.getActiveModelId(),
       ai.getInlineCompletionModelId(),
       ai.getCommitModelId(),
+      ai.getSessionTitleModelId(),
     ])
-    return { models, chat, inline: inlineModel, commit }
+    return { models, chat, inline: inlineModel, commit, sessionTitle }
   }, [ai])
 
   useEffect(() => {
@@ -94,6 +97,7 @@ export function AiStatusBarItem({ entry }: StatusBarItemProps) {
       ai.onDidChangeActiveModel(apply),
       ai.onDidChangeInlineCompletionModel(apply),
       ai.onDidChangeCommitModel(apply),
+      ai.onDidChangeSessionTitleModel(apply),
       inline.onDidChange(apply),
     ]
     return () => {
@@ -139,6 +143,11 @@ export function AiStatusBarItem({ entry }: StatusBarItemProps) {
       key: 'commit',
       label: localize('ai.quickSettings.commit', 'Commit'),
       currentModelName: modelName(snapshot.commit),
+    },
+    {
+      key: 'sessionTitle',
+      label: localize('ai.quickSettings.sessionTitle', 'Session Title'),
+      currentModelName: modelName(snapshot.sessionTitle),
     },
   ]
 

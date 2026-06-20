@@ -67,6 +67,7 @@ import type { AskUserQuestionRequest } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -411,6 +412,7 @@ describe('AcpSessionService', () => {
       new FakeStorage(),
       makeAgentDefaults(),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
   })
@@ -687,6 +689,7 @@ describe('AcpSessionService', () => {
       new FakeStorage(),
       makeAgentDefaults(),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     const s = await svc.createSession()
@@ -725,6 +728,7 @@ describe('AcpSessionService', () => {
         new FakeStorage(),
         makeAgentDefaults(),
         new StubSessionChangeTracker(),
+        new StubSessionTitleService(),
         FAKE_HOST,
       )
     }
@@ -962,6 +966,7 @@ describe('AcpSessionService — startup timeout', () => {
       new FakeStorage(),
       makeAgentDefaults(),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
     await expect(svc.createSession()).rejects.toThrow(/timed out/)
@@ -985,6 +990,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       new FakeStorage(),
       makeAgentDefaults(),
       new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
       FAKE_HOST,
     )
   }

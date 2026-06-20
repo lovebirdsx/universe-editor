@@ -36,13 +36,16 @@ function makeAi() {
     onDidChangeActiveModel: new Emitter<void>().event,
     onDidChangeInlineCompletionModel: new Emitter<void>().event,
     onDidChangeCommitModel: new Emitter<void>().event,
+    onDidChangeSessionTitleModel: new Emitter<void>().event,
     getModels: vi.fn().mockResolvedValue(MODELS),
     getActiveModelId: vi.fn().mockResolvedValue('m1'),
     getInlineCompletionModelId: vi.fn().mockResolvedValue(undefined),
     getCommitModelId: vi.fn().mockResolvedValue(undefined),
+    getSessionTitleModelId: vi.fn().mockResolvedValue(undefined),
     setActiveModelId: vi.fn().mockResolvedValue(undefined),
     setInlineCompletionModelId: vi.fn().mockResolvedValue(undefined),
     setCommitModelId: vi.fn().mockResolvedValue(undefined),
+    setSessionTitleModelId: vi.fn().mockResolvedValue(undefined),
   }
 }
 

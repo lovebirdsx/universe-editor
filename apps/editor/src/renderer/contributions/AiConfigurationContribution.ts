@@ -113,6 +113,10 @@ function buildSchema(modelIds: readonly string[]): IJSONSchema {
             ...modelRef,
             description: 'Active model id for commit message generation.',
           },
+          sessionTitle: {
+            ...modelRef,
+            description: 'Active model id for AI session title generation.',
+          },
         },
       },
     },

@@ -7,7 +7,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useState } from 'react'
-import { Bot, GitCommitHorizontal, WandSparkles, type LucideIcon } from 'lucide-react'
+import { Bot, GitCommitHorizontal, Heading, WandSparkles, type LucideIcon } from 'lucide-react'
 import {
   IAiModelService,
   ICommandService,
@@ -58,6 +58,17 @@ const FEATURES: readonly FeatureDef[] = [
     command: 'ai.commitMessage.pickModel',
     read: (ai) => ai.getCommitModelId(),
   },
+  {
+    id: 'sessionTitle',
+    icon: Heading,
+    label: localize('aiFeatures.sessionTitle', 'Session Title'),
+    description: localize(
+      'aiFeatures.sessionTitle.desc',
+      'Model used to generate friendly titles for AGENTS sessions.',
+    ),
+    command: 'ai.sessionTitle.pickModel',
+    read: (ai) => ai.getSessionTitleModelId(),
+  },
 ]
 
 function findModel(
@@ -95,6 +106,7 @@ export function AiFeatureModelsPanel() {
       aiModel.onDidChangeActiveModel(() => void reload()),
       aiModel.onDidChangeInlineCompletionModel(() => void reload()),
       aiModel.onDidChangeCommitModel(() => void reload()),
+      aiModel.onDidChangeSessionTitleModel(() => void reload()),
     ]
     return () => disposables.forEach((d) => d.dispose())
   }, [aiModel, reload])

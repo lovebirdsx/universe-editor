@@ -104,17 +104,6 @@ async function runPrompt(id, params) {
 
   activeTurns.delete(sessionId)
 
-  // Mirror the real agent: once the turn settles, push a friendly session
-  // title via session_info_update so the editor's title pipeline can be
-  // exercised end-to-end.
-  notify('session/update', {
-    sessionId,
-    update: {
-      sessionUpdate: 'session_info_update',
-      title: `Echo: ${userText}`,
-    },
-  })
-
   reply(id, { stopReason: 'end_turn' })
 }
 

@@ -35,8 +35,6 @@ import {
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IAcpSessionService } from '../services/acp/acpSessionService.js'
-import type { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
-import { resolveLiveSessionTitle } from '../services/acp/acpSessionTitle.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
@@ -74,7 +72,6 @@ export interface E2EProbeServices {
   readonly viewDescriptorService: IViewDescriptorService
   readonly configurationService: IConfigurationService
   readonly acpSessionService: IAcpSessionService
-  readonly acpSessionHistoryService: IAcpSessionHistoryService
   readonly outputService: IOutputService
   readonly updateService: IUpdateService
   readonly terminalService: ITerminalService
@@ -300,15 +297,6 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     getAcpSessionCount: () => services.acpSessionService.sessions.get().length,
     getActiveAcpSessionId: () => services.acpSessionService.activeSessionId.get(),
-    getActiveAcpSessionTitle: () => {
-      const id = services.acpSessionService.activeSessionId.get()
-      if (id === undefined) return undefined
-      return resolveLiveSessionTitle(
-        services.acpSessionHistoryService,
-        services.acpSessionService,
-        id,
-      )
-    },
     sendAcpPrompt: async (text) => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')

@@ -244,7 +244,12 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   async setActiveModel(kind: AiActiveModelKind, modelId: string | undefined): Promise<void> {
     await this._ready
-    const next: { chat?: string; inlineCompletion?: string; commit?: string } = {
+    const next: {
+      chat?: string
+      inlineCompletion?: string
+      commit?: string
+      sessionTitle?: string
+    } = {
       ...this._activeModels,
     }
     if (modelId === undefined) delete next[kind]
@@ -425,16 +430,26 @@ function parseSettings(text: string): { groups: AiProviderGroup[]; activeModels:
 
 function parseActiveModels(raw: unknown): AiActiveModels {
   if (!raw || typeof raw !== 'object') return {}
-  const out: { chat?: string; inlineCompletion?: string } = {}
+  const out: { chat?: string; inlineCompletion?: string; commit?: string; sessionTitle?: string } =
+    {}
   const chat = (raw as { chat?: unknown }).chat
   const inline = (raw as { inlineCompletion?: unknown }).inlineCompletion
+  const commit = (raw as { commit?: unknown }).commit
+  const sessionTitle = (raw as { sessionTitle?: unknown }).sessionTitle
   if (typeof chat === 'string') out.chat = chat
   if (typeof inline === 'string') out.inlineCompletion = inline
+  if (typeof commit === 'string') out.commit = commit
+  if (typeof sessionTitle === 'string') out.sessionTitle = sessionTitle
   return out
 }
 
 function hasAnyActive(active: AiActiveModels): boolean {
-  return active.chat !== undefined || active.inlineCompletion !== undefined
+  return (
+    active.chat !== undefined ||
+    active.inlineCompletion !== undefined ||
+    active.commit !== undefined ||
+    active.sessionTitle !== undefined
+  )
 }
 
 function cloneGroup(g: AiProviderGroup): MutableGroup {

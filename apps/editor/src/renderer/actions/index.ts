@@ -166,6 +166,7 @@ import {
   PickInlineCompletionModelAction,
 } from './inlineCompletionActions.js'
 import { PickCommitModelAction } from './commitMessageActions.js'
+import { PickSessionTitleModelAction } from './sessionTitleActions.js'
 import {
   ViewGitGraphAction,
   GitGraphFocusSearchAction,
@@ -419,6 +420,7 @@ registerAction2(CommitInlineCompletionAction)
 registerAction2(ToggleInlineCompletionAction)
 registerAction2(PickInlineCompletionModelAction)
 registerAction2(PickCommitModelAction)
+registerAction2(PickSessionTitleModelAction)
 
 // Git Graph
 registerAction2(ViewGitGraphAction)

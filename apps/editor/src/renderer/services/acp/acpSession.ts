@@ -27,6 +27,7 @@ import type { IAcpClientConnection } from './acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import type { ISessionChangeTrackerService } from './sessionChangeTracker.js'
+import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import type { DiffHunk } from './diff/reconstructBaseline.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
@@ -352,6 +353,9 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private readonly _toolCallParent = new Map<string, string>()
 
+  /** Guards one-shot AI title generation (see `_maybeGenerateTitle`). */
+  private _titleGenerated = false
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -363,6 +367,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _history?: IAcpSessionHistoryService,
     private readonly _agentDefaults?: IAcpAgentDefaultsService,
     private readonly _changeTracker?: ISessionChangeTrackerService,
+    private readonly _titleService?: IAcpSessionTitleService,
   ) {
     super()
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
@@ -555,8 +560,10 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (abort.signal.aborted) onAbort()
       else abort.signal.addEventListener('abort', onAbort, { once: true })
     })
+    let turnOk = false
     try {
       await Promise.race([this._conn.conn.prompt(params), abortPromise])
+      turnOk = true
     } catch (err) {
       if (err instanceof AcpAbortError) {
         // '[cancelled]' is appended once by cancelTurn — appending here would
@@ -578,6 +585,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (this._inFlight.size === 0) this._flushStream()
       this._recomputeStatus()
     }
+    // After a successful first turn, upgrade the title via the session-title
+    // model. Fire-and-forget; one-shot and self-degrading (see the method).
+    if (turnOk) void this._maybeGenerateTitle(text)
   }
 
   async cancelTurn(): Promise<void> {
@@ -626,6 +636,22 @@ export class AcpSession extends Disposable implements IAcpSession {
     const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
     this._history.updateInfo(this.id, { title: derived })
+  }
+
+  /**
+   * After the first turn settles, ask the session-title model for a friendly
+   * title and overwrite the first-prompt-derived one. Runs at most once per
+   * session and degrades silently: when no title model is configured/available
+   * (or generation fails) the derived title stays. Fire-and-forget.
+   */
+  private async _maybeGenerateTitle(userText: string): Promise<void> {
+    if (this._titleGenerated) return
+    if (!this._history || !this._titleService) return
+    this._titleGenerated = true
+    const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
+    const title = await this._titleService.generateTitle(userText, agentText)
+    if (title === undefined || this.status.get() === 'closed') return
+    this._history.updateInfo(this.id, { title })
   }
 
   async close(): Promise<void> {

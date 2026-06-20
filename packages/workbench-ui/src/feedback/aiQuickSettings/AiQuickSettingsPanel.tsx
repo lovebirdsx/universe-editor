@@ -15,7 +15,7 @@ import { Toggle } from '../../atoms/Toggle.js'
 import { IconButton } from '../../atoms/IconButton.js'
 import styles from './AiQuickSettingsPanel.module.css'
 
-export type AiSlotKey = 'chat' | 'inline' | 'commit'
+export type AiSlotKey = 'chat' | 'inline' | 'commit' | 'sessionTitle'
 
 export interface AiSlotRow {
   readonly key: AiSlotKey

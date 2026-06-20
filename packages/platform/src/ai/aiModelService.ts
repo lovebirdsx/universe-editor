@@ -45,6 +45,9 @@ export interface IAiModelService {
   /** Fires when the active commit-message model selection changes (persisted in aiSettings.json). */
   readonly onDidChangeCommitModel: Event<void>
 
+  /** Fires when the active session-title model selection changes (persisted in aiSettings.json). */
+  readonly onDidChangeSessionTitleModel: Event<void>
+
   /** List currently available models (resolved, with metadata). */
   getModels(): Promise<readonly AiModelMetadata[]>
 
@@ -79,6 +82,11 @@ export interface IAiModelService {
   getCommitModelId(): Promise<string | undefined>
   /** Set the active commit-message model id (persisted in aiSettings.json by main). */
   setCommitModelId(modelId: string | undefined): Promise<void>
+
+  /** The active session-title model id, or undefined if none (persisted in aiSettings.json by main). */
+  getSessionTitleModelId(): Promise<string | undefined>
+  /** Set the active session-title model id (persisted in aiSettings.json by main). */
+  setSessionTitleModelId(modelId: string | undefined): Promise<void>
 
   /** Resolved per-model configuration (schema default → user settings). */
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration>
