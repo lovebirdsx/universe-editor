@@ -1039,6 +1039,7 @@ export class SwitchSessionAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const switcher = accessor.get(ISessionSwitcherService)
     const quickInput = accessor.get(IQuickInputService)
+    const activeSessionId = accessor.get(IAcpSessionService).activeSession.get()?.id
     const sessions = await switcher.getAllSessions()
     if (sessions.length === 0) return
     const items: SessionSwitchPickItem[] = sessions.map((s: SessionSummary) => ({
@@ -1052,8 +1053,10 @@ export class SwitchSessionAction extends Action2 {
       windowId: s.windowId,
       sessionId: s.sessionId,
     }))
+    const activeItemId = items.find((it) => it.sessionId === activeSessionId)?.id
     const pick = await quickInput.pick<SessionSwitchPickItem>(items, {
       placeholder: localize('agent.switchSession.placeholder', 'Switch to a session in any window'),
+      activeItemId,
     })
     if (!pick) return
     await switcher.reveal(pick.windowId, pick.sessionId)

@@ -88,6 +88,11 @@ export interface IKeyMods {
 export interface IPickOptions {
   readonly id?: string
   readonly placeholder?: string
+  /**
+   * Id of the item to highlight initially. The panel focuses the matching item
+   * instead of auto-highlighting the first row. No-op if no item matches.
+   */
+  readonly activeItemId?: string
   readonly matchOnDescription?: boolean
   readonly matchOnDetail?: boolean
   readonly filterMode?: QuickPickFilterMode

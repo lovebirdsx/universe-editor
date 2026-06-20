@@ -294,6 +294,9 @@ export class QuickInputService implements IQuickInputService {
         items,
         mruIds,
         placeholder: options?.placeholder,
+        activeItems: options?.activeItemId
+          ? items.filter((it): it is T => !('type' in it) && it.id === options.activeItemId)
+          : undefined,
         prefix: options?.prefix,
         matchOnDescription: options?.matchOnDescription,
         matchOnDetail: options?.matchOnDetail,
