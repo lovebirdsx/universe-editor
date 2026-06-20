@@ -183,4 +183,30 @@ describe('JsonSchemaAssociationsContribution', () => {
 
     expect(userContribs()).toHaveLength(0)
   })
+
+  it('does not register a user schema resolved after disposal', async () => {
+    const url = 'https://json.schemastore.org/claude-code-settings.json'
+    const config = new ConfigurationService()
+    config.update('json.schemas', [{ fileMatch: ['**/*.c.json'], url }], ConfigurationTarget.User)
+
+    // A remote service whose fetch we resolve manually, to interleave disposal
+    // between the await and the registration.
+    let release!: (r: RemoteSchemaResult) => void
+    const pending = new Promise<RemoteSchemaResult>((r) => {
+      release = r
+    })
+    const remote = { fetchSchema: () => pending } as unknown as IRemoteSchemaService
+    const c = new JsonSchemaAssociationsContribution(
+      config,
+      fakeFileService({}),
+      remote,
+      undefined as never,
+    )
+    await settle()
+    c.dispose()
+    release({ ok: true, content: JSON.stringify({ type: 'object' }) })
+    await settle()
+
+    expect(userContribs()).toHaveLength(0)
+  })
 })

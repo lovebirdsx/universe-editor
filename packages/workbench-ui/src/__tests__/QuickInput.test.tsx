@@ -525,6 +525,53 @@ describe('QuickPickPanel active item (live preview)', () => {
     fireEvent.change(screen.getByTestId('quick-input-field'), { target: { value: 'zzzznomatch' } })
     expect(onActiveChange).toHaveBeenLastCalledWith(undefined)
   })
+
+  it('does not report a stray item when the list is rebuilt under host-managed focus', () => {
+    // autoFocusFirstItem=false (simple file dialog): focus sits on a non-zero
+    // index, then the host replaces the items (e.g. entering a directory). The
+    // panel must NOT report whatever entry now lands at the old index — that would
+    // auto-suggest the new folder's first child and clobber the host's input.
+    const onActiveChange = vi.fn()
+    const folderA = [
+      { id: 'pa', label: '..' },
+      { id: 'foo', label: 'foo' },
+    ]
+    const { rerender } = render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folderA,
+          filterExternally: true,
+          autoFocusFirstItem: false,
+          activeItems: [folderA[1]!], // focus "foo" (index 1)
+          onActiveChange,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(onActiveChange).toHaveBeenLastCalledWith(folderA[1])
+    onActiveChange.mockClear()
+
+    // Enter "foo": new listing, focus must reset, NOT report foo's first child
+    // ("bar") that happens to sit at the old index 1.
+    const folderB = [
+      { id: 'pb', label: '..' },
+      { id: 'bar', label: 'bar' },
+    ]
+    rerender(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folderB,
+          filterExternally: true,
+          autoFocusFirstItem: false,
+          onActiveChange,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    expect(onActiveChange).not.toHaveBeenCalledWith(folderB[1])
+  })
 })
 
 describe('QuickPickPanel simple-file-dialog extras', () => {

@@ -88,6 +88,28 @@ export function isDeletion(prev: string, next: string): boolean {
 }
 
 /**
+ * Decide whether a value change should count as a deletion (suppressing
+ * autocomplete). `base` is the segment the user actually typed before the last
+ * completion appended a selected tail. Typing a character forward over that
+ * selection yields a value longer than `base` (e.g. base `/b/f`, completed
+ * `/b/foo` with `oo` selected, typing `o` → `/b/fo`), which must NOT count as a
+ * deletion — only shrinking back to `base` (the selected tail removed) is a real
+ * delete. Falls back to the plain prefix-shrink check when there is no pending
+ * completion or the edit is unrelated to it.
+ */
+export function isDeletionEdit(prev: string, next: string, base: string | undefined): boolean {
+  if (
+    base !== undefined &&
+    prev.length > base.length &&
+    prev.startsWith(base) &&
+    next.startsWith(base)
+  ) {
+    return next.length <= base.length
+  }
+  return isDeletion(prev, next)
+}
+
+/**
  * Compute the autocompletion of a typed path against a matched entry name. Returns
  * the completed value and the `[start, end]` selection covering the appended
  * suffix, so the panel can highlight the part the user has not yet typed.

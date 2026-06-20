@@ -71,6 +71,9 @@ class FakeQuickPick {
   triggerOk(): void {
     this._onTriggerOk.fire()
   }
+  triggerButton(): void {
+    this._onTriggerButton.fire(this.buttons[0])
+  }
 }
 
 class FakeQuickInputService {
@@ -85,9 +88,10 @@ class FakeQuickInputService {
 // In-memory filesystem keyed by URI path. Directories map to their child names;
 // files live in a separate set.
 const DIRS = new Map<string, string[]>([
-  ['/a', ['git_project', 'src', 'readme.md']],
+  ['/a', ['git_project', 'src', 'readme.md', '.hidden']],
   ['/a/git_project', []],
   ['/a/src', []],
+  ['/a/.hidden', []],
   ['/b', ['foo']],
   ['/b/foo', []],
   ['/home/u', ['Documents']],
@@ -173,17 +177,37 @@ const fakeDialog = {
   confirm: async () => ({ confirmed: true }),
 } as unknown as IDialogService
 
+// In-memory storage so showDotFiles can persist across dialog opens in a test.
+class FakeStorageService {
+  private readonly _map = new Map<string, unknown>()
+  async get<T>(key: string): Promise<T | undefined> {
+    return this._map.get(key) as T | undefined
+  }
+  async set(key: string, value: unknown): Promise<void> {
+    this._map.set(key, value)
+  }
+  async remove(key: string): Promise<void> {
+    this._map.delete(key)
+  }
+  readonly onDidChangeWorkspaceScope = () => ({ dispose: () => undefined })
+}
+
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
-function createDialog(): { dialog: SimpleFileDialog; quickInput: FakeQuickInputService } {
+function createDialog(storage: FakeStorageService = new FakeStorageService()): {
+  dialog: SimpleFileDialog
+  quickInput: FakeQuickInputService
+  storage: FakeStorageService
+} {
   const quickInput = new FakeQuickInputService()
   const dialog = new SimpleFileDialog(
     quickInput as never,
     new FakeFileService() as never,
     fakeWorkspace,
     fakeDialog,
+    storage as never,
   )
-  return { dialog, quickInput }
+  return { dialog, quickInput, storage }
 }
 
 const labels = (qp: FakeQuickPick): string[] => qp.items.map((it) => it.label)
@@ -364,6 +388,37 @@ describe('SimpleFileDialog interaction', () => {
     expect(qp.value).toBe('/home/u/')
     expect(labels(qp)).toEqual(['..', 'Documents'])
   })
+
+  it('toggling hidden files reveals dotfiles and persists the setting across opens', async () => {
+    const storage = new FakeStorageService()
+    const first = createDialog(storage)
+    void first.dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp1 = first.quickInput.lastPick
+    // hidden by default
+    expect(labels(qp1)).toEqual(['..', 'git_project', 'src'])
+
+    qp1.triggerButton()
+    await flush()
+    // ".hidden" now shows (directories first, sorted)
+    expect(labels(qp1)).toEqual(['..', '.hidden', 'git_project', 'src'])
+
+    // A fresh dialog sharing the same storage must remember the setting.
+    const second = createDialog(storage)
+    void second.dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    expect(labels(second.quickInput.lastPick)).toEqual(['..', '.hidden', 'git_project', 'src'])
+  })
 })
 
 describe('SimpleFileDialog Windows drives', () => {
@@ -374,6 +429,7 @@ describe('SimpleFileDialog Windows drives', () => {
       new WinFakeFileService() as never,
       fakeWorkspace,
       fakeDialog,
+      new FakeStorageService() as never,
     )
     return { dialog, quickInput }
   }

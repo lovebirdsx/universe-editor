@@ -9,6 +9,7 @@ import {
   expandTilde,
   findCompletion,
   isDeletion,
+  isDeletionEdit,
   prepareEntries,
   splitTrailingSegment,
   type DialogEntry,
@@ -124,5 +125,26 @@ describe('isDeletion', () => {
     expect(isDeletion('/foo/ba', '/foo/bar')).toBe(false)
     expect(isDeletion('/foo/bar', '/foo/baz')).toBe(false)
     expect(isDeletion('/foo', '/foo')).toBe(false)
+  })
+})
+
+describe('isDeletionEdit', () => {
+  it('treats typing forward over the completed selection as NOT a deletion', () => {
+    // base "/b/f", completed "/b/foo" with "oo" selected; typing "o" → "/b/fo"
+    expect(isDeletionEdit('/b/foo', '/b/fo', '/b/f')).toBe(false)
+    // typing the last "o" stays "/b/foo"
+    expect(isDeletionEdit('/b/foo', '/b/foo', '/b/fo')).toBe(false)
+  })
+
+  it('treats shrinking back to (or below) the typed base as a deletion', () => {
+    // backspace removes the whole selected tail → back to base
+    expect(isDeletionEdit('/b/foo', '/b/f', '/b/f')).toBe(true)
+    // backspace into the base itself
+    expect(isDeletionEdit('/b/foo', '/b/', '/b/f')).toBe(true)
+  })
+
+  it('falls back to plain isDeletion without a pending completion base', () => {
+    expect(isDeletionEdit('/foo/bar', '/foo/ba', undefined)).toBe(true)
+    expect(isDeletionEdit('/foo/ba', '/foo/bar', undefined)).toBe(false)
   })
 })

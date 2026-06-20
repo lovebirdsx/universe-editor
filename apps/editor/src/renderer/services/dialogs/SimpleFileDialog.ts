@@ -12,6 +12,7 @@ import {
   IFileService,
   IFileDialogService,
   IQuickInputService,
+  IStorageService,
   IWorkspaceService,
   InstantiationType,
   MutableDisposable,
@@ -25,7 +26,7 @@ import { resourceIconId } from '../quickInput/quickPickResourceIcon.js'
 import {
   endsWithSeparator,
   expandTilde,
-  isDeletion,
+  isDeletionEdit,
   prepareEntries,
   splitTrailingSegment,
   type DialogEntry,
@@ -39,6 +40,7 @@ interface ResolvedEntry {
 }
 
 const PARENT_ID = '..'
+const STORAGE_KEY_SHOW_DOT_FILES = 'fileDialog.showHiddenFiles'
 
 export class SimpleFileDialog extends Disposable implements IFileDialogService {
   declare readonly _serviceBrand: undefined
@@ -56,6 +58,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
     @IFileService private readonly _fileService: IFileService,
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IDialogService private readonly _dialog: IDialogService,
+    @IStorageService private readonly _storage: IStorageService,
   ) {
     super()
     const ipc = typeof window !== 'undefined' ? window.ipc : undefined
@@ -74,6 +77,8 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
   private async _show(opts: IFileDialogOptions, mode: DialogMode): Promise<URI | undefined> {
     const allowFiles = opts.canSelectFiles
     const start = await this._resolveStart(opts, mode)
+    const initialShowDotFiles =
+      (await this._storage.get<boolean>(STORAGE_KEY_SHOW_DOT_FILES)) === true
 
     return new Promise<URI | undefined>((resolve) => {
       const session = new DisposableStore()
@@ -86,12 +91,16 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       qp.okLabel = opts.openLabel ?? localize('fileDialog.ok', 'OK')
 
       let currentFolder = start.folder
-      let showDotFiles = false
+      let showDotFiles = initialShowDotFiles
       let currentItems: IQuickPickItem[] = []
       let entriesById = new Map<string, ResolvedEntry>()
       let settled = false
       let lastValue = ''
       let userTypedSegment = ''
+      // The value the user actually typed before the last completion appended a
+      // selected tail. Lets onValueChange tell "typing forward over the selection"
+      // (not a deletion) apart from "backspacing the tail" (a deletion).
+      let autoCompleteBase: string | undefined
       let navToken = 0
 
       const syncHiddenButton = (): void => {
@@ -195,15 +204,37 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         if (listOpts.resetInput) setInputToFolder()
       }
 
-      // Highlight the entry whose name prefixes the typed trailing segment. Setting
-      // activeItems drives the panel focus, which fires onDidChangeActive and
-      // autocompletes the value.
+      // Autocomplete the input to `item`, selecting the untyped tail so the next
+      // keystroke replaces it. Records the committed-so-far prefix (value minus the
+      // selected tail) as the completion base, so a forward keystroke over the
+      // selection is not mistaken for a backspace.
+      const completeToItem = (item: IQuickPickItem): void => {
+        const prefix = this._isDriveListRoot(currentFolder)
+          ? ''
+          : this._displayWithSep(currentFolder)
+        const completed = item.id === PARENT_ID ? prefix + '..' : prefix + item.label
+        const startsWithTyped =
+          item.id !== PARENT_ID &&
+          item.label.toLowerCase().startsWith(userTypedSegment.toLowerCase())
+        const typedLen = startsWithTyped ? userTypedSegment.length : 0
+        const selStart = Math.min(prefix.length + typedLen, completed.length)
+        autoCompleteBase = completed.slice(0, selStart)
+        lastValue = completed
+        qp.value = completed
+        qp.valueSelection = [selStart, completed.length]
+      }
+
+      // Highlight the entry whose name prefixes the typed trailing segment and
+      // autocomplete to it directly. Going through activeItems alone is not enough:
+      // the panel dedupes onDidChangeActive by item id, so re-matching the same
+      // entry (typing the next matched char) would not re-fire the completion.
       const applyMatch = (name: string): void => {
         const lower = name.toLowerCase()
         const match = currentItems.find(
           (it) => it.id !== PARENT_ID && it.label.toLowerCase().startsWith(lower),
         )
         qp.activeItems = match ? [match] : []
+        if (match) completeToItem(match)
       }
 
       const onValueChange = async (value: string): Promise<void> => {
@@ -214,8 +245,11 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
           qp.value = expanded
         }
 
-        const deletion = isDeletion(lastValue, value)
+        const deletion = isDeletionEdit(lastValue, value, autoCompleteBase)
         lastValue = value
+        // Drop the previous completion base; completeToItem re-establishes it only
+        // when this change actually autocompletes to a match.
+        autoCompleteBase = undefined
 
         const { dir, name } = splitTrailingSegment(value)
         userTypedSegment = name
@@ -262,19 +296,8 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       // the list. The untyped tail is selected so the next keystroke replaces it.
       const onActiveChange = (item: IQuickPickItem | undefined): void => {
         if (!item) return
-        const entry = entriesById.get(item.id)
-        if (!entry) return
-        const prefix = this._isDriveListRoot(currentFolder)
-          ? ''
-          : this._displayWithSep(currentFolder)
-        const completed = item.id === PARENT_ID ? prefix + '..' : prefix + item.label
-        const startsWithTyped =
-          item.id !== PARENT_ID &&
-          item.label.toLowerCase().startsWith(userTypedSegment.toLowerCase())
-        const typedLen = startsWithTyped ? userTypedSegment.length : 0
-        lastValue = completed
-        qp.value = completed
-        qp.valueSelection = [Math.min(prefix.length + typedLen, completed.length), completed.length]
+        if (!entriesById.has(item.id)) return
+        completeToItem(item)
       }
 
       const setSaveValue = (uri: URI): void => {
@@ -342,6 +365,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       qp.onDidTriggerButton(
         () => {
           showDotFiles = !showDotFiles
+          void this._storage.set(STORAGE_KEY_SHOW_DOT_FILES, showDotFiles)
           syncHiddenButton()
           void updateItems(currentFolder, { resetInput: false })
         },

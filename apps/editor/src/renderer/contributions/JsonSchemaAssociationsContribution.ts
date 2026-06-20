@@ -17,12 +17,12 @@
 import {
   ConfigurationRegistry,
   Disposable,
+  DisposableStore,
   IConfigurationService,
   IFileService,
   ILoggerService,
   JSONContributionRegistry,
   NullLogger,
-  type IDisposable,
   type IJSONSchema,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
@@ -51,8 +51,9 @@ export class JsonSchemaAssociationsContribution
 {
   private readonly _logger: ILogger
   /** Registry handles for the user `json.schemas` entries, cleared on each refresh. */
-  private _userSchemas: IDisposable[] = []
+  private readonly _userSchemas = this._register(new DisposableStore())
   private _userPending = false
+  private _disposed = false
 
   constructor(
     @IConfigurationService private readonly _configuration: IConfigurationService,
@@ -118,7 +119,7 @@ export class JsonSchemaAssociationsContribution
   }
 
   override dispose(): void {
-    this._clearUserSchemas()
+    this._disposed = true
     super.dispose()
   }
 
@@ -144,8 +145,7 @@ export class JsonSchemaAssociationsContribution
   }
 
   private _clearUserSchemas(): void {
-    for (const d of this._userSchemas) d.dispose()
-    this._userSchemas = []
+    this._userSchemas.clear()
   }
 
   private async _refreshUserSchemas(): Promise<void> {
@@ -161,8 +161,12 @@ export class JsonSchemaAssociationsContribution
 
       const schema = await this._resolveSchema(entry, i)
       if (!schema) continue
+      // Resolution can await a local read or remote download; the contribution may
+      // have been disposed in the meantime. Registering now would leak a handle
+      // past the store's disposal, so bail.
+      if (this._disposed) return
 
-      this._userSchemas.push(
+      this._userSchemas.add(
         JSONContributionRegistry.registerSchema({
           uri: `user://schemas/${i}`,
           fileMatch: [...fileMatch],

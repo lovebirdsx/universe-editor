@@ -502,14 +502,24 @@ export function QuickPickPanel({
   // don't re-fire. No-op unless the host wired onActiveChange.
   const onActiveChange = state.onActiveChange
   const lastActiveIdRef = useRef<string | undefined>(undefined)
+  const prevSortedRef = useRef(sortedFiltered)
   useEffect(() => {
+    const listChanged = prevSortedRef.current !== sortedFiltered
+    prevSortedRef.current = sortedFiltered
     if (!onActiveChange) return
+    // Host-managed focus (autoFocusFirstItem=false): a list rebuild resets focus to
+    // -1 via the effect above, but in this same commit `focusedIdx` is still the
+    // pre-reset value. Reading it against the freshly-built list would report a
+    // stray item — the entry that happens to land at the old index — and clobber
+    // the host's input (e.g. entering a folder would auto-suggest its first child).
+    // Skip this render; the post-reset render reports the real focus.
+    if (listChanged && !autoFocusFirstItem) return
     const active = sortedFiltered[focusedIdx]
     const item = isSelectable(active) ? active : undefined
     if (item?.id === lastActiveIdRef.current) return
     lastActiveIdRef.current = item?.id
     onActiveChange(item)
-  }, [onActiveChange, sortedFiltered, focusedIdx])
+  }, [onActiveChange, sortedFiltered, focusedIdx, autoFocusFirstItem])
 
   const accept = useCallback(
     (items: IQuickPickItem[], mods?: IKeyMods) => {
