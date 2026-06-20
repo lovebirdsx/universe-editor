@@ -118,6 +118,7 @@ import { IOutlineService, OutlineService } from './services/languageFeatures/Out
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
+import { IAcpSessionHistoryService } from './services/acp/acpSessionHistory.js'
 // Side-effect import: registers IAcpSessionFilterService before the
 // getSingletonServiceDescriptors() snapshot below picks it up.
 import './services/acp/acpSessionFilterService.js'
@@ -572,6 +573,9 @@ async function bootstrapWorkbench(): Promise<void> {
     viewDescriptorService,
     configurationService,
     acpSessionService,
+    acpSessionHistoryService: instantiation.invokeFunction((a) =>
+      a.get(IAcpSessionHistoryService),
+    ),
     outputService,
     updateService: services.get(IUpdateService) as IUpdateService,
     terminalService: services.get(ITerminalService) as ITerminalService,

@@ -213,6 +213,12 @@ export interface E2EProbe {
   /** Active ACP session id (the local one assigned by AcpSessionService), if any. */
   getActiveAcpSessionId(): string | undefined
   /**
+   * Resolved display title of the active ACP session — the durable history
+   * title (updated by the agent's `session_info_update`) falling back to the
+   * live session title. Undefined when no session is active.
+   */
+  getActiveAcpSessionTitle(): string | undefined
+  /**
    * Send a prompt on the active ACP session. Fire-and-forget — the promise
    * resolves once the prompt request resolves on the agent side (one full
    * turn). Specs that don't want to wait should not await this call.
