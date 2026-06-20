@@ -10,7 +10,7 @@ import {
   Action2,
   IEditorGroupsService,
   URI,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -78,8 +78,8 @@ export class GoToNextDifferenceAction extends Action2 {
   constructor() {
     super({
       id: GoToNextDifferenceAction.ID,
-      title: localize('action.diffEditor.nextChange.title', 'Go to Next Difference'),
-      category: localize('command.category.diffEditor', 'Diff Editor'),
+      title: localize2('action.diffEditor.nextChange.title', 'Go to Next Difference'),
+      category: localize2('command.category.diffEditor', 'Diff Editor'),
       keybinding: { primary: 'alt+f5' },
       precondition: 'isInDiffEditor',
       f1: true,
@@ -97,8 +97,8 @@ export class GoToPreviousDifferenceAction extends Action2 {
   constructor() {
     super({
       id: GoToPreviousDifferenceAction.ID,
-      title: localize('action.diffEditor.previousChange.title', 'Go to Previous Difference'),
-      category: localize('command.category.diffEditor', 'Diff Editor'),
+      title: localize2('action.diffEditor.previousChange.title', 'Go to Previous Difference'),
+      category: localize2('command.category.diffEditor', 'Diff Editor'),
       keybinding: { primary: 'shift+alt+f5' },
       precondition: 'isInDiffEditor',
       f1: true,

@@ -3,7 +3,13 @@
  *  Mutate actions on existing Explorer entries: rename / delete.
  *--------------------------------------------------------------------------------------------*/
 
-import { Action2, IDialogService, localize, type ServicesAccessor } from '@universe-editor/platform'
+import {
+  Action2,
+  IDialogService,
+  localize,
+  localize2,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
 import {
   IExplorerTreeService,
   type ExplorerTreeService,
@@ -43,8 +49,8 @@ export class RenameFileAction extends Action2 {
   constructor() {
     super({
       id: RenameFileAction.ID,
-      title: localize('action.rename.title', 'Rename…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.rename.title', 'Rename…'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'f2' },
       f1: true,
     })
@@ -78,8 +84,8 @@ export class DeleteFileAction extends Action2 {
   constructor() {
     super({
       id: DeleteFileAction.ID,
-      title: localize('action.deleteFile.title', 'Delete'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.deleteFile.title', 'Delete'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'delete' },
       f1: true,
     })

@@ -165,6 +165,58 @@ describe('QuickPickPanel prefix mode', () => {
     expect(screen.queryByText('View: Toggle Sidebar')).toBeNull()
   })
 
+  it('word filter matches keywords (English title / command id) without rendering them', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            {
+              id: 'ai.pickModel',
+              label: 'AI: 选择 AI 模型',
+              keywords: ['AI: Select AI Model', 'ai.pickModel'],
+            },
+            { id: 'view.toggle', label: '视图: 切换侧边栏', keywords: ['View: Toggle Sidebar'] },
+          ],
+          filterMode: 'word',
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+
+    // English title matches the Chinese-labeled item.
+    fireEvent.change(input, { target: { value: '>Select AI Model' } })
+    expect(screen.getByText('AI: 选择 AI 模型')).toBeTruthy()
+    expect(screen.queryByText('视图: 切换侧边栏')).toBeNull()
+    // The keyword itself is never rendered.
+    expect(screen.queryByText('AI: Select AI Model')).toBeNull()
+
+    // Command id matches too.
+    fireEvent.change(input, { target: { value: '>ai.pickModel' } })
+    expect(screen.getByText('AI: 选择 AI 模型')).toBeTruthy()
+  })
+
+  it('fuzzy filter matches an item via its keywords', () => {
+    render(
+      <QuickPickPanel
+        state={makeState({
+          items: [
+            { id: 'ai.pickModel', label: '选择 AI 模型', keywords: ['Select AI Model'] },
+            { id: 'other', label: '打开主题' },
+          ],
+          prefix: undefined,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'Select AI' } })
+    // Keyword hit surfaces the Chinese-labeled item; the keyword text is not rendered.
+    expect(screen.getByText('选择 AI 模型')).toBeTruthy()
+    expect(screen.queryByText('打开主题')).toBeNull()
+    expect(screen.queryByText('Select AI Model')).toBeNull()
+  })
+
   it('does not match description or detail unless enabled', () => {
     render(
       <QuickPickPanel

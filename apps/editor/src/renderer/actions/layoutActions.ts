@@ -12,7 +12,7 @@ import {
   MenuId,
   PartId,
   ViewContainerLocation,
-  localize,
+  localize2,
   type LayoutSizes,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -33,8 +33,8 @@ export class ShowExplorerAction extends Action2 {
   constructor() {
     super({
       id: ShowExplorerAction.ID,
-      title: localize('action.showExplorer.title', 'Show Explorer'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.showExplorer.title', 'Show Explorer'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+shift+e' },
       menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 2 },
       f1: true,
@@ -62,8 +62,8 @@ export class ToggleActivityBarVisibilityAction extends Action2 {
   constructor() {
     super({
       id: ToggleActivityBarVisibilityAction.ID,
-      title: localize('action.toggleActivityBar.title', 'Toggle Activity Bar'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.toggleActivityBar.title', 'Toggle Activity Bar'),
+      category: localize2('command.category.view', 'View'),
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 0 },
       f1: true,
     })
@@ -78,8 +78,8 @@ export class ToggleSidebarVisibilityAction extends Action2 {
   constructor() {
     super({
       id: ToggleSidebarVisibilityAction.ID,
-      title: localize('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+b' },
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 1 },
       f1: true,
@@ -95,8 +95,8 @@ export class ToggleSecondarySidebarVisibilityAction extends Action2 {
   constructor() {
     super({
       id: ToggleSecondarySidebarVisibilityAction.ID,
-      title: localize('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+b' },
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 2 },
       f1: true,
@@ -118,8 +118,8 @@ export class FocusOutlineAction extends Action2 {
   constructor() {
     super({
       id: FocusOutlineAction.ID,
-      title: localize('action.focusOutline.title', 'Focus on Outline View'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.focusOutline.title', 'Focus on Outline View'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+shift+q' },
       f1: true,
     })
@@ -136,8 +136,8 @@ export class TogglePanelAction extends Action2 {
   constructor() {
     super({
       id: TogglePanelAction.ID,
-      title: localize('action.togglePanel.title', 'Toggle Panel'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.togglePanel.title', 'Toggle Panel'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+j' },
       menu: { id: MenuId.MenubarViewMenu, group: '2_layout', order: 3 },
       f1: true,
@@ -159,8 +159,8 @@ export class ToggleMaximizedPanelAction extends Action2 {
   constructor() {
     super({
       id: ToggleMaximizedPanelAction.ID,
-      title: localize('action.toggleMaximizedPanel.title', 'Toggle Maximized Panel'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.toggleMaximizedPanel.title', 'Toggle Maximized Panel'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'alt+m' },
       f1: true,
     })
@@ -181,8 +181,8 @@ export class ShowScmAction extends Action2 {
   constructor() {
     super({
       id: ShowScmAction.ID,
-      title: localize('action.showScm.title', 'Show Source Control'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.showScm.title', 'Show Source Control'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+shift+g' },
       menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 3 },
       f1: true,
@@ -220,8 +220,8 @@ export class ShowCommandsAction extends Action2 {
   constructor() {
     super({
       id: ShowCommandsAction.ID,
-      title: localize('action.showAllCommands.title', 'Show All Commands'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.showAllCommands.title', 'Show All Commands'),
+      category: localize2('command.category.view', 'View'),
       keybinding: [{ primary: 'ctrl+shift+p' }, { primary: 'f1' }],
       menu: { id: MenuId.MenubarViewMenu, group: '1_open', order: 1 },
       f1: true,
@@ -323,8 +323,8 @@ export class IncreaseViewWidthAction extends Action2 {
   constructor() {
     super({
       id: IncreaseViewWidthAction.ID,
-      title: localize('action.increaseViewWidth.title', 'Increase Current View Width'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.increaseViewWidth.title', 'Increase Current View Width'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+shift+right', when: RESIZE_WHEN },
       f1: true,
     })
@@ -339,8 +339,8 @@ export class DecreaseViewWidthAction extends Action2 {
   constructor() {
     super({
       id: DecreaseViewWidthAction.ID,
-      title: localize('action.decreaseViewWidth.title', 'Decrease Current View Width'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.decreaseViewWidth.title', 'Decrease Current View Width'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+shift+left', when: RESIZE_WHEN },
       f1: true,
     })
@@ -355,8 +355,8 @@ export class IncreaseViewHeightAction extends Action2 {
   constructor() {
     super({
       id: IncreaseViewHeightAction.ID,
-      title: localize('action.increaseViewHeight.title', 'Increase Current View Height'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.increaseViewHeight.title', 'Increase Current View Height'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+shift+down', when: RESIZE_WHEN },
       f1: true,
     })
@@ -371,8 +371,8 @@ export class DecreaseViewHeightAction extends Action2 {
   constructor() {
     super({
       id: DecreaseViewHeightAction.ID,
-      title: localize('action.decreaseViewHeight.title', 'Decrease Current View Height'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.decreaseViewHeight.title', 'Decrease Current View Height'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'ctrl+alt+shift+up', when: RESIZE_WHEN },
       f1: true,
     })

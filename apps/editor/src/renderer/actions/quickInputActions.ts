@@ -8,7 +8,7 @@
 import {
   Action2,
   IQuickInputService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 
@@ -17,7 +17,7 @@ export class CloseQuickInputAction extends Action2 {
   constructor() {
     super({
       id: CloseQuickInputAction.ID,
-      title: localize('action.closeQuickInput.title', 'Close Quick Input'),
+      title: localize2('action.closeQuickInput.title', 'Close Quick Input'),
       keybinding: { primary: 'escape', when: 'quickInputVisible' },
     })
   }

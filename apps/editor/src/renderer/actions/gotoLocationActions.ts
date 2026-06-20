@@ -19,9 +19,10 @@
 import {
   Action2,
   IEditorGroupsService,
-  localize,
+  localize2,
   type IAction2Keybinding,
   type IAction2Options,
+  type ILocalizedString,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -30,7 +31,7 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 interface NavCommandDef {
   /** Monaco/VSCode command id, reused verbatim as our Action2 id. */
   readonly id: string
-  readonly title: string
+  readonly title: ILocalizedString
   /**
    * Project default keybinding, mirroring Monaco's. A 2-element tuple expresses a
    * chord (e.g. Ctrl+K F12). Omitted when Monaco has no default key.
@@ -44,53 +45,53 @@ interface NavCommandDef {
 const NAVIGATION_COMMANDS: readonly NavCommandDef[] = [
   {
     id: 'editor.action.revealDefinition',
-    title: localize('action.revealDefinition.title', 'Go to Definition'),
+    title: localize2('action.revealDefinition.title', 'Go to Definition'),
     keybinding: 'f12',
   },
   {
     id: 'editor.action.revealDefinitionAside',
-    title: localize('action.revealDefinitionAside.title', 'Open Definition to the Side'),
+    title: localize2('action.revealDefinitionAside.title', 'Open Definition to the Side'),
     keybinding: ['ctrl+k', 'f12'],
   },
   {
     id: 'editor.action.peekDefinition',
-    title: localize('action.peekDefinition.title', 'Peek Definition'),
+    title: localize2('action.peekDefinition.title', 'Peek Definition'),
     keybinding: 'alt+f12',
   },
   {
     id: 'editor.action.revealDeclaration',
-    title: localize('action.revealDeclaration.title', 'Go to Declaration'),
+    title: localize2('action.revealDeclaration.title', 'Go to Declaration'),
   },
   {
     id: 'editor.action.peekDeclaration',
-    title: localize('action.peekDeclaration.title', 'Peek Declaration'),
+    title: localize2('action.peekDeclaration.title', 'Peek Declaration'),
   },
   {
     id: 'editor.action.goToTypeDefinition',
-    title: localize('action.goToTypeDefinition.title', 'Go to Type Definition'),
+    title: localize2('action.goToTypeDefinition.title', 'Go to Type Definition'),
   },
   {
     id: 'editor.action.peekTypeDefinition',
-    title: localize('action.peekTypeDefinition.title', 'Peek Type Definition'),
+    title: localize2('action.peekTypeDefinition.title', 'Peek Type Definition'),
   },
   {
     id: 'editor.action.goToImplementation',
-    title: localize('action.goToImplementation.title', 'Go to Implementations'),
+    title: localize2('action.goToImplementation.title', 'Go to Implementations'),
     keybinding: 'ctrl+f12',
   },
   {
     id: 'editor.action.peekImplementation',
-    title: localize('action.peekImplementation.title', 'Peek Implementations'),
+    title: localize2('action.peekImplementation.title', 'Peek Implementations'),
     keybinding: 'ctrl+shift+f12',
   },
   {
     id: 'editor.action.goToReferences',
-    title: localize('action.goToReferences.title', 'Go to References'),
+    title: localize2('action.goToReferences.title', 'Go to References'),
     keybinding: 'shift+f12',
   },
   {
     id: 'editor.action.referenceSearch.trigger',
-    title: localize('action.peekReferences.title', 'Peek References'),
+    title: localize2('action.peekReferences.title', 'Peek References'),
   },
 ]
 
@@ -108,7 +109,7 @@ function createNavAction(def: NavCommandDef): new () => Action2 {
   const options: IAction2Options = {
     id: def.id,
     title: def.title,
-    category: localize('command.category.go', 'Go'),
+    category: localize2('command.category.go', 'Go'),
     precondition: 'hasActiveEditor',
     f1: true,
     ...(def.keybinding !== undefined

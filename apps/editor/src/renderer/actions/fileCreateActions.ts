@@ -12,6 +12,7 @@ import {
   MenuId,
   URI,
   localize,
+  localize2,
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -41,8 +42,8 @@ export class NewUntitledFileAction extends Action2 {
   constructor() {
     super({
       id: NewUntitledFileAction.ID,
-      title: localize('action.newUntitledFile.title', 'New File'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.newUntitledFile.title', 'New File'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+n', when: '!terminalFocus' },
       menu: { id: MenuId.MenubarFileMenu, group: '1_new', order: 0 },
       f1: true,
@@ -61,8 +62,8 @@ export class NewFileAction extends Action2 {
   constructor() {
     super({
       id: NewFileAction.ID,
-      title: localize('action.newFile.title', 'New File…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.newFile.title', 'New File…'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -98,8 +99,8 @@ export class NewFolderAction extends Action2 {
   constructor() {
     super({
       id: NewFolderAction.ID,
-      title: localize('action.newFolder.title', 'New Folder…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.newFolder.title', 'New Folder…'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }

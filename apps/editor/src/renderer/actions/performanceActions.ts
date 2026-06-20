@@ -6,7 +6,7 @@
 import {
   Action2,
   IEditorGroupsService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
@@ -17,8 +17,8 @@ export class ShowStartupPerformanceAction extends Action2 {
   constructor() {
     super({
       id: ShowStartupPerformanceAction.ID,
-      title: localize('action.showStartupPerformance.title', 'Startup Performance'),
-      category: localize('command.category.developer', 'Developer'),
+      title: localize2('action.showStartupPerformance.title', 'Startup Performance'),
+      category: localize2('command.category.developer', 'Developer'),
       f1: true,
     })
   }

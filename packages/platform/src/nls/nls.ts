@@ -2,6 +2,16 @@ export type MessageValue = string
 
 export type MessageMap = Readonly<Record<string, MessageValue>>
 
+/**
+ * A localized string that also carries its original (English) form. Mirrors
+ * VSCode's `ILocalizedString`: `value` is shown to the user, `original` is kept
+ * so non-English UIs can still match against the English command title.
+ */
+export interface ILocalizedString {
+  readonly value: string
+  readonly original: string
+}
+
 export interface IConfigureNlsOptions {
   readonly locale: string
   readonly fallbackLocale?: string
@@ -72,4 +82,20 @@ export function localize(
   }
 
   return formatMessage(template, vars)
+}
+
+/**
+ * Like {@link localize}, but returns both the localized `value` and the
+ * `original` (English) form. Use for command/menu titles so the command palette
+ * can match the English title even under a non-English display language.
+ */
+export function localize2(
+  key: string,
+  defaultMessage: string,
+  vars?: Record<string, unknown>,
+): ILocalizedString {
+  return {
+    value: localize(key, defaultMessage, vars),
+    original: formatMessage(defaultMessage, vars),
+  }
 }

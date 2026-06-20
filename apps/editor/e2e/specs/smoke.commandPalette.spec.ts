@@ -107,4 +107,24 @@ test.describe('@p0 command palette', () => {
     const activeUri = await workbench.getActiveEditorUri()
     expect(activeUri).toBeDefined()
   })
+
+  test('matches a command by its English command id (keywords)', async ({ page, workbench }) => {
+    // 'splitEditorRight' is the command id — it appears in the item's keywords but
+    // not as a token in the visible label ("Split Editor Right"). Matching it proves
+    // keyword (command-id) filtering works end to end, regardless of display language.
+    await workbench.runCommand('workbench.action.files.newUntitledFile')
+    await expect(workbench.editor.monacoEditor).toBeVisible()
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(1)
+    await workbench.focusActiveEditorGroup()
+
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.showCommands')
+    })
+    await workbench.quickInput.waitForVisible()
+    await page.keyboard.type('splitEditorRight')
+    await page.keyboard.press('Enter')
+    await workbench.quickInput.waitForHidden()
+
+    await expect.poll(() => workbench.getEditorGroupCount()).toBe(2)
+  })
 })

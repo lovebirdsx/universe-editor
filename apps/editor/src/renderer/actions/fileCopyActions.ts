@@ -3,7 +3,7 @@ import {
   IEditorGroupsService,
   IWorkspaceService,
   MenuId,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -22,8 +22,8 @@ export class CopyFileNameAction extends Action2 {
   constructor() {
     super({
       id: CopyFileNameAction.ID,
-      title: localize('action.copyName.title', 'Copy Name'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.copyName.title', 'Copy Name'),
+      category: localize2('command.category.file', 'File'),
       menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 1 }],
       f1: true,
     })
@@ -40,8 +40,8 @@ export class CopyFilePathAction extends Action2 {
   constructor() {
     super({
       id: CopyFilePathAction.ID,
-      title: localize('action.copyFilePath.title', 'Copy Path'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.copyFilePath.title', 'Copy Path'),
+      category: localize2('command.category.file', 'File'),
       menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 2 }],
       f1: true,
     })
@@ -58,8 +58,8 @@ export class CopyFileRelativePathAction extends Action2 {
   constructor() {
     super({
       id: CopyFileRelativePathAction.ID,
-      title: localize('action.copyRelativeFilePath.title', 'Copy Relative Path'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.copyRelativeFilePath.title', 'Copy Relative Path'),
+      category: localize2('command.category.file', 'File'),
       menu: [{ id: MenuId.EditorTabContext, group: '2_path', order: 3 }],
       f1: true,
     })

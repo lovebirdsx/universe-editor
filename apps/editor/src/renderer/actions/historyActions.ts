@@ -15,7 +15,7 @@ import {
   IHistoryEntry,
   IHistoryService,
   IInstantiationService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -80,8 +80,8 @@ export class GoBackAction extends Action2 {
   constructor() {
     super({
       id: GoBackAction.ID,
-      title: localize('action.goBack.title', 'Go Back'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.goBack.title', 'Go Back'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'alt+left' },
       precondition: 'canGoBack',
       f1: true,
@@ -100,8 +100,8 @@ export class GoForwardAction extends Action2 {
   constructor() {
     super({
       id: GoForwardAction.ID,
-      title: localize('action.goForward.title', 'Go Forward'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.goForward.title', 'Go Forward'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'alt+right' },
       precondition: 'canGoForward',
       f1: true,
@@ -120,8 +120,8 @@ export class ClearHistoryAction extends Action2 {
   constructor() {
     super({
       id: ClearHistoryAction.ID,
-      title: localize('action.clearHistory.title', 'Clear Navigation History'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.clearHistory.title', 'Clear Navigation History'),
+      category: localize2('command.category.view', 'View'),
       f1: true,
     })
   }

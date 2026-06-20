@@ -20,6 +20,7 @@ import {
   PartId,
   Severity,
   localize,
+  localize2,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -37,14 +38,14 @@ import type {
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
 
-const CATEGORY = localize('command.category.agents', 'Agents')
+const CATEGORY = localize2('command.category.agents', 'Agents')
 
 export class NewAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.newSession'
   constructor() {
     super({
       id: NewAgentSessionAction.ID,
-      title: localize('action.agent.newSession', 'New Agent Session'),
+      title: localize2('action.agent.newSession', 'New Agent Session'),
       keybinding: { primary: 'ctrl+alt+n' },
       category: CATEGORY,
       menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 1 }],
@@ -80,7 +81,7 @@ export class CancelAgentTurnAction extends Action2 {
   constructor() {
     super({
       id: CancelAgentTurnAction.ID,
-      title: localize('action.agent.cancelTurn', 'Cancel Agent Turn'),
+      title: localize2('action.agent.cancelTurn', 'Cancel Agent Turn'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+shift+escape' },
       f1: true,
@@ -97,7 +98,7 @@ export class OpenAgentInEditorAction extends Action2 {
   constructor() {
     super({
       id: OpenAgentInEditorAction.ID,
-      title: localize('action.agent.openInEditor', 'Open Agent Session in Editor'),
+      title: localize2('action.agent.openInEditor', 'Open Agent Session in Editor'),
       category: CATEGORY,
       f1: true,
     })
@@ -116,7 +117,7 @@ export class OpenAgentViewAction extends Action2 {
   constructor() {
     super({
       id: OpenAgentViewAction.ID,
-      title: localize('action.agent.openView', 'Open Agents View'),
+      title: localize2('action.agent.openView', 'Open Agents View'),
       category: CATEGORY,
       f1: true,
     })
@@ -133,7 +134,7 @@ export class ToggleAgentChatLocationAction extends Action2 {
   constructor() {
     super({
       id: ToggleAgentChatLocationAction.ID,
-      title: localize('action.agent.toggleChatLocation', 'Toggle Agent Chat Location'),
+      title: localize2('action.agent.toggleChatLocation', 'Toggle Agent Chat Location'),
       category: CATEGORY,
       f1: true,
     })
@@ -148,7 +149,7 @@ export class FocusAgentInputAction extends Action2 {
   constructor() {
     super({
       id: FocusAgentInputAction.ID,
-      title: localize('action.agent.focusInput', 'Focus Agent Input'),
+      title: localize2('action.agent.focusInput', 'Focus Agent Input'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+alt+i' },
       f1: true,
@@ -164,7 +165,7 @@ export class SelectAgentAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentAction.ID,
-      title: localize('action.agent.selectAgent', 'Choose Agent Then New Session…'),
+      title: localize2('action.agent.selectAgent', 'Choose Agent Then New Session…'),
       category: CATEGORY,
       menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 2 }],
       f1: true,
@@ -211,7 +212,7 @@ export class OpenAcpMcpSettingsAction extends Action2 {
   constructor() {
     super({
       id: OpenAcpMcpSettingsAction.ID,
-      title: localize('action.agent.openMcpSettings', 'Open MCP Settings'),
+      title: localize2('action.agent.openMcpSettings', 'Open MCP Settings'),
       category: CATEGORY,
       icon: 'settings-gear',
       menu: [
@@ -312,7 +313,7 @@ export class SelectAgentModelAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentModelAction.ID,
-      title: localize('action.agent.selectModel', 'Select Agent Model…'),
+      title: localize2('action.agent.selectModel', 'Select Agent Model…'),
       category: CATEGORY,
       f1: true,
     })
@@ -332,7 +333,7 @@ export class SelectAgentModeAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentModeAction.ID,
-      title: localize('action.agent.selectMode', 'Select Agent Mode…'),
+      title: localize2('action.agent.selectMode', 'Select Agent Mode…'),
       category: CATEGORY,
       f1: true,
     })
@@ -352,7 +353,7 @@ export class SelectAgentThoughtLevelAction extends Action2 {
   constructor() {
     super({
       id: SelectAgentThoughtLevelAction.ID,
-      title: localize('action.agent.selectThoughtLevel', 'Select Agent Thinking Level…'),
+      title: localize2('action.agent.selectThoughtLevel', 'Select Agent Thinking Level…'),
       category: CATEGORY,
       f1: true,
     })
@@ -401,7 +402,7 @@ export class ResumeAgentSessionAction extends Action2 {
   constructor() {
     super({
       id: ResumeAgentSessionAction.ID,
-      title: localize('action.agent.resumeSession', 'Resume Agent Session…'),
+      title: localize2('action.agent.resumeSession', 'Resume Agent Session…'),
       keybinding: { primary: 'ctrl+shift+h' },
       category: CATEGORY,
       f1: true,
@@ -469,7 +470,7 @@ export class ClearAgentSessionHistoryAction extends Action2 {
   constructor() {
     super({
       id: ClearAgentSessionHistoryAction.ID,
-      title: localize('action.agent.clearHistory', 'Clear Agent Session History'),
+      title: localize2('action.agent.clearHistory', 'Clear Agent Session History'),
       category: CATEGORY,
       f1: true,
     })
@@ -513,7 +514,7 @@ export class RefreshAgentSessionsAction extends Action2 {
   constructor() {
     super({
       id: RefreshAgentSessionsAction.ID,
-      title: localize('action.agent.refreshSessions', 'Refresh Agent Session List'),
+      title: localize2('action.agent.refreshSessions', 'Refresh Agent Session List'),
       category: CATEGORY,
       f1: true,
     })
@@ -534,7 +535,7 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
   constructor() {
     super({
       id: FocusNextAcpTimelineItemAction.ID,
-      title: localize('action.agent.focusNextTimelineItem', 'Focus Next Timeline Item'),
+      title: localize2('action.agent.focusNextTimelineItem', 'Focus Next Timeline Item'),
       category: CATEGORY,
       icon: 'timeline-next',
       keybinding: [
@@ -562,7 +563,7 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
   constructor() {
     super({
       id: FocusPreviousAcpTimelineItemAction.ID,
-      title: localize('action.agent.focusPreviousTimelineItem', 'Focus Previous Timeline Item'),
+      title: localize2('action.agent.focusPreviousTimelineItem', 'Focus Previous Timeline Item'),
       category: CATEGORY,
       icon: 'timeline-prev',
       keybinding: [
@@ -590,7 +591,7 @@ export class FocusTopAcpTimelineAction extends Action2 {
   constructor() {
     super({
       id: FocusTopAcpTimelineAction.ID,
-      title: localize('action.agent.focusTopTimelineItem', 'Focus Top Timeline Item'),
+      title: localize2('action.agent.focusTopTimelineItem', 'Focus Top Timeline Item'),
       category: CATEGORY,
       icon: 'timeline-top',
       keybinding: [
@@ -618,7 +619,7 @@ export class FocusBottomAcpTimelineAction extends Action2 {
   constructor() {
     super({
       id: FocusBottomAcpTimelineAction.ID,
-      title: localize('action.agent.focusBottomTimelineItem', 'Focus Bottom Timeline Item'),
+      title: localize2('action.agent.focusBottomTimelineItem', 'Focus Bottom Timeline Item'),
       category: CATEGORY,
       icon: 'timeline-bottom',
       keybinding: [
@@ -646,7 +647,7 @@ export class JumpToAcpPlanAction extends Action2 {
   constructor() {
     super({
       id: JumpToAcpPlanAction.ID,
-      title: localize('action.agent.jumpToPlan', 'Jump to Plan'),
+      title: localize2('action.agent.jumpToPlan', 'Jump to Plan'),
       category: CATEGORY,
       icon: 'go-to-plan',
       keybinding: { primary: 'alt+p', when: 'acpChatFocused' },
@@ -671,7 +672,7 @@ export class ShowAcpSessionChangesAction extends Action2 {
   constructor() {
     super({
       id: ShowAcpSessionChangesAction.ID,
-      title: localize('action.agent.showSessionChanges', 'Show Session Changes'),
+      title: localize2('action.agent.showSessionChanges', 'Show Session Changes'),
       category: CATEGORY,
       icon: 'diff',
       menu: [
@@ -695,7 +696,7 @@ export class ScrollAcpTimelineUpAction extends Action2 {
   constructor() {
     super({
       id: ScrollAcpTimelineUpAction.ID,
-      title: localize('action.agent.scrollTimelineUp', 'Scroll Timeline Up'),
+      title: localize2('action.agent.scrollTimelineUp', 'Scroll Timeline Up'),
       category: CATEGORY,
       keybinding: [
         { primary: 'ctrl+alt+up', when: 'acpChatFocused' },
@@ -715,7 +716,7 @@ export class ScrollAcpTimelineDownAction extends Action2 {
   constructor() {
     super({
       id: ScrollAcpTimelineDownAction.ID,
-      title: localize('action.agent.scrollTimelineDown', 'Scroll Timeline Down'),
+      title: localize2('action.agent.scrollTimelineDown', 'Scroll Timeline Down'),
       category: CATEGORY,
       keybinding: [
         { primary: 'ctrl+alt+down', when: 'acpChatFocused' },
@@ -736,7 +737,7 @@ export class ScrollAcpTimelinePageUpAction extends Action2 {
   constructor() {
     super({
       id: ScrollAcpTimelinePageUpAction.ID,
-      title: localize('action.agent.scrollTimelinePageUp', 'Scroll Timeline Page Up'),
+      title: localize2('action.agent.scrollTimelinePageUp', 'Scroll Timeline Page Up'),
       category: CATEGORY,
       keybinding: [{ primary: 'ctrl+alt+pageup', when: 'acpChatFocused' }],
       precondition: 'acpChatFocused',
@@ -753,7 +754,7 @@ export class ScrollAcpTimelinePageDownAction extends Action2 {
   constructor() {
     super({
       id: ScrollAcpTimelinePageDownAction.ID,
-      title: localize('action.agent.scrollTimelinePageDown', 'Scroll Timeline Page Down'),
+      title: localize2('action.agent.scrollTimelinePageDown', 'Scroll Timeline Page Down'),
       category: CATEGORY,
       keybinding: [{ primary: 'ctrl+alt+pagedown', when: 'acpChatFocused' }],
       precondition: 'acpChatFocused',
@@ -770,7 +771,7 @@ export class ScrollAcpTimelineToTopAction extends Action2 {
   constructor() {
     super({
       id: ScrollAcpTimelineToTopAction.ID,
-      title: localize('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
+      title: localize2('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+alt+home', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',
@@ -787,7 +788,7 @@ export class ScrollAcpTimelineToBottomAction extends Action2 {
   constructor() {
     super({
       id: ScrollAcpTimelineToBottomAction.ID,
-      title: localize('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
+      title: localize2('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+alt+end', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',
@@ -804,7 +805,7 @@ export class ToggleAcpTimelineItemCollapseAction extends Action2 {
   constructor() {
     super({
       id: ToggleAcpTimelineItemCollapseAction.ID,
-      title: localize('action.agent.toggleTimelineItemCollapse', 'Toggle Timeline Item Collapse'),
+      title: localize2('action.agent.toggleTimelineItemCollapse', 'Toggle Timeline Item Collapse'),
       category: CATEGORY,
       keybinding: { primary: 'alt+f', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',
@@ -821,7 +822,7 @@ export class CycleAcpTimelineCollapseAction extends Action2 {
   constructor() {
     super({
       id: CycleAcpTimelineCollapseAction.ID,
-      title: localize('action.agent.cycleTimelineCollapse', 'Cycle Timeline Collapse (All)'),
+      title: localize2('action.agent.cycleTimelineCollapse', 'Cycle Timeline Collapse (All)'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+alt+f', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',
@@ -853,7 +854,7 @@ export class SelectNextAcpPromptSuggestionAction extends Action2 {
   constructor() {
     super({
       id: SelectNextAcpPromptSuggestionAction.ID,
-      title: localize('action.agent.prompt.selectNextSuggestion', 'Select Next Suggestion'),
+      title: localize2('action.agent.prompt.selectNextSuggestion', 'Select Next Suggestion'),
       category: CATEGORY,
       keybinding: [
         { primary: 'down', when: 'acpPromptPopupVisible' },
@@ -872,7 +873,10 @@ export class SelectPreviousAcpPromptSuggestionAction extends Action2 {
   constructor() {
     super({
       id: SelectPreviousAcpPromptSuggestionAction.ID,
-      title: localize('action.agent.prompt.selectPreviousSuggestion', 'Select Previous Suggestion'),
+      title: localize2(
+        'action.agent.prompt.selectPreviousSuggestion',
+        'Select Previous Suggestion',
+      ),
       category: CATEGORY,
       keybinding: [
         { primary: 'up', when: 'acpPromptPopupVisible' },
@@ -890,7 +894,7 @@ export class AcceptAcpPromptSuggestionAction extends Action2 {
   constructor() {
     super({
       id: AcceptAcpPromptSuggestionAction.ID,
-      title: localize('action.agent.prompt.acceptSuggestion', 'Accept Suggestion'),
+      title: localize2('action.agent.prompt.acceptSuggestion', 'Accept Suggestion'),
       category: CATEGORY,
       keybinding: [
         { primary: 'tab', when: 'acpPromptPopupVisible' },
@@ -908,7 +912,7 @@ export class HideAcpPromptSuggestionAction extends Action2 {
   constructor() {
     super({
       id: HideAcpPromptSuggestionAction.ID,
-      title: localize('action.agent.prompt.hideSuggestion', 'Hide Suggestions'),
+      title: localize2('action.agent.prompt.hideSuggestion', 'Hide Suggestions'),
       category: CATEGORY,
       keybinding: [{ primary: 'escape', when: 'acpPromptPopupVisible' }],
     })
@@ -931,7 +935,7 @@ export class ChatFindAction extends Action2 {
   constructor() {
     super({
       id: ChatFindAction.ID,
-      title: localize('action.agent.find', 'Find in Session'),
+      title: localize2('action.agent.find', 'Find in Session'),
       category: CATEGORY,
       icon: 'search',
       keybinding: { primary: 'ctrl+f', when: 'acpChatFocused' },
@@ -956,7 +960,7 @@ export class ChatFindNextAction extends Action2 {
   constructor() {
     super({
       id: ChatFindNextAction.ID,
-      title: localize('action.agent.findNext', 'Find Next'),
+      title: localize2('action.agent.findNext', 'Find Next'),
       category: CATEGORY,
       keybinding: { primary: 'f3', when: 'acpChatFindVisible' },
     })
@@ -971,7 +975,7 @@ export class ChatFindPreviousAction extends Action2 {
   constructor() {
     super({
       id: ChatFindPreviousAction.ID,
-      title: localize('action.agent.findPrevious', 'Find Previous'),
+      title: localize2('action.agent.findPrevious', 'Find Previous'),
       category: CATEGORY,
       keybinding: { primary: 'shift+f3', when: 'acpChatFindVisible' },
     })
@@ -986,7 +990,7 @@ export class ChatFindCloseAction extends Action2 {
   constructor() {
     super({
       id: ChatFindCloseAction.ID,
-      title: localize('action.agent.findClose', 'Close Find'),
+      title: localize2('action.agent.findClose', 'Close Find'),
       category: CATEGORY,
       keybinding: { primary: 'escape', when: 'acpChatFindVisible' },
     })
@@ -1006,7 +1010,7 @@ export class CopyFocusedAcpMessageAction extends Action2 {
   constructor() {
     super({
       id: CopyFocusedAcpMessageAction.ID,
-      title: localize('action.agent.copyFocusedMessage', 'Copy Message'),
+      title: localize2('action.agent.copyFocusedMessage', 'Copy Message'),
       category: CATEGORY,
       precondition: 'acpChatFocused',
       menu: [{ id: MenuId.AcpChatContext, group: '1_copy', order: 1 }],
@@ -1024,7 +1028,7 @@ export class SwitchSessionAction extends Action2 {
   constructor() {
     super({
       id: SwitchSessionAction.ID,
-      title: localize('action.agent.switchSession', 'Switch Session…'),
+      title: localize2('action.agent.switchSession', 'Switch Session…'),
       category: CATEGORY,
       keybinding: { primary: 'alt+s' },
       menu: [{ id: MenuId.AcpChatContext, group: '3_switch', order: 1 }],
@@ -1070,7 +1074,7 @@ export class IncreaseAgentFontSizeAction extends Action2 {
   constructor() {
     super({
       id: IncreaseAgentFontSizeAction.ID,
-      title: localize('action.agent.increaseFontSize', 'Increase Chat Font Size'),
+      title: localize2('action.agent.increaseFontSize', 'Increase Chat Font Size'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+=', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',
@@ -1089,7 +1093,7 @@ export class DecreaseAgentFontSizeAction extends Action2 {
   constructor() {
     super({
       id: DecreaseAgentFontSizeAction.ID,
-      title: localize('action.agent.decreaseFontSize', 'Decrease Chat Font Size'),
+      title: localize2('action.agent.decreaseFontSize', 'Decrease Chat Font Size'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+-', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',
@@ -1108,7 +1112,7 @@ export class ResetAgentFontSizeAction extends Action2 {
   constructor() {
     super({
       id: ResetAgentFontSizeAction.ID,
-      title: localize('action.agent.resetFontSize', 'Reset Chat Font Size'),
+      title: localize2('action.agent.resetFontSize', 'Reset Chat Font Size'),
       category: CATEGORY,
       keybinding: { primary: 'ctrl+0', when: 'acpChatFocused' },
       precondition: 'acpChatFocused',

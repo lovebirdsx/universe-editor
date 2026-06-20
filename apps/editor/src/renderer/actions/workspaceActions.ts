@@ -20,6 +20,7 @@ import {
   ShutdownReason,
   URI,
   localize,
+  localize2,
   type IKeyMods,
   type IQuickPickItem,
   type ServicesAccessor,
@@ -30,8 +31,8 @@ export class OpenFolderAction extends Action2 {
   constructor() {
     super({
       id: OpenFolderAction.ID,
-      title: localize('action.openFolder.title', 'Open Folder…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openFolder.title', 'Open Folder…'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: ['ctrl+k', 'ctrl+o'] },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 1 },
       f1: true,
@@ -69,8 +70,8 @@ export class CloseFolderAction extends Action2 {
   constructor() {
     super({
       id: CloseFolderAction.ID,
-      title: localize('action.closeFolder.title', 'Close Folder'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.closeFolder.title', 'Close Folder'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -88,8 +89,8 @@ export class OpenWorkspaceInVSCodeAction extends Action2 {
   constructor() {
     super({
       id: OpenWorkspaceInVSCodeAction.ID,
-      title: localize('action.openWorkspaceInVSCode.title', 'Open Workspace in VS Code'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openWorkspaceInVSCode.title', 'Open Workspace in VS Code'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+alt+e' },
       f1: true,
     })
@@ -122,8 +123,8 @@ export class OpenRecentAction extends Action2 {
   constructor() {
     super({
       id: OpenRecentAction.ID,
-      title: localize('action.openRecent.title', 'Open Recent…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openRecent.title', 'Open Recent…'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+r' },
       f1: true,
     })
@@ -198,8 +199,8 @@ export class ClearRecentWorkspacesAction extends Action2 {
   constructor() {
     super({
       id: ClearRecentWorkspacesAction.ID,
-      title: localize('action.clearRecentWorkspaces.title', 'Clear Recently Opened'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.clearRecentWorkspaces.title', 'Clear Recently Opened'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }

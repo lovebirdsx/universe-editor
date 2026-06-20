@@ -10,6 +10,7 @@ import {
   MenuId,
   Severity,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
@@ -19,8 +20,8 @@ export class CheckForUpdatesAction extends Action2 {
   constructor() {
     super({
       id: CheckForUpdatesAction.ID,
-      title: localize('update.check', 'Check for Updates'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('update.check', 'Check for Updates'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: 'm_updates', order: 1 },
       f1: true,
     })
@@ -60,8 +61,8 @@ export class DownloadUpdateAction extends Action2 {
   constructor() {
     super({
       id: DownloadUpdateAction.ID,
-      title: localize('update.download', 'Download Update'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('update.download', 'Download Update'),
+      category: localize2('command.category.help', 'Help'),
       f1: false,
     })
   }
@@ -76,8 +77,8 @@ export class InstallUpdateAction extends Action2 {
   constructor() {
     super({
       id: InstallUpdateAction.ID,
-      title: localize('update.restart', 'Restart to Update'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('update.restart', 'Restart to Update'),
+      category: localize2('command.category.help', 'Help'),
       f1: false,
     })
   }

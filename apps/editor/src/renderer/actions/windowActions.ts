@@ -17,6 +17,7 @@ import {
   ShutdownReason,
   URI,
   localize,
+  localize2,
   type DisposableTracker,
   type IQuickPickItem,
   type ServicesAccessor,
@@ -29,8 +30,8 @@ export class NewWindowAction extends Action2 {
   constructor() {
     super({
       id: NewWindowAction.ID,
-      title: localize('action.newWindow.title', 'New Window'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.newWindow.title', 'New Window'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+shift+n' },
       menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 0 },
       f1: true,
@@ -47,8 +48,8 @@ export class CloseWindowAction extends Action2 {
   constructor() {
     super({
       id: CloseWindowAction.ID,
-      title: localize('action.closeWindow.title', 'Close Window'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.closeWindow.title', 'Close Window'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+shift+w' },
       menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 1 },
       f1: true,
@@ -65,8 +66,8 @@ export class OpenFolderInNewWindowAction extends Action2 {
   constructor() {
     super({
       id: OpenFolderInNewWindowAction.ID,
-      title: localize('action.openFolderInNewWindow.title', 'Open Folder in New Window…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openFolderInNewWindow.title', 'Open Folder in New Window…'),
+      category: localize2('command.category.file', 'File'),
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 4 },
       f1: true,
     })
@@ -96,8 +97,8 @@ export class SwitchWindowAction extends Action2 {
   constructor() {
     super({
       id: SwitchWindowAction.ID,
-      title: localize('action.switchWindow.title', 'Switch Window…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.switchWindow.title', 'Switch Window…'),
+      category: localize2('command.category.file', 'File'),
       menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 2 },
       f1: true,
     })
@@ -131,8 +132,8 @@ export class ExitAction extends Action2 {
   constructor() {
     super({
       id: ExitAction.ID,
-      title: localize('action.exit.title', 'Exit'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.exit.title', 'Exit'),
+      category: localize2('command.category.file', 'File'),
       menu: { id: MenuId.MenubarFileMenu, group: 'zz_exit', order: 1 },
       f1: true,
     })
@@ -148,8 +149,8 @@ export class ReloadWindowAction extends Action2 {
   constructor() {
     super({
       id: ReloadWindowAction.ID,
-      title: localize('action.reloadWindow.title', 'Reload Window'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.reloadWindow.title', 'Reload Window'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+alt+r' },
       menu: { id: MenuId.MenubarFileMenu, group: 'z_window', order: 0 },
       f1: true,
@@ -211,8 +212,8 @@ export class ToggleDevToolsAction extends Action2 {
   constructor() {
     super({
       id: ToggleDevToolsAction.ID,
-      title: localize('action.toggleDeveloperTools.title', 'Toggle Developer Tools'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.toggleDeveloperTools.title', 'Toggle Developer Tools'),
+      category: localize2('command.category.help', 'Help'),
       keybinding: { primary: 'ctrl+shift+i' },
       menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 1 },
       f1: true,
@@ -229,8 +230,8 @@ export class OpenUserDataFolderAction extends Action2 {
   constructor() {
     super({
       id: OpenUserDataFolderAction.ID,
-      title: localize('action.openUserDataFolder.title', 'Developer: Open User Data Folder'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.openUserDataFolder.title', 'Developer: Open User Data Folder'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 3 },
       f1: true,
     })
@@ -246,8 +247,8 @@ export class AboutAction extends Action2 {
   constructor() {
     super({
       id: AboutAction.ID,
-      title: localize('action.about.title', 'About Universe Editor'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.about.title', 'About Universe Editor'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: 'z_about', order: 1 },
       f1: true,
     })

@@ -58,6 +58,7 @@ function wordItemMatches(
     return true
   }
   if (matchOnDetail && item.detail && wordMatchField(item.detail, query)) return true
+  if (item.keywords?.some((k) => wordMatchField(k, query))) return true
   return false
 }
 
@@ -79,12 +80,18 @@ function fuzzyItemMatch(
   const descRes =
     matchOnDescription && item.description ? fuzzyScore(item.description, query) : null
   const detailRes = matchOnDetail && item.detail ? fuzzyScore(item.detail, query) : null
+  const keywordScore = item.keywords?.reduce<number | null>((best, k) => {
+    const res = fuzzyScore(k, query)
+    if (!res) return best
+    return best === null || res.score > best ? res.score : best
+  }, null)
 
   const scores: number[] = []
   if (labelRes) scores.push(labelRes.score)
   if (leadingRes) scores.push(leadingRes.score)
   if (descRes) scores.push(descRes.score - 1000)
   if (detailRes) scores.push(detailRes.score - 1000)
+  if (keywordScore !== null && keywordScore !== undefined) scores.push(keywordScore - 2000)
   if (scores.length === 0) return null
 
   const highlights: { -readonly [K in keyof IQuickPickItemHighlights]: IQuickItemHighlight[] } = {}

@@ -10,7 +10,7 @@ import {
   Action2,
   IEditorGroupsService,
   IInstantiationService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { MergeEditorInput, type MergeEditorContents } from '../services/editor/MergeEditorInput.js'
@@ -60,8 +60,8 @@ export class CompleteMergeAction extends Action2 {
   constructor() {
     super({
       id: CompleteMergeAction.ID,
-      title: localize('action.completeMerge.title', 'Complete Merge'),
-      category: localize('command.category.merge', 'Merge Editor'),
+      title: localize2('action.completeMerge.title', 'Complete Merge'),
+      category: localize2('command.category.merge', 'Merge Editor'),
       precondition: 'isInMergeEditor',
       f1: true,
     })

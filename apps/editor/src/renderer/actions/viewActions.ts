@@ -8,11 +8,11 @@
 import {
   Action2,
   IViewDescriptorService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 
-const CATEGORY = localize('command.category.view', 'View')
+const CATEGORY = localize2('command.category.view', 'View')
 
 export class ResetViewLocationsAction extends Action2 {
   static readonly ID = 'workbench.action.resetViewLocations'
@@ -20,7 +20,7 @@ export class ResetViewLocationsAction extends Action2 {
   constructor() {
     super({
       id: ResetViewLocationsAction.ID,
-      title: localize('action.resetViewLocations.title', 'Reset View Locations'),
+      title: localize2('action.resetViewLocations.title', 'Reset View Locations'),
       category: CATEGORY,
       f1: true,
     })

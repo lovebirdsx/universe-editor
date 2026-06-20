@@ -15,6 +15,13 @@ export interface ICommandMetadata {
   description?: string
   /** Category prefix shown in the command palette. */
   category?: string
+  /**
+   * Original (English) form of {@link description}, kept so the command palette
+   * can match the English title under a non-English display language.
+   */
+  originalDescription?: string
+  /** Original (English) form of {@link category}. */
+  originalCategory?: string
 }
 
 export interface ICommand {

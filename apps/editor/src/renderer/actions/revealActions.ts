@@ -15,7 +15,7 @@ import {
   IViewsService,
   MenuId,
   URI,
-  localize,
+  localize2,
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -37,8 +37,8 @@ export class RevealActiveFileInExplorerAction extends Action2 {
   constructor() {
     super({
       id: RevealActiveFileInExplorerAction.ID,
-      title: localize('action.revealActiveFileInExplorer.title', 'Reveal Active File in Explorer'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.revealActiveFileInExplorer.title', 'Reveal Active File in Explorer'),
+      category: localize2('command.category.file', 'File'),
       menu: [{ id: MenuId.EditorTabContext, group: 'reveal', order: 1 }],
       f1: true,
     })
@@ -62,8 +62,8 @@ export class RevealInOSExplorerAction extends Action2 {
   constructor() {
     super({
       id: RevealInOSExplorerAction.ID,
-      title: localize('action.openContainingFolder.title', 'Open Containing Folder'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openContainingFolder.title', 'Open Containing Folder'),
+      category: localize2('command.category.file', 'File'),
       keybinding: {
         primary: 'alt+shift+e',
       },

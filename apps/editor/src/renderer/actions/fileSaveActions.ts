@@ -15,6 +15,7 @@ import {
   MenuId,
   URI,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -27,8 +28,8 @@ export class SaveFileAction extends Action2 {
   constructor() {
     super({
       id: SaveFileAction.ID,
-      title: localize('action.save.title', 'Save'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.save.title', 'Save'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+s' },
       menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 1 },
       f1: true,
@@ -51,8 +52,8 @@ export class SaveFileAsAction extends Action2 {
   constructor() {
     super({
       id: SaveFileAsAction.ID,
-      title: localize('action.saveAs.title', 'Save As…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.saveAs.title', 'Save As…'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+shift+s' },
       menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 2 },
       f1: true,

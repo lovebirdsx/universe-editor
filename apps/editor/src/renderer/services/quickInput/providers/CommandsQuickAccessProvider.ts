@@ -63,9 +63,21 @@ export class CommandsQuickAccessProvider implements IQuickAccessProvider {
       const keybinding = resolveShortcut(entry.command)
       const title = entry.title ?? command?.metadata?.description ?? entry.command
       const category = command?.metadata?.category
+      const originalTitle = command?.metadata?.originalDescription
+      const originalCategory = command?.metadata?.originalCategory
+      const englishLabel =
+        originalTitle !== undefined
+          ? originalCategory !== undefined
+            ? `${originalCategory}: ${originalTitle}`
+            : originalTitle
+          : undefined
+      const keywords = [englishLabel, entry.command].filter(
+        (k): k is string => k !== undefined && k.length > 0,
+      )
       registryItems.push({
         id: entry.command,
         label: category !== undefined ? `${category}: ${title}` : title,
+        keywords,
         ...(keybinding !== undefined ? { keybinding } : {}),
       })
     }

@@ -20,6 +20,7 @@ import {
   URI,
   isEqualResource,
   localize,
+  localize2,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -111,8 +112,8 @@ export class ShowLogsAction extends Action2 {
   constructor() {
     super({
       id: ShowLogsAction.ID,
-      title: localize('action.showLogs.title', 'Developer: Show Logs...'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.showLogs.title', 'Developer: Show Logs...'),
+      category: localize2('command.category.help', 'Help'),
       keybinding: { primary: 'ctrl+shift+u' },
       f1: true,
     })
@@ -168,8 +169,8 @@ export class ShowOutputChannelAction extends Action2 {
   constructor() {
     super({
       id: ShowOutputChannelAction.ID,
-      title: localize('action.showOutputChannel.title', 'Output: Show Output Channels...'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.showOutputChannel.title', 'Output: Show Output Channels...'),
+      category: localize2('command.category.view', 'View'),
       f1: true,
     })
   }
@@ -222,8 +223,8 @@ export class RefreshLogOutputAction extends Action2 {
   constructor() {
     super({
       id: RefreshLogOutputAction.ID,
-      title: localize('action.refreshLogOutput.title', 'Developer: Refresh Log Output'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.refreshLogOutput.title', 'Developer: Refresh Log Output'),
+      category: localize2('command.category.help', 'Help'),
       f1: true,
     })
   }
@@ -248,8 +249,8 @@ export class OpenActiveLogFileAction extends Action2 {
   constructor() {
     super({
       id: OpenActiveLogFileAction.ID,
-      title: localize('action.openActiveLogFile.title', 'Developer: Open Active Log File'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.openActiveLogFile.title', 'Developer: Open Active Log File'),
+      category: localize2('command.category.help', 'Help'),
       f1: true,
     })
   }
@@ -274,8 +275,8 @@ export class OpenLogFileAction extends Action2 {
   constructor() {
     super({
       id: OpenLogFileAction.ID,
-      title: localize('action.openLogFile.title', 'Developer: Open Log File...'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.openLogFile.title', 'Developer: Open Log File...'),
+      category: localize2('command.category.help', 'Help'),
       f1: true,
     })
   }
@@ -326,8 +327,8 @@ export class ClearOutputAction extends Action2 {
   constructor() {
     super({
       id: ClearOutputAction.ID,
-      title: localize('action.clearOutput.title', 'Clear Output'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.clearOutput.title', 'Clear Output'),
+      category: localize2('command.category.view', 'View'),
       icon: 'trash-2',
       menu: [
         {
@@ -355,8 +356,8 @@ export class ToggleOutputAction extends Action2 {
   constructor() {
     super({
       id: ToggleOutputAction.ID,
-      title: localize('action.toggleOutput.title', 'View: Toggle Output'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.toggleOutput.title', 'View: Toggle Output'),
+      category: localize2('command.category.view', 'View'),
       f1: true,
     })
   }
@@ -378,8 +379,8 @@ export class OpenLogsFolderAction extends Action2 {
   constructor() {
     super({
       id: OpenLogsFolderAction.ID,
-      title: localize('action.openLogsFolder.title', 'Developer: Open Logs Folder'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.openLogsFolder.title', 'Developer: Open Logs Folder'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: '5_tools', order: 2 },
       f1: true,
     })
@@ -397,8 +398,8 @@ export class SetLogLevelAction extends Action2 {
   constructor() {
     super({
       id: SetLogLevelAction.ID,
-      title: localize('action.setLogLevel.title', 'Developer: Set Log Level...'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.setLogLevel.title', 'Developer: Set Log Level...'),
+      category: localize2('command.category.help', 'Help'),
       f1: true,
     })
   }

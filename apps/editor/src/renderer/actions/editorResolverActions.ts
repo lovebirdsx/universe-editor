@@ -11,6 +11,7 @@ import {
   URI,
   isEqualResource,
   localize,
+  localize2,
   type ServicesAccessor,
   type UriComponents,
 } from '@universe-editor/platform'
@@ -21,8 +22,8 @@ export class ReopenWithAction extends Action2 {
   constructor() {
     super({
       id: ReopenWithAction.ID,
-      title: localize('action.reopenWith.title', 'Reopen With...'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.reopenWith.title', 'Reopen With...'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }

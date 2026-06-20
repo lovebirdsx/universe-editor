@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { configureNls, getCurrentLocale, localize } from '../../nls/nls.js'
+import { configureNls, getCurrentLocale, localize, localize2 } from '../../nls/nls.js'
 
 describe('nls', () => {
   afterEach(() => {
@@ -43,5 +43,38 @@ describe('nls', () => {
 
     expect(localize('unknown', 'Unknown')).toBe('Unknown')
     expect(warn).not.toHaveBeenCalled()
+  })
+
+  describe('localize2', () => {
+    it('returns the translated value and the original English form', () => {
+      configureNls({
+        locale: 'zh-CN',
+        messages: { hello: '你好' },
+        fallbackMessages: { hello: 'Hello' },
+      })
+
+      expect(localize2('hello', 'Hello')).toEqual({ value: '你好', original: 'Hello' })
+    })
+
+    it('formats placeholders in both value and original', () => {
+      configureNls({
+        locale: 'zh-CN',
+        messages: { greet: '你好，{name}！' },
+      })
+
+      expect(localize2('greet', 'Hello, {name}!', { name: 'Universe' })).toEqual({
+        value: '你好，Universe！',
+        original: 'Hello, Universe!',
+      })
+    })
+
+    it('original equals the default message even when no translation exists', () => {
+      configureNls({ locale: 'en-US' })
+
+      expect(localize2('missing.key', 'Fallback')).toEqual({
+        value: 'Fallback',
+        original: 'Fallback',
+      })
+    })
   })
 })

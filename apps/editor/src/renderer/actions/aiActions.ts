@@ -20,6 +20,7 @@ import {
   URI,
   UserDataFile,
   localize,
+  localize2,
   type AiProviderGroup,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -27,7 +28,7 @@ import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
-const CATEGORY = localize('command.category.ai', 'AI')
+const CATEGORY = localize2('command.category.ai', 'AI')
 
 const MANAGE_ITEM_ID = '__manage__'
 
@@ -36,7 +37,7 @@ export class PickModelAction extends Action2 {
   constructor() {
     super({
       id: PickModelAction.ID,
-      title: localize('action.ai.pickModel', 'Select AI Model'),
+      title: localize2('action.ai.pickModel', 'Select AI Model'),
       category: CATEGORY,
       f1: true,
     })
@@ -74,7 +75,7 @@ export class ManageModelsAction extends Action2 {
   constructor() {
     super({
       id: ManageModelsAction.ID,
-      title: localize('action.ai.openSettings', 'Open AI Settings'),
+      title: localize2('action.ai.openSettings', 'Open AI Settings'),
       category: CATEGORY,
       f1: true,
     })
@@ -99,7 +100,7 @@ export class OpenAiSettingsJsonAction extends Action2 {
   constructor() {
     super({
       id: OpenAiSettingsJsonAction.ID,
-      title: localize('action.ai.openSettingsJson', 'Open AI Settings (JSON)'),
+      title: localize2('action.ai.openSettingsJson', 'Open AI Settings (JSON)'),
       category: CATEGORY,
       f1: true,
     })
@@ -124,7 +125,7 @@ export class SetApiKeyAction extends Action2 {
   constructor() {
     super({
       id: SetApiKeyAction.ID,
-      title: localize('action.ai.setApiKey', 'Set AI Provider API Key'),
+      title: localize2('action.ai.setApiKey', 'Set AI Provider API Key'),
       category: CATEGORY,
       f1: true,
     })
@@ -167,7 +168,7 @@ export class ClearApiKeyAction extends Action2 {
   constructor() {
     super({
       id: ClearApiKeyAction.ID,
-      title: localize('action.ai.clearApiKey', 'Clear AI Provider API Key'),
+      title: localize2('action.ai.clearApiKey', 'Clear AI Provider API Key'),
       category: CATEGORY,
       f1: true,
     })

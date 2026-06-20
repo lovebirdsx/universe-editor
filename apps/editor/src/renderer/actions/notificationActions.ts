@@ -9,15 +9,15 @@ import {
   Severity,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { localize } from '@universe-editor/platform'
+import { localize, localize2 } from '@universe-editor/platform'
 
 export class ToggleNotificationsCenterAction extends Action2 {
   static readonly ID = 'workbench.action.notifications.toggleList'
   constructor() {
     super({
       id: ToggleNotificationsCenterAction.ID,
-      title: localize('action.notifications.toggleList', 'Toggle Notifications'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.notifications.toggleList', 'Toggle Notifications'),
+      category: localize2('command.category.view', 'View'),
       f1: true,
     })
   }
@@ -44,8 +44,8 @@ export class ClearAllNotificationsAction extends Action2 {
   constructor() {
     super({
       id: ClearAllNotificationsAction.ID,
-      title: localize('action.notifications.clearAll', 'Clear All Notifications'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.notifications.clearAll', 'Clear All Notifications'),
+      category: localize2('command.category.view', 'View'),
       f1: true,
     })
   }
@@ -59,8 +59,8 @@ export class TestNotificationAction extends Action2 {
   constructor() {
     super({
       id: TestNotificationAction.ID,
-      title: localize('action.notifications.test', 'Test Notification'),
-      category: localize('command.category.developer', 'Developer'),
+      title: localize2('action.notifications.test', 'Test Notification'),
+      category: localize2('command.category.developer', 'Developer'),
       f1: true,
     })
   }

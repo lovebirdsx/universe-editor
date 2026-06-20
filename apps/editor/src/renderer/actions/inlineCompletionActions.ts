@@ -16,6 +16,7 @@ import {
   KeybindingWeight,
   Severity,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -23,14 +24,14 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IInlineCompletionService } from '../services/ai/InlineCompletionService.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
-const CATEGORY = localize('command.category.ai', 'AI')
+const CATEGORY = localize2('command.category.ai', 'AI')
 
 export class TriggerInlineCompletionAction extends Action2 {
   static readonly ID = 'ai.inlineCompletion.trigger'
   constructor() {
     super({
       id: TriggerInlineCompletionAction.ID,
-      title: localize('action.ai.inlineCompletion.trigger', 'Trigger Inline Completion'),
+      title: localize2('action.ai.inlineCompletion.trigger', 'Trigger Inline Completion'),
       category: CATEGORY,
       keybinding: { primary: 'alt+\\', when: 'editorTextFocus' },
       f1: true,
@@ -78,7 +79,7 @@ export class CommitInlineCompletionAction extends Action2 {
   constructor() {
     super({
       id: CommitInlineCompletionAction.ID,
-      title: localize('action.ai.inlineCompletion.commit', 'Accept Inline Completion'),
+      title: localize2('action.ai.inlineCompletion.commit', 'Accept Inline Completion'),
       category: CATEGORY,
       // Claim Tab while ghost text is visible. Monaco confines its own
       // inlineSuggestionVisible key to the editor's scoped context-key service
@@ -111,7 +112,7 @@ export class ToggleInlineCompletionAction extends Action2 {
   constructor() {
     super({
       id: ToggleInlineCompletionAction.ID,
-      title: localize('action.ai.inlineCompletion.toggle', 'Toggle Inline Completions'),
+      title: localize2('action.ai.inlineCompletion.toggle', 'Toggle Inline Completions'),
       category: CATEGORY,
       f1: true,
     })
@@ -134,7 +135,7 @@ export class PickInlineCompletionModelAction extends Action2 {
   constructor() {
     super({
       id: PickInlineCompletionModelAction.ID,
-      title: localize('action.ai.inlineCompletion.pickModel', 'Select Inline Completion Model'),
+      title: localize2('action.ai.inlineCompletion.pickModel', 'Select Inline Completion Model'),
       category: CATEGORY,
       f1: true,
     })

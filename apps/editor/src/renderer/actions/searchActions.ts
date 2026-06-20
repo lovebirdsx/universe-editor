@@ -10,7 +10,7 @@ import {
   IViewsService,
   PartId,
   ViewContainerLocation,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -39,8 +39,8 @@ export class FindInFilesAction extends Action2 {
   constructor() {
     super({
       id: FindInFilesAction.ID,
-      title: localize('action.findInFiles.title', 'Find in Files'),
-      category: localize('command.category.search', 'Search'),
+      title: localize2('action.findInFiles.title', 'Find in Files'),
+      category: localize2('command.category.search', 'Search'),
       keybinding: { primary: 'ctrl+shift+f' },
       f1: true,
     })
@@ -74,8 +74,8 @@ export class QuickTextSearchAction extends Action2 {
   constructor() {
     super({
       id: QuickTextSearchAction.ID,
-      title: localize('action.quickTextSearch.title', 'Quick Search'),
-      category: localize('command.category.search', 'Search'),
+      title: localize2('action.quickTextSearch.title', 'Quick Search'),
+      category: localize2('command.category.search', 'Search'),
       keybinding: { primary: 'ctrl+q' },
       f1: true,
     })
@@ -100,8 +100,8 @@ export class FindInFileAction extends Action2 {
   constructor() {
     super({
       id: FindInFileAction.ID,
-      title: localize('action.find.title', 'Find'),
-      category: localize('command.category.editor', 'Editor'),
+      title: localize2('action.find.title', 'Find'),
+      category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'ctrl+f' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -117,8 +117,8 @@ export class FindReplaceInFileAction extends Action2 {
   constructor() {
     super({
       id: FindReplaceInFileAction.ID,
-      title: localize('action.replace.title', 'Replace'),
-      category: localize('command.category.editor', 'Editor'),
+      title: localize2('action.replace.title', 'Replace'),
+      category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'ctrl+h' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -134,8 +134,8 @@ export class FindNextAction extends Action2 {
   constructor() {
     super({
       id: FindNextAction.ID,
-      title: localize('action.findNext.title', 'Find Next'),
-      category: localize('command.category.editor', 'Editor'),
+      title: localize2('action.findNext.title', 'Find Next'),
+      category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'f3' },
       precondition: 'hasActiveEditor',
       f1: true,
@@ -151,8 +151,8 @@ export class FindPreviousAction extends Action2 {
   constructor() {
     super({
       id: FindPreviousAction.ID,
-      title: localize('action.findPrevious.title', 'Find Previous'),
-      category: localize('command.category.editor', 'Editor'),
+      title: localize2('action.findPrevious.title', 'Find Previous'),
+      category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'shift+f3' },
       precondition: 'hasActiveEditor',
       f1: true,

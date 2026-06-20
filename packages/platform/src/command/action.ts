@@ -49,7 +49,7 @@ export interface IAction2Options {
   /** Title for menus / command palette. */
   title: string | ICommandActionTitle
   /** Optional category prefix shown in the command palette. */
-  category?: string
+  category?: string | ICommandActionTitle
   /** Optional icon identifier. */
   icon?: string
   /**
@@ -93,6 +93,11 @@ function titleString(title: string | ICommandActionTitle): string {
   return typeof title === 'string' ? title : title.value
 }
 
+/** The original (English) form of a title, if one was supplied via localize2. */
+function originalString(title: string | ICommandActionTitle): string | undefined {
+  return typeof title === 'string' ? undefined : title.original
+}
+
 function asArray<T>(value: T | readonly T[] | undefined): readonly T[] {
   if (value === undefined) return []
   return Array.isArray(value) ? (value as readonly T[]) : [value as T]
@@ -109,8 +114,16 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
 
   const metadata: ICommandMetadata = {}
   metadata.description = titleString(desc.title)
+  const originalTitle = originalString(desc.title)
+  if (originalTitle !== undefined) {
+    metadata.originalDescription = originalTitle
+  }
   if (desc.category !== undefined) {
-    metadata.category = desc.category
+    metadata.category = titleString(desc.category)
+    const originalCategory = originalString(desc.category)
+    if (originalCategory !== undefined) {
+      metadata.originalCategory = originalCategory
+    }
   }
 
   disposables.push(

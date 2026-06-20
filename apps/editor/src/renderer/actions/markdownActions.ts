@@ -22,7 +22,7 @@ import {
   IEditorGroupsService,
   type IEditorGroup,
   MenuId,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -69,8 +69,8 @@ export class OpenMarkdownPreviewAction extends Action2 {
   constructor() {
     super({
       id: OpenMarkdownPreviewAction.ID,
-      title: localize('action.markdown.openPreview.title', 'Open Preview'),
-      category: localize('command.category.markdown', 'Markdown'),
+      title: localize2('action.markdown.openPreview.title', 'Open Preview'),
+      category: localize2('command.category.markdown', 'Markdown'),
       icon: 'open-preview',
       keybinding: { primary: 'ctrl+shift+v' },
       precondition: MARKDOWN_PRECONDITION,
@@ -88,8 +88,8 @@ export class OpenMarkdownPreviewToSideAction extends Action2 {
   constructor() {
     super({
       id: OpenMarkdownPreviewToSideAction.ID,
-      title: localize('action.markdown.openPreviewToSide.title', 'Open Preview to the Side'),
-      category: localize('command.category.markdown', 'Markdown'),
+      title: localize2('action.markdown.openPreviewToSide.title', 'Open Preview to the Side'),
+      category: localize2('command.category.markdown', 'Markdown'),
       icon: 'open-preview-side',
       keybinding: { primary: ['ctrl+k', 'ctrl+v'] },
       precondition: MARKDOWN_PRECONDITION,
@@ -107,8 +107,8 @@ export class OpenMarkdownSourceAction extends Action2 {
   constructor() {
     super({
       id: OpenMarkdownSourceAction.ID,
-      title: localize('action.markdown.showSource.title', 'Open Source'),
-      category: localize('command.category.markdown', 'Markdown'),
+      title: localize2('action.markdown.showSource.title', 'Open Source'),
+      category: localize2('command.category.markdown', 'Markdown'),
       icon: 'go-to-file',
       keybinding: { primary: 'ctrl+shift+v' },
       precondition: MARKDOWN_PREVIEW_PRECONDITION,

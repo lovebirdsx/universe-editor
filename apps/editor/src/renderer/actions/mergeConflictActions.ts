@@ -7,7 +7,7 @@
 import {
   Action2,
   IEditorGroupsService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -43,8 +43,8 @@ export class GoToNextMergeConflictAction extends Action2 {
   constructor() {
     super({
       id: GoToNextMergeConflictAction.ID,
-      title: localize('mergeConflict.next.title', 'Go to Next Merge Conflict'),
-      category: localize('command.category.mergeConflict', 'Merge Conflict'),
+      title: localize2('mergeConflict.next.title', 'Go to Next Merge Conflict'),
+      category: localize2('command.category.mergeConflict', 'Merge Conflict'),
       keybinding: { primary: 'alt+f9', when: 'editorTextFocus' },
       precondition: 'editorTextFocus',
       f1: true,
@@ -62,8 +62,8 @@ export class GoToPreviousMergeConflictAction extends Action2 {
   constructor() {
     super({
       id: GoToPreviousMergeConflictAction.ID,
-      title: localize('mergeConflict.previous.title', 'Go to Previous Merge Conflict'),
-      category: localize('command.category.mergeConflict', 'Merge Conflict'),
+      title: localize2('mergeConflict.previous.title', 'Go to Previous Merge Conflict'),
+      category: localize2('command.category.mergeConflict', 'Merge Conflict'),
       keybinding: { primary: 'shift+alt+f9', when: 'editorTextFocus' },
       precondition: 'editorTextFocus',
       f1: true,

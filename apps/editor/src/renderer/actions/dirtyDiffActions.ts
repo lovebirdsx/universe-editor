@@ -9,7 +9,7 @@
 import {
   Action2,
   IEditorGroupsService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -47,8 +47,8 @@ export class GoToNextChangeAction extends Action2 {
   constructor() {
     super({
       id: GoToNextChangeAction.ID,
-      title: localize('action.editor.nextChange.title', 'Go to Next Change'),
-      category: localize('command.category.editor', 'Editor'),
+      title: localize2('action.editor.nextChange.title', 'Go to Next Change'),
+      category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'alt+pagedown', when: WHEN },
       precondition: WHEN,
       f1: true,
@@ -66,8 +66,8 @@ export class GoToPreviousChangeAction extends Action2 {
   constructor() {
     super({
       id: GoToPreviousChangeAction.ID,
-      title: localize('action.editor.previousChange.title', 'Go to Previous Change'),
-      category: localize('command.category.editor', 'Editor'),
+      title: localize2('action.editor.previousChange.title', 'Go to Previous Change'),
+      category: localize2('command.category.editor', 'Editor'),
       keybinding: { primary: 'alt+pageup', when: WHEN },
       precondition: WHEN,
       f1: true,

@@ -7,7 +7,7 @@
  *    - workbench.action.gotoSymbol (Ctrl+Shift+O) → '@' editor symbols
  *--------------------------------------------------------------------------------------------*/
 
-import { Action2, localize, type ServicesAccessor } from '@universe-editor/platform'
+import { Action2, localize2, type ServicesAccessor } from '@universe-editor/platform'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 
 export class GoToWorkspaceSymbolAction extends Action2 {
@@ -15,8 +15,8 @@ export class GoToWorkspaceSymbolAction extends Action2 {
   constructor() {
     super({
       id: GoToWorkspaceSymbolAction.ID,
-      title: localize('action.showAllSymbols.title', 'Go to Symbol in Workspace…'),
-      category: localize('command.category.go', 'Go'),
+      title: localize2('action.showAllSymbols.title', 'Go to Symbol in Workspace…'),
+      category: localize2('command.category.go', 'Go'),
       keybinding: { primary: 'ctrl+t' },
       f1: true,
     })
@@ -31,8 +31,8 @@ export class GoToFileSymbolAction extends Action2 {
   constructor() {
     super({
       id: GoToFileSymbolAction.ID,
-      title: localize('action.gotoSymbol.title', 'Go to Symbol in Editor…'),
-      category: localize('command.category.go', 'Go'),
+      title: localize2('action.gotoSymbol.title', 'Go to Symbol in Editor…'),
+      category: localize2('command.category.go', 'Go'),
       keybinding: { primary: 'ctrl+shift+o' },
       f1: true,
     })

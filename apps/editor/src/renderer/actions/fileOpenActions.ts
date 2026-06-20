@@ -17,6 +17,7 @@ import {
   URI,
   isEqualResource,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
@@ -33,8 +34,8 @@ export class OpenFileAction extends Action2 {
   constructor() {
     super({
       id: OpenFileAction.ID,
-      title: localize('action.openFile.title', 'Open File…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openFile.title', 'Open File…'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+o' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 0 },
       f1: true,
@@ -67,8 +68,8 @@ export class OpenRecentFilesAction extends Action2 {
   constructor() {
     super({
       id: OpenRecentFilesAction.ID,
-      title: localize('action.openRecentFile.title', 'Open Recent File…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openRecentFile.title', 'Open Recent File…'),
+      category: localize2('command.category.file', 'File'),
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 3 },
       f1: true,
     })
@@ -119,8 +120,8 @@ export class ClearRecentFilesAction extends Action2 {
   constructor() {
     super({
       id: ClearRecentFilesAction.ID,
-      title: localize('action.clearRecentFiles.title', 'Clear Recently Opened Files'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.clearRecentFiles.title', 'Clear Recently Opened Files'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }
@@ -134,8 +135,8 @@ export class OpenWithDefaultAppAction extends Action2 {
   constructor() {
     super({
       id: OpenWithDefaultAppAction.ID,
-      title: localize('action.openWithDefaultApplication.title', 'Open with Default Application'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.openWithDefaultApplication.title', 'Open with Default Application'),
+      category: localize2('command.category.file', 'File'),
       f1: false,
     })
   }
@@ -162,8 +163,8 @@ export class GoToFileAction extends Action2 {
   constructor() {
     super({
       id: GoToFileAction.ID,
-      title: localize('action.goToFile.title', 'Go to File…'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.goToFile.title', 'Go to File…'),
+      category: localize2('command.category.file', 'File'),
       keybinding: { primary: 'ctrl+p', when: '!terminalFocus' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 1 },
       f1: true,
@@ -186,8 +187,8 @@ export class RefreshExplorerAction extends Action2 {
   constructor() {
     super({
       id: RefreshExplorerAction.ID,
-      title: localize('action.refresh.title', 'Refresh Explorer'),
-      category: localize('command.category.file', 'File'),
+      title: localize2('action.refresh.title', 'Refresh Explorer'),
+      category: localize2('command.category.file', 'File'),
       f1: true,
     })
   }

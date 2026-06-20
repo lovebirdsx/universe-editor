@@ -14,18 +14,19 @@ import {
   Severity,
   URI,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 
-const CATEGORY = localize('command.category.preferences', 'Preferences')
+const CATEGORY = localize2('command.category.preferences', 'Preferences')
 
 export class SetConfigLocationAction extends Action2 {
   static readonly ID = 'workbench.action.setConfigLocation'
   constructor() {
     super({
       id: SetConfigLocationAction.ID,
-      title: localize('action.setConfigLocation.title', 'Set Config Directory…'),
+      title: localize2('action.setConfigLocation.title', 'Set Config Directory…'),
       category: CATEGORY,
       menu: { id: MenuId.MenubarFileMenu, group: '5_preferences', order: 10 },
       f1: true,
@@ -106,7 +107,7 @@ export class OpenConfigLocationFolderAction extends Action2 {
   constructor() {
     super({
       id: OpenConfigLocationFolderAction.ID,
-      title: localize('action.openConfigLocationFolder.title', 'Open Config Directory'),
+      title: localize2('action.openConfigLocationFolder.title', 'Open Config Directory'),
       category: CATEGORY,
       f1: true,
     })
@@ -125,7 +126,7 @@ export class ResetConfigLocationAction extends Action2 {
   constructor() {
     super({
       id: ResetConfigLocationAction.ID,
-      title: localize('action.resetConfigLocation.title', 'Reset Config Directory to Default'),
+      title: localize2('action.resetConfigLocation.title', 'Reset Config Directory to Default'),
       category: CATEGORY,
       f1: true,
     })

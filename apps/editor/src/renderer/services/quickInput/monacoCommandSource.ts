@@ -61,6 +61,7 @@ export function collectMonacoCommands(groupsService: IEditorGroupsService): Mona
         id: action.id,
         label: action.label || action.id,
         description: localize('monaco.commandSource', 'Monaco'),
+        keywords: [action.id],
         ...(keybinding !== undefined ? { keybinding } : {}),
         _monaco: true as const,
         _editor: editor,

@@ -8,18 +8,19 @@ import {
   IAiModelService,
   IQuickInputService,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
-const CATEGORY = localize('command.category.ai', 'AI')
+const CATEGORY = localize2('command.category.ai', 'AI')
 
 export class PickCommitModelAction extends Action2 {
   static readonly ID = 'ai.commitMessage.pickModel'
   constructor() {
     super({
       id: PickCommitModelAction.ID,
-      title: localize('action.ai.commitMessage.pickModel', 'Select Commit Message Model'),
+      title: localize2('action.ai.commitMessage.pickModel', 'Select Commit Message Model'),
       category: CATEGORY,
       f1: true,
     })

@@ -8,7 +8,7 @@ import {
   ILayoutService,
   IOutputService,
   IViewsService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import {
@@ -24,11 +24,11 @@ export class ToggleKeybindingsTroubleshootingAction extends Action2 {
   constructor() {
     super({
       id: ToggleKeybindingsTroubleshootingAction.ID,
-      title: localize(
+      title: localize2(
         'action.toggleKeybindingsLog.title',
         'Developer: Toggle Keyboard Shortcuts Troubleshooting',
       ),
-      category: localize('command.category.developer', 'Developer'),
+      category: localize2('command.category.developer', 'Developer'),
       f1: true,
     })
   }

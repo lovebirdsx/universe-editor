@@ -16,7 +16,7 @@ import {
   IWorkspaceService,
   PartId,
   ViewContainerLocation,
-  localize,
+  localize2,
   type ExternalTerminalKind,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -40,8 +40,8 @@ export class OpenInTerminalAction extends Action2 {
   constructor() {
     super({
       id: OpenInTerminalAction.ID,
-      title: localize('action.openInTerminal.title', 'Open in External Terminal'),
-      category: localize('command.category.terminal', 'Terminal'),
+      title: localize2('action.openInTerminal.title', 'Open in External Terminal'),
+      category: localize2('command.category.terminal', 'Terminal'),
       keybinding: { primary: 'ctrl+shift+c' },
       f1: true,
     })
@@ -81,8 +81,8 @@ export class ToggleTerminalAction extends Action2 {
   constructor() {
     super({
       id: ToggleTerminalAction.ID,
-      title: localize('action.toggleTerminal.title', 'Toggle Terminal'),
-      category: localize('command.category.terminal', 'Terminal'),
+      title: localize2('action.toggleTerminal.title', 'Toggle Terminal'),
+      category: localize2('command.category.terminal', 'Terminal'),
       f1: true,
     })
   }
@@ -107,8 +107,8 @@ export class NewTerminalAction extends Action2 {
   constructor() {
     super({
       id: NewTerminalAction.ID,
-      title: localize('action.newTerminal.title', 'New Terminal'),
-      category: localize('command.category.terminal', 'Terminal'),
+      title: localize2('action.newTerminal.title', 'New Terminal'),
+      category: localize2('command.category.terminal', 'Terminal'),
       keybinding: [{ primary: 'ctrl+shift+`' }],
       f1: true,
     })
@@ -130,8 +130,8 @@ export class SplitTerminalAction extends Action2 {
   constructor() {
     super({
       id: SplitTerminalAction.ID,
-      title: localize('action.splitTerminal.title', 'Split Terminal'),
-      category: localize('command.category.terminal', 'Terminal'),
+      title: localize2('action.splitTerminal.title', 'Split Terminal'),
+      category: localize2('command.category.terminal', 'Terminal'),
       keybinding: { primary: 'ctrl+shift+5' },
       f1: true,
     })
@@ -154,8 +154,8 @@ export class FocusTerminalPanelAction extends Action2 {
   constructor() {
     super({
       id: FocusTerminalPanelAction.ID,
-      title: localize('action.terminal.focusPanel.title', 'Focus Terminal'),
-      category: localize('command.category.terminal', 'Terminal'),
+      title: localize2('action.terminal.focusPanel.title', 'Focus Terminal'),
+      category: localize2('command.category.terminal', 'Terminal'),
       keybinding: { primary: 'alt+`', when: '!terminalFocus' },
       f1: true,
     })
@@ -180,8 +180,8 @@ export class OpenTerminalInEditorAction extends Action2 {
   constructor() {
     super({
       id: OpenTerminalInEditorAction.ID,
-      title: localize('action.terminalInEditor.title', 'Open Terminal in Editor'),
-      category: localize('command.category.terminal', 'Terminal'),
+      title: localize2('action.terminalInEditor.title', 'Open Terminal in Editor'),
+      category: localize2('command.category.terminal', 'Terminal'),
       keybinding: { primary: 'ctrl+`' },
       f1: true,
     })

@@ -20,6 +20,7 @@ import {
   UserDataFile,
   isEqualResource,
   localize,
+  localize2,
   type IQuickPickItem,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -140,8 +141,8 @@ export class OpenSettingsAction extends Action2 {
   constructor() {
     super({
       id: OpenSettingsAction.ID,
-      title: localize('action.openSettings.title', 'Open Settings'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.openSettings.title', 'Open Settings'),
+      category: localize2('command.category.preferences', 'Preferences'),
       keybinding: [{ primary: 'ctrl+,' }],
       menu: { id: MenuId.MenubarFileMenu, group: '5_preferences', order: 1 },
       f1: true,
@@ -174,8 +175,8 @@ export class OpenKeybindingsEditorAction extends Action2 {
   constructor() {
     super({
       id: OpenKeybindingsEditorAction.ID,
-      title: localize('action.openKeybindings.title', 'Open Keyboard Shortcuts'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.openKeybindings.title', 'Open Keyboard Shortcuts'),
+      category: localize2('command.category.preferences', 'Preferences'),
       keybinding: { primary: ['ctrl+k', 'ctrl+s'] },
       menu: { id: MenuId.MenubarFileMenu, group: '5_preferences', order: 2 },
       f1: true,
@@ -206,8 +207,8 @@ export class OpenSettingsJsonAction extends Action2 {
   constructor() {
     super({
       id: OpenSettingsJsonAction.ID,
-      title: localize('action.openSettingsJson.title', 'Open Settings (JSON)'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.openSettingsJson.title', 'Open Settings (JSON)'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }
@@ -226,9 +227,9 @@ export class OpenKeybindingsJsonAction extends Action2 {
   constructor() {
     super({
       id: OpenKeybindingsJsonAction.ID,
-      title: localize('action.openKeybindingsJson.title', 'Open Keyboard Shortcuts (JSON)'),
+      title: localize2('action.openKeybindingsJson.title', 'Open Keyboard Shortcuts (JSON)'),
       keybinding: { primary: ['ctrl+k', 'ctrl+k'] },
-      category: localize('command.category.preferences', 'Preferences'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }
@@ -247,11 +248,11 @@ export class OpenVSCodeKeybindingsJsonAction extends Action2 {
   constructor() {
     super({
       id: OpenVSCodeKeybindingsJsonAction.ID,
-      title: localize(
+      title: localize2(
         'action.openVSCodeKeybindingsJson.title',
         'Open VS Code Keyboard Shortcuts (JSON)',
       ),
-      category: localize('command.category.preferences', 'Preferences'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }
@@ -284,8 +285,8 @@ export class OpenVSCodeSettingsJsonAction extends Action2 {
   constructor() {
     super({
       id: OpenVSCodeSettingsJsonAction.ID,
-      title: localize('action.openVSCodeSettingsJson.title', 'Open VS Code Settings (JSON)'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.openVSCodeSettingsJson.title', 'Open VS Code Settings (JSON)'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }
@@ -318,8 +319,8 @@ export class ConfigureDisplayLanguageAction extends Action2 {
   constructor() {
     super({
       id: ConfigureDisplayLanguageAction.ID,
-      title: localize('action.configureDisplayLanguage.title', 'Configure Display Language'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.configureDisplayLanguage.title', 'Configure Display Language'),
+      category: localize2('command.category.preferences', 'Preferences'),
       menu: { id: MenuId.MenubarFileMenu, group: '5_preferences', order: 3 },
       f1: true,
     })
@@ -362,8 +363,8 @@ export class OpenWorkspaceSettingsAction extends Action2 {
   constructor() {
     super({
       id: OpenWorkspaceSettingsAction.ID,
-      title: localize('action.openWorkspaceSettings.title', 'Open Workspace Settings'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.openWorkspaceSettings.title', 'Open Workspace Settings'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }
@@ -395,8 +396,8 @@ export class OpenWorkspaceSettingsJsonAction extends Action2 {
   constructor() {
     super({
       id: OpenWorkspaceSettingsJsonAction.ID,
-      title: localize('action.openWorkspaceSettingsJson.title', 'Open Workspace Settings (JSON)'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.openWorkspaceSettingsJson.title', 'Open Workspace Settings (JSON)'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }
@@ -422,8 +423,8 @@ export class SelectColorThemeAction extends Action2 {
   constructor() {
     super({
       id: SelectColorThemeAction.ID,
-      title: localize('action.selectTheme.title', 'Color Theme'),
-      category: localize('command.category.preferences', 'Preferences'),
+      title: localize2('action.selectTheme.title', 'Color Theme'),
+      category: localize2('command.category.preferences', 'Preferences'),
       f1: true,
     })
   }

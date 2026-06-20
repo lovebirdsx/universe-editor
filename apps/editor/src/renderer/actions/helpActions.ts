@@ -11,6 +11,7 @@ import {
   IEditorGroupsService,
   MenuId,
   localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
@@ -23,8 +24,8 @@ export class OpenEditorGuideAction extends Action2 {
   constructor() {
     super({
       id: OpenEditorGuideAction.ID,
-      title: localize('action.openEditorGuide.title', 'Editor Guide'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.openEditorGuide.title', 'Editor Guide'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 1 },
       f1: true,
     })
@@ -40,8 +41,8 @@ export class OpenAgentGuideAction extends Action2 {
   constructor() {
     super({
       id: OpenAgentGuideAction.ID,
-      title: localize('action.openAgentGuide.title', 'Agent Guide'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('action.openAgentGuide.title', 'Agent Guide'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 2 },
       f1: true,
     })
@@ -57,8 +58,8 @@ export class ShowReleaseNotesAction extends Action2 {
   constructor() {
     super({
       id: ShowReleaseNotesAction.ID,
-      title: localize('releaseNotes.show', 'Show Release Notes'),
-      category: localize('command.category.help', 'Help'),
+      title: localize2('releaseNotes.show', 'Show Release Notes'),
+      category: localize2('command.category.help', 'Help'),
       menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 3 },
       f1: true,
     })

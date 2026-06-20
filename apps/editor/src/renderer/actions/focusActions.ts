@@ -11,7 +11,7 @@ import {
   Action2,
   IFocusStackService,
   ILayoutService,
-  localize,
+  localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 
@@ -20,8 +20,8 @@ export class FocusNextPartAction extends Action2 {
   constructor() {
     super({
       id: FocusNextPartAction.ID,
-      title: localize('action.focusNextPart.title', 'Focus Next Part'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.focusNextPart.title', 'Focus Next Part'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'f6', when: '!quickInputVisible' },
       f1: true,
     })
@@ -37,8 +37,8 @@ export class FocusPreviousPartAction extends Action2 {
   constructor() {
     super({
       id: FocusPreviousPartAction.ID,
-      title: localize('action.focusPreviousPart.title', 'Focus Previous Part'),
-      category: localize('command.category.view', 'View'),
+      title: localize2('action.focusPreviousPart.title', 'Focus Previous Part'),
+      category: localize2('command.category.view', 'View'),
       keybinding: { primary: 'shift+f6', when: '!quickInputVisible' },
       f1: true,
     })

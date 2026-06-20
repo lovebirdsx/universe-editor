@@ -31,6 +31,12 @@ export interface IQuickPickItem {
    * (distinct from `iconId`'s agent-icon resolver).
    */
   readonly statusIconId?: string
+  /**
+   * Extra strings folded into filtering but never rendered and never highlighted.
+   * Used e.g. by the command palette to match a command's English title and id
+   * under a non-English display language. Mirrors VSCode's QuickPick `keywords`.
+   */
+  readonly keywords?: readonly string[]
   readonly highlights?: IQuickPickItemHighlights
 }
 

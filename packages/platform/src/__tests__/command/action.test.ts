@@ -57,6 +57,19 @@ class MultiTargetAction extends Action2 {
   override run(): void {}
 }
 
+class LocalizedAction extends Action2 {
+  static readonly ID = 'test.action.localized'
+  constructor() {
+    super({
+      id: LocalizedAction.ID,
+      title: { value: '简单动作', original: 'Simple Action' },
+      category: { value: '测试', original: 'Test' },
+      f1: true,
+    })
+  }
+  override run(): void {}
+}
+
 describe('Action2 / registerAction2', () => {
   it('registers a command, menu, keybinding and command palette entry', () => {
     const d = registerAction2(SimpleAction)
@@ -144,6 +157,31 @@ describe('Action2 / registerAction2', () => {
       ).toBe(true)
       expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+1')).toBe(MultiTargetAction.ID)
       expect(KeybindingsRegistry.resolveKeybinding('ctrl+alt+2')).toBe(MultiTargetAction.ID)
+    } finally {
+      d.dispose()
+    }
+  })
+
+  it('stores the localized title and the original English form in command metadata', () => {
+    const d = registerAction2(LocalizedAction)
+    try {
+      const meta = CommandsRegistry.getCommand(LocalizedAction.ID)?.metadata
+      expect(meta?.description).toBe('简单动作')
+      expect(meta?.originalDescription).toBe('Simple Action')
+      expect(meta?.category).toBe('测试')
+      expect(meta?.originalCategory).toBe('Test')
+    } finally {
+      d.dispose()
+    }
+  })
+
+  it('leaves original fields undefined for plain string titles', () => {
+    const d = registerAction2(SimpleAction)
+    try {
+      const meta = CommandsRegistry.getCommand(SimpleAction.ID)?.metadata
+      expect(meta?.description).toBe('Simple Action')
+      expect(meta?.originalDescription).toBeUndefined()
+      expect(meta?.originalCategory).toBeUndefined()
     } finally {
       d.dispose()
     }
