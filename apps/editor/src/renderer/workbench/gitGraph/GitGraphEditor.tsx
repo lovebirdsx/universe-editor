@@ -527,16 +527,18 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [commands, load],
   )
 
+  // Mirror the SCM-selected repo into the graph. Compare against the live
+  // `selectedRepo` (seeded from the surviving module store) rather than a ref —
+  // a ref resets to undefined on every remount, so it would mistake re-activating
+  // the tab for a repo switch and force a full reload, wiping selection/scroll.
   const scmSelectedRepo = useObservable(scmViewState.selectedRepo)
-  const lastSyncedScmRepo = useRef<string | undefined>(undefined)
   useEffect(() => {
     if (!scmSelectedRepo) return
     if (repos.length === 0) return
     if (!repos.find((r) => r.root === scmSelectedRepo)) return
-    if (scmSelectedRepo === lastSyncedScmRepo.current) return
-    lastSyncedScmRepo.current = scmSelectedRepo
+    if (scmSelectedRepo === selectedRepo) return
     onSelectRepo(scmSelectedRepo)
-  }, [scmSelectedRepo, repos, onSelectRepo])
+  }, [scmSelectedRepo, repos, selectedRepo, onSelectRepo])
 
   const adjustColumn = useCallback((col: 'author' | 'date', deltaX: number) => {
     setColumnWidths((prev) => {
