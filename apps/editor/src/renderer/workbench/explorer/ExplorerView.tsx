@@ -119,7 +119,7 @@ export function ExplorerView() {
         <button
           type="button"
           className={styles['openBtn']}
-          onClick={() => void workspaceService.openFolder()}
+          onClick={() => void commandService.executeCommand('workbench.action.files.openFolder')}
         >
           Open Folder
         </button>
