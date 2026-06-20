@@ -43,7 +43,7 @@ import {
   type GitGraphLoadResult,
   type GitGraphRepoDto,
 } from '@universe-editor/extensions-common'
-import { useService } from '../useService.js'
+import { useService, useObservable } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
 import { computeGraphLayout, type GraphGrid } from '../../services/gitGraph/graphLayout.js'
 import { buildFileTree, type FileTreeNode } from '../../services/gitGraph/fileTree.js'
@@ -53,6 +53,7 @@ import {
   GIT_GRAPH_PAGE_SIZE,
   type GitGraphSettings,
 } from '../../services/gitGraph/gitGraphViewState.js'
+import { scmViewState } from '../scm/scmViewState.js'
 import {
   GitGraphContextMenu,
   type GitGraphMenuItem,
@@ -525,6 +526,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     },
     [commands, load],
   )
+
+  const scmSelectedRepo = useObservable(scmViewState.selectedRepo)
+  const lastSyncedScmRepo = useRef<string | undefined>(undefined)
+  useEffect(() => {
+    if (!scmSelectedRepo) return
+    if (repos.length === 0) return
+    if (!repos.find((r) => r.root === scmSelectedRepo)) return
+    if (scmSelectedRepo === lastSyncedScmRepo.current) return
+    lastSyncedScmRepo.current = scmSelectedRepo
+    onSelectRepo(scmSelectedRepo)
+  }, [scmSelectedRepo, repos, onSelectRepo])
 
   const adjustColumn = useCallback((col: 'author' | 'date', deltaX: number) => {
     setColumnWidths((prev) => {
