@@ -7,6 +7,7 @@ const showErrorMessage = vi.fn()
 const getModels = vi.fn()
 const getActiveModelId = vi.fn()
 const getCommitModelId = vi.fn()
+const getCommitSystemPrompt = vi.fn()
 const sendRequest = vi.fn()
 const getConfig = vi.fn()
 
@@ -16,6 +17,7 @@ vi.mock('@universe-editor/extension-api', () => ({
     getModels: () => getModels(),
     getActiveModelId: () => getActiveModelId(),
     getCommitModelId: () => getCommitModelId(),
+    getCommitSystemPrompt: () => getCommitSystemPrompt(),
     sendRequest: (...args: unknown[]) => sendRequest(...args),
   },
   commands: { executeCommand: (...args: unknown[]) => executeCommand(...args) },
@@ -51,6 +53,7 @@ beforeEach(() => {
   getModels.mockResolvedValue([{ id: 'm1' }])
   getActiveModelId.mockResolvedValue(undefined)
   getCommitModelId.mockResolvedValue(undefined)
+  getCommitSystemPrompt.mockResolvedValue(undefined)
 })
 
 describe('generateCommitMessage', () => {

@@ -66,10 +66,24 @@ export interface AiActiveModels {
   readonly sessionTitle?: string
 }
 
+/** Which feature's system prompt a value overrides. */
+export type AiPromptKind = 'commit' | 'inlineCompletion' | 'sessionTitle'
+
+/**
+ * Per-feature system-prompt overrides, persisted in aiSettings.json. An absent
+ * field means the feature keeps its built-in default prompt.
+ */
+export interface AiSystemPrompts {
+  readonly commit?: string
+  readonly inlineCompletion?: string
+  readonly sessionTitle?: string
+}
+
 /** Top-level shape of aiSettings.json: provider groups plus active selections. */
 export interface AiSettingsFile {
   readonly groups: readonly AiProviderGroup[]
   readonly activeModels?: AiActiveModels
+  readonly systemPrompts?: AiSystemPrompts
 }
 
 /** Stable cache / lookup key for a group: `vendor/name`. */

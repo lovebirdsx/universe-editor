@@ -463,6 +463,8 @@ export interface AiApi {
   getActiveModelId(): Promise<string | undefined>
   /** The user's currently selected commit-message model id, if any. */
   getCommitModelId(): Promise<string | undefined>
+  /** The configured commit-message system prompt, or undefined to use the built-in default. */
+  getCommitSystemPrompt(): Promise<string | undefined>
   /** Send a request and stream the response. Cancel via the returned handle. */
   sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse
 }
@@ -615,6 +617,7 @@ export const ai: AiApi = {
   computeTokenLength: (modelId, text) => bridge().ai.computeTokenLength(modelId, text),
   getActiveModelId: () => bridge().ai.getActiveModelId(),
   getCommitModelId: () => bridge().ai.getCommitModelId(),
+  getCommitSystemPrompt: () => bridge().ai.getCommitSystemPrompt(),
   sendRequest: (messages, options) => bridge().ai.sendRequest(messages, options),
 }
 

@@ -20,6 +20,7 @@ const fakeAi: IAiModelService = {
   onDidChangeInlineCompletionModel: Event.None,
   onDidChangeCommitModel: Event.None,
   onDidChangeSessionTitleModel: Event.None,
+  onDidChangeSystemPrompts: Event.None,
   getModels: () => Promise.resolve([]),
   selectModels: (_selector: AiModelSelector) => Promise.resolve([]),
   computeTokenLength: (_modelId: string, _text: string, _token: CancellationToken) =>
@@ -39,6 +40,8 @@ const fakeAi: IAiModelService = {
   setCommitModelId: (_modelId: string | undefined) => Promise.resolve(),
   getSessionTitleModelId: () => Promise.resolve(undefined),
   setSessionTitleModelId: (_modelId: string | undefined) => Promise.resolve(),
+  getSystemPrompt: () => Promise.resolve(undefined),
+  setSystemPrompt: () => Promise.resolve(),
   getModelConfiguration: (_modelId: string) => Promise.resolve({}),
   setModelConfiguration: (_modelId: string, _config: AiModelConfiguration) => Promise.resolve(),
   getGroups: () => Promise.resolve([]),

@@ -9,14 +9,19 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
-import { Boxes, SlidersHorizontal, type LucideIcon } from 'lucide-react'
+import { Boxes, MessageSquareText, SlidersHorizontal, type LucideIcon } from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
 import { cx } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { AiModelsPanel } from './AiModelsPanel.js'
 import { AiFeatureModelsPanel } from './AiFeatureModelsPanel.js'
+import { AiSystemPromptsPanel } from './AiSystemPromptsPanel.js'
 import { AiSettingsHelpButton } from './AiSettingsHelpButton.js'
-import { aiFeatureModelsHelpText, aiModelsHelpText } from './aiSettingsHelpText.js'
+import {
+  aiFeatureModelsHelpText,
+  aiModelsHelpText,
+  aiSystemPromptsHelpText,
+} from './aiSettingsHelpText.js'
 import styles from './AiSettingsEditor.module.css'
 
 interface CategoryDef {
@@ -41,6 +46,13 @@ const CATEGORIES: readonly CategoryDef[] = [
     label: localize('aiSettings.category.features', 'Feature Models'),
     panel: AiFeatureModelsPanel,
     help: aiFeatureModelsHelpText,
+  },
+  {
+    id: 'systemPrompts',
+    icon: MessageSquareText,
+    label: localize('aiSettings.category.systemPrompts', 'System Prompts'),
+    panel: AiSystemPromptsPanel,
+    help: aiSystemPromptsHelpText,
   },
 ]
 

@@ -16,7 +16,7 @@ import type {
   AiRequestOptions,
   AiResponseChunk,
 } from './aiModelTypes.js'
-import type { AiProviderGroup } from './aiModelConfiguration.js'
+import type { AiProviderGroup, AiPromptKind } from './aiModelConfiguration.js'
 
 /** Mirrors VSCode's ILanguageModelChatResponse: stream + final result split. */
 export interface AiResponse {
@@ -47,6 +47,9 @@ export interface IAiModelService {
 
   /** Fires when the active session-title model selection changes (persisted in aiSettings.json). */
   readonly onDidChangeSessionTitleModel: Event<void>
+
+  /** Fires when any feature's system-prompt override changes (persisted in aiSettings.json). */
+  readonly onDidChangeSystemPrompts: Event<void>
 
   /** List currently available models (resolved, with metadata). */
   getModels(): Promise<readonly AiModelMetadata[]>
@@ -87,6 +90,11 @@ export interface IAiModelService {
   getSessionTitleModelId(): Promise<string | undefined>
   /** Set the active session-title model id (persisted in aiSettings.json by main). */
   setSessionTitleModelId(modelId: string | undefined): Promise<void>
+
+  /** A feature's system-prompt override, or undefined when it uses its built-in default. */
+  getSystemPrompt(kind: AiPromptKind): Promise<string | undefined>
+  /** Set (or, with undefined/blank, clear) a feature's system-prompt override. */
+  setSystemPrompt(kind: AiPromptKind, prompt: string | undefined): Promise<void>
 
   /** Resolved per-model configuration (schema default → user settings). */
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration>

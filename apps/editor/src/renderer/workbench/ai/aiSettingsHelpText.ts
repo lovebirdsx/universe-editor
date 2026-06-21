@@ -43,3 +43,21 @@ export function aiFeatureModelsHelpText(): string {
     ].join('\n'),
   )
 }
+
+export function aiSystemPromptsHelpText(): string {
+  return localize(
+    'aiSettings.help.systemPrompts',
+    [
+      '## System Prompts',
+      '',
+      'Customize the **system prompt** sent to the model for each AI feature:',
+      '',
+      '- **Commit Message**: instructions for summarizing staged changes into a commit message.',
+      '- **Inline Completion**: instructions for the Copilot-style ghost-text engine.',
+      '- **Session Title**: instructions for naming AGENTS sessions.',
+      '',
+      'Leave a field empty to use the built-in default — shown as grey placeholder text. Use **Restore default** to clear an override you no longer want.',
+      'Overrides are saved to `aiSettings.json`; built-in defaults are never written to the file.',
+    ].join('\n'),
+  )
+}

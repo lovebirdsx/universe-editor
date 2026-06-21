@@ -15,7 +15,7 @@ interface CommitGenContext {
   files: { path: string; diff: string }[]
 }
 
-const SYSTEM_PROMPT = [
+const DEFAULT_SYSTEM_PROMPT = [
   'You are an AI programming assistant that writes the single most appropriate git',
   'commit message for a set of code changes. You understand the intent behind a',
   "change and produce concise, clear messages that follow this repository's own",
@@ -119,9 +119,11 @@ export async function generateCommitMessage(arg: unknown): Promise<void> {
     return
   }
 
+  const systemPrompt = (await ai.getCommitSystemPrompt()) || DEFAULT_SYSTEM_PROMPT
+
   const response = ai.sendRequest(
     [
-      { role: AiMessageRole.System, content: SYSTEM_PROMPT },
+      { role: AiMessageRole.System, content: systemPrompt },
       { role: AiMessageRole.User, content: buildUserPrompt(ctx, maxDiffChars, instructions) },
     ],
     { modelId, temperature: 0.2, purpose: 'commit' },

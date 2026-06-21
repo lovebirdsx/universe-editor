@@ -30,6 +30,7 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import { DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT } from './defaultSystemPrompts.js'
 
 const CONFIG = {
   enabled: 'ai.inlineCompletion.enabled',
@@ -174,7 +175,10 @@ export class InlineCompletionService extends Disposable implements IInlineComple
       if (!waited || token.isCancellationRequested) return null
     }
 
-    const prompt = this._buildPrompt(model, position)
+    const systemPrompt =
+      (await this._aiModel.getSystemPrompt('inlineCompletion')) ||
+      DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT
+    const prompt = this._buildPrompt(model, position, systemPrompt)
     if (prompt === null) return null
 
     const cts = new CancellationTokenSource()
@@ -251,6 +255,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   private _buildPrompt(
     model: monaco.editor.ITextModel,
     position: monaco.Position,
+    systemPrompt: string,
   ): { messages: AiMessage[]; suffix: string } | null {
     const prefixChars = this._config.get<number>(CONFIG.prefixChars) ?? DEFAULTS.prefixChars
     const suffixChars = this._config.get<number>(CONFIG.suffixChars) ?? DEFAULTS.suffixChars
@@ -264,7 +269,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     const messages: AiMessage[] = [
       {
         role: AiMessageRole.System,
-        content: [{ type: 'text', value: SYSTEM_PROMPT }],
+        content: [{ type: 'text', value: systemPrompt }],
       },
       {
         role: AiMessageRole.User,
@@ -349,19 +354,6 @@ function describeAiError(code: AiErrorCode | undefined, message: string): string
       return message
   }
 }
-
-const SYSTEM_PROMPT = [
-  'You are an inline text completion engine, like GitHub Copilot.',
-  'The user message contains the document around the cursor: text before the',
-  'cursor is wrapped as <|prefix|>…<|cursor|>, text after as <|cursor|>…<|suffix|>.',
-  'Your output is inserted verbatim at the cursor, immediately after the prefix.',
-  'If the completion should begin on a new line (for example a new list item, a',
-  'new statement, or a new paragraph), your output MUST start with a newline',
-  'character — otherwise it is glued onto the end of the current line.',
-  'Output ONLY the raw text to insert — no explanations, no markdown code fences,',
-  'no repetition of the surrounding text. Keep it focused; use multiple lines only',
-  'when natural. If nothing should be inserted, output nothing.',
-].join(' ')
 
 /**
  * Clean a model reply into insertable text: strip code fences the model may wrap
