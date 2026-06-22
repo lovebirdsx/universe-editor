@@ -542,6 +542,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
     this._appendMessage('user', text)
+    void this._maybeGenerateTitle(text)
     const prompt = composePromptBlocks(text, mentions ?? [])
     const params: PromptRequest = {
       sessionId: this.id,
@@ -560,10 +561,8 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (abort.signal.aborted) onAbort()
       else abort.signal.addEventListener('abort', onAbort, { once: true })
     })
-    let turnOk = false
     try {
       await Promise.race([this._conn.conn.prompt(params), abortPromise])
-      turnOk = true
     } catch (err) {
       if (err instanceof AcpAbortError) {
         // '[cancelled]' is appended once by cancelTurn — appending here would
@@ -585,9 +584,6 @@ export class AcpSession extends Disposable implements IAcpSession {
       if (this._inFlight.size === 0) this._flushStream()
       this._recomputeStatus()
     }
-    // After a successful first turn, upgrade the title via the session-title
-    // model. Fire-and-forget; one-shot and self-degrading (see the method).
-    if (turnOk) void this._maybeGenerateTitle(text)
   }
 
   async cancelTurn(): Promise<void> {
@@ -639,10 +635,9 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * After the first turn settles, ask the session-title model for a friendly
-   * title and overwrite the first-prompt-derived one. Runs at most once per
-   * session and degrades silently: when no title model is configured/available
-   * (or generation fails) the derived title stays. Fire-and-forget.
+   * Ask the session-title model for a friendly title as soon as the first user
+   * message is sent, and overwrite the first-prompt-derived one. Runs at most
+   * once per session and degrades silently. Fire-and-forget.
    */
   private async _maybeGenerateTitle(userText: string): Promise<void> {
     if (this._titleGenerated) return
