@@ -87,9 +87,8 @@ function buildUserPrompt(ctx: CommitGenContext, budget: number, instructions: st
   return parts.join('\n')
 }
 
-/** Resolve the model id: explicit config → commit model → active chat model → first available. */
-async function resolveModelId(configured: string): Promise<string | undefined> {
-  if (configured) return configured
+/** Resolve the model id: commit model → active chat model → first available. */
+async function resolveModelId(): Promise<string | undefined> {
   const commit = await ai.getCommitModelId()
   if (commit) return commit
   const active = await ai.getActiveModelId()
@@ -109,11 +108,10 @@ export async function generateCommitMessage(arg: unknown): Promise<void> {
   }
 
   const cfg = workspace.getConfiguration('ai')
-  const configuredModel = await cfg.get('commitMessage.modelId', '')
   const maxDiffChars = await cfg.get('commitMessage.maxDiffChars', 12000)
   const instructions = await cfg.get('commitMessage.instructions', '')
 
-  const modelId = await resolveModelId(configuredModel)
+  const modelId = await resolveModelId()
   if (!modelId) {
     await window.showErrorMessage('No AI model is available. Configure a model first.')
     return

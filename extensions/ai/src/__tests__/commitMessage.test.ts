@@ -85,17 +85,6 @@ describe('generateCommitMessage', () => {
     expect(showWarningMessage).toHaveBeenCalledOnce()
   })
 
-  it('passes the configured model id to the request', async () => {
-    executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
-    getConfig.mockImplementation((key: string, def: unknown) =>
-      Promise.resolve(key === 'commitMessage.modelId' ? 'custom-model' : def),
-    )
-    sendRequest.mockReturnValue(streamFrom(['x']))
-    await generateCommitMessage({ rootUri: '/r' })
-    expect(getModels).not.toHaveBeenCalled()
-    expect(sendRequest.mock.calls[0]?.[1]).toMatchObject({ modelId: 'custom-model' })
-  })
-
   it('prefers the commit model over the active chat model when none is configured', async () => {
     executeCommand.mockResolvedValueOnce(contextWith([{ path: 'a.ts', diff: 'diff --git a b' }]))
     getCommitModelId.mockResolvedValueOnce('openai/default/commit-model')
