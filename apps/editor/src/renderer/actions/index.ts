@@ -184,6 +184,10 @@ import {
   OpenMarkdownPreviewAction,
   OpenMarkdownPreviewToSideAction,
   OpenMarkdownSourceAction,
+  MarkdownPreviewFindAction,
+  MarkdownPreviewFindNextAction,
+  MarkdownPreviewFindPreviousAction,
+  MarkdownPreviewFindCloseAction,
 } from './markdownActions.js'
 import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
 import {
@@ -441,6 +445,10 @@ registerAction2(ToggleKeybindingsTroubleshootingAction)
 registerAction2(OpenMarkdownPreviewAction)
 registerAction2(OpenMarkdownPreviewToSideAction)
 registerAction2(OpenMarkdownSourceAction)
+registerAction2(MarkdownPreviewFindAction)
+registerAction2(MarkdownPreviewFindNextAction)
+registerAction2(MarkdownPreviewFindPreviousAction)
+registerAction2(MarkdownPreviewFindCloseAction)
 
 registerAction2(ShowJsonSchemaAction)
 

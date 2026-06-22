@@ -630,6 +630,10 @@ describe('OutlineService', () => {
         focusCount += 1
       },
       onDidScroll: onDidScroll.event,
+      openFind: () => {},
+      closeFind: () => {},
+      findNext: () => {},
+      findPrev: () => {},
       ...overrides,
     }
     return { controller, scrolled, onDidScroll, focusCount: () => focusCount }

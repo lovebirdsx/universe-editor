@@ -22,12 +22,24 @@ export interface IMarkdownPreviewController {
   focus(): void
   /** Fires (debounced by the component) when the user scrolls the preview. */
   readonly onDidScroll: Emitter<void>['event']
+  /** Open the in-preview find widget (focuses its input). */
+  openFind(): void
+  /** Close the in-preview find widget and clear highlights. */
+  closeFind(): void
+  /** Move to the next find match. */
+  findNext(): void
+  /** Move to the previous find match. */
+  findPrev(): void
 }
 
 class MarkdownPreviewRegistryImpl {
   private readonly _map = new Map<string, IMarkdownPreviewController[]>()
   private readonly _onDidChange = new Emitter<URI>()
   readonly onDidChange = this._onDidChange.event
+
+  // The preview that currently holds keyboard focus, so find commands (Ctrl+F /
+  // F3 / Escape) target the one the user is looking at rather than broadcasting.
+  private _activeController: IMarkdownPreviewController | undefined
 
   register(sourceUri: URI, controller: IMarkdownPreviewController): void {
     const key = sourceUri.toString()
@@ -54,8 +66,21 @@ class MarkdownPreviewRegistryImpl {
     return list[list.length - 1]
   }
 
+  setActive(controller: IMarkdownPreviewController): void {
+    this._activeController = controller
+  }
+
+  clearActive(controller: IMarkdownPreviewController): void {
+    if (this._activeController === controller) this._activeController = undefined
+  }
+
+  getActive(): IMarkdownPreviewController | undefined {
+    return this._activeController
+  }
+
   _resetForTests(): void {
     this._map.clear()
+    this._activeController = undefined
   }
 }
 

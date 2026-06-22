@@ -27,6 +27,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
 
 const MARKDOWN_PRECONDITION = 'activeEditorLanguageId == markdown'
 const MARKDOWN_PREVIEW_PRECONDITION = `activeEditorTypeId == '${MarkdownPreviewInput.TYPE_ID}'`
@@ -145,5 +146,83 @@ export class OpenMarkdownSourceAction extends Action2 {
         return
       }
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// In-preview find (Ctrl+F / F3 / Shift+F3 / Escape). Routed to the focused
+// preview via MarkdownPreviewRegistry.getActive(), gated by the
+// `markdownPreviewFocused` / `markdownPreviewFindVisible` context keys the
+// MarkdownPreviewEditor maintains (mirrors the chat find commands).
+// ---------------------------------------------------------------------------
+
+const FIND_CATEGORY = localize2('command.category.markdown', 'Markdown')
+
+export class MarkdownPreviewFindAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.find'
+  constructor() {
+    super({
+      id: MarkdownPreviewFindAction.ID,
+      title: localize2('action.markdownPreview.find.title', 'Find in Preview'),
+      category: FIND_CATEGORY,
+      icon: 'search',
+      keybinding: { primary: 'ctrl+f', when: 'markdownPreviewFocused' },
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: 'navigation',
+          when: MARKDOWN_PREVIEW_PRECONDITION,
+        },
+      ],
+      f1: true,
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.openFind()
+  }
+}
+
+export class MarkdownPreviewFindNextAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.findNext'
+  constructor() {
+    super({
+      id: MarkdownPreviewFindNextAction.ID,
+      title: localize2('action.markdownPreview.findNext.title', 'Find Next'),
+      category: FIND_CATEGORY,
+      keybinding: { primary: 'f3', when: 'markdownPreviewFindVisible' },
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.findNext()
+  }
+}
+
+export class MarkdownPreviewFindPreviousAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.findPrevious'
+  constructor() {
+    super({
+      id: MarkdownPreviewFindPreviousAction.ID,
+      title: localize2('action.markdownPreview.findPrevious.title', 'Find Previous'),
+      category: FIND_CATEGORY,
+      keybinding: { primary: 'shift+f3', when: 'markdownPreviewFindVisible' },
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.findPrev()
+  }
+}
+
+export class MarkdownPreviewFindCloseAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.findClose'
+  constructor() {
+    super({
+      id: MarkdownPreviewFindCloseAction.ID,
+      title: localize2('action.markdownPreview.findClose.title', 'Close Find'),
+      category: FIND_CATEGORY,
+      keybinding: { primary: 'escape', when: 'markdownPreviewFindVisible' },
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.closeFind()
   }
 }

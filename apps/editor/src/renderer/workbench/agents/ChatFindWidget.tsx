@@ -27,6 +27,8 @@ export interface ChatFindWidgetProps {
   readonly onNext: () => void
   readonly onPrev: () => void
   readonly onClose: () => void
+  /** Overrides the widget's container class so hosts can re-position it. */
+  readonly className?: string | undefined
 }
 
 export function ChatFindWidget({
@@ -37,6 +39,7 @@ export function ChatFindWidget({
   onNext,
   onPrev,
   onClose,
+  className,
 }: ChatFindWidgetProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
 
@@ -69,7 +72,11 @@ export function ChatFindWidget({
   const disabled = count === 0
 
   return (
-    <div className={styles['findWidget']} data-acp-find-widget data-testid="acp-find-widget">
+    <div
+      className={className ?? styles['findWidget']}
+      data-find-widget
+      data-testid="acp-find-widget"
+    >
       <input
         ref={inputRef}
         type="text"

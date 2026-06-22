@@ -1,0 +1,12 @@
+/* Highlight ranges painted via the CSS Custom Highlight API. The highlight names
+   are registered globally on CSS.highlights, so these rules must live in a plain
+   (non-module) stylesheet — a CSS-module `:global {}` block compiles to an empty
+   parent selector and the nested `::highlight()` rules get dropped. */
+::highlight(md-find-match) {
+  background-color: var(--color-find-match-bg, rgba(234, 179, 8, 0.35));
+}
+
+::highlight(md-find-match-current) {
+  background-color: var(--color-find-match-current-bg, rgba(234, 179, 8, 0.85));
+  color: var(--color-find-match-current-fg, #1e1e1e);
+}

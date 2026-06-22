@@ -7,6 +7,8 @@
 .previewRoot {
   height: 100%;
   overflow: auto;
+  display: flex;
+  flex-direction: column;
   background: var(--color-editor-bg, #1e1e1e);
   color: var(--color-editor-fg, #d4d4d4);
   outline: none;
@@ -17,4 +19,25 @@
   font-size: 14px;
   line-height: 1.6;
   gap: 8px;
+}
+
+/* In-preview find bar. Sticky so it stays pinned to the top-right of the scroll
+   viewport while the document scrolls beneath it (mirrors Monaco's find widget).
+   Mirrors the chat find bar; ChatFindWidget replaces its container class with
+   this one, so it must carry the full visual styling, not just positioning. */
+.findWidget {
+  position: sticky;
+  top: 4px;
+  z-index: 6;
+  align-self: flex-end;
+  margin-right: 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px 3px 8px;
+  max-width: min(360px, 90%);
+  background: var(--color-message-bg, #2a2a2a);
+  border: 1px solid var(--color-border, #555);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
 }
