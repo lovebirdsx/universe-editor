@@ -121,6 +121,7 @@ import {
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { FileEditor } from '../FileEditor.js'
+import { IRecentEditsTracker, RecentEditsTracker } from '../../../services/ai/RecentEditsTracker.js'
 import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { IOutlineService } from '../../../services/languageFeatures/OutlineService.js'
@@ -249,6 +250,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     } as never)
     services.set(IConfigurationService, new FakeConfigurationService() as never)
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(
+      IRecentEditsTracker,
+      new RecentEditsTracker(new FakeConfigurationService() as never),
+    )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/bom.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
@@ -278,6 +283,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     } as never)
     services.set(IConfigurationService, new FakeConfigurationService() as never)
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(
+      IRecentEditsTracker,
+      new RecentEditsTracker(new FakeConfigurationService() as never),
+    )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/mixed.md'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
@@ -305,6 +314,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     } as never)
     services.set(IConfigurationService, new FakeConfigurationService() as never)
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(
+      IRecentEditsTracker,
+      new RecentEditsTracker(new FakeConfigurationService() as never),
+    )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     const group = new FakeGroup(input)
@@ -349,6 +362,10 @@ describe('FileEditor — auto-pin on first edit', () => {
       }) as never,
     )
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(
+      IRecentEditsTracker,
+      new RecentEditsTracker(new FakeConfigurationService() as never),
+    )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)
@@ -391,6 +408,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     })
     services.set(IConfigurationService, config as never)
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(
+      IRecentEditsTracker,
+      new RecentEditsTracker(new FakeConfigurationService() as never),
+    )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
     services.set(IEditorGroupsService, new FakeGroupsService([new FakeGroup(input)]) as never)

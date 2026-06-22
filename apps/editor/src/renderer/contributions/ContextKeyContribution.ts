@@ -187,6 +187,15 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // indent and accept the suggestion.
     contextKeyService.createKey<boolean>('inlineSuggestionVisible', false)
 
+    // Inline-edit (Next Edit Suggestion) keys, mirrored from Monaco's scoped
+    // context-key service by FileEditor's bridgeInlineEditState. They drive the
+    // Tab arbitration between jumping to and accepting an inline edit (raw key
+    // for visibility is `inlineEditIsVisible`, matching Monaco).
+    contextKeyService.createKey<boolean>('inlineEditIsVisible', false)
+    contextKeyService.createKey<boolean>('cursorAtInlineEdit', false)
+    contextKeyService.createKey<boolean>('tabShouldJumpToInlineEdit', false)
+    contextKeyService.createKey<boolean>('tabShouldAcceptInlineEdit', false)
+
     // True when an xterm.js terminal instance holds DOM focus (panel or editor tab).
     // Written by TerminalInstance via xterm's onFocus/onBlur events.
     contextKeyService.createKey<boolean>('terminalFocus', false)

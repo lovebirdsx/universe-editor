@@ -76,6 +76,7 @@ export type AiMessagePart =
 export type AiRequestPurpose =
   | 'chat'
   | 'inline-completion'
+  | 'next-edit-suggestion'
   | 'session-title'
   | 'commit'
   | 'extension'

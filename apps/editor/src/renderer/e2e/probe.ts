@@ -114,6 +114,10 @@ interface GhostTextLike {
 }
 interface InlineCompletionsModelLike {
   readonly primaryGhostText?: { get?: () => GhostTextLike | undefined }
+  readonly inlineEditState?: { get?: () => InlineEditStateLike | undefined }
+}
+interface InlineEditStateLike {
+  readonly inlineEdit?: { readonly edit?: { readonly text?: string } }
 }
 interface InlineCompletionsControllerLike {
   dispose(): void
@@ -142,6 +146,9 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
   // The fake inline-completion provider installed by installFakeInlineCompletion,
   // replaced on each call and disposed with the probe.
   let fakeInlineCompletion: IDisposable | undefined
+
+  // The fake inline-edit (NES) provider installed by installFakeInlineEdit.
+  let fakeInlineEdit: IDisposable | undefined
 
   // Accumulate every terminal's output so specs can poll it. Lives for the app's
   // lifetime — acceptable for the probe (only present under UNIVERSE_E2E=1).
@@ -534,6 +541,49 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const ghost = controller?.model?.get?.()?.primaryGhostText?.get?.()
       if (!ghost || ghost.parts.length === 0) return undefined
       return ghost.parts.map((p) => p.text).join('')
+    },
+    installFakeInlineEdit: (startLine: number, endLine: number, text: string): boolean => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return false
+      const editor = FileEditorRegistry.get(active)
+      const model = editor?.getModel()
+      if (!editor || !model) return false
+      fakeInlineEdit?.dispose()
+      fakeInlineEdit = services.languageFeaturesService.registerInlineCompletionsProvider('*', {
+        provideInlineCompletions: (m, _position, context) => {
+          if (context.includeInlineEdits !== true) return { items: [] }
+          return {
+            items: [
+              {
+                insertText: text,
+                range: {
+                  startLineNumber: startLine,
+                  startColumn: 1,
+                  endLineNumber: endLine,
+                  endColumn: m.getLineMaxColumn(endLine),
+                },
+                isInlineEdit: true,
+                showInlineEditMenu: true,
+              },
+            ],
+          }
+        },
+        disposeInlineCompletions: () => {
+          // No per-completion resources to release.
+        },
+      })
+      ds.add(fakeInlineEdit)
+      return true
+    },
+    getActiveInlineEditText: (): string | undefined => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const editor = FileEditorRegistry.get(active)
+      if (!editor || typeof editor.getContribution !== 'function') return undefined
+      const controller = editor.getContribution<InlineCompletionsControllerLike>(
+        'editor.contrib.inlineCompletionsController',
+      )
+      return controller?.model?.get?.()?.inlineEditState?.get?.()?.inlineEdit?.edit?.text
     },
     getAiDebugRecords: async (): Promise<readonly E2EAiDebugRecord[]> => {
       const records = await services.aiDebugService.listRecords()

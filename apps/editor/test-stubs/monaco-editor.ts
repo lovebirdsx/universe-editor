@@ -3,7 +3,8 @@
  * FileEditorInput, and LogOutputView tests.
  */
 
-type Listener = () => void
+type ContentChangedEvent = { changes: ReadonlyArray<unknown> }
+type Listener = (e: ContentChangedEvent) => void
 
 function normalizeModelText(initial: string): string {
   const crlf = initial.match(/\r\n/g)?.length ?? 0
@@ -30,7 +31,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
       if (normalized === value) return
       value = normalized
       versionId++
-      for (const l of listeners) l()
+      for (const l of listeners) l({ changes: [] })
     },
     getLanguageId: () => language,
     getLineCount: () => lines().length,
@@ -38,7 +39,7 @@ function makeModel(initial: string, language: string, uri: unknown) {
     applyEdits: (edits: Array<{ text: string }>) => {
       for (const e of edits) value += normalizeModelText(e.text)
       versionId++
-      for (const l of listeners) l()
+      for (const l of listeners) l({ changes: [] })
     },
     onDidChangeContent: (cb: Listener) => {
       listeners.add(cb)

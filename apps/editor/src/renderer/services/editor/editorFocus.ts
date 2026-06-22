@@ -63,8 +63,14 @@ interface GhostTextLike {
 interface InlineStateLike {
   readonly primaryGhostText?: GhostTextLike
 }
+interface InlineEditStateLike {
+  readonly cursorAtInlineEdit: ObservableLike<boolean>
+}
 interface InlineModelLike {
   readonly inlineCompletionState: ObservableLike<InlineStateLike | undefined>
+  readonly inlineEditState: ObservableLike<InlineEditStateLike | undefined>
+  readonly tabShouldJumpToInlineEdit: ObservableLike<boolean>
+  readonly tabShouldAcceptInlineEdit: ObservableLike<boolean>
 }
 interface InlineControllerLike {
   readonly model: ObservableLike<InlineModelLike | undefined>
@@ -99,6 +105,52 @@ export function bridgeInlineSuggestionVisible(
     dispose: () => {
       sub.dispose()
       contextKeyService.set('inlineSuggestionVisible', false)
+    },
+  }
+}
+
+/**
+ * Mirror Monaco's inline-edit (Next Edit Suggestion) state onto global context
+ * keys, the same way the controller binds them on its own scoped service. The
+ * global keybinding handler can't see Monaco's scoped keys, and with
+ * `editContext: true` Monaco's internal Tab dispatch is unreliable — so we
+ * mirror `inlineEditIsVisible` / `cursorAtInlineEdit` / `tabShouldJump…` /
+ * `tabShouldAccept…` and drive Tab through our own high-weight jump/commit
+ * commands (see inlineCompletionActions). Resets all four on dispose.
+ */
+export function bridgeInlineEditState(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  contextKeyService: IContextKeyService,
+): IDisposable {
+  if (typeof editor.getContribution !== 'function') return { dispose: () => undefined }
+  const controller = editor.getContribution<InlineControllerLike>(
+    'editor.contrib.inlineCompletionsController',
+  )
+  if (!controller?.model) return { dispose: () => undefined }
+  const reset = () => {
+    contextKeyService.set('inlineEditIsVisible', false)
+    contextKeyService.set('cursorAtInlineEdit', false)
+    contextKeyService.set('tabShouldJumpToInlineEdit', false)
+    contextKeyService.set('tabShouldAcceptInlineEdit', false)
+  }
+  const sub = autorun((reader) => {
+    const model = controller.model.read(reader)
+    const editState = model?.inlineEditState.read(reader)
+    contextKeyService.set('inlineEditIsVisible', editState !== undefined)
+    contextKeyService.set('cursorAtInlineEdit', !!editState?.cursorAtInlineEdit.read(reader))
+    contextKeyService.set(
+      'tabShouldJumpToInlineEdit',
+      !!model?.tabShouldJumpToInlineEdit.read(reader),
+    )
+    contextKeyService.set(
+      'tabShouldAcceptInlineEdit',
+      !!model?.tabShouldAcceptInlineEdit.read(reader),
+    )
+  })
+  return {
+    dispose: () => {
+      sub.dispose()
+      reset()
     },
   }
 }

@@ -26,6 +26,7 @@ import {
   type INotificationService,
 } from '@universe-editor/platform'
 import { InlineCompletionService, sanitizeCompletion } from '../InlineCompletionService.js'
+import type { IRecentEdit, IRecentEditsTracker } from '../RecentEditsTracker.js'
 
 const MODEL: AiModelMetadata = {
   id: 'openai/default/m',
@@ -128,6 +129,18 @@ class FakeNotification implements Partial<INotificationService> {
   }
 }
 
+class FakeRecentEditsTracker implements IRecentEditsTracker {
+  declare readonly _serviceBrand: undefined
+  edits: IRecentEdit[] = []
+  record(): void {}
+  getRecentEdits(): readonly IRecentEdit[] {
+    return this.edits
+  }
+  clear(): void {
+    this.edits = []
+  }
+}
+
 interface FakeModelOptions {
   value: string
   cursorOffset: number
@@ -135,31 +148,42 @@ interface FakeModelOptions {
 }
 
 function fakeMonacoModel(opts: FakeModelOptions) {
+  const lines = opts.value.split('\n')
   return {
+    uri: { toString: () => 'file:///test' },
     getValue: () => opts.value,
     getLanguageId: () => opts.languageId ?? 'plaintext',
     getOffsetAt: () => opts.cursorOffset,
+    getLineCount: () => lines.length,
+    getLineContent: (n: number) => lines[n - 1] ?? '',
+    getLineMaxColumn: (n: number) => (lines[n - 1]?.length ?? 0) + 1,
+    getValueInRange: (range: { startLineNumber: number; endLineNumber: number }) =>
+      lines.slice(range.startLineNumber - 1, range.endLineNumber).join('\n'),
   }
 }
 
 const POSITION = { lineNumber: 1, column: 1 } as never
 const EXPLICIT = { triggerKind: 1 } as never
+const EXPLICIT_NES = { triggerKind: 1, includeInlineEdits: true } as never
 
 function createService(overrides?: {
   ai?: FakeAiModel
   config?: FakeConfig
   notification?: FakeNotification
+  recentEdits?: FakeRecentEditsTracker
 }) {
   const ai = overrides?.ai ?? new FakeAiModel()
   const config = overrides?.config ?? new FakeConfig()
   const notification = overrides?.notification ?? new FakeNotification()
+  const recentEdits = overrides?.recentEdits ?? new FakeRecentEditsTracker()
   const service = new InlineCompletionService(
     ai as unknown as IAiModelService,
     config as unknown as IConfigurationService,
     notification as unknown as INotificationService,
     FAKE_LOGGER_SERVICE,
+    recentEdits,
   )
-  return { service, ai, config, notification }
+  return { service, ai, config, notification, recentEdits }
 }
 
 async function provide(
@@ -309,5 +333,118 @@ describe('InlineCompletionService.provide', () => {
     cts.cancel()
     await provide(service, fakeMonacoModel({ value: 'abc', cursorOffset: 3 }), EXPLICIT, cts.token)
     expect(notification.calls).toHaveLength(0)
+  })
+})
+
+describe('InlineCompletionService NES mode', () => {
+  function enableNes(config: FakeConfig): void {
+    config.values['ai.nes.enabled'] = true
+  }
+
+  it('falls back to ghost text when NES is disabled', async () => {
+    const { service, ai } = createService()
+    ai.inlineModelId = MODEL.id
+    ai.reply = 'world'
+    // includeInlineEdits true but feature off → plain continuation.
+    const result = await provide(
+      service,
+      fakeMonacoModel({ value: 'hello ', cursorOffset: 6 }),
+      EXPLICIT_NES,
+    )
+    expect(result?.items[0]?.insertText).toBe('world')
+    expect(result?.items[0]).not.toHaveProperty('isInlineEdit')
+  })
+
+  it('produces an inline-edit item from a JSON reply', async () => {
+    const config = new FakeConfig()
+    enableNes(config)
+    const { service, ai } = createService({ config })
+    ai.inlineModelId = MODEL.id
+    ai.reply = '{"edits":[{"startLine":1,"endLine":2,"newText":"const a = 2"}]}'
+    const model = fakeMonacoModel({ value: 'const a = 1\nfoo()', cursorOffset: 0 })
+    const result = await provide(service, model, EXPLICIT_NES)
+    const item = result?.items[0]
+    expect(item?.insertText).toBe('const a = 2')
+    expect((item as { isInlineEdit?: boolean })?.isInlineEdit).toBe(true)
+    expect(item?.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 2,
+      endColumn: 6, // 'foo()'.length + 1
+    })
+  })
+
+  it('merges multiple edits into one span, keeping gap lines verbatim', async () => {
+    const config = new FakeConfig()
+    enableNes(config)
+    const { service, ai } = createService({ config })
+    ai.inlineModelId = MODEL.id
+    // Rename `count` → `total` on lines 1 and 3; line 2 is untouched.
+    ai.reply =
+      '{"edits":[{"startLine":1,"endLine":1,"newText":"let total = 0"},' +
+      '{"startLine":3,"endLine":3,"newText":"return total"}]}'
+    const model = fakeMonacoModel({
+      value: 'let count = 0\nuse(count)\nreturn count',
+      cursorOffset: 0,
+    })
+    const result = await provide(service, model, EXPLICIT_NES)
+    const item = result?.items[0]
+    expect((item as { isInlineEdit?: boolean })?.isInlineEdit).toBe(true)
+    // One item spanning lines 1–3, the unchanged middle line kept verbatim.
+    expect(item?.range).toEqual({
+      startLineNumber: 1,
+      startColumn: 1,
+      endLineNumber: 3,
+      endColumn: 13, // 'return count'.length + 1
+    })
+    expect(item?.insertText).toBe('let total = 0\nuse(count)\nreturn total')
+  })
+
+  it('returns null on a noEdit reply when fallback is off', async () => {
+    const config = new FakeConfig()
+    enableNes(config)
+    config.values['ai.nes.fallbackToCompletion'] = false
+    const { service, ai } = createService({ config })
+    ai.inlineModelId = MODEL.id
+    ai.reply = '{"noEdit":true}'
+    const result = await provide(
+      service,
+      fakeMonacoModel({ value: 'const a = 1', cursorOffset: 0 }),
+      EXPLICIT_NES,
+    )
+    expect(result).toBeNull()
+  })
+
+  it('skips NES on automatic triggers with no recent edits', async () => {
+    const config = new FakeConfig()
+    enableNes(config)
+    config.values['ai.nes.fallbackToCompletion'] = false
+    config.values['ai.inlineCompletion.debounceDelay'] = 0
+    config.values['ai.nes.debounceDelay'] = 0
+    const { service, ai } = createService({ config })
+    ai.inlineModelId = MODEL.id
+    ai.reply = '{"edits":[{"startLine":1,"endLine":1,"newText":"x"}]}'
+    const ctx = { triggerKind: 0, includeInlineEdits: true } as never
+    const result = await provide(
+      service,
+      fakeMonacoModel({ value: 'const a = 1', cursorOffset: 0 }),
+      ctx,
+    )
+    expect(result).toBeNull()
+  })
+
+  it('drops a no-op edit that restates the current lines', async () => {
+    const config = new FakeConfig()
+    enableNes(config)
+    config.values['ai.nes.fallbackToCompletion'] = false
+    const { service, ai } = createService({ config })
+    ai.inlineModelId = MODEL.id
+    ai.reply = '{"edits":[{"startLine":1,"endLine":1,"newText":"const a = 1"}]}'
+    const result = await provide(
+      service,
+      fakeMonacoModel({ value: 'const a = 1', cursorOffset: 0 }),
+      EXPLICIT_NES,
+    )
+    expect(result).toBeNull()
   })
 })

@@ -81,19 +81,21 @@ export class CommitInlineCompletionAction extends Action2 {
       id: CommitInlineCompletionAction.ID,
       title: localize2('action.ai.inlineCompletion.commit', 'Accept Inline Completion'),
       category: CATEGORY,
-      // Claim Tab while ghost text is visible. Monaco confines its own
-      // inlineSuggestionVisible key to the editor's scoped context-key service
-      // and, with editContext: true, can't be relied on to commit on Tab — so we
-      // run the commit command ourselves and must outrank every other Tab binding
-      // that could be active in the editor. That includes extension-contributed
-      // Tab handlers (e.g. markdown.editing.onTab at ExternalExtension=400), not
-      // just Monaco's bridged default — hence ExternalExtension + 1. It stays
-      // below User (1000) so a user override still wins. The suggest-widget guard
-      // keeps Tab accepting an open IntelliSense pick first.
+      // Claim Tab while ghost text is visible OR an inline edit is ready to be
+      // accepted at the cursor. Monaco confines its own visibility keys to the
+      // editor's scoped context-key service and, with editContext: true, can't be
+      // relied on to commit on Tab — so we run the commit command ourselves and
+      // must outrank every other Tab binding that could be active in the editor.
+      // That includes extension-contributed Tab handlers (e.g.
+      // markdown.editing.onTab at ExternalExtension=400), not just Monaco's
+      // bridged default — hence ExternalExtension + 1. It stays below User (1000)
+      // so a user override still wins. The suggest-widget guard keeps Tab
+      // accepting an open IntelliSense pick first; `!tabShouldJumpToInlineEdit`
+      // yields Tab to the jump command when the cursor isn't yet at the edit.
       keybinding: {
         primary: 'tab',
         weight: KeybindingWeight.ExternalExtension + 1,
-        when: 'inlineSuggestionVisible && editorTextFocus && !suggestWidgetVisible',
+        when: '(inlineSuggestionVisible || tabShouldAcceptInlineEdit) && !tabShouldJumpToInlineEdit && editorTextFocus && !suggestWidgetVisible',
       },
     })
   }
@@ -104,6 +106,34 @@ export class CommitInlineCompletionAction extends Action2 {
     if (!(active instanceof FileEditorInput)) return
     const editor = FileEditorRegistry.get(active, group.id)
     editor?.trigger('keyboard', 'editor.action.inlineSuggest.commit', undefined)
+  }
+}
+
+export class JumpToNextInlineEditAction extends Action2 {
+  static readonly ID = 'ai.inlineCompletion.jump'
+  constructor() {
+    super({
+      id: JumpToNextInlineEditAction.ID,
+      title: localize2('action.ai.inlineCompletion.jump', 'Jump to Next Edit Suggestion'),
+      category: CATEGORY,
+      // Tab moves the cursor to an inline edit shown away from it. Same
+      // editContext reasoning and weight as the commit binding; the when clauses
+      // are mutually exclusive (jump requires the cursor not yet at the edit,
+      // commit requires it is) so exactly one claims Tab.
+      keybinding: {
+        primary: 'tab',
+        weight: KeybindingWeight.ExternalExtension + 1,
+        when: 'tabShouldJumpToInlineEdit && editorTextFocus && !suggestWidgetVisible',
+      },
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    const groups = accessor.get(IEditorGroupsService)
+    const group = groups.activeGroup
+    const active = group.activeEditor
+    if (!(active instanceof FileEditorInput)) return
+    const editor = FileEditorRegistry.get(active, group.id)
+    editor?.trigger('keyboard', 'editor.action.inlineSuggest.jump', undefined)
   }
 }
 

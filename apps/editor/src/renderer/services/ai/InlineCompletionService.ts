@@ -25,12 +25,18 @@ import {
   getTextResponse,
   localize,
   type AiMessage,
+  type AiRequestPurpose,
   type CancellationToken,
   type Event,
   type ILogger,
 } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
-import { DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT } from './defaultSystemPrompts.js'
+import {
+  DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT,
+  DEFAULT_NES_SYSTEM_PROMPT,
+} from './defaultSystemPrompts.js'
+import { IRecentEditsTracker, type IRecentEdit } from './RecentEditsTracker.js'
+import { composeNesEdits, parseNesEdits } from './nesEditParser.js'
 
 const CONFIG = {
   enabled: 'ai.inlineCompletion.enabled',
@@ -40,6 +46,12 @@ const CONFIG = {
   maxTokens: 'ai.inlineCompletion.maxTokens',
   multiline: 'ai.inlineCompletion.multiline',
   disabledLanguages: 'ai.inlineCompletion.disabledLanguages',
+  nesEnabled: 'ai.nes.enabled',
+  nesContextLines: 'ai.nes.contextLines',
+  nesIncludeFullDocument: 'ai.nes.includeFullDocument',
+  nesDebounceDelay: 'ai.nes.debounceDelay',
+  nesMaxTokens: 'ai.nes.maxTokens',
+  nesFallback: 'ai.nes.fallbackToCompletion',
 } as const
 
 const DEFAULTS = {
@@ -49,6 +61,12 @@ const DEFAULTS = {
   suffixChars: 500,
   maxTokens: 128,
   multiline: true,
+  nesEnabled: false,
+  nesContextLines: 80,
+  nesIncludeFullDocument: false,
+  nesDebounceDelay: 400,
+  nesMaxTokens: 512,
+  nesFallback: true,
 } as const
 
 export interface IInlineCompletionService {
@@ -106,6 +124,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     @IConfigurationService private readonly _config: IConfigurationService,
     @INotificationService private readonly _notification: INotificationService,
     @ILoggerService loggerService: ILoggerService,
+    @IRecentEditsTracker private readonly _recentEdits: IRecentEditsTracker,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'inlineCompletion', name: 'Inline Completion' })
@@ -169,6 +188,29 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     if (!modelId) return null
 
     const automatic = context.triggerKind === TRIGGER_KIND_AUTOMATIC
+
+    // NES mode: when enabled and Monaco asks for inline edits, try to predict an
+    // edit elsewhere in the file first. Fall back to ghost-text continuation when
+    // it produces nothing (unless the user opted out of the fallback).
+    const nesEnabled = this._config.get<boolean>(CONFIG.nesEnabled) ?? DEFAULTS.nesEnabled
+    if (nesEnabled && context.includeInlineEdits === true) {
+      const edit = await this._provideInlineEdit(model, position, modelId, automatic, token)
+      if (edit) return edit
+      if (token.isCancellationRequested) return null
+      const fallback = this._config.get<boolean>(CONFIG.nesFallback) ?? DEFAULTS.nesFallback
+      if (!fallback) return null
+    }
+
+    return this._provideGhostText(model, position, modelId, automatic, token)
+  }
+
+  private async _provideGhostText(
+    model: monaco.editor.ITextModel,
+    position: monaco.Position,
+    modelId: string,
+    automatic: boolean,
+    token: CancellationToken,
+  ): Promise<monaco.languages.InlineCompletions | null> {
     if (automatic) {
       const delay = this._config.get<number>(CONFIG.debounceDelay) ?? DEFAULTS.debounceDelay
       const waited = await this._debounce(delay, token)
@@ -181,25 +223,108 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     const prompt = this._buildPrompt(model, position, systemPrompt)
     if (prompt === null) return null
 
+    const maxTokens = this._config.get<number>(CONFIG.maxTokens) ?? DEFAULTS.maxTokens
+    const text = await this._sendText(
+      prompt.messages,
+      maxTokens,
+      modelId,
+      'inline-completion',
+      token,
+    )
+    if (text === null || token.isCancellationRequested) return null
+
+    const multiline = this._config.get<boolean>(CONFIG.multiline) ?? DEFAULTS.multiline
+    const insertText = sanitizeCompletion(text, prompt.suffix, multiline)
+    if (!insertText) return null
+
+    return {
+      items: [{ insertText, range: this._cursorRange(position) }],
+      enableForwardStability: true,
+    }
+  }
+
+  private async _provideInlineEdit(
+    model: monaco.editor.ITextModel,
+    position: monaco.Position,
+    modelId: string,
+    automatic: boolean,
+    token: CancellationToken,
+  ): Promise<monaco.languages.InlineCompletions | null> {
+    if (automatic) {
+      const delay = this._config.get<number>(CONFIG.nesDebounceDelay) ?? DEFAULTS.nesDebounceDelay
+      const waited = await this._debounce(delay, token)
+      if (!waited || token.isCancellationRequested) return null
+    }
+
+    const recent = this._recentEdits.getRecentEdits(model.uri.toString())
+    // No recent edits → nothing to predict from. Honor an explicit trigger by
+    // still asking, but stay quiet on automatic passes.
+    if (recent.length === 0 && automatic) return null
+
+    const messages = this._buildNesPrompt(model, position, recent)
+    const maxTokens = this._config.get<number>(CONFIG.nesMaxTokens) ?? DEFAULTS.nesMaxTokens
+    const text = await this._sendText(messages, maxTokens, modelId, 'next-edit-suggestion', token)
+    if (text === null || token.isCancellationRequested) return null
+
+    const parsedEdits = parseNesEdits(text, model.getLineCount())
+    if (parsedEdits === null) return null
+
+    // Merge the discrete edits into one contiguous span (unchanged lines kept
+    // verbatim) so Monaco's inline edit diffs it into several highlights and
+    // accepts them all with one Tab — e.g. renaming every occurrence at once.
+    const parsed = composeNesEdits(parsedEdits, (line) => model.getLineContent(line))
+
+    const range: monaco.IRange = {
+      startLineNumber: parsed.startLine,
+      startColumn: 1,
+      endLineNumber: parsed.endLine,
+      endColumn: model.getLineMaxColumn(parsed.endLine),
+    }
+    // Drop a no-op edit that merely restates the current lines.
+    // Use EndOfLinePreference.LF (1) to match composeNesEdits's '\n' separators —
+    // the default TextDefined returns '\r\n' on CRLF documents, causing a false
+    // inequality that lets Monaco's getStringEdit see an empty diff and crash on accept.
+    if (model.getValueInRange(range, 1 /* EndOfLinePreference.LF */) === parsed.newText) return null
+
+    return {
+      items: [
+        {
+          insertText: parsed.newText,
+          range,
+          isInlineEdit: true,
+          showInlineEditMenu: true,
+        } as monaco.languages.InlineCompletion,
+      ],
+    }
+  }
+
+  /**
+   * Send one request and return the merged text, or null on cancellation /
+   * failure. Owns the in-flight cancellation token, the requesting flag and
+   * error-toast de-duping shared by both completion modes.
+   */
+  private async _sendText(
+    messages: AiMessage[],
+    maxTokens: number,
+    modelId: string,
+    purpose: AiRequestPurpose,
+    token: CancellationToken,
+  ): Promise<string | null> {
     const cts = new CancellationTokenSource()
     const tokenSub = token.onCancellationRequested(() => cts.cancel())
     this._cancelInFlight()
     this._activeCts = cts
     this._setRequesting(true)
 
-    let text: string
     try {
       const response = this._aiModel.sendRequest(
-        prompt.messages,
-        {
-          modelId,
-          maxTokens: this._config.get<number>(CONFIG.maxTokens) ?? DEFAULTS.maxTokens,
-          purpose: 'inline-completion',
-        },
+        messages,
+        { modelId, maxTokens, purpose },
         cts.token,
       )
-      text = await getTextResponse(response)
+      const text = await getTextResponse(response)
       this._lastErrorKey = undefined
+      return text
     } catch (err) {
       if (!cts.token.isCancellationRequested) {
         this._logger.warn('inline completion failed', err)
@@ -213,17 +338,6 @@ export class InlineCompletionService extends Disposable implements IInlineComple
         this._setRequesting(false)
       }
       cts.dispose()
-    }
-
-    if (token.isCancellationRequested) return null
-
-    const multiline = this._config.get<boolean>(CONFIG.multiline) ?? DEFAULTS.multiline
-    const insertText = sanitizeCompletion(text, prompt.suffix, multiline)
-    if (!insertText) return null
-
-    return {
-      items: [{ insertText, range: this._cursorRange(position) }],
-      enableForwardStability: true,
     }
   }
 
@@ -282,6 +396,61 @@ export class InlineCompletionService extends Disposable implements IInlineComple
       },
     ]
     return { messages, suffix }
+  }
+
+  private _buildNesPrompt(
+    model: monaco.editor.ITextModel,
+    position: monaco.Position,
+    recent: readonly IRecentEdit[],
+  ): AiMessage[] {
+    const editsBlock =
+      recent.length === 0
+        ? '(none)'
+        : recent
+            .map((e) => `L${e.lineNumber}: +${JSON.stringify(e.inserted)} (-${e.deletedLength}ch)`)
+            .join('\n')
+
+    const document = this._numberedDocument(model, position)
+
+    return [
+      {
+        role: AiMessageRole.System,
+        content: [{ type: 'text', value: DEFAULT_NES_SYSTEM_PROMPT }],
+      },
+      {
+        role: AiMessageRole.User,
+        content: [
+          {
+            type: 'text',
+            value: [
+              `<|recent_edits|>\n${editsBlock}`,
+              `<|cursor_line|>${position.lineNumber}`,
+              `<|document|>\n${document}`,
+            ].join('\n\n'),
+          },
+        ],
+      },
+    ]
+  }
+
+  /**
+   * The document with each line prefixed by its 1-based number, so the model can
+   * address edits by line. Windowed around the cursor unless includeFullDocument
+   * is set.
+   */
+  private _numberedDocument(model: monaco.editor.ITextModel, position: monaco.Position): string {
+    const lineCount = model.getLineCount()
+    const full =
+      this._config.get<boolean>(CONFIG.nesIncludeFullDocument) ?? DEFAULTS.nesIncludeFullDocument
+    const span = this._config.get<number>(CONFIG.nesContextLines) ?? DEFAULTS.nesContextLines
+    const from = full ? 1 : Math.max(1, position.lineNumber - span)
+    const to = full ? lineCount : Math.min(lineCount, position.lineNumber + span)
+
+    const lines: string[] = []
+    for (let n = from; n <= to; n++) {
+      lines.push(`${n}: ${model.getLineContent(n)}`)
+    }
+    return lines.join('\n')
   }
 
   private _cursorRange(position: monaco.Position): monaco.IRange {

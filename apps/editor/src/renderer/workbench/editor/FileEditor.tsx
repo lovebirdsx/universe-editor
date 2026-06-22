@@ -35,8 +35,10 @@ import { Breadcrumbs } from './Breadcrumbs.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { IRecentEditsTracker } from '../../services/ai/RecentEditsTracker.js'
 import {
   bridgeInlineSuggestionVisible,
+  bridgeInlineEditState,
   bridgeSuggestWidgetVisible,
   focusStandaloneEditor,
   syncEditorFocusContext,
@@ -109,6 +111,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
   const configService = useService(IConfigurationService)
   const contextKeyService = useService(IContextKeyService)
   const focusStackService = useService(IFocusStackService)
+  const recentEditsTracker = useService(IRecentEditsTracker)
   const group = useContext(EditorGroupContext)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
@@ -213,6 +216,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // Mirror inline-suggestion (ghost text) visibility so our Tab binding can
     // accept it; Monaco's own editContext Tab dispatch can't be relied on.
     const inlineSuggestSub = bridgeInlineSuggestionVisible(ed, contextKeyService)
+    // Mirror inline-edit (Next Edit Suggestion) state for the Tab jump/accept
+    // arbitration, for the same editContext reason.
+    const inlineEditSub = bridgeInlineEditState(ed, contextKeyService)
     editorRef.current = ed
     return () => {
       focusSub.dispose()
@@ -222,6 +228,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       modelChangeSub.dispose()
       suggestSub.dispose()
       inlineSuggestSub.dispose()
+      inlineEditSub.dispose()
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
@@ -365,8 +372,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         scrollSub = editorRef.current.onDidScrollChange(flushViewState)
       }
 
-      contentSub = model.onDidChangeContent(() => {
+      contentSub = model.onDidChangeContent((e) => {
         fileInput.updateDirtyFromModel(model)
+        // Feed the user's edits to the Next Edit Suggestion history.
+        recentEditsTracker.record(resourceUri, e.changes)
         // First edit upgrades a preview tab to pinned. pinEditor is a no-op
         // when the input isn't currently the group's preview slot.
         for (const g of groupsService.groups) {
@@ -397,7 +406,15 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       scrollSub?.dispose()
       if (registeredEditor) FileEditorRegistry.unregister(fileInput, registeredEditor)
     }
-  }, [monacoNs, contextKeyService, fileInput, groupsService, group, configService])
+  }, [
+    monacoNs,
+    contextKeyService,
+    fileInput,
+    groupsService,
+    group,
+    configService,
+    recentEditsTracker,
+  ])
 
   useEffect(() => {
     if (activeGroup !== group) return

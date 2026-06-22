@@ -162,6 +162,7 @@ import {
 import {
   TriggerInlineCompletionAction,
   CommitInlineCompletionAction,
+  JumpToNextInlineEditAction,
   ToggleInlineCompletionAction,
   PickInlineCompletionModelAction,
 } from './inlineCompletionActions.js'
@@ -417,6 +418,7 @@ registerAction2(SetApiKeyAction)
 registerAction2(ClearApiKeyAction)
 registerAction2(TriggerInlineCompletionAction)
 registerAction2(CommitInlineCompletionAction)
+registerAction2(JumpToNextInlineEditAction)
 registerAction2(ToggleInlineCompletionAction)
 registerAction2(PickInlineCompletionModelAction)
 registerAction2(PickCommitModelAction)

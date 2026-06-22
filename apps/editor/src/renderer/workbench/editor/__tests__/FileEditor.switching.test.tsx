@@ -99,6 +99,7 @@ import {
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { FileEditor } from '../FileEditor.js'
+import { IRecentEditsTracker, RecentEditsTracker } from '../../../services/ai/RecentEditsTracker.js'
 import { MonacoModelRegistry } from '../monaco/MonacoModelRegistry.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../../services/editor/FileEditorRegistry.js'
@@ -233,6 +234,10 @@ describe('FileEditor tab switching', () => {
     } as never)
     services.set(IConfigurationService, new FakeConfigurationService() as never)
     services.set(IContextKeyService, new ContextKeyService())
+    services.set(
+      IRecentEditsTracker,
+      new RecentEditsTracker(new FakeConfigurationService() as never),
+    )
     services.set(IFocusStackService, {
       _serviceBrand: undefined,
       onDidChange: () => ({ dispose() {} }),

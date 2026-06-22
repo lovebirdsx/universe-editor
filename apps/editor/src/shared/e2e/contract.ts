@@ -388,6 +388,21 @@ export interface E2EProbe {
    * assert a suggestion appeared before pressing Tab and disappeared after.
    */
   getActiveInlineSuggestionText(): string | undefined
+  /**
+   * Register a fake inline-EDIT (Next Edit Suggestion) provider on the active
+   * Monaco editor that returns a whole-line replacement of [startLine, endLine]
+   * (1-based, inclusive) with `text`, flagged isInlineEdit. Returns false when no
+   * file editor is active. Lets the NES spec exercise the inline-edit → jump →
+   * accept path without a live AI model. Idempotent: a second call replaces the
+   * first.
+   */
+  installFakeInlineEdit(startLine: number, endLine: number, text: string): boolean
+  /**
+   * The inline edit currently offered by the active editor's inline-completions
+   * controller (its inlineEditState), or undefined when none. Used to assert an
+   * inline edit appeared and to read its replacement text.
+   */
+  getActiveInlineEditText(): string | undefined
   // -- AI debug probe -------------------------------------------------------
   /**
    * Summaries of every recorded "direct provider" AI request, newest first, via

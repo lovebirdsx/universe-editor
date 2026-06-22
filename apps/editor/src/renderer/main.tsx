@@ -115,6 +115,7 @@ import {
   IInlineCompletionService,
   InlineCompletionService,
 } from './services/ai/InlineCompletionService.js'
+import { IRecentEditsTracker, RecentEditsTracker } from './services/ai/RecentEditsTracker.js'
 import { IOutlineService, OutlineService } from './services/languageFeatures/OutlineService.js'
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
@@ -466,6 +467,11 @@ async function bootstrapWorkbench(): Promise<void> {
       sticky: true,
     })
   })
+
+  // Tracks the user's recent edits per file; the raw material for Next Edit
+  // Suggestions. Must exist before InlineCompletionService, which injects it.
+  const recentEditsTracker = workbenchStore.add(instantiation.createInstance(RecentEditsTracker))
+  services.set(IRecentEditsTracker, recentEditsTracker)
 
   // Inline (ghost-text) AI completions. Depends on IAiModelService + config/
   // logger from the container, plus INotificationService (registered above).

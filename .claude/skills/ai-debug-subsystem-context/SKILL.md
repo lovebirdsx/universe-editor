@@ -67,7 +67,8 @@ apps/editor/src/renderer/workbench/aiDebug/
 
 | purpose | 调用点 | 备注 |
 |---|---|---|
-| `inline-completion` | `renderer/services/ai/InlineCompletionService.ts` | options 加 purpose |
+| `inline-completion` | `renderer/services/ai/InlineCompletionService.ts` | ghost-text 续写；options 加 purpose（经共用 `_sendText(…, purpose, token)`） |
+| `next-edit-suggestion` | `renderer/services/ai/InlineCompletionService.ts` | NES（光标外编辑预测）；与续写**共用 `_sendText`**，靠传入不同 purpose 在面板里区分两种模式。详见 nes-subsystem-context |
 | `session-title` | `renderer/services/acp/acpSessionTitleService.ts` | |
 | `commit` | `extensions/ai/src/commitMessage.ts` | 经扩展 API；purpose 已穿透（extension-api 与 extensions-common 的 AiRequestOptions 都带 purpose 字段） |
 | `extension` | `renderer/services/extensions/MainThreadAi.ts` | 兜底 `purpose: options.purpose ?? 'extension'` |
@@ -150,5 +151,5 @@ pnpm --filter @universe-editor/editor build && pnpm --filter @universe-editor/ed
 - `apps/editor/src/renderer/workbench/aiDebug/AiDebugView.tsx` —— 侧栏面板
 - `packages/platform/src/ai/aiDebugTypes.ts` / `aiModelTypes.ts` —— 记录形态 + purpose 载体
 - `apps/editor/e2e/specs/smoke.aiDebug.spec.ts` + `src/renderer/e2e/probe.ts` + `src/shared/e2e/contract.ts` —— E2E 端到端
-- 相关：`apps/editor/CLAUDE.md` 套路 I（底层 AI 服务/加 vendor）、套路 C/B（跨进程服务/View 注册）、`ai-settings-subsystem-context`（AI 设置页面）
+- 相关：`apps/editor/CLAUDE.md` 套路 I（底层 AI 服务/加 vendor）、套路 C/B（跨进程服务/View 注册）、`ai-settings-subsystem-context`（AI 设置页面）、`inline-completion-subsystem-context`（ghost-text 续写）、`nes-subsystem-context`（NES 光标外编辑预测，purpose `next-edit-suggestion`）
 ```
