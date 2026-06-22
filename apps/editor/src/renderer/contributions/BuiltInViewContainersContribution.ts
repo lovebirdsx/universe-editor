@@ -67,7 +67,7 @@ export class BuiltInViewContainersContribution
         label: localize('viewContainer.aiDebug', 'AI Debug'),
         icon: 'debug-alt',
         order: 5,
-        location: ViewContainerLocation.SideBar,
+        location: ViewContainerLocation.SecondarySideBar,
       }),
     )
 
