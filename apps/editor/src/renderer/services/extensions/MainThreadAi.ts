@@ -59,10 +59,6 @@ export class MainThreadAi extends Disposable implements IMainThreadAi {
     return this._ai.getCommitModelId()
   }
 
-  getCommitSystemPrompt(): Promise<string | undefined> {
-    return this._ai.getSystemPrompt('commit')
-  }
-
   async startRequest(
     requestId: string,
     messages: readonly AiMessageDto[],

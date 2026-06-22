@@ -31,10 +31,7 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
-import {
-  DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT,
-  DEFAULT_NES_SYSTEM_PROMPT,
-} from './defaultSystemPrompts.js'
+import { DEFAULT_NES_SYSTEM_PROMPT } from './nesSystemPrompt.js'
 import { IRecentEditsTracker, type IRecentEdit } from './RecentEditsTracker.js'
 import { composeNesEdits, parseNesEdits } from './nesEditParser.js'
 
@@ -217,10 +214,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
       if (!waited || token.isCancellationRequested) return null
     }
 
-    const systemPrompt =
-      (await this._aiModel.getSystemPrompt('inlineCompletion')) ||
-      DEFAULT_INLINE_COMPLETION_SYSTEM_PROMPT
-    const prompt = this._buildPrompt(model, position, systemPrompt)
+    const prompt = this._buildPrompt(model, position)
     if (prompt === null) return null
 
     const maxTokens = this._config.get<number>(CONFIG.maxTokens) ?? DEFAULTS.maxTokens
@@ -369,7 +363,6 @@ export class InlineCompletionService extends Disposable implements IInlineComple
   private _buildPrompt(
     model: monaco.editor.ITextModel,
     position: monaco.Position,
-    systemPrompt: string,
   ): { messages: AiMessage[]; suffix: string } | null {
     const prefixChars = this._config.get<number>(CONFIG.prefixChars) ?? DEFAULTS.prefixChars
     const suffixChars = this._config.get<number>(CONFIG.suffixChars) ?? DEFAULTS.suffixChars
@@ -383,7 +376,7 @@ export class InlineCompletionService extends Disposable implements IInlineComple
     const messages: AiMessage[] = [
       {
         role: AiMessageRole.System,
-        content: [{ type: 'text', value: systemPrompt }],
+        content: [{ type: 'text', value: SYSTEM_PROMPT }],
       },
       {
         role: AiMessageRole.User,
@@ -523,6 +516,19 @@ function describeAiError(code: AiErrorCode | undefined, message: string): string
       return message
   }
 }
+
+const SYSTEM_PROMPT = [
+  'You are an inline text completion engine, like GitHub Copilot.',
+  'The user message contains the document around the cursor: text before the',
+  'cursor is wrapped as <|prefix|>…<|cursor|>, text after as <|cursor|>…<|suffix|>.',
+  'Your output is inserted verbatim at the cursor, immediately after the prefix.',
+  'If the completion should begin on a new line (for example a new list item, a',
+  'new statement, or a new paragraph), your output MUST start with a newline',
+  'character — otherwise it is glued onto the end of the current line.',
+  'Output ONLY the raw text to insert — no explanations, no markdown code fences,',
+  'no repetition of the surrounding text. Keep it focused; use multiple lines only',
+  'when natural. If nothing should be inserted, output nothing.',
+].join(' ')
 
 /**
  * Clean a model reply into insertable text: strip code fences the model may wrap

@@ -33,12 +33,10 @@ import {
   type AiModelMetadata,
   type AiModelSelector,
   type AiProviderGroup,
-  type AiPromptKind,
   type AiRequestOptions,
   type AiResolvedGroup,
   type AiResponse,
   type AiSettingsFile,
-  type AiSystemPrompts,
 } from '@universe-editor/platform'
 import { type ParseError, parse } from 'jsonc-parser'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
@@ -97,13 +95,9 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   private readonly _onDidChangeActiveModel = this._register(new Emitter<AiActiveModelChangeEvent>())
   readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
 
-  private readonly _onDidChangeSystemPrompts = this._register(new Emitter<void>())
-  readonly onDidChangeSystemPrompts = this._onDidChangeSystemPrompts.event
-
   private readonly _inflight = new Map<string, CancellationTokenSource>()
   private _persistedGroups: readonly AiProviderGroup[] = DEFAULT_GROUPS
   private _activeModels: AiActiveModels = {}
-  private _systemPrompts: AiSystemPrompts = {}
   private readonly _ready: Promise<void>
 
   private _watcher: FSWatcher | undefined
@@ -182,7 +176,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     if (Object.keys(settings).length === 0) delete group.settings
     else group.settings = settings
 
-    await this._writeSettings(groups, this._activeModels, this._systemPrompts)
+    await this._writeSettings(groups, this._activeModels)
     await this._reload()
   }
 
@@ -193,7 +187,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
 
   async updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
     await this._ready
-    await this._writeSettings(groups, this._activeModels, this._systemPrompts)
+    await this._writeSettings(groups, this._activeModels)
     await this._reload()
   }
 
@@ -264,25 +258,8 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     if (modelId === undefined) delete next[kind]
     else next[kind] = modelId
     this._activeModels = next
-    await this._writeSettings(this._persistedGroups, next, this._systemPrompts)
+    await this._writeSettings(this._persistedGroups, next)
     this._onDidChangeActiveModel.fire({ kind })
-  }
-
-  async getSystemPrompt(kind: AiPromptKind): Promise<string | undefined> {
-    await this._ready
-    return this._systemPrompts[kind]
-  }
-
-  async setSystemPrompt(kind: AiPromptKind, prompt: string | undefined): Promise<void> {
-    await this._ready
-    const next: { commit?: string; inlineCompletion?: string; sessionTitle?: string } = {
-      ...this._systemPrompts,
-    }
-    if (prompt === undefined || prompt.trim() === '') delete next[kind]
-    else next[kind] = prompt
-    this._systemPrompts = next
-    await this._writeSettings(this._persistedGroups, this._activeModels, next)
-    this._onDidChangeSystemPrompts.fire()
   }
 
   private async _schemaFor(modelId: string): Promise<AiModelConfigSchema | undefined> {
@@ -303,14 +280,12 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     const parsed = parseSettings(text)
     this._persistedGroups = parsed.groups.length > 0 ? parsed.groups : DEFAULT_GROUPS
     this._activeModels = parsed.activeModels
-    this._systemPrompts = parsed.systemPrompts
     this._registry.setGroups(this._toResolved(this._persistedGroups))
   }
 
   private async _writeSettings(
     groups: readonly AiProviderGroup[],
     activeModels: AiActiveModels,
-    systemPrompts: AiSystemPrompts,
   ): Promise<void> {
     const { dir } = await this._configLocation.getInfo()
     await mkdir(dir, { recursive: true })
@@ -319,7 +294,6 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     const file: AiSettingsFile = {
       groups,
       ...(hasAnyActive(activeModels) ? { activeModels } : {}),
-      ...(hasAnySystemPrompt(systemPrompts) ? { systemPrompts } : {}),
     }
     const tmp = `${path}.${process.pid}.tmp`
     await writeFile(tmp, JSON.stringify(file, null, 2) + '\n', 'utf8')
@@ -433,16 +407,8 @@ function missingProviderError(modelId: string): AiError {
   return new AiError(AiErrorCode.ModelNotFound, `No AI model provider found for '${modelId}'.`)
 }
 
-function parseSettings(text: string): {
-  groups: AiProviderGroup[]
-  activeModels: AiActiveModels
-  systemPrompts: AiSystemPrompts
-} {
-  const empty = {
-    groups: [] as AiProviderGroup[],
-    activeModels: {} as AiActiveModels,
-    systemPrompts: {} as AiSystemPrompts,
-  }
+function parseSettings(text: string): { groups: AiProviderGroup[]; activeModels: AiActiveModels } {
+  const empty = { groups: [] as AiProviderGroup[], activeModels: {} as AiActiveModels }
   if (text.trim() === '') return empty
   const errors: ParseError[] = []
   const parsed: unknown = parse(text, errors, { allowTrailingComma: true })
@@ -466,7 +432,6 @@ function parseSettings(text: string): {
   return {
     groups,
     activeModels: parseActiveModels((parsed as { activeModels?: unknown }).activeModels),
-    systemPrompts: parseSystemPrompts((parsed as { systemPrompts?: unknown }).systemPrompts),
   }
 }
 
@@ -491,26 +456,6 @@ function hasAnyActive(active: AiActiveModels): boolean {
     active.inlineCompletion !== undefined ||
     active.commit !== undefined ||
     active.sessionTitle !== undefined
-  )
-}
-
-function parseSystemPrompts(raw: unknown): AiSystemPrompts {
-  if (!raw || typeof raw !== 'object') return {}
-  const out: { commit?: string; inlineCompletion?: string; sessionTitle?: string } = {}
-  const commit = (raw as { commit?: unknown }).commit
-  const inline = (raw as { inlineCompletion?: unknown }).inlineCompletion
-  const sessionTitle = (raw as { sessionTitle?: unknown }).sessionTitle
-  if (typeof commit === 'string') out.commit = commit
-  if (typeof inline === 'string') out.inlineCompletion = inline
-  if (typeof sessionTitle === 'string') out.sessionTitle = sessionTitle
-  return out
-}
-
-function hasAnySystemPrompt(prompts: AiSystemPrompts): boolean {
-  return (
-    prompts.commit !== undefined ||
-    prompts.inlineCompletion !== undefined ||
-    prompts.sessionTitle !== undefined
   )
 }
 

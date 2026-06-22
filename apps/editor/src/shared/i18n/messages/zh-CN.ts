@@ -266,7 +266,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiSettings.nav': 'AI 设置分类',
   'aiSettings.category.models': '模型配置',
   'aiSettings.category.features': '功能模型',
-  'aiSettings.category.systemPrompts': '系统提示词',
   'aiSettings.openJson': '打开 aiSettings.json',
   'aiSettings.help.label': '帮助',
 
@@ -325,15 +324,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'aiFeatures.sessionTitle.desc': '为 AGENTS 会话生成友好标题使用的模型。',
   'aiFeatures.unset': '未设置',
 
-  // --- AI settings: system prompts panel ---
-  'aiPrompts.commit': '提交信息',
-  'aiPrompts.commit.desc': '生成 Git 提交信息的系统提示词。',
-  'aiPrompts.inline': '内联补全',
-  'aiPrompts.inline.desc': '编辑器幽灵文本补全的系统提示词。',
-  'aiPrompts.sessionTitle': '会话标题',
-  'aiPrompts.sessionTitle.desc': '为 AGENTS 会话命名的系统提示词。',
-  'aiPrompts.resetDefault': '恢复默认',
-
   // --- AI settings: help (markdown) ---
   'aiSettings.help.models': [
     '## 模型配置',
@@ -358,17 +348,5 @@ export const ZH_CN_MESSAGES: MessageMap = {
     '- **提交信息**：生成 Git 提交信息使用的模型。',
     '',
     '点击任意一行会弹出模型选择器，选中后即时生效——与状态栏的模型选择体验一致。',
-  ].join('\n'),
-  'aiSettings.help.systemPrompts': [
-    '## 系统提示词',
-    '',
-    '为每个 AI 功能自定义发送给模型的 **系统提示词**：',
-    '',
-    '- **提交信息**：将暂存改动总结为提交信息的指令。',
-    '- **内联补全**：Copilot 式幽灵文本引擎的指令。',
-    '- **会话标题**：为 AGENTS 会话命名的指令。',
-    '',
-    '留空即使用内置默认值——以灰色占位符显示。点 **恢复默认** 可清除不再需要的覆盖值。',
-    '覆盖值会保存到 `aiSettings.json`；内置默认值绝不写入文件。',
   ].join('\n'),
 } as const

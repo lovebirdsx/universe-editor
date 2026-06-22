@@ -20,7 +20,6 @@ import {
   type AiModelMetadata,
   type AiModelSelector,
   type AiProviderGroup,
-  type AiPromptKind,
   type AiRequestOptions,
   type AiResponse,
   type CancellationToken,
@@ -50,9 +49,6 @@ export class AiModelClientService extends Disposable implements IAiModelService 
   private readonly _onDidChangeSessionTitleModel = this._register(new Emitter<void>())
   readonly onDidChangeSessionTitleModel = this._onDidChangeSessionTitleModel.event
 
-  private readonly _onDidChangeSystemPrompts = this._register(new Emitter<void>())
-  readonly onDidChangeSystemPrompts = this._onDidChangeSystemPrompts.event
-
   constructor(private readonly _main: IAiModelMainService) {
     super()
     this.onDidChangeModels = this._main.onDidChangeModels
@@ -64,7 +60,6 @@ export class AiModelClientService extends Disposable implements IAiModelService 
         else this._onDidChangeSessionTitleModel.fire()
       }),
     )
-    this._register(this._main.onDidChangeSystemPrompts(() => this._onDidChangeSystemPrompts.fire()))
   }
 
   getModels(): Promise<readonly AiModelMetadata[]> {
@@ -109,14 +104,6 @@ export class AiModelClientService extends Disposable implements IAiModelService 
 
   setSessionTitleModelId(modelId: string | undefined): Promise<void> {
     return this._main.setActiveModel('sessionTitle', modelId)
-  }
-
-  getSystemPrompt(kind: AiPromptKind): Promise<string | undefined> {
-    return this._main.getSystemPrompt(kind)
-  }
-
-  setSystemPrompt(kind: AiPromptKind, prompt: string | undefined): Promise<void> {
-    return this._main.setSystemPrompt(kind, prompt)
   }
 
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration> {

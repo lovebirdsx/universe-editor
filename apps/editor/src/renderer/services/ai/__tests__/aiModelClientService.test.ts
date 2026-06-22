@@ -23,7 +23,7 @@ import type {
   AiEndEvent,
   IAiModelMainService,
 } from '../../../../shared/ipc/aiModelService.js'
-import type { AiActiveModelKind, AiPromptKind } from '@universe-editor/platform'
+import type { AiActiveModelKind } from '@universe-editor/platform'
 
 class FakeMain implements IAiModelMainService {
   declare readonly _serviceBrand: undefined
@@ -32,12 +32,10 @@ class FakeMain implements IAiModelMainService {
   readonly onDidEndRequestEmitter = new Emitter<AiEndEvent>()
   readonly onDidChangeModelsEmitter = new Emitter<void>()
   readonly onDidChangeActiveModelEmitter = new Emitter<AiActiveModelChangeEvent>()
-  readonly onDidChangeSystemPromptsEmitter = new Emitter<void>()
   readonly onDidEmitChunk = this.onDidEmitChunkEmitter.event
   readonly onDidEndRequest = this.onDidEndRequestEmitter.event
   readonly onDidChangeModels = this.onDidChangeModelsEmitter.event
   readonly onDidChangeActiveModel = this.onDidChangeActiveModelEmitter.event
-  readonly onDidChangeSystemPrompts = this.onDidChangeSystemPromptsEmitter.event
 
   startedRequestId: string | undefined
   cancelledRequestId: string | undefined
@@ -48,7 +46,6 @@ class FakeMain implements IAiModelMainService {
     commit?: string
     sessionTitle?: string
   } = {}
-  readonly systemPrompts: { commit?: string; inlineCompletion?: string; sessionTitle?: string } = {}
 
   getModels() {
     return Promise.resolve([])
@@ -66,15 +63,6 @@ class FakeMain implements IAiModelMainService {
     if (modelId === undefined) delete this.activeModels[kind]
     else this.activeModels[kind] = modelId
     this.onDidChangeActiveModelEmitter.fire({ kind })
-    return Promise.resolve()
-  }
-  getSystemPrompt(kind: AiPromptKind): Promise<string | undefined> {
-    return Promise.resolve(this.systemPrompts[kind])
-  }
-  setSystemPrompt(kind: AiPromptKind, prompt: string | undefined): Promise<void> {
-    if (prompt === undefined || prompt.trim() === '') delete this.systemPrompts[kind]
-    else this.systemPrompts[kind] = prompt
-    this.onDidChangeSystemPromptsEmitter.fire()
     return Promise.resolve()
   }
   startRequest(requestId: string): Promise<void> {
@@ -161,26 +149,6 @@ describe('AiModelClientService', () => {
     main.onDidChangeActiveModelEmitter.fire({ kind: 'inlineCompletion' })
     expect(chat).toBe(1)
     expect(inline).toBe(1)
-    client.dispose()
-  })
-
-  it('proxies system-prompt overrides to main and forwards the change event', async () => {
-    const main = new FakeMain()
-    const client = new AiModelClientService(main)
-    let changed = 0
-    client.onDidChangeSystemPrompts(() => changed++)
-
-    expect(await client.getSystemPrompt('commit')).toBeUndefined()
-
-    await client.setSystemPrompt('commit', 'Write a great commit message.')
-    expect(await client.getSystemPrompt('commit')).toBe('Write a great commit message.')
-    expect(main.systemPrompts.commit).toBe('Write a great commit message.')
-    expect(changed).toBe(1)
-
-    await client.setSystemPrompt('commit', undefined)
-    expect(main.systemPrompts.commit).toBeUndefined()
-    expect(await client.getSystemPrompt('commit')).toBeUndefined()
-    expect(changed).toBe(2)
     client.dispose()
   })
 

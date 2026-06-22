@@ -18,7 +18,6 @@ import type {
   AiModelMetadata,
   AiModelSelector,
   AiProviderGroup,
-  AiPromptKind,
   AiRequestOptions,
   AiResponseChunk,
   Event,
@@ -64,7 +63,6 @@ export interface IAiModelMainService {
   readonly onDidEndRequest: Event<AiEndEvent>
   readonly onDidChangeModels: Event<void>
   readonly onDidChangeActiveModel: Event<AiActiveModelChangeEvent>
-  readonly onDidChangeSystemPrompts: Event<void>
 
   getModels(): Promise<readonly AiModelMetadata[]>
   selectModels(selector: AiModelSelector): Promise<readonly string[]>
@@ -83,11 +81,6 @@ export interface IAiModelMainService {
   getActiveModel(kind: AiActiveModelKind): Promise<string | undefined>
   /** Set the active model id for a slot (writes aiSettings.json, fires onDidChangeActiveModel). */
   setActiveModel(kind: AiActiveModelKind, modelId: string | undefined): Promise<void>
-
-  /** A feature's system-prompt override, or undefined when it uses its built-in default. */
-  getSystemPrompt(kind: AiPromptKind): Promise<string | undefined>
-  /** Set (or clear) a feature's system-prompt override (writes aiSettings.json, fires onDidChangeSystemPrompts). */
-  setSystemPrompt(kind: AiPromptKind, prompt: string | undefined): Promise<void>
 
   /** Resolved per-model configuration (schema default → user settings). */
   getModelConfiguration(modelId: string): Promise<AiModelConfiguration>

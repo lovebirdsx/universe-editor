@@ -437,34 +437,6 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
-  it('parses system-prompt overrides round-trip and omits the key when empty', async () => {
-    const { service, dir } = makeServiceFromFile(
-      JSON.stringify({
-        groups: [{ vendor: 'openai', name: 'default' }],
-        systemPrompts: { commit: 'Write a great commit.' },
-      }),
-    )
-    expect(await service.getSystemPrompt('commit')).toBe('Write a great commit.')
-    expect(await service.getSystemPrompt('inlineCompletion')).toBeUndefined()
-
-    const events: number[] = []
-    service.onDidChangeSystemPrompts(() => events.push(1))
-
-    await service.setSystemPrompt('inlineCompletion', 'Complete the code.')
-    expect(events.length).toBe(1)
-    let onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
-    expect(onDisk.systemPrompts.commit).toBe('Write a great commit.')
-    expect(onDisk.systemPrompts.inlineCompletion).toBe('Complete the code.')
-
-    // Blank clears the override (key deleted); when none remain the section is omitted.
-    await service.setSystemPrompt('commit', '   ')
-    await service.setSystemPrompt('inlineCompletion', undefined)
-    expect(await service.getSystemPrompt('commit')).toBeUndefined()
-    onDisk = JSON.parse(readFileSync(join(dir, 'aiSettings.json'), 'utf8'))
-    expect(onDisk.systemPrompts).toBeUndefined()
-    service.dispose()
-  })
-
   it('cancels a metadata request whose provider never responds (no leak on a hung endpoint)', async () => {
     // Regression: getModels has no per-call deadline, so a provider whose fetch
     // never settles leaves its abort store + cancellation listener pending until

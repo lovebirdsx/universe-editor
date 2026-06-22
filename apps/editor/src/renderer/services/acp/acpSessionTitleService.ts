@@ -21,7 +21,6 @@ import {
   type CancellationToken,
   type ILogger,
 } from '@universe-editor/platform'
-import { DEFAULT_SESSION_TITLE_SYSTEM_PROMPT } from '../ai/defaultSystemPrompts.js'
 
 export interface IAcpSessionTitleService {
   readonly _serviceBrand: undefined
@@ -42,6 +41,15 @@ export const IAcpSessionTitleService =
 
 const MAX_INPUT_CHARS = 2000
 const MAX_TITLE_CHARS = 60
+
+const SYSTEM_PROMPT = [
+  'You generate a concise title for a coding-assistant conversation.',
+  'Rules:',
+  '- Reply with ONLY the title, nothing else.',
+  '- At most 6 words. No surrounding quotes, no trailing punctuation.',
+  '- Use the same language as the user message.',
+  '- Capture the core task/topic, not pleasantries.',
+].join('\n')
 
 export class AcpSessionTitleService implements IAcpSessionTitleService {
   declare readonly _serviceBrand: undefined
@@ -72,11 +80,9 @@ export class AcpSessionTitleService implements IAcpSessionTitleService {
 
     const cts = new CancellationTokenSource(token)
     try {
-      const systemPrompt =
-        (await this._aiModel.getSystemPrompt('sessionTitle')) || DEFAULT_SESSION_TITLE_SYSTEM_PROMPT
       const response = this._aiModel.sendRequest(
         [
-          { role: AiMessageRole.System, content: [{ type: 'text', value: systemPrompt }] },
+          { role: AiMessageRole.System, content: [{ type: 'text', value: SYSTEM_PROMPT }] },
           {
             role: AiMessageRole.User,
             content: [{ type: 'text', value: buildUserPrompt(user, agent) }],

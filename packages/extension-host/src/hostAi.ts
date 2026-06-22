@@ -44,10 +44,6 @@ export class HostAi implements AiApi {
     return this._ai.getCommitModelId()
   }
 
-  getCommitSystemPrompt(): Promise<string | undefined> {
-    return this._ai.getCommitSystemPrompt()
-  }
-
   sendRequest(messages: readonly AiMessage[], options: AiRequestOptions): AiResponse {
     const requestId = generateUuid()
     const reassembler = new AiResponseReassembler()

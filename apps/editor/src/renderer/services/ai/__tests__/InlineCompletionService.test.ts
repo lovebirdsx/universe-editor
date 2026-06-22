@@ -73,9 +73,6 @@ class FakeAiModel implements Partial<IAiModelService> {
   getInlineCompletionModelId(): Promise<string | undefined> {
     return Promise.resolve(this.inlineModelId)
   }
-  getSystemPrompt(): Promise<string | undefined> {
-    return Promise.resolve(undefined)
-  }
   setInlineCompletionModelId(modelId: string | undefined): Promise<void> {
     this.inlineModelId = modelId
     this._onDidChangeInlineCompletionModel.fire()

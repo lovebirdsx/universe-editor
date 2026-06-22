@@ -57,9 +57,6 @@ export interface IMainThreadAi {
   /** The user's currently selected commit-message model id, if any. */
   getCommitModelId(): Promise<string | undefined>
 
-  /** The configured commit-message system prompt, or undefined to use the built-in default. */
-  getCommitSystemPrompt(): Promise<string | undefined>
-
   /** Fire a request; chunks/end come back via the events keyed by `requestId`. */
   startRequest(
     requestId: string,
