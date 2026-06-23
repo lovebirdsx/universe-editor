@@ -34,6 +34,10 @@ extraResources:
   # - release-notes.json
   - from: .runtime-resources
     to: .
+extraFiles:
+  # CLI wrapper scripts placed at $INSTDIR/bin/; installer adds $INSTDIR/bin to user PATH.
+  - from: resources/cli
+    to: bin
 win:
   icon: public/icon.ico
   target:
@@ -51,6 +55,7 @@ nsis:
   installerIcon: public/icon.ico
   uninstallerIcon: public/icon.ico
   installerHeaderIcon: public/icon.ico
+  include: build/installer.nsh
 mac:
   target: dmg
 linux:
