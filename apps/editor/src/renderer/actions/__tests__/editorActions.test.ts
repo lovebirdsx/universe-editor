@@ -32,6 +32,8 @@ import {
   FocusNextGroupAction,
   FocusPreviousGroupAction,
   LastEditorInGroupAction,
+  MoveEditorLeftInGroupAction,
+  MoveEditorRightInGroupAction,
   NextEditorAction,
   PreviousEditorAction,
   SplitEditorDownAction,
@@ -355,6 +357,52 @@ describe('Built-in editor Action2s', () => {
     expect(svc.activeGroup.activeEditor).toBe(b)
   })
 
+  it('MoveEditorLeftInGroup moves the active editor one tab left and keeps it active', () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    const c = new TestEditor('c')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(c)
+    svc.activeGroup.setActive(b)
+    exec(MoveEditorLeftInGroupAction, svc)
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['b', 'a', 'c'])
+    expect(svc.activeGroup.activeEditor).toBe(b)
+  })
+
+  it('MoveEditorRightInGroup moves the active editor one tab right and keeps it active', () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    const c = new TestEditor('c')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+    svc.activeGroup.openEditor(c)
+    svc.activeGroup.setActive(b)
+    exec(MoveEditorRightInGroupAction, svc)
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['a', 'c', 'b'])
+    expect(svc.activeGroup.activeEditor).toBe(b)
+  })
+
+  it('MoveEditorLeftInGroup / MoveEditorRightInGroup no-op at group edges', () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('a')
+    const b = new TestEditor('b')
+    svc.activeGroup.openEditor(a)
+    svc.activeGroup.openEditor(b)
+
+    svc.activeGroup.setActive(a)
+    exec(MoveEditorLeftInGroupAction, svc)
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['a', 'b'])
+    expect(svc.activeGroup.activeEditor).toBe(a)
+
+    svc.activeGroup.setActive(b)
+    exec(MoveEditorRightInGroupAction, svc)
+    expect(svc.activeGroup.editors.map((e) => (e as TestEditor).getName())).toEqual(['a', 'b'])
+    expect(svc.activeGroup.activeEditor).toBe(b)
+  })
+
   it('SplitEditorRight adds a new group with the active editor copied', () => {
     const svc = new EditorGroupsService()
     const a = new TestEditor('a')
@@ -455,6 +503,27 @@ describe('Built-in editor Action2s', () => {
     disposables.push(registerAction2(PreviousEditorAction))
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+pagedown')).toBe(NextEditorAction.ID)
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+pageup')).toBe(PreviousEditorAction.ID)
+  })
+
+  it('MoveEditorLeftInGroup + MoveEditorRightInGroup are registered with the expected keybindings', () => {
+    disposables.push(registerAction2(MoveEditorLeftInGroupAction))
+    disposables.push(registerAction2(MoveEditorRightInGroupAction))
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+pageup')).toBe(
+      MoveEditorLeftInGroupAction.ID,
+    )
+    expect(KeybindingsRegistry.resolveKeybinding('ctrl+shift+pagedown')).toBe(
+      MoveEditorRightInGroupAction.ID,
+    )
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === MoveEditorLeftInGroupAction.ID,
+      ),
+    ).toBe(true)
+    expect(
+      MenuRegistry.getMenuItems(MenuId.CommandPalette).some(
+        (i) => 'command' in i && i.command === MoveEditorRightInGroupAction.ID,
+      ),
+    ).toBe(true)
   })
 
   it('SplitEditorRight is bound to Ctrl+\\ and is f1', () => {

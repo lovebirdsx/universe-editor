@@ -291,6 +291,52 @@ export class PreviousEditorAction extends Action2 {
   }
 }
 
+function moveActiveEditorInGroup(accessor: ServicesAccessor, delta: -1 | 1): void {
+  const group = accessor.get(IEditorGroupsService).activeGroup
+  const active = group.activeEditor
+  if (!active) return
+
+  const index = group.indexOf(active)
+  const target = index + delta
+  if (index === -1 || target < 0 || target >= group.count) return
+
+  group.moveEditor(active, target)
+}
+
+export class MoveEditorLeftInGroupAction extends Action2 {
+  static readonly ID = 'workbench.action.moveEditorLeftInGroup'
+  constructor() {
+    super({
+      id: MoveEditorLeftInGroupAction.ID,
+      title: localize2('action.moveEditorLeftInGroup.title', 'Move Editor Left'),
+      category: localize2('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+pageup' },
+      precondition: 'hasActiveEditor && !activeEditorIsFirstInGroup',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    moveActiveEditorInGroup(accessor, -1)
+  }
+}
+
+export class MoveEditorRightInGroupAction extends Action2 {
+  static readonly ID = 'workbench.action.moveEditorRightInGroup'
+  constructor() {
+    super({
+      id: MoveEditorRightInGroupAction.ID,
+      title: localize2('action.moveEditorRightInGroup.title', 'Move Editor Right'),
+      category: localize2('command.category.view', 'View'),
+      keybinding: { primary: 'ctrl+shift+pagedown' },
+      precondition: 'hasActiveEditor && !activeEditorIsLastInGroup',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    moveActiveEditorInGroup(accessor, 1)
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Quick-pick MRU editor switching (Ctrl+Tab / Ctrl+Shift+Tab)
 // ---------------------------------------------------------------------------

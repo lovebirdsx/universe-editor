@@ -54,6 +54,8 @@ import {
   FocusPreviousGroupAction,
   FocusRightGroupAction,
   LastEditorInGroupAction,
+  MoveEditorLeftInGroupAction,
+  MoveEditorRightInGroupAction,
   MoveEditorToAboveGroupAction,
   MoveEditorToBelowGroupAction,
   MoveEditorToLeftGroupAction,
@@ -285,6 +287,8 @@ registerAction2(QuickOpenRecentEditorAction)
 registerAction2(QuickOpenRecentEditorReverseAction)
 registerAction2(FirstEditorInGroupAction)
 registerAction2(LastEditorInGroupAction)
+registerAction2(MoveEditorLeftInGroupAction)
+registerAction2(MoveEditorRightInGroupAction)
 
 // Editor — split
 registerAction2(SplitEditorRightAction)
