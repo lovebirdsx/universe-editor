@@ -81,6 +81,7 @@ import {
 import { QuickAccessContribution } from './QuickAccessContribution.js'
 import { OutlineViewStateContribution } from './OutlineViewStateContribution.js'
 import { SearchPersistenceContribution } from './SearchPersistenceContribution.js'
+import { StartupFileContribution } from './StartupFileContribution.js'
 
 // Install the Monaco standalone override services (cross-file rename writer +
 // references text-model resolver) on MonacoLoader before any editor is created —
@@ -644,6 +645,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.searchPersistence',
   SearchPersistenceContribution,
   WorkbenchPhase.BlockStartup,
+)
+
+// Open a file that was passed via CLI argv at cold-launch (e.g. Windows double-click)
+// or pushed from the main process when a second instance launches with a file path.
+// AfterRestore so the editor groups are already rebuilt and can accept openEditor.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.startupFile',
+  StartupFileContribution,
+  WorkbenchPhase.AfterRestore,
 )
 
 export {

@@ -7,6 +7,10 @@ const HOME_DIR_FLAG = '--ue-home-dir='
 const homeArg = process.argv.find((a) => a.startsWith(HOME_DIR_FLAG))
 const home = homeArg ? homeArg.slice(HOME_DIR_FLAG.length) : ''
 
+const OPEN_FILE_FLAG = '--ue-open-file='
+const openFileArg = process.argv.find((a) => a.startsWith(OPEN_FILE_FLAG))
+const openFilePath = openFileArg ? openFileArg.slice(OPEN_FILE_FLAG.length) : undefined
+
 const bridge = {
   send(data: Uint8Array): void {
     ipcRenderer.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
@@ -29,6 +33,16 @@ const bridge = {
   // File back to an absolute filesystem path is webUtils.getPathForFile.
   getPathForFile(file: File): string {
     return webUtils.getPathForFile(file)
+  },
+  /** Absolute path of the file passed via CLI argv at cold-launch (undefined if none). */
+  openFilePath,
+  /** Listen for files pushed by the main process (second-instance scenario). */
+  onOpenFile(cb: (path: string) => void): () => void {
+    const listener = (_event: IpcRendererEvent, path: unknown): void => {
+      if (typeof path === 'string') cb(path)
+    }
+    ipcRenderer.on('ue:open-file', listener)
+    return () => ipcRenderer.removeListener('ue:open-file', listener)
   },
 }
 

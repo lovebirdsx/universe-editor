@@ -61,12 +61,14 @@ export interface ICreateWindowOptions {
   readonly uiState?: IWindowState
   /** Whether DevTools should be opened. */
   readonly devToolsOpen?: boolean
+  /** Absolute file path to open in the editor at startup (e.g. from CLI double-click). */
+  readonly fileToOpen?: string
 }
 
 export interface IWindowMainService {
   readonly onDidChangeWindows: Event<void>
   createWindow(opts?: ICreateWindowOptions): Promise<number>
-  restoreSession(list: readonly IRestoreWindow[]): Promise<void>
+  restoreSession(list: readonly IRestoreWindow[], fileToOpen?: string): Promise<void>
   focusWindow(id: number): void
   getWindowById(id: number): BrowserWindow | undefined
   getWindows(): ReadonlyArray<BrowserWindow>
@@ -163,6 +165,7 @@ export class WindowMainService implements IWindowMainService {
         ...(e2eEnabled ? { backgroundThrottling: false } : {}),
         additionalArguments: [
           `--ue-home-dir=${homedir()}`,
+          ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
         ],
       },
@@ -326,24 +329,53 @@ export class WindowMainService implements IWindowMainService {
   /**
    * Restore a previously persisted session. Opens one window per entry (skipping
    * duplicate workspaces defensively). An empty list opens a single empty window.
+   * When `fileToOpen` is given, it is routed to whichever window's workspace
+   * contains the file; if none match, the first window receives it.
    */
-  async restoreSession(list: readonly IRestoreWindow[]): Promise<void> {
+  async restoreSession(list: readonly IRestoreWindow[], fileToOpen?: string): Promise<void> {
     if (list.length === 0) {
-      await this.createWindow({})
+      await this.createWindow(fileToOpen ? { fileToOpen } : {})
       return
     }
+
+    // Normalise the file path for platform-insensitive prefix matching.
+    const fileNorm = fileToOpen ? fileToOpen.toLowerCase().replace(/\\/g, '/') : undefined
+
     const seen = new Set<string>()
+    let fileAssigned = false
+    let isFirst = true
+
     for (const entry of list) {
       const id = entry.workspace ? workspaceIdFromUri(entry.workspace.folder.toString()) : null
       if (id !== null) {
         if (seen.has(id)) continue
         seen.add(id)
       }
+
+      // Decide whether to route the file to this window.
+      let windowFileToOpen: string | undefined
+      if (fileToOpen && !fileAssigned) {
+        if (fileNorm && entry.workspace) {
+          const folderNorm = entry.workspace.folder.fsPath.toLowerCase().replace(/\\/g, '/') + '/'
+          if (fileNorm.startsWith(folderNorm)) {
+            windowFileToOpen = fileToOpen
+            fileAssigned = true
+          }
+        }
+        // Fallback: assign to the first window if no workspace matched yet.
+        if (!windowFileToOpen && isFirst) {
+          windowFileToOpen = fileToOpen
+          fileAssigned = true
+        }
+      }
+
       await this.createWindow({
         workspace: entry.workspace,
         ...(entry.uiState ? { uiState: entry.uiState } : {}),
         devToolsOpen: entry.devToolsOpen,
+        ...(windowFileToOpen ? { fileToOpen: windowFileToOpen } : {}),
       })
+      isFirst = false
     }
   }
 

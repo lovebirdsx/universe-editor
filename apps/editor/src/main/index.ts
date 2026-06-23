@@ -14,6 +14,7 @@ import {
   IFileSearchService,
   IFileService,
   mark,
+  URI,
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { PerfMarks } from '../shared/perf/marks.js'
@@ -66,6 +67,15 @@ const environmentService = new EnvironmentMainService({
   env: process.env,
   isDev: import.meta.env.DEV,
 })
+
+// Extract the first positional argument as the file to open at startup.
+// Windows file associations pass the file path as a plain argument.
+// Packaged: argv[0]=exe, argv[1+]=user args
+// Dev:      argv[0]=electron, argv[1]=main script, argv[2+]=user args
+function parseFileToOpen(argv: readonly string[], isPackaged: boolean): string | undefined {
+  return argv.slice(isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && a.length > 0)
+}
+const startupFilePath = parseFileToOpen(process.argv, app.isPackaged)
 
 // Resolve product identity once (pure): reused for the --version/--help banner
 // and for applyProductIdentity below.
@@ -144,13 +154,35 @@ const hasSingleInstanceLock = e2eEnabled || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
-  app.on('second-instance', () => {
-    const win = BrowserWindow.getAllWindows()[0]
-    if (win) {
-      if (win.isMinimized()) win.restore()
-      win.focus()
+  app.on('second-instance', (_event, argv) => {
+    const filePath = parseFileToOpen(argv, app.isPackaged)
+    const services = getOrCreateServices()
+
+    // Route the file to the window whose workspace contains it; else first window.
+    let targetWin: BrowserWindow | undefined
+    if (filePath) {
+      const fileNorm = filePath.toLowerCase().replace(/\\/g, '/')
+      for (const info of services.windows.getOpenWindowInfos()) {
+        const folder = info.folder
+        if (folder) {
+          const revived = URI.revive(folder)
+          if (!revived) continue
+          const folderNorm = revived.fsPath.toLowerCase().replace(/\\/g, '/') + '/'
+          if (fileNorm.startsWith(folderNorm)) {
+            targetWin = services.windows.getWindowById(info.id)
+            break
+          }
+        }
+      }
+    }
+    if (!targetWin) targetWin = BrowserWindow.getAllWindows()[0]
+
+    if (targetWin) {
+      if (targetWin.isMinimized()) targetWin.restore()
+      targetWin.focus()
+      if (filePath) targetWin.webContents.send('ue:open-file', filePath)
     } else {
-      void getOrCreateServices().windows.createWindow({})
+      void services.windows.createWindow(filePath ? { fileToOpen: filePath } : {})
     }
   })
 }
@@ -246,7 +278,7 @@ void app.whenReady().then(async () => {
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
   mark(PerfMarks.mainDidCreateServices)
-  await windows.restoreSession(await loadSession(getDefaultStorage()))
+  await windows.restoreSession(await loadSession(getDefaultStorage()), startupFilePath)
 
   setTimeout(() => {
     void logMainService.cleanupOldLogs(20).catch((err) => {
