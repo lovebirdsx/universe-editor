@@ -7,9 +7,19 @@
 
 import { observableValue, type IObservable } from '@universe-editor/platform'
 import type { ISessionChangeTrackerService, SessionFileChange } from '../sessionChangeTracker.js'
+import type { DiffHunk } from '../diff/reconstructBaseline.js'
+
+export interface StubSessionChangeRecord {
+  readonly sessionId: string
+  readonly path: string
+  readonly toolCallId: string
+  readonly hunks: readonly DiffHunk[]
+  readonly created?: boolean
+}
 
 export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   declare readonly _serviceBrand: undefined
+  readonly records: StubSessionChangeRecord[] = []
   private readonly _empty: IObservable<readonly SessionFileChange[]> = observableValue(
     'test.sessionChanges.empty',
     [],
@@ -17,7 +27,21 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   initialize(): Promise<void> {
     return Promise.resolve()
   }
-  record(): void {}
+  record(
+    sessionId: string,
+    path: string,
+    toolCallId: string,
+    hunks: readonly DiffHunk[],
+    created?: boolean,
+  ): void {
+    this.records.push({
+      sessionId,
+      path,
+      toolCallId,
+      hunks: [...hunks],
+      ...(created !== undefined ? { created } : {}),
+    })
+  }
   changesFor(): IObservable<readonly SessionFileChange[]> {
     return this._empty
   }

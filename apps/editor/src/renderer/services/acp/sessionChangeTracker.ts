@@ -2,10 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  SessionChangeTrackerService — per-session, whole-file change tracking.
  *
- *  The agent reports each Edit/Write as a `structuredPatch` (hunks with line
- *  numbers) via `_meta.claudeCode.toolResponse`. We accumulate those hunks per
- *  (sessionId, path) in apply-order. To render a *whole-file* diff scoped to the
- *  session, we read the file's current on-disk content and run
+ *  Agent adapters report each file edit as hunk batches normalized by
+ *  AcpSession (Claude `structuredPatch`, Codex ACP diff content). We accumulate
+ *  those hunks per (sessionId, path) in apply-order. To render a *whole-file*
+ *  diff scoped to the session, we read the file's current on-disk content and run
  *  {@link reconstructBaseline} in reverse to recover the pre-session baseline —
  *  the agent writes directly to disk, so the renderer can never read the real
  *  pre-edit content otherwise.

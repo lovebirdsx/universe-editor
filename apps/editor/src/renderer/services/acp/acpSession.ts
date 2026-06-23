@@ -671,8 +671,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   applyUpdate(update: SessionUpdate): void {
     const parentId = readParentToolUseId(update)
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
-      const change = readStructuredPatch(update)
-      if (change) {
+      for (const change of readFileChanges(update)) {
         this._changeTracker?.record(
           this.id,
           change.path,
@@ -1107,11 +1106,19 @@ function readMcpServer(update: SessionUpdate): string | undefined {
  * because an empty-content Write reports an empty `structuredPatch` yet still
  * created a file the tracker must surface.
  */
-function readStructuredPatch(
-  update: SessionUpdate,
-):
-  | { readonly path: string; readonly hunks: readonly DiffHunk[]; readonly isCreate: boolean }
-  | undefined {
+interface FileChangeDescriptor {
+  readonly path: string
+  readonly hunks: readonly DiffHunk[]
+  readonly isCreate: boolean
+}
+
+function readFileChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
+  const structured = readStructuredPatch(update)
+  if (structured) return [structured]
+  return readDiffContentChanges(update)
+}
+
+function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | undefined {
   const meta = (
     update as {
       _meta?: {
@@ -1155,6 +1162,48 @@ function readStructuredPatch(
   }
   if (hunks.length === 0 && !isCreate) return undefined
   return { path, hunks, isCreate }
+}
+
+function readDiffContentChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
+  const content = (update as { content?: unknown }).content
+  if (!Array.isArray(content)) return []
+  const changes: FileChangeDescriptor[] = []
+  for (const item of content) {
+    if (!item || typeof item !== 'object') continue
+    const diff = item as { type?: unknown; path?: unknown; oldText?: unknown; newText?: unknown }
+    if (diff.type !== 'diff') continue
+    if (typeof diff.path !== 'string' || diff.path.length === 0) continue
+    if (typeof diff.newText !== 'string') continue
+    const isCreate = diff.oldText == null
+    const oldText = typeof diff.oldText === 'string' ? diff.oldText : ''
+    const hunks = wholeFileDiffHunks(oldText, diff.newText, isCreate)
+    if (hunks.length === 0 && !isCreate) continue
+    changes.push({ path: diff.path, hunks, isCreate })
+  }
+  return changes
+}
+
+function wholeFileDiffHunks(
+  oldText: string,
+  newText: string,
+  isCreate: boolean,
+): readonly DiffHunk[] {
+  if (oldText === newText) return []
+  const oldLines = isCreate ? [] : diffLines(oldText)
+  const newLines = newText.length === 0 && isCreate ? [] : diffLines(newText)
+  return [
+    {
+      oldStart: 1,
+      oldLines: oldLines.length,
+      newStart: 1,
+      newLines: newLines.length,
+      lines: [...oldLines.map((line) => `-${line}`), ...newLines.map((line) => `+${line}`)],
+    },
+  ]
+}
+
+function diffLines(text: string): readonly string[] {
+  return text.length === 0 ? [''] : text.split('\n')
 }
 
 /** True when at least one block would render visible content. */

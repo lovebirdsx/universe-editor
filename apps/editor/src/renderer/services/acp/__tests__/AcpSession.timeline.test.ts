@@ -296,6 +296,7 @@ class FakeAcpClientService implements IAcpClientService {
 function makeService(
   client: FakeAcpClientService,
   config?: IConfigurationService,
+  changeTracker: StubSessionChangeTracker = new StubSessionChangeTracker(),
 ): AcpSessionService {
   return new AcpSessionService(
     client,
@@ -310,7 +311,7 @@ function makeService(
     makeHistory(),
     new FakeStorage(),
     makeAgentDefaults(),
-    new StubSessionChangeTracker(),
+    changeTracker,
     new StubSessionTitleService(),
     FAKE_HOST,
   )
@@ -989,5 +990,49 @@ describe('AcpSession.timeline', () => {
     expect(childTool.call.status).toBe('completed')
     expect(childTool.call.kind).toBe('edit')
     expect(childTool.call.title).toBe('Edit')
+  })
+
+  it('records Codex Edit diff content as a session file change', async () => {
+    svc.dispose()
+    const tracker = new StubSessionChangeTracker()
+    svc = makeService(client, undefined, tracker)
+    await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'codex-edit',
+        title: 'Edit /work/new.ts',
+        kind: 'edit',
+        status: 'completed',
+        content: [
+          {
+            type: 'diff',
+            path: '/work/new.ts',
+            oldText: null,
+            newText: 'alpha\nbeta',
+          },
+        ],
+      },
+    })
+
+    expect(tracker.records).toHaveLength(1)
+    expect(tracker.records[0]).toMatchObject({
+      sessionId: 'agent-1',
+      path: '/work/new.ts',
+      toolCallId: 'codex-edit',
+      created: true,
+    })
+    expect(tracker.records[0]?.hunks).toEqual([
+      {
+        oldStart: 1,
+        oldLines: 0,
+        newStart: 1,
+        newLines: 2,
+        lines: ['+alpha', '+beta'],
+      },
+    ])
   })
 })
