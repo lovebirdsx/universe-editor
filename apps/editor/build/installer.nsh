@@ -1,12 +1,6 @@
-!macro preInit
-  ; Default install directory to Program Files (electron-builder has no installDir option).
-  SetRegView 64
-  WriteRegExpandStr HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation "$PROGRAMFILES64\Universe Editor"
-  WriteRegExpandStr HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation "$PROGRAMFILES64\Universe Editor"
-  SetRegView 32
-  WriteRegExpandStr HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation "$PROGRAMFILES\Universe Editor"
-  WriteRegExpandStr HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation "$PROGRAMFILES\Universe Editor"
-!macroend
+; No preInit override: electron-builder's multiUser logic already defaults
+; per-machine installs to Program Files and per-user installs to
+; %LocalAppData%\Programs\Universe Editor (matching VSCode's behavior).
 
 !macro customInstall
   ; Add $INSTDIR\bin to user PATH so `ue` is available without admin rights.
