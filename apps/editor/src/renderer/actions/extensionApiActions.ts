@@ -12,10 +12,12 @@ import {
   IEditorGroupsService,
   IInstantiationService,
   URI,
+  isEqualResource,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 
 /** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */
 export class GetConfigurationAction extends Action2 {
@@ -67,5 +69,61 @@ export class OpenFileAction extends Action2 {
       .get(IInstantiationService)
       .createInstance(FileEditorInput, URI.file(fsPath))
     group.openEditor(input, { activate: true, pinned: true })
+  }
+}
+
+/**
+ * Opens a file editor and reveals a specific position. Backs cross-file jumps for
+ * extensions (e.g. numbered-bookmarks). `line`/`column` are 0-based to match the
+ * extension API's Position; Monaco lines/columns are 1-based, hence the `+ 1`.
+ */
+export class OpenFileAtAction extends Action2 {
+  static readonly ID = '_workbench.openFileAt'
+
+  constructor() {
+    super({ id: OpenFileAtAction.ID, title: 'Open File At Position' })
+  }
+
+  override run(accessor: ServicesAccessor, fsPath: string, line: number, column = 0): void {
+    if (!fsPath) return
+    const groups = accessor.get(IEditorGroupsService)
+    const uri = URI.file(fsPath)
+    const input = revealExistingOrOpen(accessor, groups, uri)
+    void revealPosition(input, line + 1, column + 1)
+  }
+}
+
+function revealExistingOrOpen(
+  accessor: ServicesAccessor,
+  groups: IEditorGroupsService,
+  uri: URI,
+): FileEditorInput {
+  for (const group of groups.groups) {
+    for (const editor of group.editors) {
+      if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+        groups.activateGroup(group)
+        group.setActive(editor)
+        return editor
+      }
+    }
+  }
+  const input = accessor.get(IInstantiationService).createInstance(FileEditorInput, uri)
+  groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+  return input
+}
+
+/** Monaco may not have mounted the editor yet; retry briefly before giving up. */
+async function revealPosition(input: FileEditorInput, line: number, column: number): Promise<void> {
+  const delays = [0, 50, 100, 200]
+  for (const delay of delays) {
+    if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
+    const editor = FileEditorRegistry.get(input)
+    if (editor) {
+      const position = { lineNumber: line, column }
+      editor.setPosition(position)
+      editor.revealLineInCenterIfOutsideViewport(line)
+      editor.focus()
+      return
+    }
   }
 }

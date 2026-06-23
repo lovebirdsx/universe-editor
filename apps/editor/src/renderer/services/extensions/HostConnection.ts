@@ -28,12 +28,14 @@ import {
   type IOutputService,
   type IQuickInputService,
   type IStatusBarService,
+  type IStorageService,
 } from '@universe-editor/platform'
 import {
   ExtHostChannels,
   StdioFramingProtocol,
   type IExtHostCommands,
   type IExtHostDocuments,
+  type IExtHostEditor,
   type IExtHostExtensions,
   type IExtHostLanguages,
   type IExtHostScm,
@@ -49,6 +51,7 @@ import { MainThreadEditor } from './MainThreadEditor.js'
 import { MainThreadFs } from './MainThreadFs.js'
 import { MainThreadLanguages } from './MainThreadLanguages.js'
 import { MainThreadOutput } from './MainThreadOutput.js'
+import { MainThreadStorage } from './MainThreadStorage.js'
 import { MainThreadWindow } from './MainThreadWindow.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import type { IScmService } from './ScmService.js'
@@ -71,6 +74,8 @@ export interface HostConnectionDeps {
   readonly editorService?: IEditorService
   /** Wired only for the trusted connection — AI models are trusted-only. */
   readonly aiModel?: IAiModelService
+  /** Wired only for the trusted connection — persisted extension state. */
+  readonly storage?: IStorageService
   readonly output: IOutputService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
@@ -166,7 +171,10 @@ export class HostConnection extends Disposable {
     }
 
     if (deps.editorService) {
-      const mainThreadEditor = store.add(new MainThreadEditor(deps.editorService))
+      const extHostEditor = ProxyChannel.toService<IExtHostEditor>(
+        client.getChannel(ExtHostChannels.extHostEditor),
+      )
+      const mainThreadEditor = store.add(new MainThreadEditor(deps.editorService, extHostEditor))
       server.registerChannel(
         ExtHostChannels.mainThreadEditor,
         ProxyChannel.fromService(mainThreadEditor),
@@ -186,6 +194,14 @@ export class HostConnection extends Disposable {
       ExtHostChannels.mainThreadOutput,
       ProxyChannel.fromService(mainThreadOutput),
     )
+
+    if (deps.storage) {
+      const mainThreadStorage = new MainThreadStorage(deps.storage)
+      server.registerChannel(
+        ExtHostChannels.mainThreadStorage,
+        ProxyChannel.fromService(mainThreadStorage),
+      )
+    }
   }
 
   get dead(): boolean {

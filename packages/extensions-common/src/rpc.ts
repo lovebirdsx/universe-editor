@@ -55,8 +55,12 @@ export const ExtHostChannels = {
   mainThreadLanguages: 'mainThreadLanguages',
   /** Ext host → renderer: active text editor inspection + edits/selection control. */
   mainThreadEditor: 'mainThreadEditor',
+  /** Renderer → ext host: active-editor changes mirrored to drive `onDidChangeActiveTextEditor`. */
+  extHostEditor: 'extHostEditor',
   /** Trusted ext host → renderer: AI model requests (streaming chunks + cancel). */
   mainThreadAi: 'mainThreadAi',
+  /** Ext host → renderer: persisted key/value storage backing `context.workspaceState`/`globalState`. */
+  mainThreadStorage: 'mainThreadStorage',
 } as const
 
 export type ExtHostChannelName = (typeof ExtHostChannels)[keyof typeof ExtHostChannels]
@@ -356,6 +360,27 @@ export interface ISelectionDto {
   readonly active: Position
 }
 
+/** Where a decoration paints in the overview ruler. Mirrors Monaco's lane enum. */
+export type OverviewRulerLaneDto = 1 | 2 | 4 | 7
+
+/** Static look of a decoration type, allocated once via {@link IMainThreadEditor.$createDecorationType}.
+ *  `gutterIconPath` is a data-URI (e.g. an inline SVG) painted in the glyph margin;
+ *  the renderer turns these into a Monaco `IModelDecorationOptions`. */
+export interface IDecorationRenderOptionsDto {
+  readonly gutterIconPath?: string
+  readonly isWholeLine?: boolean
+  readonly backgroundColor?: string
+  readonly borderColor?: string
+  readonly borderWidth?: string
+  readonly overviewRulerColor?: string
+  readonly overviewRulerLane?: OverviewRulerLaneDto
+}
+
+/** A range a decoration type applies to (0-based, LSP-shaped). */
+export interface IDecorationRangeDto {
+  readonly range: Range
+}
+
 /** Snapshot of the active text editor returned by {@link IMainThreadEditor.$getActiveTextEditor}.
  *  Carries the live text so it stays consistent with `selections` — the debounced
  *  document mirror may lag the editor, so the host can't reuse its own model here. */
@@ -384,4 +409,45 @@ export interface IMainThreadEditor {
   $applyEdits(uri: UriComponents, version: number, edits: readonly ITextEditDto[]): Promise<boolean>
   /** Replace the selections of the editor at `uri` and reveal the primary one. */
   $setSelections(uri: UriComponents, selections: readonly ISelectionDto[]): Promise<void>
+  /** Allocate a decoration type (look fixed up front), addressed later by `handle`. */
+  $createDecorationType(handle: number, options: IDecorationRenderOptionsDto): Promise<void>
+  /** Release a decoration type and remove every decoration it painted. */
+  $disposeDecorationType(handle: number): Promise<void>
+  /**
+   * Replace the ranges decorated with `typeHandle` in the editor at `uri`. An
+   * empty `ranges` clears that type. No-op when no editor is showing `uri`.
+   */
+  $setDecorations(
+    uri: UriComponents,
+    typeHandle: number,
+    ranges: readonly IDecorationRangeDto[],
+  ): Promise<void>
+}
+
+/**
+ * Renderer → exposed to the ext host: active-editor changes, mirrored into the
+ * host so a plugin sees `window.onDidChangeActiveTextEditor`. Carries the same
+ * snapshot shape as {@link IMainThreadEditor.$getActiveTextEditor}; null when no
+ * text editor is focused.
+ */
+export interface IExtHostEditor {
+  $acceptActiveEditorChange(editor: IActiveTextEditorDto | null): Promise<void>
+}
+
+/** Storage scope mirroring the platform's `StorageScope`: 0 = global (all
+ *  workspaces), 1 = workspace (the open folder). */
+export type ExtHostStorageScope = 0 | 1
+
+/**
+ * Renderer → exposed to the ext host: persisted key/value storage backing a
+ * plugin's `context.globalState` / `context.workspaceState`. The host keeps an
+ * in-memory mirror (so the public `Memento.get` stays synchronous) and flushes
+ * through here; values cross the wire as JSON strings. Keys are namespaced
+ * per-extension by the renderer, so plugins can't read or clobber each other.
+ */
+export interface IMainThreadStorage {
+  /** Read the whole state object for `extId` at `scope`, as a JSON string (or undefined). */
+  $get(scope: ExtHostStorageScope, extId: string): Promise<string | undefined>
+  /** Replace the whole state object for `extId` at `scope` with `valueJson`. */
+  $set(scope: ExtHostStorageScope, extId: string, valueJson: string): Promise<void>
 }

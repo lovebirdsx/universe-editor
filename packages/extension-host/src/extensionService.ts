@@ -9,10 +9,12 @@
  * is logged to stderr and never tears down the host or other extensions.
  */
 import { pathToFileURL } from 'node:url'
+import { Emitter, type Event } from '@universe-editor/platform'
 import {
   FileType,
   type AiApi,
   type CompletionItemProvider,
+  type DecorationRenderOptions,
   type DefinitionProvider,
   type DiagnosticCollection,
   type Disposable,
@@ -37,6 +39,7 @@ import {
   type Selection,
   type TextDocument,
   type TextEditor,
+  type TextEditorDecorationType,
   type TextEditorEdit,
   type TypeDefinitionProvider,
   type UriComponents,
@@ -47,7 +50,10 @@ import {
   bytesToBase64,
   matchesActivationEvent,
   type ExtHostFileType,
+  type IActiveTextEditorDto,
   type ICompletionContext,
+  type IDecorationRangeDto,
+  type IDecorationRenderOptionsDto,
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
   type ILanguageProviderMetadata,
@@ -61,9 +67,11 @@ import {
   type IMainThreadScm,
   type IMainThreadWindow,
   type IMainThreadAi,
+  type IMainThreadStorage,
   type IReferenceContext,
   type ISignatureHelpContext,
   type LanguageProviderType,
+  type OverviewRulerLaneDto,
 } from '@universe-editor/extensions-common'
 import type {
   CompletionItem,
@@ -76,6 +84,7 @@ import type {
   Hover,
   Location,
   Position,
+  Range,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -301,10 +310,51 @@ class HostTextEditor implements TextEditor {
   setSelections(selections: readonly Selection[]): Promise<void> {
     return this._editorRpc.$setSelections(this.document.uri, selections.map(toSelectionDto))
   }
+
+  setDecorations(decorationType: TextEditorDecorationType, ranges: readonly Range[]): void {
+    const dtos: IDecorationRangeDto[] = ranges.map((range) => ({ range }))
+    void this._editorRpc.$setDecorations(this.document.uri, decorationType.key, dtos)
+  }
+}
+
+/**
+ * Host-side decoration type. Allocates a handle, ships the static look to the
+ * renderer once, and forwards disposal so the renderer drops the CSS rule and
+ * every range it painted.
+ */
+class HostTextEditorDecorationType implements TextEditorDecorationType {
+  private _disposed = false
+
+  constructor(
+    readonly key: number,
+    private readonly _editorRpc: IMainThreadEditor,
+  ) {}
+
+  dispose(): void {
+    if (this._disposed) return
+    this._disposed = true
+    void this._editorRpc.$disposeDecorationType(this.key)
+  }
 }
 
 function toSelectionDto(sel: Selection): ISelectionDto {
   return { anchor: sel.anchor, active: sel.active }
+}
+
+function toDecorationOptionsDto(options: DecorationRenderOptions): IDecorationRenderOptionsDto {
+  return {
+    ...(options.gutterIconPath !== undefined ? { gutterIconPath: options.gutterIconPath } : {}),
+    ...(options.isWholeLine !== undefined ? { isWholeLine: options.isWholeLine } : {}),
+    ...(options.backgroundColor !== undefined ? { backgroundColor: options.backgroundColor } : {}),
+    ...(options.borderColor !== undefined ? { borderColor: options.borderColor } : {}),
+    ...(options.borderWidth !== undefined ? { borderWidth: options.borderWidth } : {}),
+    ...(options.overviewRulerColor !== undefined
+      ? { overviewRulerColor: options.overviewRulerColor }
+      : {}),
+    ...(options.overviewRulerLane !== undefined
+      ? { overviewRulerLane: options.overviewRulerLane as OverviewRulerLaneDto }
+      : {}),
+  }
 }
 
 export class ExtensionService implements IExtensionHostBridge {
@@ -318,7 +368,12 @@ export class ExtensionService implements IExtensionHostBridge {
   private readonly _providers = new Map<number, RegisteredProvider>()
   private _languageHandle = 0
   private _diagnosticHandle = 0
+  private _decorationTypeHandle = 0
   private readonly _documents = new ExtHostDocuments()
+
+  private readonly _onDidChangeActiveTextEditor = new Emitter<TextEditor | undefined>()
+  readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
+    this._onDidChangeActiveTextEditor.event
 
   readonly onDidOpenTextDocument = this._documents.onDidOpen
   readonly onDidChangeTextDocument = this._documents.onDidChange
@@ -336,6 +391,7 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadLanguages?: IMainThreadLanguages,
     private readonly _mainThreadEditor?: IMainThreadEditor,
     private readonly _mainThreadAi?: IMainThreadAi,
+    private readonly _mainThreadStorage?: IMainThreadStorage,
   ) {
     installApiBridge(this)
   }
@@ -498,7 +554,10 @@ export class ExtensionService implements IExtensionHostBridge {
 
   async getActiveTextEditor(): Promise<TextEditor | undefined> {
     const snapshot = await this._editor().$getActiveTextEditor()
-    if (!snapshot) return undefined
+    return snapshot ? this._editorFromSnapshot(snapshot) : undefined
+  }
+
+  private _editorFromSnapshot(snapshot: IActiveTextEditorDto): TextEditor {
     const document = new HostTextDocument(
       snapshot.uri,
       snapshot.languageId,
@@ -507,6 +566,19 @@ export class ExtensionService implements IExtensionHostBridge {
     )
     const selections = snapshot.selections.map((s) => ({ anchor: s.anchor, active: s.active }))
     return new HostTextEditor(document, selections, snapshot.version, this._editor())
+  }
+
+  createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType {
+    const handle = this._decorationTypeHandle++
+    void this._editor().$createDecorationType(handle, toDecorationOptionsDto(options))
+    return new HostTextEditorDecorationType(handle, this._editor())
+  }
+
+  /** IExtHostEditor.$acceptActiveEditorChange — renderer mirrors editor focus changes. */
+  acceptActiveEditorChange(snapshot: IActiveTextEditorDto | null): void {
+    this._onDidChangeActiveTextEditor.fire(
+      snapshot ? this._editorFromSnapshot(snapshot) : undefined,
+    )
   }
 
   // --- languages: provider registration (handle-routed, mirrors SCM) ---
@@ -866,7 +938,7 @@ export class ExtensionService implements IExtensionHostBridge {
   }
 
   private async _doActivate(ext: IScannedExtension): Promise<void> {
-    const context = createExtensionContext(ext)
+    const context = await createExtensionContext(ext, this._mainThreadStorage)
     try {
       let deactivate: (() => unknown) | undefined
       if (ext.mainPath) {

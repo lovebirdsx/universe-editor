@@ -17,6 +17,7 @@ import {
   StdioFramingProtocol,
   type IExtHostCommands,
   type IExtHostDocuments,
+  type IExtHostEditor,
   type IExtHostExtensions,
   type IExtHostLanguages,
   type IExtHostScm,
@@ -28,6 +29,7 @@ import {
   type IMainThreadOutput,
   type IMainThreadScm,
   type IMainThreadWindow,
+  type IMainThreadStorage,
   type StdioTransport,
 } from '@universe-editor/extensions-common'
 import { scanExtensions } from './extensionScanner.js'
@@ -73,6 +75,9 @@ const mainThreadLanguages = ProxyChannel.toService<IMainThreadLanguages>(
 )
 const mainThreadEditor = ProxyChannel.toService<IMainThreadEditor>(
   client.getChannel(ExtHostChannels.mainThreadEditor),
+)
+const mainThreadStorage = ProxyChannel.toService<IMainThreadStorage>(
+  client.getChannel(ExtHostChannels.mainThreadStorage),
 )
 
 // Register channels synchronously so a renderer call that races the async scan
@@ -134,6 +139,11 @@ const extHostDocuments: IExtHostDocuments = {
     ;(await serviceReady).acceptDocumentClose(uri)
   },
 }
+const extHostEditor: IExtHostEditor = {
+  $acceptActiveEditorChange: async (editor) => {
+    ;(await serviceReady).acceptActiveEditorChange(editor)
+  },
+}
 
 server.registerChannel(ExtHostChannels.extHostCommands, ProxyChannel.fromService(extHostCommands))
 server.registerChannel(
@@ -143,6 +153,7 @@ server.registerChannel(
 server.registerChannel(ExtHostChannels.extHostScm, ProxyChannel.fromService(extHostScm))
 server.registerChannel(ExtHostChannels.extHostLanguages, ProxyChannel.fromService(extHostLanguages))
 server.registerChannel(ExtHostChannels.extHostDocuments, ProxyChannel.fromService(extHostDocuments))
+server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(extHostEditor))
 
 async function main(): Promise<void> {
   const kind = process.env.UNIVERSE_EXT_HOST_KIND === 'restricted' ? 'restricted' : 'trusted'
@@ -180,6 +191,7 @@ async function main(): Promise<void> {
       mainThreadLanguages,
       mainThreadEditor,
       mainThreadAi,
+      mainThreadStorage,
     ),
   )
   console.error(`[ext-host] ready (${kind})`)

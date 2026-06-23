@@ -1,0 +1,99 @@
+{
+  "name": "@universe-editor/numbered-bookmarks",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "displayName": "Numbered Bookmarks",
+  "description": "Delphi-style numbered bookmarks (0-9): toggle, jump, gutter icons, sticky on edit (first-party Universe extension).",
+  "main": "dist/extension.js",
+  "engines": {
+    "universe": "^0.1.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      { "command": "numberedBookmarks.toggleBookmark0", "title": "Toggle Bookmark 0", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark1", "title": "Toggle Bookmark 1", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark2", "title": "Toggle Bookmark 2", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark3", "title": "Toggle Bookmark 3", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark4", "title": "Toggle Bookmark 4", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark5", "title": "Toggle Bookmark 5", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark6", "title": "Toggle Bookmark 6", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark7", "title": "Toggle Bookmark 7", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark8", "title": "Toggle Bookmark 8", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.toggleBookmark9", "title": "Toggle Bookmark 9", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark0", "title": "Jump to Bookmark 0", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark1", "title": "Jump to Bookmark 1", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark2", "title": "Jump to Bookmark 2", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark3", "title": "Jump to Bookmark 3", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark4", "title": "Jump to Bookmark 4", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark5", "title": "Jump to Bookmark 5", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark6", "title": "Jump to Bookmark 6", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark7", "title": "Jump to Bookmark 7", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark8", "title": "Jump to Bookmark 8", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.jumpToBookmark9", "title": "Jump to Bookmark 9", "category": "Numbered Bookmarks" },
+      { "command": "numberedBookmarks.list", "title": "List Bookmarks", "category": "Numbered Bookmarks", "icon": "bookmark" },
+      { "command": "numberedBookmarks.clear", "title": "Clear All Bookmarks", "category": "Numbered Bookmarks", "icon": "clear-all" }
+    ],
+    "keybindings": [
+      { "command": "numberedBookmarks.toggleBookmark0", "key": "ctrl+shift+0", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark1", "key": "ctrl+shift+1", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark2", "key": "ctrl+shift+2", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark3", "key": "ctrl+shift+3", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark4", "key": "ctrl+shift+4", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark5", "key": "ctrl+shift+5", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark6", "key": "ctrl+shift+6", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark7", "key": "ctrl+shift+7", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark8", "key": "ctrl+shift+8", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.toggleBookmark9", "key": "ctrl+shift+9", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark0", "key": "ctrl+0", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark1", "key": "ctrl+1", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark2", "key": "ctrl+2", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark3", "key": "ctrl+3", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark4", "key": "ctrl+4", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark5", "key": "ctrl+5", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark6", "key": "ctrl+6", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark7", "key": "ctrl+7", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark8", "key": "ctrl+8", "when": "editorTextFocus" },
+      { "command": "numberedBookmarks.jumpToBookmark9", "key": "ctrl+9", "when": "editorTextFocus" }
+    ],
+    "configuration": {
+      "title": "Numbered Bookmarks",
+      "properties": {
+        "numberedBookmarks.gutterIconFillColor": {
+          "type": "string",
+          "default": "#0070e0",
+          "description": "Fill color of the numbered gutter icon."
+        },
+        "numberedBookmarks.gutterIconNumberColor": {
+          "type": "string",
+          "default": "#ffffff",
+          "description": "Color of the number drawn inside the gutter icon."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.config.mjs",
+    "dev": "node esbuild.config.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src",
+    "lint:fix": "eslint --fix src",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "@universe-editor/config-ts": "workspace:*",
+    "@universe-editor/extension-api": "workspace:*",
+    "@types/node": "catalog:",
+    "esbuild": "catalog:",
+    "eslint": "catalog:",
+    "typescript": "catalog:",
+    "vitest": "catalog:"
+  }
+}

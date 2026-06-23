@@ -26,6 +26,7 @@ import {
   IOutputService,
   IQuickInputService,
   IStatusBarService,
+  IStorageService,
   IWorkspaceService,
   Severity,
   type Event,
@@ -128,6 +129,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @ILanguageFeaturesService private readonly _languageFeatures: ILanguageFeaturesService,
     @IEditorService private readonly _editorService: IEditorService,
     @IAiModelService private readonly _aiModel: IAiModelService,
+    @IStorageService private readonly _storage: IStorageService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -212,6 +214,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
       files: this._files,
       pathPolicy: this._pathPolicy,
       commandService: this._commandService,
+      storage: this._storage,
       ...(kind === 'trusted'
         ? {
             scm: this._scm,

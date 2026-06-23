@@ -161,6 +161,12 @@ export interface WindowApi {
   /** The focused text editor, or undefined when no editor has focus. A snapshot —
    *  re-fetch after an external change rather than holding the handle long-term. */
   getActiveTextEditor(): Promise<TextEditor | undefined>
+  /** Fires when the focused text editor changes; argument is undefined when focus
+   *  leaves all text editors. The editor is a fresh snapshot, as from
+   *  {@link WindowApi.getActiveTextEditor}. */
+  readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
+  /** Create a reusable decoration style for {@link TextEditor.setDecorations}. */
+  createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
 }
 
 /** A text document open in the editor. URIs/positions are LSP-shaped. */
@@ -209,6 +215,48 @@ export interface TextEditor {
   edit(callback: (editBuilder: TextEditorEdit) => void): Promise<boolean>
   /** Replace the selections and reveal the primary one. */
   setSelections(selections: readonly Selection[]): Promise<void>
+  /**
+   * Paint `ranges` with a decoration type in this editor, replacing any ranges
+   * previously set for that type. Pass an empty array to clear it. The
+   * decoration persists on the editor until replaced or the type is disposed.
+   */
+  setDecorations(decorationType: TextEditorDecorationType, ranges: readonly Range[]): void
+}
+
+/** Where a decoration shows in the overview ruler (mirrors VSCode's enum). */
+export enum OverviewRulerLane {
+  Left = 1,
+  Center = 2,
+  Right = 4,
+  Full = 7,
+}
+
+/**
+ * The visual styling of a decoration type. `gutterIconPath` is a data-URI (an
+ * inline SVG, typically) painted in the editor's glyph margin; the color/border
+ * fields style the line itself. Fixed at creation — to restyle, dispose and
+ * recreate.
+ */
+export interface DecorationRenderOptions {
+  /** Data-URI of an icon painted in the glyph margin (gutter). */
+  gutterIconPath?: string
+  /** Apply the line styling to the whole line, not just the decorated range. */
+  isWholeLine?: boolean
+  backgroundColor?: string
+  borderColor?: string
+  borderWidth?: string
+  overviewRulerColor?: string
+  overviewRulerLane?: OverviewRulerLane
+}
+
+/**
+ * A reusable decoration style created by {@link WindowApi.createTextEditorDecorationType}
+ * and applied via {@link TextEditor.setDecorations}. Dispose to remove every
+ * decoration painted with it.
+ */
+export interface TextEditorDecorationType extends Disposable {
+  /** Opaque id allocated by the host; identifies this type across the RPC wire. */
+  readonly key: number
 }
 
 /** The `workspace` namespace: the folder the editor currently has open. */
@@ -536,6 +584,8 @@ interface IExtensionHostBridge {
     defaultValue: unknown,
   ): Promise<unknown>
   createOutputChannel(name: string): OutputChannel
+  readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
+  createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable
   registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable
   registerImplementationProvider(
@@ -603,6 +653,8 @@ export const window: WindowApi = {
     bridge().createStatusBarItem(alignment, priority),
   createOutputChannel: (name) => bridge().createOutputChannel(name),
   getActiveTextEditor: () => bridge().getActiveTextEditor(),
+  onDidChangeActiveTextEditor: (listener) => bridge().onDidChangeActiveTextEditor(listener),
+  createTextEditorDecorationType: (options) => bridge().createTextEditorDecorationType(options),
 }
 
 export const scm: ScmApi = {

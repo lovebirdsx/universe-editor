@@ -7,6 +7,7 @@
 import type {
   AiApi,
   CompletionItemProvider,
+  DecorationRenderOptions,
   DefinitionProvider,
   DiagnosticCollection,
   Disposable,
@@ -34,10 +35,15 @@ import type {
   TextDocument,
   TextDocumentChangeEvent,
   TextEditor,
+  TextEditorDecorationType,
   TypeDefinitionProvider,
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import type { IScannedExtension } from './extensionScanner.js'
+import type { ExtHostStorageScope, IMainThreadStorage } from '@universe-editor/extensions-common'
+
+/** The slice of the storage RPC the context factory needs (whole-object get/set). */
+export type IExtensionStorage = IMainThreadStorage
 
 /**
  * Global key the bridge is installed under. KEEP IN SYNC with the consumer in
@@ -62,6 +68,8 @@ export interface IExtensionHostBridge {
   createStatusBarItem(alignment: StatusBarAlignment, priority: number): StatusBarItem
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl
   getActiveTextEditor(): Promise<TextEditor | undefined>
+  readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined>
+  createTextEditorDecorationType(options: DecorationRenderOptions): TextEditorDecorationType
   getWorkspaceRoot(): string | undefined
   fsReadFile(path: string): Promise<Uint8Array>
   fsWriteFile(path: string, content: Uint8Array): Promise<void>
@@ -119,8 +127,8 @@ export function installApiBridge(bridge: IExtensionHostBridge): void {
   ;(globalThis as Record<string, unknown>)[BRIDGE_KEY] = bridge
 }
 
-function createInMemoryMemento(): Memento {
-  const store = new Map<string, unknown>()
+function createInMemoryMemento(initial?: Record<string, unknown>): Memento {
+  const store = new Map<string, unknown>(initial ? Object.entries(initial) : [])
   const get = <T>(key: string, defaultValue?: T): T | undefined => {
     const value = store.get(key)
     return value === undefined ? defaultValue : (value as T)
@@ -135,14 +143,84 @@ function createInMemoryMemento(): Memento {
 }
 
 /**
- * Phase 2 context: subscriptions + path + in-memory mementos. Persistence of
- * global/workspace state lands in a later phase.
+ * A Memento backed by persistent storage. The whole state object is mirrored in
+ * memory (loaded once, before activation, via `initial`) so `get` stays
+ * synchronous; `update` mutates the mirror and flushes the entire object back
+ * through `flush` (fire-and-forget — persistence races are harmless, last write
+ * wins, and the in-memory value is always authoritative for this session).
  */
-export function createExtensionContext(ext: IScannedExtension): ExtensionContext {
+function createPersistentMemento(
+  initial: Record<string, unknown>,
+  flush: (state: Record<string, unknown>) => void,
+): Memento {
+  const store: Record<string, unknown> = { ...initial }
+  const get = <T>(key: string, defaultValue?: T): T | undefined => {
+    const value = store[key]
+    return value === undefined ? defaultValue : (value as T)
+  }
+  return {
+    get: get as Memento['get'],
+    update: (key, value) => {
+      if (value === undefined) delete store[key]
+      else store[key] = value
+      flush({ ...store })
+      return Promise.resolve()
+    },
+  }
+}
+
+/**
+ * Loads a JSON-encoded state object from the host storage RPC, tolerating a
+ * missing key or malformed JSON (returns `{}` then).
+ */
+async function loadState(
+  storage: IExtensionStorage,
+  scope: ExtHostStorageScope,
+  extId: string,
+): Promise<Record<string, unknown>> {
+  try {
+    const json = await storage.$get(scope, extId)
+    if (json === undefined) return {}
+    const parsed: unknown = JSON.parse(json)
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
+  } catch (err) {
+    console.error(
+      `[ext-host] failed to load ${scope === 1 ? 'workspace' : 'global'} state for ${extId}:`,
+      err,
+    )
+    return {}
+  }
+}
+
+/**
+ * Phase 3 context: subscriptions + path + persistent mementos. When no storage
+ * backend is wired (restricted host probing, tests), falls back to in-memory
+ * mementos so `activate` still gets a working context.
+ */
+export async function createExtensionContext(
+  ext: IScannedExtension,
+  storage?: IExtensionStorage,
+): Promise<ExtensionContext> {
+  if (!storage) {
+    return {
+      subscriptions: [],
+      extensionPath: ext.extensionPath,
+      globalState: createInMemoryMemento(),
+      workspaceState: createInMemoryMemento(),
+    }
+  }
+  const [globalInitial, workspaceInitial] = await Promise.all([
+    loadState(storage, 0, ext.id),
+    loadState(storage, 1, ext.id),
+  ])
   return {
     subscriptions: [],
     extensionPath: ext.extensionPath,
-    globalState: createInMemoryMemento(),
-    workspaceState: createInMemoryMemento(),
+    globalState: createPersistentMemento(globalInitial, (state) => {
+      void storage.$set(0, ext.id, JSON.stringify(state))
+    }),
+    workspaceState: createPersistentMemento(workspaceInitial, (state) => {
+      void storage.$set(1, ext.id, JSON.stringify(state))
+    }),
   }
 }
