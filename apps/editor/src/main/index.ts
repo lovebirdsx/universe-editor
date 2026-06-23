@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   DisposableTracker,
   setDisposableTracker,
@@ -158,23 +158,27 @@ const hasSingleInstanceLock = e2eEnabled || app.requestSingleInstanceLock()
 if (!hasSingleInstanceLock) {
   app.quit()
 } else {
-  app.on('second-instance', (_event, argv) => {
+  app.on('second-instance', (_event, argv, workingDirectory) => {
     const argPath = parseFileToOpen(argv, app.isPackaged)
     const services = getOrCreateServices()
 
     void (async () => {
-      if (argPath) {
-        const stat = await fs.stat(argPath).catch(() => null)
+      // Resolve relative paths (e.g. ".") against the second instance's working
+      // directory, not this (first) process's cwd.
+      const resolvedPath = argPath ? resolve(workingDirectory, argPath) : undefined
+
+      if (resolvedPath) {
+        const stat = await fs.stat(resolvedPath).catch(() => null)
         if (stat?.isDirectory()) {
-          await services.windows.openWindowForFolder(URI.file(argPath))
+          await services.windows.openWindowForFolder(URI.file(resolvedPath))
           return
         }
       }
 
       // Route the file to the window whose workspace contains it; else first window.
       let targetWin: BrowserWindow | undefined
-      if (argPath) {
-        const fileNorm = argPath.toLowerCase().replace(/\\/g, '/')
+      if (resolvedPath) {
+        const fileNorm = resolvedPath.toLowerCase().replace(/\\/g, '/')
         for (const info of services.windows.getOpenWindowInfos()) {
           const folder = info.folder
           if (folder) {
@@ -193,9 +197,9 @@ if (!hasSingleInstanceLock) {
       if (targetWin) {
         if (targetWin.isMinimized()) targetWin.restore()
         targetWin.focus()
-        if (argPath) targetWin.webContents.send('ue:open-file', argPath)
+        if (resolvedPath) targetWin.webContents.send('ue:open-file', resolvedPath)
       } else {
-        void services.windows.createWindow(argPath ? { fileToOpen: argPath } : {})
+        void services.windows.createWindow(resolvedPath ? { fileToOpen: resolvedPath } : {})
       }
     })()
   })
@@ -299,7 +303,7 @@ void app.whenReady().then(async () => {
   if (startupPath) {
     const stat = await fs.stat(startupPath).catch(() => null)
     if (stat?.isDirectory()) {
-      startupFolderUri = URI.file(startupPath)
+      startupFolderUri = URI.file(resolve(startupPath))
     } else {
       startupFilePath = startupPath
     }
