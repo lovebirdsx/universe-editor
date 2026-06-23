@@ -85,6 +85,9 @@ const productIdentity = resolveProductIdentity(environmentService.toResolveEnv()
 // single-instance lock) so output reaches the real stdout and a second launch with
 // --help/--version isn't forwarded to a running instance.
 if (environmentService.shouldPrintVersion) {
+  // Electron (GUI subsystem) outputs \r\n when attaching to the parent console on Windows,
+  // leaving a blank line before our output. Move up one line and clear it.
+  if (process.platform === 'win32' && process.stdout.isTTY) process.stdout.write('\x1b[1A\x1b[2K')
   process.stdout.write(
     environmentService.formatVersion(productIdentity.productName, app.getVersion(), [
       `Electron ${process.versions.electron}`,
@@ -93,6 +96,7 @@ if (environmentService.shouldPrintVersion) {
   )
   app.exit(0)
 } else if (environmentService.shouldPrintHelp) {
+  if (process.platform === 'win32' && process.stdout.isTTY) process.stdout.write('\x1b[1A\x1b[2K')
   process.stdout.write(
     environmentService.formatHelp(productIdentity.productName, app.getVersion()) + '\n',
   )
