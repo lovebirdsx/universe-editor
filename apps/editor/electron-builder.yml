@@ -51,7 +51,6 @@ win:
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
-  installDir: '$PROGRAMFILES\Universe Editor'
   installerIcon: public/icon.ico
   uninstallerIcon: public/icon.ico
   installerHeaderIcon: public/icon.ico
