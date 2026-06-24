@@ -30,6 +30,7 @@ import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
+import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
@@ -51,6 +52,7 @@ import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
 import { ClaudeConfigMainService } from './claudeConfig/claudeConfigMainService.js'
 import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
+import { CodexConfigMainService } from './codexConfig/codexConfigMainService.js'
 import { DisposableLeakMainService } from './disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './update/updateMainService.js'
 import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.js'
@@ -118,6 +120,11 @@ registerSingleton(
 registerSingleton(
   ICodexBinaryService,
   new SyncDescriptor<ICodexBinaryService>(CodexBinaryMainService, [], false),
+)
+registerSingleton(
+  ICodexConfigService,
+  // 1 leading static param (configPath) before @ILoggerService.
+  new SyncDescriptor<ICodexConfigService>(CodexConfigMainService, [undefined], false),
 )
 registerSingleton(
   IDisposableLeakService,

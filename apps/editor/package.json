@@ -37,7 +37,8 @@
     "electron-updater": "^6.3.0",
     "jsonc-parser": "catalog:",
     "@vscode/ripgrep": "catalog:",
-    "tar": "catalog:"
+    "tar": "catalog:",
+    "smol-toml": "catalog:"
   },
   "devDependencies": {
     "@agentclientprotocol/sdk": "catalog:",

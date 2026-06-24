@@ -40,6 +40,7 @@ import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
+import { ICodexConfigService } from '../shared/ipc/codexConfigService.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
@@ -252,6 +253,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       claudeBinary: accessor.get(IClaudeBinaryService),
       claudeConfig: accessor.get(IClaudeConfigService),
       codexBinary: accessor.get(ICodexBinaryService),
+      codexConfig: accessor.get(ICodexConfigService),
       disposableLeak: accessor.get(IDisposableLeakService),
       update: accessor.get(IUpdateService),
       releaseNotes: accessor.get(IReleaseNotesService),

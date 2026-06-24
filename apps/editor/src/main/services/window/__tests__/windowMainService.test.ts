@@ -99,6 +99,7 @@ function makeOpts() {
       claudeBinary: {} as never,
       claudeConfig: {} as never,
       codexBinary: {} as never,
+      codexConfig: {} as never,
       disposableLeak: {} as never,
       update: {} as never,
       releaseNotes: {} as never,

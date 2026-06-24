@@ -31,6 +31,7 @@ import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { ITerminalService } from '../../shared/ipc/terminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
+import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
@@ -107,6 +108,10 @@ export function registerProxyChannelServices(
   services.set(
     ICodexBinaryService,
     ProxyChannel.toService<ICodexBinaryService>(ipc.getChannel(ServiceChannels.CodexBinary)),
+  )
+  services.set(
+    ICodexConfigService,
+    ProxyChannel.toService<ICodexConfigService>(ipc.getChannel(ServiceChannels.CodexConfig)),
   )
   services.set(
     IUpdateService,

@@ -27,6 +27,7 @@ export const ServiceChannels = {
   ClaudeBinary: 'claudeBinary',
   ClaudeConfig: 'claudeConfig',
   CodexBinary: 'codexBinary',
+  CodexConfig: 'codexConfig',
   DisposableLeak: 'disposableLeak',
   Update: 'update',
   ReleaseNotes: 'releaseNotes',

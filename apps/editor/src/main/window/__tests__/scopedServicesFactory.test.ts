@@ -19,6 +19,7 @@ describe('ApplicationServices type', () => {
       claudeBinary: {} as ApplicationServices['claudeBinary'],
       claudeConfig: {} as ApplicationServices['claudeConfig'],
       codexBinary: {} as ApplicationServices['codexBinary'],
+      codexConfig: {} as ApplicationServices['codexConfig'],
       disposableLeak: {} as ApplicationServices['disposableLeak'],
       update: {} as ApplicationServices['update'],
       releaseNotes: {} as ApplicationServices['releaseNotes'],
@@ -30,7 +31,7 @@ describe('ApplicationServices type', () => {
       aiDebug: {} as ApplicationServices['aiDebug'],
       remoteSchema: {} as ApplicationServices['remoteSchema'],
     }
-    expect(Object.keys(svc)).toHaveLength(21)
+    expect(Object.keys(svc)).toHaveLength(22)
   })
 })
 

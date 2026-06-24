@@ -7,3 +7,4 @@
  *--------------------------------------------------------------------------------------------*/
 
 import './claude/ClaudeAgentSettings.js'
+import './codex/CodexAgentSettings.js'
