@@ -92,6 +92,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     collapseMode: observableValue('cm', 'default' as const),
     accumulatedRunningMs: observableValue('arm', 0),
     runningStartedAt: observableValue<number | undefined>('rsa', undefined),
+    onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: vi.fn().mockResolvedValue(undefined) as never,

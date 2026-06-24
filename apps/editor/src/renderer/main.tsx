@@ -59,6 +59,7 @@ import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
+import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { AiModelClientService } from './services/ai/aiModelClientService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
@@ -341,6 +342,16 @@ async function bootstrapWorkbench(): Promise<void> {
   services.set(
     IAiDebugService,
     ProxyChannel.toService<IAiDebugService>(ipcService.getChannel(ServiceChannels.AiDebug)),
+  )
+
+  // Shared Claude config (`~/.claude/settings.json`) read/write — the Agents
+  // settings panel binds its controls to this; the built-in agent + local CLI
+  // read the same file, so edits are shared.
+  services.set(
+    IClaudeConfigService,
+    ProxyChannel.toService<IClaudeConfigService>(
+      ipcService.getChannel(ServiceChannels.ClaudeConfig),
+    ),
   )
 
   // Remote JSON schema downloader (main-side fetch + cache). Used by the JSON

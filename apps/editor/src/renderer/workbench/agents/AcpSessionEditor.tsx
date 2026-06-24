@@ -6,16 +6,20 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
-import { AlertCircle, Loader2, RotateCw } from 'lucide-react'
-import { IEditorInput, IEditorService, localize } from '@universe-editor/platform'
+import { AlertCircle, KeyRound, Loader2, RotateCw } from 'lucide-react'
+import { ICommandService, IEditorInput, IEditorService, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
+import { isAuthRequiredError } from '../../services/acp/acpAuthError.js'
 import { ChatBody } from './ChatBody.js'
 import styles from './agents.module.css'
 
-type ResumePhase = { kind: 'idle' } | { kind: 'pending' } | { kind: 'error'; message: string }
+type ResumePhase =
+  | { kind: 'idle' }
+  | { kind: 'pending' }
+  | { kind: 'error'; message: string; needsAuth: boolean }
 
 export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   const service = useService(IAcpSessionService)
@@ -45,6 +49,7 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const editor = useService(IEditorService)
+  const commands = useService(ICommandService)
   const sessionId = input.sessionId
   const [phase, setPhase] = useState<ResumePhase>({ kind: 'idle' })
 
@@ -64,7 +69,11 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
           editor.closeEditor(input.id)
           return
         }
-        setPhase({ kind: 'error', message: (err as Error).message })
+        setPhase({
+          kind: 'error',
+          message: (err as Error).message,
+          needsAuth: isAuthRequiredError(err),
+        })
       },
     )
   }, [service, history, editor, input, sessionId, phase.kind])
@@ -75,11 +84,27 @@ function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {
         <div className={styles['sessionLoadingHeader']}>
           <AlertCircle size={20} strokeWidth={1.75} aria-hidden="true" />
           <p className={styles['sessionLoadingMessage']}>
-            {localize('acp.session.resumeFailed', 'Failed to resume agent session: {error}', {
-              error: phase.message,
-            })}
+            {phase.needsAuth
+              ? localize(
+                  'acp.session.authRequired',
+                  'This agent needs authentication before it can start.',
+                )
+              : localize('acp.session.resumeFailed', 'Failed to resume agent session: {error}', {
+                  error: phase.message,
+                })}
           </p>
         </div>
+        {phase.needsAuth && (
+          <button
+            type="button"
+            className={styles['sessionRetryButton']}
+            onClick={() => void commands.executeCommand('workbench.action.agent.openSettings')}
+            data-testid="acp-session-open-auth"
+          >
+            <KeyRound size={14} strokeWidth={1.75} aria-hidden="true" />
+            {localize('acp.session.openAuth', 'Open Agent Settings')}
+          </button>
+        )}
         <button
           type="button"
           className={styles['sessionRetryButton']}

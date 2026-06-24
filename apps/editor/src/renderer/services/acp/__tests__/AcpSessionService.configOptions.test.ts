@@ -372,6 +372,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new FakeWorkspaceService(),
     config,
     new StubNotificationService(),
+    { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
     new StubProgressService(),

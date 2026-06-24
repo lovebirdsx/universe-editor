@@ -38,6 +38,7 @@ import { IAcpHostService } from '../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../shared/ipc/extensionHostService.js'
 import { IAcpTerminalService } from '../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../shared/ipc/claudeBinaryService.js'
+import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
@@ -249,6 +250,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       extensionHost: accessor.get(IExtensionHostService),
       acpTerminal: accessor.get(IAcpTerminalService),
       claudeBinary: accessor.get(IClaudeBinaryService),
+      claudeConfig: accessor.get(IClaudeConfigService),
       codexBinary: accessor.get(ICodexBinaryService),
       disposableLeak: accessor.get(IDisposableLeakService),
       update: accessor.get(IUpdateService),

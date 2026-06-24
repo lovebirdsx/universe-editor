@@ -30,6 +30,7 @@ import type { IExtensionHostService } from '../../shared/ipc/extensionHostServic
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
+import type { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
 import type { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import type { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
@@ -50,6 +51,7 @@ export interface ApplicationServices {
   readonly extensionHost: IExtensionHostService
   readonly acpTerminal: IAcpTerminalService
   readonly claudeBinary: IClaudeBinaryService
+  readonly claudeConfig: IClaudeConfigService
   readonly codexBinary: ICodexBinaryService
   readonly disposableLeak: IDisposableLeakService
   readonly update: IUpdateService

@@ -25,6 +25,7 @@ import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
+import { AgentSettingsEditorInput } from '../services/editor/AgentSettingsEditorInput.js'
 import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
 import { TerminalEditorInput } from '../services/editor/TerminalEditorInput.js'
@@ -57,6 +58,13 @@ export class BuiltInEditorProvidersContribution
         typeId: AiSettingsEditorInput.TYPE_ID,
         componentKey: 'aiSettings',
         deserialize: () => AiSettingsEditorInput.deserialize(),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: AgentSettingsEditorInput.TYPE_ID,
+        componentKey: 'agentSettings',
+        deserialize: () => AgentSettingsEditorInput.deserialize(),
       }),
     )
     // Transient read-only schema viewer — no deserialize: it carries in-memory

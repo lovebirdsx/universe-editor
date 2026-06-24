@@ -204,6 +204,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     collapseMode: observableValue('test.collapseMode', 'default' as const),
     accumulatedRunningMs: observableValue('test.arm', 0),
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
+    onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},
     sendPrompt: sendPrompt as never,

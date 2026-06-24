@@ -30,6 +30,7 @@ import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { AgentSettingsEditorInput } from '../services/editor/AgentSettingsEditorInput.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { AGENT_FONT_SIZE_DEFAULT } from '../services/configuration/fontDefaults.js'
 import type {
@@ -230,6 +231,22 @@ export class OpenAcpMcpSettingsAction extends Action2 {
     // Settings UI can't deep-link to a single key yet; opening the editor lands
     // the user on the searchable settings list where `acp.mcpServers` lives.
     await accessor.get(ICommandService).executeCommand('workbench.action.openSettings')
+  }
+}
+
+export class OpenAgentSettingsAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openSettings'
+  constructor() {
+    super({
+      id: OpenAgentSettingsAction.ID,
+      title: localize2('action.agent.openSettings', 'Open Agent Settings'),
+      category: CATEGORY,
+      icon: 'settings-gear',
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IEditorService).openEditor(new AgentSettingsEditorInput(), { activate: true })
   }
 }
 

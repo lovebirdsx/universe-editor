@@ -179,6 +179,10 @@ const DEFAULT_INIT_PARAMS: InitializeRequest = {
   clientCapabilities: {
     fs: { readTextFile: true, writeTextFile: true },
     terminal: true,
+    // Advertise terminal-auth support so the agent offers `claude auth login`
+    // methods in its InitializeResponse. The editor runs the login flow in its
+    // integrated terminal (see Agent Settings → Authentication).
+    auth: { terminal: true, _meta: { 'terminal-auth': true } },
     _meta: { 'universe-editor/ask_user_question': true },
   },
 }

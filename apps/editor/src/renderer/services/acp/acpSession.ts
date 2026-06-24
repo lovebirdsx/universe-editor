@@ -10,10 +10,12 @@ import {
   Disposable,
   autorun,
   observableValue,
+  Emitter,
   TransactionImpl,
   type ITelemetryService,
   type IObservable,
   type ISettableObservable,
+  type Event,
 } from '@universe-editor/platform'
 import type {
   AvailableCommand,
@@ -31,6 +33,7 @@ import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import type { DiffHunk } from './diff/reconstructBaseline.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
+import { isAuthRequiredError } from './acpAuthError.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 import { parseMcpToolName, type McpTransport } from './acpMcpServers.js'
 
@@ -269,6 +272,12 @@ export interface IAcpSession {
   readonly accumulatedRunningMs: IObservable<number>
   /** Timestamp (epoch ms) when the current running segment started, or undefined if not running. */
   readonly runningStartedAt: IObservable<number | undefined>
+  /**
+   * Fires when a prompt (or other agent call) fails because the agent has no
+   * usable credentials. The session itself has no access to the notification /
+   * command services, so AcpSessionService owns the user-facing guidance.
+   */
+  readonly onDidRequireAuth: Event<void>
   /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
@@ -313,6 +322,9 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly collapseMode: ISettableObservable<CollapseMode>
   readonly accumulatedRunningMs: ISettableObservable<number>
   readonly runningStartedAt: ISettableObservable<number | undefined>
+
+  private readonly _onDidRequireAuth = this._register(new Emitter<void>())
+  readonly onDidRequireAuth: Event<void> = this._onDidRequireAuth.event
 
   private readonly _configOptions: ConfigOptionStateMachine
 
@@ -575,6 +587,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           sessionId: this.id,
           error: (err as Error).message,
         })
+        if (isAuthRequiredError(err)) this._onDidRequireAuth.fire()
       }
     } finally {
       this._inFlight.delete(abort)

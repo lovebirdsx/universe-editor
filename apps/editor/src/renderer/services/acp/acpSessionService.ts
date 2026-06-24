@@ -20,6 +20,7 @@ import {
   createDecorator,
   Disposable,
   Emitter,
+  ICommandService,
   IConfigurationService,
   IHostService,
   ILoggerService,
@@ -31,6 +32,7 @@ import {
   ProgressLocation,
   Severity,
   StorageScope,
+  localize,
   observableValue,
   transaction,
   type ILogger,
@@ -57,6 +59,7 @@ import {
   type IAcpClientNotificationSink,
 } from './acpClientService.js'
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
+import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService, type AcpSessionHistoryEntry } from './acpSessionHistory.js'
 import { IAcpSessionTitleService } from './acpSessionTitleService.js'
@@ -160,6 +163,9 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
+/** Min gap between auth-required toasts per session, collapsing prompt bursts. */
+const AUTH_NOTIFICATION_COOLDOWN_MS = 10_000
+
 /** ext-notification method the agent fork uses to forward raw Claude SDK messages. */
 const SDK_MESSAGE_EXT_METHOD = '_claude/sdkMessage'
 
@@ -209,6 +215,7 @@ export class AcpSessionService
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IConfigurationService private readonly _config: IConfigurationService,
     @INotificationService private readonly _notification: INotificationService,
+    @ICommandService private readonly _commands: ICommandService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpPermissionHandler private readonly _permission: IAcpPermissionHandler,
     @IProgressService private readonly _progress: IProgressService,
@@ -397,6 +404,7 @@ export class AcpSessionService
             this._titleService,
           )
           this._register(session)
+          this._wireAuthGuidance(session)
           transaction((tx) => {
             this._sessions = [...this._sessions, session]
             this.sessions.set(this._sessions, tx)
@@ -411,10 +419,30 @@ export class AcpSessionService
           conn.dispose()
           const msg = (err as Error).message
           this._logger.warn(`createSession failed: ${msg}`)
-          this._notification.notify({
-            severity: Severity.Error,
-            message: `Failed to start agent session: ${msg}`,
-          })
+          if (isAuthRequiredError(err)) {
+            // No usable credentials yet — point the user straight at the
+            // Authentication panel instead of a dead-end error toast.
+            this._notification.notify({
+              severity: Severity.Warning,
+              message: localize(
+                'acp.session.authRequired',
+                'This agent needs authentication before it can start.',
+              ),
+              actions: [
+                {
+                  label: localize('acp.session.openAuth', 'Open Agent Settings'),
+                  run: () => {
+                    void this._commands.executeCommand('workbench.action.agent.openSettings')
+                  },
+                },
+              ],
+            })
+          } else {
+            this._notification.notify({
+              severity: Severity.Error,
+              message: `Failed to start agent session: ${msg}`,
+            })
+          }
           this._telemetry.publicLogError('acp.session_create_failed', {
             agentId: resolvedAgentId,
             error: msg,
@@ -517,6 +545,7 @@ export class AcpSessionService
         // title, so we must not regenerate (and overwrite) it on the next turn.
       )
       this._register(session)
+      this._wireAuthGuidance(session)
       const captured = session
       const prior = this._sessions.find((s) => s.id === captured.id)
       transaction((tx) => {
@@ -579,6 +608,39 @@ export class AcpSessionService
       }
       this._onResumeFailure(entry, err)
     }
+  }
+
+  /**
+   * Subscribe to a session's `onDidRequireAuth` and surface a single actionable
+   * notification routing the user to the Authentication settings. The agent only
+   * raises authRequired once the first prompt is sent (session creation itself
+   * succeeds), so this is the path that catches an unconfigured agent in practice.
+   * A short cooldown collapses bursts (concurrent prompts) into one toast.
+   */
+  private _wireAuthGuidance(session: IAcpSession): void {
+    let lastShownAt = 0
+    this._register(
+      session.onDidRequireAuth(() => {
+        const now = Date.now()
+        if (now - lastShownAt < AUTH_NOTIFICATION_COOLDOWN_MS) return
+        lastShownAt = now
+        this._notification.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'acp.session.authRequired',
+            'This agent needs authentication before it can respond.',
+          ),
+          actions: [
+            {
+              label: localize('acp.session.openAuth', 'Open Agent Settings'),
+              run: () => {
+                void this._commands.executeCommand('workbench.action.agent.openSettings')
+              },
+            },
+          ],
+        })
+      }),
+    )
   }
 
   /**

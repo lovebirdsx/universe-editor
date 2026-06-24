@@ -97,6 +97,7 @@ function makeOpts() {
       extensionHost: {} as never,
       typescriptLanguage: {} as never,
       claudeBinary: {} as never,
+      claudeConfig: {} as never,
       codexBinary: {} as never,
       disposableLeak: {} as never,
       update: {} as never,

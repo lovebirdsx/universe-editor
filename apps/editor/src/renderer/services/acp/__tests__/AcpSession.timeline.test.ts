@@ -304,6 +304,7 @@ function makeService(
     new FakeWorkspaceService(),
     config ?? new ConfigurationService(),
     new StubNotificationService(),
+    { executeCommand: async () => undefined } as never,
     new NoopTelemetryService() as ITelemetryService,
     new StubPermissionHandler(),
     new StubProgressService(),

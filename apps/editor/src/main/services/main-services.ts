@@ -28,6 +28,7 @@ import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
+import { IClaudeConfigService } from '../../shared/ipc/claudeConfigService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
@@ -48,6 +49,7 @@ import { AcpHostMainService } from './acpHost/acpHostMainService.js'
 import { ExtensionHostMainService } from './extensionHost/extensionHostMainService.js'
 import { AcpTerminalMainService } from './acpTerminal/acpTerminalMainService.js'
 import { ClaudeBinaryMainService } from './claudeBinary/claudeBinaryMainService.js'
+import { ClaudeConfigMainService } from './claudeConfig/claudeConfigMainService.js'
 import { CodexBinaryMainService } from './codexBinary/codexBinaryMainService.js'
 import { DisposableLeakMainService } from './disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './update/updateMainService.js'
@@ -107,6 +109,11 @@ registerSingleton(
 registerSingleton(
   IClaudeBinaryService,
   new SyncDescriptor<IClaudeBinaryService>(ClaudeBinaryMainService, [], false),
+)
+registerSingleton(
+  IClaudeConfigService,
+  // 1 leading static param (settingsPath) before @ILoggerService.
+  new SyncDescriptor<IClaudeConfigService>(ClaudeConfigMainService, [undefined], false),
 )
 registerSingleton(
   ICodexBinaryService,

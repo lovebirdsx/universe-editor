@@ -311,6 +311,7 @@ describe('AcpSessionService — onDidCloseSession', () => {
       new FakeWorkspaceService(),
       new ConfigurationService(),
       new StubNotificationService(),
+      { executeCommand: async () => undefined } as never,
       new NoopTelemetryService(),
       new StubPermissionHandler(),
       new StubProgressService(),

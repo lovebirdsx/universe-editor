@@ -442,6 +442,7 @@ function build(storage: FakeStorage): Built {
     new FakeWorkspaceService(),
     config,
     notifications,
+    { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
     new StubProgressService(),
