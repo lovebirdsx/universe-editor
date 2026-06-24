@@ -31,7 +31,6 @@
       { "command": "markdown.editing.toggleBold", "key": "ctrl+b", "when": "editorTextFocus && editorLangId == markdown" },
       { "command": "markdown.editing.toggleItalic", "key": "ctrl+i", "when": "editorTextFocus && editorLangId == markdown" },
       { "command": "markdown.editing.toggleInlineCode", "key": "ctrl+m", "when": "editorTextFocus && editorLangId == markdown" },
-      { "command": "markdown.editing.toggleStrikethrough", "key": "alt+s", "when": "editorTextFocus && editorLangId == markdown" },
       { "command": "markdown.editing.toggleMath", "key": "ctrl+shift+m", "when": "editorTextFocus && editorLangId == markdown" },
       { "command": "markdown.editing.headingUp", "key": "ctrl+shift+]", "when": "editorTextFocus && editorLangId == markdown" },
       { "command": "markdown.editing.headingDown", "key": "ctrl+shift+[", "when": "editorTextFocus && editorLangId == markdown" },

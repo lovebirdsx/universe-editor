@@ -389,11 +389,6 @@ test.describe('@p1 markdown editing commands', () => {
     expect(ctrlB).toContain('workbench.action.toggleSidebarVisibility')
     expect(ctrlB).toContain('markdown.editing.toggleBold')
 
-    // Alt+S likewise collides with Switch Session; the plugin contributes strikethrough.
-    expect(await workbench.getKeybindingCommandsForKey('alt+s')).toContain(
-      'markdown.editing.toggleStrikethrough',
-    )
-
     expect(await workbench.getKeybindingCommandsForKey('ctrl+i')).toContain(
       'markdown.editing.toggleItalic',
     )
