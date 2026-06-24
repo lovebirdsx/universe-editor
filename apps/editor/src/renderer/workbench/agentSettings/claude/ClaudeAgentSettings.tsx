@@ -10,7 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
-import { KeyRound, SlidersHorizontal, Terminal, type LucideIcon } from 'lucide-react'
+import { KeyRound, Package, SlidersHorizontal, Terminal, type LucideIcon } from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
 import { cx } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
@@ -18,6 +18,7 @@ import { registerAgentSettings } from '../agentSettingsRegistry.js'
 import { AuthenticationPanel } from './AuthenticationPanel.js'
 import { ModelThinkingPanel } from './ModelThinkingPanel.js'
 import { AdvancedEnvPanel } from './AdvancedEnvPanel.js'
+import { BinaryPanel } from './BinaryPanel.js'
 import { useClaudeConfig, type UseClaudeConfig } from './useClaudeConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -46,6 +47,12 @@ const CATEGORIES: readonly CategoryDef[] = [
     icon: Terminal,
     label: localize('agentSettings.category.env', 'Advanced (env)'),
     panel: AdvancedEnvPanel,
+  },
+  {
+    id: 'binary',
+    icon: Package,
+    label: localize('agentSettings.category.binary', 'Binary'),
+    panel: BinaryPanel,
   },
 ]
 

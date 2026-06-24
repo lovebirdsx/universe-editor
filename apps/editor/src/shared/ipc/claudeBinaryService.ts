@@ -31,6 +31,22 @@ export interface IClaudeBinaryResult {
   readonly path: string
 }
 
+export interface IClaudeBinaryVersionInfo {
+  /** SDK version the bundled ACP agent was built against (from claude-binary.json). */
+  readonly bundledVersion: string
+  /**
+   * Actually-installed binary version on disk. Written by forceDownload() into a
+   * `.version` sidecar file alongside the binary. null means the binary has not
+   * been downloaded yet (no file at the expected cache path).
+   */
+  readonly installedVersion: string | null
+  /**
+   * Latest version available on the npm registry for @anthropic-ai/claude-agent-sdk.
+   * null when the network query failed.
+   */
+  readonly latestVersion: string | null
+}
+
 /**
  * Resolves the native Claude binary, downloading it on first use when needed.
  * `resolve` is idempotent and de-dupes concurrent calls for the same options;
@@ -43,6 +59,16 @@ export interface IClaudeBinaryService {
   readonly onDidChangeProgress: Event<IClaudeBinaryProgress>
 
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult>
+
+  /** Returns version metadata for the download-mode binary. */
+  getVersionInfo(): Promise<IClaudeBinaryVersionInfo>
+
+  /**
+   * Force-downloads the specified version of the binary, overwriting whatever is
+   * currently cached at the bundled-version path. Writes a `.version` sidecar
+   * file so getVersionInfo() can report the installed version accurately.
+   */
+  forceDownload(version: string): Promise<IClaudeBinaryResult>
 }
 
 export const IClaudeBinaryService = createDecorator<IClaudeBinaryService>('claudeBinaryService')

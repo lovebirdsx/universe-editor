@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, chmod, mkdir, readFile, rename, rm } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import * as path from 'node:path'
 import { Readable, Transform } from 'node:stream'
@@ -31,6 +31,7 @@ import type {
   IClaudeBinaryResolveOptions,
   IClaudeBinaryResult,
   IClaudeBinaryService,
+  IClaudeBinaryVersionInfo,
 } from '../../../shared/ipc/claudeBinaryService.js'
 
 const REGISTRY = 'https://registry.npmjs.org'
@@ -334,6 +335,52 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       throw new Error(`claude-binary.json at ${metaPath} is missing sdkVersion`)
     }
     return meta.sdkVersion
+  }
+
+  async getVersionInfo(): Promise<IClaudeBinaryVersionInfo> {
+    const bundledVersion = await this._readSdkVersion()
+    const { binName } = detectPlatformBinary()
+    const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
+    const cached = path.join(cacheDir, binName)
+
+    let installedVersion: string | null = null
+    if (await pathExists(cached)) {
+      try {
+        const ver = (await readFile(path.join(cacheDir, '.version'), 'utf8')).trim()
+        installedVersion = ver || bundledVersion
+      } catch {
+        // .version sidecar absent — this is a pre-upgrade binary, treat as bundled version
+        installedVersion = bundledVersion
+      }
+    }
+
+    let latestVersion: string | null = null
+    try {
+      const res = await fetch(`${REGISTRY}/@anthropic-ai/claude-agent-sdk/latest`)
+      if (res.ok) {
+        const body = (await res.json()) as { version?: string }
+        latestVersion = body.version ?? null
+      }
+    } catch {
+      // network error — leave latestVersion null
+    }
+
+    return { bundledVersion, installedVersion, latestVersion }
+  }
+
+  async forceDownload(version: string): Promise<IClaudeBinaryResult> {
+    const bundledVersion = await this._readSdkVersion()
+    const { suffix, binName } = detectPlatformBinary()
+    const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
+    const cached = path.join(cacheDir, binName)
+
+    await this._rmQuiet(cached)
+    // Clear inflight cache so the next resolve() call doesn't return the stale result.
+    this._inflight.delete('download:')
+
+    const binaryPath = await this._download(version, suffix, binName, cached)
+    await writeFile(path.join(cacheDir, '.version'), version, 'utf8')
+    return { path: binaryPath }
   }
 
   private _whichClaude(): Promise<string | null> {
