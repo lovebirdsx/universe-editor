@@ -75,7 +75,7 @@ export class ManageModelsAction extends Action2 {
   constructor() {
     super({
       id: ManageModelsAction.ID,
-      title: localize2('action.ai.openSettings', 'Open AI Settings'),
+      title: localize2('action.ai.openSettings', 'Open AI & Agent Settings'),
       category: CATEGORY,
       f1: true,
     })

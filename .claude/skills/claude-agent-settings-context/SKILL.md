@@ -1,26 +1,29 @@
 ---
 name: claude-agent-settings-context
 description: >-
-  当你要改动「Agent 设置」编辑器、Claude 凭据/登录/模型/环境变量配置，或读写
+  当你要改动 Claude 凭据/登录/模型/环境变量配置，或读写
   ~/.claude/settings.json / .credentials.json / credential-profiles.json 时召回。
-  覆盖：Agent Settings 多 agent 可扩展外壳与按 agent 贡献机制（registerAgentSettings）、
-  Claude 专属面板（认证库 / 登录状态 / 模型思考 / 高级环境）、claudeConfig 跨进程服务三层
-  （wire 契约 / main 实现 / renderer hook）、三个配置文件的语义与凭据明文落盘的刻意决策、
-  以及 readAuthStatus 绝不回传 token 的安全约束。涉及「再加一个 acp agent 的设置页」也看这里。
+  覆盖：Claude 设置在统一 Settings editor「Agents」组里的渲染方式与按 agent 贡献机制
+  （registerAgentSettings）、Claude 专属面板（认证库 / 登录状态 / 模型思考 / 高级环境）、
+  claudeConfig 跨进程服务三层（wire 契约 / main 实现 / renderer hook）、三个配置文件的语义
+  与凭据明文落盘的刻意决策、以及 readAuthStatus 绝不回传 token 的安全约束。涉及「再加一个
+  acp agent 的设置页」也看这里。设置页壳本身（AI/Agents 双组导航）见 ai-settings-subsystem-context。
 disable-model-invocation: true
 ---
 
 # Claude / Agent 设置子系统
 
-「Agent 设置」是一个**多 agent 的伞形子系统**：外壳按 `IAcpAgentRegistry` 列出所有 acp agent（claude-code、codex、用户自定义），每个 agent 通过**模块级贡献注册表**挂自己的设置组件。Claude 的设置内容全部收敛在 `agentSettings/claude/` 命名空间下。
+agent 设置是**多 agent 的可扩展子系统**：统一 Settings editor 的左侧「Agents」组按 `IAcpAgentRegistry` 列出所有 acp agent（claude-code、codex、用户自定义），每个 agent 通过**模块级贡献注册表**挂自己的设置组件。Claude 的设置内容全部收敛在 `agentSettings/claude/` 命名空间下。
+
+> 🔀 **2026-06 合并**：agent 设置原是独立的 Agent Settings editor，现已并入 AI Settings 的统一壳（`workbench/ai/AiSettingsEditor.tsx`）。本 skill 讲 **agent 设置内容本体**（注册表 + Claude 面板 + claudeConfig 服务）；**承载它的壳**（AI/Agents 双组导航、激活项持久化、入口命令）见 **ai-settings-subsystem-context**。
 
 ## 文件地图
 
-### Renderer — 伞形外壳（agent 无关）
-- `renderer/workbench/agentSettings/AgentSettingsEditor.tsx` — 编辑器外壳。左侧列出 `IAcpAgentRegistry.list()` 的 agent，右侧 `getAgentSettingsComponent(selected.id)` 渲染该 agent 的设置组件，无注册则占位。持久化当前 agent（`agent.settings.activeAgentId`）。`import './builtinAgentSettings.js'` 触发副作用注册。
+### Renderer — 承载壳（见 ai-settings-subsystem-context）
+- `renderer/workbench/ai/AiSettingsEditor.tsx` — 统一 Settings editor 壳。左侧「Agents」组动态列出 `IAcpAgentRegistry.list()`，选中 agent 后右侧 `getAgentSettingsComponent(id)` 渲染其贡献组件，无注册则占位。激活项持久化用 `settings.activeItem`（值 `agent:<id>`）。壳顶部 `import '../agentSettings/builtinAgentSettings.js'` 触发副作用注册。
 - `agentSettings/agentSettingsRegistry.ts` — 贡献注册表。`registerAgentSettings(agentId, component)` / `getAgentSettingsComponent(agentId)`，`AgentSettingsComponentProps { agentId }`。
 - `agentSettings/builtinAgentSettings.ts` — 内置 agent 设置的副作用聚合 hub：`import './claude/ClaudeAgentSettings.js'`。**新增 agent 设置时在这里加一行 import。**
-- `agentSettings/AgentSettingsEditor.module.css` — 外壳 + 所有面板共用样式。
+- `agentSettings/AgentSettingsEditor.module.css` — Claude 面板共用样式（`agentBody`/`subNav`/`subBody`/认证库/状态行等，用 `--ue-*` token）。注意：壳本身的样式在 `ai/AiSettingsEditor.module.css`（用 `--color-*` token），两套并存。
 
 ### Renderer — Claude 专属（agentSettings/claude/）
 - `claude/ClaudeAgentSettings.tsx` — Claude 设置根组件。持有 `useClaudeConfig()`，三分类子导航（auth/model/env，`CATEGORIES` 数组），滚动位置 + 激活分类经 `IStorageService` 持久化（`agent.settings.claude.activeCategory`、`agent.settings.claude.scroll.<id>`）。**末行 `registerAgentSettings('claude-code', ClaudeAgentSettings)`。**
@@ -74,7 +77,7 @@ disable-model-invocation: true
 
 - **给 Claude 加一个新设置项**：定字段进 `ClaudeSettings`/`ClaudeSettingsPatch`（契约）→ main 实现读写 → 对应面板（model 类→ModelThinkingPanel、env 类→AdvancedEnvPanel、认证类→AuthenticationPanel + `AUTH_ENV_KEYS`）加 UI，经 `useClaudeConfig().patch` 落盘。
 - **给 claudeConfig 加一个跨进程方法**：只改契约 + main 实现两个文件（5 处接线不动）。
-- **再加一个 acp agent 的设置页（如 codex）**：新建 `agentSettings/codex/CodexAgentSettings.tsx`，末行 `registerAgentSettings('codex', CodexAgentSettings)`；在 `builtinAgentSettings.ts` 加一行 `import './codex/CodexAgentSettings.js'`。**外壳零改动。**
+- **再加一个 acp agent 的设置页（如 codex）**：新建 `agentSettings/codex/CodexAgentSettings.tsx`，末行 `registerAgentSettings('codex', CodexAgentSettings)`；在 `builtinAgentSettings.ts` 加一行 `import './codex/CodexAgentSettings.js'`。**壳零改动**——只要该 agent 在 `IAcpAgentRegistry.list()` 里，就会自动出现在 Settings 的 Agents 组。
 - **加一个凭据种类**：扩 `ClaudeCredentialKind`，改 `applyProfile` 的互斥注入逻辑 + `ProfileForm` 表单 + `isProfileActive`。
 
 ## 易踩坑速记
@@ -92,10 +95,17 @@ disable-model-invocation: true
 - `pnpm check`（lint + typecheck + test，输出长，只截错误）。
 - 改交互逻辑跑 `pnpm e2e`。已知本机 flaky（非回归）：simpleFileDialog / multiFileDragEditor / explorerExternalWatcher / markdown* @p1（多 worker / exthost 环境问题，单跑必过）。
 
+## 入口（打开到 Agents 区）
+
+- 主入口：命令 `ai.manageModels`（标题 “Open AI & Agent Settings”）打开统一 Settings editor。
+- agent 专用入口：命令 `workbench.action.agent.openSettings`（`actions/agentActions.ts` 的 `OpenAgentSettingsAction`）——先 `storage.set('settings.activeItem', 'agent:<defaultAgentId>')` 再打开 `AiSettingsEditorInput`，落点直接在 Agents 区。**此命令 ID 被 AcpSessionEditor 齿轮、`acpSessionService`（两处）引用，勿改 ID。**
+
 ## 关键参考路径
 
-- 外壳：`renderer/workbench/agentSettings/{AgentSettingsEditor.tsx,agentSettingsRegistry.ts,builtinAgentSettings.ts}`
-- Claude：`renderer/workbench/agentSettings/claude/*`
+- 承载壳：`renderer/workbench/ai/AiSettingsEditor.tsx`（Agents 组渲染 + 激活项持久化）→ 见 ai-settings-subsystem-context
+- 贡献注册：`renderer/workbench/agentSettings/{agentSettingsRegistry.ts,builtinAgentSettings.ts}`
+- Claude 内容：`renderer/workbench/agentSettings/claude/*` + `agentSettings/AgentSettingsEditor.module.css`
 - 服务：`shared/ipc/claudeConfigService.ts`、`main/services/claudeConfig/claudeConfigMainService.ts`
-- 编辑器输入：`renderer/services/editor/AgentSettingsEditorInput.ts`（TYPE_ID `agentSettings`，URI `universe:/agentSettings`）
+- 编辑器输入：`renderer/services/editor/AiSettingsEditorInput.ts`（TYPE_ID `aiSettings`，URI `universe:/aiSettings`）— 注意 `AgentSettingsEditorInput` 已删
+- 入口命令：`renderer/actions/agentActions.ts`（`OpenAgentSettingsAction`）、`renderer/actions/aiActions.ts`（`ManageModelsAction`）
 - agent 注册表：`renderer/services/acp/acpAgentRegistry.ts`（`IAcpAgentRegistry`、`BUILTIN_AGENTS`、`agentIconId()`）

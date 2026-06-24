@@ -14,11 +14,13 @@ import {
   IInstantiationService,
   INotificationService,
   IQuickInputService,
+  IStorageService,
   IViewsService,
   ILayoutService,
   MenuId,
   PartId,
   Severity,
+  StorageScope,
   localize,
   localize2,
   type IQuickPickItem,
@@ -30,7 +32,7 @@ import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
-import { AgentSettingsEditorInput } from '../services/editor/AgentSettingsEditorInput.js'
+import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { AGENT_FONT_SIZE_DEFAULT } from '../services/configuration/fontDefaults.js'
 import type {
@@ -245,8 +247,17 @@ export class OpenAgentSettingsAction extends Action2 {
       f1: true,
     })
   }
-  override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new AgentSettingsEditorInput(), { activate: true })
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Agent settings now live inside the unified settings editor under the
+    // "Agents" group. Land the user there by pre-selecting the default agent.
+    const registry = accessor.get(IAcpAgentRegistry)
+    const storage = accessor.get(IStorageService)
+    await storage.set(
+      'settings.activeItem',
+      `agent:${registry.defaultAgentId()}`,
+      StorageScope.GLOBAL,
+    )
+    await accessor.get(IEditorService).openEditor(new AiSettingsEditorInput(), { activate: true })
   }
 }
 

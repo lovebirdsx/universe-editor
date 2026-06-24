@@ -32,6 +32,16 @@
   color: var(--color-editor-fg-muted);
 }
 
+.navGroupTitle {
+  padding: var(--spacing-4) var(--spacing-3) var(--spacing-2);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-editor-fg-muted);
+  opacity: 0.8;
+}
+
 .navItem {
   display: flex;
   align-items: center;

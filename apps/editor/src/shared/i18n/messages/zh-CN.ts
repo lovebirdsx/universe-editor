@@ -233,7 +233,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   // --- AI: commands ---
   'command.category.ai': 'AI',
   'action.ai.pickModel': '选择 AI 模型',
-  'action.ai.openSettings': '打开 AI 设置',
+  'action.ai.openSettings': '打开 AI 与 Agent 设置',
   'action.ai.openSettingsJson': '打开 AI 设置（JSON）',
   'action.ai.setApiKey': '设置 AI 提供方 API 密钥',
   'action.ai.clearApiKey': '清除 AI 提供方 API 密钥',
@@ -262,6 +262,11 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'ai.sessionTitle.pickModel.placeholder': '选择用于生成会话标题的模型',
 
   // --- AI settings: shell ---
+  'settings.title': '设置',
+  'settings.nav': '设置分类',
+  'settings.group.ai': 'AI',
+  'settings.group.agents': 'Agents',
+  'agentSettings.noSettings': '此 agent 暂无可在编辑器中配置的设置。',
   'aiSettings.title': 'AI 设置',
   'aiSettings.nav': 'AI 设置分类',
   'aiSettings.category.models': '模型配置',
