@@ -7,6 +7,7 @@ import {
   CommandsRegistry,
   Emitter,
   IEditorGroupsService,
+  IHostService,
   IViewsService,
   InstantiationService,
   ServiceCollection,
@@ -14,12 +15,14 @@ import {
   observableValue,
   registerAction2,
   type EditorInput,
+  type Event,
   type IEditorGroup,
   type IEditorGroupsService as IEditorGroupsServiceType,
+  type IHostService as IHostServiceType,
   type IObservable,
   type IViewsService as IViewsServiceType,
 } from '@universe-editor/platform'
-import { RevealActiveFileInExplorerAction } from '../revealActions.js'
+import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from '../revealActions.js'
 import {
   IExplorerTreeService,
   type ExplorerTreeService,
@@ -55,6 +58,7 @@ class FakeViews implements IViewsServiceType {
 
 class FakeExplorerTree {
   declare readonly _serviceBrand: undefined
+  selectedResource: URI | null = null
   readonly revealed: string[] = []
   readonly onDidChange = new Emitter<void>().event
   async reveal(target: URI): Promise<boolean> {
@@ -63,15 +67,28 @@ class FakeExplorerTree {
   }
 }
 
-function makeHarness(active?: EditorInput) {
+class FakeHost {
+  declare readonly _serviceBrand: undefined
+  readonly platform = 'win32'
+  readonly onDidChangeMaximized: Event<boolean> = new Emitter<boolean>().event
+  readonly shownItems: string[] = []
+  async showItemInFolder(fsPath: string): Promise<void> {
+    this.shownItems.push(fsPath)
+  }
+}
+
+function makeHarness(active?: EditorInput, selectedResource?: URI) {
   const views = new FakeViews()
   const tree = new FakeExplorerTree()
+  tree.selectedResource = selectedResource ?? null
+  const host = new FakeHost()
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, makeGroups(active))
   services.set(IViewsService, views)
   services.set(IExplorerTreeService, tree as unknown as ExplorerTreeService)
+  services.set(IHostService, host as unknown as IHostServiceType)
   const inst = new InstantiationService(services)
-  return { inst, views, tree }
+  return { inst, views, tree, host }
 }
 
 function run(inst: InstantiationService, id: string, args?: unknown): Promise<unknown> {
@@ -83,6 +100,7 @@ function run(inst: InstantiationService, id: string, args?: unknown): Promise<un
 const disposables: Array<{ dispose(): void }> = []
 beforeEach(() => {
   disposables.push(registerAction2(RevealActiveFileInExplorerAction))
+  disposables.push(registerAction2(RevealInOSExplorerAction))
 })
 afterEach(() => {
   while (disposables.length > 0) disposables.pop()?.dispose()
@@ -119,5 +137,36 @@ describe('RevealActiveFileInExplorerAction', () => {
     await run(h.inst, RevealActiveFileInExplorerAction.ID)
     expect(h.views.openedContainers).toHaveLength(0)
     expect(h.tree.revealed).toHaveLength(0)
+  })
+})
+
+describe('RevealInOSExplorerAction', () => {
+  it('uses the resource argument when given (tab or Explorer right-click)', async () => {
+    const active = URI.file('/ws/src/active.ts')
+    const target = URI.file('/external/from-menu.txt')
+    const h = makeHarness(makeFileInput(active), URI.file('/ws/src/selected.ts'))
+
+    await run(h.inst, RevealInOSExplorerAction.ID, { resource: target.toJSON() })
+
+    expect(h.host.shownItems).toEqual([target.fsPath])
+  })
+
+  it('uses the active external file instead of a stale Explorer selection when invoked without args', async () => {
+    const active = URI.file('/external/outside.txt')
+    const selected = URI.file('/ws/src/main.ts')
+    const h = makeHarness(makeFileInput(active), selected)
+
+    await run(h.inst, RevealInOSExplorerAction.ID)
+
+    expect(h.host.shownItems).toEqual([active.fsPath])
+  })
+
+  it('falls back to the Explorer selection when there is no active file editor', async () => {
+    const selected = URI.file('/ws/src/main.ts')
+    const h = makeHarness(new UntitledEditorInput(), selected)
+
+    await run(h.inst, RevealInOSExplorerAction.ID)
+
+    expect(h.host.shownItems).toEqual([selected.fsPath])
   })
 })

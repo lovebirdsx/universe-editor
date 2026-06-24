@@ -4,8 +4,8 @@
  *  tree (tab right-click entry and F1 command palette). Ctrl+Shift+E is owned
  *  by ShowExplorerAction (show/hide toggle); this action has no default binding.
  *  RevealInOSExplorerAction — opens the OS file manager with the file selected.
- *  Resolution order: explicit `resource` arg (Explorer context menu) → current
- *  Explorer selection → active file editor.
+ *  Resolution order: explicit `resource` arg (context menus) → active file
+ *  editor → current Explorer selection fallback.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -74,12 +74,12 @@ export class RevealInOSExplorerAction extends Action2 {
   override async run(accessor: ServicesAccessor, ...args: unknown[]): Promise<void> {
     const explicit = reviveResource((args[0] as IRevealArgs | undefined)?.resource)
     let resource: URI | null = explicit
-    if (!resource) resource = accessor.get(IExplorerTreeService).selectedResource
     if (!resource) {
       const groups = accessor.get(IEditorGroupsService)
       const active = groups.activeGroup.activeEditor
       if (active instanceof FileEditorInput) resource = active.resource
     }
+    if (!resource) resource = accessor.get(IExplorerTreeService).selectedResource
     if (!resource || resource.scheme !== 'file') return
     await accessor.get(IHostService).showItemInFolder(resource.fsPath)
   }
