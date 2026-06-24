@@ -244,7 +244,6 @@ export class OpenAgentSettingsAction extends Action2 {
       title: localize2('action.agent.openSettings', 'Open Agent Settings'),
       category: CATEGORY,
       icon: 'settings-gear',
-      f1: true,
     })
   }
   override async run(accessor: ServicesAccessor, agentId?: unknown): Promise<void> {
