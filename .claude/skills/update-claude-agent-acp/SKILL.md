@@ -122,6 +122,13 @@ git push -u origin chore/update-claude-agent-acp
 - **解法**：把测试里的 `cwd: "/test"` 改成 `process.cwd()`。同时这些 elicitation 断言需随案例 2 的设计更新——“无 elicitation 能力 → AskUserQuestion 仍启用（extMethod 兜底）、onElicitation undefined”“url-only → 不 disable、onElicitation 是 function”，即把上游的 `toContain("AskUserQuestion")` 反转为 `not.toContain`。
 - **锚点**：`src/tests/create-session-options.test.ts`（`describe("elicitation")` 块、`validateCwd` 在 `src/acp-agent.ts`）。
 
+### 案例 5：上游 #790「Update to new ACP SDK patterns」把 client 抽象成窄接口 AcpClient，导致 extMethod 静默丢失
+- **现象**：rebase 全程**零手动冲突**（acp-agent.ts/tools.ts 都自动合并成功），但 `npm run typecheck` 报 `src/acp-agent.ts: Property 'extMethod' does not exist on type 'AcpClient'`。`canUseTool` 里我方 `this.client.extMethod(ASK_USER_QUESTION_METHOD, ...)` 调用代码完整保留，但调用的方法没了。
+- **根因**：基线（#783）里 `this.client` 直接是 SDK 的 `AgentSideConnection`（自带 `extMethod`/`extNotification`）。上游 #790 把它抽象成自定义窄接口 `AcpClient`（line ~610）+ `ClientConnection implements AcpClient`（底层换成 `AgentContext` 的 `ctx.request`/`ctx.notify`）。git 三方合并能把我方的**调用点**保留，但我方当初随 extMethod 一起加的接口/实现是在旧结构上的，被上游的新接口整体替换 → 接口里只剩上游迁移过去的 `extNotification`，`extMethod` 凭空消失。**这类“接口被重写、调用点存活”的丢失靠冲突标记发现不了，必须靠 typecheck 兜底**。
+- **解法**：在 `interface AcpClient` 补 `extMethod(method: string, params: Record<string, unknown>): Promise<unknown>;`，在 `class ClientConnection` 补 `extMethod(method, params) { return this.ctx.request(method, params); }`（与紧邻的 `extNotification`→`ctx.notify` 对称；`ctx.request` 接受任意字符串 method，无需 `methods.client.*` 常量）。改完 typecheck 即过。该改动用 `git commit --fixup=<AskUserQuestion提交sha>` 并入命脉提交。
+- **教训**：**rebase 零冲突 ≠ 语义正确**。上游做接口/抽象层重构时，我方挂在旧结构上的“接口声明 + 实现”可能被整体顶替而只留调用点。第 3 步的 `npm run typecheck` 是必跑的安全网，别因为 rebase 顺利就跳过。
+- **锚点**：`src/acp-agent.ts`（`interface AcpClient` line ~610、`class ClientConnection` 的 `extNotification`/`extMethod`、`canUseTool` 的 `extMethod` 调用 line ~2647）。
+
 ## 速记
 1. 调查阶段全程只读（`git ls-remote` / `gh api`），别在 plan mode 改 submodule。
 2. submodule 是 detached HEAD；**本地 `main` 分支常已过时**，rebase 基线和工作分支都用 `origin/main`/当前 HEAD 的真实 sha，别信本地 main。
@@ -129,9 +136,10 @@ git push -u origin chore/update-claude-agent-acp
 4. AskUserQuestion 是本 fork 的命脉：主仓库走 extMethod、不支持 elicitation。合并时**两路并存**，绝不让上游的 form-only 逻辑禁用它（案例 2）。
 5. package.json 解冲突当心**重复 key**（公共行别在 new_string 重写）；version/依赖取上游、build/esbuild 取我方。
 6. 后处理改动（重生成的 lock、适配的测试）用 `git commit --fixup=<sha>` + `GIT_SEQUENCE_EDITOR=: git rebase -i --autosquash` 并入逻辑所属提交。
-7. fork 测试已知 2 个 Windows toDisplayPath 失败是上游缺陷（案例 1），别误判为回归；主仓库 `pnpm check` 的 FileWatcher/DiffEditor 偶发失败是既有 flake，重跑即绿。
+7. fork 测试已知 2 个 Windows toDisplayPath 失败是上游缺陷（案例 1），别误判为回归；主仓库 `pnpm check` 的 FileWatcher/DiffEditor/`Channel closed`(IPC) 偶发失败是既有 flake，单独 `pnpm --filter @universe-editor/editor run test` 重跑即绿。
 8. `pnpm agent:build` 会 prune fork 到生产依赖；之后要再跑 fork 测试先 `npm install`。
 9. 全流程末尾用 `git diff --submodule=log vendor/claude-agent-acp` 核对“我方提交在顶 + 上游新提交在下”，再提交主仓库指针。
+10. **rebase 零冲突 ≠ 语义正确**：上游做接口/抽象层重构时，我方挂在旧结构上的接口声明+实现可能被整体顶替而只留调用点（案例 5）。第 3 步 `npm run typecheck` 是必跑安全网，别因 rebase 顺利就跳过。
 
 ## 关键参考路径
 - 根 `CLAUDE.md`「内置 ACP agent」段 + `scripts/release/{vendor-install.mjs,runtime-resources.mjs}`、`package.json` 的 `agent:build`
