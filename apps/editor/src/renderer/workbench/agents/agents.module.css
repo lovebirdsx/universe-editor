@@ -732,6 +732,7 @@
 }
 
 .promptForm {
+  flex-shrink: 0;
   border-top: 1px solid var(--color-border, #333);
   padding: 4px 5px;
   display: flex;
@@ -1378,6 +1379,7 @@
 }
 
 .permissionCard {
+  flex-shrink: 0;
   border-top: 1px solid var(--color-border, #333);
   background: var(--color-message-bg, #2a2a2a);
   padding: 8px 12px;
@@ -1433,6 +1435,7 @@
 }
 
 .questionCard {
+  flex-shrink: 0;
   border-top: 1px solid var(--color-border, #333);
   background: var(--color-message-bg, #2a2a2a);
   padding: 8px 12px;

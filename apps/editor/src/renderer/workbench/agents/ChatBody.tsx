@@ -643,6 +643,24 @@ function ChatScroll({
     scrollToBottomStable()
   }, [timeline.length, tailSignature, scrollToBottomStable])
 
+  // Re-pin when chatBody clientHeight shrinks (e.g. PermissionCard / QuestionCard
+  // appears, or the PromptInput textarea grows via field-sizing:content). The
+  // timeline-length effect above only fires on new messages; it cannot see the
+  // chatBody losing height to sibling flex items. Without this, the last messages
+  // scroll out of view behind the newly-tall siblings whenever stuck === true.
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    let prevHeight = el.clientHeight
+    const observer = new ResizeObserver(() => {
+      const h = el.clientHeight
+      if (h < prevHeight && stickRef.current) scrollToBottomStable()
+      prevHeight = h
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [scrollToBottomStable])
+
   // Stable across renders (reads refs only) so passing it to the memoized
   // TimelineSlot does not bust memo. Toggles the per-item collapse override.
   const handleToggleCollapse = useCallback((key: string) => {
