@@ -10,6 +10,7 @@ import {
   type EditorInput,
   type IDialogService,
   type IEditorGroup,
+  type IEditorGroupModelChangeEvent,
   type IEditorGroupsService as IEditorGroupsServiceType,
   type IFileChangeEvent,
   type IFileService as IFileServiceType,
@@ -32,9 +33,13 @@ class FakeWatcher implements IFileWatcherServiceType {
   declare readonly _serviceBrand: undefined
   private readonly _emitter = new Emitter<readonly IFileChangeEvent[]>()
   readonly onDidChangeFiles = this._emitter.event
+  readonly outOfWorkspaceCalls: UriComponents[][] = []
   async watch(_folder: UriComponents): Promise<void> {}
   async setExcludes(): Promise<void> {}
   async unwatch(): Promise<void> {}
+  async watchOutOfWorkspace(uris: readonly UriComponents[]): Promise<void> {
+    this.outOfWorkspaceCalls.push([...uris])
+  }
   fire(events: readonly IFileChangeEvent[]): void {
     this._emitter.fire(events)
   }
@@ -70,10 +75,17 @@ class FakeUserData implements IUserDataFilesService {
 function makeGroups(editors: EditorInput[]): IEditorGroupsServiceType & {
   closed: EditorInput[]
   group: IEditorGroup
+  openEditor(editor: EditorInput): void
+  closeEditorInGroup(editor: EditorInput): void
 } {
   const closed: EditorInput[] = []
+  const modelEmitter = new Emitter<IEditorGroupModelChangeEvent>()
+  const addGroupEmitter = new Emitter<IEditorGroup>()
+  const removeGroupEmitter = new Emitter<IEditorGroup>()
   const group = {
+    id: 1,
     editors,
+    onDidChangeModel: modelEmitter.event,
     closeEditor(editor: EditorInput) {
       closed.push(editor)
       const index = editors.indexOf(editor)
@@ -81,9 +93,26 @@ function makeGroups(editors: EditorInput[]): IEditorGroupsServiceType & {
       return true
     },
   } as unknown as IEditorGroup
-  return { groups: [group], closed, group } as unknown as IEditorGroupsServiceType & {
+  return {
+    groups: [group],
+    closed,
+    group,
+    onDidAddGroup: addGroupEmitter.event,
+    onDidRemoveGroup: removeGroupEmitter.event,
+    openEditor(editor: EditorInput) {
+      editors.push(editor)
+      modelEmitter.fire({ kind: 'open', editor })
+    },
+    closeEditorInGroup(editor: EditorInput) {
+      const index = editors.indexOf(editor)
+      if (index >= 0) editors.splice(index, 1)
+      modelEmitter.fire({ kind: 'close', editor })
+    },
+  } as unknown as IEditorGroupsServiceType & {
     closed: EditorInput[]
     group: IEditorGroup
+    openEditor(editor: EditorInput): void
+    closeEditorInGroup(editor: EditorInput): void
   }
 }
 
@@ -326,5 +355,76 @@ describe('ExternalChangeWatcher', () => {
     userData.fire(settings, 'self')
     await flush()
     expect(input.checks).toHaveLength(1)
+  })
+
+  it('initializes watchOutOfWorkspace with URIs of all open FileEditorInputs', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const input = makeFileInput(uri)
+    const groups = makeGroups([input])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
+
+    await flush()
+    expect(watcher.outOfWorkspaceCalls.length).toBeGreaterThan(0)
+    const lastCall = watcher.outOfWorkspaceCalls.at(-1)!
+    const uriStrings = lastCall.map((u) =>
+      URI.revive(u as Parameters<typeof URI.revive>[0])?.toString(),
+    )
+    expect(uriStrings).toContain(uri.toString())
+  })
+
+  it('updates watchOutOfWorkspace when an editor is opened', async () => {
+    const groups = makeGroups([])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
+
+    const uri = URI.file('/ws/new.txt')
+    const input = makeFileInput(uri)
+    groups.openEditor(input)
+    await flush()
+
+    const lastCall = watcher.outOfWorkspaceCalls.at(-1)!
+    const uriStrings = lastCall.map((u) =>
+      URI.revive(u as Parameters<typeof URI.revive>[0])?.toString(),
+    )
+    expect(uriStrings).toContain(uri.toString())
+  })
+
+  it('updates watchOutOfWorkspace when an editor is closed', async () => {
+    const uri = URI.file('/ws/a.txt')
+    const input = makeFileInput(uri)
+    const groups = makeGroups([input])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
+
+    groups.closeEditorInGroup(input)
+    await flush()
+
+    const lastCall = watcher.outOfWorkspaceCalls.at(-1)!
+    const uriStrings = lastCall.map((u) =>
+      URI.revive(u as Parameters<typeof URI.revive>[0])?.toString(),
+    )
+    expect(uriStrings).not.toContain(uri.toString())
   })
 })

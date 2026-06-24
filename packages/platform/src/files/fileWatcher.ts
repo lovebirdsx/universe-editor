@@ -40,6 +40,14 @@ export interface IFileWatcherService {
   unwatch(): Promise<void>
 
   /**
+   * Replace the set of additional (out-of-workspace) file paths to watch.
+   * Files already under the active workspace root are skipped automatically.
+   * Pass an empty array to clear all extra watches. Events from these paths
+   * are emitted through `onDidChangeFiles` alongside workspace events.
+   */
+  watchOutOfWorkspace(uris: readonly UriComponents[]): Promise<void>
+
+  /**
    * Fires for every batch of debounced filesystem events. The same resource
    * may appear at most once per batch; consumers should treat ordering across
    * batches as best-effort.

@@ -17,10 +17,13 @@ import {
   IUserDataFilesService,
   NullLogger,
   URI,
+  type IEditorGroup,
+  type IDisposable,
   type IFileChangeEvent,
   type ILogger,
   type ILoggerService as ILoggerServiceType,
   type IWorkbenchContribution,
+  type UriComponents,
   type UserDataFile,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -29,9 +32,11 @@ import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
   private readonly _logger: ILogger
+  private readonly _groupDisposables = new Map<number, IDisposable>()
+  private _watchUpdatePending = false
 
   constructor(
-    @IFileWatcherService watcher: IFileWatcherService,
+    @IFileWatcherService private readonly _watcher: IFileWatcherService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IDialogService private readonly _dialog: IDialogService,
     @IFileService private readonly _fileService: IFileService,
@@ -43,7 +48,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       loggerService?.createLogger({ id: 'externalChange', name: 'External Change' }) ??
       new NullLogger()
     this._register(
-      watcher.onDidChangeFiles((events) => {
+      _watcher.onDidChangeFiles((events) => {
         // Don't await — events run concurrently per group.
         void this._handle(events)
       }),
@@ -56,6 +61,72 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
         void this._handleUserDataChange(change.file)
       }),
     )
+
+    // Track editors opening/closing so we can keep out-of-workspace file
+    // watches in sync with what's currently open.
+    for (const group of this._groups.groups) {
+      this._attachGroup(group)
+    }
+    this._register(
+      this._groups.onDidAddGroup((group) => {
+        this._attachGroup(group)
+        this._scheduleWatchUpdate()
+      }),
+    )
+    this._register(
+      this._groups.onDidRemoveGroup((group) => {
+        this._detachGroup(group.id)
+        this._scheduleWatchUpdate()
+      }),
+    )
+    void this._updateExtraWatches()
+  }
+
+  override dispose(): void {
+    this._groupDisposables.clear()
+    super.dispose()
+  }
+
+  private _attachGroup(group: IEditorGroup): void {
+    if (this._groupDisposables.has(group.id)) return
+    // _register() parents the disposable with ExternalChangeWatcher so the
+    // leak tracker can root through it. _groupDisposables tracks it by group
+    // id so _detachGroup can dispose early (the subscription is idempotent).
+    const d = this._register(
+      group.onDidChangeModel((e) => {
+        if (e.kind === 'open' || e.kind === 'close') this._scheduleWatchUpdate()
+      }),
+    )
+    this._groupDisposables.set(group.id, d)
+  }
+
+  private _detachGroup(id: number): void {
+    const d = this._groupDisposables.get(id)
+    if (d) {
+      d.dispose()
+      this._groupDisposables.delete(id)
+    }
+  }
+
+  private _scheduleWatchUpdate(): void {
+    if (this._watchUpdatePending) return
+    this._watchUpdatePending = true
+    setTimeout(() => {
+      this._watchUpdatePending = false
+      void this._updateExtraWatches()
+    }, 0)
+  }
+
+  private async _updateExtraWatches(): Promise<void> {
+    const uris: UriComponents[] = []
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof FileEditorInput) {
+          uris.push(editor.resource.toJSON())
+        }
+      }
+    }
+    await this._watcher.watchOutOfWorkspace(uris)
   }
 
   private async _handleUserDataChange(file: UserDataFile): Promise<void> {

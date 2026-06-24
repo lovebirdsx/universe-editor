@@ -163,4 +163,53 @@ describe('FileWatcherMainService', () => {
     },
     WATCHER_TEST_TIMEOUT,
   )
+
+  it(
+    'emits events for out-of-workspace files registered via watchOutOfWorkspace',
+    async () => {
+      // Create a separate tmpdir (simulates a path outside the workspace root).
+      const outRoot = await fs.mkdtemp(join(tmpdir(), 'universe-editor-out-'))
+      const file = join(outRoot, 'external.txt')
+      await fs.writeFile(file, 'initial')
+      try {
+        await svc.watch(URI.file(root).toJSON()) // workspace root ≠ outRoot
+        await svc.watchOutOfWorkspace([URI.file(file).toJSON()])
+        const c = startCollecting(svc)
+        await fs.writeFile(file, 'modified')
+        await vi.waitFor(() => {
+          svc._flushForTests()
+          const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(file))
+          expect(matched).toBeDefined()
+        }, WAIT)
+        c.stop()
+      } finally {
+        await fs.rm(outRoot, { recursive: true, force: true })
+      }
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
+
+  it(
+    'does not emit events for workspace files passed to watchOutOfWorkspace',
+    async () => {
+      // Files under the workspace root should be handled by the parcel watcher,
+      // so watchOutOfWorkspace should skip them and not set up extra fs.watch.
+      const inWorkspace = join(root, 'inws.txt')
+      await fs.writeFile(inWorkspace, 'v1')
+      await svc.watch(URI.file(root).toJSON())
+      // watchOutOfWorkspace is a no-op for in-workspace paths — the parcel
+      // watcher covers them; calling it should not break anything.
+      await svc.watchOutOfWorkspace([URI.file(inWorkspace).toJSON()])
+      // Parcel still fires for workspace-internal changes.
+      const c = startCollecting(svc)
+      await fs.writeFile(inWorkspace, 'v2')
+      await vi.waitFor(() => {
+        svc._flushForTests()
+        const matched = c.events.find((e) => normPath(reviveFsPath(e)) === normPath(inWorkspace))
+        expect(matched).toBeDefined()
+      }, WAIT)
+      c.stop()
+    },
+    WATCHER_TEST_TIMEOUT,
+  )
 })

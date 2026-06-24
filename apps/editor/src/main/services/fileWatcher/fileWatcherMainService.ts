@@ -17,6 +17,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { platform } from 'node:process'
+import { watch as fsWatch } from 'node:fs'
+import { dirname } from 'node:path'
+import type { FSWatcher } from 'node:fs'
 import watcher from '@parcel/watcher'
 import type { AsyncSubscription, BackendType, Event as ParcelEvent } from '@parcel/watcher'
 import {
@@ -91,6 +94,13 @@ function reviveUri(value: UriComponents): URI {
   return URI.revive(value) as URI
 }
 
+function isUnder(fsPath: string, rootFsPath: string): boolean {
+  const norm = (p: string) => p.toLowerCase().replace(/\\/g, '/')
+  const root = norm(rootFsPath)
+  const file = norm(fsPath)
+  return file === root || file.startsWith(root + '/')
+}
+
 export class FileWatcherMainService implements IFileWatcherService, IDisposable {
   declare readonly _serviceBrand: undefined
 
@@ -108,6 +118,9 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
   private _flushTimer: NodeJS.Timeout | null = null
+
+  // Extra (out-of-workspace) file watches: dirPath → { watcher, files }
+  private _extraDirWatchers = new Map<string, { watcher: FSWatcher; files: Set<string> }>()
 
   async watch(folder: UriComponents, options?: { excludes?: readonly string[] }): Promise<void> {
     const uri = reviveUri(folder)
@@ -137,8 +150,69 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
     await this._teardown()
   }
 
+  async watchOutOfWorkspace(uris: readonly UriComponents[]): Promise<void> {
+    // Build new dirPath → files mapping, skipping files under the workspace root.
+    const newDirMap = new Map<string, Set<string>>()
+    for (const u of uris) {
+      const uri = reviveUri(u)
+      if (uri.scheme !== 'file') continue
+      const fsPath = uri.fsPath
+      if (this._rootFsPath && isUnder(fsPath, this._rootFsPath)) continue
+      const dir = dirname(fsPath)
+      const files = newDirMap.get(dir) ?? new Set()
+      files.add(fsPath)
+      newDirMap.set(dir, files)
+    }
+
+    // Remove watchers for dirs no longer needed.
+    for (const [dir, entry] of this._extraDirWatchers) {
+      if (!newDirMap.has(dir)) {
+        try {
+          entry.watcher.close()
+        } catch {
+          // ignore
+        }
+        this._extraDirWatchers.delete(dir)
+        this._logger.info(`unwatch extra ${dir}`)
+      }
+    }
+
+    // Update file sets and add watchers for new dirs.
+    for (const [dir, files] of newDirMap) {
+      const existing = this._extraDirWatchers.get(dir)
+      if (existing) {
+        existing.files = files
+      } else {
+        try {
+          const w = fsWatch(dir, { recursive: false, persistent: false }, () => {
+            const entry = this._extraDirWatchers.get(dir)
+            if (!entry) return
+            for (const filePath of entry.files) {
+              this._enqueue(filePath, 'modified')
+            }
+          })
+          w.on('error', (err) => {
+            this._logger.warn(
+              `extra watcher error ${dir}`,
+              err instanceof Error ? err.message : String(err),
+            )
+            this._extraDirWatchers.delete(dir)
+          })
+          this._extraDirWatchers.set(dir, { watcher: w, files })
+          this._logger.info(`watch extra ${dir}`)
+        } catch (err) {
+          this._logger.warn(
+            `watch extra failed ${dir}`,
+            err instanceof Error ? (err as Error).message : String(err),
+          )
+        }
+      }
+    }
+  }
+
   dispose(): void {
     void this._teardown()
+    this._teardownExtraWatchers()
     this._onDidChangeFiles.dispose()
   }
 
@@ -190,6 +264,17 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
       }
       if (root) this._logger.info(`unwatch ${root}`)
     }
+  }
+
+  private _teardownExtraWatchers(): void {
+    for (const [, entry] of this._extraDirWatchers) {
+      try {
+        entry.watcher.close()
+      } catch {
+        // ignore
+      }
+    }
+    this._extraDirWatchers.clear()
   }
 
   private readonly _onParcel = (err: Error | null, events: ParcelEvent[]): void => {
