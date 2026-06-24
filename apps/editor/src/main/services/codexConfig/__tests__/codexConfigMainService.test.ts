@@ -102,13 +102,13 @@ describe('CodexConfigMainService', () => {
 
     it('reports a valid ChatGPT login with plan and expiry', async () => {
       const exp = Math.floor(Date.now() / 1000) + 3600
-      const idToken = makeJwt({
-        exp,
-        'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' },
-      })
+      const idToken = makeJwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } })
+      const accessToken = makeJwt({ exp })
       await fs.writeFile(
         authPath(),
-        JSON.stringify({ tokens: { id_token: idToken, access_token: 'at', refresh_token: 'rt' } }),
+        JSON.stringify({
+          tokens: { id_token: idToken, access_token: accessToken, refresh_token: 'rt' },
+        }),
         'utf8',
       )
       const status = await svc.readAuthStatus()
@@ -117,12 +117,51 @@ describe('CodexConfigMainService', () => {
       expect(status.chatgpt).toEqual({ expired: false, planType: 'plus', expiresAt: exp * 1000 })
     })
 
-    it('flags an expired ChatGPT token', async () => {
-      const exp = Math.floor(Date.now() / 1000) - 3600
-      const idToken = makeJwt({ exp })
+    it('stays signed in when only the short-lived id_token is expired', async () => {
+      // Regression: the id_token lives ≈1h and expires constantly; the session is
+      // governed by the access token. Judging expiry by id_token falsely reported
+      // "Login expired" while `codex /status` showed a live login.
+      const idToken = makeJwt({
+        exp: Math.floor(Date.now() / 1000) - 1800,
+        'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' },
+      })
+      const accessExp = Math.floor(Date.now() / 1000) + 86400
+      const accessToken = makeJwt({ exp: accessExp })
       await fs.writeFile(
         authPath(),
-        JSON.stringify({ tokens: { id_token: idToken, access_token: 'at', refresh_token: 'rt' } }),
+        JSON.stringify({
+          auth_mode: 'chatgpt',
+          tokens: { id_token: idToken, access_token: accessToken, refresh_token: 'rt' },
+        }),
+        'utf8',
+      )
+      const status = await svc.readAuthStatus()
+      expect(status.active).toBe('chatgpt')
+      expect(status.chatgpt).toEqual({
+        expired: false,
+        planType: 'pro',
+        expiresAt: accessExp * 1000,
+      })
+    })
+
+    it('is not expired when the access token is stale but a refresh token exists', async () => {
+      // codex transparently refreshes on a 401, so a past-exp access token with a
+      // refresh token is still a usable login.
+      const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) - 3600 })
+      await fs.writeFile(
+        authPath(),
+        JSON.stringify({ tokens: { access_token: accessToken, refresh_token: 'rt' } }),
+        'utf8',
+      )
+      expect((await svc.readAuthStatus()).chatgpt?.expired).toBe(false)
+    })
+
+    it('flags an expired ChatGPT token', async () => {
+      // Access token past exp AND no refresh token → genuinely expired.
+      const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) - 3600 })
+      await fs.writeFile(
+        authPath(),
+        JSON.stringify({ tokens: { id_token: makeJwt({}), access_token: accessToken } }),
         'utf8',
       )
       const status = await svc.readAuthStatus()
@@ -151,13 +190,14 @@ describe('CodexConfigMainService', () => {
       // block is still reported (so the panel shows "Signed in"), but `active`
       // reflects the API key codex actually uses.
       const exp = Math.floor(Date.now() / 1000) + 3600
-      const idToken = makeJwt({ exp, 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } })
+      const idToken = makeJwt({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'pro' } })
+      const accessToken = makeJwt({ exp })
       await fs.writeFile(
         authPath(),
         JSON.stringify({
           auth_mode: 'apikey',
           OPENAI_API_KEY: 'sk-test',
-          tokens: { id_token: idToken, access_token: 'at', refresh_token: 'rt' },
+          tokens: { id_token: idToken, access_token: accessToken, refresh_token: 'rt' },
         }),
         'utf8',
       )

@@ -152,8 +152,11 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
       typeof auth['OPENAI_API_KEY'] === 'string' && (auth['OPENAI_API_KEY'] as string) !== ''
     const status: CodexAuthStatus = { active, hasApiKey }
     if (this._hasChatgptTokens(auth)) {
-      status.chatgpt = this._chatgptInfo(this._idToken(auth))
+      status.chatgpt = this._chatgptInfo(auth)
     }
+    this._logger.info(
+      `auth status: active=${active} hasApiKey=${hasApiKey} chatgptExpired=${status.chatgpt?.expired ?? 'n/a'}`,
+    )
     return status
   }
 
@@ -227,31 +230,58 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     return typeof access === 'string' && access !== ''
   }
 
-  private _idToken(auth: Record<string, unknown>): string | undefined {
+  private _token(
+    auth: Record<string, unknown>,
+    name: 'id_token' | 'access_token',
+  ): string | undefined {
     const tokens = auth['tokens']
     if (!tokens || typeof tokens !== 'object') return undefined
-    const idToken = (tokens as Record<string, unknown>)['id_token']
-    return typeof idToken === 'string' ? idToken : undefined
+    const value = (tokens as Record<string, unknown>)[name]
+    return typeof value === 'string' && value !== '' ? value : undefined
   }
 
-  private _chatgptInfo(idToken: string | undefined): NonNullable<CodexAuthStatus['chatgpt']> {
-    const info: NonNullable<CodexAuthStatus['chatgpt']> = { expired: false }
-    if (!idToken) return info
-    const claims = decodeJwtPayload(idToken)
-    if (!claims) return info
+  private _refreshToken(auth: Record<string, unknown>): string | undefined {
+    const tokens = auth['tokens']
+    if (!tokens || typeof tokens !== 'object') return undefined
+    const value = (tokens as Record<string, unknown>)['refresh_token']
+    return typeof value === 'string' && value !== '' ? value : undefined
+  }
 
-    const exp = claims['exp']
-    if (typeof exp === 'number') {
-      const expiresAt = exp * 1000
-      info.expiresAt = expiresAt
-      info.expired = expiresAt <= Date.now()
+  /**
+   * ChatGPT login status. Expiry mirrors codex-rs: the session stays usable as
+   * long as the *access* token is unexpired, and even an expired access token is
+   * transparently refreshed when a refresh token is present — so we only report
+   * `expired` when the access token is past its `exp` AND no refresh token can
+   * renew it. The short-lived `id_token` (≈1h) is identity-only and used solely
+   * to read the plan type; judging expiry by it falsely flags a live session.
+   */
+  private _chatgptInfo(auth: Record<string, unknown>): NonNullable<CodexAuthStatus['chatgpt']> {
+    const info: NonNullable<CodexAuthStatus['chatgpt']> = { expired: false }
+
+    const accessExp = this._tokenExpiry(this._token(auth, 'access_token'))
+    if (accessExp !== undefined) {
+      info.expiresAt = accessExp
+      // A refresh token lets codex renew silently, so it is never "expired" then.
+      info.expired = accessExp <= Date.now() && !this._refreshToken(auth)
     }
-    const auth = claims['https://api.openai.com/auth']
-    if (auth && typeof auth === 'object') {
-      const plan = (auth as Record<string, unknown>)['chatgpt_plan_type']
-      if (typeof plan === 'string' && plan !== '') info.planType = plan
+
+    const claims = decodeJwtPayload(this._token(auth, 'id_token') ?? '')
+    if (claims) {
+      const auth0 = claims['https://api.openai.com/auth']
+      if (auth0 && typeof auth0 === 'object') {
+        const plan = (auth0 as Record<string, unknown>)['chatgpt_plan_type']
+        if (typeof plan === 'string' && plan !== '') info.planType = plan
+      }
     }
     return info
+  }
+
+  /** Epoch ms of a JWT's `exp` claim, or undefined when not derivable. */
+  private _tokenExpiry(jwt: string | undefined): number | undefined {
+    if (!jwt) return undefined
+    const claims = decodeJwtPayload(jwt)
+    const exp = claims?.['exp']
+    return typeof exp === 'number' ? exp * 1000 : undefined
   }
 
   private async _readAuth(): Promise<Record<string, unknown> | undefined> {
