@@ -150,10 +150,13 @@ export function AiSettingsEditor() {
 
   return (
     <div className={styles['root']}>
-      <nav className={styles['nav']} aria-label={localize('settings.nav', 'Settings categories')}>
-        <div className={styles['navTitle']}>{localize('settings.title', 'Settings')}</div>
+      <nav
+        className={styles['nav']}
+        aria-label={localize('aiSettings.nav', 'AI Settings categories')}
+      >
+        <div className={styles['navTitle']}>{localize('aiSettings.title', 'AI Settings')}</div>
 
-        <div className={styles['navGroupTitle']}>{localize('settings.group.ai', 'AI')}</div>
+        <div className={styles['navGroupTitle']}>{localize('aiSettings.group.ai', 'AI')}</div>
         {AI_CATEGORIES.map((c) => {
           const Icon = c.icon
           const id = aiItemKey(c.id)
@@ -171,7 +174,9 @@ export function AiSettingsEditor() {
           )
         })}
 
-        <div className={styles['navGroupTitle']}>{localize('settings.group.agents', 'Agents')}</div>
+        <div className={styles['navGroupTitle']}>
+          {localize('aiSettings.group.agents', 'Agents')}
+        </div>
         {agents.map((a) => {
           const id = agentItemKey(a.id)
           return (

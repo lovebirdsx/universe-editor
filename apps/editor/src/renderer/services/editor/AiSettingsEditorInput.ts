@@ -29,6 +29,6 @@ export class AiSettingsEditorInput extends EditorInput {
   }
 
   override getName(): string {
-    return 'Settings'
+    return 'AI Settings'
   }
 }

@@ -349,6 +349,19 @@
   word-break: break-all;
 }
 
+.pathLink {
+  border: none;
+  background: transparent;
+  color: var(--ue-textLink-foreground, #4daafc);
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+
+.pathLink:hover {
+  text-decoration: underline;
+}
+
 .tagList {
   display: flex;
   flex-wrap: wrap;

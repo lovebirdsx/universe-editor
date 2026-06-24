@@ -27,6 +27,7 @@ import type {
 } from '../../../../shared/ipc/claudeConfigService.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import { runClaudeLogin } from './claudeLogin.js'
+import { ConfigFileLink } from '../ConfigFileLink.js'
 import styles from '../AgentSettingsEditor.module.css'
 
 const API_KEY = 'ANTHROPIC_API_KEY'
@@ -81,9 +82,8 @@ export function AuthenticationPanel({ config }: { config: UseClaudeConfig }) {
 
       {configPath && (
         <div className={styles['pathHint']}>
-          {localize('agentSettings.auth.path', 'Active credential stored in {path}', {
-            path: configPath,
-          })}
+          {localize('agentSettings.auth.path.prefix', 'Active credential stored in')}{' '}
+          <ConfigFileLink path={configPath} />
         </div>
       )}
     </div>

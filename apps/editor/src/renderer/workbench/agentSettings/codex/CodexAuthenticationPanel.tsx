@@ -25,6 +25,7 @@ import type {
 } from '../../../../shared/ipc/codexConfigService.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import { runCodexLogin } from './codexLogin.js'
+import { ConfigFileLink, getSiblingConfigPath } from '../ConfigFileLink.js'
 import styles from '../AgentSettingsEditor.module.css'
 
 /** Show only a hint of a secret: first 4 + last 2 characters. */
@@ -42,6 +43,7 @@ function newId(): string {
 export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig }) {
   const { authStatus, configPath } = config
   const apiKeyActive = authStatus.active === 'apiKey'
+  const authPath = configPath ? getSiblingConfigPath(configPath, 'auth.json') : undefined
 
   return (
     <div className={styles['panel']}>
@@ -54,11 +56,12 @@ export function CodexAuthenticationPanel({ config }: { config: UseCodexConfig })
         <LoginForm config={config} />
       </section>
 
-      {configPath && (
+      {configPath && authPath && (
         <div className={styles['pathHint']}>
-          {localize('codexSettings.auth.path', 'Settings in {path}; credentials in auth.json', {
-            path: configPath,
-          })}
+          {localize('codexSettings.auth.path.settingsPrefix', 'Settings in')}{' '}
+          <ConfigFileLink path={configPath} />
+          {localize('codexSettings.auth.path.credentialsPrefix', '; credentials in')}{' '}
+          <ConfigFileLink path={authPath} label="auth.json" />
         </div>
       )}
     </div>
