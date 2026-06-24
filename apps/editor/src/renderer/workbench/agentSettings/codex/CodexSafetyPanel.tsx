@@ -6,6 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { localize } from '@universe-editor/platform'
+import { Select } from '@universe-editor/workbench-ui'
 import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
@@ -42,21 +43,18 @@ export function CodexSafetyPanel({ config }: { config: UseCodexConfig }) {
               'config.toml `approval_policy` — when Codex pauses to ask before running a command. Use "on-request" for interactive work, "never" for unattended runs.',
             )}
           </div>
-          <select
-            className={`${styles['control']} ${styles['controlNarrow']}`}
+          <Select
+            className={styles['controlNarrow']}
+            aria-label={localize('codexSettings.approval', 'Approval policy')}
             value={settings.approval_policy ?? ''}
-            onChange={(e) => {
-              const v = e.target.value
+            options={[
+              { value: '', label: localize('codexSettings.approval.default', '(default)') },
+              ...APPROVAL_POLICIES.map((p) => ({ value: p, label: p })),
+            ]}
+            onChange={(v) =>
               void patch({ approval_policy: v === '' ? null : (v as CodexApprovalPolicy) })
-            }}
-          >
-            <option value="">{localize('codexSettings.approval.default', '(default)')}</option>
-            {APPROVAL_POLICIES.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
+            }
+          />
         </div>
 
         <div className={styles['field']}>
@@ -69,21 +67,18 @@ export function CodexSafetyPanel({ config }: { config: UseCodexConfig }) {
               'config.toml `sandbox_mode` — the filesystem/network sandbox Codex runs under. "danger-full-access" disables the sandbox entirely.',
             )}
           </div>
-          <select
-            className={`${styles['control']} ${styles['controlNarrow']}`}
+          <Select
+            className={styles['controlNarrow']}
+            aria-label={localize('codexSettings.sandbox', 'Sandbox mode')}
             value={settings.sandbox_mode ?? ''}
-            onChange={(e) => {
-              const v = e.target.value
+            options={[
+              { value: '', label: localize('codexSettings.sandbox.default', '(default)') },
+              ...SANDBOX_MODES.map((m) => ({ value: m, label: m })),
+            ]}
+            onChange={(v) =>
               void patch({ sandbox_mode: v === '' ? null : (v as CodexSandboxMode) })
-            }}
-          >
-            <option value="">{localize('codexSettings.sandbox.default', '(default)')}</option>
-            {SANDBOX_MODES.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </select>
+            }
+          />
         </div>
       </section>
     </div>

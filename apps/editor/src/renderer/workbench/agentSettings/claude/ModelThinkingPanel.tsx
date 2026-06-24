@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import { Input, Toggle } from '@universe-editor/workbench-ui'
+import { Input, Select, Toggle } from '@universe-editor/workbench-ui'
 import type { ClaudeEffortLevel } from '../../../../shared/ipc/claudeConfigService.js'
 import type { UseClaudeConfig } from './useClaudeConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
@@ -103,21 +103,18 @@ export function ModelThinkingPanel({ config }: { config: UseClaudeConfig }) {
           <label className={styles['label']}>
             {localize('agentSettings.effortLevel', 'Effort level')}
           </label>
-          <select
-            className={`${styles['control']} ${styles['controlNarrow']}`}
+          <Select
+            className={styles['controlNarrow']}
+            aria-label={localize('agentSettings.effortLevel', 'Effort level')}
             value={settings.effortLevel ?? ''}
-            onChange={(e) => {
-              const v = e.target.value
+            options={[
+              { value: '', label: localize('agentSettings.effortLevel.default', '(default)') },
+              ...EFFORT_LEVELS.map((lvl) => ({ value: lvl, label: lvl })),
+            ]}
+            onChange={(v) =>
               void patch({ effortLevel: v === '' ? null : (v as ClaudeEffortLevel) })
-            }}
-          >
-            <option value="">{localize('agentSettings.effortLevel.default', '(default)')}</option>
-            {EFFORT_LEVELS.map((lvl) => (
-              <option key={lvl} value={lvl}>
-                {lvl}
-              </option>
-            ))}
-          </select>
+            }
+          />
         </div>
 
         <div className={styles['fieldRow']}>

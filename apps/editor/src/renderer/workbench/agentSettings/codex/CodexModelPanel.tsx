@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { localize } from '@universe-editor/platform'
-import { Input } from '@universe-editor/workbench-ui'
+import { Input, Select } from '@universe-editor/workbench-ui'
 import type { CodexReasoningEffort } from '../../../../shared/ipc/codexConfigService.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
@@ -89,21 +89,18 @@ export function CodexModelPanel({ config }: { config: UseCodexConfig }) {
               'config.toml `model_reasoning_effort`. Higher effort spends more on thinking. Only applies on the Responses API.',
             )}
           </div>
-          <select
-            className={`${styles['control']} ${styles['controlNarrow']}`}
+          <Select
+            className={styles['controlNarrow']}
+            aria-label={localize('codexSettings.effort', 'Reasoning effort')}
             value={settings.model_reasoning_effort ?? ''}
-            onChange={(e) => {
-              const v = e.target.value
+            options={[
+              { value: '', label: localize('codexSettings.effort.default', '(default)') },
+              ...EFFORT_LEVELS.map((lvl) => ({ value: lvl, label: lvl })),
+            ]}
+            onChange={(v) =>
               void patch({ model_reasoning_effort: v === '' ? null : (v as CodexReasoningEffort) })
-            }}
-          >
-            <option value="">{localize('codexSettings.effort.default', '(default)')}</option>
-            {EFFORT_LEVELS.map((lvl) => (
-              <option key={lvl} value={lvl}>
-                {lvl}
-              </option>
-            ))}
-          </select>
+            }
+          />
         </div>
       </section>
     </div>

@@ -149,16 +149,6 @@
   line-height: 1.4;
 }
 
-.control {
-  width: 100%;
-  padding: 5px 8px;
-  border: 1px solid var(--ue-input-border, rgba(128, 128, 128, 0.35));
-  border-radius: 4px;
-  background: var(--ue-input-background, rgba(128, 128, 128, 0.08));
-  color: inherit;
-  font-size: 13px;
-}
-
 .controlNarrow {
   width: 200px;
 }

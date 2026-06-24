@@ -11,7 +11,7 @@
 import { useCallback, useState } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
-import { Input, IconButton, Toggle } from '@universe-editor/workbench-ui'
+import { Input, IconButton, Select, Toggle } from '@universe-editor/workbench-ui'
 import type { CodexCredentialStore } from '../../../../shared/ipc/codexConfigService.js'
 import type { UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
@@ -54,25 +54,20 @@ export function CodexAdvancedPanel({ config }: { config: UseCodexConfig }) {
               'config.toml `cli_auth_credentials_store` — where Codex keeps credentials: "file" (auth.json), "keyring" (OS store), or "auto".',
             )}
           </div>
-          <select
-            className={`${styles['control']} ${styles['controlNarrow']}`}
+          <Select
+            className={styles['controlNarrow']}
+            aria-label={localize('codexSettings.credentialStore', 'Credential storage')}
             value={settings.cli_auth_credentials_store ?? ''}
-            onChange={(e) => {
-              const v = e.target.value
+            options={[
+              { value: '', label: localize('codexSettings.credentialStore.default', '(default)') },
+              ...CREDENTIAL_STORES.map((s) => ({ value: s, label: s })),
+            ]}
+            onChange={(v) =>
               void patch({
                 cli_auth_credentials_store: v === '' ? null : (v as CodexCredentialStore),
               })
-            }}
-          >
-            <option value="">
-              {localize('codexSettings.credentialStore.default', '(default)')}
-            </option>
-            {CREDENTIAL_STORES.map((s) => (
-              <option key={s} value={s}>
-                {s}
-              </option>
-            ))}
-          </select>
+            }
+          />
         </div>
 
         <div className={styles['fieldRow']}>
