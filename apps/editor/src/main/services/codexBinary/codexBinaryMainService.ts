@@ -43,7 +43,7 @@ const REGISTRY = 'https://registry.npmjs.org'
  * Pinned codex-acp version to download. There is no vendor submodule to derive
  * this from (unlike Claude), so it is bumped by hand when following upstream.
  */
-const CODEX_ACP_VERSION = '0.15.0'
+const CODEX_ACP_VERSION = '0.16.0'
 
 interface PlatformBinary {
   /** Optional-dependency suffix, e.g. `win32-x64`, `darwin-arm64`, `linux-x64`. */
