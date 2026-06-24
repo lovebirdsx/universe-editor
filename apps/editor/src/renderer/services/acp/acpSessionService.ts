@@ -634,7 +634,10 @@ export class AcpSessionService
             {
               label: localize('acp.session.openAuth', 'Open Agent Settings'),
               run: () => {
-                void this._commands.executeCommand('workbench.action.agent.openSettings')
+                void this._commands.executeCommand(
+                  'workbench.action.agent.openSettings',
+                  session.agentId,
+                )
               },
             },
           ],

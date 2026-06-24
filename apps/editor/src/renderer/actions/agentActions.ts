@@ -247,16 +247,18 @@ export class OpenAgentSettingsAction extends Action2 {
       f1: true,
     })
   }
-  override async run(accessor: ServicesAccessor): Promise<void> {
+  override async run(accessor: ServicesAccessor, agentId?: unknown): Promise<void> {
     // Agent settings now live inside the unified settings editor under the
-    // "Agents" group. Land the user there by pre-selecting the default agent.
+    // "Agents" group. Land the user there by pre-selecting an agent: callers may
+    // request a specific one (e.g. the auth-failure toast targets the failing
+    // session's agent); otherwise fall back to the default.
     const registry = accessor.get(IAcpAgentRegistry)
     const storage = accessor.get(IStorageService)
-    await storage.set(
-      'settings.activeItem',
-      `agent:${registry.defaultAgentId()}`,
-      StorageScope.GLOBAL,
-    )
+    const target =
+      typeof agentId === 'string' && registry.allAgentIds().includes(agentId)
+        ? agentId
+        : registry.defaultAgentId()
+    await storage.set('settings.activeItem', `agent:${target}`, StorageScope.GLOBAL)
     await accessor.get(IEditorService).openEditor(new AiSettingsEditorInput(), { activate: true })
   }
 }
