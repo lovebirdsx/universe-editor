@@ -125,7 +125,7 @@ describe('ClaudeConfigMainService', () => {
       })
     })
 
-    it('flags an expired token', async () => {
+    it('flags an expired token when no refresh token can renew it', async () => {
       const expiresAt = Date.now() - 60_000
       await fs.writeFile(
         credPath(),
@@ -135,6 +135,25 @@ describe('ClaudeConfigMainService', () => {
       const status = await svc.readAuthStatus()
       expect(status.loggedIn).toBe(true)
       expect(status.expired).toBe(true)
+    })
+
+    it('is not expired when a refresh token is present, even past expiresAt', async () => {
+      const expiresAt = Date.now() - 60_000
+      await fs.writeFile(
+        credPath(),
+        JSON.stringify({
+          claudeAiOauth: {
+            accessToken: 'sk-ant-oat01-x',
+            refreshToken: 'sk-ant-ort01-x',
+            expiresAt,
+            subscriptionType: 'pro',
+          },
+        }),
+        'utf8',
+      )
+      const status = await svc.readAuthStatus()
+      expect(status.loggedIn).toBe(true)
+      expect(status.expired).toBe(false)
     })
 
     it('never returns the tokens themselves', async () => {

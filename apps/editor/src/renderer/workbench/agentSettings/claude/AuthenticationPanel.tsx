@@ -348,6 +348,7 @@ function LoginForm({
 }) {
   const notification = useService(INotificationService)
   const login = runClaudeLogin()
+  const [refreshing, setRefreshing] = useState(false)
 
   const doLogin = useCallback(
     async (kind: 'claudeai' | 'console') => {
@@ -358,6 +359,26 @@ function LoginForm({
     },
     [login, reloadAuthStatus],
   )
+
+  const doRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const status = await reloadAuthStatus()
+      const message =
+        status.loggedIn && !status.expired
+          ? status.subscriptionType
+            ? localize('agentSettings.auth.login.signedInPlan', 'Signed in ({plan})', {
+                plan: status.subscriptionType,
+              })
+            : localize('agentSettings.auth.login.signedIn', 'Signed in')
+          : status.loggedIn && status.expired
+            ? localize('agentSettings.auth.login.expired', 'Login expired — please sign in again.')
+            : localize('agentSettings.auth.login.signedOut', 'Not signed in')
+      notification.notify({ severity: Severity.Info, message })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [reloadAuthStatus, notification])
 
   const setAsCurrent = useCallback(async () => {
     // Hand control back to the OAuth login by clearing the env credentials that
@@ -401,9 +422,12 @@ function LoginForm({
         <button
           type="button"
           className={styles['linkButton']}
-          onClick={() => void reloadAuthStatus()}
+          disabled={refreshing}
+          onClick={() => void doRefresh()}
         >
-          {localize('agentSettings.auth.login.refresh', 'Refresh')}
+          {refreshing
+            ? localize('agentSettings.auth.login.refreshing', 'Refreshing…')
+            : localize('agentSettings.auth.login.refresh', 'Refresh')}
         </button>
       </div>
 

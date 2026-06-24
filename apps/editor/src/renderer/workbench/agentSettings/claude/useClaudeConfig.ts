@@ -24,7 +24,7 @@ export interface UseClaudeConfig {
   readonly profiles: readonly ClaudeCredentialProfile[]
   patch(patch: ClaudeSettingsPatch): Promise<void>
   reload(): Promise<void>
-  reloadAuthStatus(): Promise<void>
+  reloadAuthStatus(): Promise<ClaudeAuthStatus>
   /** Insert or update a profile by id, persisting the whole library. */
   saveProfile(profile: ClaudeCredentialProfile): Promise<void>
   deleteProfile(id: string): Promise<void>
@@ -61,7 +61,9 @@ export function useClaudeConfig(): UseClaudeConfig {
   }, [service])
 
   const reloadAuthStatus = useCallback(async () => {
-    setAuthStatus(await service.readAuthStatus())
+    const status = await service.readAuthStatus()
+    setAuthStatus(status)
+    return status
   }, [service])
 
   useEffect(() => {

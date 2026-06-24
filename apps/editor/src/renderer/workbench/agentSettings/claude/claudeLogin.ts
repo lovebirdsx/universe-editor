@@ -4,12 +4,21 @@
  *  flow there. The native binary is resolved (downloaded on first use) through
  *  IClaudeBinaryService, the same one the agent uses, so login and the agent
  *  share one binary and one `~/.claude` credential store.
+ *
+ *  The binary is spawned directly as the terminal's PTY process (not via a shell
+ *  with an injected command string). This sidesteps per-shell quoting rules —
+ *  notably PowerShell, which rejects a bare quoted path ("…\claude.exe" auth …)
+ *  and requires the `&` call operator — and means a spawn failure surfaces in the
+ *  visible terminal instead of being swallowed by the shell.
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback } from 'react'
 import {
   IConfigurationService,
+  ILayoutService,
   INotificationService,
+  IViewsService,
+  PartId,
   Severity,
   localize,
 } from '@universe-editor/platform'
@@ -22,18 +31,15 @@ import { useService } from '../../useService.js'
 
 export type ClaudeLoginKind = 'claudeai' | 'console'
 
-/** Quote a path for the platform shell so spaces in userData paths survive. */
-function quoteArg(value: string): string {
-  if (!/\s/.test(value)) return value
-  // Both PowerShell and POSIX shells accept double quotes; embedded quotes are rare here.
-  return `"${value}"`
-}
+const TERMINAL_CONTAINER_ID = 'workbench.view.terminal'
 
 export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
   const binary = useService(IClaudeBinaryService)
   const terminals = useService(ITerminalManagerService)
   const notification = useService(INotificationService)
   const config = useService(IConfigurationService)
+  const layout = useService(ILayoutService)
+  const views = useService(IViewsService)
 
   return useCallback(
     async (kind: ClaudeLoginKind) => {
@@ -59,7 +65,17 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
       }
 
       const flag = kind === 'console' ? '--console' : '--claudeai'
-      const id = await terminals.newTerminal({ target: 'panel' })
+      // Reveal the panel and switch to the Terminal container before spawning;
+      // newTerminal alone creates the terminal but does not surface the panel.
+      if (!layout.getVisible(PartId.Panel)) layout.setVisible(PartId.Panel, true)
+      views.openViewContainer(TERMINAL_CONTAINER_ID)
+      // Spawn the binary as the terminal process itself, so the integrated PTY
+      // runs claude.exe directly with argv — no shell, no quoting pitfalls.
+      const id = await terminals.newTerminal({
+        target: 'panel',
+        shell: binPath,
+        shellArgs: ['auth', 'login', flag],
+      })
       if (!id) {
         notification.notify({
           severity: Severity.Error,
@@ -69,10 +85,7 @@ export function runClaudeLogin(): (kind: ClaudeLoginKind) => Promise<void> {
       }
       terminals.setActiveTerminal(id)
       terminals.focus()
-      // Give the shell a beat to print its prompt before injecting the command.
-      const command = `${quoteArg(binPath)} auth login ${flag}\r`
-      setTimeout(() => terminals.input(id, command), 600)
     },
-    [binary, terminals, notification, config],
+    [binary, terminals, notification, config, layout, views],
   )
 }

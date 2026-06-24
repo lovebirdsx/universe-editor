@@ -97,7 +97,13 @@ export class ClaudeConfigMainService extends Disposable implements IClaudeConfig
       const expiresAt = typeof oauth['expiresAt'] === 'number' ? oauth['expiresAt'] : undefined
       const subscriptionType =
         typeof oauth['subscriptionType'] === 'string' ? oauth['subscriptionType'] : undefined
-      const expired = expiresAt !== undefined && expiresAt <= Date.now()
+      // A refresh token lets the SDK/CLI renew silently, so an access token past
+      // its expiresAt is not truly expired while one is present (mirrors the
+      // Codex auth status logic). Only report expired when there is no way to
+      // renew. `claude auth status` confirms such sessions as still logged in.
+      const refreshToken = typeof oauth['refreshToken'] === 'string' && oauth['refreshToken'] !== ''
+      const accessExpired = expiresAt !== undefined && expiresAt <= Date.now()
+      const expired = accessExpired && !refreshToken
       const status: ClaudeAuthStatus = { loggedIn: true, expired }
       if (subscriptionType !== undefined) status.subscriptionType = subscriptionType
       if (expiresAt !== undefined) status.expiresAt = expiresAt
