@@ -320,6 +320,28 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
   const chatgptActive = authStatus.active === 'chatgpt'
   // A valid ChatGPT login that is being overridden by an active API key.
   const overridden = signedIn && authStatus.active === 'apiKey'
+  const [refreshing, setRefreshing] = useState(false)
+
+  const doRefresh = useCallback(async () => {
+    setRefreshing(true)
+    try {
+      const status = await reloadAuthStatus()
+      const cg = status.chatgpt
+      const message =
+        cg && !cg.expired
+          ? cg.planType
+            ? localize('codexSettings.auth.login.signedInPlan', 'Signed in ({plan})', {
+                plan: cg.planType,
+              })
+            : localize('codexSettings.auth.login.signedIn', 'Signed in')
+          : cg?.expired
+            ? localize('codexSettings.auth.login.expired', 'Login expired — please sign in again.')
+            : localize('codexSettings.auth.login.signedOut', 'Not signed in')
+      notification.notify({ severity: Severity.Info, message })
+    } finally {
+      setRefreshing(false)
+    }
+  }, [reloadAuthStatus, notification])
 
   const doLogin = useCallback(async () => {
     await login()
@@ -376,9 +398,12 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
         <button
           type="button"
           className={styles['linkButton']}
-          onClick={() => void reloadAuthStatus()}
+          disabled={refreshing}
+          onClick={() => void doRefresh()}
         >
-          {localize('codexSettings.auth.login.refresh', 'Refresh')}
+          {refreshing
+            ? localize('codexSettings.auth.login.refreshing', 'Refreshing…')
+            : localize('codexSettings.auth.login.refresh', 'Refresh')}
         </button>
       </div>
 
