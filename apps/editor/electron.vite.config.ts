@@ -58,7 +58,9 @@ export default defineConfig({
       tsconfigRaw: decoratorTsconfigRaw,
     },
     build: {
-      sourcemap: true,
+      // Dev only: the main sourcemap (~1.2MB) is dead weight inside the asar in
+      // production and inflates Defender's first-run scan.
+      sourcemap: process.env['NODE_ENV'] !== 'production',
       externalizeDeps: { exclude: ['@universe-editor/platform'] },
       rollupOptions: {
         input: { index: resolve(__dirname, 'src/main/index.ts') },

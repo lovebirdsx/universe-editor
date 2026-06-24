@@ -11,10 +11,22 @@
     WriteRegExpandStr HKCU "Environment" "PATH" "$INSTDIR\bin;$0"
   ${EndIf}
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+
+  ; Offer to add a Windows Defender exclusion for the install directory. Without
+  ; it, Defender full-scans the ~80MB app.asar on first read every cold start,
+  ; adding seconds of startup latency. Opting in needs admin rights (one UAC
+  ; prompt); declining leaves the app fully functional, just slower to launch.
+  MessageBox MB_YESNO|MB_ICONQUESTION "为提升启动速度，建议将安装目录加入 Windows Defender 排除项。$\n$\n若不加入，每次启动时 Defender 会扫描程序文件，导致启动明显变慢（可能多花数秒）。$\n$\n是否现在加入？（需要管理员授权）" /SD IDYES IDNO skipDefenderExclusion
+  ExecShellWait "runas" "powershell.exe" '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\resources\defender\add-defender-exclusion.ps1"' SW_HIDE
+  skipDefenderExclusion:
 !macroend
 
 !macro customUnInstall
   ; Remove $INSTDIR\bin from user PATH via PowerShell string manipulation.
   nsExec::Exec 'powershell -WindowStyle Hidden -Command "[Environment]::SetEnvironmentVariable(\"PATH\", (([Environment]::GetEnvironmentVariable(\"PATH\", \"User\").Split(\";\") | Where-Object { $$_ -ne \"$INSTDIR\bin\" }) -join \";\"), \"User\")"'
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
+
+  ; Best-effort removal of the Defender exclusion added at install time. Elevation
+  ; may be declined; if so the stale exclusion is harmless.
+  ExecShellWait "runas" "powershell.exe" '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "$INSTDIR\resources\defender\remove-defender-exclusion.ps1"' SW_HIDE
 !macroend

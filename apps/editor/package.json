@@ -32,10 +32,16 @@
     "package:win:installer": "pnpm -w run runtime:stage && pnpm --filter \"@universe-editor/editor...\" build && electron-builder --win nsis && pnpm -w run runtime:verify:packaged"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "catalog:",
     "@parcel/watcher": "catalog:",
-    "@fontsource/roboto": "catalog:",
     "@lydell/node-pty": "catalog:",
+    "electron-updater": "^6.3.0",
+    "jsonc-parser": "catalog:",
+    "@vscode/ripgrep": "catalog:",
+    "tar": "catalog:"
+  },
+  "devDependencies": {
+    "@agentclientprotocol/sdk": "catalog:",
+    "@fontsource/roboto": "catalog:",
     "@react-aria/focus": "catalog:",
     "@tanstack/react-virtual": "catalog:",
     "@vscode/codicons": "catalog:",
@@ -43,19 +49,13 @@
     "@xterm/addon-web-links": "catalog:",
     "@xterm/xterm": "catalog:",
     "allotment": "catalog:",
-    "electron-updater": "^6.3.0",
-    "jsonc-parser": "catalog:",
     "lucide-react": "catalog:",
     "mermaid": "catalog:",
     "monaco-editor": "catalog:",
-    "@vscode/ripgrep": "catalog:",
-    "tar": "catalog:",
     "vscode-jsonrpc": "catalog:",
     "vscode-languageserver-protocol": "catalog:",
     "vscode-languageserver-types": "catalog:",
-    "zod": "catalog:"
-  },
-  "devDependencies": {
+    "zod": "catalog:",
     "@playwright/test": "catalog:",
     "@testing-library/react": "catalog:",
     "@types/node": "catalog:",

@@ -38,6 +38,9 @@ extraFiles:
   # CLI wrapper scripts placed at $INSTDIR/bin/; installer adds $INSTDIR/bin to user PATH.
   - from: resources/cli
     to: bin
+  # Defender exclusion helper scripts; installer.nsh runs them elevated on opt-in.
+  - from: resources/defender
+    to: resources/defender
 win:
   icon: public/icon.ico
   target:
