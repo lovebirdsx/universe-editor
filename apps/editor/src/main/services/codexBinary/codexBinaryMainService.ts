@@ -15,7 +15,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, chmod, mkdir, rename, rm } from 'node:fs/promises'
+import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import * as path from 'node:path'
 import { Readable, Transform } from 'node:stream'
@@ -34,6 +34,7 @@ import type {
   ICodexBinaryResolveOptions,
   ICodexBinaryResult,
   ICodexBinaryService,
+  ICodexBinaryVersionInfo,
 } from '../../../shared/ipc/codexBinaryService.js'
 
 const REGISTRY = 'https://registry.npmjs.org'
@@ -146,6 +147,51 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
       return cached
     }
     return this._download(CODEX_ACP_VERSION, suffix, binName, cached)
+  }
+
+  async getVersionInfo(): Promise<ICodexBinaryVersionInfo> {
+    const bundledVersion = CODEX_ACP_VERSION
+    const { binName } = detectPlatformBinary()
+    const cacheDir = path.join(app.getPath('userData'), 'codex-acp-bin', bundledVersion)
+    const cached = path.join(cacheDir, binName)
+
+    let installedVersion: string | null = null
+    if (await pathExists(cached)) {
+      try {
+        const ver = (await readFile(path.join(cacheDir, '.version'), 'utf8')).trim()
+        installedVersion = ver || bundledVersion
+      } catch {
+        // .version sidecar absent — this is a pre-upgrade binary, treat as bundled version
+        installedVersion = bundledVersion
+      }
+    }
+
+    let latestVersion: string | null = null
+    try {
+      const res = await fetch(`${REGISTRY}/@zed-industries/codex-acp/latest`)
+      if (res.ok) {
+        const body = (await res.json()) as { version?: string }
+        latestVersion = body.version ?? null
+      }
+    } catch {
+      // network error — leave latestVersion null
+    }
+
+    return { bundledVersion, installedVersion, latestVersion }
+  }
+
+  async forceDownload(version: string): Promise<ICodexBinaryResult> {
+    const { suffix, binName } = detectPlatformBinary()
+    const cacheDir = path.join(app.getPath('userData'), 'codex-acp-bin', CODEX_ACP_VERSION)
+    const cached = path.join(cacheDir, binName)
+
+    await this._rmQuiet(cached)
+    // Clear inflight cache so the next resolve() call doesn't return the stale result.
+    this._inflight.delete('download:')
+
+    const binaryPath = await this._download(version, suffix, binName, cached)
+    await writeFile(path.join(cacheDir, '.version'), version, 'utf8')
+    return { path: binaryPath }
   }
 
   private async _download(

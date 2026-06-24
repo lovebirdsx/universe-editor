@@ -11,7 +11,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type ComponentType } from 'react'
-import { KeyRound, ShieldCheck, SlidersHorizontal, Terminal, type LucideIcon } from 'lucide-react'
+import {
+  KeyRound,
+  Package,
+  ShieldCheck,
+  SlidersHorizontal,
+  Terminal,
+  type LucideIcon,
+} from 'lucide-react'
 import { IStorageService, StorageScope, localize } from '@universe-editor/platform'
 import { cx } from '@universe-editor/workbench-ui'
 import { useService } from '../../useService.js'
@@ -20,6 +27,7 @@ import { CodexAuthenticationPanel } from './CodexAuthenticationPanel.js'
 import { CodexModelPanel } from './CodexModelPanel.js'
 import { CodexSafetyPanel } from './CodexSafetyPanel.js'
 import { CodexAdvancedPanel } from './CodexAdvancedPanel.js'
+import { CodexBinaryPanel } from './CodexBinaryPanel.js'
 import { useCodexConfig, type UseCodexConfig } from './useCodexConfig.js'
 import styles from '../AgentSettingsEditor.module.css'
 
@@ -54,6 +62,12 @@ const CATEGORIES: readonly CategoryDef[] = [
     icon: Terminal,
     label: localize('codexSettings.category.advanced', 'Advanced'),
     panel: CodexAdvancedPanel,
+  },
+  {
+    id: 'binary',
+    icon: Package,
+    label: localize('codexSettings.category.binary', 'Binary'),
+    panel: CodexBinaryPanel,
   },
 ]
 

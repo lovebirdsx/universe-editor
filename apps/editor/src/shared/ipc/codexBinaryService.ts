@@ -33,6 +33,26 @@ export interface ICodexBinaryResult {
   readonly path: string
 }
 
+export interface ICodexBinaryVersionInfo {
+  /**
+   * codex-acp version pinned in CodexBinaryMainService. Unlike Claude there is no
+   * vendor submodule to derive this from, so it is bumped by hand when following
+   * upstream. Used as both the default download target and the cache directory.
+   */
+  readonly bundledVersion: string
+  /**
+   * Actually-installed binary version on disk. Written by forceDownload() into a
+   * `.version` sidecar file alongside the binary. null means the binary has not
+   * been downloaded yet (no file at the expected cache path).
+   */
+  readonly installedVersion: string | null
+  /**
+   * Latest version available on the npm registry for @zed-industries/codex-acp.
+   * null when the network query failed.
+   */
+  readonly latestVersion: string | null
+}
+
 /**
  * Resolves the native codex-acp binary, downloading it on first use when needed.
  * `resolve` is idempotent and de-dupes concurrent calls for the same options;
@@ -45,6 +65,16 @@ export interface ICodexBinaryService {
   readonly onDidChangeProgress: Event<ICodexBinaryProgress>
 
   resolve(opts: ICodexBinaryResolveOptions): Promise<ICodexBinaryResult>
+
+  /** Returns version metadata for the download-mode binary. */
+  getVersionInfo(): Promise<ICodexBinaryVersionInfo>
+
+  /**
+   * Force-downloads the specified version of the binary, overwriting whatever is
+   * currently cached at the bundled-version path. Writes a `.version` sidecar
+   * file so getVersionInfo() can report the installed version accurately.
+   */
+  forceDownload(version: string): Promise<ICodexBinaryResult>
 }
 
 export const ICodexBinaryService = createDecorator<ICodexBinaryService>('codexBinaryService')
