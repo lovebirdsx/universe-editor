@@ -83,6 +83,145 @@ describe('CodexConfigMainService', () => {
     expect(entries).toEqual(['config.toml'])
   })
 
+  describe('applyCredential', () => {
+    const authPath = () => join(dir, 'auth.json')
+    const readAuth = async () =>
+      JSON.parse(await fs.readFile(authPath(), 'utf8')) as Record<string, unknown>
+    const writeChatgptTokens = () => {
+      const idToken = makeJwt({})
+      const accessToken = makeJwt({ exp: Math.floor(Date.now() / 1000) + 3600 })
+      return fs.writeFile(
+        authPath(),
+        JSON.stringify({
+          auth_mode: 'chatgpt',
+          tokens: { id_token: idToken, access_token: accessToken, refresh_token: 'rt' },
+        }),
+      )
+    }
+
+    it('writes a self-contained gateway provider carrying its own bearer token', async () => {
+      await writeToml('model = "gpt-5.4"\n')
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://gw.example.com',
+        apiKey: 'sk-gw',
+        providerName: 'My Gateway',
+      })
+      const cfg = await readToml()
+      expect(cfg['model_provider']).toBe('codex-gateway')
+      expect(cfg['model']).toBe('gpt-5.4')
+      // Never sets the global redirect that would also hijack the built-in openai.
+      expect(cfg['openai_base_url']).toBeUndefined()
+      const providers = cfg['model_providers'] as Record<string, Record<string, unknown>>
+      expect(providers['codex-gateway']).toEqual({
+        name: 'My Gateway',
+        base_url: 'https://gw.example.com',
+        wire_api: 'responses',
+        supports_websockets: false,
+        experimental_bearer_token: 'sk-gw',
+      })
+    })
+
+    it('does not touch a ChatGPT token block when applying a gateway', async () => {
+      await writeChatgptTokens()
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://gw.example.com',
+        apiKey: 'sk-gw',
+      })
+      const auth = await readAuth()
+      // ChatGPT tokens survive (just unused); no OPENAI_API_KEY is written.
+      expect(auth['tokens']).toBeDefined()
+      expect('OPENAI_API_KEY' in auth).toBe(false)
+    })
+
+    it('updates the gateway base_url + token when the profile changes', async () => {
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://old.example.com',
+        apiKey: 'sk-1',
+      })
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://new.example.com',
+        apiKey: 'sk-2',
+      })
+      const providers = (await readToml())['model_providers'] as Record<
+        string,
+        Record<string, unknown>
+      >
+      expect(providers['codex-gateway']!['base_url']).toBe('https://new.example.com')
+      expect(providers['codex-gateway']!['experimental_bearer_token']).toBe('sk-2')
+    })
+
+    it('is a no-op (no rewrite) when the gateway is already in sync', async () => {
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://gw.example.com',
+        apiKey: 'sk-gw',
+      })
+      const before = await fs.stat(configPath)
+      await new Promise((r) => setTimeout(r, 10))
+      // Re-running reconcile alone (no auth change) must not rewrite config.toml.
+      const current = await svc.read()
+      const next = await svc.read()
+      expect(next).toEqual(current)
+      const after = await fs.stat(configPath)
+      expect(after.mtimeMs).toBe(before.mtimeMs)
+    })
+
+    it('writes the API key into auth.json and tears the gateway down for apiKey intent', async () => {
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://gw.example.com',
+        apiKey: 'sk-gw',
+      })
+      await svc.applyCredential({ kind: 'apiKey', apiKey: 'sk-official' })
+      const auth = await readAuth()
+      expect(auth['OPENAI_API_KEY']).toBe('sk-official')
+      expect(auth['auth_mode']).toBe('apikey')
+      const cfg = await readToml()
+      expect(cfg['model_provider']).toBeUndefined()
+      expect(cfg['model_providers']).toBeUndefined()
+    })
+
+    it('hands control back to ChatGPT: clears key + gateway, keeps tokens', async () => {
+      await writeChatgptTokens()
+      await svc.applyCredential({ kind: 'apiKey', apiKey: 'sk-official' })
+      await svc.applyCredential({ kind: 'chatgpt' })
+      const auth = await readAuth()
+      expect('OPENAI_API_KEY' in auth).toBe(false)
+      expect(auth['auth_mode']).toBe('chatgpt')
+      expect(auth['tokens']).toBeDefined()
+    })
+
+    it('clears a stale top-level openai_base_url left by an older version', async () => {
+      // Reproduces the reported bug: a lingering openai_base_url would redirect
+      // the built-in openai provider, breaking a ChatGPT login.
+      await writeChatgptTokens()
+      await writeToml('openai_base_url = "https://gw.example.com"\nmodel = "gpt-5.5"\n')
+      await svc.applyCredential({ kind: 'chatgpt' })
+      const cfg = await readToml()
+      expect(cfg['openai_base_url']).toBeUndefined()
+      expect(cfg['model']).toBe('gpt-5.5')
+    })
+
+    it('preserves a user-defined custom provider while tearing down', async () => {
+      await writeToml(
+        '[model_providers.mine]\nname = "mine"\nbase_url = "https://mine.example.com"\n',
+      )
+      await svc.applyCredential({
+        kind: 'gateway',
+        baseUrl: 'https://gw.example.com',
+        apiKey: 'sk-gw',
+      })
+      await svc.applyCredential({ kind: 'chatgpt' })
+      const providers = (await readToml())['model_providers'] as Record<string, unknown>
+      expect(providers['mine']).toBeDefined()
+      expect(providers['codex-gateway']).toBeUndefined()
+    })
+  })
+
   describe('readAuthStatus', () => {
     const authPath = () => join(dir, 'auth.json')
 
@@ -259,55 +398,6 @@ describe('CodexConfigMainService', () => {
           new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000)),
         ]),
       ).resolves.toBeUndefined()
-    })
-  })
-
-  describe('setApiKey', () => {
-    const authPath = () => join(dir, 'auth.json')
-    const readAuth = async () =>
-      JSON.parse(await fs.readFile(authPath(), 'utf8')) as Record<string, unknown>
-
-    it('writes OPENAI_API_KEY into a fresh auth.json', async () => {
-      await svc.setApiKey('sk-new')
-      const auth = await readAuth()
-      expect(auth['OPENAI_API_KEY']).toBe('sk-new')
-      expect(auth['auth_mode']).toBe('apikey')
-    })
-
-    it('preserves an existing ChatGPT token block when setting a key', async () => {
-      await fs.writeFile(authPath(), JSON.stringify({ tokens: { access_token: 'at' } }), 'utf8')
-      await svc.setApiKey('sk-new')
-      const auth = await readAuth()
-      expect(auth['OPENAI_API_KEY']).toBe('sk-new')
-      expect(auth['tokens']).toEqual({ access_token: 'at' })
-      // Pin the mode so codex uses the key despite the leftover token block.
-      expect(auth['auth_mode']).toBe('apikey')
-    })
-
-    it('removes OPENAI_API_KEY when cleared with null', async () => {
-      await fs.writeFile(authPath(), JSON.stringify({ OPENAI_API_KEY: 'sk-old' }), 'utf8')
-      await svc.setApiKey(null)
-      const auth = await readAuth()
-      expect('OPENAI_API_KEY' in auth).toBe(false)
-      // No tokens remain, so there is no active credential to tag.
-      expect('auth_mode' in auth).toBe(false)
-    })
-
-    it('hands control back to ChatGPT (auth_mode chatgpt) when clearing a key over tokens', async () => {
-      await fs.writeFile(
-        authPath(),
-        JSON.stringify({
-          auth_mode: 'apikey',
-          OPENAI_API_KEY: 'sk-old',
-          tokens: { access_token: 'at' },
-        }),
-        'utf8',
-      )
-      await svc.setApiKey(null)
-      const auth = await readAuth()
-      expect('OPENAI_API_KEY' in auth).toBe(false)
-      expect(auth['auth_mode']).toBe('chatgpt')
-      expect(auth['tokens']).toEqual({ access_token: 'at' })
     })
   })
 

@@ -35,6 +35,11 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'claude-agent-acp/dist/index.js',
   },
   {
+    label: 'Codex ACP agent',
+    source: join(repoRoot, 'vendor/codex-acp/dist/index.js'),
+    packaged: 'codex-acp/dist/index.js',
+  },
+  {
     label: 'extension host bootstrap',
     source: join(repoRoot, 'packages/extension-host/dist/bootstrap.js'),
     packaged: 'extension-host/dist/bootstrap.js',
@@ -162,6 +167,7 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
   mkdirSync(stageDir, { recursive: true })
 
   copyPath(join(repoRoot, 'vendor/claude-agent-acp/dist'), join(stageDir, 'claude-agent-acp/dist'))
+  copyPath(join(repoRoot, 'vendor/codex-acp/dist'), join(stageDir, 'codex-acp/dist'))
   copyPath(join(repoRoot, 'packages/extension-host/dist'), join(stageDir, 'extension-host/dist'))
   // The TS/JS language server is a prebuilt third-party CLI that needs its own
   // node_modules at runtime (typescript-language-server + tsserver). Stage the

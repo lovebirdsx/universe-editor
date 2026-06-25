@@ -38,6 +38,11 @@ export interface IAcpAgentDescriptor {
    * `acp.agents` config.
    */
   readonly runAsNode?: boolean
+  /**
+   * Which bundled entry main resolves for the `runAsNode` launch
+   * (`'claude'` | `'codex'`). Built-in presets only.
+   */
+  readonly nodeEntry?: 'claude' | 'codex'
 }
 
 /** Generic fallback icon id for unknown / iconless agents. */
@@ -101,17 +106,21 @@ const BUILTIN_AGENTS: readonly IAcpAgentDescriptor[] = [
     args: [],
     icon: 'claude',
     runAsNode: true,
+    nodeEntry: 'claude',
   },
   {
     id: 'codex',
     name: 'Codex',
-    // The codex-acp adapter binary is not on PATH — it is downloaded on demand
-    // by ICodexBinaryService and its absolute path is injected as the spawn
-    // `command` in AcpClientService._ensureCodexBinary. `command` here is a
-    // placeholder used only for logging / the system-source PATH lookup.
+    // Launched through Electron's own Node runtime against the bundled codex-acp
+    // (JS, self-contained once CODEX_PATH points at a native codex binary).
+    // The native codex binary itself is NOT shipped — it is downloaded on demand
+    // by ICodexBinaryService and injected as CODEX_PATH in
+    // AcpClientService._ensureCodexBinary. `command` here is advisory.
     command: 'codex-acp',
     args: [],
     icon: 'openai',
+    runAsNode: true,
+    nodeEntry: 'codex',
   },
 ]
 
@@ -172,6 +181,7 @@ export class AcpAgentRegistry extends Disposable implements IAcpAgentRegistry {
       args: d.args,
       ...(d.env ? { env: d.env } : {}),
       ...(d.runAsNode ? { runAsNode: true } : {}),
+      ...(d.nodeEntry ? { nodeEntry: d.nodeEntry } : {}),
       ...(cwdOverride !== undefined
         ? { cwd: cwdOverride }
         : d.cwd !== undefined

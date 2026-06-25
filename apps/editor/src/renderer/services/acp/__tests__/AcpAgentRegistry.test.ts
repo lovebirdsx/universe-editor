@@ -47,11 +47,19 @@ describe('AcpAgentRegistry', () => {
     expect(registry.defaultAgentId()).toBe('claude-code')
   })
 
-  it('exposes the built-in codex preset (binary fetched on demand, not runAsNode)', () => {
+  it('exposes the built-in codex preset (runAsNode against the bundled codex-acp adapter)', () => {
     const { registry } = makeRegistry()
     const codex = registry.list().find((a) => a.id === 'codex')
     expect(codex).toBeDefined()
-    expect(codex?.runAsNode).toBeUndefined()
+    expect(codex?.runAsNode).toBe(true)
+    expect(codex?.nodeEntry).toBe('codex')
+  })
+
+  it('resolve() carries codex runAsNode + nodeEntry into the launch spec', () => {
+    const { registry } = makeRegistry()
+    const spec = registry.resolve('codex')
+    expect(spec.runAsNode).toBe(true)
+    expect(spec.nodeEntry).toBe('codex')
   })
 
   it('health reports codex available without a PATH probe (managed binary)', async () => {

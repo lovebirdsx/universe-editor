@@ -264,6 +264,12 @@ jobs:
           path: vendor/claude-agent-acp/node_modules
           key: agent-deps-${{ runner.os }}-${{ hashFiles('vendor/claude-agent-acp/package-lock.json') }}
 
+      - name: Cache codex agent vendor deps
+        uses: actions/cache@v4
+        with:
+          path: vendor/codex-acp/node_modules
+          key: codex-agent-deps-${{ runner.os }}-${{ hashFiles('vendor/codex-acp/package-lock.json') }}
+
       - name: Build Windows release artifacts
         run: pnpm --filter @universe-editor/editor package:win
 

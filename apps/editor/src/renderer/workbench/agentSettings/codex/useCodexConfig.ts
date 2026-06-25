@@ -5,9 +5,10 @@
  *  and refreshes local state. All panels in the Codex settings share this so edits
  *  stay consistent with the on-disk files the agent + CLI also read.
  *
- *  Codex splits credentials (auth.json) from settings (config.toml), so applying a
- *  profile writes the API key into auth.json and the gateway base URL into
- *  config.toml — keeping a single active credential the way `codex` expects.
+ *  Codex splits credentials (auth.json) from settings (config.toml). Switching
+ *  credentials goes through `applyCredential`, one atomic main-process step that
+ *  keeps both files consistent across the three login modes (gateway / API key /
+ *  ChatGPT).
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useState } from 'react'
@@ -32,21 +33,16 @@ export interface UseCodexConfig {
   /** Insert or update a profile by id, persisting the whole library. */
   saveProfile(profile: CodexCredentialProfile): Promise<void>
   deleteProfile(id: string): Promise<void>
-  /** Make a profile the active credential (auth.json key + config.toml base URL). */
+  /** Make a profile the active credential (atomic auth.json + config.toml). */
   applyProfile(profile: CodexCredentialProfile): Promise<void>
-  /** Set or clear the active API key in auth.json directly. */
-  setApiKey(apiKey: string | null): Promise<void>
   /**
-   * Hand control to the ChatGPT login: clear any API key in auth.json AND the
-   * custom `openai_base_url` in config.toml, so ChatGPT tokens are not sent to a
-   * gateway endpoint a previously-applied profile left behind.
+   * Hand control to the ChatGPT login: clears any API key + gateway provider so
+   * the built-in `openai` provider runs on the ChatGPT OAuth tokens.
    */
   switchToChatgptLogin(): Promise<void>
 }
 
 const LOGGED_OUT: CodexAuthStatus = { active: 'none', hasApiKey: false }
-
-const BASE_URL = 'openai_base_url'
 
 export function useCodexConfig(): UseCodexConfig {
   const service = useService<ICodexConfigService>(ICodexConfigService)
@@ -139,34 +135,29 @@ export function useCodexConfig(): UseCodexConfig {
     [service],
   )
 
-  const setApiKey = useCallback(
-    async (apiKey: string | null) => {
-      await service.setApiKey(apiKey)
-      setAuthStatus(await service.readAuthStatus())
-    },
-    [service],
-  )
-
   const applyProfile = useCallback(
     async (profile: CodexCredentialProfile) => {
-      // The API key lives in auth.json; the gateway base URL in config.toml.
-      await service.setApiKey(profile.apiKey ?? null)
-      await service.patch({
-        [BASE_URL]: profile.kind === 'gateway' ? (profile.baseUrl ?? '') : null,
-      })
+      // One atomic main-process step keeps auth.json + config.toml consistent.
+      const status =
+        profile.kind === 'gateway'
+          ? await service.applyCredential({
+              kind: 'gateway',
+              baseUrl: profile.baseUrl ?? '',
+              apiKey: profile.apiKey ?? '',
+              providerName: profile.label,
+            })
+          : await service.applyCredential({ kind: 'apiKey', apiKey: profile.apiKey ?? '' })
       setSettings(await service.read())
-      setAuthStatus(await service.readAuthStatus())
+      setAuthStatus(status)
     },
     [service],
   )
 
   const switchToChatgptLogin = useCallback(async () => {
-    // Drop the API key so the ChatGPT tokens take over, and clear any custom
-    // endpoint a gateway profile left in config.toml.
-    await service.setApiKey(null)
-    await service.patch({ [BASE_URL]: null })
+    // Clear the API key + gateway provider so the ChatGPT tokens take over.
+    const status = await service.applyCredential({ kind: 'chatgpt' })
     setSettings(await service.read())
-    setAuthStatus(await service.readAuthStatus())
+    setAuthStatus(status)
   }, [service])
 
   return {
@@ -181,7 +172,6 @@ export function useCodexConfig(): UseCodexConfig {
     saveProfile,
     deleteProfile,
     applyProfile,
-    setApiKey,
     switchToChatgptLogin,
   }
 }

@@ -2,3 +2,7 @@
 	path = vendor/claude-agent-acp
 	url = git@github.com:lovebirdsx/claude-agent-acp.git
 	branch = main
+[submodule "vendor/codex-acp"]
+	path = vendor/codex-acp
+	url = git@github.com:lovebirdsx/codex-acp.git
+	branch = main

@@ -25,6 +25,7 @@ export function SessionCostIndicator({ session }: { session: IAcpSession }) {
   const totalUsd = usage?.cost?.amount
   if (usage == null || totalUsd == null || totalUsd <= 0) return null
 
+  const estimated = usage.costEstimated === true
   const rateValue = rate?.rate ?? FALLBACK_RATE
   const totalCny = totalUsd * rateValue
 
@@ -33,12 +34,21 @@ export function SessionCostIndicator({ session }: { session: IAcpSession }) {
       <button
         type="button"
         className={styles['usageIndicator']}
-        title={localize('acp.cost.indicator', 'Session cost — click for breakdown')}
+        title={
+          estimated
+            ? localize(
+                'acp.cost.indicator.estimated',
+                'Estimated session cost — click for breakdown',
+              )
+            : localize('acp.cost.indicator', 'Session cost — click for breakdown')
+        }
         onClick={() => setOpen((v) => !v)}
         data-testid="acp-session-cost-indicator"
       >
         <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
-        <span className={styles['usageIndicatorText']}>¥{formatCny(totalCny)}</span>
+        <span className={styles['usageIndicatorText']}>
+          {estimated ? '≈' : ''}¥{formatCny(totalCny)}
+        </span>
       </button>
       {open ? (
         <SessionCostPopover
@@ -47,6 +57,7 @@ export function SessionCostIndicator({ session }: { session: IAcpSession }) {
           rateSource={rate?.source ?? 'fallback'}
           totalUsd={totalUsd}
           totalCny={totalCny}
+          estimated={estimated}
           onDismiss={() => setOpen(false)}
         />
       ) : null}
@@ -60,6 +71,7 @@ function SessionCostPopover({
   rateSource,
   totalUsd,
   totalCny,
+  estimated,
   onDismiss,
 }: {
   usage: AcpUsage
@@ -67,6 +79,7 @@ function SessionCostPopover({
   rateSource: 'live' | 'fallback'
   totalUsd: number
   totalCny: number
+  estimated: boolean
   onDismiss: () => void
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null)
@@ -103,8 +116,14 @@ function SessionCostPopover({
       aria-label={localize('acp.cost.popover', 'Session cost breakdown')}
     >
       <div className={styles['sessionCostHeader']}>
-        <span>{localize('acp.cost.title', 'Session Cost')}</span>
-        <span className={styles['sessionCostTotal']}>¥{formatCny(totalCny)}</span>
+        <span>
+          {estimated
+            ? localize('acp.cost.title.estimated', 'Estimated Session Cost')
+            : localize('acp.cost.title', 'Session Cost')}
+        </span>
+        <span className={styles['sessionCostTotal']}>
+          {estimated ? '≈' : ''}¥{formatCny(totalCny)}
+        </span>
       </div>
       {models.length > 0 ? (
         <table className={styles['sessionCostTable']}>
@@ -138,6 +157,14 @@ function SessionCostPopover({
               : '',
         })}
       </div>
+      {estimated ? (
+        <div className={styles['sessionCostFooter']}>
+          {localize(
+            'acp.cost.estimateNote',
+            'Estimated locally from token usage — actual billing may differ.',
+          )}
+        </div>
+      ) : null}
     </div>
   )
 }
@@ -160,6 +187,12 @@ function ModelRow({ model, rate }: { model: AcpModelCost; rate: number }) {
 const FALLBACK_RATE = 7.2
 
 function formatCny(value: number): string {
+  // Codex estimates for cheap models (e.g. mini, cache-heavy turns) land in the
+  // few-fen range; 1-decimal rounding would collapse them to ¥0.0. Widen the
+  // precision for sub-¥1 amounts so they stay legible, while keeping larger
+  // totals compact.
+  if (value > 0 && value < 0.01) return '<0.01'
+  if (value < 1) return value.toFixed(2)
   return value.toFixed(1)
 }
 

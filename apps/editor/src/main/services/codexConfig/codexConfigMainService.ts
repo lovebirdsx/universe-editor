@@ -28,6 +28,7 @@ import {
 } from '@universe-editor/platform'
 import type {
   CodexAuthStatus,
+  CodexCredentialIntent,
   CodexCredentialProfile,
   CodexSettings,
   CodexSettingsPatch,
@@ -39,6 +40,17 @@ function defaultConfigPath(): string {
   const dir = process.env['CODEX_HOME'] ?? join(homedir(), '.codex')
   return join(dir, 'config.toml')
 }
+
+/**
+ * Provider id for the editor-managed gateway. Modelled as a *self-contained*
+ * custom provider (key in `experimental_bearer_token`, `wire_api = "responses"`,
+ * `supports_websockets = false` to stop codex 0.141+ probing
+ * `wss://<gateway>/responses`). It deliberately avoids the reserved built-in
+ * `openai` id, `requires_openai_auth`, and the global `openai_base_url` — all of
+ * which would entangle it with the ChatGPT / official-key auth path. See
+ * `applyCredential` / `reconcileGatewayProvider`.
+ */
+const GATEWAY_PROVIDER_ID = 'codex-gateway'
 
 /** Decode a JWT payload (base64url) without verifying the signature. */
 function decodeJwtPayload(jwt: string): Record<string, unknown> | undefined {
@@ -135,6 +147,37 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
     this._logger.info(`patched ${this._configPath}`)
   }
 
+  async applyCredential(intent: CodexCredentialIntent): Promise<CodexAuthStatus> {
+    // 1) auth.json: only the API key is editor-managed; ChatGPT tokens are owned
+    //    by `codex login` and must survive a switch to gateway/apiKey unchanged.
+    const auth = (await this._readAuth()) ?? {}
+    if (intent.kind === 'apiKey') {
+      auth['OPENAI_API_KEY'] = intent.apiKey.trim()
+      auth['auth_mode'] = 'apikey'
+    } else {
+      // gateway carries its own key in config.toml; chatgpt uses the tokens.
+      delete auth['OPENAI_API_KEY']
+      if (this._hasChatgptTokens(auth)) auth['auth_mode'] = 'chatgpt'
+      else delete auth['auth_mode']
+    }
+    await this._writeJsonAtomic(this._authPath(), auth)
+
+    // 2) config.toml: the gateway is a fully self-contained provider — set it up
+    //    only for gateway intent, tear it down for apiKey/chatgpt. Never touch
+    //    the global `openai_base_url` (it would also redirect the built-in
+    //    `openai` provider used by ChatGPT/official-key auth).
+    const current = await this.read()
+    const next = reconcileGatewayProvider(current, intent)
+    if (next != null) await this._writeTomlAtomic(this._configPath, next)
+
+    this._logger.info(
+      `applied credential kind=${intent.kind} ` +
+        `(model_provider=${(next ?? current)['model_provider'] ?? 'none'}, ` +
+        `auth_mode=${auth['auth_mode'] ?? 'none'})`,
+    )
+    return this.readAuthStatus()
+  }
+
   configPath(): Promise<string> {
     return Promise.resolve(this._configPath)
   }
@@ -158,27 +201,6 @@ export class CodexConfigMainService extends Disposable implements ICodexConfigSe
       `auth status: active=${active} hasApiKey=${hasApiKey} chatgptExpired=${status.chatgpt?.expired ?? 'n/a'}`,
     )
     return status
-  }
-
-  async setApiKey(apiKey: string | null): Promise<void> {
-    const auth = (await this._readAuth()) ?? {}
-    const key = apiKey?.trim()
-    if (key) {
-      auth['OPENAI_API_KEY'] = key
-      // Pin the mode so codex uses this key even if a ChatGPT token block is
-      // still present (its `resolved_mode` checks `auth_mode` first).
-      auth['auth_mode'] = 'apikey'
-    } else {
-      delete auth['OPENAI_API_KEY']
-      // Hand control back to a ChatGPT login when its tokens remain; otherwise
-      // there is no active credential, so drop the mode entirely.
-      if (this._hasChatgptTokens(auth)) auth['auth_mode'] = 'chatgpt'
-      else delete auth['auth_mode']
-    }
-    await this._writeJsonAtomic(this._authPath(), auth)
-    this._logger.info(
-      `updated OPENAI_API_KEY in ${this._authPath()} (mode=${auth['auth_mode'] ?? 'none'})`,
-    )
   }
 
   async readProfiles(): Promise<CodexCredentialProfile[]> {
@@ -339,5 +361,80 @@ function mergePatch(current: CodexSettings, patch: CodexSettingsPatch): CodexSet
     if (value === null) delete out[key]
     else out[key] = value
   }
+  return out
+}
+
+/**
+ * Reconcile the `codex-gateway` provider in config.toml with the chosen
+ * credential. Returns the next settings to write, or `null` when nothing needs
+ * to change. Idempotent; preserves every unmanaged key (e.g. a hand-written
+ * `[model_providers.kuro]`).
+ *
+ * The gateway is modelled as a *self-contained* custom provider, exactly like a
+ * hand-written one: its key rides in `experimental_bearer_token`, it sets
+ * `supports_websockets = false` (so codex 0.141+ stops probing
+ * `wss://<gateway>/responses`), and `model_provider` points at it. Crucially it
+ * does NOT use `requires_openai_auth` and does NOT set the global
+ * `openai_base_url` — both would entangle it with the built-in `openai` provider
+ * that ChatGPT / official-key auth rely on.
+ *
+ * - gateway intent: write/update the provider + pointer.
+ * - apiKey / chatgpt intent: tear the provider + pointer down so codex uses the
+ *   built-in `openai` provider. Also clears any stale top-level `openai_base_url`
+ *   the previous implementation may have left behind.
+ */
+function reconcileGatewayProvider(
+  current: CodexSettings,
+  intent: CodexCredentialIntent,
+): CodexSettings | null {
+  const providers =
+    current['model_providers'] && typeof current['model_providers'] === 'object'
+      ? (current['model_providers'] as Record<string, unknown>)
+      : {}
+  const existing =
+    providers[GATEWAY_PROVIDER_ID] && typeof providers[GATEWAY_PROVIDER_ID] === 'object'
+      ? (providers[GATEWAY_PROVIDER_ID] as Record<string, unknown>)
+      : undefined
+  const hasStaleBaseUrl = typeof current['openai_base_url'] === 'string'
+
+  if (intent.kind !== 'gateway') {
+    // Tear down: remove our provider + pointer + any stale global base URL.
+    const dirty =
+      existing != null || current['model_provider'] === GATEWAY_PROVIDER_ID || hasStaleBaseUrl
+    if (!dirty) return null
+    const nextProviders = { ...providers }
+    delete nextProviders[GATEWAY_PROVIDER_ID]
+    const out: CodexSettings = { ...current }
+    if (Object.keys(nextProviders).length > 0) out['model_providers'] = nextProviders
+    else delete out['model_providers']
+    if (out['model_provider'] === GATEWAY_PROVIDER_ID) delete out['model_provider']
+    delete out['openai_base_url']
+    return out
+  }
+
+  const desired = {
+    name: intent.providerName?.trim() || 'Gateway',
+    base_url: intent.baseUrl,
+    wire_api: 'responses',
+    supports_websockets: false,
+    experimental_bearer_token: intent.apiKey,
+  }
+  const inSync =
+    current['model_provider'] === GATEWAY_PROVIDER_ID &&
+    !hasStaleBaseUrl &&
+    existing != null &&
+    existing['base_url'] === desired.base_url &&
+    existing['wire_api'] === desired.wire_api &&
+    existing['supports_websockets'] === false &&
+    existing['experimental_bearer_token'] === desired.experimental_bearer_token &&
+    existing['name'] === desired.name
+
+  if (inSync) return null
+
+  const out: CodexSettings = { ...current }
+  out['model_providers'] = { ...providers, [GATEWAY_PROVIDER_ID]: desired }
+  out['model_provider'] = GATEWAY_PROVIDER_ID
+  // The self-contained provider supersedes any global redirect.
+  delete out['openai_base_url']
   return out
 }

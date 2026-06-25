@@ -57,12 +57,15 @@ export interface CodexAuthStatus {
 /**
  * The subset of `~/.codex/config.toml` the editor surfaces. Codex tolerates
  * unknown keys and `patch` preserves any field not listed here, so this stays a
- * curated view — not the full schema. `openai_base_url` is the documented way to
- * point the built-in `openai` provider at a custom/compatible endpoint.
+ * curated view — not the full schema. Gateway credentials are modelled as a
+ * self-contained `[model_providers.codex-gateway]` (see {@link CodexCredentialIntent}),
+ * NOT via the global `openai_base_url` (which would also redirect the built-in
+ * `openai` provider used by ChatGPT / official-key auth).
  */
 export interface CodexSettings {
   model?: string
   model_provider?: string
+  model_providers?: Record<string, unknown>
   model_reasoning_effort?: CodexReasoningEffort
   approval_policy?: CodexApprovalPolicy
   sandbox_mode?: CodexSandboxMode
@@ -85,9 +88,9 @@ export type CodexSettingsPatch = {
 /**
  * A saved credential profile in the editor's own library
  * (`<codexHome>/.universe-editor/credential-profiles.json`). The user *applies* a
- * profile to make it the active credential, which for Codex means writing the
- * `OPENAI_API_KEY` into `auth.json` and (for gateway profiles) the matching
- * `openai_base_url` into `config.toml`.
+ * profile to make it the active credential via `applyCredential`: an API-key
+ * profile writes `OPENAI_API_KEY` into `auth.json`; a gateway profile writes a
+ * self-contained `[model_providers.codex-gateway]` into `config.toml`.
  *
  * ChatGPT login (OAuth) is deliberately not a profile — it is a single shared
  * login managed by `codex login`.
@@ -104,6 +107,26 @@ export interface CodexCredentialProfile {
   baseUrl?: string
 }
 
+/**
+ * The credential the user wants Codex to use next, applied atomically by the
+ * main process. This mirrors how Codex actually separates the three login modes:
+ *
+ *  - `gateway`  — a *self-contained* custom provider (like a hand-written
+ *    `[model_providers.X]`): the key lives in the provider's
+ *    `experimental_bearer_token`, `model_provider` points at it, and **neither
+ *    `auth.json` nor the global `openai_base_url` is touched**. A ChatGPT login
+ *    stays intact (and unused) alongside it.
+ *  - `apiKey`   — the official OpenAI API key in `auth.json` (built-in `openai`
+ *    provider). Any gateway provider/pointer is torn down.
+ *  - `chatgpt`  — hand control back to the ChatGPT OAuth tokens: clear the API
+ *    key and any gateway provider/pointer so the built-in `openai` provider runs
+ *    on the login tokens.
+ */
+export type CodexCredentialIntent =
+  | { kind: 'gateway'; baseUrl: string; apiKey: string; providerName?: string }
+  | { kind: 'apiKey'; apiKey: string }
+  | { kind: 'chatgpt' }
+
 export interface ICodexConfigService {
   readonly _serviceBrand: undefined
   /**
@@ -119,6 +142,14 @@ export interface ICodexConfigService {
    * every key the editor does not manage. `null` values delete.
    */
   patch(patch: CodexSettingsPatch): Promise<void>
+  /**
+   * Apply a credential atomically: rewrites `auth.json` and/or config.toml's
+   * `[model_providers.codex-gateway]` + `model_provider` in one main-process step
+   * so the three login modes stay mutually consistent (see {@link CodexCredentialIntent}).
+   * Returns the resulting auth status. Call this for every credential switch
+   * instead of poking `setApiKey` / providers individually.
+   */
+  applyCredential(intent: CodexCredentialIntent): Promise<CodexAuthStatus>
   /** Absolute path of config.toml (for display / "reveal in folder"). */
   configPath(): Promise<string>
   /**
@@ -127,11 +158,6 @@ export interface ICodexConfigService {
    * Never returns the credentials themselves.
    */
   readAuthStatus(): Promise<CodexAuthStatus>
-  /**
-   * Apply (or clear) the API key in `auth.json`. Passing `null` removes the
-   * `OPENAI_API_KEY` field, handing control back to a ChatGPT login.
-   */
-  setApiKey(apiKey: string | null): Promise<void>
   /**
    * Read the editor's saved credential library. Returns `[]` when the file is
    * absent or malformed. This library is separate from auth.json / config.toml.

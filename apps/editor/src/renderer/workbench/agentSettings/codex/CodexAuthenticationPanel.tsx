@@ -80,17 +80,32 @@ function CredentialLibrary({
   const [editing, setEditing] = useState<CodexCredentialProfile | null>(null)
   const [adding, setAdding] = useState(false)
 
-  const activeBaseUrl = typeof settings.openai_base_url === 'string' ? settings.openai_base_url : ''
+  // What codex *actually* uses is decided by config.toml's `model_provider`:
+  // - `codex-gateway` → our self-contained gateway provider is active.
+  // - empty/unset → the built-in `openai` provider runs on auth.json (ChatGPT
+  //   login or API key). So an API-key / ChatGPT login is only "in use" when no
+  //   custom provider overrides it.
+  const modelProvider = typeof settings.model_provider === 'string' ? settings.model_provider : ''
+  const gatewayActive = modelProvider === 'codex-gateway'
+  const builtinActive = modelProvider === ''
+  const gatewayBaseUrl = (() => {
+    const providers = settings.model_providers
+    if (!gatewayActive || !providers || typeof providers !== 'object') return ''
+    const gw = (providers as Record<string, unknown>)['codex-gateway']
+    if (!gw || typeof gw !== 'object') return ''
+    const url = (gw as Record<string, unknown>)['base_url']
+    return typeof url === 'string' ? url : ''
+  })()
 
   const isActive = useCallback(
     (profile: CodexCredentialProfile): boolean => {
-      // The API key value never leaves the main process, so we can only match on
-      // the gateway base URL + the fact an API key is the active credential.
-      if (!apiKeyActive) return false
-      if (profile.kind === 'gateway') return activeBaseUrl === (profile.baseUrl ?? '')
-      return activeBaseUrl === ''
+      // The API key value never leaves the main process, so gateway profiles
+      // match on the active provider's base URL, API-key profiles on the mode.
+      if (profile.kind === 'gateway')
+        return gatewayActive && gatewayBaseUrl === (profile.baseUrl ?? '')
+      return apiKeyActive && builtinActive
     },
-    [apiKeyActive, activeBaseUrl],
+    [apiKeyActive, builtinActive, gatewayActive, gatewayBaseUrl],
   )
 
   const apply = useCallback(
@@ -314,12 +329,18 @@ function ProfileForm({
 function LoginForm({ config }: { config: UseCodexConfig }) {
   const notification = useService(INotificationService)
   const login = runCodexLogin()
-  const { authStatus, reloadAuthStatus, switchToChatgptLogin } = config
+  const { authStatus, settings, reloadAuthStatus, switchToChatgptLogin } = config
   const chatgpt = authStatus.chatgpt
   const signedIn = !!chatgpt && !chatgpt.expired
-  const chatgptActive = authStatus.active === 'chatgpt'
-  // A valid ChatGPT login that is being overridden by an active API key.
-  const overridden = signedIn && authStatus.active === 'apiKey'
+  // ChatGPT only actually runs when the built-in `openai` provider is selected,
+  // i.e. config.toml's `model_provider` is empty. A custom provider (e.g.
+  // `codex-gateway`) overrides it even while auth.json still reports `chatgpt`.
+  const builtinActive =
+    typeof settings.model_provider !== 'string' || settings.model_provider === ''
+  const chatgptActive = authStatus.active === 'chatgpt' && builtinActive
+  // A valid ChatGPT login that is not actually in use (an API key or a custom
+  // provider currently takes precedence) — offer a one-click "Use this login".
+  const overridden = signedIn && !chatgptActive
   const [refreshing, setRefreshing] = useState(false)
 
   const doRefresh = useCallback(async () => {
@@ -346,13 +367,15 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
   const doLogin = useCallback(async () => {
     await login()
     // The login runs in a terminal and rewrites ~/.codex/auth.json with a
-    // ChatGPT token block (auth_mode "chatgpt"). The disk watch refreshes the
-    // status automatically; we only schedule a follow-up to clear any custom
-    // gateway base URL once a fresh, un-overridden ChatGPT login takes effect.
+    // ChatGPT token block. The disk watch refreshes status automatically; we
+    // also tear down any lingering gateway provider once a fresh ChatGPT login
+    // takes effect, so it is actually used instead of the custom provider.
     setTimeout(() => {
       void (async () => {
         const status = await reloadAuthStatus()
-        if (status.active === 'chatgpt') await config.patch({ openai_base_url: null })
+        if (status.chatgpt && !status.chatgpt.expired) {
+          await config.switchToChatgptLogin()
+        }
       })()
     }, 4000)
   }, [login, reloadAuthStatus, config])
@@ -411,7 +434,7 @@ function LoginForm({ config }: { config: UseCodexConfig }) {
         <div className={styles['desc']}>
           {localize(
             'codexSettings.auth.login.overridden',
-            'You are signed in, but a saved API key is currently taking precedence.',
+            'You are signed in, but a saved credential is currently taking precedence.',
           )}
         </div>
       )}

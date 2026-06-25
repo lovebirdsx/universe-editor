@@ -46,10 +46,11 @@ export type AcpSpawner = (
 ) => ChildProcessWithoutNullStreams
 
 /**
- * Resolves the bundled Claude agent entry file for the `runAsNode` launch.
- * Injectable for tests; the default branches on whether the app is packaged.
+ * Resolves a bundled agent entry file for the `runAsNode` launch, keyed by which
+ * agent it is. Injectable for tests; the default branches on whether the app is
+ * packaged.
  */
-export type NodeEntryResolver = () => string
+export type NodeEntryResolver = (entry: 'claude' | 'codex') => string
 
 /**
  * Lookup abstraction for `probe()` — injectable so tests don't shell out. The
@@ -71,17 +72,24 @@ const defaultSpawner: AcpSpawner = (command, args, options) =>
   })
 
 /**
- * Bundled Claude agent entry, relative to `app.getAppPath()` in the dev tree
+ * Bundled agent entries, relative to `app.getAppPath()` in the dev tree
  * (`apps/editor` → repo root → `vendor/`).
  */
 const BUNDLED_CLAUDE_ENTRY_DEV = '../../vendor/claude-agent-acp/dist/index.js'
 /** Bundled Claude agent entry under `resourcesPath` in a packaged build. */
 const BUNDLED_CLAUDE_ENTRY_PACKAGED = 'claude-agent-acp/dist/index.js'
+/** Bundled Codex agent entry in the dev tree. */
+const BUNDLED_CODEX_ENTRY_DEV = '../../vendor/codex-acp/dist/index.js'
+/** Bundled Codex agent entry under `resourcesPath` in a packaged build. */
+const BUNDLED_CODEX_ENTRY_PACKAGED = 'codex-acp/dist/index.js'
 
-const defaultResolveNodeEntry: NodeEntryResolver = () =>
-  app.isPackaged
-    ? path.join(process.resourcesPath, BUNDLED_CLAUDE_ENTRY_PACKAGED)
-    : path.resolve(app.getAppPath(), BUNDLED_CLAUDE_ENTRY_DEV)
+const defaultResolveNodeEntry: NodeEntryResolver = (entry) => {
+  const dev = entry === 'codex' ? BUNDLED_CODEX_ENTRY_DEV : BUNDLED_CLAUDE_ENTRY_DEV
+  const packaged = entry === 'codex' ? BUNDLED_CODEX_ENTRY_PACKAGED : BUNDLED_CLAUDE_ENTRY_PACKAGED
+  return app.isPackaged
+    ? path.join(process.resourcesPath, packaged)
+    : path.resolve(app.getAppPath(), dev)
+}
 
 const defaultLookup: AcpCommandLookup = (command) =>
   new Promise<boolean>((resolve) => {
@@ -199,7 +207,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       // denylist strips it from inherited/override env) because the agent
       // re-spawns itself via `process.execPath` and the child must inherit it.
       command = process.execPath
-      args = [this._resolveNodeEntry(), ...spec.args]
+      args = [this._resolveNodeEntry(spec.nodeEntry ?? 'claude'), ...spec.args]
       env.ELECTRON_RUN_AS_NODE = '1'
       options.shell = false
     }

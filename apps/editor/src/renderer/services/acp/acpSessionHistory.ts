@@ -76,6 +76,8 @@ export interface AcpSessionHistoryEntry {
       readonly cacheCreateTokens: number
       readonly costUSD: number
     }>
+    /** True when cost/models are locally estimated (Codex) rather than agent-reported. */
+    readonly costEstimated?: boolean
   }
   /** Timeline collapse mode persisted per-session so it survives editor restarts. */
   readonly collapseMode?: CollapseMode

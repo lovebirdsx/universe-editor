@@ -339,6 +339,33 @@ describe('AcpHostMainService — env / cwd plumbing', () => {
     // execPath is a real binary — must not be routed through a shell.
     expect(call[2].shell).toBe(false)
   })
+
+  it('passes spec.nodeEntry to the entry resolver (codex vs claude)', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    const resolver = vi.fn((entry: 'claude' | 'codex') => `/bundled/${entry}/dist/index.js`)
+    svc = new AcpHostMainService(spawner, undefined, resolver)
+
+    await svc.start({ command: 'codex-acp', args: [], runAsNode: true, nodeEntry: 'codex' })
+
+    expect(resolver).toHaveBeenCalledWith('codex')
+    expect(spawner.mock.calls[0]![1]).toEqual(['/bundled/codex/dist/index.js'])
+  })
+
+  it('defaults the entry resolver to claude when nodeEntry is omitted', async () => {
+    const proc = new FakeProc()
+    const spawner = vi.fn(
+      ((_cmd, _args, _opts) => proc as unknown as ChildProcessWithoutNullStreams) as AcpSpawner,
+    )
+    const resolver = vi.fn((entry: 'claude' | 'codex') => `/bundled/${entry}/dist/index.js`)
+    svc = new AcpHostMainService(spawner, undefined, resolver)
+
+    await svc.start({ command: 'claude-agent-acp', args: [], runAsNode: true })
+
+    expect(resolver).toHaveBeenCalledWith('claude')
+  })
 })
 
 describe('AcpHostMainService — probe', () => {

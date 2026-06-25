@@ -10,6 +10,7 @@
  *
  *  Vendors:
  *   - vendor/claude-agent-acp           (git submodule; built afterwards by agent:build)
+ *   - vendor/codex-acp                  (git submodule; built afterwards by agent:build)
  *   - vendor/typescript-language-server (prebuilt npm package; no build step)
  *--------------------------------------------------------------------------------------------*/
 
@@ -22,7 +23,11 @@ import { fileURLToPath } from 'node:url'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const repoRoot = resolve(__dirname, '../..')
 
-const VENDOR_DIRS = ['vendor/claude-agent-acp', 'vendor/typescript-language-server']
+const VENDOR_DIRS = [
+  'vendor/claude-agent-acp',
+  'vendor/codex-acp',
+  'vendor/typescript-language-server',
+]
 
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 

@@ -421,16 +421,18 @@ export class AcpClientService extends Disposable implements IAcpClientService {
   }
 
   /**
-   * For the built-in Codex agent, the codex-acp adapter binary is not shipped —
-   * resolve it (download on first use / system install / custom path) and use
-   * its absolute path as the spawn `command`. The downloaded binary lives under
-   * a userData path that contains spaces, so `shell` is forced off to stop the
-   * platform shell from mis-quoting it. Auth is taken from `acp.codex.apiKey`
-   * when set, otherwise the child inherits a real OPENAI_API_KEY / CODEX_API_KEY
-   * from the environment. Non-codex agents pass through untouched.
+   * For the built-in Codex agent (runAsNode), the bundled codex-acp JS adapter
+   * is launched through Electron's Node runtime, but the native `codex` binary it
+   * drives is not shipped — resolve it (download on first use / system install /
+   * custom path) and inject its absolute path via CODEX_PATH so codex-acp spawns
+   * it directly instead of resolving `@openai/codex`'s platform package. Auth is
+   * taken from `acp.codex.apiKey` when set, otherwise the child inherits a real
+   * OPENAI_API_KEY / CODEX_API_KEY from the environment. Non-codex agents pass
+   * through untouched.
    */
   private async _ensureCodexBinary(spec: AcpLaunchSpec, agentId: string): Promise<AcpLaunchSpec> {
     if (agentId !== 'codex') return spec
+
     const source = (this._config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource
     const customPath = this._config.get<string>('acp.codex.executablePath') ?? ''
     const opts: ICodexBinaryResolveOptions =
@@ -445,13 +447,13 @@ export class AcpClientService extends Disposable implements IAcpClientService {
             if (total > 0) {
               const pct = Math.min(100, Math.floor((received / total) * 100))
               progress.report({
-                message: `Downloading codex-acp… ${pct}%`,
+                message: `Downloading codex… ${pct}%`,
                 increment: pct - lastPct,
               })
               lastPct = pct
             } else {
               progress.report({
-                message: `Downloading codex-acp… ${Math.floor(received / 1048576)} MB`,
+                message: `Downloading codex… ${Math.floor(received / 1048576)} MB`,
               })
             }
           }),
@@ -467,9 +469,11 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     const apiKey = (this._config.get<string>('acp.codex.apiKey') ?? '').trim()
     return {
       ...spec,
-      command: result.path,
-      shell: false,
-      ...(apiKey ? { env: { ...spec.env, OPENAI_API_KEY: apiKey } } : {}),
+      env: {
+        ...spec.env,
+        CODEX_PATH: result.path,
+        ...(apiKey ? { OPENAI_API_KEY: apiKey } : {}),
+      },
     }
   }
 

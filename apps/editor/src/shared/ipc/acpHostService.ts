@@ -30,6 +30,13 @@ export interface AcpLaunchSpec {
    */
   readonly runAsNode?: boolean
   /**
+   * Selects which bundled agent entry file main resolves when `runAsNode` is set.
+   * `'claude'` → vendored claude-agent-acp, `'codex'` → vendored codex-acp.
+   * Defaults to `'claude'` for backward compatibility. Built-in presets only;
+   * never sourced from user config.
+   */
+  readonly nodeEntry?: 'claude' | 'codex'
+  /**
    * Force the platform-shell wrapper on or off. Defaults to win32 (so `.cmd`
    * shims like `npx` resolve). Set `false` when `command` is an absolute path to
    * a real binary that may contain spaces (e.g. the downloaded codex-acp under

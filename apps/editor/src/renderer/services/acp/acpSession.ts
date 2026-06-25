@@ -21,6 +21,7 @@ import type {
   AvailableCommand,
   ContentBlock,
   PromptRequest,
+  PromptResponse,
   SessionConfigOption,
   SessionUpdate,
   ToolCallContent,
@@ -36,6 +37,12 @@ import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 import { parseMcpToolName, type McpTransport } from './acpMcpServers.js'
+import {
+  estimateCodexCostUSD,
+  extractCodexModelUsage,
+  extractCodexTurnUsage,
+  type CodexModelUsage,
+} from '../../../shared/ai/codexPricing.js'
 
 // ---------------------------------------------------------------------------
 // Public view model
@@ -231,6 +238,12 @@ export interface AcpUsage {
    * work), if the agent reports it. Drives the session cost popover.
    */
   readonly models?: readonly AcpModelCost[]
+  /**
+   * True when `cost`/`models` are locally estimated from token counts rather than
+   * reported authoritatively by the agent. Codex sets this (it never reports a
+   * real cost); Claude leaves it unset. The UI labels estimated costs as such.
+   */
+  readonly costEstimated?: boolean
 }
 
 /** Bag of normalized initial session state captured from `session/new`. */
@@ -590,7 +603,8 @@ export class AcpSession extends Disposable implements IAcpSession {
       else abort.signal.addEventListener('abort', onAbort, { once: true })
     })
     try {
-      await Promise.race([this._conn.conn.prompt(params), abortPromise])
+      const response = await Promise.race([this._conn.conn.prompt(params), abortPromise])
+      this._ingestPromptResponse(response)
     } catch (err) {
       if (err instanceof AcpAbortError) {
         // '[cancelled]' is appended once by cancelTurn — appending here would
@@ -825,6 +839,25 @@ export class AcpSession extends Disposable implements IAcpSession {
       case 'usage_update': {
         const tx = this._batchedTx()
         const prev = this.usage.get()
+        // Codex estimates cost locally from the session-cumulative per-model token
+        // counts it stamps on every usage_update (one per model call). Take the
+        // latest snapshot — it already folds in every call, so no accumulation.
+        const codexCost =
+          this.agentId === 'codex'
+            ? this._estimateCodexCost(extractCodexModelUsage((update as { _meta?: unknown })._meta))
+            : undefined
+        if (codexCost != null) {
+          const next: AcpUsage = {
+            used: update.used,
+            size: update.size,
+            cost: codexCost.cost,
+            models: codexCost.models,
+            costEstimated: true,
+          }
+          this.usage.set(next, tx)
+          this._history?.setHistoryUsage(this.id, next)
+          break
+        }
         const models = extractModelBreakdown(update)
         // `cost` / `models` only ride on the turn-final usage_update (derived
         // from the SDK `result` message). Mid-stream updates emitted while a
@@ -836,11 +869,16 @@ export class AcpSession extends Disposable implements IAcpSession {
             ? { amount: update.cost.amount, currency: update.cost.currency }
             : prev?.cost
         const nextModels = models.length > 0 ? models : prev?.models
+        // Codex's own usage_update never carries cost — the estimate rides on
+        // PromptResponse instead (see _ingestPromptResponse). Preserve the
+        // estimated flag whenever we carry a prior cost forward.
+        const costEstimated = update.cost != null ? undefined : prev?.costEstimated
         const next: AcpUsage = {
           used: update.used,
           size: update.size,
           ...(cost != null ? { cost } : {}),
           ...(nextModels != null ? { models: nextModels } : {}),
+          ...(costEstimated ? { costEstimated: true } : {}),
         }
         this.usage.set(next, tx)
         // Mirror onto history so the arc survives resume — `session/load`
@@ -856,6 +894,64 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   setConfigOption(configId: string, value: string): Promise<void> {
     return this._configOptions.setConfigOption(configId, value)
+  }
+
+  /**
+   * Finalize the locally-estimated Codex cost from the prompt response. Codex
+   * never reports an authoritative cost, so we estimate from the session-
+   * cumulative per-model token counts the fork stamps on the response. This is a
+   * safety net — `usage_update` already refreshes the estimate on every model
+   * call (see the usage_update case); the response just confirms the final total.
+   * No-op for Claude, which reports real cost.
+   */
+  private _ingestPromptResponse(response: PromptResponse): void {
+    if (this.agentId !== 'codex') return
+    const usages = extractCodexTurnUsage(response)
+    const estimate = this._estimateCodexCost(usages)
+    if (estimate == null) return
+
+    const tx = this._batchedTx()
+    const prev = this.usage.get()
+    const next: AcpUsage = {
+      used: prev?.used ?? 0,
+      size: prev?.size ?? 0,
+      cost: estimate.cost,
+      models: estimate.models,
+      costEstimated: true,
+    }
+    this.usage.set(next, tx)
+    this._history?.setHistoryUsage(this.id, next)
+  }
+
+  /**
+   * Price a snapshot of session-cumulative per-model Codex usage. Returns the
+   * total cost plus the per-model breakdown, or undefined when there is nothing
+   * to price. Token counts are cumulative (the fork reports a running total on
+   * every model call), so callers overwrite rather than accumulate.
+   */
+  private _estimateCodexCost(
+    usages: readonly CodexModelUsage[],
+  ): { cost: { amount: number; currency: string }; models: AcpModelCost[] } | undefined {
+    if (usages.length === 0) return undefined
+    const models: AcpModelCost[] = []
+    let totalUsd = 0
+    for (const u of usages) {
+      const costUSD = estimateCodexCostUSD(u.model, {
+        inputTokens: u.inputTokens,
+        cachedReadTokens: u.cachedReadTokens,
+        outputTokens: u.outputTokens,
+      })
+      totalUsd += costUSD
+      models.push({
+        model: u.model,
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cacheReadTokens: u.cachedReadTokens,
+        cacheCreateTokens: 0,
+        costUSD,
+      })
+    }
+    return { cost: { amount: totalUsd, currency: 'USD' }, models }
   }
 
   private _appendChunk(role: AcpMessageRole, block: ContentBlock, parentId?: string): void {

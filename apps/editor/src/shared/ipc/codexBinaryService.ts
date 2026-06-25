@@ -1,12 +1,11 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Wire contract for resolving the native codex-acp adapter binary the built-in
- *  Codex agent spawns. The adapter ships as a self-contained Rust binary inside
- *  the platform-specific optional dependency of `@zed-industries/codex-acp`
- *  (e.g. `@zed-industries/codex-acp-win32-x64`) and is deliberately NOT packaged:
+ *  Wire contract for resolving the native `codex` binary the built-in Codex
+ *  agent drives. The bundled codex-acp adapter (JS) spawns it directly via the
+ *  `CODEX_PATH` env. The binary ships as the platform version of `@openai/codex`
+ *  (e.g. `@openai/codex@<ver>-win32-x64`) and is deliberately NOT packaged (~300MB):
  *  it is downloaded on demand into userData, reused from a system install, or
- *  pointed at a custom path. The resolved absolute path is used as the agent's
- *  spawn `command`.
+ *  pointed at a custom path. The resolved absolute path is injected as `CODEX_PATH`.
  *--------------------------------------------------------------------------------------------*/
 
 import { createDecorator } from '@universe-editor/platform'
@@ -29,15 +28,15 @@ export interface ICodexBinaryProgress {
 }
 
 export interface ICodexBinaryResult {
-  /** Absolute path to a ready-to-spawn codex-acp binary. */
+  /** Absolute path to a ready-to-spawn codex binary. */
   readonly path: string
 }
 
 export interface ICodexBinaryVersionInfo {
   /**
-   * codex-acp version pinned in CodexBinaryMainService. Unlike Claude there is no
-   * vendor submodule to derive this from, so it is bumped by hand when following
-   * upstream. Used as both the default download target and the cache directory.
+   * codex version pinned in CodexBinaryMainService, kept in sync with the
+   * codex-acp fork's lockfile and bumped by hand when following upstream. Used as
+   * both the default download target and the cache directory.
    */
   readonly bundledVersion: string
   /**
@@ -47,7 +46,7 @@ export interface ICodexBinaryVersionInfo {
    */
   readonly installedVersion: string | null
   /**
-   * Latest version available on the npm registry for @zed-industries/codex-acp.
+   * Latest version available on the npm registry for @openai/codex.
    * null when the network query failed.
    */
   readonly latestVersion: string | null
@@ -60,7 +59,7 @@ export interface ICodexBinaryVersionInfo {
 }
 
 /**
- * Resolves the native codex-acp binary, downloading it on first use when needed.
+ * Resolves the native codex binary, downloading it on first use when needed.
  * `resolve` is idempotent and de-dupes concurrent calls for the same options;
  * a cached binary returns immediately without re-downloading.
  */

@@ -1,12 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  CodexBinaryPanel — the "Binary" category for the built-in Codex agent. Configures
- *  how the agent locates the native codex-acp adapter executable: auto-download
+ *  how the agent locates the native codex adapter executable: auto-download
  *  (default), system PATH install, or a custom path. For the download source, also
  *  shows the installed binary version and the latest available version from npm,
  *  with a one-click upgrade button when a newer release is available.
  *  Mirrors claude/BinaryPanel.tsx; differences are the service, config keys, and
- *  the codex-acp wording (no SDK — the pinned version is the download target).
+ *  the codex wording (no SDK — the pinned version is the download target).
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -99,7 +99,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             severity: Severity.Info,
             message: localize(
               'codexBinaryPanel.upgrade.success',
-              'codex-acp binary upgraded to {version}.',
+              'codex binary upgraded to {version}.',
               { version: targetVersion },
             ),
           })
@@ -109,7 +109,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             severity: Severity.Error,
             message: localize(
               'codexBinaryPanel.upgrade.error',
-              'Failed to upgrade codex-acp binary: {message}',
+              'Failed to upgrade codex binary: {message}',
               { message: String(err) },
             ),
           })
@@ -138,7 +138,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             label={localize('codexBinaryPanel.source.download', 'Download (recommended)')}
             desc={localize(
               'codexBinaryPanel.source.download.desc',
-              'Automatically download the codex-acp binary into the user data folder on first use.',
+              'Automatically download the codex binary into the user data folder on first use.',
             )}
             onChange={changeSource}
           />
@@ -148,7 +148,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             label={localize('codexBinaryPanel.source.system', 'System')}
             desc={localize(
               'codexBinaryPanel.source.system.desc',
-              'Use the `codex-acp` executable found on PATH (you manage updates yourself).',
+              'Use the `codex` executable found on PATH (you manage updates yourself).',
             )}
             onChange={changeSource}
           />
@@ -158,7 +158,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             label={localize('codexBinaryPanel.source.custom', 'Custom path')}
             desc={localize(
               'codexBinaryPanel.source.custom.desc',
-              'Point to a specific codex-acp executable. Useful for testing or multiple installs.',
+              'Point to a specific codex executable. Useful for testing or multiple installs.',
             )}
             onChange={changeSource}
           />
@@ -172,9 +172,7 @@ export function CodexBinaryPanel(_props: { config: UseCodexConfig }) {
             <Input
               value={customPath}
               placeholder={
-                host.platform === 'win32'
-                  ? 'C:\\path\\to\\codex-acp.exe'
-                  : '/usr/local/bin/codex-acp'
+                host.platform === 'win32' ? 'C:\\path\\to\\codex.exe' : '/usr/local/bin/codex'
               }
               onChange={(e) => setCustomPathState(e.target.value)}
               onBlur={() => commitCustomPath(customPath)}
@@ -273,10 +271,10 @@ function VersionInfo({
 
   return (
     <div className={styles['field']}>
-      {/* Pinned codex-acp version (always shown) */}
+      {/* Pinned codex version (always shown) */}
       <div className={styles['statusRow']}>
         <span className={styles['statusMuted']}>
-          {localize('codexBinaryPanel.version.pinned', 'Pinned codex-acp: {version}', {
+          {localize('codexBinaryPanel.version.pinned', 'Pinned codex: {version}', {
             version: bundledVersion,
           })}
         </span>
