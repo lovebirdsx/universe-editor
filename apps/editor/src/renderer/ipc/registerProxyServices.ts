@@ -24,6 +24,7 @@ import {
   IPerformanceMarksService,
   IPingService,
   IUsageService,
+  IExchangeRateService,
 } from '../../shared/ipc/services.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
@@ -138,5 +139,9 @@ export function registerProxyChannelServices(
   services.set(
     IUsageService,
     ProxyChannel.toService<IUsageService>(ipc.getChannel(ServiceChannels.Usage)),
+  )
+  services.set(
+    IExchangeRateService,
+    ProxyChannel.toService<IExchangeRateService>(ipc.getChannel(ServiceChannels.ExchangeRate)),
   )
 }

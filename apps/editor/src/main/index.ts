@@ -30,6 +30,7 @@ import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
+  IExchangeRateService,
   IPingService,
   IPerformanceMarksService,
   IUsageService,
@@ -262,6 +263,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       aiModel: accessor.get(IAiModelMainService),
       aiDebug: accessor.get(IAiDebugService),
       remoteSchema: accessor.get(IRemoteSchemaService),
+      exchangeRate: accessor.get(IExchangeRateService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
     }))

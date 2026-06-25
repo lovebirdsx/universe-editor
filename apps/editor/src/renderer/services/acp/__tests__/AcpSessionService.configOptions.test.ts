@@ -478,6 +478,76 @@ describe('AcpSessionService — session/update fan-out', () => {
     expect(s.usage.get()).toEqual({ used: 10, size: 100 })
   })
 
+  it('parses per-model cost breakdown from usage_update _meta', async () => {
+    const s = await svc.createSession()
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 1800,
+        size: 200000,
+        cost: { amount: 0.45, currency: 'USD' },
+        _meta: {
+          '_universe/modelBreakdown': [
+            {
+              model: 'claude-opus-4-20250514',
+              inputTokens: 1000,
+              outputTokens: 500,
+              cacheReadTokens: 200,
+              cacheCreateTokens: 100,
+              costUSD: 0.42,
+            },
+          ],
+        },
+      },
+    } as never)
+    expect(s.usage.get()?.models).toEqual([
+      {
+        model: 'claude-opus-4-20250514',
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 200,
+        cacheCreateTokens: 100,
+        costUSD: 0.42,
+      },
+    ])
+  })
+
+  it('keeps cost / models when a mid-stream usage_update omits them', async () => {
+    const s = await svc.createSession()
+    // Turn-final update carries cost + breakdown.
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'usage_update',
+        used: 1800,
+        size: 200000,
+        cost: { amount: 0.45, currency: 'USD' },
+        _meta: {
+          '_universe/modelBreakdown': [
+            {
+              model: 'claude-opus-4-20250514',
+              inputTokens: 1000,
+              outputTokens: 500,
+              cacheReadTokens: 0,
+              cacheCreateTokens: 0,
+              costUSD: 0.42,
+            },
+          ],
+        },
+      },
+    } as never)
+    // Next turn's mid-stream update has only used/size — cost must persist.
+    client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'usage_update', used: 2100, size: 200000 },
+    })
+    const u = s.usage.get()
+    expect(u?.used).toBe(2100)
+    expect(u?.cost).toEqual({ amount: 0.45, currency: 'USD' })
+    expect(u?.models).toHaveLength(1)
+  })
+
   it('applies config_option_update verbatim and replaces prior values', async () => {
     const s = await svc.createSession()
     client.connected[0]!.sink.onSessionUpdate({

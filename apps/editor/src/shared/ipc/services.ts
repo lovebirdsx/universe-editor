@@ -176,3 +176,22 @@ export interface IUsageService {
 }
 
 export const IUsageService = createDecorator<IUsageService>('usageService')
+
+// -------- Exchange Rate (main fetches USD→CNY rate, caches to disk) --------
+
+export interface ExchangeRateResult {
+  /** 1 USD = `rate` CNY. */
+  readonly rate: number
+  /** 'live' = freshly fetched or cached from network; 'fallback' = hardcoded constant because network never succeeded. */
+  readonly source: 'live' | 'fallback'
+  /** Unix epoch ms when the rate was fetched. */
+  readonly fetchedAt: number
+}
+
+export interface IExchangeRateService {
+  readonly _serviceBrand: undefined
+  /** Returns USD→CNY rate. Cached on disk; only hits the network once per day. */
+  getUsdToCnyRate(): Promise<ExchangeRateResult>
+}
+
+export const IExchangeRateService = createDecorator<IExchangeRateService>('exchangeRateService')

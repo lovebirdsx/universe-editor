@@ -21,6 +21,7 @@ import type {
   IPingService,
   IDisposableLeakService,
   IUsageService,
+  IExchangeRateService,
 } from '../../shared/ipc/services.js'
 import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
@@ -63,6 +64,7 @@ export interface ApplicationServices {
   readonly aiModel: IAiModelMainService
   readonly aiDebug: IAiDebugService
   readonly remoteSchema: IRemoteSchemaService
+  readonly exchangeRate: IExchangeRateService
   /**
    * Concrete (not interface) type: WindowMainService calls registerWindow /
    * unregisterWindow on it, which are main-internal and not on the wire contract.

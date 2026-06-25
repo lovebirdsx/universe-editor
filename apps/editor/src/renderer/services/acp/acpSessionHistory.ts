@@ -68,6 +68,14 @@ export interface AcpSessionHistoryEntry {
     readonly used: number
     readonly size: number
     readonly cost?: { readonly amount: number; readonly currency: string }
+    readonly models?: ReadonlyArray<{
+      readonly model: string
+      readonly inputTokens: number
+      readonly outputTokens: number
+      readonly cacheReadTokens: number
+      readonly cacheCreateTokens: number
+      readonly costUSD: number
+    }>
   }
   /** Timeline collapse mode persisted per-session so it survives editor restarts. */
   readonly collapseMode?: CollapseMode

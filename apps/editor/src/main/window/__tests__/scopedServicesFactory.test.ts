@@ -30,8 +30,9 @@ describe('ApplicationServices type', () => {
       aiModel: {} as ApplicationServices['aiModel'],
       aiDebug: {} as ApplicationServices['aiDebug'],
       remoteSchema: {} as ApplicationServices['remoteSchema'],
+      exchangeRate: {} as ApplicationServices['exchangeRate'],
     }
-    expect(Object.keys(svc)).toHaveLength(22)
+    expect(Object.keys(svc)).toHaveLength(23)
   })
 })
 

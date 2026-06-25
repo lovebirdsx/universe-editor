@@ -207,6 +207,17 @@ export interface AcpPendingQuestion {
 
 export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
 
+/** Per-model cost/token breakdown for a session, reported by the agent. */
+export interface AcpModelCost {
+  readonly model: string
+  readonly inputTokens: number
+  readonly outputTokens: number
+  readonly cacheReadTokens: number
+  readonly cacheCreateTokens: number
+  /** Session-cumulative cost in USD for this model, as reported by the agent. */
+  readonly costUSD: number
+}
+
 /** Context-window usage reported by the agent via `usage_update`. */
 export interface AcpUsage {
   /** Tokens currently in context. */
@@ -215,6 +226,11 @@ export interface AcpUsage {
   readonly size: number
   /** Cumulative session cost, if the agent reports it. */
   readonly cost?: { readonly amount: number; readonly currency: string }
+  /**
+   * Per-model cost breakdown for the whole session (including sub-agent / Task
+   * work), if the agent reports it. Drives the session cost popover.
+   */
+  readonly models?: readonly AcpModelCost[]
 }
 
 /** Bag of normalized initial session state captured from `session/new`. */
@@ -808,12 +824,23 @@ export class AcpSession extends Disposable implements IAcpSession {
       }
       case 'usage_update': {
         const tx = this._batchedTx()
+        const prev = this.usage.get()
+        const models = extractModelBreakdown(update)
+        // `cost` / `models` only ride on the turn-final usage_update (derived
+        // from the SDK `result` message). Mid-stream updates emitted while a
+        // turn runs carry only used/size, so carry the last known cost forward
+        // instead of replacing it — otherwise the cost readout flickers off for
+        // the whole duration of every running turn.
+        const cost =
+          update.cost != null
+            ? { amount: update.cost.amount, currency: update.cost.currency }
+            : prev?.cost
+        const nextModels = models.length > 0 ? models : prev?.models
         const next: AcpUsage = {
           used: update.used,
           size: update.size,
-          ...(update.cost != null
-            ? { cost: { amount: update.cost.amount, currency: update.cost.currency } }
-            : {}),
+          ...(cost != null ? { cost } : {}),
+          ...(nextModels != null ? { models: nextModels } : {}),
         }
         this.usage.set(next, tx)
         // Mirror onto history so the arc survives resume — `session/load`
@@ -1083,6 +1110,37 @@ export class AcpSession extends Disposable implements IAcpSession {
 /** A text block whose content is empty or only whitespace carries nothing. */
 export function isBlankContentBlock(block: ContentBlock): boolean {
   return block.type === 'text' && block.text.trim().length === 0
+}
+
+/**
+ * Read the per-model cost breakdown our agent fork stamps onto `usage_update`
+ * via `_meta._universe/modelBreakdown`. Values are session-cumulative and
+ * already fold in sub-agent (Task) work. Returns [] when absent or malformed.
+ */
+function extractModelBreakdown(update: {
+  _meta?: Record<string, unknown> | null | undefined
+}): readonly AcpModelCost[] {
+  const raw = update._meta?.['_universe/modelBreakdown']
+  if (!Array.isArray(raw)) return []
+  const out: AcpModelCost[] = []
+  for (const item of raw) {
+    if (item == null || typeof item !== 'object') continue
+    const r = item as Record<string, unknown>
+    if (typeof r['model'] !== 'string') continue
+    out.push({
+      model: r['model'],
+      inputTokens: numberOr(r['inputTokens']),
+      outputTokens: numberOr(r['outputTokens']),
+      cacheReadTokens: numberOr(r['cacheReadTokens']),
+      cacheCreateTokens: numberOr(r['cacheCreateTokens']),
+      costUSD: numberOr(r['costUSD']),
+    })
+  }
+  return out
+}
+
+function numberOr(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
 
 /**

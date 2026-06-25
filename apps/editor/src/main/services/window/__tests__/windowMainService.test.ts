@@ -113,6 +113,7 @@ function makeOpts() {
       aiModel: {} as never,
       aiDebug: {} as never,
       remoteSchema: {} as never,
+      exchangeRate: {} as never,
     },
     logService,
     e2eEnabled: false,

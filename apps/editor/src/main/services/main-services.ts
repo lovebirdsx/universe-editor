@@ -20,6 +20,7 @@ import { ISecretStorageService } from '@universe-editor/platform'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
   IDisposableLeakService,
+  IExchangeRateService,
   IPerformanceMarksService,
   IPingService,
   IUsageService,
@@ -65,6 +66,7 @@ import { AiModelMainService } from './ai/aiModelMainService.js'
 import { AiDebugRecorder, IAiDebugRecorderService } from './ai/aiDebugRecorder.js'
 import { AiDebugMainService } from './ai/aiDebugService.js'
 import { RemoteSchemaMainService } from './remoteSchema/remoteSchemaMainService.js'
+import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.js'
 
 // SyncDescriptor (not the ctor overload) because these constructors mix
 // @-injected services with non-branded static params (spawner stubs, Storage,
@@ -171,4 +173,9 @@ registerSingleton(
   IRemoteSchemaService,
   // 1 leading static param (cacheDir) before @ILoggerService.
   new SyncDescriptor<IRemoteSchemaService>(RemoteSchemaMainService, [undefined], false),
+)
+registerSingleton(
+  IExchangeRateService,
+  // 1 leading static param (cacheFile) before @ILoggerService.
+  new SyncDescriptor<IExchangeRateService>(ExchangeRateMainService, [undefined], false),
 )

@@ -54,6 +54,7 @@ import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { UsageIndicator } from './UsageIndicator.js'
+import { SessionCostIndicator } from './SessionCostIndicator.js'
 import styles from './agents.module.css'
 
 // Snapshot of the live popover state + accept callbacks, kept in a ref so the
@@ -443,6 +444,7 @@ export function PromptInput({
             {formatRunningTime(totalRunningMs)}
           </span>
         ) : null}
+        <SessionCostIndicator session={session} />
         <UsageIndicator />
         <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
