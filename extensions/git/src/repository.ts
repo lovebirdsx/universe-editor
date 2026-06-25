@@ -1,7 +1,9 @@
 /**
  * A single git repository surfaced through the SCM API. Owns the SourceControl,
- * its staged / working-tree groups, the branch status-bar item, and a debounced
- * filesystem watcher that re-runs `git status` on change.
+ * its staged / working-tree groups, and a debounced filesystem watcher that
+ * re-runs `git status` on change. Branch / ahead-behind / in-flight state is
+ * exposed as a snapshot plus an `onDidChange` signal; a single shared status-bar
+ * controller renders whichever repo is active (see gitStatusBar.ts).
  *
  * All git work goes through `gitExec` (argv arrays, no shell). `refresh` is
  * re-entrant-safe: a change arriving mid-refresh queues exactly one more run.
@@ -15,11 +17,10 @@ import {
   scm,
   window,
   workspace,
-  StatusBarAlignment,
+  type Disposable,
   type SourceControl,
   type SourceControlResourceGroup,
   type SourceControlResourceState,
-  type StatusBarItem,
 } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
 import { parseStatus, type GitFileStatus } from './statusParser.js'
@@ -128,19 +129,25 @@ function workingStates(
 }
 
 interface RepositoryOptions {
-  /** Whether this repo owns branch / sync status-bar items. Only the main repo should. */
-  readonly statusBar?: boolean
   /** SourceControl label shown in the SCM view header (e.g. `Git: <submodule>`). */
   readonly label?: string
+}
+
+/** Branch / sync state the shared status-bar controller renders. */
+export interface RepoStatus {
+  readonly branch: string | undefined
+  readonly ahead: number
+  readonly behind: number
+  /** Non-null while an operation runs: the spinner text + kind to display. */
+  readonly busy: { readonly text: string; readonly kind: 'syncing' | 'spinning' } | undefined
 }
 
 export class Repository {
   private readonly _sc: SourceControl
   private readonly _staged: SourceControlResourceGroup
   private readonly _working: SourceControlResourceGroup
-  private readonly _branchItem: StatusBarItem | undefined
-  private readonly _syncItem: StatusBarItem | undefined
   private readonly _watchers: FSWatcher[] = []
+  private readonly _changeListeners = new Set<() => void>()
   private _debounce: ReturnType<typeof setTimeout> | undefined
   private _refreshing = false
   private _queued = false
@@ -148,19 +155,22 @@ export class Repository {
   private _fetching = false
   /** Count of in-flight progress operations; while > 0 the sync item shows a spinner. */
   private _busy = 0
+  private _busyText: { text: string; kind: 'syncing' | 'spinning' } | undefined
   private _disposed = false
   private _stagedCount = 0
   private _workingCount = 0
   private _branch: string | undefined
+  private _ahead = 0
+  private _behind = 0
   private _autofetchTimer: ReturnType<typeof setInterval> | undefined
   private _autofetchInitial: ReturnType<typeof setTimeout> | undefined
 
   constructor(
     readonly root: string,
     private readonly _log?: (msg: string) => void,
-    private readonly _opts: RepositoryOptions = {},
+    opts: RepositoryOptions = {},
   ) {
-    this._sc = scm.createSourceControl('git', _opts.label ?? 'Git', root)
+    this._sc = scm.createSourceControl('git', opts.label ?? 'Git', root)
     this._sc.inputBox.placeholder = 'Message (Ctrl+Enter to commit)'
     this._sc.acceptInputCommand = GIT_COMMIT_INPUT_COMMAND
 
@@ -168,19 +178,28 @@ export class Repository {
     this._staged.hideWhenEmpty = true
     this._working = this._sc.createResourceGroup('workingTree', 'Changes')
 
-    if (_opts.statusBar !== false) {
-      this._branchItem = window.createStatusBarItem(StatusBarAlignment.Left, 100)
-      this._branchItem.command = 'git.checkout'
-      this._branchItem.tooltip = 'Checkout branch'
-      this._branchItem.text = '$(git-branch) …'
-      this._branchItem.show()
-
-      this._syncItem = window.createStatusBarItem(StatusBarAlignment.Left, 99)
-      this._syncItem.command = 'git.sync'
-    }
-
     this._startWatching()
     void this._startAutofetch()
+  }
+
+  /** Subscribe to branch / sync / busy state changes for the status bar. */
+  onDidChange(listener: () => void): Disposable {
+    this._changeListeners.add(listener)
+    return { dispose: () => this._changeListeners.delete(listener) }
+  }
+
+  private _emitChange(): void {
+    for (const l of this._changeListeners) l()
+  }
+
+  /** Current branch / ahead-behind / busy snapshot for the status bar. */
+  get status(): RepoStatus {
+    return {
+      branch: this._branch,
+      ahead: this._ahead,
+      behind: this._behind,
+      busy: this._busy > 0 ? this._busyText : undefined,
+    }
   }
 
   async refresh(opts?: RefreshOptions): Promise<void> {
@@ -230,40 +249,22 @@ export class Repository {
       behind: status.behind,
     })
     this._branch = status.branch
-    if (this._branchItem) {
-      this._branchItem.text = `$(git-branch) ${status.branch ?? 'detached'}`
-    }
-
-    // While an operation is showing a spinner, leave the sync item alone.
-    if (this._busy === 0 && this._syncItem) {
-      const { ahead, behind } = status
-      if (ahead > 0 || behind > 0) {
-        const parts: string[] = []
-        if (ahead > 0) parts.push(`↑${ahead}`)
-        if (behind > 0) parts.push(`↓${behind}`)
-        this._syncItem.text = parts.join(' ')
-        this._syncItem.tooltip = `${ahead} commit(s) ahead, ${behind} behind — click to sync`
-        this._syncItem.showProgress = false
-        this._syncItem.show()
-      } else {
-        this._syncItem.hide()
-      }
-    }
+    this._ahead = status.ahead
+    this._behind = status.behind
+    this._emitChange()
   }
 
   /** Show a spinner on the sync item for the duration of an operation. */
   private _beginProgress(text: string, kind: 'syncing' | 'spinning'): void {
     this._busy++
-    if (!this._syncItem) return
-    this._syncItem.text = text
-    this._syncItem.tooltip = text
-    this._syncItem.showProgress = kind
-    this._syncItem.show()
+    this._busyText = { text, kind }
+    this._emitChange()
   }
 
   private _endProgress(): void {
     this._busy = Math.max(0, this._busy - 1)
-    if (this._busy === 0 && this._syncItem) this._syncItem.showProgress = false
+    if (this._busy === 0) this._busyText = undefined
+    this._emitChange()
   }
 
   get hasStagedChanges(): boolean {
@@ -886,8 +887,7 @@ export class Repository {
         // ignore
       }
     }
-    this._branchItem?.dispose()
-    this._syncItem?.dispose()
+    this._changeListeners.clear()
     this._sc.dispose()
   }
 }

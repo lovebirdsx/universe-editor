@@ -18,14 +18,30 @@ interface RepoArg {
 
 export class RepositoryManager {
   private readonly _repos = new Map<string, Repository>()
+  /** The repo argument-less commands (command palette, keybindings, status bar)
+   *  target. Mirrors the SCM view's selected repo, pushed via `git.setActiveRepo`;
+   *  defaults to the main repo until the renderer syncs a selection. */
+  private _activeRoot: string
 
   constructor(
     readonly mainRoot: string,
     private readonly _log?: (msg: string) => void,
-  ) {}
+  ) {
+    this._activeRoot = mainRoot
+  }
 
   get main(): Repository | undefined {
     return this._repos.get(norm(this.mainRoot))
+  }
+
+  /** The currently active repo (falls back to main when the selection is gone). */
+  get active(): Repository | undefined {
+    return this._repos.get(norm(this._activeRoot)) ?? this.main
+  }
+
+  /** Point argument-less commands at `root` when it names a known repo. */
+  setActive(root: string | undefined): void {
+    if (root && this._repos.has(norm(root))) this._activeRoot = root
   }
 
   get all(): Repository[] {
@@ -60,7 +76,7 @@ export class RepositoryManager {
       }
       if (best) return best
     }
-    return this.main
+    return this.active
   }
 
   dispose(): void {

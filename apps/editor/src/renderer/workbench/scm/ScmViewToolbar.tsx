@@ -6,7 +6,7 @@
  *  time); the navigation icons and `…` overflow always target the selected repo.
  *--------------------------------------------------------------------------------------------*/
 
-import { useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ChevronDown } from 'lucide-react'
 import { ICommandService, MenuId, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
@@ -46,16 +46,22 @@ export function ScmViewToolbar() {
   const navActions = useMemo(
     () =>
       selected ? menuActions(MenuId.ScmTitle, { scmProvider: selected.id }, 'navigation') : [],
+    // All git repos share the id `git`; rootUri is what distinguishes the selected
+    // one, so the menus (and the runCommand closure they capture) must recompute on
+    // rootUri change, not id.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [selected?.id, revision],
+    [selected?.rootUri, revision],
   )
 
-  const runCommand = (command: string): void => {
-    void commandService.executeCommand(
-      command,
-      selected ? { rootUri: selected.rootUri, sourceControlId: selected.id } : undefined,
-    )
-  }
+  const runCommand = useCallback(
+    (command: string): void => {
+      void commandService.executeCommand(
+        command,
+        selected ? { rootUri: selected.rootUri, sourceControlId: selected.id } : undefined,
+      )
+    },
+    [commandService, selected],
+  )
 
   const overflowRows = useMemo<OverflowRow[]>(() => {
     const rows: OverflowRow[] = [
@@ -93,7 +99,7 @@ export function ScmViewToolbar() {
     }
     return rows
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.id, viewMode, revision])
+  }, [selected?.rootUri, viewMode, revision, runCommand])
 
   const repoRows = useMemo<OverflowRow[]>(
     () =>

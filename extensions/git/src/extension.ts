@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Repository } from './repository.js'
 import { RepositoryManager } from './repositoryManager.js'
+import { GitStatusBarController } from './gitStatusBar.js'
 import { discoverRepos, type DiscoverOptions, type DiscoveredRepo } from './repoDiscovery.js'
 import { norm } from './pathUtil.js'
 import {
@@ -87,11 +88,17 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // Surface every discovered (initialized) repo as its own SCM provider.
   const mgr = new RepositoryManager(statusBarRoot, log)
   context.subscriptions.push(mgr)
+
+  // One shared status-bar pair renders whichever repo is active.
+  const statusBar = new GitStatusBarController(mgr)
+  context.subscriptions.push(statusBar)
+
   for (const { root: repoRoot, name, initialized } of repos) {
     const isMain = norm(repoRoot) === norm(statusBarRoot)
     if (!isMain && !initialized) continue
-    mgr.add(repoRoot, { statusBar: isMain, label: isMain ? 'Git' : `Git: ${name}` })
+    mgr.add(repoRoot, { label: isMain ? 'Git' : `Git: ${name}` })
   }
+  statusBar.refresh()
   for (const repo of mgr.all) void repo.refresh({ fetch: true, silent: true })
 
   // The repository the Git Graph view currently targets. Defaults to the
@@ -131,6 +138,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
   }
 
   context.subscriptions.push(
+    // Point argument-less commands (command palette, keybindings, status bar) at
+    // the repo the SCM view currently shows. Pushed by the renderer on selection.
+    commands.registerCommand('git.setActiveRepo', (...args: unknown[]) => {
+      mgr.setActive(args[0] as string | undefined)
+      statusBar.refresh()
+    }),
+
     commands.registerCommand('git.refresh', (arg) =>
       mgr.resolveRepo(arg)?.refresh({ fetch: true }),
     ),
@@ -208,8 +222,10 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.createTag', (arg) => mgr.resolveRepo(arg)?.createTag()),
     commands.registerCommand('git.deleteTag', (arg) => mgr.resolveRepo(arg)?.deleteTag()),
 
-    commands.registerCommand('git.submoduleUpdateInit', () => mgr.main?.submoduleUpdateInit()),
-    commands.registerCommand('git.submoduleSync', () => mgr.main?.submoduleSync()),
+    commands.registerCommand('git.submoduleUpdateInit', (arg) =>
+      mgr.resolveRepo(arg)?.submoduleUpdateInit(),
+    ),
+    commands.registerCommand('git.submoduleSync', (arg) => mgr.resolveRepo(arg)?.submoduleSync()),
 
     // Git Graph — read-only data source for the renderer's Git Graph editor.
     commands.registerCommand('git-graph.getRepos', () => getGitGraphRepos(root, scanOpts, log)),

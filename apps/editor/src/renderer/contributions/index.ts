@@ -79,6 +79,7 @@ import {
   DirtyEditorsActivityContribution,
   ScmActivityContribution,
 } from './ActivityBarBadgeContributions.js'
+import { ActiveRepoSyncContribution } from './ActiveRepoSyncContribution.js'
 import { QuickAccessContribution } from './QuickAccessContribution.js'
 import { OutlineViewStateContribution } from './OutlineViewStateContribution.js'
 import { SearchPersistenceContribution } from './SearchPersistenceContribution.js'
@@ -627,6 +628,16 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.scmActivity',
   ScmActivityContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Keep the git extension host's active repo in sync with the SCM view's selected
+// repo, so argument-less git commands (command palette / keybindings / status
+// bar) target the repo the user is looking at. AfterRestore so the SCM model and
+// command service are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.activeRepoSync',
+  ActiveRepoSyncContribution,
   WorkbenchPhase.AfterRestore,
 )
 
