@@ -40,12 +40,6 @@ function createFilePick(root: URI, uri: URI, labelOverride?: string): IQuickPick
   return { id: uri.toString(), label, description: rel, iconId: resourceIconId(uri) }
 }
 
-function isUriInsideRoot(root: URI, uri: URI): boolean {
-  const rootPath = root.fsPath.replace(/\\/g, '/').replace(/\/$/, '').toLowerCase()
-  const path = uri.fsPath.replace(/\\/g, '/').toLowerCase()
-  return path === rootPath || path.startsWith(rootPath + '/')
-}
-
 export class FileQuickAccessProvider implements IQuickAccessProvider {
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
@@ -153,9 +147,9 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
 
     void this._recentFiles.getAll().then((recent) => {
       if (token.isCancellationRequested) return
-      recentItems = recent
-        .filter((f) => isUriInsideRoot(root, f.uri))
-        .map((f) => createFilePick(root, f.uri, f.name))
+      // Show all recent files (in-workspace shown by relative path, others by
+      // full fsPath) so this picker fully subsumes "Open Recent File…".
+      recentItems = recent.map((f) => createFilePick(root, f.uri, f.name))
       // Only seed the list if the user hasn't started typing a query yet.
       if (picker.value.trim().length === 0) picker.items = recentItems
     })

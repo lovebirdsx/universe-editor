@@ -116,7 +116,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.openEditorGuide.title': '编辑器使用说明',
   'action.openKeybindingsJson.title': '打开键盘快捷方式（JSON）',
   'action.openKeybindings.title': '打开键盘快捷方式',
-  'action.openRecentFile.title': '打开最近的文件…',
   'action.openRecent.title': '打开最近打开的项…',
   'action.openSettingsJson.title': '打开设置（JSON）',
   'action.openSettings.title': '打开设置',

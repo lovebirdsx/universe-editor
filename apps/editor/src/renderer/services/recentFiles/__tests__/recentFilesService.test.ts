@@ -22,7 +22,7 @@ import {
 import { IRecentFilesService, RecentFilesService } from '../recentFilesService.js'
 import { RecentFilesContribution } from '../../../contributions/RecentFilesContribution.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
-import { ClearRecentFilesAction, OpenRecentFilesAction } from '../../../actions/fileOpenActions.js'
+import { ClearRecentFilesAction } from '../../../actions/fileOpenActions.js'
 
 // ---------------------------------------------------------------------------
 // Fake IStorageService
@@ -465,14 +465,13 @@ describe('RecentFilesContribution', () => {
 })
 
 // ---------------------------------------------------------------------------
-// OpenRecentFilesAction / ClearRecentFilesAction tests
+// ClearRecentFilesAction tests
 // ---------------------------------------------------------------------------
 
-describe('OpenRecentFilesAction', () => {
+describe('ClearRecentFilesAction', () => {
   const disposables: Array<{ dispose(): void }> = []
 
   beforeEach(() => {
-    disposables.push(registerAction2(OpenRecentFilesAction))
     disposables.push(registerAction2(ClearRecentFilesAction))
   })
 

@@ -1,6 +1,6 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Open / OpenRecent / OpenWithDefaultApp / ClearRecent / Refresh actions.
+ *  Open / OpenWithDefaultApp / ClearRecent / Refresh / GoToFile actions.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -11,17 +11,13 @@ import {
   IFileService,
   IHostService,
   IInstantiationService,
-  IQuickInputService,
   IWorkspaceService,
   MenuId,
-  URI,
-  isEqualResource,
   localize,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
-import { resourceIconId } from '../services/quickInput/quickPickResourceIcon.js'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
@@ -59,59 +55,6 @@ export class OpenFileAction extends Action2 {
     if (!picked) return
     if (!(await confirmLargeFile(picked, fileService, dialog))) return
     const input = inst.createInstance(FileEditorInput, picked)
-    groups.activeGroup.openEditor(input, { activate: true })
-  }
-}
-
-export class OpenRecentFilesAction extends Action2 {
-  static readonly ID = 'workbench.action.openRecentFile'
-  constructor() {
-    super({
-      id: OpenRecentFilesAction.ID,
-      title: localize2('action.openRecentFile.title', 'Open Recent File…'),
-      category: localize2('command.category.file', 'File'),
-      keybinding: { primary: 'ctrl+p', when: '!terminalFocus' },
-      menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 3 },
-      f1: true,
-    })
-  }
-  override async run(accessor: ServicesAccessor): Promise<void> {
-    const recentFiles = accessor.get(IRecentFilesService)
-    const quickInput = accessor.get(IQuickInputService)
-    const groups = accessor.get(IEditorGroupsService)
-    const inst = accessor.get(IInstantiationService)
-
-    const items = await recentFiles.getAll()
-    if (items.length === 0) return
-
-    const pickItems = items.map((f) => ({
-      id: f.uri.toString(),
-      label: f.name,
-      description: f.uri.fsPath,
-      iconId: resourceIconId(f.uri),
-    }))
-
-    const pick = await quickInput.pick(pickItems, {
-      id: 'workbench.recentFiles',
-      placeholder: localize('quickInput.openRecentFile.placeholder', 'Open Recent File…'),
-      matchOnDescription: true,
-    })
-    if (!pick) return
-
-    const uri = URI.parse(pick.id)
-
-    // Activate if already open in any group.
-    for (const group of groups.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
-          groups.activateGroup(group)
-          group.setActive(editor)
-          return
-        }
-      }
-    }
-
-    const input = inst.createInstance(FileEditorInput, uri)
     groups.activeGroup.openEditor(input, { activate: true })
   }
 }
@@ -166,6 +109,7 @@ export class GoToFileAction extends Action2 {
       id: GoToFileAction.ID,
       title: localize2('action.goToFile.title', 'Go to File…'),
       category: localize2('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+p', when: '!terminalFocus' },
       menu: { id: MenuId.MenubarFileMenu, group: '2_open', order: 1 },
       f1: true,
     })

@@ -314,4 +314,23 @@ describe('FileQuickAccessProvider', () => {
     expect(picker.items).toHaveLength(1)
     expect(picker.items[0]).toMatchObject({ label: 'a.ts' })
   })
+
+  it('seeds the empty query with all recent files, including those outside the workspace', async () => {
+    const recent: IRecentFile[] = [
+      { uri: URI.file('/ws/src/inside.ts'), name: 'inside.ts', lastOpened: 2 },
+      { uri: URI.file('/elsewhere/outside.ts'), name: 'outside.ts', lastOpened: 1 },
+    ]
+    const { provider, fileSearch } = setup({ recent })
+    const picker = new FakeQuickPick<IQuickPickItem>()
+    run(provider, picker)
+    await flushPromises()
+
+    expect(fileSearch.calls).toHaveLength(0)
+    expect(picker.items.map((i) => (i as IQuickPickItem).label)).toEqual([
+      'inside.ts',
+      'outside.ts',
+    ])
+    expect(picker.items[0]).toMatchObject({ description: 'src/inside.ts' })
+    expect(picker.items[1]).toMatchObject({ description: URI.file('/elsewhere/outside.ts').fsPath })
+  })
 })

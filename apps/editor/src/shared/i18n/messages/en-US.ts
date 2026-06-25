@@ -116,7 +116,6 @@ export const EN_US_MESSAGES: MessageMap = {
   'action.openEditorGuide.title': 'Editor Guide',
   'action.openKeybindingsJson.title': 'Open Keyboard Shortcuts (JSON)',
   'action.openKeybindings.title': 'Open Keyboard Shortcuts',
-  'action.openRecentFile.title': 'Open Recent File…',
   'action.openRecent.title': 'Open Recent…',
   'action.openSettingsJson.title': 'Open Settings (JSON)',
   'action.openSettings.title': 'Open Settings',

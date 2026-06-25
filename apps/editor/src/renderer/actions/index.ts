@@ -117,7 +117,6 @@ import {
   ClearRecentFilesAction,
   GoToFileAction,
   OpenFileAction,
-  OpenRecentFilesAction,
   OpenWithDefaultAppAction,
   RefreshExplorerAction,
 } from './fileOpenActions.js'
@@ -360,7 +359,6 @@ registerAction2(SaveFileAction)
 registerAction2(SaveFileAsAction)
 registerAction2(GoToFileAction)
 registerAction2(OpenFileAction)
-registerAction2(OpenRecentFilesAction)
 registerAction2(ClearRecentFilesAction)
 registerAction2(NewUntitledFileAction)
 registerAction2(NewFileAction)
