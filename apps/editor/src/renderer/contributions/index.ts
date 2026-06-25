@@ -64,6 +64,7 @@ import {
 } from './AgentsContributions.js'
 import { AgentNotificationContribution } from './AgentNotificationContribution.js'
 import { FirstRunAgentOnboardingContribution } from './FirstRunAgentOnboardingContribution.js'
+import { AgentBinaryPrefetchContribution } from './AgentBinaryPrefetchContribution.js'
 import { SessionShutdownParticipant } from './SessionShutdownParticipant.js'
 import { StartupPerformanceStatusContribution } from './StartupPerformanceStatusContribution.js'
 import { TerminalEditorLifecycleContribution } from './TerminalEditorLifecycleContribution.js'
@@ -509,6 +510,15 @@ ContributionsRegistry.registerContribution(
   'workbench.contrib.firstRunAgentOnboarding',
   FirstRunAgentOnboardingContribution,
   WorkbenchPhase.AfterRestore,
+)
+
+// Idle-time background prefetch of the Claude / codex-acp binaries so upgrading
+// is instant. Eventually so it never competes with startup work; the fetch only
+// kicks off once the host reports idle.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.agentBinaryPrefetch',
+  AgentBinaryPrefetchContribution,
+  WorkbenchPhase.Eventually,
 )
 
 // Editor groups must be rebuilt from storage BEFORE the React tree mounts the

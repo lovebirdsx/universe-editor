@@ -45,6 +45,12 @@ export interface IClaudeBinaryVersionInfo {
    * null when the network query failed.
    */
   readonly latestVersion: string | null
+  /**
+   * Version already downloaded into the background prefetch staging area and ready
+   * to be activated instantly by forceDownload() without a network fetch. null when
+   * nothing is staged.
+   */
+  readonly prefetchedVersion: string | null
 }
 
 /**
@@ -62,6 +68,15 @@ export interface IClaudeBinaryService {
 
   /** Returns version metadata for the download-mode binary. */
   getVersionInfo(): Promise<IClaudeBinaryVersionInfo>
+
+  /**
+   * Best-effort background download of the most desirable version (latest when
+   * available, otherwise the bundled SDK version) into a staging area, so a later
+   * forceDownload() can activate it instantly. No-op when the desired version is
+   * already installed or already staged. Never throws — network failures are
+   * swallowed so idle prefetch never disrupts the user.
+   */
+  prefetch(): Promise<void>
 
   /**
    * Force-downloads the specified version of the binary, overwriting whatever is

@@ -8,7 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { ArrowUpCircle, CheckCircle2, CircleAlert, Download } from 'lucide-react'
+import { CheckCircle2, CircleAlert, Download } from 'lucide-react'
 import {
   ConfigurationTarget,
   IConfigurationService,
@@ -122,11 +122,6 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
     [claudeBinary, downloading, loadVersionInfo, notifications],
   )
 
-  const handleInitialDownload = useCallback(() => {
-    if (!versionInfo || downloading) return
-    handleUpgrade(versionInfo.bundledVersion)
-  }, [downloading, handleUpgrade, versionInfo])
-
   return (
     <div className={styles['panel']}>
       {/* ── Binary Source ─────────────────────────────────────────────── */}
@@ -196,7 +191,6 @@ export function BinaryPanel(_props: { config: UseClaudeConfig }) {
             downloading={downloading}
             downloadProgress={downloadProgress}
             onUpgrade={handleUpgrade}
-            onDownload={handleInitialDownload}
           />
         </section>
       )}
@@ -243,7 +237,6 @@ interface VersionInfoProps {
   downloading: boolean
   downloadProgress: { received: number; total: number } | null
   onUpgrade(version: string): void
-  onDownload(): void
 }
 
 function VersionInfo({
@@ -252,7 +245,6 @@ function VersionInfo({
   downloading,
   downloadProgress,
   onUpgrade,
-  onDownload,
 }: VersionInfoProps) {
   if (loading && !info) {
     return (
@@ -266,10 +258,14 @@ function VersionInfo({
 
   if (!info) return null
 
-  const { bundledVersion, installedVersion, latestVersion } = info
+  const { bundledVersion, installedVersion, latestVersion, prefetchedVersion } = info
   const isUpToDate = latestVersion !== null && installedVersion === latestVersion
-  const canUpgrade =
-    latestVersion !== null && installedVersion !== null && installedVersion !== latestVersion
+  // Offer the bundled version when nothing is installed yet.
+  const canDownloadBundled = installedVersion === null
+  // Offer the latest version whenever it differs from what's installed and from
+  // the bundled one (when bundled === latest a single button is enough).
+  const canGetLatest =
+    latestVersion !== null && latestVersion !== bundledVersion && installedVersion !== latestVersion
 
   return (
     <div className={styles['field']}>
@@ -338,24 +334,47 @@ function VersionInfo({
 
       {/* Actions */}
       {!downloading && (
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
-          {installedVersion === null && (
-            <Button onClick={onDownload}>
-              <Download size={14} strokeWidth={2} />
-              {localize('binaryPanel.version.download', 'Download {version}', {
-                version: bundledVersion,
-              })}
-            </Button>
+        <>
+          {canDownloadBundled && canGetLatest && (
+            <div className={styles['desc']} style={{ marginTop: 4 }}>
+              {localize(
+                'binaryPanel.version.chooseHint',
+                'Bundled ({bundled}) is verified to match this build’s ACP SDK — safest choice. Latest ({latest}) gets the newest features but may not be fully tested with this build.',
+                { bundled: bundledVersion, latest: latestVersion ?? '' },
+              )}
+            </div>
           )}
-          {canUpgrade && latestVersion !== null && (
-            <Button onClick={() => onUpgrade(latestVersion)}>
-              <ArrowUpCircle size={14} strokeWidth={2} />
-              {localize('binaryPanel.version.upgrade', 'Upgrade to {version}', {
-                version: latestVersion,
-              })}
-            </Button>
-          )}
-        </div>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 4 }}>
+            {canDownloadBundled && (
+              <Button onClick={() => onUpgrade(bundledVersion)}>
+                <Download size={14} strokeWidth={2} />
+                {prefetchedVersion === bundledVersion
+                  ? localize('binaryPanel.version.downloadReady', 'Download {version} (ready)', {
+                      version: bundledVersion,
+                    })
+                  : localize('binaryPanel.version.download', 'Download {version}', {
+                      version: bundledVersion,
+                    })}
+              </Button>
+            )}
+            {canGetLatest && latestVersion !== null && (
+              <Button onClick={() => onUpgrade(latestVersion)}>
+                <Download size={14} strokeWidth={2} />
+                {prefetchedVersion === latestVersion
+                  ? localize('binaryPanel.version.upgradeReady', 'Upgrade to {version} (ready)', {
+                      version: latestVersion,
+                    })
+                  : installedVersion === null
+                    ? localize('binaryPanel.version.download', 'Download {version}', {
+                        version: latestVersion,
+                      })
+                    : localize('binaryPanel.version.upgrade', 'Upgrade to {version}', {
+                        version: latestVersion,
+                      })}
+              </Button>
+            )}
+          </div>
+        </>
       )}
     </div>
   )

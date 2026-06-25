@@ -51,6 +51,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Default agent used by "New Agent Session".',
             ),
           },
+          'acp.prefetchBinaries': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.acp.prefetchBinaries',
+              'Download the latest Claude / codex-acp binaries in the background while the editor is idle (download mode only), so upgrading is instant. Disable to save bandwidth.',
+            ),
+          },
           'acp.claude.source': {
             type: 'string',
             enum: ['download', 'system', 'custom'],

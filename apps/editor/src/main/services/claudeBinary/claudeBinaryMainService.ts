@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { access, chmod, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import * as path from 'node:path'
 import { Readable, Transform } from 'node:stream'
@@ -205,9 +205,10 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     suffix: string,
     binName: string,
     cached: string,
+    silent = false,
   ): Promise<string> {
     const pkg = `@anthropic-ai/claude-agent-sdk-${suffix}`
-    this._logger.info(`downloading claude binary ${pkg}@${version}`)
+    this._logger.info(`downloading claude binary ${pkg}@${version}${silent ? ' (background)' : ''}`)
 
     const dist = await this._fetchDist(pkg, version)
     const cacheDir = path.dirname(cached)
@@ -224,7 +225,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     await mkdir(tmpDir, { recursive: true })
     try {
       this._logger.info(`start downloading claude binary from ${dist.tarball}...`)
-      await this._streamExtract(dist, tmpDir, binName)
+      await this._streamExtract(dist, tmpDir, binName, silent)
       const extracted = path.join(tmpDir, binName)
       this._logger.info(`downloading claude binary complete, extracted to ${extracted}`)
       if (!(await pathExists(extracted))) {
@@ -253,7 +254,12 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     return body.dist
   }
 
-  private async _streamExtract(dist: RegistryDist, tmpDir: string, binName: string): Promise<void> {
+  private async _streamExtract(
+    dist: RegistryDist,
+    tmpDir: string,
+    binName: string,
+    silent = false,
+  ): Promise<void> {
     const res = await fetch(dist.tarball)
     if (!res.ok || !res.body) {
       throw new Error(`Failed to download ${dist.tarball}: HTTP ${res.status}`)
@@ -270,7 +276,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       transform: (chunk: Buffer, _enc, cb) => {
         received += chunk.length
         hash.update(chunk)
-        this._onDidChangeProgress.fire({ received, total })
+        if (!silent) this._onDidChangeProgress.fire({ received, total })
         cb(null, chunk)
       },
     })
@@ -365,7 +371,85 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       // network error — leave latestVersion null
     }
 
-    return { bundledVersion, installedVersion, latestVersion }
+    const prefetchedVersion = await this._findPrefetched(binName)
+
+    return { bundledVersion, installedVersion, latestVersion, prefetchedVersion }
+  }
+
+  /** Path of the background prefetch staging area for a specific version. */
+  private _prefetchDir(version: string): string {
+    return path.join(app.getPath('userData'), 'claude-bin', '.prefetch', version)
+  }
+
+  /** Returns the version staged in the prefetch area, or null when none is ready. */
+  private async _findPrefetched(binName: string): Promise<string | null> {
+    const root = path.join(app.getPath('userData'), 'claude-bin', '.prefetch')
+    let entries: string[]
+    try {
+      entries = await readdir(root)
+    } catch {
+      return null
+    }
+    for (const version of entries) {
+      if (await pathExists(path.join(root, version, binName))) return version
+    }
+    return null
+  }
+
+  async prefetch(): Promise<void> {
+    const bundledVersion = await this._readSdkVersion()
+    const { suffix, binName } = detectPlatformBinary()
+
+    // Prefer the latest release; fall back to the bundled SDK version when the
+    // registry is unreachable.
+    let target = bundledVersion
+    try {
+      const res = await fetch(`${REGISTRY}/@anthropic-ai/claude-agent-sdk/latest`)
+      if (res.ok) {
+        const body = (await res.json()) as { version?: string }
+        if (body.version) target = body.version
+      }
+    } catch {
+      // network error — fall back to bundled
+    }
+
+    // Already the active version? Nothing worth prefetching.
+    const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
+    if (await pathExists(path.join(cacheDir, binName))) {
+      try {
+        const installed = (await readFile(path.join(cacheDir, '.version'), 'utf8')).trim()
+        if ((installed || bundledVersion) === target) return
+      } catch {
+        if (bundledVersion === target) return
+      }
+    }
+
+    // Already staged for this exact version? Done.
+    const staged = this._prefetchDir(target)
+    if (await pathExists(path.join(staged, binName))) {
+      this._logger.info(`claude binary already prefetched ${target}`)
+      return
+    }
+
+    // Dev convenience: the vendored binary already covers download mode for the
+    // bundled version, so prefetching it is pointless. But when the target is a
+    // newer `latest`, vendor (= bundled) can't help — fall through and fetch it.
+    if (!app.isPackaged && target === bundledVersion) {
+      const vendor = path.resolve(
+        app.getAppPath(),
+        '../../vendor/claude-agent-acp/node_modules/@anthropic-ai',
+        `claude-agent-sdk-${suffix}`,
+        binName,
+      )
+      if (await pathExists(vendor)) return
+    }
+
+    // Clear any stale staging dirs (other versions) before fetching the target.
+    await this._rmQuiet(path.join(app.getPath('userData'), 'claude-bin', '.prefetch'))
+    this._logger.info(`prefetching claude binary ${target} in background`)
+    await this._download(target, suffix, binName, path.join(staged, binName), true)
+    await writeFile(path.join(staged, '.version'), target, 'utf8')
+    this._logger.info(`claude binary prefetch ready ${target}`)
   }
 
   async forceDownload(version: string): Promise<IClaudeBinaryResult> {
@@ -374,10 +458,23 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
     const cached = path.join(cacheDir, binName)
 
-    await this._rmQuiet(cached)
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
 
+    // Fast path: the requested version is already staged by a background prefetch.
+    // Move it into the active path instead of re-downloading.
+    const staged = path.join(this._prefetchDir(version), binName)
+    if (await pathExists(staged)) {
+      this._logger.info(`activating prefetched claude binary ${version}`)
+      await mkdir(cacheDir, { recursive: true })
+      await this._rmQuiet(cached)
+      await this._renameWithRetry(staged, cached)
+      await this._rmQuiet(this._prefetchDir(version))
+      await writeFile(path.join(cacheDir, '.version'), version, 'utf8')
+      return { path: cached }
+    }
+
+    await this._rmQuiet(cached)
     const binaryPath = await this._download(version, suffix, binName, cached)
     await writeFile(path.join(cacheDir, '.version'), version, 'utf8')
     return { path: binaryPath }
