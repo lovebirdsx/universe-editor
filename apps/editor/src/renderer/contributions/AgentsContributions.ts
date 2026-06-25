@@ -136,7 +136,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
             type: 'object',
             default: {
               'claude-code': 'default',
-              codex: 'collapsed',
+              codex: 'default',
             },
             description: localize(
               'settings.acp.defaultCollapseModes',
