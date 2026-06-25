@@ -13,8 +13,8 @@ import { IApiUsageService } from '../../services/usage/ApiUsageService.js'
 import type { UsageSnapshot } from '../../../shared/ipc/services.js'
 import styles from './agents.module.css'
 
-function formatCny(raw: number): string {
-  return (raw / 10000).toFixed(2)
+function formatCny(raw: number, digits: number = 2): string {
+  return (raw / 10000).toFixed(digits)
 }
 
 export function UsageIndicator() {
@@ -71,9 +71,7 @@ function UsageIndicatorInner({ service }: { service: IApiUsageService }) {
       data-testid="acp-usage-indicator"
     >
       <Wallet size={13} strokeWidth={1.75} aria-hidden="true" />
-      <span className={styles['usageIndicatorText']}>
-        ¥{formatCny(s.periodUsedCny)}/¥{formatCny(s.periodLimitCny)}
-      </span>
+      <span className={styles['usageIndicatorText']}>¥{formatCny(s.periodUsedCny, 0)}</span>
     </button>
   )
 }
@@ -97,14 +95,14 @@ function buildTooltip(s: UsageSnapshot): string {
   )
   if (s.models.length > 0) {
     lines.push('')
-    lines.push(localize('acp.usage.modelBreakdown', '--- Today by model ---'))
+    lines.push(localize('acp.usage.modelBreakdown', '--- Week by model ---'))
     for (const m of s.models) {
       lines.push(`  ${m.model}  ${m.requests} req  ¥${formatCny(m.costCny)}`)
     }
   }
   lines.push('')
   lines.push(
-    localize('acp.usage.totals', 'Today total: {requests} req  Token: {tokens}', {
+    localize('acp.usage.totals', 'Week total: {requests} req  Token: {tokens}', {
       requests: s.requests,
       tokens: s.rawTokens.toLocaleString(),
     }),
