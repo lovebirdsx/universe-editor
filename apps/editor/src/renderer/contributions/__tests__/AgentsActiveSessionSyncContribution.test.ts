@@ -44,7 +44,12 @@ class FakeSessionService {
   readonly setActiveCalls: string[] = []
   private readonly _byId = new Map<string, IAcpSession>()
   register(id: string): void {
-    this._byId.set(id, { id, agentId: 'fake', title: id } as unknown as IAcpSession)
+    this._byId.set(id, {
+      id,
+      agentId: 'fake',
+      title: id,
+      sessionIdOnAgent: observableValue<string | undefined>('fake.sid', id),
+    } as unknown as IAcpSession)
   }
   getById(id: string): IAcpSession | undefined {
     return this._byId.get(id)

@@ -60,6 +60,7 @@ function makeSessionStub(id: string, title: string, status: AcpSessionStatus = '
     status: statusObs,
     pendingQuestion,
     pendingPermission,
+    sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
   } as unknown as IAcpSession
   return { session, statusObs, pendingQuestion, pendingPermission }
 }

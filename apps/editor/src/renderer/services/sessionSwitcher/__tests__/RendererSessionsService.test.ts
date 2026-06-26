@@ -128,6 +128,7 @@ function makeSession(id: string, agentId = 'fake'): IAcpSession {
     id,
     agentId,
     title: `Session ${id}`,
+    sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
   } as unknown as IAcpSession
 }
 

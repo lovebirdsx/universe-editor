@@ -91,7 +91,12 @@ class FakeLocationService {
 }
 
 function makeSession(id: string, agentId: string): IAcpSession {
-  return { id, agentId, title: id } as unknown as IAcpSession
+  return {
+    id,
+    agentId,
+    title: id,
+    sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
+  } as unknown as IAcpSession
 }
 
 interface Harness {

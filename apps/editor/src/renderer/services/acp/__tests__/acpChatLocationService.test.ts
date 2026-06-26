@@ -119,6 +119,7 @@ function makeSession(id: string, agentId: string): IAcpSession {
     id,
     agentId,
     title: 'Test',
+    sessionIdOnAgent: observableValue<string | undefined>('test.sid', id),
   } as unknown as IAcpSession
 }
 
