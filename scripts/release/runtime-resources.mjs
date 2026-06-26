@@ -35,9 +35,19 @@ const REQUIRED_SOURCE_FILES = [
     packaged: 'claude-agent-acp/dist/index.js',
   },
   {
+    label: 'Claude ACP agent ESM marker',
+    source: join(repoRoot, 'vendor/claude-agent-acp/dist/package.json'),
+    packaged: 'claude-agent-acp/dist/package.json',
+  },
+  {
     label: 'Codex ACP agent',
     source: join(repoRoot, 'vendor/codex-acp/dist/index.js'),
     packaged: 'codex-acp/dist/index.js',
+  },
+  {
+    label: 'Codex ACP agent ESM marker',
+    source: join(repoRoot, 'vendor/codex-acp/dist/package.json'),
+    packaged: 'codex-acp/dist/package.json',
   },
   {
     label: 'extension host bootstrap',
