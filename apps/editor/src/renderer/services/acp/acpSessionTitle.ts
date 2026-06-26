@@ -16,13 +16,21 @@ export function truncateSessionTitle(s: string): string {
   return `${s.slice(0, MAX_SESSION_TITLE_LEN - 1)}…`
 }
 
-/** history.title 优先于 live.title（后者构造时锁定，rename 后不更新）；两者皆无则 undefined。 */
+/**
+ * history.title 优先于 live.title（后者构造时锁定，rename / AI 改名后不更新）；两者皆无则 undefined。
+ *
+ * history 条目按 agent 颁发的 `sessionIdOnAgent` 建 key，而 tab/window 传入的 `sessionId`
+ * 可能是本地 uuid（创建即渲染、握手前还没有 agent id）。所以先用 live session 把本地 id
+ * 解析成 `sessionIdOnAgent` 再查 history，否则本地 uuid 永远 miss，只能回落到锁死的 live.title。
+ */
 export function resolveLiveSessionTitle(
   history: IAcpSessionHistoryService,
   sessions: IAcpSessionService,
   sessionId: string,
 ): string | undefined {
-  return history.get(sessionId)?.title ?? sessions.getById(sessionId)?.title
+  const live = sessions.getById(sessionId)
+  const historyId = live?.sessionIdOnAgent.get() ?? sessionId
+  return history.get(historyId)?.title ?? live?.title
 }
 
 /** 纯函数，便于单测。symbol+sessionTitle 同时存在 → 带 Session 段；否则回退到「name - parent」。 */
