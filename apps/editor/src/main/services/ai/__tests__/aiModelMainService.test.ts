@@ -378,11 +378,11 @@ describe('AiModelMainService', () => {
     service.dispose()
   })
 
-  it('falls back to default groups when the file is a bare array (no longer supported)', async () => {
+  it('yields no groups when the file is a bare array (no longer supported)', async () => {
     const { service } = makeServiceFromFile(JSON.stringify([{ vendor: 'openai', name: 'default' }]))
     const groups = await service.getGroups()
-    // A top-level array is rejected → default ollama/openai groups synthesized.
-    expect(groups.length).toBe(2)
+    // A top-level array is rejected → no groups (defaults are never synthesized).
+    expect(groups).toEqual([])
     expect(await service.getActiveModel('chat')).toBeUndefined()
     service.dispose()
   })

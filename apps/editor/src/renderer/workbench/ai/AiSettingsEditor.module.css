@@ -146,6 +146,93 @@
   font-size: var(--font-size-base);
 }
 
+/* -- add-provider dialog ------------------------------------------------ */
+
+.dialogBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 1000);
+  background: rgba(0, 0, 0, 0.45);
+}
+
+.dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: calc(var(--z-modal, 1000) + 1);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-6);
+  width: 460px;
+  max-width: calc(100vw - 48px);
+  max-height: 80vh;
+  overflow-y: auto;
+  padding: var(--spacing-7);
+  transform: translate(-50%, -50%);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  box-shadow: var(--shadow-lg);
+}
+
+.dialogTitle {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
+}
+
+.dialogBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-5);
+}
+
+.dialogFieldError {
+  font-size: var(--font-size-sm);
+  color: var(--color-error-fg, #f48771);
+}
+
+.verifyRow {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  min-height: 24px;
+}
+
+.verifyStatus {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-editor-fg-muted);
+}
+
+.verifyOk {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-size: var(--font-size-sm);
+  color: var(--color-success-fg, #89d185);
+}
+
+.verifyFail {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-error-fg, #f48771);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-4);
+}
+
 /* -- empty state -------------------------------------------------------- */
 
 .emptyState {

@@ -16,7 +16,12 @@ import type {
   AiRequestOptions,
   AiResponseChunk,
 } from './aiModelTypes.js'
-import type { AiProviderGroup } from './aiModelConfiguration.js'
+import type {
+  AiProviderGroup,
+  AiVendorDescriptor,
+  AiGroupVerifyInput,
+  AiGroupVerifyResult,
+} from './aiModelConfiguration.js'
 
 /** Mirrors VSCode's ILanguageModelChatResponse: stream + final result split. */
 export interface AiResponse {
@@ -97,6 +102,11 @@ export interface IAiModelService {
   getGroups(): Promise<readonly AiProviderGroup[]>
   /** Replace the persisted provider groups (rewrites aiSettings.json; no secrets). */
   updateGroups(groups: readonly AiProviderGroup[]): Promise<void>
+
+  /** Vendors a user can pick when adding a provider group (registered providers + endpoint defaults). */
+  getVendors(): Promise<readonly AiVendorDescriptor[]>
+  /** Probe a candidate group against its endpoint without persisting anything. */
+  verifyGroup(input: AiGroupVerifyInput): Promise<AiGroupVerifyResult>
 
   /** Store a group's API key in encrypted secret storage (plaintext stays in main). */
   setApiKey(vendor: string, group: string, key: string): Promise<void>

@@ -86,6 +86,12 @@ class FakeMain implements IAiModelMainService {
     this.groups = groups
     return Promise.resolve()
   }
+  getVendors() {
+    return Promise.resolve([])
+  }
+  verifyGroup() {
+    return Promise.resolve({ ok: true, modelCount: 0 })
+  }
   setApiKey(): Promise<void> {
     return Promise.resolve()
   }

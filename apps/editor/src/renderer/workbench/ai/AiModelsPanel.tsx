@@ -48,6 +48,7 @@ import {
 import { Badge, Button, Checkbox, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { AddProviderDialog } from './AddProviderDialog.js'
 import styles from './AiSettingsEditor.module.css'
 
 interface GroupState {
@@ -71,6 +72,7 @@ export function AiModelsPanel() {
 
   const [groupStates, setGroupStates] = useState<readonly GroupState[]>([])
   const [collapsed, setCollapsed] = useState<Readonly<Record<string, boolean>>>({})
+  const [addOpen, setAddOpen] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -129,41 +131,7 @@ export function AiModelsPanel() {
     [groupStates, writeGroups],
   )
 
-  const addGroup = useCallback(async () => {
-    const vendor = await quickInput.input({
-      prompt: localize('aiModels.addGroup.vendor', 'Vendor (e.g. openai, ollama)'),
-      placeholder: 'openai',
-      validateInput: (v) =>
-        v.trim().length === 0
-          ? localize('aiModels.addGroup.vendorEmpty', 'Vendor must not be empty.')
-          : undefined,
-    })
-    const trimmedVendor = vendor?.trim()
-    if (!trimmedVendor) return
-    const name = await quickInput.input({
-      prompt: localize('aiModels.addGroup.name', 'Group name'),
-      value: 'default',
-      validateInput: (v) =>
-        v.includes('/')
-          ? localize('aiModels.addGroup.nameSlash', "Group name must not contain '/'.")
-          : v.trim().length === 0
-            ? localize('aiModels.addGroup.nameEmpty', 'Group name must not be empty.')
-            : undefined,
-    })
-    const trimmedName = name?.trim()
-    if (!trimmedName) return
-    if (groupStates.some((s) => s.group.vendor === trimmedVendor && s.group.name === trimmedName)) {
-      notifications.notify({
-        severity: Severity.Warning,
-        message: localize('aiModels.addGroup.exists', 'That provider group already exists.'),
-      })
-      return
-    }
-    await writeGroups([
-      ...groupStates.map((s) => s.group),
-      { vendor: trimmedVendor, name: trimmedName },
-    ])
-  }, [groupStates, notifications, quickInput, writeGroups])
+  const addGroup = useCallback(() => setAddOpen(true), [])
 
   const removeGroup = useCallback(
     async (index: number) => {
@@ -303,7 +271,7 @@ export function AiModelsPanel() {
   return (
     <div className={styles['panel']}>
       <div className={styles['panelToolbar']}>
-        <Button onClick={() => void addGroup()}>
+        <Button onClick={() => addGroup()}>
           <Plus size={14} strokeWidth={2} className={styles['btnIcon']} />
           {localize('aiModels.addGroup', 'Add Provider Group')}
         </Button>
@@ -325,7 +293,7 @@ export function AiModelsPanel() {
               'Add a provider group to connect an AI service (OpenAI-compatible endpoint, Ollama, …).',
             )}
           </div>
-          <Button onClick={() => void addGroup()}>
+          <Button onClick={() => addGroup()}>
             <Plus size={14} strokeWidth={2} className={styles['btnIcon']} />
             {localize('aiModels.addGroup', 'Add Provider Group')}
           </Button>
@@ -362,6 +330,17 @@ export function AiModelsPanel() {
             )
           })}
         </div>
+      )}
+
+      {addOpen && (
+        <AddProviderDialog
+          existingGroups={groupStates.map((s) => s.group)}
+          onClose={() => setAddOpen(false)}
+          onCreated={() => {
+            setAddOpen(false)
+            void reload()
+          }}
+        />
       )}
     </div>
   )

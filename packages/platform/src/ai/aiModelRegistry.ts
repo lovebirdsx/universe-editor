@@ -45,6 +45,11 @@ export class AiModelRegistry extends Disposable {
     return this._providers.get(vendor)
   }
 
+  /** Vendors with a registered provider. */
+  getVendors(): readonly string[] {
+    return [...this._providers.keys()]
+  }
+
   /**
    * Replace the active group set, invalidating all cached model lists (a group
    * change is typically a config or key change, both of which require re-enumeration).

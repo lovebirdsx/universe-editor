@@ -15,6 +15,8 @@ import {
   Emitter,
   generateUuid,
   reviveError,
+  type AiGroupVerifyInput,
+  type AiGroupVerifyResult,
   type AiMessage,
   type AiModelConfiguration,
   type AiModelMetadata,
@@ -22,6 +24,7 @@ import {
   type AiProviderGroup,
   type AiRequestOptions,
   type AiResponse,
+  type AiVendorDescriptor,
   type CancellationToken,
   type IAiModelService,
   type Event,
@@ -120,6 +123,14 @@ export class AiModelClientService extends Disposable implements IAiModelService 
 
   updateGroups(groups: readonly AiProviderGroup[]): Promise<void> {
     return this._main.updateGroups(groups)
+  }
+
+  getVendors(): Promise<readonly AiVendorDescriptor[]> {
+    return this._main.getVendors()
+  }
+
+  verifyGroup(input: AiGroupVerifyInput): Promise<AiGroupVerifyResult> {
+    return this._main.verifyGroup(input)
   }
 
   setApiKey(vendor: string, group: string, key: string): Promise<void> {

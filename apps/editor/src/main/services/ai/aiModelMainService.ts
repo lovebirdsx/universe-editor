@@ -26,6 +26,8 @@ import {
   type AiActiveModelKind,
   type AiActiveModels,
   type AiCustomModelConfig,
+  type AiGroupVerifyInput,
+  type AiGroupVerifyResult,
   type AiMessage,
   type AiMessagePart,
   type AiModelConfiguration,
@@ -37,6 +39,7 @@ import {
   type AiResolvedGroup,
   type AiResponse,
   type AiSettingsFile,
+  type AiVendorDescriptor,
 } from '@universe-editor/platform'
 import { type ParseError, parse } from 'jsonc-parser'
 import { IConfigLocationService } from '../../../shared/ipc/configLocationService.js'
@@ -61,11 +64,22 @@ const AI_SETTINGS_FILE = 'aiSettings.json'
  */
 const METADATA_REQUEST_TIMEOUT_MS = 10_000
 
-/** Out-of-box groups synthesized when aiSettings.json is missing or empty. */
-const DEFAULT_GROUPS: readonly AiProviderGroup[] = [
-  { name: 'default', vendor: 'ollama' },
-  { name: 'default', vendor: 'openai' },
-]
+/**
+ * Endpoint defaults per built-in vendor, surfaced in the "add provider" picker.
+ * Vendors without an entry still appear (from the registry) with no defaults.
+ */
+const VENDOR_DESCRIPTORS: Readonly<Record<string, Omit<AiVendorDescriptor, 'vendor'>>> = {
+  openai: {
+    label: 'OpenAI (compatible)',
+    defaultBaseUrl: 'https://api.openai.com/v1',
+    requiresApiKey: true,
+  },
+  ollama: {
+    label: 'Ollama',
+    defaultBaseUrl: 'http://127.0.0.1:11434',
+    requiresApiKey: false,
+  },
+}
 
 /** Mutable working copy of a group, used when editing the persisted file. */
 interface MutableGroup {
@@ -96,7 +110,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
   readonly onDidChangeActiveModel = this._onDidChangeActiveModel.event
 
   private readonly _inflight = new Map<string, CancellationTokenSource>()
-  private _persistedGroups: readonly AiProviderGroup[] = DEFAULT_GROUPS
+  private _persistedGroups: readonly AiProviderGroup[] = []
   private _activeModels: AiActiveModels = {}
   private readonly _ready: Promise<void>
 
@@ -191,6 +205,48 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
     await this._reload()
   }
 
+  async getVendors(): Promise<readonly AiVendorDescriptor[]> {
+    await this._ready
+    return this._registry.getVendors().map((vendor) => {
+      const desc = VENDOR_DESCRIPTORS[vendor]
+      return {
+        vendor,
+        label: desc?.label ?? vendor,
+        requiresApiKey: desc?.requiresApiKey ?? false,
+        ...(desc?.defaultBaseUrl !== undefined ? { defaultBaseUrl: desc.defaultBaseUrl } : {}),
+      }
+    })
+  }
+
+  async verifyGroup(input: AiGroupVerifyInput): Promise<AiGroupVerifyResult> {
+    await this._ready
+    const provider = this._registry.getProvider(input.vendor)
+    if (!provider) {
+      return { ok: false, modelCount: 0, error: `No provider registered for '${input.vendor}'.` }
+    }
+    // A throwaway resolved group: the probed key is read from the input only and
+    // never written to secret storage or aiSettings.json.
+    const group: AiResolvedGroup = {
+      vendor: input.vendor,
+      name: input.name,
+      ...(input.baseUrl !== undefined ? { baseUrl: input.baseUrl } : {}),
+      getApiKey: () => Promise.resolve(input.apiKey),
+    }
+    try {
+      const models = await this._withTimeoutToken((token) => provider.provideModels(group, token))
+      if (models.length === 0) {
+        return {
+          ok: false,
+          modelCount: 0,
+          error: 'The endpoint responded but no models are available.',
+        }
+      }
+      return { ok: true, modelCount: models.length }
+    } catch (err) {
+      return { ok: false, modelCount: 0, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
   async setApiKey(vendor: string, group: string, key: string): Promise<void> {
     await this._secrets.set(secretKey(vendor, group), key)
     await this._reload()
@@ -278,7 +334,7 @@ export class AiModelMainService extends Disposable implements IAiModelMainServic
       text = ''
     }
     const parsed = parseSettings(text)
-    this._persistedGroups = parsed.groups.length > 0 ? parsed.groups : DEFAULT_GROUPS
+    this._persistedGroups = parsed.groups
     this._activeModels = parsed.activeModels
     this._registry.setGroups(this._toResolved(this._persistedGroups))
   }

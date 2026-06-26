@@ -72,6 +72,37 @@ export interface AiSettingsFile {
   readonly activeModels?: AiActiveModels
 }
 
+/** A selectable vendor in the "add provider" flow, with its endpoint defaults. */
+export interface AiVendorDescriptor {
+  /** Vendor id bound to a registered provider, e.g. 'openai' or 'ollama'. */
+  readonly vendor: string
+  /** Human-friendly name shown in the picker. */
+  readonly label: string
+  /** Endpoint the provider falls back to when a group sets no baseUrl. */
+  readonly defaultBaseUrl?: string
+  /** Whether this vendor needs an API key to enumerate / call models. */
+  readonly requiresApiKey: boolean
+}
+
+/** A candidate provider group to probe for validity (never persisted as-is). */
+export interface AiGroupVerifyInput {
+  readonly vendor: string
+  readonly name: string
+  readonly baseUrl?: string
+  /** Probed in-memory only; the caller persists it separately if creation succeeds. */
+  readonly apiKey?: string
+}
+
+/** Outcome of probing a candidate group against its endpoint. */
+export interface AiGroupVerifyResult {
+  /** True when the endpoint responded and at least one model is reachable. */
+  readonly ok: boolean
+  /** Number of models the endpoint enumerated (plus any declared). */
+  readonly modelCount: number
+  /** Human-readable failure reason when `ok` is false. */
+  readonly error?: string
+}
+
 /** Stable cache / lookup key for a group: `vendor/name`. */
 export function groupKey(group: { readonly vendor: string; readonly name: string }): string {
   return `${group.vendor}/${group.name}`
