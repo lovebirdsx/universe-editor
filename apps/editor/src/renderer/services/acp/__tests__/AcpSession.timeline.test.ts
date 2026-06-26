@@ -470,6 +470,7 @@ describe('AcpSession.timeline', () => {
 
   it('folds codex-acp out-of-band terminal output into the execute card text', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     // The fork starts an execute tool call whose `content` carries only a
@@ -521,6 +522,7 @@ describe('AcpSession.timeline', () => {
 
   it('a full terminal_output snapshot replaces accumulated deltas', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
