@@ -1,5 +1,45 @@
 [
   {
+    "version": "0.1.23",
+    "date": "2026-06-26",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "同步SCM视图与活动仓库",
+          "codex acp使用agentclientprotocol/codex-acp，支持codex基于session的费用计算",
+          "添加汇率服务并支持模型成本明细",
+          "Session Editor中的codex的展开模式从折叠改成default",
+          "添加后台预取agent二进制文件功能",
+          "添加 Codex 二进制文件版本管理面板",
+          "添加 Codex 配置服务支持",
+          "加入claude 二进制文件可视化配置，并支持自动更新",
+          "支持监听工作区外文件变更",
+          "安装程序瘦身&windows defender自动排除",
+          "claude 配置的可视化支持",
+          "CLI 支持`ue <目录>`打开工作区",
+          "安装时添加 CLI 到系统 PATH",
+          "支持自定义安装目录",
+          "支持双击打开文件",
+          "加入工作区bookmark的支持",
+          "记录Codex Edit diff内容为会话文件变更",
+          "添加编辑器左右移动功能"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "补全漏翻的中文文本",
+          "移除OpenRecentFilesAction，由GoToFile替代",
+          "聊天区域自动滚动修复",
+          "修复alt+shift+e打开文件夹异常"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.22",
     "date": "2026-06-23",
     "groups": [
