@@ -81,10 +81,18 @@ export class ConfigOptionStateMachine {
   async setConfigOption(configId: string, value: string): Promise<void> {
     const conn = this._deps.getConn()
     const sessionId = this._deps.sessionInfo.getSessionId()
-    // Connection not yet attached (session still connecting). The config bar is
-    // hidden until configOptions arrive (post-attach), so this should not happen
-    // in practice — guard anyway so a stray call no-ops instead of throwing.
-    if (conn === undefined || sessionId === undefined) return
+    // Connection not yet attached (session still connecting). The config bar now
+    // renders optimistically from the cached bag before the handshake lands, so a
+    // user can pick a value during this window. Apply it locally + persist it as
+    // the per-agent default; once the connection attaches, the service's
+    // `_scheduleConfigPushBack` reads these defaults and pushes the diff to the
+    // agent, so the choice is not lost.
+    if (conn === undefined || sessionId === undefined) {
+      this._applyLocalValue(configId, value)
+      const { agentId } = this._deps.sessionInfo
+      this._deps.defaults?.setDefault(agentId, configId, value)
+      return
+    }
     const params: SetSessionConfigOptionRequest = {
       sessionId,
       configId,
@@ -103,5 +111,17 @@ export class ConfigOptionStateMachine {
     } finally {
       this._pendingPushes.delete(configId)
     }
+  }
+
+  /** Optimistically flip a select option's `currentValue` in the local observable. */
+  private _applyLocalValue(configId: string, value: string): void {
+    const cur = this.configOptions.get()
+    let changed = false
+    const next = cur.map((o) => {
+      if (o.id !== configId || o.type !== 'select' || o.currentValue === value) return o
+      changed = true
+      return { ...o, currentValue: value }
+    })
+    if (changed) this.configOptions.set(next, undefined)
   }
 }

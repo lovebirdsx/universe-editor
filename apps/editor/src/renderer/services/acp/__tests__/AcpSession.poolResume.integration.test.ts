@@ -75,6 +75,7 @@ import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
@@ -449,6 +450,7 @@ function build(storage: FakeStorage): Built {
     history,
     storage,
     agentDefaults,
+    new StubConfigOptionsCache(),
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
     FAKE_HOST,

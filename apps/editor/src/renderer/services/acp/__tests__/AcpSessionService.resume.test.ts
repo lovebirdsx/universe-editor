@@ -72,6 +72,7 @@ import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
@@ -408,6 +409,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     history,
     storage,
     agentDefaults,
+    new StubConfigOptionsCache(),
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
     FAKE_HOST,
@@ -900,6 +902,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -1012,6 +1015,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -1062,6 +1066,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -1107,6 +1112,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -1157,6 +1163,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
         telemetry,
         new StubLoggerService(),
       ),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,

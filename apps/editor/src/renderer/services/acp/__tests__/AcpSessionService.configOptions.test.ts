@@ -60,6 +60,7 @@ import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
   IAcpClientService,
@@ -339,6 +340,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   client: FakeAcpClientService
   history: AcpSessionHistoryService
   agentDefaults: AcpAgentDefaultsService
+  configOptionsCache: StubConfigOptionsCache
 } {
   const client = new FakeAcpClientService(opts)
   const config: IConfigurationService = new ConfigurationService()
@@ -356,6 +358,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     telemetry,
     new StubLoggerService(),
   )
+  const configOptionsCache = new StubConfigOptionsCache()
   const svc = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
@@ -369,11 +372,12 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     history,
     new FakeStorage(false),
     agentDefaults,
+    configOptionsCache,
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
     FAKE_HOST,
   )
-  return { svc, client, history, agentDefaults }
+  return { svc, client, history, agentDefaults, configOptionsCache }
 }
 
 describe('AcpSessionService — init', () => {
@@ -402,6 +406,90 @@ describe('AcpSessionService — init', () => {
     const opts = s.configOptions.get()
     expect(opts).toHaveLength(1)
     expect(opts[0]).toEqual(fixture)
+  })
+
+  it('writes the session/new bag back into the per-agent cache', async () => {
+    const fixture: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const built = buildService({ newSessionResult: { configOptions: [fixture] } })
+    svc = built.svc
+    const s = await svc.createSession()
+    await s.whenConnected()
+    expect(built.configOptionsCache.get('fake')).toEqual([fixture])
+  })
+})
+
+describe('AcpSessionService — optimistic config bar', () => {
+  let svc: AcpSessionService
+
+  afterEach(() => {
+    svc?.dispose()
+  })
+
+  const CACHED: SessionConfigOption = {
+    id: 'model',
+    name: 'Model',
+    category: 'model',
+    type: 'select',
+    currentValue: 'sonnet',
+    options: [
+      { value: 'sonnet', name: 'Sonnet' },
+      { value: 'opus', name: 'Opus' },
+    ],
+  }
+
+  it('renders cached options synchronously before the handshake completes', () => {
+    const built = buildService({ newSessionResult: { configOptions: [CACHED] } })
+    svc = built.svc
+    built.configOptionsCache.set('fake', [CACHED])
+    // Do NOT await whenConnected — assert the bar has options the moment the
+    // session is created (the handshake is still in flight).
+    const created = svc.activeSession.get()
+    expect(created).toBeUndefined()
+    void svc.createSession()
+    const session = svc.activeSession.get()!
+    expect(session.configOptions.get()).toHaveLength(1)
+    expect(session.configOptions.get()[0]?.id).toBe('model')
+  })
+
+  it('overrides the cached currentValue with the saved per-agent default for the placeholder', async () => {
+    const built = buildService({ newSessionResult: { configOptions: [CACHED] } })
+    svc = built.svc
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    built.configOptionsCache.set('fake', [CACHED])
+    const created = await svc.createSession()
+    // Optimistic placeholder shows 'opus' (the user's saved default), not the
+    // stale cached 'sonnet'.
+    expect(created.configOptions.get()[0]?.currentValue).toBe('opus')
+  })
+
+  it('pushes an optimistic pick (made before connect) to the agent once attached', async () => {
+    const acked: SessionConfigOption = { ...CACHED, currentValue: 'opus' }
+    const built = buildService({
+      newSessionResult: { configOptions: [CACHED] },
+      setConfigOptionResult: { configOptions: [acked] },
+    })
+    svc = built.svc
+    await built.agentDefaults.initialize()
+    built.configOptionsCache.set('fake', [CACHED])
+    const s = await svc.createSession()
+    // User picks 'opus' on the optimistic bar while still connecting.
+    await s.setConfigOption('model', 'opus')
+    // Local value flips immediately even though no connection yet.
+    expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
+    // Now let the handshake complete; the push-back reads the saved default.
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 20))
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toHaveLength(1)
+    expect(agent.setConfigOptionCalls[0]).toMatchObject({ configId: 'model', value: 'opus' })
   })
 })
 

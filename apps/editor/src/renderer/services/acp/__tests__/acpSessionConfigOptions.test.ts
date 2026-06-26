@@ -230,4 +230,23 @@ describe('ConfigOptionStateMachine', () => {
     })
     expect(sm.configOptions.get()[0]?.currentValue).toBe('c')
   })
+
+  it('setConfigOption applies locally + persists default when not connected (optimistic)', async () => {
+    const fakeDefaults = makeFakeDefaults()
+    const sm = new ConfigOptionStateMachine({
+      // No live connection — simulates the optimistic placeholder window before
+      // attachConnection lands.
+      getConn: () => undefined,
+      telemetry: new NoopTelemetryService(),
+      sessionInfo: { localId: 'local-1', agentId: 'fake', getSessionId: () => undefined },
+      defaults: fakeDefaults.defaults,
+    })
+    sm.applyInitState([makeConfigOption('MODEL', 'a')])
+    await sm.setConfigOption('MODEL', 'b')
+    // Local observable flips immediately so the UI reflects the pick.
+    expect(sm.configOptions.get()[0]?.currentValue).toBe('b')
+    // The choice is persisted as the per-agent default so the post-connect
+    // push-back picks it up.
+    expect(fakeDefaults.calls).toEqual([{ agentId: 'fake', configId: 'MODEL', value: 'b' }])
+  })
 })

@@ -63,6 +63,7 @@ import type { AskUserQuestionRequest } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
   IAcpClientService,
@@ -394,6 +395,7 @@ describe('AcpSessionService', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -685,6 +687,7 @@ describe('AcpSessionService', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -725,6 +728,7 @@ describe('AcpSessionService', () => {
         makeHistory(),
         new FakeStorage(),
         makeAgentDefaults(),
+        new StubConfigOptionsCache(),
         new StubSessionChangeTracker(),
         new StubSessionTitleService(),
         FAKE_HOST,
@@ -977,6 +981,7 @@ describe('AcpSessionService — startup timeout', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,
@@ -1008,6 +1013,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       makeHistory(),
       new FakeStorage(),
       makeAgentDefaults(),
+      new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
       FAKE_HOST,

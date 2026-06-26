@@ -56,6 +56,7 @@ import { AcpSessionService } from '../acpSessionService.js'
 import { AcpSessionHistoryService } from '../acpSessionHistory.js'
 import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
+import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
 import {
   IAcpClientService,
@@ -294,6 +295,7 @@ function makeService(
     makeHistory(),
     new FakeStorage(),
     makeAgentDefaults(),
+    new StubConfigOptionsCache(),
     changeTracker,
     new StubSessionTitleService(),
     FAKE_HOST,

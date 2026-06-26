@@ -56,6 +56,15 @@ test.describe('@p1 agents — scroll position survives editor tab switch', () =>
       await page.evaluate((t) => window.__E2E__!.sendAcpPrompt(t), `${i}\n${long}`)
     }
 
+    // 等所有 echo 回复落地：会话创建/派发已异步化，sendAcpPrompt 的 await 只保证
+    // prompt 发出，不等 agent 的流式回复渲染。必须等到 8 条 user + 8 条 agent 都
+    // 进入 timeline——否则滚动时 timeline 仍只有 8 条 user（< 阈值 10），走非虚拟
+    // 路径且不记锚点；随后 echo 涌入使内容高度暴涨，之前那个裸 scrollTop 就退化
+    // 成顶部，恢复必然失败。
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages().length), { timeout: 10000 })
+      .toBe(16)
+
     // 等内容真正可滚动。
     await expect
       .poll(() =>
@@ -63,6 +72,26 @@ test.describe('@p1 agents — scroll position survives editor tab switch', () =>
           const el = document.querySelector(sel)?.parentElement
           return el ? el.scrollHeight - el.clientHeight : 0
         }, TIMELINE),
+      )
+      .toBeGreaterThan(100)
+
+    // 再等高度稳定（流式 chunk + Monaco 着色 + 行高懒测量会让 scrollHeight 持续
+    // 变化几帧）。两次采样相等才认为已收敛，避免在内容仍增长时记下会失效的位置。
+    await expect
+      .poll(
+        async () => {
+          const a = await page.evaluate((sel) => {
+            const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+            return el ? el.scrollHeight : -1
+          }, TIMELINE)
+          await page.waitForTimeout(150)
+          const b = await page.evaluate((sel) => {
+            const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+            return el ? el.scrollHeight : -2
+          }, TIMELINE)
+          return a === b ? a : -1
+        },
+        { timeout: 5000 },
       )
       .toBeGreaterThan(100)
 

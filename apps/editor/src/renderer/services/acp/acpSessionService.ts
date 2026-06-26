@@ -45,6 +45,7 @@ import {
   type NewSessionRequest,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SessionConfigOption,
   type SessionNotification,
 } from '@agentclientprotocol/sdk'
 import {
@@ -63,6 +64,7 @@ import { IAcpPermissionHandler } from './acpPermissionHandler.js'
 import { IAcpSessionHistoryService, type AcpSessionHistoryEntry } from './acpSessionHistory.js'
 import { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
+import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
 import { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import { AcpChatViewStateCache } from './acpChatViewStateCache.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
@@ -221,6 +223,8 @@ export class AcpSessionService
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IStorageService private readonly _storage: IStorageService,
     @IAcpAgentDefaultsService private readonly _agentDefaults: IAcpAgentDefaultsService,
+    @IAcpConfigOptionsCacheService
+    private readonly _configOptionsCache: IAcpConfigOptionsCacheService,
     @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
     @IAcpSessionTitleService private readonly _titleService: IAcpSessionTitleService,
     @IHostService hostService: IHostService,
@@ -363,6 +367,15 @@ export class AcpSessionService
     )
     this._register(session)
     this._wireAuthGuidance(session)
+    // Optimistic config bar: seed the last-known option bag for this agent
+    // (currentValue overridden by the user's saved per-agent defaults) so the
+    // config switches render the instant the session appears, instead of
+    // popping in 1-5s later when session/new returns the real bag. The real bag
+    // replaces this once the handshake lands (see _connectSession).
+    const seededOptions = this._seedConfigOptions(resolvedAgentId)
+    if (seededOptions.length > 0) {
+      session.applyInitState({ configOptions: seededOptions })
+    }
     transaction((tx) => {
       this._sessions = [...this._sessions, session]
       this.sessions.set(this._sessions, tx)
@@ -432,6 +445,9 @@ export class AcpSessionService
         hasMessages: false,
       })
       session.applyInitState(initState)
+      if (result.configOptions) {
+        this._configOptionsCache.set(resolvedAgentId, result.configOptions)
+      }
       session.attachConnection(activeConn, result.sessionId)
       this._scheduleConfigPushBack(session, this._agentDefaults.getDefaults(resolvedAgentId))
     } catch (err) {
@@ -604,6 +620,7 @@ export class AcpSessionService
       )
       if (loadResult?.configOptions) {
         session.applyInitState({ configOptions: loadResult.configOptions })
+        this._configOptionsCache.set(entry.agentId, loadResult.configOptions)
       }
       this._telemetry.publicLog('acp.session_resumed', {
         agentId: entry.agentId,
@@ -725,6 +742,27 @@ export class AcpSessionService
 
   deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
     return this._coordinator.deleteOnAgent(sessionId)
+  }
+
+  /**
+   * Build the optimistic `configOptions` bag for a brand-new session of `agentId`
+   * from the persisted cache, overriding each option's `currentValue` with the
+   * user's saved per-agent default so the placeholder shows exactly the value the
+   * session will end up with (avoiding a server-default → user-value flicker).
+   * Returns an empty array when nothing is cached (cold start / first session).
+   */
+  private _seedConfigOptions(agentId: string): readonly SessionConfigOption[] {
+    const cached = this._configOptionsCache.get(agentId)
+    if (cached.length === 0) return cached
+    const defaults = this._agentDefaults.getDefaults(agentId)
+    if (Object.keys(defaults).length === 0) return cached
+    return cached.map((opt) => {
+      if (opt.type !== 'select') return opt
+      const desired = defaults[opt.id]
+      return desired !== undefined && desired !== opt.currentValue
+        ? { ...opt, currentValue: desired }
+        : opt
+    })
   }
 
   /**
