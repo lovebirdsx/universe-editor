@@ -1143,6 +1143,11 @@
   flex-shrink: 0;
 }
 
+.sessionRowCost {
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
 .sessionClose {
   background: none;
   border: 0;

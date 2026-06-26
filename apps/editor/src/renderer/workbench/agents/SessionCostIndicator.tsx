@@ -186,7 +186,7 @@ function ModelRow({ model, rate }: { model: AcpModelCost; rate: number }) {
 /** Default rate used only before the async rate arrives; main owns the real fallback. */
 const FALLBACK_RATE = 7.2
 
-function formatCny(value: number): string {
+export function formatCny(value: number): string {
   // Codex estimates for cheap models (e.g. mini, cache-heavy turns) land in the
   // few-fen range; 1-decimal rounding would collapse them to ¥0.0. Widen the
   // precision for sub-¥1 amounts so they stay legible, while keeping larger

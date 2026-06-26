@@ -22,6 +22,8 @@ import {
 import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { AgentIcon } from './agentIcon.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
+import { formatCny } from './SessionCostIndicator.js'
+import { useUsdToCnyRate } from './useExchangeRate.js'
 import styles from './agents.module.css'
 
 function scoreSession(entry: AcpSessionHistoryEntry, query: string): number {
@@ -59,10 +61,24 @@ function relativeTime(timestamp: number): string {
   })
 }
 
+const FALLBACK_RATE = 7.2
+
 function LiveSessionTimer({ session }: { session: IAcpSession }) {
   const ms = useSessionTimer(session)
   if (ms === 0) return null
   return <span className={styles['sessionRowTimer']}>{formatRunningTime(ms)}</span>
+}
+
+function LiveSessionCost({ session, rate }: { session: IAcpSession; rate: number }) {
+  const usage = useObservable(session.usage)
+  const totalUsd = usage?.cost?.amount
+  if (usage == null || totalUsd == null || totalUsd <= 0) return null
+  const estimated = usage.costEstimated === true
+  return (
+    <span className={styles['sessionRowCost']}>
+      {estimated ? '≈' : ''}¥{formatCny(totalUsd * rate)}
+    </span>
+  )
 }
 
 export interface SessionListBodyProps {
@@ -82,15 +98,19 @@ function SessionRow({
   isActive,
   onActivate,
   onRemove,
+  rate,
 }: {
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
   isActive: boolean
   onActivate: () => void
   onRemove: () => void
+  rate: number
 }) {
   const isRunning = liveSession !== undefined
   const historyMs = entry.accumulatedRunningMs ?? 0
+  const historyCostUsd = entry.usage?.cost?.amount
+  const historyCostEstimated = entry.usage?.costEstimated === true
   return (
     <li
       className={styles['sessionRow']}
@@ -110,6 +130,13 @@ function SessionRow({
             <LiveSessionTimer session={liveSession} />
           ) : historyMs > 0 ? (
             <span className={styles['sessionRowTimer']}>{formatRunningTime(historyMs)}</span>
+          ) : null}
+          {liveSession !== undefined ? (
+            <LiveSessionCost session={liveSession} rate={rate} />
+          ) : historyCostUsd != null && historyCostUsd > 0 ? (
+            <span className={styles['sessionRowCost']}>
+              {historyCostEstimated ? '≈' : ''}¥{formatCny(historyCostUsd * rate)}
+            </span>
           ) : null}
         </span>
       </div>
@@ -140,6 +167,9 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const searchOpen = useObservable(filterService.searchOpen)
   const query = useObservable(filterService.query)
   const filtered = useMemo(() => filterSessions(entries, query), [entries, query])
+
+  const exchangeRate = useUsdToCnyRate()
+  const rate = exchangeRate?.rate ?? FALLBACK_RATE
 
   const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
@@ -190,6 +220,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 entry={entry}
                 liveSession={liveSession}
                 isActive={isActive}
+                rate={rate}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
