@@ -819,6 +819,12 @@
   white-space: nowrap;
 }
 
+.usageWrap {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
 .sessionCostWrap {
   position: relative;
   display: inline-flex;
