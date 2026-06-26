@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
-import { IEditorInput } from '@universe-editor/platform'
+import { IEditorInput, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { ITimerService, type IStartupMetrics } from '../../services/performance/TimerService.js'
 import styles from './StartupPerformanceEditor.module.css'
@@ -31,7 +31,9 @@ export function StartupPerformanceEditor(_props: { input: IEditorInput }) {
   if (!metrics) {
     return (
       <div className={styles['root']} data-testid="startup-performance">
-        <div className={styles['measuring']}>Measuring startup performance…</div>
+        <div className={styles['measuring']}>
+          {localize('startupPerformance.measuring', 'Measuring startup performance…')}
+        </div>
       </div>
     )
   }
@@ -40,18 +42,21 @@ export function StartupPerformanceEditor(_props: { input: IEditorInput }) {
 
   return (
     <div className={styles['root']} data-testid="startup-performance">
-      <h1 className={styles['title']}>Startup Performance</h1>
+      <h1 className={styles['title']}>
+        {localize('startupPerformance.title', 'Startup Performance')}
+      </h1>
       <div className={styles['summary']}>
-        Total startup time: <strong>{(metrics.totalTime / 1000).toFixed(2)} s</strong>
+        {localize('startupPerformance.total', 'Total startup time:')}{' '}
+        <strong>{(metrics.totalTime / 1000).toFixed(2)} s</strong>
       </div>
 
-      <h2 className={styles['heading']}>Phases</h2>
+      <h2 className={styles['heading']}>{localize('startupPerformance.phases', 'Phases')}</h2>
       <table className={styles['table']}>
         <thead>
           <tr>
-            <th>From</th>
-            <th>To</th>
-            <th className={styles['num']}>Duration</th>
+            <th>{localize('startupPerformance.from', 'From')}</th>
+            <th>{localize('startupPerformance.to', 'To')}</th>
+            <th className={styles['num']}>{localize('startupPerformance.duration', 'Duration')}</th>
           </tr>
         </thead>
         <tbody>
@@ -65,12 +70,14 @@ export function StartupPerformanceEditor(_props: { input: IEditorInput }) {
         </tbody>
       </table>
 
-      <h2 className={styles['heading']}>Marks</h2>
+      <h2 className={styles['heading']}>{localize('startupPerformance.marks', 'Marks')}</h2>
       <table className={styles['table']}>
         <thead>
           <tr>
-            <th>Name</th>
-            <th className={styles['num']}>Offset from start</th>
+            <th>{localize('common.name', 'Name')}</th>
+            <th className={styles['num']}>
+              {localize('startupPerformance.offset', 'Offset from start')}
+            </th>
           </tr>
         </thead>
         <tbody>

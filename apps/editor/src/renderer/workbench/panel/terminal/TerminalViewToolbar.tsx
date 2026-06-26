@@ -7,7 +7,7 @@ import {
   TerminalSquare,
   Trash2,
 } from 'lucide-react'
-import { ICommandService } from '@universe-editor/platform'
+import { ICommandService, localize } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService, useObservable } from '../../useService.js'
 import styles from './TerminalViewToolbar.module.css'
@@ -86,7 +86,7 @@ export function TerminalViewToolbar() {
 
   const shells = shellsForPlatform()
   const activeTerminal = terminals.find((t) => t.id === activeId)
-  const activeLabel = activeTerminal?.name ?? 'No terminals'
+  const activeLabel = activeTerminal?.name ?? localize('terminal.noTerminals', 'No terminals')
 
   return (
     <div className={styles['toolbar']}>
@@ -98,7 +98,7 @@ export function TerminalViewToolbar() {
           onClick={() => setShowInstanceMenu((v) => !v)}
           disabled={terminals.length === 0}
           title={activeLabel}
-          aria-label="Select terminal instance"
+          aria-label={localize('terminal.selectInstance', 'Select terminal instance')}
           aria-haspopup="listbox"
           aria-expanded={showInstanceMenu}
           data-testid="terminal-instance-select"
@@ -134,7 +134,7 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title="Open Terminal in Editor"
+        title={localize('action.terminalInEditor.title', 'Open Terminal in Editor')}
         onClick={handleOpenInEditor}
       >
         <ExternalLink size={14} />
@@ -143,7 +143,7 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title="Split Terminal (Ctrl+Shift+5)"
+        title={localize('terminal.splitWithKey', 'Split Terminal (Ctrl+Shift+5)')}
         onClick={handleSplit}
         disabled={!activeId}
       >
@@ -153,7 +153,7 @@ export function TerminalViewToolbar() {
       <button
         type="button"
         className={styles['iconBtn']}
-        title="Close Terminal"
+        title={localize('terminal.close', 'Close Terminal')}
         onClick={handleClose}
         disabled={!activeId}
       >
@@ -164,7 +164,7 @@ export function TerminalViewToolbar() {
         <button
           type="button"
           className={styles['newBtn']}
-          title="New Terminal"
+          title={localize('action.newTerminal.title', 'New Terminal')}
           onClick={handleNewDefault}
         >
           <Plus size={14} />
@@ -173,7 +173,7 @@ export function TerminalViewToolbar() {
           ref={chevronRef}
           type="button"
           className={`${styles['chevronBtn']} ${showShellMenu ? styles['active'] : ''}`}
-          title="Select Shell"
+          title={localize('terminal.selectShell', 'Select Shell')}
           onClick={() => setShowShellMenu((v) => !v)}
         >
           <ChevronDown size={10} />

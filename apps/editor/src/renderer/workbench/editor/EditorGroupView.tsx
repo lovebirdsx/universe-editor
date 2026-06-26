@@ -619,7 +619,7 @@ export function EditorGroupView({
             <button
               className={styles['tabScrollBtn']}
               onClick={() => scrollTabs('left')}
-              aria-label="Scroll tabs left"
+              aria-label={localize('editorTabs.scrollLeft', 'Scroll tabs left')}
               tabIndex={-1}
             >
               <ChevronLeft size={16} strokeWidth={1.75} aria-hidden="true" />
@@ -683,7 +683,7 @@ export function EditorGroupView({
             <button
               className={styles['tabScrollBtn']}
               onClick={() => scrollTabs('right')}
-              aria-label="Scroll tabs right"
+              aria-label={localize('editorTabs.scrollRight', 'Scroll tabs right')}
               tabIndex={-1}
             >
               <ChevronRight size={16} strokeWidth={1.75} aria-hidden="true" />

@@ -440,7 +440,10 @@ export function PromptInput({
       <div className={styles['promptActions']}>
         <ConfigOptionsBar session={session} />
         {totalRunningMs > 0 || running ? (
-          <span className={styles['sessionTimerInline']} title="Session running time">
+          <span
+            className={styles['sessionTimerInline']}
+            title={localize('acp.session.runningTime', 'Session running time')}
+          >
             {formatRunningTime(totalRunningMs)}
           </span>
         ) : null}

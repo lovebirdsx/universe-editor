@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Component, type ErrorInfo, type ReactNode } from 'react'
-import type { ILogger } from '@universe-editor/platform'
+import { localize, type ILogger } from '@universe-editor/platform'
 
 interface Props {
   logger: ILogger
@@ -53,7 +53,9 @@ export class WorkbenchErrorBoundary extends Component<Props, State> {
           background: '#1e1e1e',
         }}
       >
-        <h2 style={{ margin: 0, fontSize: 18, color: '#f48771' }}>Something went wrong</h2>
+        <h2 style={{ margin: 0, fontSize: 18, color: '#f48771' }}>
+          {localize('workbenchError.title', 'Something went wrong')}
+        </h2>
         {error && (
           <pre
             style={{
@@ -83,7 +85,7 @@ export class WorkbenchErrorBoundary extends Component<Props, State> {
             fontSize: 13,
           }}
         >
-          Reload Window
+          {localize('action.reloadWindow.title', 'Reload Window')}
         </button>
       </div>
     )

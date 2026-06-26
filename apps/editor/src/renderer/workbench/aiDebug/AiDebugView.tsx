@@ -177,19 +177,19 @@ function RecordDetail({ id }: { id: string }) {
 
       <Section title={localize('aiDebug.section.meta', 'Request')}>
         <dl className={styles['kv']}>
-          <dt>modelId</dt>
+          <dt>{localize('aiDebug.meta.modelId', 'modelId')}</dt>
           <dd>{record.modelId}</dd>
-          <dt>status</dt>
+          <dt>{localize('aiDebug.meta.status', 'status')}</dt>
           <dd>{record.status}</dd>
           {record.durationMs !== undefined && (
             <>
-              <dt>duration</dt>
+              <dt>{localize('aiDebug.meta.duration', 'duration')}</dt>
               <dd>{record.durationMs}ms</dd>
             </>
           )}
           {record.usage && (
             <>
-              <dt>tokens</dt>
+              <dt>{localize('aiDebug.meta.tokens', 'tokens')}</dt>
               <dd>
                 {record.usage.inputTokens}→{record.usage.outputTokens}
               </dd>

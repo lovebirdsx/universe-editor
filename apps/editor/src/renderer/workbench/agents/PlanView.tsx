@@ -9,6 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { HTMLAttributes } from 'react'
+import { localize } from '@universe-editor/platform'
 import type { AcpPlanEntry } from '../../services/acp/acpSessionService.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { planEntryStatusIcon, planIcon } from './timelineIcons.js'
@@ -36,10 +37,11 @@ export function PlanCard({
   const total = entries.length
   const done = entries.filter((e) => e.status === 'completed').length
   const active = entries.find((e) => e.status === 'in_progress')
+  const planLabel = localize('acp.plan.title', 'Plan')
 
   const title = (
     <>
-      <span className={styles['planTitle']}>Plan</span>
+      <span className={styles['planTitle']}>{planLabel}</span>
       <span className={styles['planCount']}>
         {done}/{total}
       </span>
@@ -47,7 +49,7 @@ export function PlanCard({
   )
   const summary = (
     <>
-      <span className={styles['planTitle']}>Plan</span>
+      <span className={styles['planTitle']}>{planLabel}</span>
       <span className={styles['planCount']}>
         {done}/{total}
       </span>
@@ -61,7 +63,7 @@ export function PlanCard({
     <CollapsibleSlot
       as="li"
       icon={planIcon()}
-      kindLabel="Plan"
+      kindLabel={planLabel}
       title={title}
       summary={summary}
       collapsed={collapsed}

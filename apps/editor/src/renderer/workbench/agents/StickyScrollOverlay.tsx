@@ -10,6 +10,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react'
+import { localize } from '@universe-editor/platform'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
 import { ToolCallStatusIcon } from './ToolCallOutput.js'
@@ -180,7 +181,7 @@ function StickyHeader({
           className={styles['stickyChevronBtn']}
           aria-expanded={!collapsed}
           onClick={onToggle}
-          title="Collapse"
+          title={localize('acp.sticky.collapse', 'Collapse')}
           data-testid="acp-sticky-toggle"
         >
           {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}

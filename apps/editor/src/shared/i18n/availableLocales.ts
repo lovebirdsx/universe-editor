@@ -42,7 +42,10 @@ export function resolveDisplayLanguage(
   return normalizeLocale(systemLocale) ?? DEFAULT_LOCALE
 }
 
-const ZH_CN_ALL_MESSAGES: MessageMap = { ...EDITOR_OPTIONS_ZH_CN_MESSAGES, ...ZH_CN_MESSAGES }
+const ZH_CN_ALL_MESSAGES: MessageMap = {
+  ...EDITOR_OPTIONS_ZH_CN_MESSAGES,
+  ...ZH_CN_MESSAGES,
+}
 
 export function getLocaleMessages(locale: SupportedLocale): MessageMap {
   if (locale === 'zh-CN') return ZH_CN_ALL_MESSAGES

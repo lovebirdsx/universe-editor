@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { Allotment } from 'allotment'
 import 'allotment/dist/style.css'
-import { IWorkspaceService } from '@universe-editor/platform'
+import { IWorkspaceService, localize } from '@universe-editor/platform'
 import { ITerminalManagerService } from '../../../services/terminal/TerminalManagerService.js'
 import { useService, useObservable } from '../../useService.js'
 import { TerminalInstance } from './TerminalInstance.js'
@@ -40,7 +40,7 @@ export function TerminalView() {
     <div className={styles['terminal']} data-testid="view-terminal">
       <div className={styles['body']}>
         {terminals.length === 0 ? (
-          <div className={styles['empty']}>No terminals.</div>
+          <div className={styles['empty']}>{localize('terminal.empty', 'No terminals.')}</div>
         ) : (
           groups.map((group) => {
             const groupActive = group.id === activeGroupId

@@ -1,4 +1,9 @@
-import { IStatusBarService, StatusBarAlignment, ICommandService } from '@universe-editor/platform'
+import {
+  IStatusBarService,
+  StatusBarAlignment,
+  ICommandService,
+  localize,
+} from '@universe-editor/platform'
 import type { IPart, IStatusBarEntry } from '@universe-editor/platform'
 import { Bell, Loader2, RefreshCw, Sparkles, type LucideIcon } from 'lucide-react'
 import { useService, useObservable } from '../useService.js'
@@ -86,7 +91,7 @@ export function StatusBar({ part }: { part?: IPart | undefined } = {}) {
     <footer
       ref={containerRef}
       className={styles['statusbar']}
-      aria-label="Status Bar"
+      aria-label={localize('statusbar.label', 'Status Bar')}
       data-testid="part-statusbar"
     >
       <div className={styles['left']}>

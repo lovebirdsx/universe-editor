@@ -4,6 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { forwardRef, useRef, type RefObject } from 'react'
+import { localize } from '@universe-editor/platform'
 import { ChevronDown, ChevronRight, FileX2, SlidersHorizontal } from 'lucide-react'
 import styles from './SearchView.module.css'
 
@@ -101,7 +102,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
           <button
             type="button"
             className={styles['expand']}
-            aria-label="Toggle Replace"
+            aria-label={localize('search.toggleReplace', 'Toggle Replace')}
             aria-pressed={props.replaceVisible}
             onClick={props.onToggleReplace}
           >
@@ -116,8 +117,8 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               ref={ref as RefObject<HTMLInputElement>}
               className={styles['input']}
               type="text"
-              placeholder="Search"
-              aria-label="Search"
+              placeholder={localize('search.input.placeholder', 'Search')}
+              aria-label={localize('search.input.placeholder', 'Search')}
               value={props.pattern}
               onChange={(e) => {
                 historyIndexRef.current = -1
@@ -128,19 +129,19 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
             <div className={styles['toggles']}>
               <Toggle
                 label="Aa"
-                title="Match Case"
+                title={localize('search.matchCase', 'Match Case')}
                 active={props.matchCase}
                 onClick={props.onToggleCase}
               />
               <Toggle
                 label="ab|"
-                title="Match Whole Word"
+                title={localize('search.matchWholeWord', 'Match Whole Word')}
                 active={props.matchWholeWord}
                 onClick={props.onToggleWord}
               />
               <Toggle
                 label=".*"
-                title="Use Regular Expression"
+                title={localize('search.useRegex', 'Use Regular Expression')}
                 active={props.isRegex}
                 onClick={props.onToggleRegex}
               />
@@ -148,8 +149,8 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
           </div>
           <button
             type="button"
-            title="Toggle Search Details"
-            aria-label="Toggle Search Details"
+            title={localize('search.toggleDetails', 'Toggle Search Details')}
+            aria-label={localize('search.toggleDetails', 'Toggle Search Details')}
             aria-pressed={props.filtersVisible}
             className={`${styles['filterToggle']} ${props.filtersVisible ? styles['filterToggleActive'] : ''}`}
             onClick={props.onToggleFilters}
@@ -164,8 +165,8 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
               <input
                 className={styles['input']}
                 type="text"
-                placeholder="Replace"
-                aria-label="Replace"
+                placeholder={localize('search.replace.placeholder', 'Replace')}
+                aria-label={localize('search.replace.placeholder', 'Replace')}
                 value={props.replacePattern}
                 onChange={(e) => props.onReplace(e.target.value)}
               />
@@ -175,7 +176,7 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
         {props.filtersVisible && (
           <div className={styles['filters']}>
             <label className={styles['filterLabel']}>
-              <span>files to include</span>
+              <span>{localize('search.filesToInclude', 'files to include')}</span>
               <input
                 className={styles['input']}
                 type="text"
@@ -186,11 +187,17 @@ export const SearchInputBar = forwardRef<HTMLInputElement, SearchInputBarProps>(
             </label>
             <label className={styles['filterLabel']}>
               <span className={styles['filterLabelRow']}>
-                files to exclude
+                {localize('search.filesToExclude', 'files to exclude')}
                 <button
                   type="button"
-                  title="Use Exclude Settings and Ignore Files"
-                  aria-label="Use Exclude Settings and Ignore Files"
+                  title={localize(
+                    'search.useExcludeSettings',
+                    'Use Exclude Settings and Ignore Files',
+                  )}
+                  aria-label={localize(
+                    'search.useExcludeSettings',
+                    'Use Exclude Settings and Ignore Files',
+                  )}
                   aria-pressed={props.useExcludeSettings}
                   className={`${styles['excludeToggle']} ${props.useExcludeSettings ? styles['excludeToggleActive'] : ''}`}
                   onClick={props.onToggleUseExclude}

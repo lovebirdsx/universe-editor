@@ -5,7 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useReducer, useRef, useState, type JSX } from 'react'
-import { CommandsRegistry, KeybindingsRegistry } from '@universe-editor/platform'
+import { CommandsRegistry, KeybindingsRegistry, localize } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import { formatKey, formatChord } from '../titlebar/keybindingFormat.js'
 import { KEYBINDINGS_EDITOR_FOCUS_SEARCH_EVENT } from '../preferences/preferencesFocus.js'
@@ -91,19 +91,21 @@ function KeyRecorder({
         readOnly
         className={styles['recorderInput']}
         value={pending ? formatKey(pending) : ''}
-        placeholder="Press a key…"
+        placeholder={localize('keybindings.record.placeholder', 'Press a key…')}
       />
       {pending ? (
         <>
           <button className={styles['btn']} onClick={() => onConfirm(pending)}>
-            OK
+            {localize('common.ok', 'OK')}
           </button>
           <button className={styles['btn']} onClick={onCancel}>
-            Cancel
+            {localize('common.cancel', 'Cancel')}
           </button>
         </>
       ) : (
-        <span className={styles['recorderHint']}>Esc to cancel</span>
+        <span className={styles['recorderHint']}>
+          {localize('keybindings.record.cancelHint', 'Esc to cancel')}
+        </span>
       )}
     </div>
   )
@@ -174,7 +176,9 @@ export function KeybindingsEditor(): JSX.Element {
           ref={searchInputRef}
           className={styles['search']}
           type="search"
-          placeholder={`Search keybindings (${allCommands.length})`}
+          placeholder={localize('keybindings.search.placeholder', 'Search keybindings ({count})', {
+            count: allCommands.length,
+          })}
           value={query}
           onChange={(e) => {
             setQuery(e.target.value)
@@ -185,14 +189,20 @@ export function KeybindingsEditor(): JSX.Element {
 
       <div className={styles['body']}>
         {filtered.length === 0 ? (
-          <div className={styles['empty']}>No matching keybindings.</div>
+          <div className={styles['empty']}>
+            {localize('keybindings.empty', 'No matching keybindings.')}
+          </div>
         ) : (
           <table className={styles['table']}>
             <thead className={styles['thead']}>
               <tr>
-                <th className={styles['th']}>Command</th>
-                <th className={styles['th']}>Keybinding</th>
-                <th className={styles['th']}>Source</th>
+                <th className={styles['th']}>
+                  {localize('keybindings.column.command', 'Command')}
+                </th>
+                <th className={styles['th']}>
+                  {localize('keybindings.column.keybinding', 'Keybinding')}
+                </th>
+                <th className={styles['th']}>{localize('keybindings.column.source', 'Source')}</th>
                 <th className={styles['th']} />
               </tr>
             </thead>
@@ -240,7 +250,9 @@ export function KeybindingsEditor(): JSX.Element {
                       <span
                         className={`${styles['sourceTag']} ${isUser ? styles['user'] : styles['default']}`}
                       >
-                        {isUser ? 'User' : 'Default'}
+                        {isUser
+                          ? localize('keybindings.source.user', 'User')
+                          : localize('keybindings.source.default', 'Default')}
                       </span>
                     </td>
 
@@ -250,18 +262,18 @@ export function KeybindingsEditor(): JSX.Element {
                         <div className={styles['actions']}>
                           <button
                             className={styles['btn']}
-                            title="Edit keybinding"
+                            title={localize('keybindings.edit', 'Edit keybinding')}
                             onClick={() => setRecordingCommand(cmd.id)}
                           >
-                            Edit
+                            {localize('common.edit', 'Edit')}
                           </button>
                           {isUser && (
                             <button
                               className={`${styles['btn']} ${styles['danger']}`}
-                              title="Reset to default"
+                              title={localize('keybindings.reset', 'Reset to default')}
                               onClick={() => userKeybindingsService.resetKeybinding(cmd.id)}
                             >
-                              Reset
+                              {localize('common.reset', 'Reset')}
                             </button>
                           )}
                         </div>

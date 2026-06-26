@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useState } from 'react'
+import { localize } from '@universe-editor/platform'
 import { useObservable } from '../useService.js'
 import type {
   AskUserQuestion,
@@ -175,7 +176,9 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
                         })
                       }
                     />
-                    <span className={styles['questionOptionLabel']}>Other…</span>
+                    <span className={styles['questionOptionLabel']}>
+                      {localize('acp.question.other', 'Other…')}
+                    </span>
                   </label>
                 </li>
               </ul>
@@ -193,7 +196,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
                 type="text"
                 className={styles['questionFreeform']}
                 value={d.otherText}
-                placeholder="Type your answer"
+                placeholder={localize('acp.question.answer.placeholder', 'Type your answer')}
                 onChange={(e) => patch(qi, { otherText: e.target.value })}
                 data-testid={`acp-question-${qi}-other`}
               />
@@ -201,7 +204,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
             <textarea
               className={styles['questionNotes']}
               value={d.notes}
-              placeholder="Notes (optional)"
+              placeholder={localize('acp.question.notes.placeholder', 'Notes (optional)')}
               rows={1}
               onChange={(e) => patch(qi, { notes: e.target.value })}
               data-testid={`acp-question-${qi}-notes`}
@@ -217,7 +220,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
           onClick={submit}
           data-testid="acp-question-submit"
         >
-          Submit
+          {localize('acp.question.submit', 'Submit')}
         </button>
         <button
           type="button"
@@ -228,7 +231,7 @@ export function QuestionCard({ session }: { session: IAcpSession }) {
           }}
           data-testid="acp-question-dismiss"
         >
-          Dismiss
+          {localize('acp.question.dismiss', 'Dismiss')}
         </button>
       </div>
     </section>

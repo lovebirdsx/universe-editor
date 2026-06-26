@@ -32,6 +32,7 @@ import {
   IDialogService,
   IStorageService,
   StorageScope,
+  localize,
 } from '@universe-editor/platform'
 import {
   GitGraphCommands,
@@ -102,13 +103,13 @@ function formatDate(unixSeconds: number): string {
 }
 
 const STATUS_LABEL: Record<string, string> = {
-  A: 'Added',
-  M: 'Modified',
-  D: 'Deleted',
-  R: 'Renamed',
-  C: 'Copied',
-  T: 'Type changed',
-  U: 'Unmerged',
+  A: localize('gitGraph.status.added', 'Added'),
+  M: localize('gitGraph.status.modified', 'Modified'),
+  D: localize('gitGraph.status.deleted', 'Deleted'),
+  R: localize('gitGraph.status.renamed', 'Renamed'),
+  C: localize('gitGraph.status.copied', 'Copied'),
+  T: localize('gitGraph.status.typeChanged', 'Type changed'),
+  U: localize('gitGraph.status.unmerged', 'Unmerged'),
 }
 
 function statusClass(status: string): string | undefined {
@@ -440,7 +441,13 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         setDetails(null)
         setCompareFiles(null)
         fetchedKeyRef.current = null
-        if (!r) setError('Git Graph is unavailable — is this folder a git repository?')
+        if (!r)
+          setError(
+            localize(
+              'gitGraph.unavailable',
+              'Git Graph is unavailable — is this folder a git repository?',
+            ),
+          )
       })
       .catch((e: unknown) => {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e))
@@ -725,24 +732,29 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           items: [
             {
               kind: 'item',
-              label: 'Apply stash…',
+              label: localize('gitGraph.stash.apply', 'Apply stash…'),
               run: () => runOp(GitGraphCommands.stashApply, selector),
             },
             {
               kind: 'item',
-              label: 'Pop stash…',
+              label: localize('gitGraph.stash.pop', 'Pop stash…'),
               run: () => runOp(GitGraphCommands.stashPop, selector),
             },
             { kind: 'sep' },
             {
               kind: 'item',
-              label: 'Drop stash…',
+              label: localize('gitGraph.stash.drop', 'Drop stash…'),
               danger: true,
               run: async () => {
                 const r = await dialog.confirm({
-                  message: `Drop ${selector}?`,
-                  detail: 'The stashed changes will be lost.',
-                  primaryButton: 'Drop',
+                  message: localize('gitGraph.stash.dropConfirm', 'Drop {selector}?', {
+                    selector,
+                  }),
+                  detail: localize(
+                    'gitGraph.stash.dropDetail',
+                    'The stashed changes will be lost.',
+                  ),
+                  primaryButton: localize('gitGraph.stash.dropButton', 'Drop'),
                   type: 'warning',
                 })
                 if (r.confirmed) runOp(GitGraphCommands.stashDrop, selector)
@@ -751,7 +763,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             { kind: 'sep' },
             {
               kind: 'item',
-              label: 'Copy commit hash',
+              label: localize('gitGraph.copyHash', 'Copy commit hash'),
               run: () => void navigator.clipboard?.writeText(hash),
             },
           ],
@@ -761,43 +773,56 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
-          label: 'Checkout this commit…',
+          label: localize('gitGraph.checkoutCommit', 'Checkout this commit…'),
           run: async () => {
             const r = await dialog.confirm({
-              message: `Checkout commit ${shortHash(hash)}?`,
-              detail: 'This leaves HEAD detached.',
-              primaryButton: 'Checkout',
+              message: localize('gitGraph.checkoutCommit.confirm', 'Checkout commit {hash}?', {
+                hash: shortHash(hash),
+              }),
+              detail: localize('gitGraph.checkoutCommit.detail', 'This leaves HEAD detached.'),
+              primaryButton: localize('gitGraph.checkout', 'Checkout'),
             })
             if (r.confirmed) runOp(GitGraphCommands.checkout, hash)
           },
         },
         {
           kind: 'item',
-          label: 'Cherry-pick…',
+          label: localize('gitGraph.cherryPick', 'Cherry-pick…'),
           run: () => runOp(GitGraphCommands.cherrypick, hash),
         },
-        { kind: 'item', label: 'Revert…', run: () => runOp(GitGraphCommands.revert, hash) },
+        {
+          kind: 'item',
+          label: localize('gitGraph.revert', 'Revert…'),
+          run: () => runOp(GitGraphCommands.revert, hash),
+        },
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Merge into current branch…',
+          label: localize('gitGraph.mergeCurrent', 'Merge into current branch…'),
           run: () => runOp(GitGraphCommands.merge, hash),
         },
         {
           kind: 'item',
-          label: 'Rebase current branch on this commit…',
+          label: localize('gitGraph.rebaseCurrentCommit', 'Rebase current branch on this commit…'),
           run: () => runOp(GitGraphCommands.rebase, hash),
         },
         {
           kind: 'item',
-          label: 'Reset current branch to this commit…',
+          label: localize('gitGraph.resetCurrentCommit', 'Reset current branch to this commit…'),
           danger: true,
           run: async () => {
             const r = await dialog.confirm({
-              message: `Reset current branch to ${shortHash(hash)}?`,
-              detail: 'Mixed keeps your changes unstaged. Hard discards all working-tree changes.',
-              primaryButton: 'Mixed',
-              secondaryButton: 'Hard',
+              message: localize(
+                'gitGraph.resetCurrentCommit.confirm',
+                'Reset current branch to {hash}?',
+                { hash: shortHash(hash) },
+              ),
+              detail: localize(
+                'gitGraph.resetCurrentCommit.detail',
+                'Mixed keeps your changes unstaged. Hard discards all working-tree changes.',
+              ),
+              primaryButton: localize('gitGraph.reset.mixed', 'Mixed'),
+              secondaryButton: localize('gitGraph.reset.hard', 'Hard'),
               type: 'warning',
             })
             if (r.choice === 'primary') runOp(GitGraphCommands.reset, hash, 'mixed')
@@ -807,29 +832,33 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Create branch here…',
+          label: localize('gitGraph.createBranchHere', 'Create branch here…'),
           run: async () => {
-            const name = await dialog.prompt({ title: 'New branch name' })
+            const name = await dialog.prompt({
+              title: localize('gitGraph.newBranchName', 'New branch name'),
+            })
             if (name?.trim()) runOp(GitGraphCommands.createBranch, hash, name.trim(), true)
           },
         },
         {
           kind: 'item',
-          label: 'Create tag here…',
+          label: localize('gitGraph.createTagHere', 'Create tag here…'),
           run: async () => {
-            const name = await dialog.prompt({ title: 'New tag name' })
+            const name = await dialog.prompt({
+              title: localize('gitGraph.newTagName', 'New tag name'),
+            })
             if (name?.trim()) runOp(GitGraphCommands.createTag, hash, name.trim(), undefined)
           },
         },
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Copy commit hash',
+          label: localize('gitGraph.copyHash', 'Copy commit hash'),
           run: () => void navigator.clipboard?.writeText(hash),
         },
         {
           kind: 'item',
-          label: 'Copy commit message',
+          label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: () => void navigator.clipboard?.writeText(commit.message),
         },
       ]
@@ -843,24 +872,31 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       e.preventDefault()
       e.stopPropagation()
       const items: GitGraphMenuItem[] = [
-        { kind: 'item', label: 'Checkout', run: () => runOp(GitGraphCommands.checkout, name) },
+        {
+          kind: 'item',
+          label: localize('gitGraph.checkout', 'Checkout'),
+          run: () => runOp(GitGraphCommands.checkout, name),
+        },
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Merge into current branch…',
+          label: localize('gitGraph.mergeCurrent', 'Merge into current branch…'),
           run: () => runOp(GitGraphCommands.merge, name),
         },
         {
           kind: 'item',
-          label: 'Rebase current branch on branch…',
+          label: localize('gitGraph.rebaseCurrentBranch', 'Rebase current branch on branch…'),
           run: () => runOp(GitGraphCommands.rebase, name),
         },
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Rename…',
+          label: localize('gitGraph.rename', 'Rename…'),
           run: async () => {
-            const newName = await dialog.prompt({ title: 'Rename branch', initialValue: name })
+            const newName = await dialog.prompt({
+              title: localize('gitGraph.renameBranch', 'Rename branch'),
+              initialValue: name,
+            })
             if (newName?.trim() && newName.trim() !== name) {
               runOp(GitGraphCommands.renameBranch, name, newName.trim())
             }
@@ -868,18 +904,23 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         },
         {
           kind: 'item',
-          label: 'Push…',
+          label: localize('gitGraph.push', 'Push…'),
           run: () => runOp(GitGraphCommands.pushBranch, name, 'origin'),
         },
         {
           kind: 'item',
-          label: 'Push (Force)…',
+          label: localize('gitGraph.pushForce', 'Push (Force)…'),
           danger: true,
           run: async () => {
             const r = await dialog.confirm({
-              message: `Force push '${name}' to origin?`,
-              detail: 'This overwrites the remote branch history and can discard others’ commits.',
-              primaryButton: 'Force Push',
+              message: localize('gitGraph.forcePush.confirm', "Force push '{name}' to origin?", {
+                name,
+              }),
+              detail: localize(
+                'gitGraph.forcePush.detail',
+                'This overwrites the remote branch history and can discard others’ commits.',
+              ),
+              primaryButton: localize('gitGraph.forcePush.button', 'Force Push'),
               type: 'warning',
             })
             if (r.confirmed) runOp(GitGraphCommands.pushBranch, name, 'origin', true)
@@ -888,14 +929,19 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Delete…',
+          label: localize('common.deleteWithEllipsis', 'Delete…'),
           danger: true,
           run: async () => {
             const r = await dialog.confirm({
-              message: `Delete branch '${name}'?`,
-              detail: 'Force Delete removes it even if it is not fully merged.',
-              primaryButton: 'Delete',
-              secondaryButton: 'Force Delete',
+              message: localize('gitGraph.deleteBranch.confirm', "Delete branch '{name}'?", {
+                name,
+              }),
+              detail: localize(
+                'gitGraph.deleteBranch.detail',
+                'Force Delete removes it even if it is not fully merged.',
+              ),
+              primaryButton: localize('common.delete', 'Delete'),
+              secondaryButton: localize('gitGraph.forceDelete', 'Force Delete'),
               type: 'warning',
             })
             if (r.choice === 'primary') runOp(GitGraphCommands.deleteBranch, name, false)
@@ -915,11 +961,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
-          label: 'Checkout as local branch…',
+          label: localize('gitGraph.checkoutLocalBranch', 'Checkout as local branch…'),
           run: async () => {
             const suggested = name.includes('/') ? name.slice(name.indexOf('/') + 1) : name
             const local = await dialog.prompt({
-              title: 'Local branch name',
+              title: localize('gitGraph.localBranchName', 'Local branch name'),
               initialValue: suggested,
             })
             if (local?.trim()) runOp(GitGraphCommands.checkoutRemote, name, local.trim())
@@ -928,13 +974,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Delete remote branch…',
+          label: localize('gitGraph.deleteRemoteBranch', 'Delete remote branch…'),
           danger: true,
           run: async () => {
             const r = await dialog.confirm({
-              message: `Delete remote branch '${name}'?`,
-              detail: 'This will delete the branch from the remote server.',
-              primaryButton: 'Delete',
+              message: localize(
+                'gitGraph.deleteRemoteBranch.confirm',
+                "Delete remote branch '{name}'?",
+                { name },
+              ),
+              detail: localize(
+                'gitGraph.deleteRemoteBranch.detail',
+                'This will delete the branch from the remote server.',
+              ),
+              primaryButton: localize('common.delete', 'Delete'),
               type: 'warning',
             })
             if (r.confirmed) runOp(GitGraphCommands.deleteRemoteBranch, name)
@@ -953,18 +1006,18 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       const items: GitGraphMenuItem[] = [
         {
           kind: 'item',
-          label: 'Push tag…',
+          label: localize('gitGraph.pushTag', 'Push tag…'),
           run: () => runOp(GitGraphCommands.pushTag, name, 'origin'),
         },
         { kind: 'sep' },
         {
           kind: 'item',
-          label: 'Delete tag…',
+          label: localize('gitGraph.deleteTag', 'Delete tag…'),
           danger: true,
           run: async () => {
             const r = await dialog.confirm({
-              message: `Delete tag '${name}'?`,
-              primaryButton: 'Delete',
+              message: localize('gitGraph.deleteTag.confirm', "Delete tag '{name}'?", { name }),
+              primaryButton: localize('common.delete', 'Delete'),
               type: 'warning',
             })
             if (r.confirmed) runOp(GitGraphCommands.deleteTag, name)
@@ -987,7 +1040,9 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         author: '',
         email: '',
         date: 0,
-        message: `Uncommitted Changes (${result.uncommittedChanges})`,
+        message: localize('gitGraph.uncommittedCount', 'Uncommitted Changes ({count})', {
+          count: result.uncommittedChanges,
+        }),
         heads: [],
         tags: [],
         remotes: [],
@@ -1050,24 +1105,29 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   )
 
   const renderDetail = () => {
-    if (panelLoading) return <div className={styles['detailEmpty']}>Loading…</div>
+    if (panelLoading)
+      return <div className={styles['detailEmpty']}>{localize('common.loading', 'Loading…')}</div>
     if (selection.length === 1 && selection[0] === UNCOMMITTED_HASH) {
       return (
         <>
           <div className={styles['detailHeader']}>
-            <span className={styles['detailTitle']}>Uncommitted Changes</span>
+            <span className={styles['detailTitle']}>
+              {localize('gitGraph.uncommittedChanges', 'Uncommitted Changes')}
+            </span>
             <button
               type="button"
               className={styles['detailClose']}
               onClick={() => setSelection([])}
-              title="Close"
+              title={localize('common.close', 'Close')}
             >
               ×
             </button>
           </div>
           <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
             {compareFiles && compareFiles.length === 0 ? (
-              <div className={styles['detailEmpty']}>No uncommitted changes.</div>
+              <div className={styles['detailEmpty']}>
+                {localize('gitGraph.noUncommittedChanges', 'No uncommitted changes.')}
+              </div>
             ) : (
               <FileTreeView
                 nodes={compareTree}
@@ -1085,20 +1145,25 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         <>
           <div className={styles['detailHeader']}>
             <span className={styles['detailTitle']}>
-              Comparing {shortHash(selection[0]!)} ↔ {shortHash(selection[1]!)}
+              {localize('gitGraph.comparing', 'Comparing {left} ↔ {right}', {
+                left: shortHash(selection[0]!),
+                right: shortHash(selection[1]!),
+              })}
             </span>
             <button
               type="button"
               className={styles['detailClose']}
               onClick={() => setSelection([])}
-              title="Close"
+              title={localize('common.close', 'Close')}
             >
               ×
             </button>
           </div>
           <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
             {compareFiles && compareFiles.length === 0 ? (
-              <div className={styles['detailEmpty']}>No file changes.</div>
+              <div className={styles['detailEmpty']}>
+                {localize('gitGraph.noFileChanges', 'No file changes.')}
+              </div>
             ) : (
               <FileTreeView
                 nodes={compareTree}
@@ -1111,7 +1176,12 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         </>
       )
     }
-    if (!details) return <div className={styles['detailEmpty']}>No commit details.</div>
+    if (!details)
+      return (
+        <div className={styles['detailEmpty']}>
+          {localize('gitGraph.noCommitDetails', 'No commit details.')}
+        </div>
+      )
     return (
       <>
         <div className={styles['detailHeader']}>
@@ -1124,7 +1194,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             type="button"
             className={styles['detailClose']}
             onClick={() => setSelection([])}
-            title="Close"
+            title={localize('common.close', 'Close')}
           >
             ×
           </button>
@@ -1132,12 +1202,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         <div className={styles['detailBody']} ref={detailBodyRef} onScroll={onDetailScroll}>
           {details.parents.length > 0 && (
             <div className={styles['detailMeta']}>
-              Parents: {details.parents.map(shortHash).join(', ')}
+              {localize('gitGraph.parents', 'Parents:')} {details.parents.map(shortHash).join(', ')}
             </div>
           )}
           <pre className={styles['commitBody']}>{details.body}</pre>
           {details.files.length === 0 ? (
-            <div className={styles['detailEmpty']}>No file changes.</div>
+            <div className={styles['detailEmpty']}>
+              {localize('gitGraph.noFileChanges', 'No file changes.')}
+            </div>
           ) : (
             <FileTreeView
               nodes={detailTree}
@@ -1154,11 +1226,16 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   return (
     <div className={styles['gitGraph']} data-testid="gitGraph-editor">
       <div className={styles['toolbar']}>
-        <span className={styles['title']}>Git Graph</span>
+        <span className={styles['title']}>{localize('gitGraph.title', 'Git Graph')}</span>
         {result && (
           <span className={styles['count']}>
-            {result.commits.length} commits{result.moreAvailable ? '+' : ''}
-            {result.headName ? ` · on ${result.headName}` : ''}
+            {localize('gitGraph.commitCount', '{count} commits{more}', {
+              count: result.commits.length,
+              more: result.moreAvailable ? '+' : '',
+            })}
+            {result.headName
+              ? localize('gitGraph.onBranch', ' · on {branch}', { branch: result.headName })
+              : ''}
           </span>
         )}
         <span className={styles['toolbarSpacer']} />
@@ -1166,17 +1243,17 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           ref={searchInputRef}
           className={styles['searchInput']}
           type="search"
-          placeholder="Search commits…"
+          placeholder={localize('gitGraph.search.placeholder', 'Search commits…')}
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
-          aria-label="Search commits"
+          aria-label={localize('gitGraph.search.placeholder', 'Search commits…')}
         />
         {repos.length > 1 && (
           <select
             className={styles['repoSelect']}
             value={selectedRepo ?? repos[0]?.root ?? ''}
             onChange={(e) => onSelectRepo(e.target.value)}
-            title="Repository"
+            title={localize('gitGraph.repository', 'Repository')}
           >
             {repos.map((r) => (
               <option key={r.root} value={r.root}>
@@ -1189,7 +1266,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={`${styles['toolBtn']} ${settings.includeRemotes ? styles['toolBtnActive'] : ''}`}
           onClick={() => setSettings((s) => ({ ...s, includeRemotes: !s.includeRemotes }))}
-          title={settings.includeRemotes ? 'Hide remote branches' : 'Show remote branches'}
+          title={
+            settings.includeRemotes
+              ? localize('gitGraph.hideRemoteBranches', 'Hide remote branches')
+              : localize('gitGraph.showRemoteBranches', 'Show remote branches')
+          }
           aria-pressed={settings.includeRemotes}
         >
           ⎇
@@ -1198,8 +1279,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={styles['toolBtn']}
           onClick={() => setShowSettings((s) => !s)}
-          title="View settings"
-          aria-label="View settings"
+          title={localize('gitGraph.viewSettings', 'View settings')}
+          aria-label={localize('gitGraph.viewSettings', 'View settings')}
         >
           ⚙
         </button>
@@ -1207,8 +1288,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           type="button"
           className={styles['toolBtn']}
           onClick={() => load()}
-          title="Refresh"
-          aria-label="Refresh"
+          title={localize('common.refresh', 'Refresh')}
+          aria-label={localize('common.refresh', 'Refresh')}
         >
           ↺
         </button>
@@ -1217,7 +1298,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
             <div className={styles['settingsBackdrop']} onClick={() => setShowSettings(false)} />
             <div className={styles['settingsPanel']} role="dialog">
               <label className={styles['settingsRow']}>
-                <span>Order</span>
+                <span>{localize('gitGraph.order', 'Order')}</span>
                 <select
                   value={settings.order}
                   onChange={(e) =>
@@ -1227,9 +1308,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                     }))
                   }
                 >
-                  <option value="date">Date</option>
-                  <option value="author-date">Author date</option>
-                  <option value="topo">Topology</option>
+                  <option value="date">{localize('gitGraph.order.date', 'Date')}</option>
+                  <option value="author-date">
+                    {localize('gitGraph.order.authorDate', 'Author date')}
+                  </option>
+                  <option value="topo">{localize('gitGraph.order.topology', 'Topology')}</option>
                 </select>
               </label>
               <label className={styles['settingsRow']}>
@@ -1238,7 +1321,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                   checked={settings.includeRemotes}
                   onChange={(e) => setSettings((s) => ({ ...s, includeRemotes: e.target.checked }))}
                 />
-                <span>Show remote branches</span>
+                <span>{localize('gitGraph.showRemoteBranches', 'Show remote branches')}</span>
               </label>
               <label className={styles['settingsRow']}>
                 <input
@@ -1248,14 +1331,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                     setSettings((s) => ({ ...s, onlyFollowFirstParent: e.target.checked }))
                   }
                 />
-                <span>Only follow first parent</span>
+                <span>{localize('gitGraph.onlyFirstParent', 'Only follow first parent')}</span>
               </label>
             </div>
           </>
         )}
       </div>
 
-      {loading && <div className={styles['status']}>Loading…</div>}
+      {loading && <div className={styles['status']}>{localize('common.loading', 'Loading…')}</div>}
       {error && <div className={styles['error']}>{error}</div>}
 
       {result && layout && !loading && (
@@ -1268,16 +1351,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         >
           <div className={styles['header']}>
             <span className={styles['graphSpacer']} style={{ width: graphWidth }} />
-            <span className={styles['headerDescription']}>Description</span>
+            <span className={styles['headerDescription']}>
+              {localize('gitGraph.header.description', 'Description')}
+            </span>
             <span className={styles['headerCol']} style={{ width: columnWidths.author }}>
               <ColumnResizer onResize={(dx) => adjustColumn('author', dx)} />
-              Author
+              {localize('gitGraph.header.author', 'Author')}
             </span>
             <span className={styles['headerCol']} style={{ width: columnWidths.date }}>
               <ColumnResizer onResize={(dx) => adjustColumn('date', dx)} />
-              Date
+              {localize('gitGraph.header.date', 'Date')}
             </span>
-            <span className={styles['headerHash']}>Commit</span>
+            <span className={styles['headerHash']}>
+              {localize('gitGraph.header.commit', 'Commit')}
+            </span>
           </div>
           <div className={styles['canvas']} style={{ height: layout.height }}>
             <svg
@@ -1373,7 +1460,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 className={styles['loadMoreBtn']}
                 onClick={() => setLimit((l) => l + GIT_GRAPH_PAGE_SIZE)}
               >
-                Load more commits
+                {localize('gitGraph.loadMore', 'Load more commits')}
               </button>
             </div>
           )}

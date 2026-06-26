@@ -120,7 +120,7 @@ function SessionRow({
           e.stopPropagation()
           onRemove()
         }}
-        aria-label="Remove session"
+        aria-label={localize('acp.sessions.remove', 'Remove session')}
       >
         ×
       </button>

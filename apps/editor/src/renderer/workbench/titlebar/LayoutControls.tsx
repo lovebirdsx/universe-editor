@@ -1,4 +1,4 @@
-import { ILayoutService, PartId } from '@universe-editor/platform'
+import { ILayoutService, PartId, localize } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import styles from './TitleBar.module.css'
 
@@ -72,8 +72,11 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${sidebarVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.SideBar)}
-        title="Toggle Primary Side Bar (Ctrl+B)"
-        aria-label="Toggle Primary Side Bar"
+        title={localize(
+          'layoutControls.togglePrimarySideBarWithKey',
+          'Toggle Primary Side Bar (Ctrl+B)',
+        )}
+        aria-label={localize('action.togglePrimarySideBar.title', 'Toggle Primary Side Bar')}
         aria-pressed={sidebarVisible}
       >
         <SideBarLeftIcon />
@@ -81,8 +84,8 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${panelVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.Panel)}
-        title="Toggle Panel (Ctrl+J)"
-        aria-label="Toggle Panel"
+        title={localize('layoutControls.togglePanelWithKey', 'Toggle Panel (Ctrl+J)')}
+        aria-label={localize('action.togglePanel.title', 'Toggle Panel')}
         aria-pressed={panelVisible}
       >
         <PanelBottomIcon />
@@ -90,8 +93,11 @@ export function LayoutControls() {
       <button
         className={`${styles['layout-btn']} ${secondarySidebarVisible ? styles['layout-btn--active'] : ''}`}
         onClick={() => layoutService.toggleVisible(PartId.SecondarySideBar)}
-        title="Toggle Secondary Side Bar (Ctrl+Alt+B)"
-        aria-label="Toggle Secondary Side Bar"
+        title={localize(
+          'layoutControls.toggleSecondarySideBarWithKey',
+          'Toggle Secondary Side Bar (Ctrl+Alt+B)',
+        )}
+        aria-label={localize('action.toggleSecondarySideBar.title', 'Toggle Secondary Side Bar')}
         aria-pressed={secondarySidebarVisible}
       >
         <SideBarRightIcon />

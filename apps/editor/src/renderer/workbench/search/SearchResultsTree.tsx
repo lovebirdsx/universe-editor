@@ -24,6 +24,7 @@ import {
   type IFileMatch,
   type ITextSearchMatch,
   type URI,
+  localize,
   markAsSingleton,
 } from '@universe-editor/platform'
 import {
@@ -313,7 +314,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             <button
               type="button"
               className={styles['chevron']}
-              aria-label={`Toggle ${n.name}`}
+              aria-label={localize('search.toggleNode', 'Toggle {name}', { name: n.name })}
               onClick={(e) => {
                 e.stopPropagation()
                 ctx.onToggle()
@@ -333,7 +334,12 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
               )}
             </span>
             <span className={styles['rowLabel']}>{n.name}</span>
-            <span className={styles['fileCount']} aria-label={`${n.matchCount} matches`}>
+            <span
+              className={styles['fileCount']}
+              aria-label={localize('search.matchCount', '{count} matches', {
+                count: n.matchCount,
+              })}
+            >
               {n.matchCount}
             </span>
           </div>
@@ -359,7 +365,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             <button
               type="button"
               className={styles['chevron']}
-              aria-label={`Toggle ${n.name}`}
+              aria-label={localize('search.toggleNode', 'Toggle {name}', { name: n.name })}
               onClick={(e) => {
                 e.stopPropagation()
                 ctx.onToggle()
@@ -378,15 +384,22 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
               size={14}
             />
             <span className={styles['rowLabel']}>{n.name}</span>
-            <span className={styles['fileCount']} aria-label={`${n.matchCount} matches`}>
+            <span
+              className={styles['fileCount']}
+              aria-label={localize('search.matchCount', '{count} matches', {
+                count: n.matchCount,
+              })}
+            >
               {n.matchCount}
             </span>
             {replaceVisible && onReplaceFile && (
               <button
                 type="button"
                 className={styles['replaceBtn']}
-                title="Replace All in File"
-                aria-label={`Replace all in ${n.name}`}
+                title={localize('search.replaceAllInFile', 'Replace All in File')}
+                aria-label={localize('search.replaceAllInNamedFile', 'Replace all in {name}', {
+                  name: n.name,
+                })}
                 onClick={(e) => {
                   e.stopPropagation()
                   onReplaceFile(n.resource)
@@ -422,8 +435,10 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
             <button
               type="button"
               className={styles['replaceBtn']}
-              title="Replace"
-              aria-label={`Replace match at line ${n.match.lineNumber}`}
+              title={localize('search.replace', 'Replace')}
+              aria-label={localize('search.replaceMatchAtLine', 'Replace match at line {line}', {
+                line: n.match.lineNumber,
+              })}
               onClick={(e) => {
                 e.stopPropagation()
                 onReplaceMatch(n.resource, n.match, n.rangeIndex)
@@ -443,7 +458,7 @@ export const SearchResultsTree = forwardRef<SearchResultsTreeHandle, SearchResul
           rootRef={containerRef}
           className={styles['resultsTree'] ?? ''}
           virtualListClassName={styles['resultsTree'] ?? ''}
-          ariaLabel="Search results"
+          ariaLabel={localize('search.results', 'Search results')}
           rowHeight={22}
           indentWidth={10}
           renderRow={renderRow}

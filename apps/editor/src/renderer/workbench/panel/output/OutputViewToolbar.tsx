@@ -1,5 +1,5 @@
 import { type ChangeEvent } from 'react'
-import { IOutputService } from '@universe-editor/platform'
+import { IOutputService, localize } from '@universe-editor/platform'
 import { useService, useObservable } from '../../useService.js'
 import styles from './OutputViewToolbar.module.css'
 
@@ -23,7 +23,7 @@ export function OutputViewToolbar() {
       className={styles['channelSelect']}
       value={activeChannelName ?? ''}
       onChange={handleChannelChange}
-      aria-label="Select output channel"
+      aria-label={localize('output.selectChannel', 'Select output channel')}
       data-testid="output-channel-select"
     >
       {sortedChannelNames.map((name) => (
@@ -31,7 +31,9 @@ export function OutputViewToolbar() {
           {name}
         </option>
       ))}
-      {sortedChannelNames.length === 0 && <option value="">No channels</option>}
+      {sortedChannelNames.length === 0 && (
+        <option value="">{localize('output.noChannels', 'No channels')}</option>
+      )}
     </select>
   )
 }

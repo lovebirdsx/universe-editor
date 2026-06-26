@@ -23,6 +23,7 @@ import {
   IEditorResolverService,
   IFileService,
   IWorkspaceService,
+  localize,
   markAsSingleton,
   observableValue,
   type IObservable,
@@ -115,13 +116,13 @@ export function ExplorerView() {
   if (!root) {
     return (
       <div className={styles['empty']}>
-        <p>You have not yet opened a folder.</p>
+        <p>{localize('explorer.empty.noFolder', 'You have not yet opened a folder.')}</p>
         <button
           type="button"
           className={styles['openBtn']}
           onClick={() => void commandService.executeCommand('workbench.action.files.openFolder')}
         >
-          Open Folder
+          {localize('action.openFolder.title', 'Open Folder…')}
         </button>
       </div>
     )
