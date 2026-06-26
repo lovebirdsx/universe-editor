@@ -483,6 +483,95 @@ describe('AcpSession.timeline', () => {
     expect(first.call.status).toBe('completed')
   })
 
+  it('folds codex-acp out-of-band terminal output into the execute card text', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    // The fork starts an execute tool call whose `content` carries only a
+    // `terminal` placeholder — the real output streams via `_meta` deltas.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'term-1',
+        title: 'ls -la',
+        kind: 'execute',
+        status: 'in_progress',
+        content: [{ type: 'terminal', terminalId: 'term-1' }],
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-1',
+        _meta: { terminal_output_delta: { data: 'line1\n', terminal_id: 'term-1' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-1',
+        _meta: { terminal_output_delta: { data: 'line2\n', terminal_id: 'term-1' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-1',
+        status: 'completed',
+        _meta: { terminal_exit: { exit_code: 0, signal: null, terminal_id: 'term-1' } },
+      },
+    })
+
+    const slot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'term-1')
+    if (!slot || slot.kind !== 'toolCall') throw new Error('expected execute toolCall')
+    // Deltas accumulate; the placeholder never leaks into the body.
+    expect(slot.call.text).toBe('line1\nline2\n')
+    expect(slot.call.text).not.toContain('[terminal:')
+    expect(slot.call.status).toBe('completed')
+  })
+
+  it('a full terminal_output snapshot replaces accumulated deltas', async () => {
+    const s = await svc.createSession()
+    const conn = client.connected[0]!
+
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call',
+        toolCallId: 'term-2',
+        title: 'echo hi',
+        kind: 'execute',
+        status: 'in_progress',
+        content: [{ type: 'terminal', terminalId: 'term-2' }],
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-2',
+        _meta: { terminal_output_delta: { data: 'partial', terminal_id: 'term-2' } },
+      },
+    })
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: {
+        sessionUpdate: 'tool_call_update',
+        toolCallId: 'term-2',
+        status: 'completed',
+        _meta: { terminal_output: { data: 'full output\n', terminal_id: 'term-2' } },
+      },
+    })
+
+    const slot = s.timeline.get().find((it) => it.kind === 'toolCall' && it.id === 'term-2')
+    if (!slot || slot.kind !== 'toolCall') throw new Error('expected execute toolCall')
+    expect(slot.call.text).toBe('full output\n')
+  })
+
   it('plan updates land on the plan observable, not the timeline', async () => {
     const s = await svc.createSession()
     const conn = client.connected[0]!

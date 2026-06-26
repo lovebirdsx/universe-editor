@@ -394,6 +394,15 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private readonly _toolCallParent = new Map<string, string>()
 
+  /**
+   * Accumulates terminal output per tool call. The codex-acp fork streams command
+   * output out-of-band via `_meta.terminal_output_delta` (append) / `terminal_output`
+   * (replace) rather than as `content` blocks — the `content` only carries a
+   * `terminal` placeholder. We fold those deltas here, keyed by toolCallId, and
+   * surface the result as the execute card's body.
+   */
+  private readonly _terminalOutput = new Map<string, string>()
+
   /** Guards one-shot AI title generation (see `_maybeGenerateTitle`). */
   private _titleGenerated = false
 
@@ -703,6 +712,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._timeline = []
     this._orphanChildren.clear()
     this._toolCallParent.clear()
+    this._terminalOutput.clear()
     this.messages.set(this._messages, undefined)
     this.toolCalls.set(this._toolCalls, undefined)
     this.timeline.set(this._timeline, undefined)
@@ -710,6 +720,21 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   // -- ingestion ----------------------------------------------------------
+
+  /**
+   * Fold the codex-acp fork's out-of-band terminal output (carried on
+   * `_meta.terminal_output*`) into the per-call accumulator and return the
+   * running text, or undefined when this call has no terminal output at all.
+   * `append` chunks concatenate; a `replace` snapshot overwrites.
+   */
+  private _accumulateTerminalOutput(toolCallId: string, update: SessionUpdate): string | undefined {
+    const chunk = readTerminalOutput(update)
+    if (chunk !== undefined) {
+      const prev = this._terminalOutput.get(toolCallId) ?? ''
+      this._terminalOutput.set(toolCallId, chunk.mode === 'append' ? prev + chunk.data : chunk.data)
+    }
+    return this._terminalOutput.get(toolCallId)
+  }
 
   applyUpdate(update: SessionUpdate): void {
     const parentId = readParentToolUseId(update)
@@ -744,6 +769,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         if (effectiveParent == null) this._sealStreamingMessages()
         const { blocks, diffs } = splitToolCallContent(update.content ?? [])
         const mcpServer = readMcpServer(update)
+        const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
         this._upsertToolCall(
           {
             id: update.toolCallId,
@@ -752,7 +778,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             status: (update.status as AcpToolCallStatus | undefined) ?? 'pending',
             blocks,
             diffs,
-            text: blocksToText(blocks),
+            text: terminalText ?? blocksToText(blocks),
             ...(mcpServer !== undefined ? { mcpServer } : {}),
           },
           effectiveParent,
@@ -773,6 +799,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const blocks = split?.blocks ?? existing?.blocks ?? []
         const diffs = split?.diffs ?? existing?.diffs ?? []
         const mcpServer = readMcpServer(update) ?? existing?.mcpServer
+        const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
@@ -780,7 +807,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           status: (update.status as AcpToolCallStatus | undefined) ?? existing?.status ?? 'pending',
           blocks,
           diffs,
-          text: blocksToText(blocks),
+          text: terminalText ?? blocksToText(blocks),
           ...(mcpServer !== undefined ? { mcpServer } : {}),
         }
         this._upsertToolCall(next, effectiveParent)
@@ -1263,6 +1290,32 @@ function readMcpServer(update: SessionUpdate): string | undefined {
 }
 
 /**
+ * Read the codex-acp fork's out-of-band terminal output from a tool_call(_update).
+ * The fork streams command output via `_meta.terminal_output_delta` (append-only
+ * chunks) or `_meta.terminal_output` (a full snapshot), rather than as `content`
+ * blocks. Returns the chunk plus whether it appends to or replaces the accumulator,
+ * or undefined when this update carries no terminal output.
+ */
+function readTerminalOutput(
+  update: SessionUpdate,
+): { readonly data: string; readonly mode: 'append' | 'replace' } | undefined {
+  const meta = (
+    update as {
+      _meta?: {
+        terminal_output_delta?: { data?: unknown } | null
+        terminal_output?: { data?: unknown } | null
+      } | null
+    }
+  )._meta
+  if (!meta) return undefined
+  const delta = meta.terminal_output_delta?.data
+  if (typeof delta === 'string') return { data: delta, mode: 'append' }
+  const full = meta.terminal_output?.data
+  if (typeof full === 'string') return { data: full, mode: 'replace' }
+  return undefined
+}
+
+/**
  * Extract a whole-file change descriptor from the agent fork's PostToolUse hook
  * payload: `_meta.claudeCode.toolResponse.{filePath, structuredPatch, type,
  * originalFile}`, present only for `Edit`/`Write` tools. Returns undefined for
@@ -1437,7 +1490,9 @@ export function timelineItemToText(item: TimelineItem | AcpChildItem): string {
  * - `content` items are unwrapped into the block list.
  * - `diff` items are pulled out into `diffs` (so the UI can render a dedicated
  *   diff preview); they no longer leak into `blocks` as `[diff: path]`.
- * - `terminal` items become a labelled text placeholder for now.
+ * - `terminal` items are dropped here: the codex-acp fork only sends them as a
+ *   placeholder, streaming the real output out-of-band via `_meta.terminal_output*`
+ *   (folded into the execute card's `text`; see `_accumulateTerminalOutput`).
  */
 export function splitToolCallContent(content: readonly ToolCallContent[]): {
   readonly blocks: readonly ContentBlock[]
@@ -1458,7 +1513,6 @@ export function splitToolCallContent(content: readonly ToolCallContent[]): {
         })
         break
       case 'terminal':
-        blocks.push({ type: 'text', text: `[terminal: ${item.terminalId}]` })
         break
     }
   }
