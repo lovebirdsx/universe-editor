@@ -89,7 +89,12 @@ function renderView(changes: readonly SessionFileChange[], root: URI | null = UR
   )
   const sessions = {
     _serviceBrand: undefined,
-    activeSession: observableValue<{ id: string } | undefined>('test.session', { id: 's1' }),
+    activeSession: observableValue<
+      { id: string; sessionIdOnAgent: IObservable<string | undefined> } | undefined
+    >('test.session', {
+      id: 's1',
+      sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', 's1'),
+    }),
   }
   const tracker = {
     _serviceBrand: undefined,

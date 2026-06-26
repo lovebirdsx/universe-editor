@@ -77,6 +77,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
   return {
     id: 's1',
     agentId: 'fake',
+    sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',
     messages: observableValue<readonly AcpMessage[]>('m', []),
     toolCalls: observableValue<readonly AcpToolCall[]>('t', []),
@@ -100,6 +101,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     close: () => Promise.resolve(),
     setConfigOption: setConfigOption as never,
     cycleCollapseMode: () => {},
+    whenConnected: () => Promise.resolve(),
     configObs,
   } satisfies FakeSession
 }

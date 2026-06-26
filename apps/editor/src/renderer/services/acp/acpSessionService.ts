@@ -20,16 +20,15 @@ import {
   createDecorator,
   Disposable,
   Emitter,
+  generateUuid,
   ICommandService,
   IConfigurationService,
   IHostService,
   ILoggerService,
   INotificationService,
-  IProgressService,
   IStorageService,
   ITelemetryService,
   IWorkspaceService,
-  ProgressLocation,
   Severity,
   StorageScope,
   localize,
@@ -218,7 +217,6 @@ export class AcpSessionService
     @ICommandService private readonly _commands: ICommandService,
     @ITelemetryService private readonly _telemetry: ITelemetryService,
     @IAcpPermissionHandler private readonly _permission: IAcpPermissionHandler,
-    @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
     @IAcpSessionHistoryService private readonly _history: IAcpSessionHistoryService,
     @IStorageService private readonly _storage: IStorageService,
@@ -263,16 +261,20 @@ export class AcpSessionService
     )
     this._coordinator.start()
 
-    // Persist the active session's id so we can restore it on the next editor
-    // launch. The id is the agent-issued sessionId — durable across restarts.
+    // Persist the active session's agent-issued id so we can restore it on the
+    // next editor launch. We persist the durable `sessionIdOnAgent`, not the
+    // local id — a freshly created session has no agent id until its connection
+    // attaches, so the write is deferred until then (the autorun re-fires when
+    // sessionIdOnAgent flips from undefined). A session with no agent id yet
+    // leaves the stored pointer untouched rather than clobbering it.
     this._register(
       autorun((r) => {
         const session = this.activeSession.read(r)
+        const sessionId = session?.sessionIdOnAgent.read(r)
         if (this._suspendActivePersist) return
-        const sessionId = session?.id
         if (sessionId) {
           void this._storage.set(ACP_ACTIVE_SESSION_STORAGE_KEY, sessionId, StorageScope.WORKSPACE)
-        } else {
+        } else if (session === undefined) {
           void this._storage.remove(ACP_ACTIVE_SESSION_STORAGE_KEY, StorageScope.WORKSPACE)
         }
       }),
@@ -336,129 +338,152 @@ export class AcpSessionService
     const collapseModes = this._config.get<Record<string, string>>('acp.defaultCollapseModes') ?? {}
     const initialCollapseMode: CollapseMode =
       (collapseModes[resolvedAgentId] as CollapseMode | undefined) ?? 'default'
-    return this._progress.withProgress(
-      {
-        location: ProgressLocation.Notification,
-        title: `Starting ${agentName}…`,
-        cancellable: true,
-        source: 'acp',
-      },
-      async (progress, token) => {
-        const cwd = this._workspace.current?.folder.fsPath
-        progress.report({ message: 'Spawning agent process…' })
-        const conn = await this._client.connect(resolvedAgentId, cwd !== undefined ? { cwd } : {})
-        const cancelSub = token.onCancellationRequested(() => conn.dispose())
-        const timeoutMs =
-          this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
-        const mcpServers = this._readMcpServers()
-        try {
-          progress.report({ message: 'Negotiating ACP protocol…' })
-          const initResult = await withTimeout(conn.initializeResult, timeoutMs, 'ACP initialize')
-          progress.report({ message: 'Creating session…' })
-          const { kept, dropped } = filterMcpServersByCapabilities(
-            mcpServers,
-            initResult.agentCapabilities?.mcpCapabilities,
-          )
-          this._warnDroppedMcpServers(agentName, dropped)
-          const newParams: NewSessionRequest = {
-            cwd: cwd ?? '',
-            mcpServers: kept,
-            _meta: EMIT_INIT_SDK_MESSAGE_META,
-          }
-          const result = await withTimeout(
-            conn.conn.newSession(newParams),
-            timeoutMs,
-            'ACP session/new',
-          )
-          conn.attachSession(result.sessionId)
-          const now = new Date()
-          const hh = String(now.getHours()).padStart(2, '0')
-          const mm = String(now.getMinutes()).padStart(2, '0')
-          const title = `${agentName} ${hh}:${mm}`
-          const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
-          const initState: IAcpSessionInitState = {
-            ...(result.configOptions ? { configOptions: result.configOptions } : {}),
-            ...(mcpSeed.length > 0 ? { mcpServers: mcpSeed } : {}),
-          }
-          // Record the session in persistent history BEFORE constructing AcpSession
-          // so the session has its history entry from the first sendPrompt onwards.
-          // history.add returns synchronously; the storage write is debounced.
-          this._history.add({
-            agentId: resolvedAgentId,
-            sessionIdOnAgent: result.sessionId,
-            title,
-            ...(cwd !== undefined ? { cwd } : {}),
-            hasMessages: false,
-          })
-          const session = new AcpSession(
-            result.sessionId,
-            resolvedAgentId,
-            title,
-            conn,
-            this._telemetry,
-            initState,
-            initialCollapseMode,
-            this._history,
-            this._agentDefaults,
-            this._changeTracker,
-            this._titleService,
-          )
-          this._register(session)
-          this._wireAuthGuidance(session)
-          transaction((tx) => {
-            this._sessions = [...this._sessions, session]
-            this.sessions.set(this._sessions, tx)
-            this.activeSessionId.set(session.id, tx)
-            this.activeSession.set(session, tx)
-          })
-          this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
-          this._onDidCreate.fire(session)
-          this._scheduleConfigPushBack(session, this._agentDefaults.getDefaults(resolvedAgentId))
-          return session
-        } catch (err) {
-          conn.dispose()
-          const msg = (err as Error).message
-          this._logger.warn(`createSession failed: ${msg}`)
-          if (isAuthRequiredError(err)) {
-            // No usable credentials yet — point the user straight at the
-            // Authentication panel instead of a dead-end error toast.
-            this._notification.notify({
-              severity: Severity.Warning,
-              message: localize(
-                'acp.session.authRequired',
-                'This agent needs authentication before it can start.',
-              ),
-              actions: [
-                {
-                  label: localize('acp.session.openAuth', 'Open Agent Settings'),
-                  run: () => {
-                    void this._commands.executeCommand('workbench.action.agent.openSettings')
-                  },
-                },
-              ],
-            })
-          } else {
-            this._notification.notify({
-              severity: Severity.Error,
-              message: `Failed to start agent session: ${msg}`,
-            })
-          }
-          this._telemetry.publicLogError('acp.session_create_failed', {
-            agentId: resolvedAgentId,
-            error: msg,
-          })
-          throw err
-        } finally {
-          cancelSub.dispose()
-        }
-      },
+    const cwd = this._workspace.current?.folder.fsPath
+    const now = new Date()
+    const hh = String(now.getHours()).padStart(2, '0')
+    const mm = String(now.getMinutes()).padStart(2, '0')
+    const title = `${agentName} ${hh}:${mm}`
+
+    // Build + publish the session synchronously with a stable local id so the
+    // chat UI renders (and accepts input) immediately. The agent process spawn +
+    // ACP handshake + session/new run in the background; the user's prompts are
+    // queued by AcpSession until attachConnection lands. This is what makes "new
+    // session" feel instant instead of blocking for 1-5s on the handshake.
+    const session = new AcpSession(
+      generateUuid(),
+      resolvedAgentId,
+      title,
+      this._telemetry,
+      undefined,
+      initialCollapseMode,
+      this._history,
+      this._agentDefaults,
+      this._changeTracker,
+      this._titleService,
     )
+    this._register(session)
+    this._wireAuthGuidance(session)
+    transaction((tx) => {
+      this._sessions = [...this._sessions, session]
+      this.sessions.set(this._sessions, tx)
+      this.activeSessionId.set(session.id, tx)
+      this.activeSession.set(session, tx)
+    })
+    this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
+    this._onDidCreate.fire(session)
+
+    void this._connectSession(session, resolvedAgentId, cwd)
+    return session
+  }
+
+  /**
+   * Background connect for a freshly created session: spawn + initialize +
+   * session/new, then hand the live connection to the session via
+   * `attachConnection` (which flushes any queued prompts) and register it in
+   * durable history. On failure the session is sealed via `failConnection` and
+   * the user is guided to fix auth / sees the error — the session row stays in
+   * the list so the failure is visible instead of vanishing.
+   */
+  private async _connectSession(
+    session: AcpSession,
+    resolvedAgentId: string,
+    cwd: string | undefined,
+  ): Promise<void> {
+    const agentName = this._registry.get(resolvedAgentId).name
+    const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
+    const mcpServers = this._readMcpServers()
+    let conn: IAcpClientConnection | undefined
+    try {
+      conn = await this._client.connect(resolvedAgentId, cwd !== undefined ? { cwd } : {})
+      const activeConn = conn
+      const initResult = await withTimeout(activeConn.initializeResult, timeoutMs, 'ACP initialize')
+      const { kept, dropped } = filterMcpServersByCapabilities(
+        mcpServers,
+        initResult.agentCapabilities?.mcpCapabilities,
+      )
+      this._warnDroppedMcpServers(agentName, dropped)
+      const newParams: NewSessionRequest = {
+        cwd: cwd ?? '',
+        mcpServers: kept,
+        _meta: EMIT_INIT_SDK_MESSAGE_META,
+      }
+      const result = await withTimeout(
+        activeConn.conn.newSession(newParams),
+        timeoutMs,
+        'ACP session/new',
+      )
+      // The session may have been closed by the user while connecting.
+      if (session.status.get() === 'closed') {
+        activeConn.dispose()
+        return
+      }
+      activeConn.attachSession(result.sessionId)
+      const mcpSeed = kept.map((s) => ({ name: s.name, transport: mcpServerTransport(s) }))
+      const initState: IAcpSessionInitState = {
+        ...(result.configOptions ? { configOptions: result.configOptions } : {}),
+        ...(mcpSeed.length > 0 ? { mcpServers: mcpSeed } : {}),
+      }
+      // Record the session in persistent history now that we have the agent id.
+      this._history.add({
+        agentId: resolvedAgentId,
+        sessionIdOnAgent: result.sessionId,
+        title: session.title,
+        ...(cwd !== undefined ? { cwd } : {}),
+        hasMessages: false,
+      })
+      session.applyInitState(initState)
+      session.attachConnection(activeConn, result.sessionId)
+      this._scheduleConfigPushBack(session, this._agentDefaults.getDefaults(resolvedAgentId))
+    } catch (err) {
+      if (conn) conn.dispose()
+      const msg = (err as Error).message
+      this._logger.warn(`createSession failed: ${msg}`)
+      session.failConnection(msg)
+      if (isAuthRequiredError(err)) {
+        // No usable credentials yet — point the user straight at the
+        // Authentication panel instead of a dead-end error toast.
+        this._notification.notify({
+          severity: Severity.Warning,
+          message: localize(
+            'acp.session.authRequired',
+            'This agent needs authentication before it can start.',
+          ),
+          actions: [
+            {
+              label: localize('acp.session.openAuth', 'Open Agent Settings'),
+              run: () => {
+                void this._commands.executeCommand('workbench.action.agent.openSettings')
+              },
+            },
+          ],
+        })
+      } else {
+        this._notification.notify({
+          severity: Severity.Error,
+          message: `Failed to start agent session: ${msg}`,
+        })
+      }
+      this._telemetry.publicLogError('acp.session_create_failed', {
+        agentId: resolvedAgentId,
+        error: msg,
+      })
+    }
+  }
+
+  /**
+   * Find a live session by either its stable local id or its agent-issued
+   * sessionId. Callers may hold either: the local id is used by freshly-created
+   * sessions / editor inputs opened in this run, while the agent id is what
+   * history rows, persisted editor inputs, and protocol notifications carry.
+   */
+  private _findSession(sessionId: string): AcpSession | undefined {
+    return this._sessions.find((x) => x.id === sessionId || x.sessionIdOnAgent.get() === sessionId)
   }
 
   setActive(sessionId: string): void {
-    const s = this._sessions.find((x) => x.id === sessionId)
+    const s = this._findSession(sessionId)
     if (!s) return
-    this.activeSessionId.set(sessionId, undefined)
+    this.activeSessionId.set(s.id, undefined)
     this.activeSession.set(s, undefined)
   }
 
@@ -470,7 +495,7 @@ export class AcpSessionService
     // map. The in-flight promise is settled before being removed.
     const inflight = this._resumingBySessionId.get(sessionId)
     if (inflight) return inflight
-    const existing = this._sessions.find((s) => s.id === sessionId)
+    const existing = this._findSession(sessionId)
     if (existing && existing.status.get() !== 'closed') {
       this.setActive(existing.id)
       return existing
@@ -524,12 +549,13 @@ export class AcpSessionService
       const title = entry.title
       // Construct the AcpSession BEFORE session/load so any session/update
       // notifications the agent emits during replay route to the right
-      // session via this._sessions lookup.
+      // session. Resumed sessions are keyed by the agent-issued id (id ===
+      // sessionIdOnAgent) — they are durable and already known. attachConnection
+      // (below) sets sessionIdOnAgent so routing works during the load replay.
       session = new AcpSession(
         entry.sessionIdOnAgent,
         entry.agentId,
         title,
-        conn,
         this._telemetry,
         {
           ...(entry.usage ? { usage: entry.usage } : {}),
@@ -544,6 +570,7 @@ export class AcpSessionService
         // No title service on resume: restored sessions already carry a durable
         // title, so we must not regenerate (and overwrite) it on the next turn.
       )
+      session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
       this._wireAuthGuidance(session)
       const captured = session
@@ -674,26 +701,26 @@ export class AcpSessionService
   }
 
   async closeSession(sessionId: string): Promise<void> {
-    const idx = this._sessions.findIndex((x) => x.id === sessionId)
-    if (idx === -1) return
-    const session = this._sessions[idx]!
+    const session = this._findSession(sessionId)
+    if (!session) return
+    const localId = session.id
     await session.close()
-    this._sessions = this._sessions.filter((x) => x.id !== sessionId)
+    this._sessions = this._sessions.filter((x) => x.id !== localId)
     this.sessions.set(this._sessions, undefined)
-    AcpChatViewStateCache.clear(sessionId)
-    AcpPromptDraftCache.clear(sessionId)
-    AcpQuestionDraftCache.clearSession(sessionId)
-    if (this.activeSessionId.get() === sessionId) {
+    AcpChatViewStateCache.clear(localId)
+    AcpPromptDraftCache.clear(localId)
+    AcpQuestionDraftCache.clearSession(localId)
+    if (this.activeSessionId.get() === localId) {
       const next = this._sessions[0]
       this.activeSessionId.set(next?.id, undefined)
       this.activeSession.set(next, undefined)
     }
-    this._telemetry.publicLog('acp.session_closed', { sessionId })
-    this._onDidCloseSession.fire(sessionId)
+    this._telemetry.publicLog('acp.session_closed', { sessionId: localId })
+    this._onDidCloseSession.fire(localId)
   }
 
   getById(sessionId: string): IAcpSession | undefined {
-    return this._sessions.find((x) => x.id === sessionId)
+    return this._findSession(sessionId)
   }
 
   deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
@@ -742,7 +769,7 @@ export class AcpSessionService
   // -- IAcpClientNotificationSink ---------------------------------------
 
   onSessionUpdate(params: SessionNotification): void {
-    const session = this._sessions.find((s) => s.id === params.sessionId)
+    const session = this._findSession(params.sessionId)
     if (!session) return
     session.applyUpdate(params.update)
   }
@@ -754,7 +781,7 @@ export class AcpSessionService
     if (typeof sessionId !== 'string' || message == null || typeof message !== 'object') return
     const m = message as { type?: unknown; subtype?: unknown; mcp_servers?: unknown }
     if (m.type !== 'system' || m.subtype !== 'init' || !Array.isArray(m.mcp_servers)) return
-    const session = this._sessions.find((s) => s.id === sessionId)
+    const session = this._findSession(sessionId)
     if (!session) return
     const servers = m.mcp_servers
       .filter((s): s is { name: string; status: string } => {
@@ -774,7 +801,7 @@ export class AcpSessionService
       })
       return auto
     }
-    const session = this._sessions.find((s) => s.id === params.sessionId)
+    const session = this._findSession(params.sessionId)
     if (!session) {
       this._logger.warn(`request_permission for unknown session ${params.sessionId}`)
       return { outcome: { outcome: 'cancelled' } }
@@ -813,7 +840,7 @@ export class AcpSessionService
   }
 
   async onAskUserQuestion(params: AskUserQuestionRequest): Promise<AskUserQuestionResult> {
-    const session = this._sessions.find((s) => s.id === params.sessionId)
+    const session = this._findSession(params.sessionId)
     if (!session) {
       this._logger.warn(`ask_user_question for unknown session ${params.sessionId}`)
       return { cancelled: true }

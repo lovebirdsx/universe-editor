@@ -189,6 +189,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   return {
     id: opts.id ?? 's1',
     agentId: 'fake',
+    sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', opts.id ?? 's1'),
     title: 'Fake',
     messages,
     toolCalls,
@@ -212,6 +213,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     close: () => Promise.resolve(),
     setConfigOption: () => Promise.resolve(),
     cycleCollapseMode: () => {},
+    whenConnected: () => Promise.resolve(),
     statusObs,
     commandsObs,
   } satisfies FakeSession

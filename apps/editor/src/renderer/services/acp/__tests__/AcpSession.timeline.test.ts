@@ -25,15 +25,11 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
-  IProgressOptions,
-  IProgressService,
-  IProgressStep,
   IStorageService,
   ITelemetryService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
-import { CancellationToken } from '@universe-editor/platform'
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -133,19 +129,6 @@ class StubNotificationService implements INotificationService {
   toggleCenter(): void {}
   markAllAsRead(): void {}
   cancelProgress(): void {}
-}
-
-class StubProgressService implements IProgressService {
-  declare readonly _serviceBrand: undefined
-  async withProgress<R>(
-    _options: IProgressOptions,
-    task: (
-      progress: { report(value: IProgressStep): void },
-      token: CancellationToken,
-    ) => Promise<R>,
-  ): Promise<R> {
-    return task({ report() {} }, CancellationToken.None)
-  }
 }
 
 class StubLoggerService implements ILoggerService {
@@ -307,7 +290,6 @@ function makeService(
     { executeCommand: async () => undefined } as never,
     new NoopTelemetryService() as ITelemetryService,
     new StubPermissionHandler(),
-    new StubProgressService(),
     new StubLoggerService(),
     makeHistory(),
     new FakeStorage(),
@@ -333,6 +315,7 @@ describe('AcpSession.timeline', () => {
 
   it('interleaves message / tool_call slots in arrival order; plan stays off the timeline', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -397,6 +380,7 @@ describe('AcpSession.timeline', () => {
 
   it('a thought after tool calls opens a fresh card at the end', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -445,6 +429,7 @@ describe('AcpSession.timeline', () => {
 
   it('tool_call_update keeps the slot at its original index', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -574,6 +559,7 @@ describe('AcpSession.timeline', () => {
 
   it('plan updates land on the plan observable, not the timeline', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -616,6 +602,7 @@ describe('AcpSession.timeline', () => {
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
     svc = makeService(client)
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     const promptPromise = s.sendPrompt('hi')
@@ -662,6 +649,7 @@ describe('AcpSession.timeline', () => {
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
     svc = makeService(client)
     const s = await svc.createSession()
+    await s.whenConnected()
 
     const promptPromise = s.sendPrompt('please cancel me')
     await new Promise((r) => setTimeout(r, 5))
@@ -681,6 +669,7 @@ describe('AcpSession.timeline', () => {
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
     svc = makeService(client)
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     const promptPromise = s.sendPrompt('go')
@@ -772,6 +761,7 @@ describe('AcpSession.timeline', () => {
 
   it('blank thought chunks never produce a message slot', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     for (const text of ['', '   ', '\n\t']) {
@@ -787,6 +777,7 @@ describe('AcpSession.timeline', () => {
 
   it('a blank thought followed by an agent message leaves only the agent card', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -810,6 +801,7 @@ describe('AcpSession.timeline', () => {
 
   it('a blank chunk inside an active thought stream preserves inter-word spacing', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     for (const text of ['a', '', ' b']) {
@@ -830,6 +822,7 @@ describe('AcpSession.timeline', () => {
 
   it('a leading blank thought chunk is skipped but later content still opens a card', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -853,6 +846,7 @@ describe('AcpSession.timeline', () => {
 
   it('routes sub-agent updates into the parent tool call children', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -914,6 +908,7 @@ describe('AcpSession.timeline', () => {
 
   it('breaks the child message merge when a child tool call interleaves', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     const child = <T extends object>(u: T) => ({
@@ -963,6 +958,7 @@ describe('AcpSession.timeline', () => {
 
   it('merges sub-agent children that arrive before their parent tool call', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     // Child message arrives first (out-of-order); parent lands afterwards.
@@ -997,6 +993,7 @@ describe('AcpSession.timeline', () => {
 
   it('keeps sub-agent children across a parent tool_call_update', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -1034,6 +1031,7 @@ describe('AcpSession.timeline', () => {
 
   it('re-attaches a child tool_call_update that drops parentToolUseId (PostToolUse hook)', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -1086,7 +1084,8 @@ describe('AcpSession.timeline', () => {
     svc.dispose()
     const tracker = new StubSessionChangeTracker()
     svc = makeService(client, undefined, tracker)
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({

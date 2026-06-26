@@ -38,6 +38,11 @@ const EMPTY_OBS: IObservable<readonly SessionFileChange[]> = observableValue(
   [],
 )
 
+const EMPTY_ID_OBS: IObservable<string | undefined> = observableValue(
+  'acp.sessionChanges.viewEmptyId',
+  undefined,
+)
+
 const VIEW_MODE_STORAGE_KEY = 'acp.sessionChanges.viewMode'
 
 export function SessionChangesView() {
@@ -45,8 +50,10 @@ export function SessionChangesView() {
   const tracker = useService(ISessionChangeTrackerService)
   const storage = useService(IStorageService)
   const session = useObservable(sessions.activeSession)
-  const sessionId = session?.id
-  const changes = useObservable(sessionId ? tracker.changesFor(sessionId) : EMPTY_OBS)
+  // change tracker 以 agent 颁发的 sessionIdOnAgent 为 key 记录改动；连接完成前它是
+  // undefined，此时无改动可显示。observe 它以便连接就绪后自动刷新。
+  const sessionIdOnAgent = useObservable(session?.sessionIdOnAgent ?? EMPTY_ID_OBS)
+  const changes = useObservable(sessionIdOnAgent ? tracker.changesFor(sessionIdOnAgent) : EMPTY_OBS)
   const viewMode = useObservable(sessionChangesViewState.viewMode)
 
   // This view owns the IStorageService dependency, so it restores the persisted

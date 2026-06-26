@@ -28,15 +28,11 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
-  IProgressOptions,
-  IProgressService,
-  IProgressStep,
   IStorageService,
   ITelemetryService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
-import { CancellationToken } from '@universe-editor/platform'
 
 const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
@@ -143,19 +139,6 @@ class StubNotificationService implements INotificationService {
   toggleCenter(): void {}
   markAllAsRead(): void {}
   cancelProgress(): void {}
-}
-
-class StubProgressService implements IProgressService {
-  declare readonly _serviceBrand: undefined
-  async withProgress<R>(
-    _options: IProgressOptions,
-    task: (
-      progress: { report(value: IProgressStep): void },
-      token: CancellationToken,
-    ) => Promise<R>,
-  ): Promise<R> {
-    return task({ report() {} }, CancellationToken.None)
-  }
 }
 
 class StubLoggerService implements ILoggerService {
@@ -407,7 +390,6 @@ describe('AcpSessionService', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       permission,
-      new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
@@ -424,6 +406,7 @@ describe('AcpSessionService', () => {
 
   it('createSession spawns a connection and appends to sessions / sets active', async () => {
     const session = await svc.createSession()
+    await session.whenConnected()
     expect(session.agentId).toBe('fake')
     expect(svc.sessions.get()).toHaveLength(1)
     expect(svc.activeSession.get()?.id).toBe(session.id)
@@ -431,7 +414,8 @@ describe('AcpSessionService', () => {
   })
 
   it('registers createSession sessions so they dispose with the service (no leak)', async () => {
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
     expect(conn.disposed).toBe(false)
     svc.dispose()
@@ -444,6 +428,8 @@ describe('AcpSessionService', () => {
   it('setActive switches the active session', async () => {
     const a = await svc.createSession()
     const b = await svc.createSession()
+    await a.whenConnected()
+    await b.whenConnected()
     expect(svc.activeSession.get()?.id).toBe(b.id)
     svc.setActive(a.id)
     expect(svc.activeSession.get()?.id).toBe(a.id)
@@ -453,6 +439,8 @@ describe('AcpSessionService', () => {
   it('routes session/update notifications to the matching session by agentSessionId', async () => {
     const a = await svc.createSession()
     const b = await svc.createSession()
+    await a.whenConnected()
+    await b.whenConnected()
     const connA = client.connected[0]!
     const connB = client.connected[1]!
 
@@ -479,6 +467,7 @@ describe('AcpSessionService', () => {
 
   it('streams chunks into a single message while the turn is open and flushes on completion', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -503,6 +492,7 @@ describe('AcpSessionService', () => {
 
   it('batches observer notifications across a burst of chunks (16ms throttle)', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     let observerFires = 0
@@ -538,6 +528,7 @@ describe('AcpSessionService', () => {
 
   it('tracks tool calls and updates them in place', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -572,6 +563,7 @@ describe('AcpSessionService', () => {
 
   it('tool_call_update overrides title and kind when the agent reveals them later', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     conn.sink.onSessionUpdate({
@@ -608,6 +600,7 @@ describe('AcpSessionService', () => {
 
   it('publishes plan entries verbatim', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
     conn.sink.onSessionUpdate({
       sessionId: 'agent-1',
@@ -628,6 +621,7 @@ describe('AcpSessionService', () => {
 
   it('preserves per-entry status across plan snapshots', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
     conn.sink.onSessionUpdate({
       sessionId: 'agent-1',
@@ -655,6 +649,7 @@ describe('AcpSessionService', () => {
 
   it('cancelTurn sends a session/cancel notification to the agent', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
     await s.cancelTurn()
     // Cancel arrives async over the SDK stream; flush microtasks.
@@ -666,6 +661,7 @@ describe('AcpSessionService', () => {
   it('getById returns undefined for unknown ids', async () => {
     expect(svc.getById('nope')).toBeUndefined()
     const a = await svc.createSession()
+    await a.whenConnected()
     expect(svc.getById(a.id)?.id).toBe(a.id)
   })
 
@@ -685,7 +681,6 @@ describe('AcpSessionService', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       permission,
-      new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
@@ -695,6 +690,7 @@ describe('AcpSessionService', () => {
       FAKE_HOST,
     )
     const s = await svc.createSession()
+    await s.whenConnected()
     const conn = client.connected[0]!
 
     const promptPromise = s.sendPrompt('hi there')
@@ -725,7 +721,6 @@ describe('AcpSessionService', () => {
         { executeCommand: async () => undefined } as never,
         new NoopTelemetryService(),
         permission,
-        new StubProgressService(),
         new StubLoggerService(),
         makeHistory(),
         new FakeStorage(),
@@ -739,6 +734,7 @@ describe('AcpSessionService', () => {
     it('stays running until the last of several concurrent prompts settles', async () => {
       rebuildControlled()
       const s = await svc.createSession()
+      await s.whenConnected()
       const conn = client.connected[0]!
       const p1 = s.sendPrompt('one')
       const p2 = s.sendPrompt('two')
@@ -758,6 +754,7 @@ describe('AcpSessionService', () => {
     it('lands on errored with a single [error] when one of two prompts fails', async () => {
       rebuildControlled()
       const s = await svc.createSession()
+      await s.whenConnected()
       const conn = client.connected[0]!
       const p1 = s.sendPrompt('one')
       const p2 = s.sendPrompt('two')
@@ -773,6 +770,7 @@ describe('AcpSessionService', () => {
     it('cancelTurn interrupts all in-flight prompts with a single notification and message', async () => {
       rebuildControlled()
       const s = await svc.createSession()
+      await s.whenConnected()
       const conn = client.connected[0]!
       const p1 = s.sendPrompt('one')
       const p2 = s.sendPrompt('two')
@@ -790,6 +788,7 @@ describe('AcpSessionService', () => {
     it('recovers from errored to running to idle when a new prompt is sent', async () => {
       rebuildControlled()
       const s = await svc.createSession()
+      await s.whenConnected()
       const conn = client.connected[0]!
       const p1 = s.sendPrompt('one')
       await tick()
@@ -808,6 +807,7 @@ describe('AcpSessionService', () => {
     it('shows a steering message on the timeline immediately while a turn runs', async () => {
       rebuildControlled()
       const s = await svc.createSession()
+      await s.whenConnected()
       void s.sendPrompt('first')
       await tick()
       expect(s.status.get()).toBe('running')
@@ -821,6 +821,7 @@ describe('AcpSessionService', () => {
 
   it('auto-approves a permission request when the kind is on the allow list', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     permission.autoApproveResult = { outcome: { outcome: 'selected', optionId: 'opt1' } }
     const result = await svc.onRequestPermission({
       sessionId: 'agent-1',
@@ -834,6 +835,8 @@ describe('AcpSessionService', () => {
   it('routes interactive permission requests to the matching session and resolves via the card', async () => {
     const a = await svc.createSession()
     const b = await svc.createSession()
+    await a.whenConnected()
+    await b.whenConnected()
     void a // satisfy TS
     const pendingPromise = svc.onRequestPermission({
       sessionId: 'agent-2',
@@ -857,6 +860,7 @@ describe('AcpSessionService', () => {
 
   it('returns cancelled when the user denies via the card', async () => {
     const b = await svc.createSession()
+    await b.whenConnected()
     const promise = svc.onRequestPermission({
       sessionId: 'agent-1',
       toolCall: { toolCallId: 'tc3' },
@@ -869,6 +873,7 @@ describe('AcpSessionService', () => {
 
   it('cancels a pending permission card when the session closes', async () => {
     const b = await svc.createSession()
+    await b.whenConnected()
     const promise = svc.onRequestPermission({
       sessionId: 'agent-1',
       toolCall: { toolCallId: 'tc4' },
@@ -892,6 +897,8 @@ describe('AcpSessionService', () => {
   it('routes an AskUserQuestion to the matching session and resolves with answers', async () => {
     const a = await svc.createSession()
     const b = await svc.createSession()
+    await a.whenConnected()
+    await b.whenConnected()
     void a
     const promise = svc.onAskUserQuestion({
       sessionId: 'agent-2',
@@ -917,6 +924,7 @@ describe('AcpSessionService', () => {
 
   it('returns cancelled when the AskUserQuestion card is dismissed', async () => {
     const b = await svc.createSession()
+    await b.whenConnected()
     const promise = svc.onAskUserQuestion({
       sessionId: 'agent-1',
       toolCallId: 'q2',
@@ -929,6 +937,7 @@ describe('AcpSessionService', () => {
 
   it('cancels a pending AskUserQuestion when the session closes', async () => {
     const b = await svc.createSession()
+    await b.whenConnected()
     const promise = svc.onAskUserQuestion({
       sessionId: 'agent-1',
       toolCallId: 'q3',
@@ -951,7 +960,7 @@ describe('AcpSessionService', () => {
 })
 
 describe('AcpSessionService — startup timeout', () => {
-  it('rejects createSession when the agent never answers initialize', async () => {
+  it('seals the session as errored when the agent never answers initialize', async () => {
     const client = new FakeAcpClientService({ stubOptions: { initializeHangs: true } })
     const config = new ConfigurationService()
     await config.update('acp.startupTimeoutMs', 50)
@@ -964,7 +973,6 @@ describe('AcpSessionService — startup timeout', () => {
       { executeCommand: async () => undefined } as never,
       new NoopTelemetryService(),
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
@@ -973,7 +981,14 @@ describe('AcpSessionService — startup timeout', () => {
       new StubSessionTitleService(),
       FAKE_HOST,
     )
-    await expect(svc.createSession()).rejects.toThrow(/timed out/)
+    // createSession returns synchronously now; the handshake fails in the
+    // background after the startup timeout fires, sealing the session via
+    // failConnection (status → 'errored' + an '[error]' message) rather than
+    // rejecting the createSession promise.
+    const s = await svc.createSession()
+    await s.whenConnected()
+    expect(s.status.get()).toBe('errored')
+    expect(s.messages.get().at(-1)?.text).toMatch(/timed out/)
     svc.dispose()
   })
 })
@@ -989,7 +1004,6 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       { executeCommand: async () => undefined } as never,
       new NoopTelemetryService(),
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),
@@ -1008,7 +1022,8 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       docs: { type: 'http', url: 'https://docs', headers: { Auth: 'k' } },
     })
     const svc = makeService(client, config)
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     const params = client.connected[0]!.agent.newSessionCalls[0]!
     expect(params.mcpServers).toEqual([
       { name: 'fs', command: 'node', args: ['srv.js'], env: [{ name: 'TOKEN', value: 'x' }] },
@@ -1023,7 +1038,8 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       docs: { type: 'http', url: 'https://docs', headers: {} },
     })
     const svc = makeService(client, config)
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     const params = client.connected[0]!.agent.newSessionCalls[0]!
     expect(params.mcpServers).toEqual([
       { type: 'http', name: 'docs', url: 'https://docs', headers: [] },
@@ -1034,7 +1050,8 @@ describe('AcpSessionService — mcpServers capability gating', () => {
   it('asks the agent to emit only the SDK system-init message via session/new _meta', async () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     const params = client.connected[0]!.agent.newSessionCalls[0]!
     expect(params._meta).toEqual({
       claudeCode: { emitRawSDKMessages: [{ type: 'system', subtype: 'init' }] },
@@ -1048,6 +1065,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     await config.update('acp.mcpServers', { fs: { command: 'node', args: [] } })
     const svc = makeService(client, config)
     const session = await svc.createSession()
+    await session.whenConnected()
     expect(session.mcpServers.get()).toEqual([
       { name: 'fs', status: 'pending', transport: 'stdio' },
     ])
@@ -1069,6 +1087,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())
     const session = await svc.createSession()
+    await session.whenConnected()
     svc.onExtNotification('_claude/sdkMessage', {
       sessionId: session.id,
       message: { type: 'result' },
@@ -1082,6 +1101,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     const client = new FakeAcpClientService()
     const svc = makeService(client, new ConfigurationService())
     const session = await svc.createSession()
+    await session.whenConnected()
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: session.id,
       update: {

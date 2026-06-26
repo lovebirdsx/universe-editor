@@ -29,15 +29,11 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
-  IProgressOptions,
-  IProgressService,
-  IProgressStep,
   IStorageService,
   ITelemetryService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
-import { CancellationToken } from '@universe-editor/platform'
 
 const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
@@ -159,19 +155,6 @@ class StubLoggerService implements ILoggerService {
   setLevel(): void {}
   getLevel(): LogLevel {
     return LogLevel.Info
-  }
-}
-
-class StubProgressService implements IProgressService {
-  declare readonly _serviceBrand: undefined
-  async withProgress<R>(
-    _options: IProgressOptions,
-    task: (
-      progress: { report(value: IProgressStep): void },
-      token: CancellationToken,
-    ) => Promise<R>,
-  ): Promise<R> {
-    return task({ report() {} }, CancellationToken.None)
   }
 }
 
@@ -421,7 +404,6 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
-    new StubProgressService(),
     new StubLoggerService(),
     history,
     storage,
@@ -449,9 +431,10 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     svc = built.svc
     await built.history.initialize()
     const session = await svc.createSession()
+    await session.whenConnected()
     const entryId = built.history.list()[0]?.id
     expect(entryId).toBeDefined()
-    expect(session.id).toBe(entryId)
+    expect(session.sessionIdOnAgent.get()).toBe(entryId)
   })
 
   it('getById returns the live session by its sessionId', async () => {
@@ -461,6 +444,10 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     const a = await svc.createSession()
     await new Promise((r) => setTimeout(r, 5))
     const b = await svc.createSession()
+    // Local-id routing works before the handshake, but drain it so the
+    // background connect doesn't attach onto a disposed service in afterEach.
+    await a.whenConnected()
+    await b.whenConnected()
     expect(svc.getById(a.id)?.id).toBe(a.id)
     expect(svc.getById(b.id)?.id).toBe(b.id)
   })
@@ -477,7 +464,8 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
-    const sessionId = original.id
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
     await svc.closeSession(original.id)
     const resumed = await svc.resumeSession(sessionId)
     expect(resumed.id).toBe(sessionId)
@@ -497,6 +485,7 @@ describe('AcpSessionService — history wiring', () => {
     svc = built.svc
     await built.history.initialize()
     const session = await svc.createSession()
+    await session.whenConnected()
     const entries = built.history.list()
     expect(entries).toHaveLength(1)
     expect(entries[0]?.agentId).toBe('fake')
@@ -513,14 +502,18 @@ describe('AcpSessionService — history wiring', () => {
     const a = await svc.createSession()
     await new Promise((r) => setTimeout(r, 5))
     const b = await svc.createSession()
-    expect(built.history.list().map((e) => e.sessionIdOnAgent)).toEqual([b.id, a.id])
+    await a.whenConnected()
+    await b.whenConnected()
+    const aId = a.sessionIdOnAgent.get()!
+    const bId = b.sessionIdOnAgent.get()!
+    expect(built.history.list().map((e) => e.sessionIdOnAgent)).toEqual([bId, aId])
     await new Promise((r) => setTimeout(r, 5))
     // Bumping `a` via sendPrompt: history.touch() runs synchronously at the
-    // start of sendPrompt. We cancel the never-resolving prompt afterwards.
-    // Note: sendPrompt also derives the title from the first prompt — so we
-    // assert by id (stable) rather than by title.
+    // start of sendPrompt's dispatch (the connection is ready). We cancel the
+    // never-resolving prompt afterwards. Note: sendPrompt also derives the title
+    // from the first prompt — so we assert by id (stable) rather than by title.
     void a.sendPrompt('hi')
-    expect(built.history.list().map((e) => e.sessionIdOnAgent)).toEqual([a.id, b.id])
+    expect(built.history.list().map((e) => e.sessionIdOnAgent)).toEqual([aId, bId])
     await a.cancelTurn()
   })
 })
@@ -545,6 +538,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     expect(built.client.connected).toHaveLength(1)
     svc.setActive(original.id)
@@ -572,6 +566,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     await svc.closeSession(original.id)
     expect(svc.sessions.get()).toHaveLength(0)
@@ -591,6 +586,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     await svc.closeSession(original.id)
     const resumed = await svc.resumeSession(historyId)
@@ -602,6 +598,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     // Mirror a usage snapshot onto history as a live session would, then close.
     built.history.setHistoryUsage(historyId, {
@@ -633,6 +630,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     built.history.setHistoryUsage(historyId, { used: 1, size: 100_000 })
     await svc.closeSession(original.id)
@@ -662,6 +660,7 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     await svc.closeSession(original.id)
     const resumed = await svc.resumeSession(historyId)
@@ -688,6 +687,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(original.id)
@@ -704,6 +704,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(original.id)
@@ -723,6 +724,11 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     // _sessions ends up with two entries for the same id — find()-based routing
     // hits the stale one and replayed messages either duplicate (editor mode,
     // reads via getById) or vanish (sidebar mode, reads via activeSession).
+    //
+    // Two live sessions can only collide on the same id when both are RESUMED
+    // (a resumed session's local id === its agent id; a freshly-created one
+    // carries a random local id). So we resume once to get the stale same-id
+    // instance, abort its connection, then resume again.
     const built = buildService({
       loadSessionUpdates: [
         {
@@ -737,9 +743,18 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     })
     svc = built.svc
     await built.history.initialize()
-    const original = await svc.createSession()
+    // Seed a durable history entry (agent id 'agent-1') via create+connect.
+    const created = await svc.createSession()
+    await created.whenConnected()
     const historyId = built.history.list()[0]!.id
-    await built.client.simulateConnectionAbort(0)
+    await svc.closeSession(created.id)
+    // Resume it: original.id === historyId === 'agent-1' (connection #2).
+    const original = await svc.resumeSession(historyId)
+    expect(original.id).toBe(historyId)
+    expect(svc.sessions.get()).toHaveLength(1)
+
+    // Its connection dies without going through closeSession (connection #2).
+    await built.client.simulateConnectionAbort(1)
     expect(original.status.get()).toBe('closed')
     expect(svc.sessions.get()).toHaveLength(1)
 
@@ -748,8 +763,8 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     expect(svc.sessions.get()).toHaveLength(1)
     expect(svc.getById(historyId)).toBe(resumed)
     expect(svc.activeSession.get()).toBe(resumed)
+    // The replay streamed during the third load routed to the NEW session only.
     expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed'])
-    expect(original.messages.get()).toEqual([])
   })
 
   it('surfaces a connect/initialize stall as an error and self-heals the dedup cache', async () => {
@@ -763,6 +778,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession() // connect #1 — succeeds
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     built.history.setHistoryHasMessages(historyId)
     await svc.closeSession(original.id)
@@ -797,6 +813,7 @@ describe('AcpSessionService.resumeSession — failure paths', () => {
     svc = built.svc
     await built.history.initialize()
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     // NOTE: deliberately NOT calling setHistoryHasMessages — the session is empty.
     await svc.closeSession(original.id)
@@ -844,7 +861,8 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
     const round1 = buildService({ loadSessionResult: {} })
     await round1.history.initialize()
     const original = await round1.svc.createSession()
-    const sessionId = original.id
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
     await flushHistoryWrite()
     round1.svc.dispose()
 
@@ -873,7 +891,6 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       history,
       storage,
@@ -928,10 +945,13 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     svc = built.svc
     await built.history.initialize()
     const session = await svc.createSession()
-    // The persistence autorun runs synchronously after activeSession changes,
-    // but FakeStorage.set is async — give it a microtask to land.
+    await session.whenConnected()
+    // The persistence autorun persists the durable agent-issued id once it
+    // flips from undefined; FakeStorage.set is async — give it a microtask.
     await Promise.resolve()
-    expect(built.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(session.id)
+    expect(built.storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(
+      session.sessionIdOnAgent.get(),
+    )
   })
 
   it('clears workspace storage when the last session closes', async () => {
@@ -939,6 +959,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     svc = built.svc
     await built.history.initialize()
     const session = await svc.createSession()
+    await session.whenConnected()
     await Promise.resolve()
     expect(built.storage.store.has(ACP_ACTIVE_SESSION_STORAGE_KEY)).toBe(true)
     await svc.closeSession(session.id)
@@ -951,7 +972,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     const round1 = buildService({ loadSessionResult: {} })
     await round1.history.initialize()
     const original = await round1.svc.createSession()
-    const sessionId = original.id
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
     // Mark as having messages so the restore coordinator does not skip it.
     round1.history.setHistoryHasMessages(sessionId)
     await Promise.resolve()
@@ -981,7 +1003,6 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       history,
       round1.storage,
@@ -1005,7 +1026,8 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
   it('is a noop when a session is already active and drops the pending restore', async () => {
     const round1 = buildService({ loadSessionResult: {} })
     await round1.history.initialize()
-    await round1.svc.createSession()
+    const seed = await round1.svc.createSession()
+    await seed.whenConnected()
     await Promise.resolve()
     const storage = round1.storage
     const persistedHistoryId = storage.store.get(ACP_ACTIVE_SESSION_STORAGE_KEY)
@@ -1031,7 +1053,6 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       history,
       storage,
@@ -1077,7 +1098,6 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       history,
       storage,
@@ -1101,8 +1121,9 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
     const round1 = buildService({ loadSessionResult: {} })
     await round1.history.initialize()
     const session = await round1.svc.createSession()
+    await session.whenConnected()
     // Mark as having messages so the restore coordinator does not skip it.
-    round1.history.setHistoryHasMessages(session.id)
+    round1.history.setHistoryHasMessages(session.sessionIdOnAgent.get()!)
     await Promise.resolve()
     const storage = round1.storage
     await flushHistoryWrite()
@@ -1127,7 +1148,6 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       { executeCommand: async () => undefined } as never,
       telemetry,
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       history,
       storage,
@@ -1182,6 +1202,7 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
     await built.agentDefaults.initialize()
 
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     // Cache the per-session preference directly on the history entry.
     built.history.setHistoryConfigOption(historyId, 'model', 'opus')
@@ -1224,6 +1245,7 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
     await built.agentDefaults.initialize()
 
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     // Per-agent default says 'opus'. Per-session history says 'haiku'.
     // The session-specific choice MUST win — a user who explicitly chose
@@ -1262,6 +1284,7 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
     await built.agentDefaults.initialize()
 
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     // No per-session override — only the global default.
     built.agentDefaults.setDefault('fake', 'model', 'opus')
@@ -1293,6 +1316,7 @@ describe('AcpSessionService.resumeSession — configOption push-back', () => {
     await built.agentDefaults.initialize()
 
     const original = await svc.createSession()
+    await original.whenConnected()
     const historyId = built.history.list()[0]!.id
     built.history.setHistoryConfigOption(historyId, 'model', 'opus')
     await svc.closeSession(original.id)

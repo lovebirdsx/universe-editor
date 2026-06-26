@@ -445,7 +445,6 @@ function build(storage: FakeStorage): Built {
     { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
-    new StubProgressService(),
     new StubLoggerService(),
     history,
     storage,
@@ -494,9 +493,20 @@ describe('ACP pooled resume — two sessions, one cwd (editor restart)', () => {
     const storage = new FakeStorage()
     const round1 = build(storage)
     await round1.history.initialize()
+    // createSession now returns synchronously and hands off to a background
+    // handshake; await whenConnected() to land the agent-issued id + history row.
+    // Await s1 fully before creating s2 so newSession ordering is deterministic
+    // (s1 → first agent id, s2 → second) while both still share ONE pooled
+    // process (s1 keeps its lease, so s2's connect reuses the entry).
     const s1 = await round1.svc.createSession()
+    await s1.whenConnected()
     const s2 = await round1.svc.createSession()
+    await s2.whenConnected()
+    // The durable, agent-issued ids are what history persists and resume talks in.
+    const s1Id = s1.sessionIdOnAgent.get()!
+    const s2Id = s2.sessionIdOnAgent.get()!
     expect(s1.id).not.toBe(s2.id)
+    expect(s1Id).not.toBe(s2Id)
     // Both sessions share ONE pooled agent process.
     expect(round1.bridge.starts()).toBe(1)
     // Persist history writes (100ms debounce) then tear the editor down.
@@ -507,22 +517,22 @@ describe('ACP pooled resume — two sessions, one cwd (editor restart)', () => {
     built = build(storage)
     await built.history.initialize()
     const ids = built.history.list().map((e) => e.id)
-    expect(ids).toContain(s1.id)
-    expect(ids).toContain(s2.id)
+    expect(ids).toContain(s1Id)
+    expect(ids).toContain(s2Id)
 
     // Restore the first session (the auto-restored active one). Works today.
-    const r1 = await withTimeout(built.svc.resumeSession(s1.id), 3000, 'resume S1')
-    expect(r1.id).toBe(s1.id)
+    const r1 = await withTimeout(built.svc.resumeSession(s1Id), 3000, 'resume S1')
+    expect(r1.id).toBe(s1Id)
 
     // Switch to the second session. THIS is where production spins forever.
-    const r2 = await withTimeout(built.svc.resumeSession(s2.id), 3000, 'resume S2')
-    expect(r2.id).toBe(s2.id)
+    const r2 = await withTimeout(built.svc.resumeSession(s2Id), 3000, 'resume S2')
+    expect(r2.id).toBe(s2Id)
 
-    expect(built.svc.getById(s1.id)?.id).toBe(s1.id)
-    expect(built.svc.getById(s2.id)?.id).toBe(s2.id)
+    expect(built.svc.getById(s1Id)?.id).toBe(s1Id)
+    expect(built.svc.getById(s2Id)?.id).toBe(s2Id)
     // One agent process, one initialize, two loadSessions (one per session).
     expect(built.bridge.starts()).toBe(1)
     const agent = built.bridge.agents[0]!
-    expect(agent.loadSessionCalls).toEqual([s1.id, s2.id])
+    expect(agent.loadSessionCalls).toEqual([s1Id, s2Id])
   })
 })

@@ -263,12 +263,24 @@ export interface IAcpSessionInitState {
 
 export interface IAcpSession {
   /**
-   * The session's canonical id is the agent-issued `sessionId` from
-   * `session/new` (a.k.a. `sessionIdOnAgent`). It is durable across editor
-   * restarts and is the single key used by every other ACP service.
+   * The session's stable local id, generated up-front (a uuid for freshly
+   * created sessions; the agent-issued id for resumed ones). It never changes
+   * for the lifetime of the session, so it is safe to use as a React key /
+   * runtime cache key even before the agent connection is established.
+   *
+   * For the durable, agent-issued protocol id (needed for `session/load`,
+   * history, change-tracking, persistence) read {@link sessionIdOnAgent} — it
+   * is `undefined` until the connection is attached.
    */
   readonly id: string
   readonly agentId: string
+  /**
+   * The agent-issued `sessionId` from `session/new` (a.k.a. `sessionIdOnAgent`).
+   * `undefined` while the session is still connecting; set once
+   * `attachConnection` runs. Durable across editor restarts and the key every
+   * other ACP service (history, change tracker, persistence) talks in.
+   */
+  readonly sessionIdOnAgent: IObservable<string | undefined>
   readonly title: string
   readonly messages: IObservable<readonly AcpMessage[]>
   readonly toolCalls: IObservable<readonly AcpToolCall[]>
@@ -307,6 +319,14 @@ export interface IAcpSession {
    * command services, so AcpSessionService owns the user-facing guidance.
    */
   readonly onDidRequireAuth: Event<void>
+  /**
+   * Resolves once the connecting phase settles — i.e. {@link attachConnection}
+   * or {@link failConnection} has run. Lets callers that genuinely need the live
+   * agent connection (and tests injecting agent traffic) await the background
+   * handshake without blocking the initial render. Resolves immediately if the
+   * session is already settled.
+   */
+  whenConnected(): Promise<void>
   /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
@@ -338,6 +358,7 @@ export class AcpAbortError extends Error {
 }
 
 export class AcpSession extends Disposable implements IAcpSession {
+  readonly sessionIdOnAgent: ISettableObservable<string | undefined>
   readonly messages: ISettableObservable<readonly AcpMessage[]>
   readonly toolCalls: ISettableObservable<readonly AcpToolCall[]>
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
@@ -406,11 +427,43 @@ export class AcpSession extends Disposable implements IAcpSession {
   /** Guards one-shot AI title generation (see `_maybeGenerateTitle`). */
   private _titleGenerated = false
 
+  /**
+   * Latest title derived/generated before the agent id existed. Re-applied to
+   * the history row from {@link attachConnection} once the row is in place.
+   */
+  private _pendingTitle: string | undefined
+
+  /**
+   * Live connection, set by {@link attachConnection} once the agent handshake
+   * completes. `undefined` while the session is still connecting (or after a
+   * connection failure).
+   */
+  private _conn: IAcpClientConnection | undefined
+
+  /**
+   * Prompts the user submitted before the connection was ready. Flushed in
+   * order by {@link attachConnection}; dropped by {@link failConnection}. Each
+   * carries the resolve/reject of the original `sendPrompt` promise so callers
+   * still observe completion.
+   */
+  private readonly _queuedPrompts: Array<{
+    readonly text: string
+    readonly mentions: readonly PromptMention[]
+  }> = []
+
+  /** True once attach or fail has settled the connecting phase. */
+  private _connectionSettled = false
+
+  /** Resolved when the connecting phase settles; see {@link whenConnected}. */
+  private _resolveConnected!: () => void
+  private readonly _whenConnected = new Promise<void>((resolve) => {
+    this._resolveConnected = resolve
+  })
+
   constructor(
     readonly id: string,
     readonly agentId: string,
     readonly title: string,
-    private readonly _conn: IAcpClientConnection,
     private readonly _telemetry: ITelemetryService,
     initState?: IAcpSessionInitState,
     initialCollapseMode: CollapseMode = 'default',
@@ -420,11 +473,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _titleService?: IAcpSessionTitleService,
   ) {
     super()
+    this.sessionIdOnAgent = observableValue<string | undefined>(
+      `acp.session.sessionIdOnAgent.${id}`,
+      undefined,
+    )
     this.messages = observableValue<readonly AcpMessage[]>(`acp.session.messages.${id}`, [])
     this.toolCalls = observableValue<readonly AcpToolCall[]>(`acp.session.toolCalls.${id}`, [])
     this.plan = observableValue<readonly AcpPlanEntry[]>(`acp.session.plan.${id}`, [])
     this.timeline = observableValue<readonly TimelineItem[]>(`acp.session.timeline.${id}`, [])
-    this.status = observableValue<AcpSessionStatus>(`acp.session.status.${id}`, 'idle')
+    this.status = observableValue<AcpSessionStatus>(`acp.session.status.${id}`, 'connecting')
     this.usage = observableValue<AcpUsage | undefined>(`acp.session.usage.${id}`, undefined)
     this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
       `acp.session.pendingPermission.${id}`,
@@ -452,9 +509,13 @@ export class AcpSession extends Disposable implements IAcpSession {
       undefined,
     )
     this._configOptions = new ConfigOptionStateMachine({
-      conn: _conn,
+      getConn: () => this._conn,
       telemetry: _telemetry,
-      sessionInfo: { sessionId: id, agentId },
+      sessionInfo: {
+        localId: id,
+        agentId,
+        getSessionId: () => this.sessionIdOnAgent.get(),
+      },
       ...(_history !== undefined ? { history: _history } : {}),
       ...(_agentDefaults !== undefined ? { defaults: _agentDefaults } : {}),
     })
@@ -465,11 +526,30 @@ export class AcpSession extends Disposable implements IAcpSession {
       const h = this._history
       this._register(
         autorun((r) => {
-          h.setHistoryCollapseMode(id, this.collapseMode.read(r))
+          // History rows are keyed by the agent-issued id; while connecting it's
+          // undefined and the setter no-ops. Reading it here re-fires the autorun
+          // once attach lands so the persisted collapse mode catches up.
+          const sid = this.sessionIdOnAgent.read(r)
+          const mode = this.collapseMode.read(r)
+          if (sid !== undefined) h.setHistoryCollapseMode(sid, mode)
         }),
       )
     }
-    this._register({ dispose: () => this._conn.dispose() })
+    this._register({ dispose: () => this._conn?.dispose() })
+  }
+
+  /**
+   * Bind the established connection + agent-issued session id. Flips the session
+   * out of 'connecting', wires the connection-close → seal listener, and flushes
+   * any prompts the user queued while connecting. Called once by the service
+   * after `session/new` (or `session/load`) returns.
+   */
+  attachConnection(conn: IAcpClientConnection, sessionIdOnAgent: string): void {
+    if (this._connectionSettled) return
+    this._connectionSettled = true
+    this._resolveConnected()
+    this._conn = conn
+    this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
     // Connection close → seal the session.
     const onClose = (): void => {
       this._commitBatchedTx()
@@ -478,10 +558,49 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._cancelPending()
       this._abortAllInFlight()
     }
-    if (this._conn.conn.signal.aborted) {
+    if (conn.conn.signal.aborted) {
       onClose()
-    } else {
-      this._conn.conn.signal.addEventListener('abort', onClose, { once: true })
+      return
+    }
+    conn.conn.signal.addEventListener('abort', onClose, { once: true })
+    this._register({
+      dispose: () => conn.conn.signal.removeEventListener('abort', onClose),
+    })
+    // Leave a terminal status (closed) untouched; otherwise settle to idle and
+    // drain the queue.
+    if (this.status.get() === 'connecting') this.status.set('idle', undefined)
+    // Re-apply any title derived while connecting now that the history row exists.
+    if (this._pendingTitle !== undefined) {
+      this._history?.updateInfo(sessionIdOnAgent, { title: this._pendingTitle })
+    }
+    this._flushQueuedPrompts()
+  }
+
+  /**
+   * Abort the connecting phase after a spawn/initialize/newSession failure.
+   * Marks the session errored, surfaces the reason on the timeline, and rejects
+   * any queued prompts so their callers don't hang.
+   */
+  failConnection(message: string): void {
+    if (this._connectionSettled) return
+    this._connectionSettled = true
+    this._resolveConnected()
+    this._queuedPrompts.length = 0
+    if (this.status.get() === 'connecting') {
+      this._appendMessage('agent', `[error] ${message}`)
+      this.status.set('errored', undefined)
+    }
+  }
+
+  whenConnected(): Promise<void> {
+    return this._whenConnected
+  }
+
+  private _flushQueuedPrompts(): void {
+    if (this._queuedPrompts.length === 0) return
+    const queued = this._queuedPrompts.splice(0, this._queuedPrompts.length)
+    for (const q of queued) {
+      void this._dispatchPrompt(q.text, q.mentions)
     }
   }
 
@@ -585,17 +704,39 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   async sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void> {
-    // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
-    // Safe no-op when this session wasn't created with a history reference.
-    this._history?.touch(this.id)
-    this._history?.setHistoryHasMessages(this.id)
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
+    // Always surface the user's message immediately, even while connecting, so
+    // typing feels instant. The wire dispatch is deferred until the connection
+    // is ready (queued) so the prompt is not lost.
     this._appendMessage('user', text)
     void this._maybeGenerateTitle(text)
-    const prompt = composePromptBlocks(text, mentions ?? [])
+    if (!this._connectionSettled) {
+      this._queuedPrompts.push({ text, mentions: mentions ?? [] })
+      return
+    }
+    // Connection failed during startup — nothing to dispatch onto.
+    if (this._conn === undefined) return
+    await this._dispatchPrompt(text, mentions ?? [])
+  }
+
+  /**
+   * Send one prompt over the (already-attached) connection. Assumes
+   * `this._conn` / `sessionIdOnAgent` are set — only called post-attach (direct
+   * dispatch or queue flush). Does NOT append the user message; the caller
+   * (`sendPrompt`) already did so the message shows immediately even while the
+   * prompt was queued.
+   */
+  private async _dispatchPrompt(text: string, mentions: readonly PromptMention[]): Promise<void> {
+    const conn = this._conn
+    const sid = this.sessionIdOnAgent.get()
+    if (conn === undefined || sid === undefined) return
+    // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
+    this._history?.touch(sid)
+    this._history?.setHistoryHasMessages(sid)
+    const prompt = composePromptBlocks(text, mentions)
     const params: PromptRequest = {
-      sessionId: this.id,
+      sessionId: sid,
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
       prompt: prompt.length > 0 ? [...prompt] : [{ type: 'text', text }],
@@ -605,25 +746,25 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Status is derived from the in-flight set — never set directly per prompt,
     // so N concurrent steering prompts stay 'running' until the last settles.
     this._recomputeStatus()
-    this._telemetry.publicLog('acp.prompt_sent', { sessionId: this.id })
+    this._telemetry.publicLog('acp.prompt_sent', { sessionId: sid })
     const abortPromise = new Promise<never>((_, reject) => {
       const onAbort = (): void => reject(new AcpAbortError())
       if (abort.signal.aborted) onAbort()
       else abort.signal.addEventListener('abort', onAbort, { once: true })
     })
     try {
-      const response = await Promise.race([this._conn.conn.prompt(params), abortPromise])
+      const response = await Promise.race([conn.conn.prompt(params), abortPromise])
       this._ingestPromptResponse(response)
     } catch (err) {
       if (err instanceof AcpAbortError) {
         // '[cancelled]' is appended once by cancelTurn — appending here would
         // duplicate it when several concurrent prompts abort together.
-        this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: this.id })
+        this._telemetry.publicLog('acp.prompt_cancelled', { sessionId: sid })
       } else {
         this._sawError = true
         this._appendMessage('agent', `[error] ${(err as Error).message}`)
         this._telemetry.publicLogError('acp.prompt_failed', {
-          sessionId: this.id,
+          sessionId: sid,
           error: (err as Error).message,
         })
         if (isAuthRequiredError(err)) this._onDidRequireAuth.fire()
@@ -639,11 +780,15 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   async cancelTurn(): Promise<void> {
+    const conn = this._conn
+    const sid = this.sessionIdOnAgent.get()
     const had = this._inFlight.size > 0
-    try {
-      await this._conn.conn.cancel({ sessionId: this.id })
-    } catch {
-      // swallow — cancel is best-effort
+    if (conn !== undefined && sid !== undefined) {
+      try {
+        await conn.conn.cancel({ sessionId: sid })
+      } catch {
+        // swallow — cancel is best-effort
+      }
     }
     // Snapshot before aborting: abort() synchronously triggers each prompt's
     // finally, which deletes from the live set.
@@ -670,7 +815,8 @@ export class AcpSession extends Disposable implements IAcpSession {
     const accumulated = this.accumulatedRunningMs.get() + (Date.now() - started)
     this.accumulatedRunningMs.set(accumulated, undefined)
     this.runningStartedAt.set(undefined, undefined)
-    this._history?.setHistoryRunningDuration(this.id, accumulated)
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) this._history?.setHistoryRunningDuration(sid, accumulated)
   }
 
   private _abortAllInFlight(): void {
@@ -678,12 +824,24 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._inFlight.clear()
   }
 
+  /**
+   * Mirror a title onto the durable history entry, keyed by the agent-issued id.
+   * While the session is still connecting that id is undefined and the row does
+   * not exist yet, so we buffer the title and re-apply it from
+   * {@link attachConnection} once the entry is in place.
+   */
+  private _setHistoryTitle(title: string): void {
+    this._pendingTitle = title
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) this._history?.updateInfo(sid, { title })
+  }
+
   private _maybeDeriveTitleFromPrompt(text: string): void {
     if (!this._history) return
     if (this._messages.length > 0) return
     const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
-    this._history.updateInfo(this.id, { title: derived })
+    this._setHistoryTitle(derived)
   }
 
   /**
@@ -698,13 +856,17 @@ export class AcpSession extends Disposable implements IAcpSession {
     const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
     const title = await this._titleService.generateTitle(userText, agentText)
     if (title === undefined || this.status.get() === 'closed') return
-    this._history.updateInfo(this.id, { title })
+    this._setHistoryTitle(title)
   }
 
   async close(): Promise<void> {
     this._commitBatchedTx()
     this._finalizeRunningSegment()
     this.status.set('closed', undefined)
+    // Unblock anyone awaiting the handshake — a session closed mid-connect
+    // never reaches attach/fail, so settle the gate here to avoid a hang.
+    this._connectionSettled = true
+    this._resolveConnected()
     this._abortAllInFlight()
     this._cancelPending()
     this._messages = []
@@ -737,16 +899,19 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   applyUpdate(update: SessionUpdate): void {
+    const sid = this.sessionIdOnAgent.get()
     const parentId = readParentToolUseId(update)
     if (update.sessionUpdate === 'tool_call' || update.sessionUpdate === 'tool_call_update') {
       for (const change of readFileChanges(update)) {
-        this._changeTracker?.record(
-          this.id,
-          change.path,
-          update.toolCallId,
-          change.hunks,
-          change.isCreate,
-        )
+        if (sid !== undefined) {
+          this._changeTracker?.record(
+            sid,
+            change.path,
+            update.toolCallId,
+            change.hunks,
+            change.isCreate,
+          )
+        }
       }
     }
     switch (update.sessionUpdate) {
@@ -857,8 +1022,8 @@ export class AcpSession extends Disposable implements IAcpSession {
             const ts = Date.parse(update.updatedAt)
             if (Number.isFinite(ts)) patch.updatedAt = ts
           }
-          if (Object.keys(patch).length > 0) {
-            this._history.updateInfo(this.id, patch)
+          if (Object.keys(patch).length > 0 && sid !== undefined) {
+            this._history.updateInfo(sid, patch)
           }
         }
         break
@@ -882,7 +1047,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             costEstimated: true,
           }
           this.usage.set(next, tx)
-          this._history?.setHistoryUsage(this.id, next)
+          if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
           break
         }
         const models = extractModelBreakdown(update)
@@ -910,7 +1075,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         this.usage.set(next, tx)
         // Mirror onto history so the arc survives resume — `session/load`
         // replay does not re-emit usage_update. Debounced + deduped downstream.
-        this._history?.setHistoryUsage(this.id, next)
+        if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
         break
       }
       default:
@@ -947,7 +1112,8 @@ export class AcpSession extends Disposable implements IAcpSession {
       costEstimated: true,
     }
     this.usage.set(next, tx)
-    this._history?.setHistoryUsage(this.id, next)
+    const sid = this.sessionIdOnAgent.get()
+    if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
   }
 
   /**

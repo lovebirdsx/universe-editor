@@ -20,13 +20,19 @@ import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 
 export interface ConfigOptionSessionInfo {
-  /** The session's canonical id (agent-issued — equals `sessionIdOnAgent`). */
-  readonly sessionId: string
+  /** Stable local id — used only to name the observable (survives the whole session). */
+  readonly localId: string
   readonly agentId: string
+  /**
+   * Agent-issued session id, available only once the connection is attached.
+   * Returns undefined while the session is still connecting.
+   */
+  getSessionId(): string | undefined
 }
 
 export interface ConfigOptionStateMachineDeps {
-  readonly conn: IAcpClientConnection
+  /** Live connection once attached, else undefined (session still connecting). */
+  getConn(): IAcpClientConnection | undefined
   readonly telemetry: ITelemetryService
   readonly sessionInfo: ConfigOptionSessionInfo
   readonly history?: IAcpSessionHistoryService
@@ -46,7 +52,7 @@ export class ConfigOptionStateMachine {
 
   constructor(private readonly _deps: ConfigOptionStateMachineDeps) {
     this.configOptions = observableValue<readonly SessionConfigOption[]>(
-      `acp.session.configOptions.${_deps.sessionInfo.sessionId}`,
+      `acp.session.configOptions.${_deps.sessionInfo.localId}`,
       [],
     )
   }
@@ -73,18 +79,24 @@ export class ConfigOptionStateMachine {
   }
 
   async setConfigOption(configId: string, value: string): Promise<void> {
+    const conn = this._deps.getConn()
+    const sessionId = this._deps.sessionInfo.getSessionId()
+    // Connection not yet attached (session still connecting). The config bar is
+    // hidden until configOptions arrive (post-attach), so this should not happen
+    // in practice — guard anyway so a stray call no-ops instead of throwing.
+    if (conn === undefined || sessionId === undefined) return
     const params: SetSessionConfigOptionRequest = {
-      sessionId: this._deps.sessionInfo.sessionId,
+      sessionId,
       configId,
       value,
     }
     this._pendingPushes.add(configId)
     try {
-      const resp = await this._deps.conn.conn.setSessionConfigOption(params)
+      const resp = await conn.conn.setSessionConfigOption(params)
       if (resp.configOptions) {
         this.configOptions.set(resp.configOptions, undefined)
       }
-      const { sessionId, agentId } = this._deps.sessionInfo
+      const { agentId } = this._deps.sessionInfo
       this._deps.history?.setHistoryConfigOption(sessionId, configId, value)
       this._deps.defaults?.setDefault(agentId, configId, value)
       this._deps.telemetry.publicLog('acp.config_option_set', { sessionId, configId })

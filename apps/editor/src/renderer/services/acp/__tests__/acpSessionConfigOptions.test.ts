@@ -104,9 +104,9 @@ describe('ConfigOptionStateMachine', () => {
   it('applyInitState seeds the configOptions observable', () => {
     const { conn } = makeFakeConn({})
     const sm = new ConfigOptionStateMachine({
-      conn,
+      getConn: () => conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
     })
     expect(sm.configOptions.get()).toEqual([])
     sm.applyInitState([makeConfigOption('MODEL', 'a')])
@@ -116,9 +116,9 @@ describe('ConfigOptionStateMachine', () => {
   it('ingestUpdate replaces configOptions when no push is in flight', () => {
     const { conn } = makeFakeConn({})
     const sm = new ConfigOptionStateMachine({
-      conn,
+      getConn: () => conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
     })
     sm.applyInitState([makeConfigOption('MODEL', 'a')])
     const update: Extract<SessionUpdate, { sessionUpdate: 'config_option_update' }> = {
@@ -132,9 +132,9 @@ describe('ConfigOptionStateMachine', () => {
   it('ingestUpdate filters echoes for in-flight pushes', async () => {
     const fakeConn = makeFakeConn({})
     const sm = new ConfigOptionStateMachine({
-      conn: fakeConn.conn,
+      getConn: () => fakeConn.conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
     })
     sm.applyInitState([makeConfigOption('MODEL', 'a'), makeConfigOption('MODE', 'a')])
     // Start a push but don't resolve it — the configId stays in _pendingPushes.
@@ -161,9 +161,9 @@ describe('ConfigOptionStateMachine', () => {
       }),
     })
     const sm = new ConfigOptionStateMachine({
-      conn: fakeConn.conn,
+      getConn: () => fakeConn.conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
     })
     sm.applyInitState([makeConfigOption('MODEL', 'a')])
     await sm.setConfigOption('MODEL', 'b')
@@ -175,9 +175,9 @@ describe('ConfigOptionStateMachine', () => {
     const fakeConn = makeFakeConn({ setSessionConfigOption: async () => ({ configOptions: [] }) })
     const fakeHistory = makeFakeHistory()
     const sm = new ConfigOptionStateMachine({
-      conn: fakeConn.conn,
+      getConn: () => fakeConn.conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
       history: fakeHistory.history,
     })
     await sm.setConfigOption('MODEL', 'b')
@@ -188,9 +188,9 @@ describe('ConfigOptionStateMachine', () => {
     const fakeConn = makeFakeConn({ setSessionConfigOption: async () => ({ configOptions: [] }) })
     const fakeHistory = makeFakeHistory()
     const sm = new ConfigOptionStateMachine({
-      conn: fakeConn.conn,
+      getConn: () => fakeConn.conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
     })
     await sm.setConfigOption('MODEL', 'b')
     expect(fakeHistory.calls).toEqual([])
@@ -200,9 +200,9 @@ describe('ConfigOptionStateMachine', () => {
     const fakeConn = makeFakeConn({ setSessionConfigOption: async () => ({ configOptions: [] }) })
     const fakeDefaults = makeFakeDefaults()
     const sm = new ConfigOptionStateMachine({
-      conn: fakeConn.conn,
+      getConn: () => fakeConn.conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'fake' },
+      sessionInfo: { localId: 'ag-1', agentId: 'fake', getSessionId: () => 'ag-1' },
       defaults: fakeDefaults.defaults,
     })
     await sm.setConfigOption('MODEL', 'b')
@@ -216,9 +216,9 @@ describe('ConfigOptionStateMachine', () => {
       },
     })
     const sm = new ConfigOptionStateMachine({
-      conn: fakeConn.conn,
+      getConn: () => fakeConn.conn,
       telemetry: new NoopTelemetryService(),
-      sessionInfo: { sessionId: 'ag-1', agentId: 'a' },
+      sessionInfo: { localId: 'ag-1', agentId: 'a', getSessionId: () => 'ag-1' },
     })
     sm.applyInitState([makeConfigOption('MODEL', 'a')])
     await expect(sm.setConfigOption('MODEL', 'b')).rejects.toThrow('boom')

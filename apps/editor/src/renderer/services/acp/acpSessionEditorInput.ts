@@ -109,8 +109,12 @@ export class AcpSessionEditorInput extends EditorInput {
   }
 
   override serialize(): string {
+    // sessionId 在内存里是本地稳定 id；持久化时改存 agent 颁发的 durable id，
+    // 这样重启后才能凭它在 history 里 resume。连接尚未完成（无 agent id）时回落到本地 id。
+    const live = this._sessions.getById(this.sessionId)
+    const durableId = live?.sessionIdOnAgent.get() ?? this.sessionId
     return JSON.stringify({
-      sessionId: this.sessionId,
+      sessionId: durableId,
       ...(this.agentId !== undefined ? { agentId: this.agentId } : {}),
       title: this._lastTitle,
     })

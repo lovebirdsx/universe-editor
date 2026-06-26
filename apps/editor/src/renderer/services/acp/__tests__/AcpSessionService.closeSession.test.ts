@@ -23,14 +23,10 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
-  IProgressOptions,
-  IProgressService,
-  IProgressStep,
   IStorageService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
-import { CancellationToken } from '@universe-editor/platform'
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -134,19 +130,6 @@ class StubNotificationService implements INotificationService {
   toggleCenter(): void {}
   markAllAsRead(): void {}
   cancelProgress(): void {}
-}
-
-class StubProgressService implements IProgressService {
-  declare readonly _serviceBrand: undefined
-  async withProgress<R>(
-    _options: IProgressOptions,
-    task: (
-      progress: { report(value: IProgressStep): void },
-      token: CancellationToken,
-    ) => Promise<R>,
-  ): Promise<R> {
-    return task({ report() {} }, CancellationToken.None)
-  }
 }
 
 class StubLoggerService implements ILoggerService {
@@ -314,7 +297,6 @@ describe('AcpSessionService — onDidCloseSession', () => {
       { executeCommand: async () => undefined } as never,
       new NoopTelemetryService(),
       new StubPermissionHandler(),
-      new StubProgressService(),
       new StubLoggerService(),
       makeHistory(),
       new FakeStorage(),

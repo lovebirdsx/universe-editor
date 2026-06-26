@@ -25,15 +25,11 @@ import type {
   INotificationHandle,
   INotificationService,
   IObservable,
-  IProgressOptions,
-  IProgressService,
-  IProgressStep,
   IStorageService,
   ITelemetryService,
   IWorkspace,
   IWorkspaceService,
 } from '@universe-editor/platform'
-import { CancellationToken } from '@universe-editor/platform'
 
 const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
 import {
@@ -151,19 +147,6 @@ class StubLoggerService implements ILoggerService {
   }
 }
 
-class StubProgressService implements IProgressService {
-  declare readonly _serviceBrand: undefined
-  async withProgress<R>(
-    _options: IProgressOptions,
-    task: (
-      progress: { report(value: IProgressStep): void },
-      token: CancellationToken,
-    ) => Promise<R>,
-  ): Promise<R> {
-    return task({ report() {} }, CancellationToken.None)
-  }
-}
-
 class StubPermissionHandler implements IAcpPermissionHandler {
   declare readonly _serviceBrand: undefined
   tryAutoApprove(_params: RequestPermissionRequest): RequestPermissionResponse | undefined {
@@ -177,12 +160,19 @@ class FakeStorage implements IStorageService {
   readonly store = new Map<string, unknown>()
   private readonly _onDidChangeWorkspaceScope = new Emitter<void>()
   readonly onDidChangeWorkspaceScope = this._onDidChangeWorkspaceScope.event
-  constructor() {
+  constructor(fireScopeOnStartup = true) {
     // Mirror production behaviour: MainStorageService fires onDidChangeWorkspaceScope
     // once on startup. Doing it on a microtask lets the history/defaults services
     // subscribe first (via Event.toPromise) and avoids the 500ms cold-start timeout
-    // in _scheduleInitialLoad.
-    queueMicrotask(() => this._onDidChangeWorkspaceScope.fire())
+    // in _scheduleInitialLoad. The session service, however, treats this event as a
+    // workspace swap that tears down live sessions; since createSession now publishes
+    // its session synchronously and connects in the background, a deferred startup
+    // swap would close the freshly-minted session mid-handshake. The service's own
+    // storage therefore opts out — in production the startup swap lands before any
+    // session exists, so suppressing it here matches reality.
+    if (fireScopeOnStartup) {
+      queueMicrotask(() => this._onDidChangeWorkspaceScope.fire())
+    }
   }
   async get<T = unknown>(key: string, _scope?: StorageScope): Promise<T | undefined> {
     return this.store.get(key) as T | undefined
@@ -375,10 +365,9 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     { executeCommand: async () => undefined } as never,
     telemetry,
     new StubPermissionHandler(),
-    new StubProgressService(),
     new StubLoggerService(),
     history,
-    new FakeStorage(),
+    new FakeStorage(false),
     agentDefaults,
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
@@ -409,6 +398,7 @@ describe('AcpSessionService — init', () => {
     const built = buildService({ newSessionResult: { configOptions: [fixture] } })
     svc = built.svc
     const s = await svc.createSession()
+    await s.whenConnected()
     const opts = s.configOptions.get()
     expect(opts).toHaveLength(1)
     expect(opts[0]).toEqual(fixture)
@@ -431,6 +421,7 @@ describe('AcpSessionService — session/update fan-out', () => {
 
   it('applies available_commands_update', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: {
@@ -452,6 +443,7 @@ describe('AcpSessionService — session/update fan-out', () => {
 
   it('applies usage_update into the usage observable', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     expect(s.usage.get()).toBeUndefined()
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: 'agent-1',
@@ -471,6 +463,7 @@ describe('AcpSessionService — session/update fan-out', () => {
 
   it('applies usage_update without cost', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: { sessionUpdate: 'usage_update', used: 10, size: 100 },
@@ -480,6 +473,7 @@ describe('AcpSessionService — session/update fan-out', () => {
 
   it('parses per-model cost breakdown from usage_update _meta', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: {
@@ -515,6 +509,7 @@ describe('AcpSessionService — session/update fan-out', () => {
 
   it('keeps cost / models when a mid-stream usage_update omits them', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     // Turn-final update carries cost + breakdown.
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: 'agent-1',
@@ -550,6 +545,7 @@ describe('AcpSessionService — session/update fan-out', () => {
 
   it('applies config_option_update verbatim and replaces prior values', async () => {
     const s = await svc.createSession()
+    await s.whenConnected()
     client.connected[0]!.sink.onSessionUpdate({
       sessionId: 'agent-1',
       update: {
@@ -624,6 +620,7 @@ describe('AcpSessionService — setConfigOption write path', () => {
     svc = built.svc
     client = built.client
     const s = await svc.createSession()
+    await s.whenConnected()
     await s.setConfigOption('model', 'opus')
     const agent = client.connected[0]!.agent
     expect(agent.setConfigOptionCalls).toHaveLength(1)
@@ -650,6 +647,7 @@ describe('AcpSessionService — setConfigOption write path', () => {
     })
     svc = built.svc
     const s = await svc.createSession()
+    await s.whenConnected()
     await expect(s.setConfigOption('model', 'gpt-5')).rejects.toThrow(/unsupported value/)
     // State should be unchanged.
     expect(s.configOptions.get()[0]?.currentValue).toBe('sonnet')
@@ -684,8 +682,9 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     await built.history.initialize()
     await built.agentDefaults.initialize()
     const s = await svc.createSession()
+    await s.whenConnected()
     await s.setConfigOption('model', 'opus')
-    const entry = built.history.list().find((e) => e.id === s.id)
+    const entry = built.history.list().find((e) => e.id === s.sessionIdOnAgent.get())
     expect(entry?.configOptions).toEqual({ model: 'opus' })
     expect(built.agentDefaults.getDefaults('fake')).toEqual({ model: 'opus' })
   })
@@ -716,6 +715,7 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     svc = built.svc
     await built.history.initialize()
     const s = await svc.createSession()
+    await s.whenConnected()
     const sink = built.client.connected[0]!.sink
     // Start a write but DON'T await — _pendingPushes now has 'model'.
     const writeP = s.setConfigOption('model', 'opus')
@@ -774,6 +774,7 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     svc = built.svc
     await built.history.initialize()
     const s = await svc.createSession()
+    await s.whenConnected()
     const sink = built.client.connected[0]!.sink
     const writeP = s.setConfigOption('model', 'opus')
     // Update contains BOTH the in-flight model (filtered) and thought_level (merged).
@@ -809,6 +810,7 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     svc = built.svc
     await built.history.initialize()
     const s = await svc.createSession()
+    await s.whenConnected()
     await expect(s.setConfigOption('model', 'opus')).rejects.toThrow(/boom/)
     // A subsequent legitimate update for the same id must NOT be filtered.
     built.client.connected[0]!.sink.onSessionUpdate({
@@ -855,6 +857,7 @@ describe('AcpSessionService — createSession push-back of agent defaults', () =
     // Seed a default BEFORE creating the session.
     built.agentDefaults.setDefault('fake', 'model', 'opus')
     const s = await svc.createSession()
+    await s.whenConnected()
     // Push-back is scheduled via queueMicrotask. Yield a couple cycles.
     await new Promise((r) => setTimeout(r, 20))
     const agent = built.client.connected[0]!.agent
@@ -877,7 +880,8 @@ describe('AcpSessionService — createSession push-back of agent defaults', () =
     await built.history.initialize()
     await built.agentDefaults.initialize()
     built.agentDefaults.setDefault('fake', 'model', 'sonnet')
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     await new Promise((r) => setTimeout(r, 20))
     const agent = built.client.connected[0]!.agent
     expect(agent.setConfigOptionCalls).toHaveLength(0)
@@ -889,7 +893,8 @@ describe('AcpSessionService — createSession push-back of agent defaults', () =
     await built.history.initialize()
     await built.agentDefaults.initialize()
     built.agentDefaults.setDefault('fake', 'mystery', 'value')
-    await svc.createSession()
+    const s = await svc.createSession()
+    await s.whenConnected()
     await new Promise((r) => setTimeout(r, 20))
     expect(built.client.connected[0]!.agent.setConfigOptionCalls).toHaveLength(0)
   })
