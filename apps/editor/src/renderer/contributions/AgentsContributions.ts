@@ -170,6 +170,14 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'How often (milliseconds) the API usage indicator below the Agent prompt refreshes. Polling pauses while the window is hidden.',
             ),
           },
+          'acp.sessions.confirmDelete': {
+            type: 'boolean',
+            default: true,
+            description: localize(
+              'settings.acp.sessions.confirmDelete',
+              'Ask for confirmation before deleting a session.',
+            ),
+          },
         },
       }),
     )

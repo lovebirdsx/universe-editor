@@ -10,8 +10,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import { localize } from '@universe-editor/platform'
-import { X } from 'lucide-react'
+import {
+  localize,
+  IDialogService,
+  IConfigurationService,
+  ConfigurationTarget,
+} from '@universe-editor/platform'
+import { X, Trash2 } from 'lucide-react'
 import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
@@ -142,14 +147,14 @@ function SessionRow({
       </div>
       <button
         type="button"
-        className={styles['sessionClose']}
+        className={styles['sessionDelete']}
         onClick={(e) => {
           e.stopPropagation()
           onRemove()
         }}
         aria-label={localize('acp.sessions.remove', 'Remove session')}
       >
-        ×
+        <Trash2 size={13} strokeWidth={1.75} />
       </button>
     </li>
   )
@@ -159,6 +164,8 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const filterService = useService(IAcpSessionFilterService)
+  const config = useService(IConfigurationService)
+  const dialogService = useService(IDialogService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
@@ -235,6 +242,25 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 }}
                 onRemove={() => {
                   void (async () => {
+                    if (config.get<boolean>('acp.sessions.confirmDelete') !== false) {
+                      const result = await dialogService.confirm({
+                        message: localize('acp.sessions.removeConfirm', 'Delete this session?'),
+                        detail: localize(
+                          'acp.sessions.removeConfirmDetail',
+                          'This will delete the session and its history.',
+                        ),
+                        primaryButton: localize('acp.sessions.removeConfirmOk', 'Delete'),
+                        cancelButton: localize('acp.sessions.removeConfirmCancel', 'Cancel'),
+                        neverAskAgainLabel: localize(
+                          'acp.sessions.removeNeverAsk',
+                          "Don't ask again",
+                        ),
+                      })
+                      if (!result.confirmed) return
+                      if (result.neverAskAgain) {
+                        config.update('acp.sessions.confirmDelete', false, ConfigurationTarget.User)
+                      }
+                    }
                     if (liveSession) await service.closeSession(liveSession.id)
                     await service.deleteOnAgent(entry.id)
                     history.remove(entry.id)

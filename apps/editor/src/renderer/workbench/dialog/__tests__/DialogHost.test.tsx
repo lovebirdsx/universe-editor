@@ -16,7 +16,11 @@ describe('RendererDialogService', () => {
     const promise = svc.confirm({ message: 'Are you sure?' })
     const btn = await screen.findByRole('button', { name: 'OK' })
     fireEvent.click(btn)
-    await expect(promise).resolves.toEqual({ confirmed: true, choice: 'primary' })
+    await expect(promise).resolves.toEqual({
+      confirmed: true,
+      choice: 'primary',
+      neverAskAgain: false,
+    })
   })
 
   it('confirm cancel returns confirmed=false / choice="cancel"', async () => {
@@ -24,7 +28,11 @@ describe('RendererDialogService', () => {
     render(<DialogHost service={svc} />)
     const promise = svc.confirm({ message: 'Discard?' })
     fireEvent.click(await screen.findByRole('button', { name: 'Cancel' }))
-    await expect(promise).resolves.toEqual({ confirmed: false, choice: 'cancel' })
+    await expect(promise).resolves.toEqual({
+      confirmed: false,
+      choice: 'cancel',
+      neverAskAgain: false,
+    })
   })
 
   it('confirm secondary returns confirmed=false / choice="secondary"', async () => {
@@ -36,7 +44,11 @@ describe('RendererDialogService', () => {
       secondaryButton: "Don't Save",
     })
     fireEvent.click(await screen.findByRole('button', { name: "Don't Save" }))
-    await expect(promise).resolves.toEqual({ confirmed: false, choice: 'secondary' })
+    await expect(promise).resolves.toEqual({
+      confirmed: false,
+      choice: 'secondary',
+      neverAskAgain: false,
+    })
   })
 
   it('prompt resolves with the input value on OK', async () => {

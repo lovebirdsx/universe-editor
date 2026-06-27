@@ -99,3 +99,13 @@
   outline: 1px solid var(--color-focus-border, #007fd4);
   outline-offset: 1px;
 }
+
+.checkboxRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-dialog-detail-fg, #aaaaaa);
+  cursor: pointer;
+  user-select: none;
+}

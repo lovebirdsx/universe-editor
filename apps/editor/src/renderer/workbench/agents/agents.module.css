@@ -1084,9 +1084,9 @@
 .sessionRow {
   display: flex;
   align-items: center;
-  padding: 4px 6px;
+  padding: 6px 6px;
   gap: 6px;
-  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  font-size: var(--agent-font-size, 12px);
   cursor: pointer;
   border-radius: 3px;
   border-left: 2px solid transparent;
@@ -1131,7 +1131,7 @@
 }
 
 .sessionRowMeta {
-  font-size: calc(var(--agent-font-size, 12px) * 0.714);
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
   color: var(--color-message-role-fg, #888);
   display: flex;
   align-items: center;
@@ -1148,20 +1148,26 @@
   flex-shrink: 0;
 }
 
-.sessionClose {
+.sessionDelete {
   background: none;
   border: 0;
   color: inherit;
   cursor: pointer;
-  font-size: var(--agent-font-size, 12px);
-  font-family: var(--agent-font-family, var(--font-ui));
-  padding: 0 4px;
+  padding: 2px;
+  display: flex;
+  align-items: center;
   visibility: hidden;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 
-.sessionRow:hover .sessionClose,
-.sessionRow[data-active='true'] .sessionClose {
+.sessionRow:hover .sessionDelete,
+.sessionRow[data-active='true'] .sessionDelete {
   visibility: visible;
+}
+
+.sessionDelete:hover {
+  color: var(--color-fg-error, #f85149);
 }
 
 .empty,

@@ -45,7 +45,11 @@ describe('ConfirmDialog', () => {
     const onResolve = vi.fn()
     render(<ConfirmDialog opts={{ message: 'Sure?' }} onResolve={onResolve} />)
     fireEvent.click(screen.getByRole('button', { name: 'OK' }))
-    expect(onResolve).toHaveBeenCalledWith({ confirmed: true, choice: 'primary' })
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: true,
+      choice: 'primary',
+      neverAskAgain: false,
+    })
   })
 
   it('secondary button resolves secondary', () => {
@@ -57,7 +61,11 @@ describe('ConfirmDialog', () => {
       />,
     )
     fireEvent.click(screen.getByRole('button', { name: "Don't Save" }))
-    expect(onResolve).toHaveBeenCalledWith({ confirmed: false, choice: 'secondary' })
+    expect(onResolve).toHaveBeenCalledWith({
+      confirmed: false,
+      choice: 'secondary',
+      neverAskAgain: false,
+    })
   })
 })
 

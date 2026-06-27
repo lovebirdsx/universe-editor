@@ -5,6 +5,7 @@
  *  portal.
  *--------------------------------------------------------------------------------------------*/
 
+import { useState } from 'react'
 import {
   localize,
   type IConfirmOptions,
@@ -23,6 +24,7 @@ export function ConfirmDialog({
   const primary = opts.primaryButton ?? localize('dialog.default.ok', 'OK')
   const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
   const secondary = opts.secondaryButton
+  const [neverAskAgain, setNeverAskAgain] = useState(false)
   return (
     <div
       className={styles['backdrop']}
@@ -32,22 +34,32 @@ export function ConfirmDialog({
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.preventDefault()
-          onResolve({ confirmed: false, choice: 'cancel' })
+          onResolve({ confirmed: false, choice: 'cancel', neverAskAgain: false })
         } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
           e.preventDefault()
-          onResolve({ confirmed: true, choice: 'primary' })
+          onResolve({ confirmed: true, choice: 'primary', neverAskAgain })
         }
       }}
     >
       <div className={styles['dialog']}>
         <p className={styles['message']}>{opts.message}</p>
         {opts.detail ? <p className={styles['detail']}>{opts.detail}</p> : null}
+        {opts.neverAskAgainLabel ? (
+          <label className={styles['checkboxRow']}>
+            <input
+              type="checkbox"
+              checked={neverAskAgain}
+              onChange={(e) => setNeverAskAgain(e.target.checked)}
+            />
+            {opts.neverAskAgainLabel}
+          </label>
+        ) : null}
         <div className={styles['buttons']}>
           <button
             type="button"
             className={styles['btnPrimary']}
             autoFocus
-            onClick={() => onResolve({ confirmed: true, choice: 'primary' })}
+            onClick={() => onResolve({ confirmed: true, choice: 'primary', neverAskAgain })}
           >
             {primary}
           </button>
@@ -64,7 +76,9 @@ export function ConfirmDialog({
             <button
               type="button"
               className={styles['btn']}
-              onClick={() => onResolve({ confirmed: false, choice: 'secondary' })}
+              onClick={() =>
+                onResolve({ confirmed: false, choice: 'secondary', neverAskAgain: false })
+              }
             >
               {secondary}
             </button>
@@ -72,7 +86,7 @@ export function ConfirmDialog({
           <button
             type="button"
             className={styles['btn']}
-            onClick={() => onResolve({ confirmed: false, choice: 'cancel' })}
+            onClick={() => onResolve({ confirmed: false, choice: 'cancel', neverAskAgain: false })}
           >
             {cancel}
           </button>
