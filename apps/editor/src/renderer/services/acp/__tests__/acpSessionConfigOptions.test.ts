@@ -138,6 +138,7 @@ describe('ConfigOptionStateMachine', () => {
     })
     sm.applyInitState([makeConfigOption('MODEL', 'a'), makeConfigOption('MODE', 'a')])
     // Start a push but don't resolve it — the configId stays in _pendingPushes.
+    // The push now applies 'b' optimistically before the RPC resolves.
     const push = sm.setConfigOption('MODEL', 'b')
     // The agent echoes the stale pre-change value AND an unrelated MODE change.
     const update: Extract<SessionUpdate, { sessionUpdate: 'config_option_update' }> = {
@@ -145,10 +146,10 @@ describe('ConfigOptionStateMachine', () => {
       configOptions: [makeConfigOption('MODEL', 'a'), makeConfigOption('MODE', 'b')],
     }
     sm.ingestUpdate(update)
-    // MODEL stays at 'a' from initState — the echo for it was filtered. MODE
-    // propagated because it wasn't in the pendingPushes set.
+    // MODEL stays at the optimistic 'b' — the echo restoring it to 'a' was
+    // filtered. MODE propagated because it wasn't in the pendingPushes set.
     const cur = sm.configOptions.get()
-    expect(cur.find((o) => o.id === 'MODEL')?.currentValue).toBe('a')
+    expect(cur.find((o) => o.id === 'MODEL')?.currentValue).toBe('b')
     expect(cur.find((o) => o.id === 'MODE')?.currentValue).toBe('b')
     fakeConn.release()
     await push

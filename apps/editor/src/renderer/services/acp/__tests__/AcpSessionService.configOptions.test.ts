@@ -8,6 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  autorun,
   ConfigurationService,
   Emitter,
   LogLevel,
@@ -205,6 +206,19 @@ interface FakeAcpClientOptions {
    * keep the call pending while we inject a rogue `config_option_update`.
    */
   setConfigOptionGate?: () => Promise<void>
+  /**
+   * Stateful mode mirroring the real Claude agent: the agent owns the bag and
+   * each `set_config_option` mutates+returns it. Crucially, setting `model`
+   * resets the dependent `effort` option back to `'default'` (a model switch
+   * rebuilds effort levels), reproducing the model→effort coupling bug.
+   */
+  statefulBag?: SessionConfigOption[]
+  /**
+   * With `statefulBag`, makes `effort` surface only AFTER `model` is set (rather
+   * than being present from `session/new`) — modelling the real Claude flow
+   * where effort levels depend on async-loaded model info and arrive late.
+   */
+  statefulEffortAppearsOnModelSet?: boolean
 }
 
 class StubAgent implements Agent {
@@ -231,6 +245,12 @@ class StubAgent implements Agent {
 
   newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.newSessionCalls.push(params)
+    if (this._opts.statefulBag) {
+      return Promise.resolve({
+        sessionId: this._agentSessionId,
+        configOptions: this._opts.statefulBag.map((o) => ({ ...o })),
+      } as unknown as NewSessionResponse)
+    }
     return Promise.resolve({
       sessionId: this._agentSessionId,
       ...(this._opts.newSessionResult ?? {}),
@@ -262,6 +282,35 @@ class StubAgent implements Agent {
           this._opts.setConfigOptionError.code,
           this._opts.setConfigOptionError.message,
         )
+      }
+      const bag = this._opts.statefulBag
+      if (bag) {
+        const value = params.value as string
+        for (const o of bag) {
+          if (o.id === params.configId && o.type === 'select') o.currentValue = value
+        }
+        if (params.configId === 'model') {
+          // A model switch rebuilds dependent options. Either reset effort to
+          // default (it was already present), or — modelling the real Claude
+          // flow — *surface* effort for the first time at its server default.
+          const existing = bag.find((o) => o.id === 'effort')
+          if (existing && existing.type === 'select') {
+            existing.currentValue = 'default'
+          } else if (this._opts.statefulEffortAppearsOnModelSet) {
+            bag.push({
+              id: 'effort',
+              name: 'Effort',
+              category: 'thought_level',
+              type: 'select',
+              currentValue: 'default',
+              options: [
+                { value: 'default', name: 'Default' },
+                { value: 'high', name: 'High' },
+              ],
+            })
+          }
+        }
+        return { configOptions: bag.map((o) => ({ ...o })) } as SetSessionConfigOptionResponse
       }
       return (this._opts.setConfigOptionResult ?? {
         configOptions: [],
@@ -422,6 +471,43 @@ describe('AcpSessionService — init', () => {
     const s = await svc.createSession()
     await s.whenConnected()
     expect(built.configOptionsCache.get('fake')).toEqual([fixture])
+  })
+
+  it('caches options that only arrive later via config_option_update', async () => {
+    // Regression: `thought_level` shows up only after init, via a
+    // `config_option_update` — not in the session/new bag. The cache must pick
+    // it up so the NEXT new session can seed it onto the optimistic config bar.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const thought: SessionConfigOption = {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    const built = buildService({ newSessionResult: { configOptions: [model] } })
+    svc = built.svc
+    const s = await svc.createSession()
+    await s.whenConnected()
+    // session/new only advertised `model`.
+    expect(built.configOptionsCache.get('fake')).toEqual([model])
+    // The agent later advertises the full bag including `thought_level`.
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'config_option_update', configOptions: [model, thought] },
+    })
+    expect(built.configOptionsCache.get('fake')).toEqual([model, thought])
   })
 })
 
@@ -805,7 +891,8 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
     const s = await svc.createSession()
     await s.whenConnected()
     const sink = built.client.connected[0]!.sink
-    // Start a write but DON'T await — _pendingPushes now has 'model'.
+    // Start a write but DON'T await — _pendingPushes now has 'model', and the
+    // value is applied optimistically to 'opus' before the RPC resolves.
     const writeP = s.setConfigOption('model', 'opus')
     // Inject a rogue echo for the same configId. Must be filtered.
     sink.onSessionUpdate({
@@ -815,11 +902,11 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
         configOptions: [{ ...initial, currentValue: 'haiku' }],
       },
     })
-    // Still pending — should NOT have flipped to 'haiku'.
-    expect(s.configOptions.get()[0]?.currentValue).toBe('sonnet')
+    // Optimistic value holds; the rogue 'haiku' echo was filtered.
+    expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
     release()
     await writeP
-    // Agent's response wins; rogue echo was suppressed.
+    // Agent's response confirms 'opus'; rogue echo was suppressed throughout.
     expect(s.configOptions.get()[0]?.currentValue).toBe('opus')
   })
 
@@ -874,8 +961,8 @@ describe('AcpSessionService — setConfigOption persistence side-effects', () =>
       },
     })
     const mid = s.configOptions.get()
-    // model preserved at 'sonnet' (rogue echo filtered).
-    expect(mid.find((o) => o.id === 'model')?.currentValue).toBe('sonnet')
+    // model holds the optimistic 'opus' (rogue 'haiku' echo filtered).
+    expect(mid.find((o) => o.id === 'model')?.currentValue).toBe('opus')
     // thought_level was merged into the existing array.
     expect(mid.find((o) => o.id === 'thought_level')?.currentValue).toBe('high')
     release()
@@ -985,5 +1072,340 @@ describe('AcpSessionService — createSession push-back of agent defaults', () =
     await s.whenConnected()
     await new Promise((r) => setTimeout(r, 20))
     expect(built.client.connected[0]!.agent.setConfigOptionCalls).toHaveLength(0)
+  })
+
+  it('pushes back a saved default for an option that only appears post-init', async () => {
+    // Regression: `thought_level` is not in session/new — it arrives later via a
+    // `config_option_update` with the server default. The saved per-agent
+    // default (`high`) must still be pushed back when the option surfaces; a
+    // one-shot reconcile right after session/new would miss it entirely.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const thought: SessionConfigOption = {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...thought, currentValue: 'high' }
+    const built = buildService({
+      newSessionResult: { configOptions: [model] },
+      setConfigOptionResult: { configOptions: [model, acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'thought_level', 'high')
+    const s = await svc.createSession()
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 20))
+    const agent = built.client.connected[0]!.agent
+    // Nothing to push yet — thought_level hasn't been advertised.
+    expect(agent.setConfigOptionCalls).toHaveLength(0)
+    // The agent now advertises thought_level (server default).
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'config_option_update', configOptions: [model, thought] },
+    })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(agent.setConfigOptionCalls).toHaveLength(1)
+    expect(agent.setConfigOptionCalls[0]).toMatchObject({
+      configId: 'thought_level',
+      value: 'high',
+    })
+    expect(s.configOptions.get().find((o) => o.id === 'thought_level')?.currentValue).toBe('high')
+  })
+
+  it('never lets the server default flash for an option whose saved value differs (no flicker)', async () => {
+    // The crux of the flicker: session/new advertises thought_level=default,
+    // but the user's saved per-agent default is high. The config bar must NEVER
+    // observe `default` for this option — it should go straight to `high`. We
+    // record every value the observable ever exposes for thought_level and
+    // assert `default` is never among them.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const thoughtDefault: SessionConfigOption = {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...thoughtDefault, currentValue: 'high' }
+    const built = buildService({
+      // session/new already carries thought_level at the server default.
+      newSessionResult: { configOptions: [model, thoughtDefault] },
+      setConfigOptionResult: { configOptions: [model, acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'thought_level', 'high')
+    // Pre-seed the per-agent cache so the optimistic bar starts at high.
+    built.configOptionsCache.set('fake', [model, { ...thoughtDefault, currentValue: 'high' }])
+
+    const seen: string[] = []
+    const s = await svc.createSession()
+    const stop = autorun((r) => {
+      const v = s.configOptions.read(r).find((o) => o.id === 'thought_level')?.currentValue
+      if (v !== undefined) seen.push(String(v))
+    })
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 30))
+    stop.dispose()
+
+    expect(s.configOptions.get().find((o) => o.id === 'thought_level')?.currentValue).toBe('high')
+    expect(seen).not.toContain('default')
+  })
+
+  it('no flicker AND a real RPC for an option that only appears post-init', async () => {
+    // The user's real case: thought_level is NOT in session/new; it surfaces
+    // later via config_option_update at the server default. The bar must jump
+    // straight to the saved `high` (no `default` frame) AND the agent must be
+    // told (a real setConfigOption RPC), so the value actually takes effect.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [{ value: 'sonnet', name: 'Sonnet' }],
+    }
+    const thoughtDefault: SessionConfigOption = {
+      id: 'thought_level',
+      name: 'Thinking',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    const acked: SessionConfigOption = { ...thoughtDefault, currentValue: 'high' }
+    const built = buildService({
+      newSessionResult: { configOptions: [model] },
+      setConfigOptionResult: { configOptions: [model, acked] },
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'thought_level', 'high')
+
+    const seen: string[] = []
+    const s = await svc.createSession()
+    const stop = autorun((r) => {
+      const v = s.configOptions.read(r).find((o) => o.id === 'thought_level')?.currentValue
+      if (v !== undefined) seen.push(String(v))
+    })
+    await s.whenConnected()
+    // thought_level surfaces post-init at the server default.
+    built.client.connected[0]!.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'config_option_update', configOptions: [model, thoughtDefault] },
+    })
+    await new Promise((r) => setTimeout(r, 30))
+    stop.dispose()
+
+    // No flicker: `default` never reached the observable.
+    expect(seen).not.toContain('default')
+    expect(s.configOptions.get().find((o) => o.id === 'thought_level')?.currentValue).toBe('high')
+    // Real RPC issued so the agent adopts the value.
+    const agent = built.client.connected[0]!.agent
+    expect(agent.setConfigOptionCalls).toEqual([
+      { sessionId: 'agent-1', configId: 'thought_level', value: 'high' },
+    ])
+  })
+
+  it('inherits effort when model is also restored (model switch must not reset effort)', async () => {
+    // The real Claude bug: user had model=opus, effort=high. On a new session
+    // both must be restored. But pushing `model` server-side rebuilds effort and
+    // resets it to `default`. The push-back must order model BEFORE effort and
+    // keep effort pinned, so the final state is high — not default.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const effort: SessionConfigOption = {
+      id: 'effort',
+      name: 'Effort',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    const built = buildService({ statefulBag: [{ ...model }, { ...effort }] })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    built.agentDefaults.setDefault('fake', 'effort', 'high')
+
+    const seenEffort: string[] = []
+    const s = await svc.createSession()
+    const stop = autorun((r) => {
+      const v = s.configOptions.read(r).find((o) => o.id === 'effort')?.currentValue
+      if (v !== undefined) seenEffort.push(String(v))
+    })
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 50))
+    stop.dispose()
+
+    // Both inherited.
+    expect(s.configOptions.get().find((o) => o.id === 'model')?.currentValue).toBe('opus')
+    expect(s.configOptions.get().find((o) => o.id === 'effort')?.currentValue).toBe('high')
+    // The agent actually ended up at high (the source of truth).
+    const agentEffort = built.client.connected[0]!.agent.setConfigOptionCalls
+    expect(agentEffort).toContainEqual({ sessionId: 'agent-1', configId: 'model', value: 'opus' })
+    expect(agentEffort).toContainEqual({ sessionId: 'agent-1', configId: 'effort', value: 'high' })
+    // model push must precede effort push (so effort is the final writer).
+    const modelIdx = agentEffort.findIndex((c) => c.configId === 'model')
+    const effortIdx = agentEffort.findIndex((c) => c.configId === 'effort')
+    expect(modelIdx).toBeLessThan(effortIdx)
+    // No flicker to default on the way (last value must be high).
+    expect(seenEffort[seenEffort.length - 1]).toBe('high')
+  })
+
+  it('inherits effort that only surfaces AFTER the model push (real Claude flow)', async () => {
+    // The actual reported bug: effort is NOT in session/new — it appears only
+    // after the model is set (effort levels depend on async-loaded model info).
+    // The push-back drains until empty, so the late-surfaced effort still gets
+    // reconciled to the saved value and pushed.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    // Only model in the initial bag; effort surfaces on the model set.
+    const built = buildService({
+      statefulBag: [{ ...model }],
+      statefulEffortAppearsOnModelSet: true,
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    built.agentDefaults.setDefault('fake', 'effort', 'high')
+
+    const seenEffort: string[] = []
+    const s = await svc.createSession()
+    const stop = autorun((r) => {
+      const v = s.configOptions.read(r).find((o) => o.id === 'effort')?.currentValue
+      if (v !== undefined) seenEffort.push(String(v))
+    })
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 50))
+    stop.dispose()
+
+    expect(s.configOptions.get().find((o) => o.id === 'model')?.currentValue).toBe('opus')
+    expect(s.configOptions.get().find((o) => o.id === 'effort')?.currentValue).toBe('high')
+    const calls = built.client.connected[0]!.agent.setConfigOptionCalls
+    expect(calls).toContainEqual({ sessionId: 'agent-1', configId: 'model', value: 'opus' })
+    expect(calls).toContainEqual({ sessionId: 'agent-1', configId: 'effort', value: 'high' })
+    // effort never flashes default on screen.
+    expect(seenEffort).not.toContain('default')
+    expect(seenEffort[seenEffort.length - 1]).toBe('high')
+  })
+
+  it('keeps a seeded model-dependent option visible across session/new (no disappear/reappear)', async () => {
+    // The reported flicker "先消失再出现": effort was seeded from the cache (so
+    // the bar shows it immediately at the saved `high`), but session/new only
+    // returns model+mode (effort surfaces only after the model push). The
+    // authoritative bag must NOT drop the seeded effort — it stays visible until
+    // the agent re-advertises it, so the option never disappears then reappears.
+    const model: SessionConfigOption = {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'sonnet',
+      options: [
+        { value: 'sonnet', name: 'Sonnet' },
+        { value: 'opus', name: 'Opus' },
+      ],
+    }
+    const effort: SessionConfigOption = {
+      id: 'effort',
+      name: 'Effort',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'default',
+      options: [
+        { value: 'default', name: 'Default' },
+        { value: 'high', name: 'High' },
+      ],
+    }
+    // The cache (from a previous session) knows about effort; session/new does
+    // not, and effort surfaces only on the model push.
+    const built = buildService({
+      statefulBag: [{ ...model }],
+      statefulEffortAppearsOnModelSet: true,
+    })
+    svc = built.svc
+    await built.history.initialize()
+    await built.agentDefaults.initialize()
+    built.agentDefaults.setDefault('fake', 'model', 'opus')
+    built.agentDefaults.setDefault('fake', 'effort', 'high')
+    // Prime the per-agent cache so the optimistic seed includes effort.
+    built.configOptionsCache.set('fake', [{ ...model }, { ...effort }])
+
+    // Record the *presence* of effort over time: it must never go absent once seeded.
+    const presence: boolean[] = []
+    const seenEffort: string[] = []
+    const s = await svc.createSession()
+    const stop = autorun((r) => {
+      const opt = s.configOptions.read(r).find((o) => o.id === 'effort')
+      presence.push(opt !== undefined)
+      if (opt?.type === 'select') seenEffort.push(String(opt.currentValue))
+    })
+    await s.whenConnected()
+    await new Promise((r) => setTimeout(r, 50))
+    stop.dispose()
+
+    // Seeded immediately, and never disappeared afterwards.
+    expect(presence[0]).toBe(true)
+    expect(presence).not.toContain(false)
+    // No flash to default; ends at the inherited high.
+    expect(seenEffort).not.toContain('default')
+    expect(s.configOptions.get().find((o) => o.id === 'effort')?.currentValue).toBe('high')
+    const calls = built.client.connected[0]!.agent.setConfigOptionCalls
+    expect(calls).toContainEqual({ sessionId: 'agent-1', configId: 'effort', value: 'high' })
   })
 })

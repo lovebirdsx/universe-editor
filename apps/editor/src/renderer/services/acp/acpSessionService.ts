@@ -391,6 +391,7 @@ export class AcpSessionService
     )
     this._register(session)
     this._wireAuthGuidance(session)
+    this._wireConfigOptionsCache(session)
     // Optimistic config bar: seed the last-known option bag for this agent
     // (currentValue overridden by the user's saved per-agent defaults) so the
     // config switches render the instant the session appears, instead of
@@ -398,7 +399,8 @@ export class AcpSessionService
     // replaces this once the handshake lands (see _connectSession).
     const seededOptions = this._seedConfigOptions(resolvedAgentId)
     if (seededOptions.length > 0) {
-      session.applyInitState({ configOptions: seededOptions })
+      session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
+      session.seedConfigOptions(seededOptions)
     }
     transaction((tx) => {
       this._sessions = [...this._sessions, session]
@@ -468,12 +470,15 @@ export class AcpSessionService
         ...(cwd !== undefined ? { cwd } : {}),
         hasMessages: false,
       })
+      // Seed the saved per-agent defaults BEFORE applying the bag so the state
+      // machine reconciles it flicker-free (server default → saved value, with
+      // no intermediate frame) and queues the real RPC for the agent to adopt.
+      session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
       session.applyInitState(initState)
       if (result.configOptions) {
         this._configOptionsCache.set(resolvedAgentId, result.configOptions)
       }
       session.attachConnection(activeConn, result.sessionId)
-      this._scheduleConfigPushBack(session, this._agentDefaults.getDefaults(resolvedAgentId))
     } catch (err) {
       if (conn) conn.dispose()
       const msg = (err as Error).message
@@ -613,6 +618,7 @@ export class AcpSessionService
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
       this._wireAuthGuidance(session)
+      this._wireConfigOptionsCache(session)
       const captured = session
       const prior = this._sessions.find((s) => s.id === captured.id)
       transaction((tx) => {
@@ -642,6 +648,15 @@ export class AcpSessionService
         timeoutMs,
         'ACP session/load',
       )
+      // Per-session history wins over per-agent defaults: a user who picked
+      // distinct values for a specific session expects them on resume even if
+      // the global default has since changed. Seed BEFORE applying the bag so
+      // the state machine reconciles it flicker-free; the connection is already
+      // attached here, so applyInitState flushes the resulting RPCs immediately.
+      session.setConfigDesired({
+        ...this._agentDefaults.getDefaults(entry.agentId),
+        ...(entry.configOptions ?? {}),
+      })
       if (loadResult?.configOptions) {
         session.applyInitState({ configOptions: loadResult.configOptions })
         this._configOptionsCache.set(entry.agentId, loadResult.configOptions)
@@ -650,14 +665,6 @@ export class AcpSessionService
         agentId: entry.agentId,
       })
       this._onDidCreate.fire(session)
-      // Per-session history wins over per-agent defaults: a user who picked
-      // distinct values for a specific session expects them on resume even if
-      // the global default has since changed.
-      const cached: Record<string, string> = {
-        ...this._agentDefaults.getDefaults(entry.agentId),
-        ...(entry.configOptions ?? {}),
-      }
-      this._scheduleConfigPushBack(session, cached)
       return session
     } catch (err) {
       if (registered && session) {
@@ -778,54 +785,29 @@ export class AcpSessionService
   private _seedConfigOptions(agentId: string): readonly SessionConfigOption[] {
     const cached = this._configOptionsCache.get(agentId)
     if (cached.length === 0) return cached
-    const defaults = this._agentDefaults.getDefaults(agentId)
-    if (Object.keys(defaults).length === 0) return cached
-    return cached.map((opt) => {
-      if (opt.type !== 'select') return opt
-      const desired = defaults[opt.id]
-      return desired !== undefined && desired !== opt.currentValue
-        ? { ...opt, currentValue: desired }
-        : opt
-    })
+    return overrideConfigOptionValues(cached, this._agentDefaults.getDefaults(agentId)).bag
   }
 
   /**
-   * Reconcile a cached `configOptions` bag against the session's current
-   * server-advertised values, and push the diff back to the agent. Used by
-   * `createSession` (per-agent default) and `resumeSession` (per-session
-   * history + per-agent default). Scheduled via `queueMicrotask` so the
-   * push-back fences against any in-flight `session/update` notifications
-   * that the agent may emit during `session/new` or `session/load`.
+   * Persist the session's full `configOptions` bag into the per-agent cache as
+   * it evolves. Unlike the one-shot write after `session/new`/`session/load`,
+   * this stays subscribed so options the agent advertises *later* via
+   * `config_option_update` (e.g. `thought_level`, which only appears once init
+   * finishes) also land in the cache. Without this the optimistic config bar on
+   * the next new session would be missing those late-arriving switches.
    *
-   * Failures on a single push are logged but never thrown — one stale cached
-   * value should not abort the session creation flow.
+   * Gated on `sessionIdOnAgent` so we never cache the optimistic placeholder bag
+   * (which carries locally-overridden currentValues) before the real handshake.
    */
-  private _scheduleConfigPushBack(
-    session: AcpSession,
-    cached: Readonly<Record<string, string>>,
-  ): void {
-    const ids = Object.keys(cached)
-    if (ids.length === 0) return
-    queueMicrotask(async () => {
-      if (session.status.get() === 'closed') return
-      const cur = session.configOptions.get()
-      for (const id of ids) {
-        const desired = cached[id]
-        if (desired === undefined) continue
-        const opt = cur.find((o) => o.id === id)
-        // Only push known configs whose current server value differs.
-        if (!opt) continue
-        const currentValue = (opt as { currentValue?: unknown }).currentValue
-        if (currentValue === desired) continue
-        try {
-          await session.setConfigOption(id, desired)
-        } catch (err) {
-          this._logger.warn(
-            `failed to restore configOption ${id}=${desired}: ${(err as Error).message}`,
-          )
-        }
-      }
-    })
+  private _wireConfigOptionsCache(session: AcpSession): void {
+    this._register(
+      autorun((r) => {
+        if (session.sessionIdOnAgent.read(r) === undefined) return
+        const bag = session.configOptions.read(r)
+        if (bag.length === 0) return
+        this._configOptionsCache.set(session.agentId, bag)
+      }),
+    )
   }
 
   // -- IAcpClientNotificationSink ---------------------------------------
@@ -968,4 +950,50 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([p, timeout]).finally(() => {
     if (timer) clearTimeout(timer)
   })
+}
+
+/**
+ * Override each select option's `currentValue` with the user's saved value
+ * (`desired[optionId]`) when one exists, differs, and is offered by the option.
+ * Used both to build the optimistic seed bag AND to pre-reconcile the
+ * authoritative `session/new` / `session/load` bag before it lands in the
+ * observable — so the server default for an option the user has a saved
+ * preference for never flashes on screen.
+ *
+ * Returns the (possibly new) bag plus the ids that were actually overridden.
+ * Those ids identify options whose *server* value differs from the user's
+ * choice and therefore still need a real `setConfigOption` RPC to the agent —
+ * the visual override alone does not change anything agent-side.
+ */
+function overrideConfigOptionValues(
+  bag: readonly SessionConfigOption[],
+  desired: Readonly<Record<string, string>>,
+): { bag: readonly SessionConfigOption[]; overridden: readonly string[] } {
+  if (bag.length === 0 || Object.keys(desired).length === 0) return { bag, overridden: [] }
+  const overridden: string[] = []
+  const next = bag.map((opt) => {
+    if (opt.type !== 'select') return opt
+    const want = desired[opt.id]
+    if (want === undefined || want === opt.currentValue) return opt
+    // Only override to a value the option actually offers; otherwise leave the
+    // server value so the bar never shows an unselectable entry.
+    if (!selectOptionHasValue(opt, want)) return opt
+    overridden.push(opt.id)
+    return { ...opt, currentValue: want }
+  })
+  return overridden.length > 0 ? { bag: next, overridden } : { bag, overridden: [] }
+}
+
+function selectOptionHasValue(
+  opt: SessionConfigOption & { type: 'select' },
+  value: string,
+): boolean {
+  for (const o of opt.options) {
+    if ('group' in o) {
+      for (const v of o.options) if (v.value === value) return true
+    } else if (o.value === value) {
+      return true
+    }
+  }
+  return false
 }

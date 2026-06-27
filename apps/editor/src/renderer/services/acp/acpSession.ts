@@ -590,6 +590,9 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleIsAi)
     }
     this._flushQueuedPrompts()
+    // Now that the connection + sessionId exist, push any configOption values
+    // that were overridden for display but not yet adopted by the agent.
+    this._configOptions.flushPendingPushes()
   }
 
   /**
@@ -1133,6 +1136,24 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   setConfigOption(configId: string, value: string): Promise<void> {
     return this._configOptions.setConfigOption(configId, value)
+  }
+
+  /**
+   * Seed the saved configOption values (per-agent defaults + per-session
+   * history) the state machine reconciles incoming bags against. Must be called
+   * before `applyInitState` so the first bag is reconciled with no flicker.
+   */
+  setConfigDesired(desired: Readonly<Record<string, string>>): void {
+    this._configOptions.setDesired(desired)
+  }
+
+  /**
+   * Apply the optimistic seed bag before the handshake lands. Seeded options are
+   * carried across the authoritative `session/new` bag so a late-surfacing,
+   * model-dependent option (e.g. `effort`) does not disappear then reappear.
+   */
+  seedConfigOptions(opts: readonly SessionConfigOption[]): void {
+    this._configOptions.seedConfigOptions(opts)
   }
 
   /**
