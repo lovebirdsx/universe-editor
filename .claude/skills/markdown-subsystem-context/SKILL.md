@@ -130,3 +130,7 @@ e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryM
 - `apps/editor/src/renderer/actions/markdownActions.ts` —— 预览命令/键位
 - `apps/editor/e2e/specs/smoke.markdownLsp.spec.ts` —— 语言特性冒烟
 - 相关 skill：[extend-language-plugin]（通用语言插件套路）、[typescript-subsystem-context]（TS 子系统对照）
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

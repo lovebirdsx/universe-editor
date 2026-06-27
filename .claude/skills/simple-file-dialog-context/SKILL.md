@@ -144,3 +144,7 @@ cd apps/editor && pnpm exec playwright test -c e2e/playwright.config.ts --grep "
 - `packages/workbench-ui/src/feedback/quickInput/QuickInput.module.css` —— `.input` 下划线显示
 - 调用点：`apps/editor/src/renderer/actions/{fileOpen,fileSave,workspace,window,configLocation}Actions.ts`
 - e2e：`apps/editor/e2e/specs/smoke.simpleFileDialog.spec.ts`
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

@@ -142,3 +142,7 @@ pnpm e2e          # 涉及交互逻辑改动时跑冒烟，仅截取错误
 - SDK 类型源码：`node_modules/@agentclientprotocol/sdk/dist/schema/types.gen.d.ts`
 - 配置 key：`acp.agents` / `acp.permissions.autoApprove` / `acp.startupTimeoutMs` / `acp.defaultAgentId` / `acp.mcpServers` / `acp.defaultCollapseModes`
 - 相关 skill：`ai-settings-subsystem-context`（AI 设置页）、`claude-agent-settings-context` / `codex-agent-settings-context`（各 agent 设置）；`apps/editor/CLAUDE.md` 套路 A/B/C（命令/View/跨进程服务注册）
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

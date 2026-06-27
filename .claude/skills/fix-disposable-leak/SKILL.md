@@ -78,5 +78,4 @@ pnpm --filter @universe-editor/editor lint
 7. 用 tracker 写回归测试时，`computeLeakingDisposables()` 无泄漏返回 **`undefined`（非 `null`）**；contribution 回退 `new NullLogger()` 等桩对象自身会被算泄漏，给个返回 `markAsSingleton` logger 的 loggerService 桩绕开。
 
 ## 其它
-
-- 后续用skill，发现有新的经验，可以自动更新本SKILL.md
+- 后续用本 skill，发现新经验，需同步更新本文件

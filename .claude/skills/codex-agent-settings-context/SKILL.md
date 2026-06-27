@@ -182,3 +182,7 @@ interface CodexAuthStatus {
 - 服务:`shared/ipc/codexConfigService.ts`、`main/services/codexConfig/codexConfigMainService.ts`
 - agent 注册表:`renderer/services/acp/acpAgentRegistry.ts`(`IAcpAgentRegistry`、`BUILTIN_AGENTS`、`agentIconId()`)——`codex` 在 `IAcpAgentRegistry.list()` 里就会自动出现在 Settings 的 Agents 组
 - codex 二进制(与配置无关,登录除外):`shared/ipc/codexBinaryService.ts`、`main/services/codexBinary/*`
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

@@ -178,3 +178,7 @@ cd apps/editor && pnpm exec playwright test specs/smoke.viewMove.spec.ts   # @p0
 - `apps/editor/src/renderer/main.tsx` —— DI 注册（createInstance + services.set）
 - 测试：`…/services/views/__tests__/{ViewDescriptorService,ViewsService}.test.ts`、`…/workbench/panel/__tests__/Panel.test.tsx`、`apps/editor/e2e/specs/smoke.viewMove.spec.ts`
 - 加新 View/Container 的三件套：`apps/editor/CLAUDE.md` 套路 B
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

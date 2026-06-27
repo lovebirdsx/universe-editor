@@ -179,3 +179,7 @@ e2e（`apps/editor/e2e/specs/smoke.inlineCompletion.spec.ts`，@p1，用 sharedA
 - `apps/editor/src/renderer/main.tsx` —— DI 注册 InlineCompletionService
 - `apps/editor/e2e/specs/smoke.inlineCompletion.spec.ts` + `renderer/e2e/probe.ts` + `shared/e2e/contract.ts` —— e2e 与探针
 - 相关 skill：[fix-keybinding-not-firing]（Tab 抢不到/快捷键不触发的逐步诊断与权重仲裁）
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

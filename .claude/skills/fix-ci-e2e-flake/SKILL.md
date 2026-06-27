@@ -134,4 +134,4 @@ disable-model-invocation: true
 - 仓库根 `memory/e2e-relaunch-flake-windows.md` —— 重启类 flake 的环境性结论
 
 ## 其它
-- 后续用 skill 发现新经验，自动更新本 SKILL.md：加一条案例 + 一条速记，二者互相引用。
+- 后续用本 skill，发现新经验，需同步更新本文件

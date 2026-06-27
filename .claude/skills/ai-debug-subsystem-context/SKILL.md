@@ -152,4 +152,7 @@ pnpm --filter @universe-editor/editor build && pnpm --filter @universe-editor/ed
 - `packages/platform/src/ai/aiDebugTypes.ts` / `aiModelTypes.ts` —— 记录形态 + purpose 载体
 - `apps/editor/e2e/specs/smoke.aiDebug.spec.ts` + `src/renderer/e2e/probe.ts` + `src/shared/e2e/contract.ts` —— E2E 端到端
 - 相关：`apps/editor/CLAUDE.md` 套路 I（底层 AI 服务/加 vendor）、套路 C/B（跨进程服务/View 注册）、`ai-settings-subsystem-context`（AI 设置页面）、`inline-completion-subsystem-context`（ghost-text 续写）、`nes-subsystem-context`（NES 光标外编辑预测，purpose `next-edit-suggestion`）
-```
+
+## 其它
+
+- 后续用本 skill，发现新经验，需同步更新本文件

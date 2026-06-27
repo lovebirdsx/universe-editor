@@ -79,4 +79,4 @@ TypeScript 语言能力 = 一个**内置插件 `extensions/typescript`**（VSCod
 - 配套 memory：`typescript-builtin-plugin`（迁移完成记录与决策）、`extension-system-progress`（插件内核全貌）、`scm-submodule-multirepo`（句柄路由的 SCM 蓝本）。
 
 ## 其它
-- 这是「地图」，会随子系统演进过时——引用某文件/行号前，若与现状不符以代码为准，并顺手更新本 skill。
+- 后续用本 skill，发现新经验，需同步更新本文件

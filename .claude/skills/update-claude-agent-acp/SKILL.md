@@ -148,4 +148,4 @@ git push -u origin chore/update-claude-agent-acp
 - 记忆 `acp-fork-windows-path-test-flake`
 
 ## 其它
-- 后续用本 skill 时若发现新冲突套路 / 新坑，自动把经验追加到「案例库」与「速记」。
+- 后续用本 skill，发现新经验，需同步更新本文件
