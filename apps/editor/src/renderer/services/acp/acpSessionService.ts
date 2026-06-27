@@ -61,7 +61,11 @@ import {
 import { IAcpAgentRegistry } from './acpAgentRegistry.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { IAcpPermissionHandler } from './acpPermissionHandler.js'
-import { IAcpSessionHistoryService, type AcpSessionHistoryEntry } from './acpSessionHistory.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+  type SessionHistoryScope,
+} from './acpSessionHistory.js'
 import { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import { IAcpConfigOptionsCacheService } from './acpConfigOptionsCache.js'
@@ -164,6 +168,9 @@ export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessio
 
 const DEFAULT_STARTUP_TIMEOUT_MS = 60_000
 
+/** Configuration key controlling which sessions the history list surfaces. */
+const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
+
 /** Min gap between auth-required toasts per session, collapsing prompt bursts. */
 const AUTH_NOTIFICATION_COOLDOWN_MS = 10_000
 
@@ -260,6 +267,7 @@ export class AcpSessionService
             for (const s of this._sessions) ids.add(s.id)
             return ids
           },
+          getHistoryScope: () => this._historyScope(),
         },
       ),
     )
@@ -286,6 +294,22 @@ export class AcpSessionService
     // Workspace swap: close all live sessions and re-read the active-session
     // pointer from the new bucket.
     this._register(this._storage.onDidChangeWorkspaceScope(() => void this._onWorkspaceSwap()))
+    // History scope changed: re-run a replace-mode sweep so the list re-converges
+    // (narrowing prunes worktree/cross-project rows; widening pulls them back).
+    this._register(
+      this._config.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration(HISTORY_SCOPE_KEY)) {
+          void this.refreshSessions().catch(() => {
+            // refresh failures are non-fatal and already logged by the coordinator.
+          })
+        }
+      }),
+    )
+  }
+
+  private _historyScope(): SessionHistoryScope {
+    const raw = this._config.get<string>(HISTORY_SCOPE_KEY)
+    return raw === 'worktree' || raw === 'all' || raw === 'workspace' ? raw : 'worktree'
   }
 
   /**

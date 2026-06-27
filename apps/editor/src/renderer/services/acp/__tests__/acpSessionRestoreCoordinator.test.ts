@@ -81,7 +81,7 @@ import {
   type IAcpClientConnection,
   type IAcpClientNotificationSink,
 } from '../acpClientService.js'
-import { AcpSessionHistoryService } from '../acpSessionHistory.js'
+import { AcpSessionHistoryService, type SessionHistoryScope } from '../acpSessionHistory.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 import type { IAcpSession } from '../acpSession.js'
@@ -362,6 +362,7 @@ interface BuildOptions {
    */
   readonly whenWorkspaceReady?: Promise<void>
   readonly getLiveSessionIds?: () => ReadonlySet<string>
+  readonly getHistoryScope?: () => SessionHistoryScope
 }
 
 interface BuildResult {
@@ -406,6 +407,7 @@ function build(opts: BuildOptions = {}): BuildResult {
     getCurrentCwd: () => opts.cwd,
     whenWorkspaceReady: () => whenWorkspaceReady,
     getLiveSessionIds: opts.getLiveSessionIds ?? (() => new Set<string>()),
+    getHistoryScope: opts.getHistoryScope ?? (() => 'workspace'),
   }
   const coordinator = new AcpSessionRestoreCoordinator(
     client,
@@ -710,6 +712,7 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
       getCurrentCwd: () => currentCwd,
       whenWorkspaceReady: () => Promise.resolve(),
       getLiveSessionIds: () => new Set<string>(),
+      getHistoryScope: () => 'workspace',
     }
     coordinator = new AcpSessionRestoreCoordinator(
       client,

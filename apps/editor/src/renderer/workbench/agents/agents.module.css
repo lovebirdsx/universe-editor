@@ -1148,6 +1148,20 @@
   flex-shrink: 0;
 }
 
+.sessionRowScope {
+  margin-left: auto;
+  min-width: 0;
+  max-width: 55%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  /* Truncate on the LEFT (keep the meaningful tail) — ellipsis renders at the
+     start. A leading LRM in the text keeps the path itself laid out LTR. */
+  direction: rtl;
+  text-align: left;
+  opacity: 0.75;
+}
+
 .sessionDelete {
   background: none;
   border: 0;

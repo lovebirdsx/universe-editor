@@ -34,7 +34,11 @@ import {
 } from '@agentclientprotocol/sdk'
 import type { IAcpClientService, IAcpClientConnection } from './acpClientService.js'
 import type { IAcpAgentRegistry } from './acpAgentRegistry.js'
-import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
+import type {
+  IAcpSessionHistoryService,
+  SessionHistoryScope,
+  BulkMergeSessionInfo,
+} from './acpSessionHistory.js'
 import type { IAcpSession } from './acpSession.js'
 
 export const ACP_ACTIVE_SESSION_STORAGE_KEY = 'acp.activeSessionId'
@@ -66,6 +70,12 @@ export interface RestoreCoordinatorCallbacks {
    * was just created and hasn't been persisted on the agent side yet).
    */
   getLiveSessionIds(): ReadonlySet<string>
+  /**
+   * Current `acp.sessions.historyScope` setting. Controls both how the sweep
+   * filters `session/list` (workspace/worktree pass cwd; all passes null) and
+   * how strictly history merges by cwd.
+   */
+  getHistoryScope(): SessionHistoryScope
 }
 
 export class AcpSessionRestoreCoordinator extends Disposable {
@@ -329,11 +339,16 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       this._agentCaps.set(agentId, init.agentCapabilities ?? {})
       const listCap = init.agentCapabilities?.sessionCapabilities?.list
       if (listCap == null) return
+      const scope = this._callbacks.getHistoryScope()
+      // `all` scope drops the cwd filter so the agent reports sessions from
+      // every project; workspace/worktree keep the current cwd (the SDK already
+      // folds in sibling worktrees of that cwd via includeWorktrees: true).
+      const listCwd = scope === 'all' ? null : (cwd ?? null)
       const collected: SessionInfo[] = []
       let cursor: string | null | undefined
       for (let page = 0; page < HYDRATE_MAX_PAGES; page++) {
         const params: ListSessionsRequest = {
-          cwd: cwd ?? null,
+          cwd: listCwd,
           ...(cursor !== undefined ? { cursor } : {}),
         }
         const resp: ListSessionsResponse = await withTimeout(
@@ -347,6 +362,7 @@ export class AcpSessionRestoreCoordinator extends Disposable {
         if (!cursor) break
       }
       if (myGen !== this._hydrateGen) return
+      const merged = collected.map(toBulkMergeInfo)
       // In replace mode we still call into history even when the agent
       // returned 0 sessions — that's a valid "the agent has nothing for this
       // workspace" signal and stale local rows should be pruned. In merge
@@ -354,14 +370,17 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       if (replace) {
         this._history.replaceAgentEntries(
           agentId,
-          collected,
+          merged,
           cwd,
           this._callbacks.getLiveSessionIds(),
+          scope,
         )
-      } else if (collected.length > 0) {
-        this._history.bulkMergeFromAgent(agentId, collected, cwd)
+      } else if (merged.length > 0) {
+        this._history.bulkMergeFromAgent(agentId, merged, cwd, scope)
       }
-      this._logger.info(`hydrated ${collected.length} sessions from ${agentId} for cwd=${cwd}`)
+      this._logger.info(
+        `hydrated ${merged.length} sessions from ${agentId} for cwd=${cwd} scope=${scope}`,
+      )
       this._telemetry.publicLog('acp.session_hydrate_ok', {
         agentId,
         count: collected.length,
@@ -375,6 +394,23 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     } finally {
       if (conn) conn.dispose()
     }
+  }
+}
+
+/**
+ * Map a protocol `SessionInfo` to the history layer's `BulkMergeSessionInfo`,
+ * lifting the agent's `_meta.gitBranch` (our fork sets this from the SDK's
+ * end-of-session git branch) into a first-class `branch` field.
+ */
+function toBulkMergeInfo(info: SessionInfo): BulkMergeSessionInfo {
+  const meta = info._meta as { gitBranch?: unknown } | null | undefined
+  const branch = typeof meta?.gitBranch === 'string' ? meta.gitBranch : undefined
+  return {
+    sessionId: info.sessionId,
+    cwd: info.cwd ?? null,
+    title: info.title ?? null,
+    updatedAt: info.updatedAt ?? null,
+    ...(branch !== undefined ? { branch } : {}),
   }
 }
 

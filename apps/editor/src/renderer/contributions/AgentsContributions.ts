@@ -178,6 +178,23 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Ask for confirmation before deleting a session.',
             ),
           },
+          'acp.sessions.historyScope': {
+            type: 'string',
+            default: 'worktree',
+            enum: ['workspace', 'worktree', 'all'],
+            enumItemLabels: {
+              workspace: localize(
+                'settings.acp.sessions.historyScope.workspace',
+                'Current Workspace',
+              ),
+              worktree: localize('settings.acp.sessions.historyScope.worktree', 'Current Worktree'),
+              all: localize('settings.acp.sessions.historyScope.all', 'All'),
+            },
+            description: localize(
+              'settings.acp.sessions.historyScope.description',
+              'Controls which sessions are listed in the Agents session history. "Current Worktree" includes sessions from sibling git worktrees of the same repository; "All" lists sessions across every project.',
+            ),
+          },
         },
       }),
     )

@@ -648,6 +648,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
         { sessionId: 's-2', cwd: '/work', title: 'two', updatedAt: '2024-02-01T00:00:00Z' },
       ],
       '/work',
+      'workspace',
     )
     const list = svc.list()
     expect(list.map((e) => e.sessionIdOnAgent)).toEqual(['s-2', 's-1'])
@@ -668,6 +669,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's-keep', cwd: '/work', title: 'protocol-title', updatedAt: null }],
       '/work',
+      'workspace',
     )
     const got = svc.get(existing.id)
     expect(got?.id).toBe(existing.id)
@@ -683,6 +685,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's-1', cwd: '/work', title: 'renamed', updatedAt: null }],
       '/work',
+      'workspace',
     )
     expect(svc.get(e.id)?.configOptions).toEqual({ model: 'claude-sonnet-4-6' })
   })
@@ -696,6 +699,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's-1', cwd: '/work', title: 't', updatedAt: '2000-01-01T00:00:00Z' }],
       '/work',
+      'workspace',
     )
     expect(svc.get(e.id)?.lastUsedAt).toBe(localTs)
     // Protocol reports a newer timestamp — protocol wins.
@@ -704,6 +708,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's-1', cwd: '/work', title: 't', updatedAt: future }],
       '/work',
+      'workspace',
     )
     expect(svc.get(e.id)?.lastUsedAt).toBe(Date.parse(future))
   })
@@ -714,6 +719,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's-blank', cwd: '/work', title: null, updatedAt: null }],
       '/work',
+      'workspace',
     )
     expect(svc.list()[0]?.title).toBe('s-blank')
   })
@@ -724,11 +730,13 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'alpha',
       [{ sessionId: 's-shared', cwd: '/work', title: 'A', updatedAt: null }],
       '/work',
+      'workspace',
     )
     svc.bulkMergeFromAgent(
       'beta',
       [{ sessionId: 's-shared', cwd: '/work', title: 'B', updatedAt: null }],
       '/work',
+      'workspace',
     )
     expect(svc.list()).toHaveLength(2)
     expect(
@@ -750,7 +758,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
         updatedAt: new Date(2000_000 + i * 1000).toISOString(),
       })
     }
-    svc.bulkMergeFromAgent('fake', big, '/work')
+    svc.bulkMergeFromAgent('fake', big, '/work', 'workspace')
     expect(svc.list()).toHaveLength(100)
     // s-109 has the largest updatedAt — must be first.
     expect(svc.list()[0]?.sessionIdOnAgent).toBe('s-109')
@@ -762,7 +770,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-untouched', title: 't' })
     await flushWrite()
     const writesBefore = storage.setCalls.length
-    svc.bulkMergeFromAgent('fake', [], '/work')
+    svc.bulkMergeFromAgent('fake', [], '/work', 'workspace')
     await flushWrite()
     expect(storage.setCalls.length).toBe(writesBefore)
     expect(svc.list()).toHaveLength(1)
@@ -778,6 +786,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's', cwd: e.cwd ?? '/work', title: 'same', updatedAt: '1970-01-01T00:00:00Z' }],
       '/work',
+      'workspace',
     )
     await flushWrite()
     expect(storage.setCalls.length).toBe(writesBefore)
@@ -792,6 +801,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
         { sessionId: 'good', cwd: '/work', title: 'ok', updatedAt: null },
       ],
       '/work',
+      'workspace',
     )
     expect(svc.list().map((e) => e.sessionIdOnAgent)).toEqual(['good'])
   })
@@ -807,6 +817,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
         { sessionId: 's-unknown', cwd: null, title: 'maybe', updatedAt: null },
       ],
       '/work',
+      'workspace',
     )
     const titles = svc.list().map((e) => e.title)
     expect(titles).toContain('mine')
@@ -820,6 +831,7 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
       'fake',
       [{ sessionId: 's-1', cwd: '/work', title: 'one', updatedAt: null }],
       undefined,
+      'workspace',
     )
     expect(svc.list()).toEqual([])
   })
@@ -843,6 +855,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
       [{ sessionId: 's-keep', cwd: '/work', title: 'keep', updatedAt: null }],
       '/work',
       new Set<string>(),
+      'workspace',
     )
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-keep'])
@@ -857,7 +870,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
       cwd: '/work',
     })
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
-    svc.replaceAgentEntries('fake', [], '/work', new Set<string>([live.id]))
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>([live.id]), 'workspace')
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-live'])
   })
@@ -866,7 +879,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
     await svc.initialize()
     svc.add({ agentId: 'other', sessionIdOnAgent: 's-other', title: 'other', cwd: '/work' })
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
-    svc.replaceAgentEntries('fake', [], '/work', new Set<string>())
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>(), 'workspace')
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-other'])
   })
@@ -875,7 +888,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
     await svc.initialize()
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-other-ws', title: 'b', cwd: '/other' })
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
-    svc.replaceAgentEntries('fake', [], '/work', new Set<string>())
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>(), 'workspace')
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-other-ws'])
   })
@@ -884,7 +897,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
     await svc.initialize()
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-nocwd', title: 'nocwd' })
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-stale', title: 'stale', cwd: '/work' })
-    svc.replaceAgentEntries('fake', [], '/work', new Set<string>())
+    svc.replaceAgentEntries('fake', [], '/work', new Set<string>(), 'workspace')
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-nocwd'])
   })
@@ -892,7 +905,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
   it('is a no-op when currentCwd is undefined (empty window)', async () => {
     await svc.initialize()
     svc.add({ agentId: 'fake', sessionIdOnAgent: 's-keep', title: 'keep', cwd: '/work' })
-    svc.replaceAgentEntries('fake', [], undefined, new Set<string>())
+    svc.replaceAgentEntries('fake', [], undefined, new Set<string>(), 'workspace')
     expect(svc.list().map((e) => e.sessionIdOnAgent)).toEqual(['s-keep'])
   })
 
@@ -904,6 +917,7 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
       [{ sessionId: 's-new', cwd: '/work', title: 'new', updatedAt: '2024-02-01T00:00:00Z' }],
       '/work',
       new Set<string>(),
+      'workspace',
     )
     const ids = svc.list().map((e) => e.sessionIdOnAgent)
     expect(ids).toEqual(['s-new'])

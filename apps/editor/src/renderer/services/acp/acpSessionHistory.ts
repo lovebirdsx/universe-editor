@@ -34,6 +34,16 @@ import {
 import { PersistedStateBase } from './persistedStateBase.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 
+/**
+ * Which sessions the Agents history surfaces:
+ *  - `workspace`: only sessions whose cwd equals the open folder.
+ *  - `worktree`:  sessions from the open folder AND its sibling git worktrees
+ *                 (the agent's `session/list` already returns these because the
+ *                 SDK defaults `includeWorktrees: true`).
+ *  - `all`:       sessions across every project the agent knows about.
+ */
+export type SessionHistoryScope = 'workspace' | 'worktree' | 'all'
+
 export interface AcpSessionHistoryEntry {
   /**
    * The agent-issued session id from `session/new` — durable across editor
@@ -48,6 +58,12 @@ export interface AcpSessionHistoryEntry {
   readonly title: string
   /** Workspace cwd at creation time. Optional because users may run agent-only. */
   readonly cwd?: string
+  /**
+   * Git branch reported by the agent for this session (end-of-session branch).
+   * Used to label rows when the history scope spans worktrees. Optional — not
+   * all agents report it and non-git sessions have none.
+   */
+  readonly branch?: string
   /** Unix epoch milliseconds. */
   readonly createdAt: number
   /** Unix epoch milliseconds — updated on resume + on outbound prompt. */
@@ -149,24 +165,31 @@ export interface IAcpSessionHistoryService {
    * we will not merge them into the current bucket. When `currentCwd` is
    * undefined (empty window) the call is a no-op so the GLOBAL fallback
    * bucket stays empty.
+   *
+   * `scope` controls how strict the cwd filter is: `workspace` keeps only
+   * exact-cwd rows; `worktree`/`all` trust the sweep's own scoping and accept
+   * every reported session (so sibling-worktree / cross-project rows survive).
    */
   bulkMergeFromAgent(
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    scope: SessionHistoryScope,
   ): void
   /**
    * Replace semantics for a user-initiated refresh: upsert every reported
-   * session like `bulkMergeFromAgent`, AND prune any existing entry whose
-   * (agentId, cwd) matches but `sessionIdOnAgent` is not in the new list and
-   * whose `id` is not in `preserveIds`. `preserveIds` should carry the
-   * currently-live session historyIds so a session that hasn't been listed
-   * yet (e.g. just-created) does not get pruned from under the UI.
+   * session like `bulkMergeFromAgent`, AND prune any existing entry for this
+   * agent (with a known cwd) that is absent from the new list and not in
+   * `preserveIds`. `preserveIds` should carry the currently-live session
+   * historyIds so a session that hasn't been listed yet (e.g. just-created)
+   * does not get pruned from under the UI.
    *
-   * Pruning is scoped to entries where `entry.cwd === currentCwd` exactly —
-   * entries with a missing `cwd` are left alone (we cannot tell which
-   * workspace they belong to). Entries for other agents or other cwds are
-   * untouched.
+   * Pruning follows `scope`: in `workspace` scope only exact-`currentCwd` rows
+   * are eligible (other workspaces survive); in `worktree`/`all` scope any
+   * known-cwd row for this agent is eligible, so narrowing the scope drops the
+   * rows a wider scope had pulled in. Entries with a missing `cwd` are always
+   * left alone (we cannot tell which workspace they belong to). Entries for
+   * other agents are untouched.
    *
    * Called by the Refresh Session List button via the coordinator.
    */
@@ -175,6 +198,7 @@ export interface IAcpSessionHistoryService {
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
     preserveIds: ReadonlySet<string>,
+    scope: SessionHistoryScope,
   ): void
   /**
    * Patch metadata for one entry from a `session_info_update` notification.
@@ -194,6 +218,8 @@ export interface BulkMergeSessionInfo {
   readonly cwd?: string | null
   readonly title?: string | null
   readonly updatedAt?: string | null
+  /** Git branch reported via the agent's `SessionInfo._meta.gitBranch`, if any. */
+  readonly branch?: string | null
 }
 
 export const IAcpSessionHistoryService = createDecorator<IAcpSessionHistoryService>(
@@ -278,6 +304,7 @@ export class AcpSessionHistoryService
       sessionIdOnAgent: entry.sessionIdOnAgent,
       title: entry.title,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
+      ...(entry.branch !== undefined ? { branch: entry.branch } : {}),
       createdAt,
       lastUsedAt: now,
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
@@ -386,9 +413,10 @@ export class AcpSessionHistoryService
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
+    scope: SessionHistoryScope,
   ): void {
     if (sessions.length === 0) return
-    this._mergeOrReplace(agentId, sessions, currentCwd, undefined)
+    this._mergeOrReplace(agentId, sessions, currentCwd, undefined, scope)
   }
 
   replaceAgentEntries(
@@ -396,11 +424,12 @@ export class AcpSessionHistoryService
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
     preserveIds: ReadonlySet<string>,
+    scope: SessionHistoryScope,
   ): void {
     // Empty bucket protection: same as bulkMergeFromAgent. Without a workspace
     // we don't know which rows to prune, so leave everything alone.
     if (currentCwd === undefined) return
-    this._mergeOrReplace(agentId, sessions, currentCwd, preserveIds)
+    this._mergeOrReplace(agentId, sessions, currentCwd, preserveIds, scope)
   }
 
   private _mergeOrReplace(
@@ -408,6 +437,7 @@ export class AcpSessionHistoryService
     sessions: readonly BulkMergeSessionInfo[],
     currentCwd: string | undefined,
     preserveIds: ReadonlySet<string> | undefined,
+    scope: SessionHistoryScope,
   ): void {
     // Empty window: refuse to absorb anything the agent reports. Otherwise a
     // hydrate fired before the user opens a folder would pollute the GLOBAL
@@ -422,10 +452,16 @@ export class AcpSessionHistoryService
     const reportedSessionIds = new Set<string>()
     for (const info of sessions) {
       if (typeof info.sessionId !== 'string' || info.sessionId.length === 0) continue
-      // Defense-in-depth: skip cross-workspace entries even if the agent
-      // ignored the `cwd` filter on `session/list`. A missing `info.cwd` is
-      // tolerated — the agent simply did not report it; existing.cwd wins.
-      if (typeof info.cwd === 'string' && !arePathsEqual(info.cwd, currentCwd, this._platform))
+      // Defense-in-depth in `workspace` scope: skip cross-workspace entries even
+      // if the agent ignored the `cwd` filter on `session/list`. A missing
+      // `info.cwd` is tolerated — the agent simply did not report it; existing.cwd
+      // wins. In `worktree`/`all` scope we trust the sweep's own scoping and keep
+      // every reported session (sibling-worktree / cross-project rows included).
+      if (
+        scope === 'workspace' &&
+        typeof info.cwd === 'string' &&
+        !arePathsEqual(info.cwd, currentCwd, this._platform)
+      )
         continue
       reportedSessionIds.add(info.sessionId)
       const key = `${agentId} ${info.sessionId}`
@@ -436,16 +472,20 @@ export class AcpSessionHistoryService
           ? info.title
           : (existing?.title ?? info.sessionId)
       const cwd = typeof info.cwd === 'string' && info.cwd.length > 0 ? info.cwd : existing?.cwd
+      const branch =
+        typeof info.branch === 'string' && info.branch.length > 0 ? info.branch : existing?.branch
       if (existing) {
         const lastUsedAt = Math.max(existing.lastUsedAt, protocolTs ?? 0)
         const sameTitle = existing.title === title
         const sameCwd = existing.cwd === cwd || arePathsEqual(existing.cwd, cwd, this._platform)
+        const sameBranch = existing.branch === branch
         const sameLastUsed = existing.lastUsedAt === lastUsedAt
-        if (sameTitle && sameCwd && sameLastUsed) continue
+        if (sameTitle && sameCwd && sameBranch && sameLastUsed) continue
         const next: AcpSessionHistoryEntry = {
           ...existing,
           title,
           ...(cwd !== undefined ? { cwd } : {}),
+          ...(branch !== undefined ? { branch } : {}),
           lastUsedAt,
         }
         byKey.set(key, next)
@@ -458,6 +498,7 @@ export class AcpSessionHistoryService
           sessionIdOnAgent: info.sessionId,
           title,
           ...(cwd !== undefined ? { cwd } : {}),
+          ...(branch !== undefined ? { branch } : {}),
           createdAt: created,
           lastUsedAt: created,
         }
@@ -465,14 +506,17 @@ export class AcpSessionHistoryService
         changed = true
       }
     }
-    // Replace mode: prune any entry that matches (agentId, cwd === currentCwd)
-    // but is absent from the new sessions list and not protected via preserveIds.
-    // Entries with no cwd are left alone — we cannot tell which workspace they
-    // belong to.
+    // Replace mode: prune entries for this agent that are absent from the new
+    // list and not protected via preserveIds. The prune domain follows `scope`:
+    // `workspace` only touches exact-cwd rows (so unrelated workspaces survive);
+    // `worktree`/`all` prune any known-cwd row (so narrowing the scope or losing
+    // a sibling worktree drops it). Entries with no cwd are always left alone —
+    // we cannot tell which workspace they belong to.
     if (preserveIds !== undefined) {
       for (const [key, entry] of byKey) {
         if (entry.agentId !== agentId) continue
-        if (!arePathsEqual(entry.cwd, currentCwd, this._platform)) continue
+        if (entry.cwd === undefined) continue
+        if (scope === 'workspace' && !arePathsEqual(entry.cwd, currentCwd, this._platform)) continue
         if (reportedSessionIds.has(entry.sessionIdOnAgent)) continue
         if (preserveIds.has(entry.id)) continue
         byKey.delete(key)
@@ -574,6 +618,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     typeof o['sessionIdOnAgent'] === 'string' &&
     typeof o['title'] === 'string' &&
     (o['cwd'] === undefined || typeof o['cwd'] === 'string') &&
+    (o['branch'] === undefined || typeof o['branch'] === 'string') &&
     typeof o['createdAt'] === 'number' &&
     typeof o['lastUsedAt'] === 'number' &&
     (o['configOptions'] === undefined || isStringRecord(o['configOptions'])) &&

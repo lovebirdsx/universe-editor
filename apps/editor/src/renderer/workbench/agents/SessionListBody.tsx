@@ -9,12 +9,16 @@
  *  can collapse themselves.
  *--------------------------------------------------------------------------------------------*/
 
-import { useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useMemo, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import {
   localize,
   IDialogService,
   IConfigurationService,
   ConfigurationTarget,
+  IWorkspaceService,
+  IHostService,
+  arePathsEqual,
+  type HostPlatform,
 } from '@universe-editor/platform'
 import { X, Trash2 } from 'lucide-react'
 import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
@@ -23,6 +27,7 @@ import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSess
 import {
   IAcpSessionHistoryService,
   type AcpSessionHistoryEntry,
+  type SessionHistoryScope,
 } from '../../services/acp/acpSessionHistory.js'
 import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { AgentIcon } from './agentIcon.js'
@@ -68,6 +73,40 @@ function relativeTime(timestamp: number): string {
 
 const FALLBACK_RATE = 7.2
 
+const HISTORY_SCOPE_KEY = 'acp.sessions.historyScope'
+
+function readHistoryScope(config: IConfigurationService): SessionHistoryScope {
+  const raw = config.get<string>(HISTORY_SCOPE_KEY)
+  return raw === 'workspace' || raw === 'worktree' || raw === 'all' ? raw : 'worktree'
+}
+
+/** Last path segment of an absolute fs path, for a compact directory fallback label. */
+function pathTail(p: string): string {
+  const parts = p.split(/[\\/]+/).filter(Boolean)
+  return parts.length > 0 ? parts[parts.length - 1]! : p
+}
+
+/**
+ * What to show in the per-row scope chip and its full-path tooltip:
+ *  - `all`:      the session cwd.
+ *  - `worktree`: the git branch, falling back to the cwd's last segment.
+ *  - `workspace`: nothing (the list is already a single workspace).
+ */
+function scopeChip(
+  entry: AcpSessionHistoryEntry,
+  scope: SessionHistoryScope,
+): { label: string; title: string } | undefined {
+  if (scope === 'all') {
+    if (!entry.cwd) return undefined
+    return { label: entry.cwd, title: entry.cwd }
+  }
+  if (scope === 'worktree') {
+    if (entry.branch) return { label: entry.branch, title: entry.cwd ?? entry.branch }
+    if (entry.cwd) return { label: pathTail(entry.cwd), title: entry.cwd }
+  }
+  return undefined
+}
+
 function LiveSessionTimer({ session }: { session: IAcpSession }) {
   const ms = useSessionTimer(session)
   if (ms === 0) return null
@@ -104,6 +143,7 @@ function SessionRow({
   onActivate,
   onRemove,
   rate,
+  scope,
 }: {
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
@@ -111,11 +151,13 @@ function SessionRow({
   onActivate: () => void
   onRemove: () => void
   rate: number
+  scope: SessionHistoryScope
 }) {
   const isRunning = liveSession !== undefined
   const historyMs = entry.accumulatedRunningMs ?? 0
   const historyCostUsd = entry.usage?.cost?.amount
   const historyCostEstimated = entry.usage?.costEstimated === true
+  const chip = scopeChip(entry, scope)
   return (
     <li
       className={styles['sessionRow']}
@@ -143,6 +185,11 @@ function SessionRow({
               {historyCostEstimated ? '≈' : ''}¥{formatCny(historyCostUsd * rate)}
             </span>
           ) : null}
+          {chip ? (
+            <span className={styles['sessionRowScope']} title={chip.title}>
+              {'‎' + chip.label}
+            </span>
+          ) : null}
         </span>
       </div>
       <button
@@ -165,6 +212,8 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const history = useService(IAcpSessionHistoryService)
   const filterService = useService(IAcpSessionFilterService)
   const config = useService(IConfigurationService)
+  const workspace = useService(IWorkspaceService)
+  const hostService = useService(IHostService)
   const dialogService = useService(IDialogService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
@@ -173,7 +222,29 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
 
   const searchOpen = useObservable(filterService.searchOpen)
   const query = useObservable(filterService.query)
-  const filtered = useMemo(() => filterSessions(entries, query), [entries, query])
+
+  // The config service exposes an Event, not an observable — mirror the scope
+  // into local state so the list re-renders (and re-filters) when it changes.
+  const [scope, setScope] = useState<SessionHistoryScope>(() => readHistoryScope(config))
+  useEffect(() => {
+    const d = config.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(HISTORY_SCOPE_KEY)) setScope(readHistoryScope(config))
+    })
+    return () => d.dispose()
+  }, [config])
+
+  const platform: HostPlatform = hostService.platform
+  const currentCwd = workspace.current?.folder.fsPath
+
+  // In `workspace` scope keep only exact-cwd rows so narrowing applies instantly
+  // without waiting for the next replace-mode hydrate. `worktree`/`all` trust the
+  // hydrate sweep's scoping (which already bounds what the bucket contains).
+  const scoped = useMemo(() => {
+    if (scope !== 'workspace' || currentCwd === undefined) return entries
+    return entries.filter((e) => e.cwd === undefined || arePathsEqual(e.cwd, currentCwd, platform))
+  }, [entries, scope, currentCwd, platform])
+
+  const filtered = useMemo(() => filterSessions(scoped, query), [scoped, query])
 
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
@@ -228,6 +299,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 liveSession={liveSession}
                 isActive={isActive}
                 rate={rate}
+                scope={scope}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
