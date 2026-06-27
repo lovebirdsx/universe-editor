@@ -328,6 +328,7 @@ export class Repository {
         void window.showErrorMessage(`Git pull failed: ${pull.stderr.trim() || pull.stdout.trim()}`)
         return
       }
+      await this._updateSubmodulesIfNeeded()
       const push = await gitExec(['push'], this.root, this._log)
       if (push.exitCode !== 0) {
         void window.showErrorMessage(`Git push failed: ${push.stderr.trim() || push.stdout.trim()}`)
@@ -340,18 +341,24 @@ export class Repository {
   }
 
   async pull(): Promise<void> {
-    await this._run(['pull'], 'pull', { text: 'Pulling…', kind: 'syncing' })
+    const ok = await this._run(['pull'], 'pull', { text: 'Pulling…', kind: 'syncing' })
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async pullRebase(): Promise<void> {
-    await this._run(['pull', '--rebase'], 'pull (rebase)', { text: 'Pulling…', kind: 'syncing' })
-  }
-
-  async pullAutostash(): Promise<void> {
-    await this._run(['pull', '--rebase', '--autostash'], 'pull (autostash)', {
+    const ok = await this._run(['pull', '--rebase'], 'pull (rebase)', {
       text: 'Pulling…',
       kind: 'syncing',
     })
+    if (ok) await this._updateSubmodulesIfNeeded()
+  }
+
+  async pullAutostash(): Promise<void> {
+    const ok = await this._run(['pull', '--rebase', '--autostash'], 'pull (autostash)', {
+      text: 'Pulling…',
+      kind: 'syncing',
+    })
+    if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async push(): Promise<void> {
@@ -524,6 +531,21 @@ export class Repository {
   }
 
   async submoduleUpdateInit(): Promise<void> {
+    await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
+      text: 'Updating submodules…',
+      kind: 'spinning',
+    })
+  }
+
+  private async _updateSubmodulesIfNeeded(): Promise<void> {
+    const cfg = workspace.getConfiguration('git')
+    const enabled = await cfg.get('pullSubmoduleUpdate', true)
+    if (!enabled) return
+    try {
+      await stat(join(this.root, '.gitmodules'))
+    } catch {
+      return
+    }
     await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
       text: 'Updating submodules…',
       kind: 'spinning',
@@ -751,19 +773,23 @@ export class Repository {
     args: readonly string[],
     label: string,
     progress?: { text: string; kind: 'syncing' | 'spinning' },
-  ): Promise<void> {
+  ): Promise<boolean> {
     if (progress) this._beginProgress(progress.text, progress.kind)
+    let ok = false
     try {
       const res = await gitExec(args, this.root, this._log)
       if (res.exitCode !== 0) {
         void window.showErrorMessage(
           `Git ${label} failed: ${res.stderr.trim() || res.stdout.trim()}`,
         )
+      } else {
+        ok = true
       }
     } finally {
       if (progress) this._endProgress()
       await this.refresh()
     }
+    return ok
   }
 
   private async _listBranches(): Promise<string[]> {

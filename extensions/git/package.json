@@ -202,6 +202,11 @@
           "default": ["node_modules"],
           "description": "Folder names skipped while scanning for nested git repositories."
         },
+        "git.pullSubmoduleUpdate": {
+          "type": "boolean",
+          "default": true,
+          "description": "After a successful pull, automatically run `git submodule update --init --recursive` when the repository contains submodules."
+        },
         "git.autofetch": {
           "type": "boolean",
           "default": true,
