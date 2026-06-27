@@ -11,7 +11,9 @@ import {
   AiMessageRole,
   CancellationError,
   CancellationTokenSource,
+  DisposableTracker,
   getTextResponse,
+  setDisposableTracker,
   type AiMessage,
   type AiCustomModelConfig,
   type AiResolvedGroup,
@@ -266,5 +268,34 @@ describe('OpenAiProvider', () => {
     cts.cancel()
 
     await expect(response.result).rejects.toBeInstanceOf(CancellationError)
+  })
+
+  it('releases the abort pipeline synchronously on cancel, before _run settles', async () => {
+    // fetch hangs forever and ignores the abort: _run stays parked in its await,
+    // so its finally never runs. The abort store and its cancellation listener
+    // must still be torn down by cancel() itself — mirroring shutdown, where the
+    // process-exit leak check is synchronous and beats _run's microtask finally.
+    vi.spyOn(globalThis, 'fetch').mockImplementation(() => new Promise<Response>(() => undefined))
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const provider = new OpenAiProvider()
+      const cts = new CancellationTokenSource()
+
+      provider.sendRequest(
+        userMessages,
+        { modelId: 'openai/default/gpt-4o' },
+        makeGroup({ apiKey: 'sk-test' }),
+        cts.token,
+      )
+      // Let _run reach `await fetch(...)` so the abort store + listener exist.
+      await Promise.resolve()
+      cts.cancel()
+      cts.dispose()
+
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      setDisposableTracker(null)
+    }
   })
 })

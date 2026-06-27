@@ -6,7 +6,11 @@
  *  vendor's semantics.
  *--------------------------------------------------------------------------------------------*/
 
-import { type CancellationToken, CancellationError } from '@universe-editor/platform'
+import {
+  type CancellationToken,
+  CancellationError,
+  DisposableStore,
+} from '@universe-editor/platform'
 
 export interface RetryOptions {
   readonly maxAttempts?: number
@@ -54,4 +58,27 @@ function delayWithCancellation(ms: number, token: CancellationToken): Promise<vo
       reject(new CancellationError())
     })
   })
+}
+
+/**
+ * Bridge a {@link CancellationToken} to an {@link AbortSignal} for `fetch`. The
+ * cancellation listener is parked in `store`, but ALSO disposes `store`
+ * synchronously when it fires — so a `cts.cancel()` at shutdown tears the abort
+ * pipeline down in the same tick, before the process-exit leak check runs (the
+ * request's own `finally` only disposes `store` a microtask later, too late).
+ * Disposing the store is idempotent, so the `finally` path stays correct too.
+ */
+export function toAbortSignal(token: CancellationToken, store: DisposableStore): AbortSignal {
+  const controller = new AbortController()
+  if (token.isCancellationRequested) {
+    controller.abort()
+  } else {
+    store.add(
+      token.onCancellationRequested(() => {
+        controller.abort()
+        store.dispose()
+      }),
+    )
+  }
+  return controller.signal
 }

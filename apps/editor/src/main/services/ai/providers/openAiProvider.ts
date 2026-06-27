@@ -30,7 +30,7 @@ import {
   type CancellationToken,
   type IAiModelProvider,
 } from '@universe-editor/platform'
-import { retryWithBackoff } from './retry.js'
+import { retryWithBackoff, toAbortSignal } from './retry.js'
 
 const VENDOR = 'openai'
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
@@ -306,13 +306,6 @@ function parseSseData(line: string): string | typeof DONE | undefined {
   if (!payload) return undefined
   if (payload === '[DONE]') return DONE
   return payload
-}
-
-function toAbortSignal(token: CancellationToken, store: DisposableStore): AbortSignal {
-  const controller = new AbortController()
-  if (token.isCancellationRequested) controller.abort()
-  else store.add(token.onCancellationRequested(() => controller.abort()))
-  return controller.signal
 }
 
 function isTransient(err: unknown): boolean {

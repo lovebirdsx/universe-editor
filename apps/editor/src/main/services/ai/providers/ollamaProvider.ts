@@ -26,7 +26,7 @@ import {
   type CancellationToken,
   type IAiModelProvider,
 } from '@universe-editor/platform'
-import { retryWithBackoff } from './retry.js'
+import { retryWithBackoff, toAbortSignal } from './retry.js'
 
 const VENDOR = 'ollama'
 const DEFAULT_BASE_URL = 'http://127.0.0.1:11434'
@@ -248,13 +248,6 @@ async function* readNdjson(
   } finally {
     void reader.cancel().catch(() => undefined)
   }
-}
-
-function toAbortSignal(token: CancellationToken, store: DisposableStore): AbortSignal {
-  const controller = new AbortController()
-  if (token.isCancellationRequested) controller.abort()
-  else store.add(token.onCancellationRequested(() => controller.abort()))
-  return controller.signal
 }
 
 function isTransient(err: unknown): boolean {
