@@ -129,3 +129,29 @@ async function readActiveText(input: FileEditorInput): Promise<string> {
   const text = await input.resolve()
   return text
 }
+
+export class SaveAllFilesAction extends Action2 {
+  static readonly ID = 'workbench.action.files.saveAll'
+  constructor() {
+    super({
+      id: SaveAllFilesAction.ID,
+      title: localize2('action.saveAll.title', 'Save All'),
+      category: localize2('command.category.file', 'File'),
+      keybinding: { primary: 'ctrl+alt+s' },
+      menu: { id: MenuId.MenubarFileMenu, group: '4_save', order: 3 },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const groups = accessor.get(IEditorGroupsService)
+    const saves: Promise<boolean>[] = []
+    for (const group of groups.groups) {
+      for (const editor of group.editors) {
+        if (editor instanceof UntitledEditorInput) continue
+        if (!editor.isDirty || !editor.save) continue
+        saves.push(editor.save())
+      }
+    }
+    await Promise.all(saves)
+  }
+}
