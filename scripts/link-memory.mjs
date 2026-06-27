@@ -173,7 +173,7 @@ function main() {
 
   const after = describeLink(linkPath)
   if (after.kind === 'link' && pointsAtSource(after.target)) {
-    console.log('[link-memory] 完成 ✓ 链接已建立并指向 .claude-memory')
+    console.log('[link-memory] 完成 ✓ 链接已建立并指向 .claude/memory')
   } else {
     console.error('[link-memory] 链接创建后校验失败,请手动检查。')
     process.exit(1)
