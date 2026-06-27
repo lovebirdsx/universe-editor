@@ -65,24 +65,42 @@ test.describe('@p1 agents — virtualized timeline scrollbar stability', () => {
       )
       .toBeGreaterThan(400)
 
-    // 从顶滚到底，分段采样 scrollHeight。每段把 scrollTop 往下推一截、等一帧让进入
-    // 视口的行完成测量，再读 scrollHeight。
+    // 从顶滚到底，分段采样 scrollHeight。每段把 scrollTop 往下推一截，然后**等 scrollHeight
+    // 测量收敛**再读数——@tanstack 通过 ResizeObserver 异步测量进入视口的行，固定等几帧在慢机/
+    // 并发 CI 上不够（行还顶着 estimateRow 没测完），会采到「估算→实测」过渡中的瞬时值，污染被
+    // 测对象本身。settle 等连续若干帧 scrollHeight 不再变化（测量已收敛）才采，测的才是用户看到
+    // 的稳定滚动条；被测断言（稳定值间的伸缩）强度不变。
     const samples = await page.evaluate(async (sel) => {
       const el = document.querySelector(sel)!.parentElement as HTMLElement
       const raf = (): Promise<void> => new Promise((r) => requestAnimationFrame(() => r()))
+      // 等 scrollHeight 连续 STABLE_FRAMES 帧不变，或耗尽 MAX_FRAMES 预算才返回。
+      const settle = async (): Promise<number> => {
+        const STABLE_FRAMES = 4
+        const MAX_FRAMES = 120
+        let last = el.scrollHeight
+        let stable = 0
+        for (let f = 0; f < MAX_FRAMES; f++) {
+          await raf()
+          const h = el.scrollHeight
+          if (h === last) {
+            if (++stable >= STABLE_FRAMES) return h
+          } else {
+            stable = 0
+            last = h
+          }
+        }
+        return el.scrollHeight
+      }
       const out: number[] = []
       el.scrollTop = 0
       el.dispatchEvent(new Event('scroll'))
-      await raf()
-      await raf()
+      await settle()
       const STEPS = 16
       for (let i = 0; i <= STEPS; i++) {
         const max = el.scrollHeight - el.clientHeight
         el.scrollTop = Math.round((max * i) / STEPS)
         el.dispatchEvent(new Event('scroll'))
-        await raf()
-        await raf()
-        out.push(el.scrollHeight)
+        out.push(await settle())
       }
       return out
     }, TIMELINE)

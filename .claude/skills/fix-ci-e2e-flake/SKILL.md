@@ -42,6 +42,7 @@ disable-model-invocation: true
 19. **同一 flaky spec 二进宫、形态从「`Test timeout`」变「poll 自己的窗口超时 + received 恒初值」= 上轮只治了天花板（速记 18），真根因还在，八成是产品 bug**。60s poll 对一次性动作恒 0 ≠ 等不够，而是**那次动作根本没发生且永不重试**（fire-once 依赖异步前置）。查链路：**“响应事件去操作某个异步启动的资源”时，若资源的 in-flight 启动 Promise 没被 await，启动期事件会被静默丢弃**。修法范式：**操作前先 `await Promise.allSettled([...in-flight 启动 Promise])` 再读资源句柄**；修产品+加回归单测（pending spawn mock 模拟“事件撞 in-flight 启动”），别动 spec。（案例 11）
 20. **报错 `Target page/context/browser has been closed`（区别于速记 14 的 `Execution context was destroyed`）先验证是不是 main 进程真崩**：抓 main 退出码，Windows `3221225477`=`0xC0000005` 访问违例=native 段错误（无 `render/child-process-gone` 事件、无 stderr、`crashReporter.start` 一开就不复现的 heisenbug）。**定位真回归 vs 环境放大的决定性方法是三组对照**：①单实例 `--workers=1` 重复多次 ②多实例 `--workers=6` 重复多次 ③多实例+禁用嫌疑子系统。**单实例怎么跑都不崩、只有多实例崩 = 测试并发放大的（常为第三方 native 库的）跨进程竞态**，真实用户单实例永不触发；**进程内**串行化修复无效（强力负结果），产品 try/catch 接不住段错误。正解：触发该 native 路径的用例 `tag:'@serial'` 隔离到 `--workers=1`。（案例 12）
 21. **报错「Worker teardown timeout」（而非「Test timeout」或被测断言失败）+ 所有测试 pass = worker 收尾关 app 时卡死，根因在“关 app”链路，别去 spec 层找**。两步定位：①**graceful close 为何挂**——Playwright `app.close()` 走 Electron `before-quit` 的 renderer veto 链（`confirmShutdown`→各 `onBeforeShutdown` participant），任何 participant 在 headless 弹**无人应答的模态框**就让 `app.close()` 永不 resolve；②**强杀为何不彻底**——`closeApp` 超时只 `SIGKILL` **main PID**，**Windows 杀父不杀子**，node-pty/agent/ext-host 成孤儿、占管道句柄 → worker 撞 30s teardown（posix 不复现正因此差异）。修法两处互补、均不削弱断言：**Fix A 源码侧 E2E 门控**——凡 quit-chain 上会弹“headless 无人应答 modal”的 participant 按 `isE2E`（`window[E2E_PROBE_ENABLED_KEY]===true`，复用 `windowActions.ts` 先例）短路放行，让 graceful quit+`will-quit` 正常清子进程；**Fix B harness 侧 tree-kill**——`closeApp` 超时强杀改 `taskkill /pid <pid> /T /F`（Windows，`execFileSync` 同步、try/catch 吞码），非 Windows 不变。`/T` 按 parent-PID 递归，只漏 `detached:true` 独立进程组（本仓库仅外部终端打开器）。（案例 13）
+22. **`page.evaluate` 里「滚动/触发后等固定 N 帧 raf 再读布局量（scrollHeight/rect）」是危险范式**：虚拟化列表（@tanstack）经 `ResizeObserver` **异步**测量进视口的行，固定帧数在慢机/并发 CI 不够，读到「估算→实测」**过渡中的瞬时值**，污染被测对象自身。**鉴别决定性信号**：`--workers=1 --repeat-each=N` 全过、`--workers=4` 全挂（received 单调爬升到某稳定值=测量收敛过程被采样）——**并发是放大器=竞态 flake，非产品回归**（与速记 9「retry 救不回=结构性」互补：retry 同样并发故救不回，但单 worker 能稳过，所以仍是 flake）。**注意 `--repeat-each` 默认按 config `workers` 跑（本仓库 4），易误判「本地也恒挂」**；必须显式 `--workers=1` 对照。修法：把「等固定帧」改为「**等布局量连续 K 帧不变（测量收敛）再采**」的 `settle()`，测的才是用户看到的稳定值；被测断言强度不变。（案例 14）
 
 ## 案例库
 
@@ -125,6 +126,13 @@ disable-model-invocation: true
 - **修法（两处互补，均不削弱断言、零覆盖损失）**：**Fix A** `SessionShutdownParticipant._maybeVeto` 在算出 `running` 后加 `isE2E` 短路 `return false`，让 graceful quit+`will-quit` 正常清子进程（复用 `windowActions.ts` 先例；单测跑在 `window` undefined 的 renderer-node，无覆盖损失）。**Fix B** `closeApp` 超时强杀改 tree-kill：Windows `execFileSync('taskkill',['/pid',String(pid),'/T','/F'],{stdio:'ignore'})`（try/catch 吞码），非 Windows 保持 `SIGKILL`。
 - **边界**：`detached:true` 仅 `hostMainService.ts` 外部终端打开器（非 teardown 孤儿，无 spec 触发），`/T` 覆盖真正孤儿（main PID 非 detached 后代）。
 - **锚点**：Fix A `SessionShutdownParticipant.ts`（`_maybeVeto`）；Fix B `e2e/fixtures/electronApp.ts`（`forceKillTree`+`closeApp`）；isE2E 先例 `windowActions.ts`、常量 `shared/e2e/contract.ts`；卡死链路 `src/main/index.ts`（`before-quit`/`will-quit`）→`windowMainService.confirmQuit`→`SessionShutdownParticipant._maybeVeto`。
+
+### 案例 14：agentsScrollbarStable maxJump 1.27（>0.25）——固定帧采样读到虚拟化测量过渡瞬时值，并发放大（速记 22）
+- **现象**：`smoke.agentsScrollbarStable` `@p1` 仅 Windows CI，retry 3 次救不回，`maxJump≈1.27`（阈值 0.25）。采样 `[5267,4723,…,7454,8880,…,16904,16904,…]` 单调爬升到 16904 后稳定。用户报「本地稳过」。
+- **判定关键**：本地 `--repeat-each=3`（默认吃 config `workers:4`）**也 3/3 全挂**，险些误判产品回归；显式 `--workers=1 --repeat-each=5` **5/5 全过**，`--workers=4 --repeat-each=4` **4/4 全挂** → **并发是放大器=竞态 flake**，单 worker 稳过证明 `estimateRow` 估算在测量完成后确实接近真实，产品没回归（commit `f4dc6365` 引入该 spec 时是绿的）。
+- **根因**：spec 采样循环每段滚动后只等**固定 2 帧 raf** 就读 `scrollHeight`；@tanstack 经 `ResizeObserver` **异步**测量进视口的行，慢机/并发下行还顶着 `estimateRow` 没测完，采到「估算→实测」**过渡瞬时值**（单调爬升正是收敛过程）→ 相邻采样落在不同收敛阶段 → maxJump 虚高。污染的是被测对象 scrollHeight 自身。
+- **修法**：把「等固定帧」换成 `settle()`——等 `scrollHeight` **连续 4 帧不变（测量收敛）**或耗尽 120 帧预算再采。被测断言（稳定值间伸缩 <25%、首末漂移 <30%）不动。验证：原必挂的 `--workers=4 --repeat-each=8`（32 次）全过。
+- **锚点**：`smoke.agentsScrollbarStable.spec.ts`（`settle()` 采样）；`ChatBody.tsx`（`estimateRow`/`useVirtualizer`/`measureElement`，`getTotalSize()` 喂 `.timelineVirtual` 高度）。
 
 ## 关键参考路径
 - `apps/editor/e2e/specs/` —— 所有 e2e spec；`@p0` 阻塞 CI，`@p1` 次级
