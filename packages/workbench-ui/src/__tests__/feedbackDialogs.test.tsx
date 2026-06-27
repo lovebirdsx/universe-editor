@@ -67,6 +67,17 @@ describe('ConfirmDialog', () => {
       neverAskAgain: false,
     })
   })
+
+  it('focuses the primary button on mount so Enter confirms over a focus trap', () => {
+    const onResolve = vi.fn()
+    render(
+      <ConfirmDialog
+        opts={{ message: 'Create it?', primaryButton: 'Create' }}
+        onResolve={onResolve}
+      />,
+    )
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Create' }))
+  })
 })
 
 describe('PromptDialog', () => {

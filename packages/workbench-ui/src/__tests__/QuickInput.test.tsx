@@ -396,6 +396,55 @@ describe('QuickPickPanel keyboard', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
+  it('Enter during an IME composition is ignored (does not accept or preventDefault)', () => {
+    const onAccept = vi.fn()
+    const onClose = vi.fn()
+    render(<QuickPickPanel state={makeState({ onAccept })} onClose={onClose} />)
+    const input = screen.getByTestId('quick-input-field')
+    const event = createEvent.keyDown(input, { key: 'Enter', isComposing: true })
+    fireEvent(input, event)
+    expect(onAccept).not.toHaveBeenCalled()
+    expect(onClose).not.toHaveBeenCalled()
+    expect(event.defaultPrevented).toBe(false)
+  })
+
+  it('does not report value changes mid-composition, then reports the composed value once', () => {
+    // IME bug: reporting onValueChange while composing lets the host autocomplete
+    // rewrite the input, which duplicates the committed text. The panel must stay
+    // silent during composition and report exactly once on compositionend.
+    const onValueChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, filterExternally: true, onValueChange })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field') as HTMLInputElement
+
+    fireEvent.compositionStart(input)
+    // Intermediate composition keystrokes update the input but must not report.
+    fireEvent.change(input, { target: { value: 'a' } })
+    expect(onValueChange).not.toHaveBeenCalled()
+
+    // The IME commits; compositionend reports the final value exactly once.
+    fireEvent.compositionEnd(input, { target: { value: '啊' } })
+    expect(onValueChange).toHaveBeenCalledTimes(1)
+    expect(onValueChange).toHaveBeenCalledWith('啊')
+  })
+
+  it('reports value changes normally when not composing', () => {
+    const onValueChange = vi.fn()
+    render(
+      <QuickPickPanel
+        state={makeState({ prefix: undefined, filterExternally: true, onValueChange })}
+        onClose={() => undefined}
+      />,
+    )
+    const input = screen.getByTestId('quick-input-field')
+    fireEvent.change(input, { target: { value: 'abc' } })
+    expect(onValueChange).toHaveBeenCalledWith('abc')
+  })
+
   it('Enter calls preventDefault to prevent the key event from leaking to the editor', () => {
     render(<QuickPickPanel state={makeState()} onClose={() => undefined} />)
     const input = screen.getByTestId('quick-input-field')
@@ -782,6 +831,54 @@ describe('QuickPickPanel simple-file-dialog extras', () => {
     )
     // No row is auto-highlighted, so Enter resolves the typed value (the current
     // folder) rather than acting on a stray first item.
+    fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
+    expect(onOk).toHaveBeenCalledOnce()
+    expect(onAccept).not.toHaveBeenCalled()
+  })
+
+  it('autoFocusFirstItem=false: clearing activeItems drops the stale highlight so Enter opens the typed path', () => {
+    // Bug 1/2 regression: the user typed a name that prefix-matched an existing
+    // entry (so the host highlighted it), then typed further until it no longer
+    // matched and the host cleared activeItems. Enter must NOT act on the stale
+    // highlight (open the existing entry) — it must fall through to onOk so the
+    // host resolves the typed value (offer-create).
+    const onOk = vi.fn()
+    const onAccept = vi.fn()
+    const folders = [
+      { id: 'a', label: '..' },
+      { id: 'b', label: 'data.txt' },
+    ]
+    const { rerender } = render(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folders,
+          filterExternally: true,
+          autoFocusFirstItem: false,
+          activeItems: [folders[1]!], // "data.txt" highlighted by the autocomplete
+          onOk,
+          onAccept,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
+    // Typed segment stopped matching: host clears the highlight.
+    rerender(
+      <QuickPickPanel
+        state={makeState({
+          prefix: undefined,
+          items: folders,
+          filterExternally: true,
+          autoFocusFirstItem: false,
+          activeItems: [],
+          onOk,
+          onAccept,
+        })}
+        onClose={() => undefined}
+      />,
+    )
+
     fireEvent.keyDown(screen.getByTestId('quick-input-field'), { key: 'Enter' })
     expect(onOk).toHaveBeenCalledOnce()
     expect(onAccept).not.toHaveBeenCalled()

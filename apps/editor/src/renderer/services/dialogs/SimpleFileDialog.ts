@@ -102,6 +102,10 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
       // (not a deletion) apart from "backspacing the tail" (a deletion).
       let autoCompleteBase: string | undefined
       let navToken = 0
+      // Guards against re-entrant accepts while a create-confirmation is open.
+      // The QuickInput keeps focus contention with the dialog, so a second Enter
+      // would otherwise queue a duplicate confirm dialog.
+      let confirming = false
 
       const syncHiddenButton = (): void => {
         qp.buttons = [
@@ -224,6 +228,16 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         qp.valueSelection = [selStart, completed.length]
       }
 
+      // Clear the highlight and any pending completion selection. Setting only
+      // activeItems is not enough: a leftover valueSelection would be re-applied
+      // by the panel and re-select the character the user just typed, so the next
+      // keystroke replaces it (the "can only type one char past an existing path"
+      // bug). Always drop the selection when nothing is being completed.
+      const clearCompletion = (): void => {
+        qp.activeItems = []
+        qp.valueSelection = undefined
+      }
+
       // Highlight the entry whose name prefixes the typed trailing segment and
       // autocomplete to it directly. Going through activeItems alone is not enough:
       // the panel dedupes onDidChangeActive by item id, so re-matching the same
@@ -233,8 +247,12 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         const match = currentItems.find(
           (it) => it.id !== PARENT_ID && it.label.toLowerCase().startsWith(lower),
         )
-        qp.activeItems = match ? [match] : []
-        if (match) completeToItem(match)
+        if (match) {
+          qp.activeItems = [match]
+          completeToItem(match)
+        } else {
+          clearCompletion()
+        }
       }
 
       const onValueChange = async (value: string): Promise<void> => {
@@ -263,7 +281,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
             await updateItems(this._driveListRoot(), { resetInput: false })
           }
           if (!deletion && name !== '') applyMatch(name)
-          else qp.activeItems = []
+          else clearCompletion()
           return
         }
 
@@ -277,11 +295,11 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
               if (stat.isDirectory) {
                 await updateItems(dirUri, { resetInput: false })
               } else {
-                qp.activeItems = []
+                clearCompletion()
                 return
               }
             } catch {
-              qp.activeItems = []
+              clearCompletion()
               return
             }
           }
@@ -289,7 +307,7 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
 
         // [B] Match-highlight the trailing segment, unless the user is deleting.
         if (!deletion && name !== '') applyMatch(name)
-        else qp.activeItems = []
+        else clearCompletion()
       }
 
       // [C] Autocomplete the input to the focused item as the user arrows through
@@ -305,6 +323,42 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
         lastValue = v
         qp.value = v
         qp.valueSelection = undefined
+      }
+
+      // Offer to create a path the user typed that does not exist yet (VSCode
+      // parity). A trailing separator, or a folder-only picker, means a folder;
+      // otherwise a file (its missing parent dirs are created too). Confirms first.
+      const offerCreate = async (value: string, target: URI): Promise<void> => {
+        if (confirming) return
+        confirming = true
+        try {
+          const asFolder = endsWithSeparator(value) || (!allowFiles && opts.canSelectFolders)
+          const name = this._display(target)
+          const { confirmed } = await this._dialog.confirm({
+            message: asFolder
+              ? localize('fileDialog.createFolder', "Folder '{name}' does not exist. Create it?", {
+                  name,
+                })
+              : localize('fileDialog.createFile', "File '{name}' does not exist. Create it?", {
+                  name,
+                }),
+            primaryButton: localize('fileDialog.create', 'Create'),
+            type: 'info',
+          })
+          if (!confirmed) return
+          if (asFolder) {
+            await this._fileService.createDirectory(target)
+          } else {
+            const parent = this._parentOf(target)
+            if (parent) await this._fileService.createDirectory(parent)
+            await this._fileService.writeFile(target, '')
+          }
+          finish(target)
+        } catch {
+          // creation failed — keep the dialog open
+        } finally {
+          confirming = false
+        }
       }
 
       // Resolve the typed value directly: enter / select a folder, open a file, or
@@ -326,7 +380,8 @@ export class SimpleFileDialog extends Disposable implements IFileDialogService {
             finish(target)
           }
         } catch {
-          // path does not exist — keep the dialog open
+          // path does not exist — offer to create it
+          await offerCreate(value, target)
         }
       }
 

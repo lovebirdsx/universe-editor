@@ -12,6 +12,7 @@ import {
   type IConfirmResult,
   type IPromptOptions,
 } from '@universe-editor/platform'
+import { FocusScopeOverlay } from '../../overlay/FocusScopeOverlay.js'
 import styles from './Dialogs.module.css'
 
 export function ConfirmDialog({
@@ -25,74 +26,74 @@ export function ConfirmDialog({
   const cancel = opts.cancelButton ?? localize('dialog.default.cancel', 'Cancel')
   const secondary = opts.secondaryButton
   const [neverAskAgain, setNeverAskAgain] = useState(false)
+  const cancelResult: IConfirmResult = {
+    confirmed: false,
+    choice: 'cancel',
+    neverAskAgain: false,
+  }
   return (
-    <div
-      className={styles['backdrop']}
-      role="dialog"
-      aria-modal="true"
-      data-renderer-dialog
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') {
-          e.preventDefault()
-          onResolve({ confirmed: false, choice: 'cancel', neverAskAgain: false })
-        } else if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
-          e.preventDefault()
-          onResolve({ confirmed: true, choice: 'primary', neverAskAgain })
-        }
-      }}
-    >
-      <div className={styles['dialog']}>
-        <p className={styles['message']}>{opts.message}</p>
-        {opts.detail ? <p className={styles['detail']}>{opts.detail}</p> : null}
-        {opts.neverAskAgainLabel ? (
-          <label className={styles['checkboxRow']}>
-            <input
-              type="checkbox"
-              checked={neverAskAgain}
-              onChange={(e) => setNeverAskAgain(e.target.checked)}
-            />
-            {opts.neverAskAgainLabel}
-          </label>
-        ) : null}
-        <div className={styles['buttons']}>
-          <button
-            type="button"
-            className={styles['btnPrimary']}
-            autoFocus
-            onClick={() => onResolve({ confirmed: true, choice: 'primary', neverAskAgain })}
-          >
-            {primary}
-          </button>
-          {opts.copyButton ? (
+    <FocusScopeOverlay visible onEscape={() => onResolve(cancelResult)}>
+      <div
+        className={styles['backdrop']}
+        role="dialog"
+        aria-modal="true"
+        data-renderer-dialog
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !(e.target instanceof HTMLButtonElement)) {
+            e.preventDefault()
+            onResolve({ confirmed: true, choice: 'primary', neverAskAgain })
+          }
+        }}
+      >
+        <div className={styles['dialog']}>
+          <p className={styles['message']}>{opts.message}</p>
+          {opts.detail ? <p className={styles['detail']}>{opts.detail}</p> : null}
+          {opts.neverAskAgainLabel ? (
+            <label className={styles['checkboxRow']}>
+              <input
+                type="checkbox"
+                checked={neverAskAgain}
+                onChange={(e) => setNeverAskAgain(e.target.checked)}
+              />
+              {opts.neverAskAgainLabel}
+            </label>
+          ) : null}
+          <div className={styles['buttons']}>
             <button
               type="button"
-              className={styles['btn']}
-              onClick={() => void navigator.clipboard.writeText(opts.detail ?? '')}
+              className={styles['btnPrimary']}
+              autoFocus
+              onClick={() => onResolve({ confirmed: true, choice: 'primary', neverAskAgain })}
             >
-              {opts.copyButton}
+              {primary}
             </button>
-          ) : null}
-          {secondary ? (
-            <button
-              type="button"
-              className={styles['btn']}
-              onClick={() =>
-                onResolve({ confirmed: false, choice: 'secondary', neverAskAgain: false })
-              }
-            >
-              {secondary}
+            {opts.copyButton ? (
+              <button
+                type="button"
+                className={styles['btn']}
+                onClick={() => void navigator.clipboard.writeText(opts.detail ?? '')}
+              >
+                {opts.copyButton}
+              </button>
+            ) : null}
+            {secondary ? (
+              <button
+                type="button"
+                className={styles['btn']}
+                onClick={() =>
+                  onResolve({ confirmed: false, choice: 'secondary', neverAskAgain: false })
+                }
+              >
+                {secondary}
+              </button>
+            ) : null}
+            <button type="button" className={styles['btn']} onClick={() => onResolve(cancelResult)}>
+              {cancel}
             </button>
-          ) : null}
-          <button
-            type="button"
-            className={styles['btn']}
-            onClick={() => onResolve({ confirmed: false, choice: 'cancel', neverAskAgain: false })}
-          >
-            {cancel}
-          </button>
+          </div>
         </div>
       </div>
-    </div>
+    </FocusScopeOverlay>
   )
 }
 
@@ -135,6 +136,8 @@ export function PromptDialog({
           placeholder={opts.placeholder}
           aria-label={opts.title}
           onKeyDown={(e) => {
+            // Enter during an IME composition confirms a candidate, not submit.
+            if (e.nativeEvent.isComposing) return
             if (e.key === 'Escape') {
               e.preventDefault()
               e.stopPropagation()

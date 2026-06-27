@@ -102,6 +102,9 @@ const FILES = new Set<string>(['/a/readme.md'])
 class FakeFileService implements Partial<IFileService> {
   declare readonly _serviceBrand: undefined
 
+  readonly createdDirs: string[] = []
+  readonly writtenFiles: string[] = []
+
   async list(resource: URI): Promise<IDirectoryEntry[]> {
     const names = DIRS.get(resource.path)
     if (!names) throw new Error(`ENOENT ${resource.path}`)
@@ -124,6 +127,14 @@ class FakeFileService implements Partial<IFileService> {
 
   async exists(resource: URI): Promise<boolean> {
     return DIRS.has(resource.path) || FILES.has(resource.path)
+  }
+
+  async createDirectory(resource: URI): Promise<void> {
+    this.createdDirs.push(resource.path)
+  }
+
+  async writeFile(resource: URI): Promise<void> {
+    this.writtenFiles.push(resource.path)
   }
 }
 
@@ -194,20 +205,25 @@ class FakeStorageService {
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
-function createDialog(storage: FakeStorageService = new FakeStorageService()): {
+function createDialog(
+  storage: FakeStorageService = new FakeStorageService(),
+  dialogService: IDialogService = fakeDialog,
+): {
   dialog: SimpleFileDialog
   quickInput: FakeQuickInputService
   storage: FakeStorageService
+  fileService: FakeFileService
 } {
   const quickInput = new FakeQuickInputService()
+  const fileService = new FakeFileService()
   const dialog = new SimpleFileDialog(
     quickInput as never,
-    new FakeFileService() as never,
+    fileService as never,
     fakeWorkspace,
-    fakeDialog,
+    dialogService,
     storage as never,
   )
-  return { dialog, quickInput, storage }
+  return { dialog, quickInput, storage, fileService }
 }
 
 const labels = (qp: FakeQuickPick): string[] => qp.items.map((it) => it.label)
@@ -387,6 +403,148 @@ describe('SimpleFileDialog interaction', () => {
 
     expect(qp.value).toBe('/home/u/')
     expect(labels(qp)).toEqual(['..', 'Documents'])
+  })
+
+  it('clears the pending completion selection once the typed segment stops matching', async () => {
+    // Regression: after autocompleting "/a/git_project" (tail selected), typing a
+    // further char that no longer matches must drop valueSelection, or the panel
+    // re-selects the just-typed char and the next keystroke replaces it (the
+    // "can only type one character past an existing path" bug).
+    const { dialog, quickInput } = createDialog()
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/a/gi')
+    await flush()
+    expect(qp.valueSelection).toBeDefined()
+
+    // user keeps typing a path segment that doesn't exist yet
+    qp.type('/a/gitx')
+    await flush()
+    expect(qp.activeItems).toHaveLength(0)
+    expect(qp.valueSelection).toBeUndefined()
+  })
+
+  it('offers to create a non-existent folder on accept and returns it', async () => {
+    const dialogService = {
+      confirm: async () => ({ confirmed: true }),
+    } as unknown as IDialogService
+    const { dialog, quickInput, fileService } = createDialog(
+      new FakeStorageService(),
+      dialogService,
+    )
+    const result = dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/a/newdir')
+    await flush()
+    qp.triggerOk()
+
+    const picked = await result
+    expect(picked?.path).toBe('/a/newdir')
+    expect(fileService.createdDirs).toContain('/a/newdir')
+  })
+
+  it('does not create the path when the user declines the confirmation', async () => {
+    const dialogService = {
+      confirm: async () => ({ confirmed: false }),
+    } as unknown as IDialogService
+    const { dialog, quickInput, fileService } = createDialog(
+      new FakeStorageService(),
+      dialogService,
+    )
+    void dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/a/newdir')
+    await flush()
+    qp.triggerOk()
+    await flush()
+
+    expect(fileService.createdDirs).toHaveLength(0)
+  })
+
+  it('shows only one create confirmation when accept fires repeatedly', async () => {
+    let confirmCalls = 0
+    let release!: (r: { confirmed: boolean }) => void
+    const dialogService = {
+      confirm: () => {
+        confirmCalls++
+        return new Promise<{ confirmed: boolean }>((r) => {
+          release = r
+        })
+      },
+    } as unknown as IDialogService
+    const { dialog, quickInput, fileService } = createDialog(
+      new FakeStorageService(),
+      dialogService,
+    )
+    const result = dialog.showOpenDialog({
+      title: 'Open Folder',
+      canSelectFiles: false,
+      canSelectFolders: true,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/a/newdir')
+    await flush()
+    // Two rapid accepts while the first confirm is still pending.
+    qp.triggerOk()
+    qp.triggerOk()
+    await flush()
+    expect(confirmCalls).toBe(1)
+
+    release({ confirmed: true })
+    const picked = await result
+    expect(picked?.path).toBe('/a/newdir')
+    expect(fileService.createdDirs).toEqual(['/a/newdir'])
+  })
+
+  it('offers to create a non-existent file (with missing parents) in a file picker', async () => {
+    const dialogService = {
+      confirm: async () => ({ confirmed: true }),
+    } as unknown as IDialogService
+    const { dialog, quickInput, fileService } = createDialog(
+      new FakeStorageService(),
+      dialogService,
+    )
+    const result = dialog.showOpenDialog({
+      title: 'Open File',
+      canSelectFiles: true,
+      canSelectFolders: false,
+      defaultUri: URI.file('/a'),
+    })
+    await flush()
+    const qp = quickInput.lastPick
+
+    qp.type('/a/sub/note.txt')
+    await flush()
+    qp.triggerOk()
+
+    const picked = await result
+    expect(picked?.path).toBe('/a/sub/note.txt')
+    expect(fileService.createdDirs).toContain('/a/sub')
+    expect(fileService.writtenFiles).toContain('/a/sub/note.txt')
   })
 
   it('toggling hidden files reveals dotfiles and persists the setting across opens', async () => {

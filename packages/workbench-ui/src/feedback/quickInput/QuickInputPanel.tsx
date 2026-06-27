@@ -316,6 +316,11 @@ export function QuickPickPanel({
   const [removedIds, setRemovedIds] = useState<ReadonlySet<string>>(() => new Set())
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // True while an IME composition is in progress. During composition the panel
+  // must not report value changes to the host (its path autocomplete would
+  // rewrite the input mid-composition and duplicate the committed text) nor let
+  // the controlled state.value/valueSelection write back to the DOM.
+  const composingRef = useRef(false)
   const mruIds = state.mruIds ?? []
   const mruKey = mruIds.join(',')
   const filterMode = state.filterMode ?? 'fuzzy'
@@ -371,7 +376,10 @@ export function QuickPickPanel({
   // Controlled value: when the host drives state.value (the simple file dialog's
   // path autocomplete / directory navigation), follow it. The panel is otherwise
   // uncontrolled — typing updates `query` locally and reports via onValueChange.
+  // Skipped during composition: writing back would clobber the IME's in-progress
+  // text.
   useEffect(() => {
+    if (composingRef.current) return
     if (state.value !== undefined && state.value !== query) setQuery(state.value)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.value])
@@ -381,6 +389,7 @@ export function QuickPickPanel({
   // a value change followed by the same selection still re-applies.
   const valueSelection = state.valueSelection
   useLayoutEffect(() => {
+    if (composingRef.current) return
     if (!valueSelection) return
     inputRef.current?.setSelectionRange(valueSelection[0], valueSelection[1])
   }, [valueSelection, query])
@@ -483,12 +492,22 @@ export function QuickPickPanel({
   // after the reset effect above so it wins when both fire on a list change.
   const activeItems = state.activeItems
   useEffect(() => {
-    if (!activeItems || activeItems.length === 0) return
+    if (!activeItems) return
+    // Host explicitly cleared the highlight (file dialog: the typed trailing
+    // segment stopped matching any entry). Drop focus so Enter resolves the typed
+    // value via onOk instead of acting on the now-stale autocomplete highlight —
+    // otherwise typing a new name that merely prefixes an existing entry and
+    // hitting Enter would open that existing entry. Only under host-managed focus;
+    // ordinary pickers keep their first-item focus.
+    if (activeItems.length === 0) {
+      if (!autoFocusFirstItem) setFocusedIdx(-1)
+      return
+    }
     const targetId = activeItems[0]?.id
     if (targetId === undefined) return
     const idx = sortedFiltered.findIndex((item) => !isSeparator(item) && item.id === targetId)
     if (idx >= 0) setFocusedIdx(idx)
-  }, [activeItems, sortedFiltered])
+  }, [activeItems, sortedFiltered, autoFocusFirstItem])
 
   useEffect(() => {
     if (sortedFiltered.length > 0) {
@@ -576,6 +595,10 @@ export function QuickPickPanel({
   const PAGE_SIZE = 8
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    // While an IME composition is active, Enter / arrows belong to the IME (e.g.
+    // confirming a candidate). Handling them here — and calling preventDefault —
+    // fights the composition and duplicates the committed text. Defer to the IME.
+    if (e.nativeEvent.isComposing) return
     const len = sortedFiltered.length
     if (quickNavigate && e.key === 'Tab') {
       e.preventDefault()
@@ -638,9 +661,23 @@ export function QuickPickPanel({
           ref={inputRef}
           className={styles['input']}
           value={query}
+          onCompositionStart={() => {
+            composingRef.current = true
+          }}
+          onCompositionEnd={(e) => {
+            composingRef.current = false
+            // Report the final composed text once, now that the IME has committed,
+            // so the host runs its autocomplete on the settled value.
+            const value = e.currentTarget.value
+            setQuery(value)
+            state.onValueChange?.(value)
+          }}
           onChange={(e) => {
             const value = e.target.value
             setQuery(value)
+            // Defer reporting until composition ends; reporting mid-composition
+            // lets the host rewrite the input and duplicate the committed text.
+            if (composingRef.current) return
             state.onValueChange?.(value)
           }}
           onKeyDown={handleKey}
@@ -801,6 +838,9 @@ function InputPanel({ state, onClose }: { state: QuickPickState; onClose: () => 
   }, [])
 
   const handleKey = (e: KeyboardEvent<HTMLInputElement>) => {
+    // Enter during an IME composition confirms a candidate; don't treat it as
+    // submit (which would also swallow the composition and duplicate text).
+    if (e.nativeEvent.isComposing) return
     if (e.key === 'Enter') {
       e.preventDefault()
       const err = state.validateInput?.(value)
