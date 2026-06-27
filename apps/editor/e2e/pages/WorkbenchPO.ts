@@ -45,6 +45,33 @@ export async function expectNoLeaks(page: Page): Promise<void> {
   ).toBeNull()
 }
 
+/**
+ * Evaluate `whenRestored()` tolerating a mid-evaluate context teardown.
+ *
+ * Callers race a navigation: the fixture's firstWindow()/a self-launched
+ * `electron.launch` may return before the first navigation commits, and a
+ * restart reload may not be fully committed on slow CI. In both cases the
+ * evaluate can coincide with a context switch and throw "Execution context was
+ * destroyed". Re-wait for the probe to be (re)installed and evaluate again.
+ *
+ * Exported so self-launching specs (which don't use the `workbench` fixture)
+ * reuse the same hardening instead of leaving a bare `page.evaluate(whenRestored)`.
+ */
+export async function evaluateWhenRestored(page: Page): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await page.evaluate(() => window.__E2E__!.whenRestored())
+      return
+    } catch (err) {
+      if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err
+      await page.waitForLoadState('domcontentloaded')
+      await page.waitForFunction(() =>
+        Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
+      )
+    }
+  }
+}
+
 export class WorkbenchPO {
   readonly activityBar: ActivityBarPO
   readonly sideBar: SideBarPO
@@ -102,29 +129,8 @@ export class WorkbenchPO {
     await this._evaluateWhenRestored()
   }
 
-  /**
-   * Evaluate `whenRestored()` tolerating a mid-evaluate context teardown.
-   *
-   * Two callers race a navigation: `waitForRestored()` (the fixture's
-   * firstWindow() may return before the first navigation commits) and
-   * `waitForRestartRestore()` (the reload may not be fully committed on slow
-   * CI). In both cases the evaluate can coincide with a context switch and
-   * throw "Execution context was destroyed". Re-wait for the probe to be
-   * (re)installed and evaluate again.
-   */
   private async _evaluateWhenRestored(): Promise<void> {
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        await this.page.evaluate(() => window.__E2E__!.whenRestored())
-        return
-      } catch (err) {
-        if (attempt === 2 || !/Execution context was destroyed/.test(String(err))) throw err
-        await this.page.waitForLoadState('domcontentloaded')
-        await this.page.waitForFunction(() =>
-          Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
-        )
-      }
-    }
+    await evaluateWhenRestored(this.page)
   }
 
   /** Open a workspace folder directly, bypassing the native dialog. */

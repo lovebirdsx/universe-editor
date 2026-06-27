@@ -66,18 +66,50 @@ test.describe('@p1 agents — virtualized timeline scroll restore', () => {
       )
       .toBeGreaterThan(100)
 
-    // —— 场景 1：滚到底（stuck）→ 切走 → 切回，应仍在底部 ——
-    await page.evaluate((sel) => {
-      const el = document.querySelector(sel)!.parentElement as HTMLElement
-      el.scrollTop = el.scrollHeight
-      el.dispatchEvent(new Event('scroll'))
-    }, TIMELINE)
+    // 等所有 echo 回复落地（12 user + 12 agent = 24）。否则贴底/滚动时内容仍在涌入，
+    // 高度暴涨，scrollToBottomStable 的 10 帧 RAF 上限会在内容稳定前耗尽、停在离底
+    // 几百 px 处（慢 CI 下 distance 卡在 ~342），断言 1 误判“没贴底”。对齐主 spec
+    // smoke.agentsScrollRestore 的 echo-settle 门控。
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpMessages().length), { timeout: 10000 })
+      .toBe(24)
 
-    const bottomBefore = await page.evaluate((sel) => {
-      const el = document.querySelector(sel)!.parentElement as HTMLElement
-      return { top: el.scrollTop, max: el.scrollHeight - el.clientHeight }
-    }, TIMELINE)
-    expect(bottomBefore.top).toBeGreaterThan(bottomBefore.max - 30)
+    // 再等高度收敛（流式 chunk + Monaco 着色 + 行高懒测量会让 scrollHeight 持续变化
+    // 几帧）。两次采样相等才认为已稳定，避免在内容仍增长时贴底/记位置。
+    await expect
+      .poll(
+        async () => {
+          const a = await page.evaluate((sel) => {
+            const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+            return el ? el.scrollHeight : -1
+          }, TIMELINE)
+          await page.waitForTimeout(150)
+          const b = await page.evaluate((sel) => {
+            const el = document.querySelector(sel)?.parentElement as HTMLElement | null
+            return el ? el.scrollHeight : -2
+          }, TIMELINE)
+          return a === b ? a : -1
+        },
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(100)
+
+    // —— 场景 1：滚到底（stuck）→ 切走 → 切回，应仍在底部 ——
+    // 单次同步 scrollTop=scrollHeight 在虚拟模式下会落短（尾部行还是估算高度，挂载
+    // 测量后变高、scrollHeight 继续涨），故 poll 反复贴底直到 distance<30 真正到底，
+    // 再继续——否则 bottomBefore 这个前置 sanity 会偶发判定“没到底”。
+    await expect
+      .poll(
+        () =>
+          page.evaluate((sel) => {
+            const el = document.querySelector(sel)!.parentElement as HTMLElement
+            el.scrollTop = el.scrollHeight
+            el.dispatchEvent(new Event('scroll'))
+            return el.scrollHeight - el.clientHeight - el.scrollTop
+          }, TIMELINE),
+        { timeout: 8000, intervals: [100] },
+      )
+      .toBeLessThan(30)
 
     await workbench.runCommand('workbench.action.files.newUntitledFile')
     await expect
@@ -88,7 +120,11 @@ test.describe('@p1 agents — virtualized timeline scroll restore', () => {
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
       .toBe('acp.session')
 
-    // 关键断言 1：切回后仍贴底，不跳中间。
+    // 关键断言 1：切回后仍贴底，不跳中间。bottom-pin 走 scrollToBottomStable 的多帧
+    // RAF（最多 10 帧，每帧 scrollTop=scrollHeight 直到高度稳定）。慢 CI（多 worker 抢
+    // CPU）下这串 RAF 要更久才收敛，原 3s 窗口会在收敛前超时（distance 卡在几千 px）。
+    // 放宽到 8s 容纳 CPU 饥饿即可——贴底是单调收敛（distance 只会越来越小），一旦某帧
+    // distance<30 就达成，无需连续稳定计数。
     await expect
       .poll(
         () =>
@@ -98,7 +134,7 @@ test.describe('@p1 agents — virtualized timeline scroll restore', () => {
             const max = el.scrollHeight - el.clientHeight
             return max - el.scrollTop
           }, TIMELINE),
-        { timeout: 3000 },
+        { timeout: 8000, intervals: [100] },
       )
       .toBeLessThan(30)
 

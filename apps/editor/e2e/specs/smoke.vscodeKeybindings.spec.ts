@@ -26,7 +26,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
-import { expectNoLeaks } from '../pages/WorkbenchPO.js'
+import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const KEY = 'ctrl+shift+d'
 const COMMAND = 'editor.action.copyLinesDownAction'
@@ -73,7 +73,10 @@ test.describe('@p1 vscode keybindings', () => {
       await page.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
-      await page.evaluate(() => window.__E2E__!.whenRestored())
+      // Self-launched spec: whenRestored() can race the startup navigation and
+      // throw "Execution context was destroyed". Reuse the fixture's hardening
+      // instead of a bare evaluate (see case 6 / smoke.disposableLeak).
+      await evaluateWhenRestored(page)
 
       // Wait for the extension host to boot and translate its contributions
       // (git.commit present) — its one-shot keybinding reload has then run.
@@ -160,7 +163,7 @@ test.describe('@p1 vscode keybindings', () => {
       await page.waitForFunction(() =>
         Boolean((window as unknown as Record<string, unknown>)['__E2E__']),
       )
-      await page.evaluate(() => window.__E2E__!.whenRestored())
+      await evaluateWhenRestored(page)
 
       await expect
         .poll(() => page.evaluate(() => window.__E2E__!.hasCommand('git.commit')), {
