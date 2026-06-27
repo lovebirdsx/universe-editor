@@ -65,6 +65,7 @@ import { AcpAgentDefaultsService } from '../acpAgentDefaultsService.js'
 import { StubSessionChangeTracker } from './stubSessionChangeTracker.js'
 import { StubConfigOptionsCache } from './stubConfigOptionsCache.js'
 import { StubSessionTitleService } from './stubSessionTitleService.js'
+import type { IAcpSessionTitleService } from '../acpSessionTitleService.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -229,6 +230,7 @@ class StubAgent implements Agent {
   readonly promptCalls: PromptRequest[] = []
   readonly cancelCalls: CancelNotification[] = []
   readonly setConfigOptionCalls: SetSessionConfigOptionRequest[] = []
+  readonly extMethodCalls: Array<{ method: string; params: Record<string, unknown> }> = []
   /** Deferred controls for promptControl mode, one per in-flight prompt(). */
   readonly promptDeferreds: Array<{
     resolve: () => void
@@ -292,6 +294,11 @@ class StubAgent implements Agent {
 
   authenticate(_params: AuthenticateRequest): Promise<AuthenticateResponse | void> {
     return Promise.resolve()
+  }
+
+  extMethod(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>> {
+    this.extMethodCalls.push({ method, params })
+    return Promise.resolve({})
   }
 }
 
@@ -375,7 +382,6 @@ describe('AcpSessionService', () => {
   let client: FakeAcpClientService
   let notifications: StubNotificationService
   let permission: StubPermissionHandler
-
   beforeEach(() => {
     client = new FakeAcpClientService()
     notifications = new StubNotificationService()
@@ -1121,5 +1127,82 @@ describe('AcpSessionService — mcpServers capability gating', () => {
     })
     expect(session.toolCalls.get()[0]?.mcpServer).toBe('sqlite')
     svc.dispose()
+  })
+})
+
+class FixedTitleService implements IAcpSessionTitleService {
+  declare readonly _serviceBrand: undefined
+  constructor(private readonly _title: string) {}
+  generateTitle(): Promise<string | undefined> {
+    return Promise.resolve(this._title)
+  }
+}
+
+describe('AcpSessionService — AI session title push-back', () => {
+  function makeServiceWithTitle(
+    client: FakeAcpClientService,
+    title: IAcpSessionTitleService,
+  ): { svc: AcpSessionService; history: AcpSessionHistoryService } {
+    const history = makeHistory()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      new StubNotificationService(),
+      { executeCommand: async () => undefined } as never,
+      new NoopTelemetryService() as ITelemetryService,
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      new StubSessionChangeTracker(),
+      title,
+      FAKE_HOST,
+    )
+    return { svc, history }
+  }
+
+  it('pushes the AI title to the agent and flags the history row', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('Fix login bug'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('how do I fix the broken login page?')
+      // _maybeGenerateTitle is fire-and-forget; let the microtasks drain.
+      await new Promise((r) => setTimeout(r, 0))
+
+      const agent = client.connected[0]!.agent
+      const sid = session.sessionIdOnAgent.get()!
+      expect(agent.extMethodCalls).toContainEqual({
+        method: 'universe-editor/set_session_title',
+        params: { sessionId: sid, title: 'Fix login bug' },
+      })
+      const entry = history.get(sid)
+      expect(entry?.title).toBe('Fix login bug')
+      expect(entry?.aiTitle).toBe(true)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('does not push the first-prompt-derived title (only AI titles)', async () => {
+    const client = new FakeAcpClientService()
+    // Title service returns undefined → session keeps the first-prompt fallback.
+    const { svc } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      await session.sendPrompt('just a first prompt')
+      await new Promise((r) => setTimeout(r, 0))
+
+      const agent = client.connected[0]!.agent
+      expect(agent.extMethodCalls).toHaveLength(0)
+    } finally {
+      svc.dispose()
+    }
   })
 })

@@ -690,6 +690,22 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
     expect(svc.get(e.id)?.configOptions).toEqual({ model: 'claude-sonnet-4-6' })
   })
 
+  it('keeps an AI-flagged local title over the protocol summary (compact-reset case)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'AI Title' })
+    svc.setHistoryAiTitle(e.id)
+    // After /compact the agent's summary reverts to the first prompt; the merge
+    // must not clobber our AI title with it.
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'first user prompt', updatedAt: null }],
+      '/work',
+      'workspace',
+    )
+    expect(svc.get(e.id)?.title).toBe('AI Title')
+    expect(svc.get(e.id)?.aiTitle).toBe(true)
+  })
+
   it('lastUsedAt = max(protocol updatedAt, local lastUsedAt)', async () => {
     await svc.initialize()
     const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 't' })
@@ -1143,5 +1159,37 @@ describe('AcpSessionHistoryService — setHistoryHasMessages', () => {
     } finally {
       svc2.dispose()
     }
+  })
+})
+
+describe('AcpSessionHistoryService — setHistoryAiTitle', () => {
+  let svc: AcpSessionHistoryService
+
+  beforeEach(async () => {
+    svc = makeService().svc
+    await svc.initialize()
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('flags an AI title on a known session', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 't' })
+    svc.setHistoryAiTitle('s1')
+    expect(svc.get('s1')?.aiTitle).toBe(true)
+  })
+
+  it('is a no-op for an unknown session id', () => {
+    expect(() => svc.setHistoryAiTitle('nonexistent')).not.toThrow()
+  })
+
+  it('re-add preserves the AI flag and its title (resume must not reset it)', () => {
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'AI Title' })
+    svc.setHistoryAiTitle('s1')
+    // resume() re-adds with the construct-time placeholder title.
+    svc.add({ agentId: 'a', sessionIdOnAgent: 's1', title: 'Fake Agent 12:00' })
+    expect(svc.get('s1')?.aiTitle).toBe(true)
+    expect(svc.get('s1')?.title).toBe('AI Title')
   })
 })

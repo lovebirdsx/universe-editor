@@ -105,6 +105,14 @@ export interface AcpSessionHistoryEntry {
    * Used by the restore coordinator to skip sessions the agent never persisted.
    */
   readonly hasMessages?: boolean
+  /**
+   * True once an AI-model-generated title has been set for this session. Such a
+   * title is also pushed back to the agent (`renameSession`), but until the next
+   * hydrate confirms it, this flag stops the `session/list` `summary` (which
+   * falls back to the first prompt after `/compact`) from clobbering it locally.
+   * It also protects agents that can't persist titles at all (e.g. codex).
+   */
+  readonly aiTitle?: boolean
 }
 
 export interface IAcpSessionHistoryService {
@@ -152,6 +160,13 @@ export interface IAcpSessionHistoryService {
    * never used (the agent does not persist those across restarts).
    */
   setHistoryHasMessages(sessionId: string): void
+  /**
+   * Mark a session's title as AI-generated. Idempotent; no-op if the id is
+   * unknown. Called by `AcpSession` when it sets a title from the session-title
+   * model so the hydrate sweep won't overwrite it with the agent's first-prompt
+   * `summary`.
+   */
+  setHistoryAiTitle(sessionId: string): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -298,11 +313,15 @@ export class AcpSessionHistoryService
       if (existing === true) return true
       return entry.hasMessages
     })()
+    // Preserve a prior AI-title flag + its title across re-add (the construct-
+    // time `entry.title` is the default placeholder, not the AI title).
+    const existingAiTitle = existingIdx >= 0 ? this._state[existingIdx]!.aiTitle : undefined
+    const title = existingAiTitle === true ? this._state[existingIdx]!.title : entry.title
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
       sessionIdOnAgent: entry.sessionIdOnAgent,
-      title: entry.title,
+      title,
       ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
       ...(entry.branch !== undefined ? { branch: entry.branch } : {}),
       createdAt,
@@ -313,6 +332,7 @@ export class AcpSessionHistoryService
         ? { collapseMode: this._state[existingIdx]!.collapseMode }
         : {}),
       ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
+      ...(existingAiTitle === true ? { aiTitle: true } : {}),
     }
     if (existingIdx >= 0) {
       this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
@@ -409,6 +429,17 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
+  setHistoryAiTitle(sessionId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.aiTitle === true) return
+    const next: AcpSessionHistoryEntry = { ...cur, aiTitle: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
   bulkMergeFromAgent(
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
@@ -467,10 +498,16 @@ export class AcpSessionHistoryService
       const key = `${agentId} ${info.sessionId}`
       const existing = byKey.get(key)
       const protocolTs = parseIsoTimestamp(info.updatedAt)
-      const title =
+      const reportedTitle =
         typeof info.title === 'string' && info.title.length > 0
           ? info.title
           : (existing?.title ?? info.sessionId)
+      // An AI-generated local title wins over the agent's reported `summary`:
+      // after `/compact` the SDK summary reverts to the first prompt, which
+      // would otherwise clobber our title here. Once our `renameSession` push
+      // lands the agent reports the same value, so this only blocks the
+      // divergent (compact-reset / unsupported-agent) case.
+      const title = existing?.aiTitle === true ? existing.title : reportedTitle
       const cwd = typeof info.cwd === 'string' && info.cwd.length > 0 ? info.cwd : existing?.cwd
       const branch =
         typeof info.branch === 'string' && info.branch.length > 0 ? info.branch : existing?.branch
@@ -623,7 +660,8 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     typeof o['lastUsedAt'] === 'number' &&
     (o['configOptions'] === undefined || isStringRecord(o['configOptions'])) &&
     (o['usage'] === undefined || isValidUsage(o['usage'])) &&
-    (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean')
+    (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
+    (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean')
   )
 }
 

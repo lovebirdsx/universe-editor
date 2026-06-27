@@ -170,6 +170,15 @@ export interface AcpPendingPermission {
  */
 export const ASK_USER_QUESTION_METHOD = 'universe-editor/ask_user_question'
 
+/**
+ * Custom ACP request that persists an AI-generated session title onto the
+ * agent's durable store (the fork backs it with `renameSession`). Shared
+ * verbatim with the agent fork's `acp-agent.ts` (`SET_SESSION_TITLE_METHOD`) —
+ * keep both in sync. Without this round-trip the title lives only client-side
+ * and `session/list`'s `summary` clobbers it after `/compact`.
+ */
+export const SET_SESSION_TITLE_METHOD = 'universe-editor/set_session_title'
+
 /** One selectable option of an {@link AskUserQuestion}. */
 export interface AskUserQuestionOption {
   readonly label: string
@@ -434,6 +443,13 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _pendingTitle: string | undefined
 
   /**
+   * Whether {@link _pendingTitle} came from the AI title model (vs. the
+   * first-prompt fallback). AI titles are flagged on the history row and pushed
+   * back to the agent so they survive `/compact` + the next `session/list`.
+   */
+  private _pendingTitleIsAi = false
+
+  /**
    * Live connection, set by {@link attachConnection} once the agent handshake
    * completes. `undefined` while the session is still connecting (or after a
    * connection failure).
@@ -571,7 +587,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.status.get() === 'connecting') this.status.set('idle', undefined)
     // Re-apply any title derived while connecting now that the history row exists.
     if (this._pendingTitle !== undefined) {
-      this._history?.updateInfo(sessionIdOnAgent, { title: this._pendingTitle })
+      this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleIsAi)
     }
     this._flushQueuedPrompts()
   }
@@ -829,11 +845,42 @@ export class AcpSession extends Disposable implements IAcpSession {
    * While the session is still connecting that id is undefined and the row does
    * not exist yet, so we buffer the title and re-apply it from
    * {@link attachConnection} once the entry is in place.
+   *
+   * `isAi` marks an AI-model-generated title: it is flagged on the history row
+   * (so the hydrate sweep won't clobber it with the agent's first-prompt
+   * `summary`) and pushed back to the agent via `renameSession`, so the title
+   * survives `/compact` and the next `session/list`.
    */
-  private _setHistoryTitle(title: string): void {
+  private _setHistoryTitle(title: string, isAi: boolean): void {
     this._pendingTitle = title
+    this._pendingTitleIsAi = isAi
     const sid = this.sessionIdOnAgent.get()
-    if (sid !== undefined) this._history?.updateInfo(sid, { title })
+    if (sid !== undefined) this._applyHistoryTitle(sid, title, isAi)
+  }
+
+  /** Write the title to the history row and, for AI titles, push it to the agent. */
+  private _applyHistoryTitle(sessionIdOnAgent: string, title: string, isAi: boolean): void {
+    this._history?.updateInfo(sessionIdOnAgent, { title })
+    if (isAi) {
+      this._history?.setHistoryAiTitle(sessionIdOnAgent)
+      this._pushTitleToAgent(sessionIdOnAgent, title)
+    }
+  }
+
+  /**
+   * Persist an AI title onto the agent's durable store so it survives `/compact`.
+   * Best-effort + fire-and-forget: agents that don't implement the ext-method
+   * (e.g. codex) reject with methodNotFound and we keep the local-only title,
+   * which the `aiTitle` history flag still protects from hydrate overwrites.
+   */
+  private _pushTitleToAgent(sessionIdOnAgent: string, title: string): void {
+    const conn = this._conn
+    if (conn === undefined) return
+    void conn.conn
+      .extMethod(SET_SESSION_TITLE_METHOD, { sessionId: sessionIdOnAgent, title })
+      .catch(() => {
+        // best-effort — unsupported agent or transient failure; local title stands.
+      })
   }
 
   private _maybeDeriveTitleFromPrompt(text: string): void {
@@ -841,7 +888,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this._messages.length > 0) return
     const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
-    this._setHistoryTitle(derived)
+    this._setHistoryTitle(derived, false)
   }
 
   /**
@@ -856,7 +903,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
     const title = await this._titleService.generateTitle(userText, agentText)
     if (title === undefined || this.status.get() === 'closed') return
-    this._setHistoryTitle(title)
+    this._setHistoryTitle(title, true)
   }
 
   async close(): Promise<void> {
