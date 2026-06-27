@@ -173,10 +173,70 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     return resolved
   }
 
+  /** Root dir holding every downloaded claude version plus the `.active` pointer. */
+  private _baseDir(): string {
+    return path.join(app.getPath('userData'), 'claude-bin')
+  }
+
+  /** Per-version install dir; the dir name is the version. */
+  private _versionDir(version: string): string {
+    return path.join(this._baseDir(), version)
+  }
+
+  /** Pointer file naming the version `resolve()` should spawn. */
+  private _activeFile(): string {
+    return path.join(this._baseDir(), '.active')
+  }
+
+  private async _readActiveVersion(): Promise<string | null> {
+    try {
+      const v = (await readFile(this._activeFile(), 'utf8')).trim()
+      return v || null
+    } catch {
+      return null
+    }
+  }
+
+  private async _setActiveVersion(version: string): Promise<void> {
+    await mkdir(this._baseDir(), { recursive: true })
+    await writeFile(this._activeFile(), version, 'utf8')
+  }
+
+  /**
+   * Best-effort removal of every version dir except `keep`. A dir whose binary is
+   * still running stays locked on Windows; `_rmQuiet` swallows the failure and the
+   * next run retries it. Skips dotfiles (`.active`, `.prefetch`) and in-flight
+   * `*.extract.*` temp dirs so a concurrent download is never clobbered.
+   */
+  private async _cleanupStaleVersions(keep: string): Promise<void> {
+    let entries: string[]
+    try {
+      entries = await readdir(this._baseDir())
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry === keep || entry.startsWith('.') || entry.includes('.extract.')) continue
+      await this._rmQuiet(path.join(this._baseDir(), entry))
+    }
+  }
+
+  /**
+   * Removes stale (non-active) version dirs. Call only at startup/idle: a just-
+   * upgraded version's predecessor is still locked by the running agent, so
+   * deleting it mid-session both fails (EPERM) and risks corrupting the live
+   * process — by next launch its lock is gone and removal succeeds cleanly.
+   */
+  async cleanupStaleVersions(): Promise<void> {
+    const active = (await this._readActiveVersion()) ?? (await this._readSdkVersion())
+    await this._cleanupStaleVersions(active)
+  }
+
   private async _resolveDownload(): Promise<string> {
     const version = await this._readSdkVersion()
     const { suffix, binName } = detectPlatformBinary()
-    const cached = path.join(app.getPath('userData'), 'claude-bin', version, binName)
+    const active = (await this._readActiveVersion()) ?? version
+    const cached = path.join(this._versionDir(active), binName)
     if (await pathExists(cached)) {
       this._logger.info(`claude binary cache hit ${cached}`)
       return cached
@@ -197,7 +257,14 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
       }
     }
 
-    return this._download(version, suffix, binName, cached)
+    const binaryPath = await this._download(
+      version,
+      suffix,
+      binName,
+      path.join(this._versionDir(version), binName),
+    )
+    await this._setActiveVersion(version)
+    return binaryPath
   }
 
   private async _download(
@@ -346,18 +413,16 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
   async getVersionInfo(): Promise<IClaudeBinaryVersionInfo> {
     const bundledVersion = await this._readSdkVersion()
     const { binName } = detectPlatformBinary()
-    const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
-    const cached = path.join(cacheDir, binName)
 
+    // The active version's dir name *is* its version; verify the binary still
+    // exists before reporting it. Fall back to the bundled-version dir for trees
+    // written before the `.active` pointer scheme.
     let installedVersion: string | null = null
-    if (await pathExists(cached)) {
-      try {
-        const ver = (await readFile(path.join(cacheDir, '.version'), 'utf8')).trim()
-        installedVersion = ver || bundledVersion
-      } catch {
-        // .version sidecar absent — this is a pre-upgrade binary, treat as bundled version
-        installedVersion = bundledVersion
-      }
+    const active = await this._readActiveVersion()
+    if (active && (await pathExists(path.join(this._versionDir(active), binName)))) {
+      installedVersion = active
+    } else if (await pathExists(path.join(this._versionDir(bundledVersion), binName))) {
+      installedVersion = bundledVersion
     }
 
     let latestVersion: string | null = null
@@ -378,12 +443,12 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
 
   /** Path of the background prefetch staging area for a specific version. */
   private _prefetchDir(version: string): string {
-    return path.join(app.getPath('userData'), 'claude-bin', '.prefetch', version)
+    return path.join(this._baseDir(), '.prefetch', version)
   }
 
   /** Returns the version staged in the prefetch area, or null when none is ready. */
   private async _findPrefetched(binName: string): Promise<string | null> {
-    const root = path.join(app.getPath('userData'), 'claude-bin', '.prefetch')
+    const root = path.join(this._baseDir(), '.prefetch')
     let entries: string[]
     try {
       entries = await readdir(root)
@@ -414,14 +479,9 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     }
 
     // Already the active version? Nothing worth prefetching.
-    const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
-    if (await pathExists(path.join(cacheDir, binName))) {
-      try {
-        const installed = (await readFile(path.join(cacheDir, '.version'), 'utf8')).trim()
-        if ((installed || bundledVersion) === target) return
-      } catch {
-        if (bundledVersion === target) return
-      }
+    const active = (await this._readActiveVersion()) ?? bundledVersion
+    if (active === target && (await pathExists(path.join(this._versionDir(active), binName)))) {
+      return
     }
 
     // Already staged for this exact version? Done.
@@ -445,39 +505,47 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     }
 
     // Clear any stale staging dirs (other versions) before fetching the target.
-    await this._rmQuiet(path.join(app.getPath('userData'), 'claude-bin', '.prefetch'))
+    await this._rmQuiet(path.join(this._baseDir(), '.prefetch'))
     this._logger.info(`prefetching claude binary ${target} in background`)
     await this._download(target, suffix, binName, path.join(staged, binName), true)
-    await writeFile(path.join(staged, '.version'), target, 'utf8')
     this._logger.info(`claude binary prefetch ready ${target}`)
   }
 
   async forceDownload(version: string): Promise<IClaudeBinaryResult> {
-    const bundledVersion = await this._readSdkVersion()
     const { suffix, binName } = detectPlatformBinary()
-    const cacheDir = path.join(app.getPath('userData'), 'claude-bin', bundledVersion)
-    const cached = path.join(cacheDir, binName)
+    const versionDir = this._versionDir(version)
+    const cached = path.join(versionDir, binName)
 
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
 
-    // Fast path: the requested version is already staged by a background prefetch.
-    // Move it into the active path instead of re-downloading.
-    const staged = path.join(this._prefetchDir(version), binName)
-    if (await pathExists(staged)) {
-      this._logger.info(`activating prefetched claude binary ${version}`)
-      await mkdir(cacheDir, { recursive: true })
-      await this._rmQuiet(cached)
-      await this._renameWithRetry(staged, cached)
-      await this._rmQuiet(this._prefetchDir(version))
-      await writeFile(path.join(cacheDir, '.version'), version, 'utf8')
+    // Already the active, on-disk version — nothing to do. Re-downloading it would
+    // target its own (possibly running, hence locked) dir.
+    const active = await this._readActiveVersion()
+    if (active === version && (await pathExists(cached))) {
+      this._logger.info(`claude binary ${version} already active`)
       return { path: cached }
     }
 
-    await this._rmQuiet(cached)
-    const binaryPath = await this._download(version, suffix, binName, cached)
-    await writeFile(path.join(cacheDir, '.version'), version, 'utf8')
-    return { path: binaryPath }
+    // Each version lives in its own dir, so the activation target never overlaps the
+    // running binary's dir — no need to delete a locked, in-use exe (the EPERM trap).
+    // The previously active dir is left in place; cleanup removes whatever isn't locked.
+    const staged = path.join(this._prefetchDir(version), binName)
+    if (await pathExists(staged)) {
+      this._logger.info(`activating prefetched claude binary ${version}`)
+      await this._rmQuiet(versionDir)
+      await mkdir(this._baseDir(), { recursive: true })
+      await this._renameWithRetry(path.dirname(staged), versionDir)
+    } else {
+      await this._rmQuiet(versionDir)
+      await this._download(version, suffix, binName, cached)
+    }
+
+    await this._setActiveVersion(version)
+    // Don't clean up the previous version's dir here — it's still locked by the
+    // running agent and removal would block the upgrade UI for seconds and risk a
+    // partial delete. Stale dirs are swept at next startup via cleanupStaleVersions().
+    return { path: cached }
   }
 
   private _whichClaude(): Promise<string | null> {

@@ -35,9 +35,9 @@ export interface IClaudeBinaryVersionInfo {
   /** SDK version the bundled ACP agent was built against (from claude-binary.json). */
   readonly bundledVersion: string
   /**
-   * Actually-installed binary version on disk. Written by forceDownload() into a
-   * `.version` sidecar file alongside the binary. null means the binary has not
-   * been downloaded yet (no file at the expected cache path).
+   * Actually-installed binary version on disk — the version named by the `.active`
+   * pointer file (each version lives in its own dir named after it). null means no
+   * binary has been downloaded yet.
    */
   readonly installedVersion: string | null
   /**
@@ -79,11 +79,19 @@ export interface IClaudeBinaryService {
   prefetch(): Promise<void>
 
   /**
-   * Force-downloads the specified version of the binary, overwriting whatever is
-   * currently cached at the bundled-version path. Writes a `.version` sidecar
-   * file so getVersionInfo() can report the installed version accurately.
+   * Force-downloads (or activates a prefetched) version into its own per-version
+   * dir and flips the `.active` pointer to it. Because each version has its own
+   * dir, activation never overwrites the running binary's locked files (the EPERM
+   * trap on Windows); the previous version's dir is cleaned up best-effort.
    */
   forceDownload(version: string): Promise<IClaudeBinaryResult>
+
+  /**
+   * Removes stale (non-active) version dirs left behind by a previous upgrade.
+   * Safe to call only at startup/idle — mid-session the predecessor binary is
+   * still locked by the running agent. Best-effort; never throws.
+   */
+  cleanupStaleVersions(): Promise<void>
 }
 
 export const IClaudeBinaryService = createDecorator<IClaudeBinaryService>('claudeBinaryService')

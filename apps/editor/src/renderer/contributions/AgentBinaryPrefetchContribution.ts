@@ -1,9 +1,13 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Idle-time background prefetch of the native Claude / codex-acp binaries so a
- *  later upgrade activates instantly instead of waiting on a ~80MB download. Runs
- *  only in download mode and only when `acp.prefetchBinaries` is enabled; failures
- *  are swallowed (best-effort, never disrupts the user).
+ *  Idle-time maintenance of the native Claude / codex-acp binaries:
+ *    1. Sweeps stale (non-active) version dirs left by a previous upgrade — the
+ *       predecessor binary is locked while a session runs, so cleanup is deferred
+ *       to the next launch when its lock is gone. Always runs.
+ *    2. Background-prefetches the latest binary so a later upgrade activates
+ *       instantly instead of waiting on a ~80MB download. Runs only in download
+ *       mode and only when `acp.prefetchBinaries` is enabled.
+ *  All failures are swallowed (best-effort, never disrupts the user).
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -33,9 +37,27 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
       name: 'Agent Binary Prefetch',
     })
 
-    if (this._config.get<boolean>('acp.prefetchBinaries') === false) return
+    this._register(runWhenIdle(globalThis, () => void this._run()))
+  }
 
-    this._register(runWhenIdle(globalThis, () => void this._prefetch()))
+  private async _run(): Promise<void> {
+    await this._cleanup()
+    if (this._config.get<boolean>('acp.prefetchBinaries') === false) return
+    await this._prefetch()
+  }
+
+  /** Sweep stale version dirs from a prior upgrade; the old binary's lock is gone now. */
+  private async _cleanup(): Promise<void> {
+    try {
+      await this._claude.cleanupStaleVersions()
+    } catch (err) {
+      this._logger.warn(`claude binary cleanup failed: ${String(err)}`)
+    }
+    try {
+      await this._codex.cleanupStaleVersions()
+    } catch (err) {
+      this._logger.warn(`codex-acp binary cleanup failed: ${String(err)}`)
+    }
   }
 
   private async _prefetch(): Promise<void> {

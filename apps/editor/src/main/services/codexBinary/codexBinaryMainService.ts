@@ -163,32 +163,83 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     return path.join(dir, 'bin', binName)
   }
 
+  /** Pointer file naming the version `resolve()` should spawn. */
+  private _activeFile(): string {
+    return path.join(this._baseDir(), '.active')
+  }
+
+  private async _readActiveVersion(): Promise<string | null> {
+    try {
+      const v = (await readFile(this._activeFile(), 'utf8')).trim()
+      return v || null
+    } catch {
+      return null
+    }
+  }
+
+  private async _setActiveVersion(version: string): Promise<void> {
+    await mkdir(this._baseDir(), { recursive: true })
+    await writeFile(this._activeFile(), version, 'utf8')
+  }
+
+  /**
+   * Best-effort removal of every version dir except `keep`. A tree whose binary is
+   * still running stays locked on Windows; `_rmQuiet` swallows the failure and the
+   * next run retries it. Skips dotfiles (`.active`, `.prefetch`) and in-flight
+   * `*.extract.*` temp dirs so a concurrent download is never clobbered.
+   */
+  private async _cleanupStaleVersions(keep: string): Promise<void> {
+    let entries: string[]
+    try {
+      entries = await readdir(this._baseDir())
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (entry === keep || entry.startsWith('.') || entry.includes('.extract.')) continue
+      await this._rmQuiet(path.join(this._baseDir(), entry))
+    }
+  }
+
+  /**
+   * Removes stale (non-active) version trees. Call only at startup/idle: a just-
+   * upgraded version's predecessor is still locked by the running agent (and its
+   * tree holds live runtime resources like ripgrep), so deleting it mid-session
+   * both fails (EPERM) and risks corrupting the live process — by next launch its
+   * lock is gone and removal succeeds cleanly.
+   */
+  async cleanupStaleVersions(): Promise<void> {
+    const active = (await this._readActiveVersion()) ?? CODEX_VERSION
+    await this._cleanupStaleVersions(active)
+  }
+
   private async _resolveDownload(): Promise<string> {
     const { suffix, triple, binName } = detectPlatformBinary()
-    const versionDir = this._versionDir(CODEX_VERSION)
-    const cached = this._binaryIn(versionDir, binName)
+    const active = (await this._readActiveVersion()) ?? CODEX_VERSION
+    const cached = this._binaryIn(this._versionDir(active), binName)
     if (await pathExists(cached)) {
       this._logger.info(`codex binary cache hit ${cached}`)
       return cached
     }
-    return this._download(CODEX_VERSION, suffix, triple, binName, versionDir)
+    const versionDir = this._versionDir(CODEX_VERSION)
+    const binaryPath = await this._download(CODEX_VERSION, suffix, triple, binName, versionDir)
+    await this._setActiveVersion(CODEX_VERSION)
+    return binaryPath
   }
 
   async getVersionInfo(): Promise<ICodexBinaryVersionInfo> {
     const bundledVersion = CODEX_VERSION
     const { binName } = detectPlatformBinary()
-    const versionDir = this._versionDir(bundledVersion)
-    const cached = this._binaryIn(versionDir, binName)
 
+    // The active version's dir name *is* its version; verify the binary still
+    // exists before reporting it. Fall back to the pinned-version dir for trees
+    // written before the `.active` pointer scheme.
     let installedVersion: string | null = null
-    if (await pathExists(cached)) {
-      try {
-        const ver = (await readFile(path.join(versionDir, '.version'), 'utf8')).trim()
-        installedVersion = ver || bundledVersion
-      } catch {
-        // .version sidecar absent — pre-upgrade tree, treat as bundled version
-        installedVersion = bundledVersion
-      }
+    const active = await this._readActiveVersion()
+    if (active && (await pathExists(this._binaryIn(this._versionDir(active), binName)))) {
+      installedVersion = active
+    } else if (await pathExists(this._binaryIn(this._versionDir(bundledVersion), binName))) {
+      installedVersion = bundledVersion
     }
 
     let latestVersion: string | null = null
@@ -245,14 +296,12 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     }
 
     // Already the active version? Nothing worth prefetching.
-    const versionDir = this._versionDir(bundledVersion)
-    if (await pathExists(this._binaryIn(versionDir, binName))) {
-      try {
-        const installed = (await readFile(path.join(versionDir, '.version'), 'utf8')).trim()
-        if ((installed || bundledVersion) === target) return
-      } catch {
-        if (bundledVersion === target) return
-      }
+    const active = (await this._readActiveVersion()) ?? bundledVersion
+    if (
+      active === target &&
+      (await pathExists(this._binaryIn(this._versionDir(active), binName)))
+    ) {
+      return
     }
 
     // Already staged for this exact version? Done.
@@ -266,35 +315,44 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     await this._rmQuiet(path.join(this._baseDir(), '.prefetch'))
     this._logger.info(`prefetching codex binary ${target} in background`)
     await this._download(target, suffix, triple, binName, staged, true)
-    await writeFile(path.join(staged, '.version'), target, 'utf8')
     this._logger.info(`codex binary prefetch ready ${target}`)
   }
 
   async forceDownload(version: string): Promise<ICodexBinaryResult> {
     const { suffix, triple, binName } = detectPlatformBinary()
-    const versionDir = this._versionDir(CODEX_VERSION)
+    const versionDir = this._versionDir(version)
     const cached = this._binaryIn(versionDir, binName)
 
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
 
-    // Fast path: the requested version is already staged by a background prefetch.
-    // Move the whole tree into the active path instead of re-downloading.
+    // Already the active, on-disk version — nothing to do. Re-downloading it would
+    // target its own (possibly running, hence locked) tree.
+    const active = await this._readActiveVersion()
+    if (active === version && (await pathExists(cached))) {
+      this._logger.info(`codex binary ${version} already active`)
+      return { path: cached }
+    }
+
+    // Each version lives in its own tree, so the activation target never overlaps the
+    // running binary's tree — no need to delete a locked, in-use exe (the EPERM trap).
+    // The previously active tree is left in place; cleanup removes whatever isn't locked.
     const staged = this._prefetchDir(version)
     if (await pathExists(this._binaryIn(staged, binName))) {
       this._logger.info(`activating prefetched codex binary ${version}`)
       await this._rmQuiet(versionDir)
-      await mkdir(path.dirname(versionDir), { recursive: true })
+      await mkdir(this._baseDir(), { recursive: true })
       await this._renameWithRetry(staged, versionDir)
-      await this._rmQuiet(staged)
-      await writeFile(path.join(versionDir, '.version'), version, 'utf8')
-      return { path: cached }
+    } else {
+      await this._rmQuiet(versionDir)
+      await this._download(version, suffix, triple, binName, versionDir)
     }
 
-    await this._rmQuiet(versionDir)
-    const binaryPath = await this._download(version, suffix, triple, binName, versionDir)
-    await writeFile(path.join(versionDir, '.version'), version, 'utf8')
-    return { path: binaryPath }
+    await this._setActiveVersion(version)
+    // Don't clean up the previous version's tree here — it's still locked by the
+    // running agent and removal would block the upgrade UI for seconds and risk a
+    // partial delete. Stale trees are swept at next startup via cleanupStaleVersions().
+    return { path: cached }
   }
 
   private async _download(
