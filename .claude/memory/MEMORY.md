@@ -1,6 +1,6 @@
 # Memory Index
 
-> 跨 clone / 跨机共享的 memory。真身在主仓库 `.claude-memory/`,各 clone 的全局 memory 目录通过 junction 指向此处。详见同目录 `README.md`。
+> 跨 clone / 跨机共享的 memory。真身在主仓库 `.claude/memory/`,各 clone 的全局 memory 目录通过 junction 指向此处。详见同目录 `README.md`。
 
 ## 功能实现进展
 

@@ -36,7 +36,7 @@ import {
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = resolve(__dirname, '..')
-const MEMORY_SOURCE = join(REPO_ROOT, '.claude-memory')
+const MEMORY_SOURCE = join(REPO_ROOT, '.claude', 'memory')
 
 const args = new Set(process.argv.slice(2))
 const STATUS_ONLY = args.has('--status')

@@ -16,17 +16,17 @@ pnpm --filter @universe-editor/editor dev     # 桌面编辑器（Electron）
 
 Claude 的 auto-memory 默认按工作目录绝对路径隔离存放，导致同一工程的多个 clone /
 worktree、以及不同机器之间，memory 互不可见。本仓库把 memory 真身放在
-`.claude-memory/` 并纳入 git，再用一条命令把它链接到当前 clone 对应的 Claude
+`.claude/memory/` 并纳入 git，再用一条命令把它链接到当前 clone 对应的 Claude
 全局 memory 目录（Windows junction / posix symlink，均无需管理员权限）：
 
 ```bash
-pnpm memory:link          # 链接当前 clone 的 memory 到 .claude-memory/
+pnpm memory:link          # 链接当前 clone 的 memory 到 .claude/memory/
 pnpm memory:status        # 只查看链接状态，不做任何改动
 ```
 
 - **每个 clone / 每台新机器各跑一次** `pnpm memory:link`（链接是本机文件系统状态，
   不随 git 走）。worktree 无需单独执行——它会自动跟随主 clone 的 memory 目录。
-- 链接建立后，Claude 的 memory 读写直接落进 `.claude-memory/`，`git pull/push`
+- 链接建立后，Claude 的 memory 读写直接落进 `.claude/memory/`，`git pull/push`
   即可跨机同步。
 - 若目标目录已存在且含 `.claude-memory/` 里没有的文件，脚本会**拒绝覆盖**并列出
   这些文件，需先手动合并进 `.claude-memory/` 再重跑。

@@ -1,4 +1,4 @@
-# .claude-memory — 跨 clone / 跨机共享的 Claude memory
+# .claude/memory — 跨 clone / 跨机共享的 Claude memory
 
 Claude 的 auto-memory 默认按 **当前工作目录(cwd)的绝对路径编码** 存到全局区
 `~/.claude/projects/<cwd编码>/memory/`,不在工作目录里。因此同一个工程的多个
@@ -36,13 +36,13 @@ pnpm memory:status        # 只查看状态,不改动
 Windows:
 ```cmd
 rmdir /S /Q "%USERPROFILE%\.claude\projects\D--git-project-universe-editor\memory"
-mklink /J "%USERPROFILE%\.claude\projects\D--git-project-universe-editor\memory" "D:\git_project\universe-editor\.claude-memory"
+mklink /J "%USERPROFILE%\.claude\projects\D--git-project-universe-editor\memory" "D:\git_project\universe-editor\.claude\memory"
 ```
 
 macOS / Linux(无盘符,例 `/Users/me/universe-editor` → `-Users-me-universe-editor`):
 ```sh
 rm -rf "$HOME/.claude/projects/-Users-me-universe-editor/memory"
-ln -s "/Users/me/universe-editor/.claude-memory" "$HOME/.claude/projects/-Users-me-universe-editor/memory"
+ln -s "/Users/me/universe-editor/.claude/memory" "$HOME/.claude/projects/-Users-me-universe-editor/memory"
 ```
 
 ## 注意
