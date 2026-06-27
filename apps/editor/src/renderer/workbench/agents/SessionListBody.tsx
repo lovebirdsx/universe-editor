@@ -17,10 +17,12 @@ import {
   ConfigurationTarget,
   IWorkspaceService,
   IHostService,
+  IEditorService,
+  IInstantiationService,
   arePathsEqual,
   type HostPlatform,
 } from '@universe-editor/platform'
-import { X, Trash2 } from 'lucide-react'
+import { X, Trash2, GitBranch } from 'lucide-react'
 import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
@@ -30,6 +32,7 @@ import {
   type SessionHistoryScope,
 } from '../../services/acp/acpSessionHistory.js'
 import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
+import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { AgentIcon } from './agentIcon.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { formatCny } from './SessionCostIndicator.js'
@@ -144,6 +147,7 @@ function SessionRow({
   onRemove,
   rate,
   scope,
+  isForeign,
 }: {
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
@@ -152,6 +156,7 @@ function SessionRow({
   onRemove: () => void
   rate: number
   scope: SessionHistoryScope
+  isForeign: boolean
 }) {
   const isRunning = liveSession !== undefined
   const historyMs = entry.accumulatedRunningMs ?? 0
@@ -163,6 +168,7 @@ function SessionRow({
       className={styles['sessionRow']}
       data-active={isActive ? 'true' : 'false'}
       data-running={isRunning ? 'true' : 'false'}
+      data-foreign={isForeign ? 'true' : 'false'}
       data-testid={`session-row-${entry.id}`}
       onClick={onActivate}
     >
@@ -170,6 +176,14 @@ function SessionRow({
         <span className={styles['sessionRowLabelLine']}>
           <AgentIcon agentId={entry.agentId} size={14} className={styles['sessionRowAgentIcon']} />
           <span className={styles['sessionRowLabel']}>{entry.title}</span>
+          {isForeign ? (
+            <GitBranch
+              size={12}
+              strokeWidth={1.75}
+              className={styles['sessionRowForeignIcon']}
+              aria-label={localize('acp.sessions.foreignWorktree', 'Belongs to another worktree')}
+            />
+          ) : null}
         </span>
         <span className={styles['sessionRowMeta']}>
           {relativeTime(entry.lastUsedAt)}
@@ -215,6 +229,8 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const workspace = useService(IWorkspaceService)
   const hostService = useService(IHostService)
   const dialogService = useService(IDialogService)
+  const editorService = useService(IEditorService)
+  const instantiation = useService(IInstantiationService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
@@ -292,6 +308,10 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
             const live = service.getById(entry.id)
             const liveSession = live && live.status.get() !== 'closed' ? live : undefined
             const isActive = liveSession !== undefined && liveSession.id === activeId
+            const isForeign =
+              entry.cwd !== undefined &&
+              currentCwd !== undefined &&
+              !arePathsEqual(entry.cwd, currentCwd, platform)
             return (
               <SessionRow
                 key={entry.id}
@@ -300,11 +320,28 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 isActive={isActive}
                 rate={rate}
                 scope={scope}
+                isForeign={isForeign}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
                   if (liveNow) {
                     service.setActive(liveNow.id)
+                  } else if (
+                    entry.cwd !== undefined &&
+                    currentCwd !== undefined &&
+                    !arePathsEqual(entry.cwd, currentCwd, platform)
+                  ) {
+                    // Foreign worktree: don't resume (would spawn the agent
+                    // against another worktree behind this window's UI). Open a
+                    // read-only preview tab; the user activates from there.
+                    editorService.openEditor(
+                      instantiation.createInstance(
+                        AcpSessionEditorInput,
+                        entry.id,
+                        entry.agentId,
+                        entry.title,
+                      ),
+                    )
                   } else {
                     service.resumeSession(entry.id).catch(() => {
                       // resumeSession publishes its own notification.

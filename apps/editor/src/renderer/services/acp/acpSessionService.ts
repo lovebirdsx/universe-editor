@@ -17,6 +17,7 @@
 
 import {
   autorun,
+  arePathsEqual,
   createDecorator,
   Disposable,
   Emitter,
@@ -34,6 +35,7 @@ import {
   localize,
   observableValue,
   transaction,
+  type HostPlatform,
   type ILogger,
   type IObservable,
   type ISettableObservable,
@@ -112,6 +114,29 @@ export {
   type IAcpSessionInitState,
   type TimelineItem,
 } from './acpSession.js'
+
+/**
+ * Thrown when resume is attempted for a session whose `cwd` does not match the
+ * currently open workspace folder. Resuming would spawn the agent against the
+ * session's own cwd (a sibling worktree) while the UI's file tree / SCM / search
+ * stay on the current folder — a split-brain where edits land in the wrong repo.
+ * The UI catches this and routes the user through the cross-worktree activation
+ * flow (open the owning worktree in a new window, or switch the current one)
+ * instead of silently spawning.
+ */
+export class AcpForeignWorktreeError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly sessionCwd: string,
+    readonly currentCwd: string | undefined,
+  ) {
+    super(
+      `Session ${sessionId} belongs to ${sessionCwd}, which is not the open workspace` +
+        `${currentCwd ? ` (${currentCwd})` : ''}`,
+    )
+    this.name = 'AcpForeignWorktreeError'
+  }
+}
 
 export interface IAcpSessionService {
   readonly _serviceBrand: undefined
@@ -206,6 +231,7 @@ export class AcpSessionService
   private _sessions: AcpSession[] = []
   private readonly _logger: ILogger
   private readonly _coordinator: AcpSessionRestoreCoordinator
+  private readonly _platform: HostPlatform
 
   /**
    * In-flight `resumeSession` promises keyed by sessionId. Concurrent callers
@@ -238,6 +264,7 @@ export class AcpSessionService
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
+    this._platform = hostService.platform
     this.sessions = observableValue<readonly IAcpSession[]>('acp.sessions', [])
     this.activeSessionId = observableValue<string | undefined>('acp.activeSessionId', undefined)
     this.activeSession = observableValue<IAcpSession | undefined>('acp.activeSession', undefined)
@@ -565,6 +592,22 @@ export class AcpSessionService
     const entry = this._history.get(sessionId)
     if (!entry) {
       throw new Error(`Unknown agent session id: ${sessionId}`)
+    }
+    // Split-brain guard: a session carries the cwd it was created in. Resuming it
+    // here would spawn the agent against that cwd while this window's views stay
+    // on the open folder. If the session belongs to a different worktree, refuse
+    // to spawn — the UI routes the user through cross-worktree activation. cwd
+    // undefined (legacy/global) is treated as "belongs here" to stay compatible.
+    const currentCwd = this._workspace.current?.folder.fsPath
+    if (
+      entry.cwd !== undefined &&
+      currentCwd !== undefined &&
+      !arePathsEqual(entry.cwd, currentCwd, this._platform)
+    ) {
+      this._logger.info(
+        `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} current=${currentCwd}`,
+      )
+      throw new AcpForeignWorktreeError(sessionId, entry.cwd, currentCwd)
     }
     const cwd = entry.cwd
     let conn: IAcpClientConnection

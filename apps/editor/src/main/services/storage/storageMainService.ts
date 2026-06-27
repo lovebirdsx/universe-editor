@@ -10,10 +10,17 @@
  *     workspace reads return undefined and writes are no-ops.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter, type Event, StorageScope, type IStorageService } from '@universe-editor/platform'
+import {
+  Emitter,
+  type Event,
+  StorageScope,
+  type IStorageService,
+  URI,
+} from '@universe-editor/platform'
 import {
   createStorage,
   getDefaultStorage,
+  workspaceIdFromUri,
   workspaceStoragePath,
   type Storage,
 } from '../../storage.js'
@@ -83,6 +90,15 @@ export class MainStorageService implements IStorageService {
       return this._workspace.remove(key)
     }
     return this._global.remove(key)
+  }
+
+  async getForWorkspaceCwd<T = unknown>(key: string, cwd: string): Promise<T | undefined> {
+    const id = workspaceIdFromUri(URI.file(cwd).toString())
+    // Hitting the active bucket: go through the live backend so we don't read a
+    // stale on-disk copy that predates pending in-memory writes.
+    if (id === this._workspaceId && this._workspace) return this._workspace.get<T>(key)
+    // Otherwise open a throwaway read-only handle on the target bucket's file.
+    return createStorage(workspaceStoragePath(id)).get<T>(key)
   }
 
   /**

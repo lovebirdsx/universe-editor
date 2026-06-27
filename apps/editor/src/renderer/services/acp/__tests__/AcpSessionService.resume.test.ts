@@ -61,7 +61,7 @@ import {
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
-import { AcpSessionService } from '../acpSessionService.js'
+import { AcpForeignWorktreeError, AcpSessionService } from '../acpSessionService.js'
 import {
   IAcpClientService,
   type IAcpClientConnection,
@@ -110,7 +110,12 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
 
 class FakeWorkspaceService implements IWorkspaceService {
   declare readonly _serviceBrand: undefined
-  readonly current: IWorkspace | null = null
+  readonly current: IWorkspace | null
+  constructor(folderPath?: string) {
+    this.current = folderPath
+      ? ({ folder: { fsPath: folderPath } as IWorkspace['folder'], name: 'ws' } as IWorkspace)
+      : null
+  }
   private readonly _onDidChangeWorkspace = new Emitter<IWorkspace | null>()
   readonly onDidChangeWorkspace = this._onDidChangeWorkspace.event
   readonly recent: readonly never[] = []
@@ -370,7 +375,10 @@ class FakeAcpClientService implements IAcpClientService {
 // Helper: build a service with a freshly-instantiated history service.
 // ---------------------------------------------------------------------------
 
-function buildService(opts: FakeAcpClientOptions = {}): {
+function buildService(
+  opts: FakeAcpClientOptions = {},
+  serviceCwd?: string,
+): {
   svc: AcpSessionService
   client: FakeAcpClientService
   history: AcpSessionHistoryService
@@ -399,7 +407,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
   const svc = new AcpSessionService(
     client,
     new FakeAgentRegistry(),
-    new FakeWorkspaceService(),
+    new FakeWorkspaceService(serviceCwd),
     config,
     notifications,
     { executeCommand: async () => undefined } as never,
@@ -472,6 +480,36 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     const resumed = await svc.resumeSession(sessionId)
     expect(resumed.id).toBe(sessionId)
     expect(svc.getById(sessionId)?.id).toBe(resumed.id)
+  })
+
+  it('refuses to resume a session whose cwd differs from the open workspace (split-brain guard)', async () => {
+    // Open folder is /repo/main; the session belongs to a sibling worktree.
+    const built = buildService({ loadSessionResult: {} }, '/repo/main')
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'foreign-1',
+      title: 'from worktree',
+      cwd: '/repo/wt1',
+    })
+    await expect(svc.resumeSession('foreign-1')).rejects.toBeInstanceOf(AcpForeignWorktreeError)
+    // No agent process must be spawned for a foreign-worktree session.
+    expect(built.client.connectArgs).toHaveLength(0)
+  })
+
+  it('resumes a session whose cwd matches the open workspace', async () => {
+    const built = buildService({ loadSessionResult: {} }, '/repo/main')
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    const sessionId = original.sessionIdOnAgent.get()!
+    // createSession recorded cwd = /repo/main (matches the open folder).
+    expect(built.history.get(sessionId)?.cwd).toBe('/repo/main')
+    await svc.closeSession(original.id)
+    const resumed = await svc.resumeSession(sessionId)
+    expect(resumed.id).toBe(sessionId)
   })
 })
 

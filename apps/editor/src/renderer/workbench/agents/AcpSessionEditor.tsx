@@ -7,13 +7,22 @@
 
 import { useEffect, useState } from 'react'
 import { AlertCircle, KeyRound, Loader2, RotateCw } from 'lucide-react'
-import { ICommandService, IEditorInput, IEditorService, localize } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IEditorInput,
+  IEditorService,
+  IWorkspaceService,
+  IHostService,
+  arePathsEqual,
+  localize,
+} from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { isAuthRequiredError } from '../../services/acp/acpAuthError.js'
 import { ChatBody } from './ChatBody.js'
+import { ForeignSessionPreview } from './ForeignSessionPreview.js'
 import styles from './agents.module.css'
 
 type ResumePhase =
@@ -24,6 +33,8 @@ type ResumePhase =
 export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
+  const workspace = useService(IWorkspaceService)
+  const hostService = useService(IHostService)
   useObservable(service.sessions)
   // 订阅 history 是为了让水化完成时触发重渲，让一个尚未 resume 的 session 在 history
   // 条目到位后能被重新评估。
@@ -35,6 +46,19 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   if (!acpInput) return null
 
   if (session) return <ChatBody session={session} autoFocus />
+
+  // A session whose cwd differs from the open folder must not be resumed here —
+  // that would spawn the agent against a sibling worktree behind this window's
+  // UI. Show a read-only metadata preview with an activation path instead.
+  const entry = history.get(acpInput.sessionId)
+  const currentCwd = workspace.current?.folder.fsPath
+  const isForeign =
+    entry?.cwd !== undefined &&
+    currentCwd !== undefined &&
+    !arePathsEqual(entry.cwd, currentCwd, hostService.platform)
+  if (entry && isForeign) {
+    return <ForeignSessionPreview key={acpInput.sessionId} entry={entry} />
+  }
 
   // EditorGroupView 用 `<Component input={active} />`（无 key）渲染激活编辑器，切换 tab
   // 会复用同一个 AcpSessionEditor 实例、只换 input prop。若把 resume 的 phase 状态直接

@@ -13,8 +13,14 @@ import {
   observableValue,
   Emitter,
   IEditorService,
+  IWorkspaceService,
+  IHostService,
 } from '@universe-editor/platform'
-import type { IEditorService as IEditorServiceType } from '@universe-editor/platform'
+import type {
+  IEditorService as IEditorServiceType,
+  IWorkspaceService as IWorkspaceServiceType,
+  IHostService as IHostServiceType,
+} from '@universe-editor/platform'
 import {
   IAcpSessionService,
   type IAcpSession,
@@ -107,7 +113,23 @@ function makeEditor(): IEditorServiceType {
   } as unknown as IEditorServiceType
 }
 
+function makeWorkspace(): IWorkspaceServiceType {
+  return {
+    _serviceBrand: undefined,
+    current: undefined,
+  } as unknown as IWorkspaceServiceType
+}
+
+function makeHost(): IHostServiceType {
+  return {
+    _serviceBrand: undefined,
+    platform: 'win32',
+  } as unknown as IHostServiceType
+}
+
 const stubEditor = makeEditor()
+const stubWorkspace = makeWorkspace()
+const stubHost = makeHost()
 
 function makeCollection(
   service: FakeAcpSessionService,
@@ -118,6 +140,8 @@ function makeCollection(
   services.set(IAcpSessionService, service)
   services.set(IAcpSessionHistoryService, history ?? makeHistory())
   services.set(IEditorService, editor)
+  services.set(IWorkspaceService, stubWorkspace)
+  services.set(IHostService, stubHost)
   return services
 }
 

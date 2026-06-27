@@ -2070,3 +2070,78 @@
   font-size: calc(var(--agent-font-size, 12px) * 0.857);
   font-variant-numeric: tabular-nums;
 }
+
+.sessionRowForeignIcon {
+  flex-shrink: 0;
+  opacity: 0.6;
+  color: var(--color-badge-progress, #4fa6e2);
+}
+
+.foreignPreview {
+  padding: 16px;
+  color: var(--color-sidebar-fg, #888);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: flex-start;
+  max-width: 640px;
+}
+
+.foreignPreviewHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--color-fg, #ddd);
+}
+
+.foreignPreviewTitle {
+  font-size: calc(var(--agent-font-size, 14px) * 1.2);
+  font-weight: 600;
+}
+
+.foreignPreviewNote {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.foreignPreviewMeta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+}
+
+.foreignPreviewMetaRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.foreignPreviewPath {
+  font-family: var(--font-mono, monospace);
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+  opacity: 0.7;
+  word-break: break-all;
+}
+
+.foreignPreviewConfig {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.foreignPreviewConfigItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid var(--color-border, #333);
+  border-radius: 4px;
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
+}
+
+.foreignPreviewActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}

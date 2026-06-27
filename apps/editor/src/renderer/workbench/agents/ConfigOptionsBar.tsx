@@ -20,7 +20,7 @@ import styles from './agents.module.css'
 
 const CATEGORY_ORDER: SessionConfigOptionCategory[] = ['model', 'mode', 'thought_level']
 
-function compareByCategory(a: SessionConfigOption, b: SessionConfigOption): number {
+export function compareByCategory(a: SessionConfigOption, b: SessionConfigOption): number {
   const ai = a.category ? CATEGORY_ORDER.indexOf(a.category as SessionConfigOptionCategory) : -1
   const bi = b.category ? CATEGORY_ORDER.indexOf(b.category as SessionConfigOptionCategory) : -1
   const aw = ai === -1 ? CATEGORY_ORDER.length + 1 : ai
@@ -206,7 +206,7 @@ function PopoverItem({
   )
 }
 
-function findLabel(
+export function findLabel(
   options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
   value: string,
 ): string {
