@@ -20,6 +20,8 @@ import {
   GetConfigurationAction,
   OpenFileAction as OpenFileFromExtensionAction,
   OpenFileAtAction,
+  OpenFolderFromExtensionAction,
+  OpenFolderInNewWindowFromExtensionAction,
 } from './extensionApiActions.js'
 import {
   ShowCommandsAction,
@@ -472,6 +474,8 @@ registerAction2(CompleteMergeAction)
 registerAction2(GetActiveEditorFileAction)
 registerAction2(OpenFileFromExtensionAction)
 registerAction2(OpenFileAtAction)
+registerAction2(OpenFolderFromExtensionAction)
+registerAction2(OpenFolderInNewWindowFromExtensionAction)
 registerAction2(GetConfigurationAction)
 
 // Update

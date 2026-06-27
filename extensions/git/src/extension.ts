@@ -194,6 +194,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.rebase', (arg) => mgr.resolveRepo(arg)?.rebase()),
     commands.registerCommand('git.publishBranch', (arg) => mgr.resolveRepo(arg)?.publishBranch()),
 
+    commands.registerCommand('git.createWorktree', (arg) => mgr.resolveRepo(arg)?.createWorktree()),
+    commands.registerCommand('git.openWorktree', (arg) =>
+      mgr.resolveRepo(arg)?.openWorktree(false),
+    ),
+    commands.registerCommand('git.openWorktreeInNewWindow', (arg) =>
+      mgr.resolveRepo(arg)?.openWorktree(true),
+    ),
+    commands.registerCommand('git.deleteWorktree', (arg) => mgr.resolveRepo(arg)?.deleteWorktree()),
+
     commands.registerCommand('git.sync', (arg) => mgr.resolveRepo(arg)?.sync()),
     commands.registerCommand('git.pull', (arg) => mgr.resolveRepo(arg)?.pull()),
     commands.registerCommand('git.pullRebase', (arg) => mgr.resolveRepo(arg)?.pullRebase()),

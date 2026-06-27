@@ -35,6 +35,10 @@
       { "command": "git.merge", "title": "Merge Branch...", "category": "Git", "icon": "merge" },
       { "command": "git.rebase", "title": "Rebase Branch...", "category": "Git", "icon": "merge" },
       { "command": "git.publishBranch", "title": "Publish Branch", "category": "Git", "icon": "push" },
+      { "command": "git.createWorktree", "title": "Create Worktree...", "category": "Git", "icon": "new-folder" },
+      { "command": "git.openWorktree", "title": "Open Worktree", "category": "Git", "icon": "git-worktree" },
+      { "command": "git.openWorktreeInNewWindow", "title": "Open Worktree in New Window", "category": "Git", "icon": "empty-window" },
+      { "command": "git.deleteWorktree", "title": "Delete Worktree...", "category": "Git", "icon": "remove" },
       { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
       { "command": "git.openMergeEditor", "title": "Resolve in Merge Editor", "category": "Git", "icon": "merge" },
       { "command": "git.openFile", "title": "Open File", "category": "Git" },
@@ -70,6 +74,7 @@
       { "id": "git.pushMenu", "label": "Push", "icon": "push" },
       { "id": "git.fetchMenu", "label": "Fetch", "icon": "fetch" },
       { "id": "git.branchMenu", "label": "Branch", "icon": "checkout" },
+      { "id": "git.worktreeMenu", "label": "Worktree", "icon": "git-worktree" },
       { "id": "git.stashMenu", "label": "Stash", "icon": "stash" },
       { "id": "git.remoteMenu", "label": "Remote", "icon": "remote" },
       { "id": "git.tagsMenu", "label": "Tags", "icon": "tag" },
@@ -86,6 +91,7 @@
         { "command": "git.sync", "group": "3_sync@3", "icon": "sync" },
         { "submenu": "git.fetchMenu", "group": "3_sync@4" },
         { "submenu": "git.branchMenu", "group": "4_branch@1" },
+        { "submenu": "git.worktreeMenu", "group": "4_branch@2" },
         { "submenu": "git.stashMenu", "group": "5_stash@1" },
         { "submenu": "git.remoteMenu", "group": "6_remote@1" },
         { "submenu": "git.tagsMenu", "group": "6_remote@2" },
@@ -124,6 +130,12 @@
         { "command": "git.merge", "group": "2@1", "icon": "merge" },
         { "command": "git.rebase", "group": "2@2", "icon": "merge" },
         { "command": "git.publishBranch", "group": "3@1", "icon": "push" }
+      ],
+      "git.worktreeMenu": [
+        { "command": "git.createWorktree", "group": "1@1", "icon": "new-folder" },
+        { "command": "git.openWorktree", "group": "2@1", "icon": "git-worktree" },
+        { "command": "git.openWorktreeInNewWindow", "group": "2@2", "icon": "empty-window" },
+        { "command": "git.deleteWorktree", "group": "3@1", "icon": "remove" }
       ],
       "git.stashMenu": [
         { "command": "git.stash", "group": "1@1", "icon": "stash" },

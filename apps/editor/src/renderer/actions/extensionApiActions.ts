@@ -11,6 +11,10 @@ import {
   IConfigurationService,
   IEditorGroupsService,
   IInstantiationService,
+  ILifecycleService,
+  IWindowsService,
+  IWorkspaceService,
+  ShutdownReason,
   URI,
   isEqualResource,
   type ServicesAccessor,
@@ -72,27 +76,6 @@ export class OpenFileAction extends Action2 {
   }
 }
 
-/**
- * Opens a file editor and reveals a specific position. Backs cross-file jumps for
- * extensions (e.g. numbered-bookmarks). `line`/`column` are 0-based to match the
- * extension API's Position; Monaco lines/columns are 1-based, hence the `+ 1`.
- */
-export class OpenFileAtAction extends Action2 {
-  static readonly ID = '_workbench.openFileAt'
-
-  constructor() {
-    super({ id: OpenFileAtAction.ID, title: 'Open File At Position' })
-  }
-
-  override run(accessor: ServicesAccessor, fsPath: string, line: number, column = 0): void {
-    if (!fsPath) return
-    const groups = accessor.get(IEditorGroupsService)
-    const uri = URI.file(fsPath)
-    const input = revealExistingOrOpen(accessor, groups, uri)
-    void revealPosition(input, line + 1, column + 1)
-  }
-}
-
 function revealExistingOrOpen(
   accessor: ServicesAccessor,
   groups: IEditorGroupsService,
@@ -125,5 +108,63 @@ async function revealPosition(input: FileEditorInput, line: number, column: numb
       editor.focus()
       return
     }
+  }
+}
+
+/**
+ * Opens a file editor and reveals a specific position. Backs cross-file jumps for
+ * extensions (e.g. numbered-bookmarks). `line`/`column` are 0-based to match the
+ * extension API's Position; Monaco lines/columns are 1-based, hence the `+ 1`.
+ */
+export class OpenFileAtAction extends Action2 {
+  static readonly ID = '_workbench.openFileAt'
+
+  constructor() {
+    super({ id: OpenFileAtAction.ID, title: 'Open File At Position' })
+  }
+
+  override run(accessor: ServicesAccessor, fsPath: string, line: number, column = 0): void {
+    if (!fsPath) return
+    const groups = accessor.get(IEditorGroupsService)
+    const uri = URI.file(fsPath)
+    const input = revealExistingOrOpen(accessor, groups, uri)
+    void revealPosition(input, line + 1, column + 1)
+  }
+}
+
+/**
+ * Switches this window to the given folder. Backs the Git extension's
+ * git.openWorktree (current-window variant). Confirms before interrupting any
+ * running session, mirroring OpenFolderAction.
+ */
+export class OpenFolderFromExtensionAction extends Action2 {
+  static readonly ID = '_workbench.openFolder'
+
+  constructor() {
+    super({ id: OpenFolderFromExtensionAction.ID, title: 'Open Folder' })
+  }
+
+  override async run(accessor: ServicesAccessor, fsPath: string): Promise<void> {
+    if (!fsPath) return
+    const lifecycle = accessor.get(ILifecycleService)
+    if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
+    await accessor.get(IWorkspaceService).openFolder(URI.file(fsPath))
+  }
+}
+
+/**
+ * Opens the given folder in a new window. Backs the Git extension's
+ * git.openWorktreeInNewWindow.
+ */
+export class OpenFolderInNewWindowFromExtensionAction extends Action2 {
+  static readonly ID = '_workbench.openFolderInNewWindow'
+
+  constructor() {
+    super({ id: OpenFolderInNewWindowFromExtensionAction.ID, title: 'Open Folder in New Window' })
+  }
+
+  override async run(accessor: ServicesAccessor, fsPath: string): Promise<void> {
+    if (!fsPath) return
+    await accessor.get(IWindowsService).openWindow(URI.file(fsPath))
   }
 }

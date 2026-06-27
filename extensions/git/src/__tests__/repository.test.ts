@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { gitPrimaryInputCommand, Repository } from '../repository.js'
+import { gitPrimaryInputCommand, parseWorktrees, Repository } from '../repository.js'
 
 interface FakeCommand {
   readonly command: string
@@ -179,6 +179,63 @@ describe('gitPrimaryInputCommand', () => {
       title: 'Commit',
       disabled: true,
     })
+  })
+})
+
+describe('parseWorktrees', () => {
+  it('parses the main worktree, a branch worktree, and a detached one', () => {
+    const out = [
+      'worktree /repo/main',
+      'HEAD abc123',
+      'branch refs/heads/main',
+      '',
+      'worktree /repo.worktrees/feature',
+      'HEAD def456',
+      'branch refs/heads/feature',
+      '',
+      'worktree /repo.worktrees/loose',
+      'HEAD 789aaa',
+      'detached',
+      '',
+    ].join('\n')
+
+    const result = parseWorktrees(out)
+    expect(result).toEqual([
+      {
+        path: '/repo/main',
+        branch: 'main',
+        head: 'abc123',
+        bare: false,
+        detached: false,
+        isMain: true,
+      },
+      {
+        path: '/repo.worktrees/feature',
+        branch: 'feature',
+        head: 'def456',
+        bare: false,
+        detached: false,
+        isMain: false,
+      },
+      {
+        path: '/repo.worktrees/loose',
+        branch: undefined,
+        head: '789aaa',
+        bare: false,
+        detached: true,
+        isMain: false,
+      },
+    ])
+  })
+
+  it('marks a bare main worktree', () => {
+    const out = ['worktree /repo/bare', 'bare', ''].join('\n')
+    const [main] = parseWorktrees(out)
+    expect(main).toMatchObject({ path: '/repo/bare', bare: true, isMain: true, branch: undefined })
+  })
+
+  it('returns an empty list for empty output', () => {
+    expect(parseWorktrees('')).toEqual([])
   })
 })
 

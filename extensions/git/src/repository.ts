@@ -8,7 +8,7 @@
  * All git work goes through `gitExec` (argv arrays, no shell). `refresh` is
  * re-entrant-safe: a change arriving mid-refresh queues exactly one more run.
  */
-import { basename, join, relative } from 'node:path'
+import { basename, dirname, join, relative } from 'node:path'
 import { watch, type FSWatcher } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
@@ -140,6 +140,74 @@ export interface RepoStatus {
   readonly behind: number
   /** Non-null while an operation runs: the spinner text + kind to display. */
   readonly busy: { readonly text: string; readonly kind: 'syncing' | 'spinning' } | undefined
+}
+
+/** A single linked working tree, as reported by `git worktree list --porcelain`. */
+export interface WorktreeInfo {
+  readonly path: string
+  /** Short branch name, or undefined when detached / bare. */
+  readonly branch: string | undefined
+  /** Abbreviated-or-full HEAD commit, or undefined for a bare worktree. */
+  readonly head: string | undefined
+  readonly bare: boolean
+  readonly detached: boolean
+  /** The first entry is always the main working tree. */
+  readonly isMain: boolean
+}
+
+/**
+ * Parse `git worktree list --porcelain` output. Records are blank-line separated;
+ * each line is a `key value` pair (or a bare key like `bare` / `detached`). The
+ * first record is the main working tree. `branch` carries a full ref
+ * (`refs/heads/x`) which we shorten for display.
+ */
+export function parseWorktrees(stdout: string): WorktreeInfo[] {
+  const result: WorktreeInfo[] = []
+  let path: string | undefined
+  let head: string | undefined
+  let branch: string | undefined
+  let bare = false
+  let detached = false
+
+  const flush = (): void => {
+    if (path === undefined) return
+    result.push({ path, branch, head, bare, detached, isMain: result.length === 0 })
+    path = undefined
+    head = undefined
+    branch = undefined
+    bare = false
+    detached = false
+  }
+
+  for (const raw of stdout.split('\n')) {
+    const line = raw.trimEnd()
+    if (line === '') {
+      flush()
+      continue
+    }
+    const sep = line.indexOf(' ')
+    const key = sep === -1 ? line : line.slice(0, sep)
+    const value = sep === -1 ? '' : line.slice(sep + 1)
+    switch (key) {
+      case 'worktree':
+        path = value
+        break
+      case 'HEAD':
+        head = value
+        break
+      case 'branch':
+        branch = value.startsWith('refs/heads/') ? value.slice('refs/heads/'.length) : value
+        break
+      case 'bare':
+        bare = true
+        break
+      case 'detached':
+        detached = true
+        break
+    }
+  }
+  flush()
+  return result
 }
 
 export class Repository {
@@ -602,6 +670,119 @@ export class Repository {
     const name = await window.showInputBox({ prompt: 'Name of the new branch' })
     if (!name) return
     await this._run(['checkout', '-b', name.trim()], 'create branch')
+  }
+
+  private async _listWorktrees(): Promise<WorktreeInfo[]> {
+    const res = await gitExec(['worktree', 'list', '--porcelain'], this.root, this._log)
+    if (res.exitCode !== 0) return []
+    return parseWorktrees(res.stdout)
+  }
+
+  /** Human-readable ref for a worktree: its branch, short detached HEAD, or bare. */
+  private _worktreeRef(wt: WorktreeInfo): string {
+    if (wt.bare) return 'bare'
+    if (wt.branch) return wt.branch
+    if (wt.head) return `(detached at ${wt.head.slice(0, 8)})`
+    return ''
+  }
+
+  async createWorktree(): Promise<void> {
+    const CREATE_NEW = '$(plus) Create new branch…'
+    const branches = await this._listBranches()
+    const pick = await window.showQuickPick([CREATE_NEW, ...branches], {
+      placeHolder: 'Select a branch to create the worktree from',
+    })
+    if (!pick) return
+
+    let ref = pick
+    const newBranch = pick === CREATE_NEW
+    if (newBranch) {
+      const name = await window.showInputBox({ prompt: 'Name of the new branch' })
+      if (!name) return
+      ref = name.trim()
+    }
+
+    // Default location mirrors VSCode: a sibling `<repo>.worktrees/<name>` folder.
+    const safeName = ref.replace(/[/\\]/g, '-')
+    const defaultPath = join(dirname(this.root), `${basename(this.root)}.worktrees`, safeName)
+    const path = await window.showInputBox({
+      prompt: 'Worktree location',
+      value: defaultPath,
+    })
+    if (!path) return
+
+    const args = newBranch
+      ? ['worktree', 'add', '-b', ref, path.trim()]
+      : ['worktree', 'add', path.trim(), ref]
+    const ok = await this._run(args, 'create worktree', {
+      text: 'Creating worktree…',
+      kind: 'spinning',
+    })
+    if (!ok) return
+
+    const open = await window.showInformationMessage(
+      `Worktree created at ${path.trim()}.`,
+      'Open in New Window',
+      'Open',
+    )
+    if (open === 'Open') {
+      await commands.executeCommand('_workbench.openFolder', path.trim())
+    } else if (open === 'Open in New Window') {
+      await commands.executeCommand('_workbench.openFolderInNewWindow', path.trim())
+    }
+  }
+
+  async openWorktree(newWindow: boolean): Promise<void> {
+    const worktrees = (await this._listWorktrees()).filter((wt) => !wt.bare)
+    if (worktrees.length <= 1) {
+      void window.showInformationMessage('No other worktrees to open.')
+      return
+    }
+    const pick = await window.showQuickPick(
+      worktrees.map((wt) => ({
+        label: basename(wt.path),
+        description: this._worktreeRef(wt),
+        detail: wt.path,
+      })),
+      { placeHolder: newWindow ? 'Open worktree in new window' : 'Open worktree' },
+    )
+    if (!pick) return
+    await commands.executeCommand(
+      newWindow ? '_workbench.openFolderInNewWindow' : '_workbench.openFolder',
+      pick.detail,
+    )
+  }
+
+  async deleteWorktree(): Promise<void> {
+    const worktrees = (await this._listWorktrees()).filter((wt) => !wt.isMain && !wt.bare)
+    if (worktrees.length === 0) {
+      void window.showInformationMessage('No worktrees to delete.')
+      return
+    }
+    const pick = await window.showQuickPick(
+      worktrees.map((wt) => ({
+        label: basename(wt.path),
+        description: this._worktreeRef(wt),
+        detail: wt.path,
+      })),
+      { placeHolder: 'Select a worktree to delete' },
+    )
+    if (!pick) return
+
+    const res = await gitExec(['worktree', 'remove', pick.detail], this.root, this._log)
+    if (res.exitCode !== 0) {
+      // A dirty or locked worktree refuses removal — offer a forced delete.
+      const force = await window.showWarningMessage(
+        `Worktree '${pick.label}' has changes or is locked. Delete anyway?`,
+        'Delete',
+      )
+      if (force === 'Delete') {
+        await this._run(['worktree', 'remove', '--force', pick.detail], 'delete worktree')
+      }
+      return
+    }
+    await gitExec(['worktree', 'prune'], this.root, this._log)
+    await this.refresh()
   }
 
   /**
