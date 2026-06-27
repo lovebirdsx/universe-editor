@@ -12,6 +12,18 @@
   ${EndIf}
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
 
+  ; Add context menu entries to Windows Explorer (user-level, no admin required).
+  ; Uses HKCU\Software\Classes which Windows merges with HKCR for the current user.
+  WriteRegStr HKCU "Software\Classes\*\shell\Open with Universe Editor" "" "用 Universe Editor 打开"
+  WriteRegStr HKCU "Software\Classes\*\shell\Open with Universe Editor" "Icon" "$INSTDIR\Universe Editor.exe,0"
+  WriteRegStr HKCU "Software\Classes\*\shell\Open with Universe Editor\command" "" '"$INSTDIR\Universe Editor.exe" "%1"'
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Open with Universe Editor" "" "用 Universe Editor 打开"
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Open with Universe Editor" "Icon" "$INSTDIR\Universe Editor.exe,0"
+  WriteRegStr HKCU "Software\Classes\Directory\shell\Open with Universe Editor\command" "" '"$INSTDIR\Universe Editor.exe" "%V"'
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Open with Universe Editor" "" "用 Universe Editor 打开"
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Open with Universe Editor" "Icon" "$INSTDIR\Universe Editor.exe,0"
+  WriteRegStr HKCU "Software\Classes\Directory\Background\shell\Open with Universe Editor\command" "" '"$INSTDIR\Universe Editor.exe" "%V"'
+
   ; Offer to add a Windows Defender exclusion for the install directory. Without
   ; it, Defender full-scans the ~80MB app.asar on first read every cold start,
   ; adding seconds of startup latency. Opting in needs admin rights (one UAC
@@ -28,6 +40,11 @@
 !macroend
 
 !macro customUnInstall
+  ; Remove context menu entries from Windows Explorer.
+  DeleteRegKey HKCU "Software\Classes\*\shell\Open with Universe Editor"
+  DeleteRegKey HKCU "Software\Classes\Directory\shell\Open with Universe Editor"
+  DeleteRegKey HKCU "Software\Classes\Directory\Background\shell\Open with Universe Editor"
+
   ; Remove $INSTDIR\bin from user PATH via PowerShell string manipulation.
   nsExec::Exec 'powershell -WindowStyle Hidden -Command "[Environment]::SetEnvironmentVariable(\"PATH\", (([Environment]::GetEnvironmentVariable(\"PATH\", \"User\").Split(\";\") | Where-Object { $$_ -ne \"$INSTDIR\bin\" }) -join \";\"), \"User\")"'
   SendMessage ${HWND_BROADCAST} ${WM_SETTINGCHANGE} 0 "STR:Environment" /TIMEOUT=5000
