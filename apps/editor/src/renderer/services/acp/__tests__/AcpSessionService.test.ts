@@ -1002,6 +1002,46 @@ describe('AcpSessionService — startup timeout', () => {
     expect(s.messages.get().at(-1)?.text).toMatch(/timed out/)
     svc.dispose()
   })
+
+  it('does not lose or hang a prompt queued before a failed connection', async () => {
+    const client = new FakeAcpClientService({ stubOptions: { initializeHangs: true } })
+    const config = new ConfigurationService()
+    await config.update('acp.startupTimeoutMs', 50)
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      config,
+      new StubNotificationService(),
+      { executeCommand: async () => undefined } as never,
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      makeHistory(),
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
+      FAKE_HOST,
+    )
+    const s = await svc.createSession()
+    // Submit a prompt while still connecting — it is buffered by the connection
+    // state machine. This fire-and-forget promise must settle (never hang) even
+    // when the connection ultimately fails.
+    const queued = s.sendPrompt('do the thing')
+    // The user's message surfaces immediately regardless of connection state.
+    expect(s.messages.get().some((m) => m.role === 'user' && m.text === 'do the thing')).toBe(true)
+    await s.whenConnected()
+    // The queued prompt promise settles (the prior implementation could leave it
+    // pending forever); the connection failure is visible as an [error] message.
+    await expect(queued).resolves.toBeUndefined()
+    expect(s.status.get()).toBe('errored')
+    expect(s.messages.get().some((m) => m.text.startsWith('[error]'))).toBe(true)
+    // The queued prompt was never dispatched onto a dead connection.
+    expect(client.connected[0]?.agent.promptCalls).toEqual([])
+    svc.dispose()
+  })
 })
 
 describe('AcpSessionService — mcpServers capability gating', () => {

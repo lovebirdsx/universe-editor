@@ -34,6 +34,7 @@ import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
 import type { DiffHunk } from './diff/reconstructBaseline.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
+import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 import { parseMcpToolName, type McpTransport } from './acpMcpServers.js'
@@ -480,27 +481,17 @@ export class AcpSession extends Disposable implements IAcpSession {
    * completes. `undefined` while the session is still connecting (or after a
    * connection failure).
    */
-  private _conn: IAcpClientConnection | undefined
+  private get _conn(): IAcpClientConnection | undefined {
+    return this._connection.conn
+  }
 
   /**
-   * Prompts the user submitted before the connection was ready. Flushed in
-   * order by {@link attachConnection}; dropped by {@link failConnection}. Each
-   * carries the resolve/reject of the original `sendPrompt` promise so callers
-   * still observe completion.
+   * Connection lifecycle state machine: owns the connecting → connected/failed/
+   * closed phase, the `whenConnected` gate, and the prompts queued while
+   * connecting (each carrying its caller's resolve/reject so a queued prompt is
+   * dispatched exactly once on connect, or rejected on failure — never lost).
    */
-  private readonly _queuedPrompts: Array<{
-    readonly text: string
-    readonly mentions: readonly PromptMention[]
-  }> = []
-
-  /** True once attach or fail has settled the connecting phase. */
-  private _connectionSettled = false
-
-  /** Resolved when the connecting phase settles; see {@link whenConnected}. */
-  private _resolveConnected!: () => void
-  private readonly _whenConnected = new Promise<void>((resolve) => {
-    this._resolveConnected = resolve
-  })
+  private readonly _connection = new AcpSessionConnection()
 
   constructor(
     readonly id: string,
@@ -592,10 +583,8 @@ export class AcpSession extends Disposable implements IAcpSession {
    * after `session/new` (or `session/load`) returns.
    */
   attachConnection(conn: IAcpClientConnection, sessionIdOnAgent: string): void {
-    if (this._connectionSettled) return
-    this._connectionSettled = true
-    this._resolveConnected()
-    this._conn = conn
+    const drained = this._connection.open(conn)
+    if (this._connection.phase !== 'connected') return
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
     // Connection close → seal the session.
     const onClose = (): void => {
@@ -620,7 +609,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this._pendingTitle !== undefined) {
       this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleIsAi)
     }
-    this._flushQueuedPrompts()
+    this._flushQueuedPrompts(drained)
     // Now that the connection + sessionId exist, push any configOption values
     // that were overridden for display but not yet adopted by the agent.
     this._configOptions.flushPendingPushes()
@@ -629,13 +618,11 @@ export class AcpSession extends Disposable implements IAcpSession {
   /**
    * Abort the connecting phase after a spawn/initialize/newSession failure.
    * Marks the session errored, surfaces the reason on the timeline, and rejects
-   * any queued prompts so their callers don't hang.
+   * any queued prompts so their callers don't hang (and so the dropped prompt is
+   * observable instead of silently lost).
    */
   failConnection(message: string): void {
-    if (this._connectionSettled) return
-    this._connectionSettled = true
-    this._resolveConnected()
-    this._queuedPrompts.length = 0
+    if (!this._connection.fail(message)) return
     if (this.status.get() === 'connecting') {
       this._appendMessage('agent', `[error] ${message}`)
       this.status.set('errored', undefined)
@@ -643,7 +630,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   whenConnected(): Promise<void> {
-    return this._whenConnected
+    return this._connection.whenSettled()
   }
 
   beginHistoryReplay(): void {
@@ -654,11 +641,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.isReplayingHistory.set(false, undefined)
   }
 
-  private _flushQueuedPrompts(): void {
-    if (this._queuedPrompts.length === 0) return
-    const queued = this._queuedPrompts.splice(0, this._queuedPrompts.length)
+  private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
-      void this._dispatchPrompt(q.text, q.mentions)
+      this._dispatchPrompt(q.text, q.mentions).then(q.resolve, q.reject)
     }
   }
 
@@ -771,8 +756,17 @@ export class AcpSession extends Disposable implements IAcpSession {
     // is ready (queued) so the prompt is not lost.
     this._appendMessage('user', text)
     void this._maybeGenerateTitle(text)
-    if (!this._connectionSettled) {
-      this._queuedPrompts.push({ text, mentions: mentions ?? [] })
+    // Still connecting — buffer the prompt; the returned promise settles when it
+    // is eventually dispatched (on connect) or rejected (on connection failure).
+    if (!this._connection.isSettled) {
+      try {
+        await this._connection.enqueue(text, mentions ?? [])
+      } catch {
+        // Connection failed before this queued prompt could be dispatched. The
+        // failure is already surfaced as an [error] timeline message by
+        // failConnection; swallow here so fire-and-forget callers (PromptInput)
+        // don't see an unhandled rejection.
+      }
       return
     }
     // Connection failed during startup — nothing to dispatch onto.
@@ -954,10 +948,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._commitBatchedTx()
     this._finalizeRunningSegment()
     this.status.set('closed', undefined)
-    // Unblock anyone awaiting the handshake — a session closed mid-connect
-    // never reaches attach/fail, so settle the gate here to avoid a hang.
-    this._connectionSettled = true
-    this._resolveConnected()
+    // Unblock anyone awaiting the handshake and reject any still-queued prompts
+    // — a session closed mid-connect never reaches attach/fail, so settle the
+    // connection here to avoid a hang.
+    this._connection.close()
     this._abortAllInFlight()
     this._cancelPending()
     this._messages = []
