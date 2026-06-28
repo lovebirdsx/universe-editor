@@ -169,6 +169,19 @@ describe('AcpChatWidgetService', () => {
     expect(svc.focusSessionInput('missing')).toBe(false)
   })
 
+  it('widgetForSession returns the latest registered widget for that session, or undefined', () => {
+    const oldA = makeWidget('old-a', 's1')
+    const b = makeWidget('b', 's2')
+    const newA = makeWidget('new-a', 's1')
+    svc.register(oldA.widget)
+    svc.register(b.widget)
+    svc.register(newA.widget)
+
+    expect(svc.widgetForSession('s1')).toBe(newA.widget)
+    expect(svc.widgetForSession('s2')).toBe(b.widget)
+    expect(svc.widgetForSession('missing')).toBeUndefined()
+  })
+
   it('registering a container that already has the active descendant seeds focused=true', () => {
     const container = document.createElement('div')
     const input = document.createElement('input')

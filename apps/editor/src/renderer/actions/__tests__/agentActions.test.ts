@@ -113,7 +113,13 @@ describe('Agent timeline navigation actions', () => {
       _serviceBrand: undefined,
       lastFocusedWidget: widget,
       register: vi.fn(),
+      widgetForSession: () => undefined,
     } as unknown as IAcpChatWidgetService)
+    // No active session editor → resolveNavWidget falls back to lastFocusedWidget.
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('t.activeEditor', undefined),
+    } as unknown as IEditorService)
     const inst = new InstantiationService(services)
     inst.invokeFunction((accessor) => {
       CommandsRegistry.getCommand(commandId)!.handler(accessor)
@@ -171,6 +177,62 @@ describe('Agent timeline navigation actions', () => {
     run(ScrollAcpTimelinePageDownAction.ID, pageDown.widget)
     expect(pageDown.scrollTimeline).toHaveBeenCalledWith('pageDown')
     expect(pageDown.moveTimeline).not.toHaveBeenCalled()
+  })
+
+  // The chat is reachable from the keyboard whenever a session editor is active
+  // AND focus is in the editor area, even if DOM focus never entered its timeline
+  // (read-only foreign session, which focuses the editor group body).
+  it('binds nav keys when a session editor is active and the editor area has focus', () => {
+    disposables.push(registerAction2(FocusTopAcpTimelineAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    ctx.createKey<boolean>('editorAreaFocus', true)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+a', ctx)).toBe(FocusTopAcpTimelineAction.ID)
+  })
+
+  // The whole point of the editorAreaFocus conjunct: a session editor can be the
+  // active editor while focus sits elsewhere (command palette, focused terminal /
+  // panel, sidebar). The nav keys must NOT fire there.
+  it('does not bind nav keys when a session editor is active but focus is outside the editor area', () => {
+    disposables.push(registerAction2(FocusTopAcpTimelineAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<string>('activeEditorTypeId', AcpSessionEditorInput.TYPE_ID)
+    ctx.createKey<boolean>('editorAreaFocus', false)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+a', ctx)).toBeUndefined()
+  })
+
+  it('does not bind nav keys when neither focused nor a session editor is active', () => {
+    disposables.push(registerAction2(FocusTopAcpTimelineAction))
+    const ctx = new ContextKeyService()
+    ctx.createKey<string>('activeEditorTypeId', 'some.other.editor')
+    ctx.createKey<boolean>('editorAreaFocus', true)
+    expect(KeybindingsRegistry.resolveKeybinding('alt+a', ctx)).toBeUndefined()
+  })
+
+  // Routing: when the active editor is a session editor, the command targets that
+  // session's widget via widgetForSession — even if lastFocusedWidget is undefined
+  // (focus never landed in the read-only chat).
+  it('routes to the active session editor widget when focus never entered the chat', () => {
+    disposables.push(registerAction2(FocusTopAcpTimelineAction))
+    const w = makeWidget()
+    const services = new ServiceCollection()
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      lastFocusedWidget: undefined,
+      register: vi.fn(),
+      widgetForSession: (id: string) => (id === 'sess-1' ? w.widget : undefined),
+    } as unknown as IAcpChatWidgetService)
+    const input = { sessionId: 'sess-1' }
+    Object.setPrototypeOf(input, AcpSessionEditorInput.prototype)
+    services.set(IEditorService, {
+      _serviceBrand: undefined,
+      activeEditor: observableValue<unknown>('t.activeEditor', input),
+    } as unknown as IEditorService)
+    const inst = new InstantiationService(services)
+    inst.invokeFunction((accessor) => {
+      CommandsRegistry.getCommand(FocusTopAcpTimelineAction.ID)!.handler(accessor)
+    })
+    expect(w.moveTimeline).toHaveBeenCalledWith('first')
   })
 })
 

@@ -210,18 +210,16 @@ function ChatSessionBody({
   // loading placeholder rather than flashing the empty-session hint; the replay
   // flag clears once history lands. Freshly-created sessions never set it, so
   // their empty timeline still renders the hint immediately.
-  if (isReplayingHistory && !hasTimelineContent) {
-    return (
-      <div className={styles['sessionLoading']} data-testid="acp-session-replaying">
-        <div className={styles['sessionLoadingHeader']}>
-          <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
-          <p className={styles['sessionLoadingMessage']}>
-            {localize('acp.session.resuming', 'Resuming agent session...')}
-          </p>
-        </div>
-      </div>
-    )
-  }
+  //
+  // The placeholder is rendered INSIDE the `acp-chat` container (not as an early
+  // return that replaces it) so `containerRef` stays attached and the widget
+  // registration effect above keeps running. An early return here mounts a div
+  // without the ref, so the effect saw `containerRef.current === null` and never
+  // registered the widget; since its deps don't include `isReplayingHistory`, it
+  // never re-ran once the replay finished either, leaving `lastFocusedWidget`
+  // undefined forever — Ctrl+Alt+I and all timeline-nav commands went dead for
+  // resumed sessions (regression from 50d30bd8).
+  const replaying = isReplayingHistory && !hasTimelineContent
 
   const chatClassName = hasTimelineContent
     ? styles['chat']
@@ -233,27 +231,40 @@ function ChatSessionBody({
       data-testid="acp-chat"
       data-readonly={readOnly ? 'true' : 'false'}
     >
-      <StickyUserMessageBar key={`user:${session.id}`} session={session} />
-      <StickyPlanBar key={`plan:${session.id}`} session={session} />
-      <ChatScroll
-        key={session.id}
-        session={session}
-        handleRef={handleRef}
-        onFindVisibleChange={handleFindVisibleChange}
-      />
-      {readOnly ? (
-        <ReadOnlyChatFooter session={session} />
+      {replaying ? (
+        <div className={styles['sessionLoading']} data-testid="acp-session-replaying">
+          <div className={styles['sessionLoadingHeader']}>
+            <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+            <p className={styles['sessionLoadingMessage']}>
+              {localize('acp.session.resuming', 'Resuming agent session...')}
+            </p>
+          </div>
+        </div>
       ) : (
         <>
-          <PermissionCard session={session} />
-          <QuestionCard key={`question:${session.id}`} session={session} />
-          <PromptInput
-            key={`prompt:${session.id}`}
+          <StickyUserMessageBar key={`user:${session.id}`} session={session} />
+          <StickyPlanBar key={`plan:${session.id}`} session={session} />
+          <ChatScroll
+            key={session.id}
             session={session}
             handleRef={handleRef}
-            onPopoverOpenChange={handlePopoverOpenChange}
-            {...(autoFocus !== undefined ? { autoFocus } : {})}
+            onFindVisibleChange={handleFindVisibleChange}
           />
+          {readOnly ? (
+            <ReadOnlyChatFooter session={session} />
+          ) : (
+            <>
+              <PermissionCard session={session} />
+              <QuestionCard key={`question:${session.id}`} session={session} />
+              <PromptInput
+                key={`prompt:${session.id}`}
+                session={session}
+                handleRef={handleRef}
+                onPopoverOpenChange={handlePopoverOpenChange}
+                {...(autoFocus !== undefined ? { autoFocus } : {})}
+              />
+            </>
+          )}
         </>
       )}
     </div>

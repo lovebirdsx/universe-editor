@@ -73,6 +73,11 @@ export interface IAcpChatWidgetService {
   readonly lastFocusedWidget: AcpChatWidget | undefined
   register(widget: AcpChatWidget): IDisposable
   focusSessionInput(sessionId: string): boolean
+  /** The registered widget for a session id, or undefined if none is mounted.
+   *  Used to route session-scoped commands (timeline nav / find / copy) to the
+   *  widget behind the active session editor even when DOM focus never landed
+   *  inside it (e.g. a read-only foreign session). */
+  widgetForSession(sessionId: string): AcpChatWidget | undefined
   /** Push a widget's popover open/closed state; the service flips
    *  `acpPromptPopupVisible` on iff the *focused* widget's popover is open. */
   setPopoverOpen(widget: AcpChatWidget, open: boolean): void
@@ -157,13 +162,18 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   }
 
   focusSessionInput(sessionId: string): boolean {
+    const target = this.widgetForSession(sessionId)
+    if (!target) return false
+    target.focusInput()
+    return true
+  }
+
+  widgetForSession(sessionId: string): AcpChatWidget | undefined {
     let target: AcpChatWidget | undefined
     for (const entry of this._entries.values()) {
       if (entry.widget.sessionId === sessionId) target = entry.widget
     }
-    if (!target) return false
-    target.focusInput()
-    return true
+    return target
   }
 
   // The popover gates its commands on the *focused* widget, so a blurred input

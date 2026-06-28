@@ -33,7 +33,7 @@ import { IAcpSessionService, type IAcpSession } from '../services/acp/acpSession
 import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
+import { IAcpChatWidgetService, type AcpChatWidget } from '../services/acp/acpChatWidgetService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
@@ -45,6 +45,34 @@ import type {
 } from '@agentclientprotocol/sdk'
 
 const CATEGORY = localize2('command.category.agents', 'Agents')
+
+// Gate for session-scoped navigation commands (timeline move/scroll, collapse,
+// find-open, font, copy). The chat widget can be driven two ways:
+//   - DOM focus is inside a chat container (sidebar ChatPanel or an editor whose
+//     timeline the user clicked) → `acpChatFocused`.
+//   - the active editor is a session editor AND focus is somewhere in the editor
+//     area (notably a read-only foreign session, which auto-focuses the editor
+//     group body rather than a chat input) → `editorAreaFocus && activeEditorTypeId`.
+// The `editorAreaFocus` conjunct is what keeps these keys from firing when the
+// active editor merely *happens* to be a session while focus sits elsewhere — the
+// command palette, a focused terminal/panel, or a sidebar view. `activeEditorTypeId`
+// (NOT the group-scoped `activeEditorType` used by the editor title menus) is the
+// root context key that global keybinding resolution can see.
+const ACP_NAV_WHEN = `acpChatFocused || (editorAreaFocus && activeEditorTypeId == '${AcpSessionEditorInput.TYPE_ID}')`
+
+// Resolve which chat widget a session command should target. Prefer the widget
+// behind the active session editor (so commands work even when DOM focus never
+// landed in its timeline); otherwise fall back to whichever chat last held focus
+// (the sidebar case, and any non-editor focus path).
+function resolveNavWidget(accessor: ServicesAccessor): AcpChatWidget | undefined {
+  const widgets = accessor.get(IAcpChatWidgetService)
+  const active = accessor.get(IEditorService).activeEditor.get()
+  if (active instanceof AcpSessionEditorInput) {
+    const w = widgets.widgetForSession(active.sessionId)
+    if (w) return w
+  }
+  return widgets.lastFocusedWidget
+}
 
 export class NewAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.newSession'
@@ -162,7 +190,7 @@ export class FocusAgentInputAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.focusInput()
+    resolveNavWidget(accessor)?.focusInput()
   }
 }
 
@@ -594,8 +622,8 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
       category: CATEGORY,
       icon: 'timeline-next',
       keybinding: [
-        { primary: 'alt+down', when: 'acpChatFocused' },
-        { primary: 'alt+j', when: 'acpChatFocused' },
+        { primary: 'alt+down', when: ACP_NAV_WHEN },
+        { primary: 'alt+j', when: ACP_NAV_WHEN },
       ],
       menu: [
         {
@@ -609,7 +637,7 @@ export class FocusNextAcpTimelineItemAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('next')
+    resolveNavWidget(accessor)?.moveTimeline('next')
   }
 }
 
@@ -622,8 +650,8 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
       category: CATEGORY,
       icon: 'timeline-prev',
       keybinding: [
-        { primary: 'alt+up', when: 'acpChatFocused' },
-        { primary: 'alt+k', when: 'acpChatFocused' },
+        { primary: 'alt+up', when: ACP_NAV_WHEN },
+        { primary: 'alt+k', when: ACP_NAV_WHEN },
       ],
       menu: [
         {
@@ -637,7 +665,7 @@ export class FocusPreviousAcpTimelineItemAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('prev')
+    resolveNavWidget(accessor)?.moveTimeline('prev')
   }
 }
 
@@ -650,8 +678,8 @@ export class FocusTopAcpTimelineAction extends Action2 {
       category: CATEGORY,
       icon: 'timeline-top',
       keybinding: [
-        { primary: 'alt+home', when: 'acpChatFocused' },
-        { primary: 'alt+a', when: 'acpChatFocused' },
+        { primary: 'alt+home', when: ACP_NAV_WHEN },
+        { primary: 'alt+a', when: ACP_NAV_WHEN },
       ],
       menu: [
         {
@@ -665,7 +693,7 @@ export class FocusTopAcpTimelineAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('first')
+    resolveNavWidget(accessor)?.moveTimeline('first')
   }
 }
 
@@ -678,8 +706,8 @@ export class FocusBottomAcpTimelineAction extends Action2 {
       category: CATEGORY,
       icon: 'timeline-bottom',
       keybinding: [
-        { primary: 'alt+end', when: 'acpChatFocused' },
-        { primary: 'alt+e', when: 'acpChatFocused' },
+        { primary: 'alt+end', when: ACP_NAV_WHEN },
+        { primary: 'alt+e', when: ACP_NAV_WHEN },
       ],
       menu: [
         {
@@ -693,7 +721,7 @@ export class FocusBottomAcpTimelineAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.moveTimeline('last')
+    resolveNavWidget(accessor)?.moveTimeline('last')
   }
 }
 
@@ -705,7 +733,7 @@ export class JumpToAcpPlanAction extends Action2 {
       title: localize2('action.agent.jumpToPlan', 'Jump to Plan'),
       category: CATEGORY,
       icon: 'go-to-plan',
-      keybinding: { primary: 'alt+p', when: 'acpChatFocused' },
+      keybinding: { primary: 'alt+p', when: ACP_NAV_WHEN },
       menu: [
         {
           id: MenuId.EditorTitle,
@@ -718,7 +746,7 @@ export class JumpToAcpPlanAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.jumpToPlan()
+    resolveNavWidget(accessor)?.jumpToPlan()
   }
 }
 
@@ -754,15 +782,15 @@ export class ScrollAcpTimelineUpAction extends Action2 {
       title: localize2('action.agent.scrollTimelineUp', 'Scroll Timeline Up'),
       category: CATEGORY,
       keybinding: [
-        { primary: 'ctrl+alt+up', when: 'acpChatFocused' },
-        { primary: 'ctrl+alt+k', when: 'acpChatFocused' },
+        { primary: 'ctrl+alt+up', when: ACP_NAV_WHEN },
+        { primary: 'ctrl+alt+k', when: ACP_NAV_WHEN },
       ],
-      precondition: 'acpChatFocused',
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('up')
+    resolveNavWidget(accessor)?.scrollTimeline('up')
   }
 }
 
@@ -774,16 +802,16 @@ export class ScrollAcpTimelineDownAction extends Action2 {
       title: localize2('action.agent.scrollTimelineDown', 'Scroll Timeline Down'),
       category: CATEGORY,
       keybinding: [
-        { primary: 'ctrl+alt+down', when: 'acpChatFocused' },
-        { primary: 'ctrl+alt+j', when: 'acpChatFocused' },
+        { primary: 'ctrl+alt+down', when: ACP_NAV_WHEN },
+        { primary: 'ctrl+alt+j', when: ACP_NAV_WHEN },
       ],
-      precondition: 'acpChatFocused',
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
 
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('down')
+    resolveNavWidget(accessor)?.scrollTimeline('down')
   }
 }
 
@@ -794,13 +822,13 @@ export class ScrollAcpTimelinePageUpAction extends Action2 {
       id: ScrollAcpTimelinePageUpAction.ID,
       title: localize2('action.agent.scrollTimelinePageUp', 'Scroll Timeline Page Up'),
       category: CATEGORY,
-      keybinding: [{ primary: 'ctrl+alt+pageup', when: 'acpChatFocused' }],
-      precondition: 'acpChatFocused',
+      keybinding: [{ primary: 'ctrl+alt+pageup', when: ACP_NAV_WHEN }],
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('pageUp')
+    resolveNavWidget(accessor)?.scrollTimeline('pageUp')
   }
 }
 
@@ -811,13 +839,13 @@ export class ScrollAcpTimelinePageDownAction extends Action2 {
       id: ScrollAcpTimelinePageDownAction.ID,
       title: localize2('action.agent.scrollTimelinePageDown', 'Scroll Timeline Page Down'),
       category: CATEGORY,
-      keybinding: [{ primary: 'ctrl+alt+pagedown', when: 'acpChatFocused' }],
-      precondition: 'acpChatFocused',
+      keybinding: [{ primary: 'ctrl+alt+pagedown', when: ACP_NAV_WHEN }],
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('pageDown')
+    resolveNavWidget(accessor)?.scrollTimeline('pageDown')
   }
 }
 
@@ -828,13 +856,13 @@ export class ScrollAcpTimelineToTopAction extends Action2 {
       id: ScrollAcpTimelineToTopAction.ID,
       title: localize2('action.agent.scrollTimelineToTop', 'Scroll Timeline to Top'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+alt+home', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'ctrl+alt+home', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('top')
+    resolveNavWidget(accessor)?.scrollTimeline('top')
   }
 }
 
@@ -845,13 +873,13 @@ export class ScrollAcpTimelineToBottomAction extends Action2 {
       id: ScrollAcpTimelineToBottomAction.ID,
       title: localize2('action.agent.scrollTimelineToBottom', 'Scroll Timeline to Bottom'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+alt+end', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'ctrl+alt+end', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.scrollTimeline('bottom')
+    resolveNavWidget(accessor)?.scrollTimeline('bottom')
   }
 }
 
@@ -862,13 +890,13 @@ export class ToggleAcpTimelineItemCollapseAction extends Action2 {
       id: ToggleAcpTimelineItemCollapseAction.ID,
       title: localize2('action.agent.toggleTimelineItemCollapse', 'Toggle Timeline Item Collapse'),
       category: CATEGORY,
-      keybinding: { primary: 'alt+f', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'alt+f', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.toggleCollapse()
+    resolveNavWidget(accessor)?.toggleCollapse()
   }
 }
 
@@ -879,13 +907,13 @@ export class CycleAcpTimelineCollapseAction extends Action2 {
       id: CycleAcpTimelineCollapseAction.ID,
       title: localize2('action.agent.cycleTimelineCollapse', 'Cycle Timeline Collapse (All)'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+alt+f', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'ctrl+alt+f', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.cycleCollapseMode()
+    resolveNavWidget(accessor)?.cycleCollapseMode()
   }
 }
 
@@ -993,7 +1021,7 @@ export class ChatFindAction extends Action2 {
       title: localize2('action.agent.find', 'Find in Session'),
       category: CATEGORY,
       icon: 'search',
-      keybinding: { primary: 'ctrl+f', when: 'acpChatFocused' },
+      keybinding: { primary: 'ctrl+f', when: ACP_NAV_WHEN },
       menu: [
         {
           id: MenuId.EditorTitle,
@@ -1006,7 +1034,7 @@ export class ChatFindAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.openFind()
+    resolveNavWidget(accessor)?.openFind()
   }
 }
 
@@ -1021,7 +1049,7 @@ export class ChatFindNextAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.findNext()
+    resolveNavWidget(accessor)?.findNext()
   }
 }
 
@@ -1036,7 +1064,7 @@ export class ChatFindPreviousAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.findPrev()
+    resolveNavWidget(accessor)?.findPrev()
   }
 }
 
@@ -1051,7 +1079,7 @@ export class ChatFindCloseAction extends Action2 {
     })
   }
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IAcpChatWidgetService).lastFocusedWidget?.closeFind()
+    resolveNavWidget(accessor)?.closeFind()
   }
 }
 
@@ -1067,13 +1095,13 @@ export class CopyFocusedAcpMessageAction extends Action2 {
       id: CopyFocusedAcpMessageAction.ID,
       title: localize2('action.agent.copyFocusedMessage', 'Copy Message'),
       category: CATEGORY,
-      precondition: 'acpChatFocused',
+      precondition: ACP_NAV_WHEN,
       menu: [{ id: MenuId.AcpChatContext, group: '1_copy', order: 1 }],
       f1: true,
     })
   }
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const text = accessor.get(IAcpChatWidgetService).lastFocusedWidget?.getFocusedText()
+    const text = resolveNavWidget(accessor)?.getFocusedText()
     if (text) await navigator.clipboard.writeText(text)
   }
 }
@@ -1134,8 +1162,8 @@ export class IncreaseAgentFontSizeAction extends Action2 {
       id: IncreaseAgentFontSizeAction.ID,
       title: localize2('action.agent.increaseFontSize', 'Increase Chat Font Size'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+=', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'ctrl+=', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
@@ -1153,8 +1181,8 @@ export class DecreaseAgentFontSizeAction extends Action2 {
       id: DecreaseAgentFontSizeAction.ID,
       title: localize2('action.agent.decreaseFontSize', 'Decrease Chat Font Size'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+-', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'ctrl+-', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }
@@ -1172,8 +1200,8 @@ export class ResetAgentFontSizeAction extends Action2 {
       id: ResetAgentFontSizeAction.ID,
       title: localize2('action.agent.resetFontSize', 'Reset Chat Font Size'),
       category: CATEGORY,
-      keybinding: { primary: 'ctrl+0', when: 'acpChatFocused' },
-      precondition: 'acpChatFocused',
+      keybinding: { primary: 'ctrl+0', when: ACP_NAV_WHEN },
+      precondition: ACP_NAV_WHEN,
       f1: true,
     })
   }

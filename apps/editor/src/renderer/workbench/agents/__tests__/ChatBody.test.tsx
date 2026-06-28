@@ -161,6 +161,9 @@ function makeInstantiation(
       onRegister?.(w)
       return { dispose() {} }
     },
+    focusSessionInput: () => false,
+    setPopoverOpen: () => {},
+    setFindVisible: () => {},
   } as unknown as IAcpChatWidgetService)
   services.set(IFileService, stubFileService)
   services.set(IFileSearchService, stubFileSearch)
@@ -377,7 +380,10 @@ describe('ChatBody — empty session hint', () => {
     const { container } = renderChat(makeSession('s1', [], { isReplayingHistory: true }))
     expect(container.querySelector('[data-testid="acp-session-replaying"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).toBeNull()
-    expect(container.querySelector('[data-testid="acp-chat"]')).toBeNull()
+    // The chat container stays mounted (its ref drives widget registration); the
+    // placeholder renders inside it instead of the timeline.
+    expect(container.querySelector('[data-testid="acp-chat"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="acp-timeline"]')).toBeNull()
   })
 
   it('renders the timeline (not the placeholder) once replayed content has landed', () => {
@@ -417,6 +423,43 @@ describe('ChatBody — empty session hint', () => {
       'workbench.action.agent.resumeSession',
       'workbench.action.agent.selectAgent',
     ])
+  })
+})
+
+describe('ChatBody — widget registration during resume', () => {
+  // Regression for 50d30bd8: resuming a session renders the "Resuming…" loading
+  // placeholder while its history replays. The placeholder early-returned BEFORE
+  // the `ref={containerRef}` chat container mounted, so the register effect saw a
+  // null ref and never registered the widget. Because the effect's deps don't
+  // include `isReplayingHistory`, it also never re-ran once the replay finished —
+  // leaving `lastFocusedWidget` undefined forever, so Ctrl+Alt+I and every
+  // timeline-navigation command went dead for resumed sessions.
+  it('registers the chat widget while a resumed session is still replaying history', () => {
+    const { widgetRef } = renderChatWithWidget(makeSession('s1', [], { isReplayingHistory: true }))
+    expect(widgetRef.current).toBeDefined()
+  })
+
+  it('keeps a registered, navigable widget after the replay finishes', () => {
+    const session = makeSession('s1', [], { isReplayingHistory: true })
+    const { container, widgetRef } = renderChatWithWidget(session)
+    act(() => {
+      ;(session.timeline as ReturnType<typeof observableValue<readonly TimelineItem[]>>).set(
+        [
+          { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+          { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
+        ],
+        undefined,
+      )
+      ;(session.isReplayingHistory as ReturnType<typeof observableValue<boolean>>).set(
+        false,
+        undefined,
+      )
+    })
+    expect(widgetRef.current).toBeDefined()
+    act(() => {
+      widgetRef.current!.moveTimeline('last')
+    })
+    expect(slotEl(container, 'm:b').className).toContain(focusedClass)
   })
 })
 
