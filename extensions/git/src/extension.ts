@@ -237,7 +237,15 @@ export async function activate(context: ExtensionContext): Promise<void> {
     commands.registerCommand('git.submoduleSync', (arg) => mgr.resolveRepo(arg)?.submoduleSync()),
 
     // Git Graph — read-only data source for the renderer's Git Graph editor.
-    commands.registerCommand('git-graph.getRepos', () => getGitGraphRepos(root, scanOpts, log)),
+    commands.registerCommand('git-graph.getRepos', async () => {
+      const list = await getGitGraphRepos(root, scanOpts, log)
+      // Surface the current graph root first so the renderer can treat repos[0]
+      // as "the default repo" — it skips a redundant reload when the SCM view
+      // selects that same default on first open.
+      return [...list].sort((a, b) =>
+        norm(a.root) === norm(gitGraphRoot) ? -1 : norm(b.root) === norm(gitGraphRoot) ? 1 : 0,
+      )
+    }),
     commands.registerCommand('git-graph.setRepo', (...args: unknown[]) => {
       const next = args[0] as string
       if (next) gitGraphRoot = next

@@ -543,7 +543,16 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     if (!scmSelectedRepo) return
     if (repos.length === 0) return
     if (!repos.find((r) => r.root === scmSelectedRepo)) return
-    if (scmSelectedRepo === selectedRepo) return
+    // On first open `selectedRepo` is still null, but the initial load already
+    // targeted the extension's default repo — the first discovered repo (the
+    // main repo). When the SCM-selected repo matches that default, only adopt it
+    // as our selection: issuing a reload would re-fetch identical data and flash
+    // a second "loading" (the first-open double-load).
+    const effectiveRepo = selectedRepo ?? repos[0]?.root ?? null
+    if (scmSelectedRepo === effectiveRepo) {
+      if (selectedRepo === null) setSelectedRepo(scmSelectedRepo)
+      return
+    }
     onSelectRepo(scmSelectedRepo)
   }, [scmSelectedRepo, repos, selectedRepo, onSelectRepo])
 
