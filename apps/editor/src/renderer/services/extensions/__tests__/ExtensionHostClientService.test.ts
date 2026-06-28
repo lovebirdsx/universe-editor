@@ -16,12 +16,14 @@ import {
   type IDialogService,
   type IEditorService,
   type IFileService,
+  type ILayoutService,
   type ILoggerService,
   type INotificationService,
   type IOutputService,
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
+  type IViewsService,
   type IWorkspaceService,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
@@ -110,6 +112,8 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
     {} as IEditorService,
     {} as IAiModelService,
     {} as IStorageService,
+    {} as ILayoutService,
+    {} as IViewsService,
   )
 }
 

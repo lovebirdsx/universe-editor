@@ -22,6 +22,7 @@ import {
   type IDialogService,
   type IEditorService,
   type IFileService,
+  type ILayoutService,
   type ILogger,
   type INotificationService,
   type IOutputChannel,
@@ -29,6 +30,7 @@ import {
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
+  type IViewsService,
 } from '@universe-editor/platform'
 import {
   ExtHostChannels,
@@ -77,6 +79,8 @@ export interface HostConnectionDeps {
   /** Wired only for the trusted connection — persisted extension state. */
   readonly storage?: IStorageService
   readonly output: IOutputService
+  readonly layout: ILayoutService
+  readonly views: IViewsService
   readonly stderr: IOutputChannel
   readonly logger: ILogger
   readonly ledger: CommandOwnershipLedger
@@ -189,7 +193,7 @@ export class HostConnection extends Disposable {
     const mainThreadFs = new MainThreadFs(workspaceRoot, deps.pathPolicy, deps.files)
     server.registerChannel(ExtHostChannels.mainThreadFs, ProxyChannel.fromService(mainThreadFs))
 
-    const mainThreadOutput = store.add(new MainThreadOutput(deps.output))
+    const mainThreadOutput = store.add(new MainThreadOutput(deps.output, deps.layout, deps.views))
     server.registerChannel(
       ExtHostChannels.mainThreadOutput,
       ProxyChannel.fromService(mainThreadOutput),

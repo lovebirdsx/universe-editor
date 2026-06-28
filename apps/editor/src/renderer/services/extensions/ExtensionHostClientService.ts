@@ -21,12 +21,14 @@ import {
   IDialogService,
   IEditorService,
   IFileService,
+  ILayoutService,
   ILoggerService,
   INotificationService,
   IOutputService,
   IQuickInputService,
   IStatusBarService,
   IStorageService,
+  IViewsService,
   IWorkspaceService,
   Severity,
   type Event,
@@ -130,6 +132,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     @IEditorService private readonly _editorService: IEditorService,
     @IAiModelService private readonly _aiModel: IAiModelService,
     @IStorageService private readonly _storage: IStorageService,
+    @ILayoutService private readonly _layout: ILayoutService,
+    @IViewsService private readonly _views: IViewsService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'extHostClient', name: 'Extension Host' })
@@ -224,6 +228,8 @@ export class ExtensionHostClientService extends Disposable implements IExtension
           }
         : {}),
       output: this._output,
+      layout: this._layout,
+      views: this._views,
       stderr,
       logger: this._logger,
       ledger: {
