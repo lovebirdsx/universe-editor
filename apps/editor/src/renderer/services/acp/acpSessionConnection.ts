@@ -26,6 +26,7 @@
 
 import type { IAcpClientConnection } from './acpClientService.js'
 import type { PromptMention } from './promptMentions.js'
+import { AcpConnectionError } from './acpErrors.js'
 
 export type AcpConnectionPhase = 'connecting' | 'connected' | 'failed' | 'closed'
 
@@ -42,16 +43,10 @@ export interface QueuedPrompt {
 }
 
 /**
- * Error a queued prompt is rejected with when the connection fails before it
- * could be dispatched. Distinct from AcpAbortError (local cancel) so callers can
- * tell "the agent never started" apart from "the user cancelled".
+ * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
+ * historical `acpSessionConnection` import path keeps working.
  */
-export class AcpConnectionError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'AcpConnectionError'
-  }
-}
+export { AcpConnectionError }
 
 export class AcpSessionConnection {
   private _phase: AcpConnectionPhase = 'connecting'

@@ -112,29 +112,14 @@ export {
   type IAcpSessionInitState,
   type TimelineItem,
 } from './acpSession.js'
+import { AcpForeignWorktreeError } from './acpErrors.js'
 
 /**
- * Thrown when resume is attempted for a session whose `cwd` does not match the
- * currently open workspace folder. Resuming would spawn the agent against the
- * session's own cwd (a sibling worktree) while the UI's file tree / SCM / search
- * stay on the current folder — a split-brain where edits land in the wrong repo.
- * The UI catches this and routes the user through the cross-worktree activation
- * flow (open the owning worktree in a new window, or switch the current one)
- * instead of silently spawning.
+ * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
+ * historical `acpSessionService` import path keeps working — the UI's
+ * cross-worktree activation flow catches this by type.
  */
-export class AcpForeignWorktreeError extends Error {
-  constructor(
-    readonly sessionId: string,
-    readonly sessionCwd: string,
-    readonly currentCwd: string | undefined,
-  ) {
-    super(
-      `Session ${sessionId} belongs to ${sessionCwd}, which is not the open workspace` +
-        `${currentCwd ? ` (${currentCwd})` : ''}`,
-    )
-    this.name = 'AcpForeignWorktreeError'
-  }
-}
+export { AcpForeignWorktreeError }
 
 export interface IAcpSessionService {
   readonly _serviceBrand: undefined

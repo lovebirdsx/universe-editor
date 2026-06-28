@@ -1,0 +1,422 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Agent session lifecycle commands: new / cancel / open-in-editor / open-view /
+ *  toggle-location / focus-input / select-agent / resume / clear-history /
+ *  refresh / switch-session.
+ *--------------------------------------------------------------------------------------------*/
+
+import {
+  Action2,
+  IDialogService,
+  IEditorService,
+  IHostService,
+  IInstantiationService,
+  INotificationService,
+  IQuickInputService,
+  IViewsService,
+  IWorkspaceService,
+  ILayoutService,
+  MenuId,
+  PartId,
+  Severity,
+  arePathsEqual,
+  localize,
+  localize2,
+  type IQuickPickItem,
+  type ServicesAccessor,
+} from '@universe-editor/platform'
+import { IAcpSessionService } from '../services/acp/acpSessionService.js'
+import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry.js'
+import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
+import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
+import { CATEGORY, resolveNavWidget } from './_agentShared.js'
+
+export class NewAgentSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.newSession'
+  constructor() {
+    super({
+      id: NewAgentSessionAction.ID,
+      title: localize2('action.agent.newSession', 'New Agent Session'),
+      keybinding: { primary: 'ctrl+alt+n' },
+      category: CATEGORY,
+      menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 1 }],
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const sessions = accessor.get(IAcpSessionService)
+    const registry = accessor.get(IAcpAgentRegistry)
+    const layout = accessor.get(ILayoutService)
+    const views = accessor.get(IViewsService)
+    const location = accessor.get(IAcpChatLocationService)
+    const editor = accessor.get(IEditorService)
+    const inst = accessor.get(IInstantiationService)
+    const session = await sessions.createSession(registry.defaultAgentId())
+    if (location.location.get() === 'editor') {
+      editor.openEditor(
+        inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+      )
+    } else {
+      // Sidebar mode: just make sure the Agents view is visible so the new
+      // session is reachable.
+      if (!layout.getVisible(PartId.SecondarySideBar)) {
+        layout.toggleVisible(PartId.SecondarySideBar)
+      }
+      views.openViewContainer('workbench.view.agents')
+    }
+  }
+}
+
+export class CancelAgentTurnAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.cancelTurn'
+  constructor() {
+    super({
+      id: CancelAgentTurnAction.ID,
+      title: localize2('action.agent.cancelTurn', 'Cancel Agent Turn'),
+      category: CATEGORY,
+      keybinding: { primary: 'ctrl+shift+escape' },
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const session = accessor.get(IAcpSessionService).activeSession.get()
+    if (session) await session.cancelTurn()
+  }
+}
+
+export class OpenAgentInEditorAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openInEditor'
+  constructor() {
+    super({
+      id: OpenAgentInEditorAction.ID,
+      title: localize2('action.agent.openInEditor', 'Open Agent Session in Editor'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    // Flip the global location flag so the side-effect handler opens the
+    // active session as a tab and (if it was docked) clears the sidebar
+    // version. Callers that simply want a tab opened still get the same
+    // outcome — the location service is idempotent on its current value.
+    accessor.get(IAcpChatLocationService).setLocation('editor')
+  }
+}
+
+export class OpenAgentViewAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.openView'
+  constructor() {
+    super({
+      id: OpenAgentViewAction.ID,
+      title: localize2('action.agent.openView', 'Open Agents View'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor
+      .get(ILayoutService)
+      .focusView('workbench.view.agents.main', { source: 'command' })
+  }
+}
+
+export class ToggleAgentChatLocationAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.toggleChatLocation'
+  constructor() {
+    super({
+      id: ToggleAgentChatLocationAction.ID,
+      title: localize2('action.agent.toggleChatLocation', 'Toggle Agent Chat Location'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IAcpChatLocationService).toggle()
+  }
+}
+
+export class FocusAgentInputAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.focusInput'
+  constructor() {
+    super({
+      id: FocusAgentInputAction.ID,
+      title: localize2('action.agent.focusInput', 'Focus Agent Input'),
+      category: CATEGORY,
+      keybinding: { primary: 'ctrl+alt+i' },
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor): void {
+    resolveNavWidget(accessor)?.focusInput()
+  }
+}
+
+export class SelectAgentAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.selectAgent'
+  constructor() {
+    super({
+      id: SelectAgentAction.ID,
+      title: localize2('action.agent.selectAgent', 'Choose Agent Then New Session…'),
+      category: CATEGORY,
+      menu: [{ id: MenuId.AcpChatContext, group: '2_session', order: 2 }],
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    // Resolve every service up-front: the accessor is only valid during this
+    // synchronous frame, so reaching for it after an `await` (the health probe
+    // or the quick pick below) throws "service accessor is only valid …".
+    const registry = accessor.get(IAcpAgentRegistry)
+    const quickInput = accessor.get(IQuickInputService)
+    const sessions = accessor.get(IAcpSessionService)
+    const agents = registry.list()
+    const healths = await Promise.all(agents.map((a) => registry.health(a.id)))
+    const items: IQuickPickItem[] = agents.map((d, i) => {
+      const available = healths[i]?.available ?? false
+      return {
+        id: d.id,
+        label: d.name,
+        description: d.command,
+        ...(available
+          ? {}
+          : {
+              detail: localize(
+                'agent.selectAgent.unavailable',
+                'Not installed (command not found in PATH)',
+              ),
+            }),
+      }
+    })
+    const picked = await quickInput.pick(items, {
+      placeholder: localize('agent.selectAgent.placeholder', 'Select default ACP agent'),
+    })
+    if (!picked) return
+    // Persist the user's choice as the new default so the next "New session" uses
+    // the same agent. The original code only created a session without writing this.
+    registry.setDefaultAgentId(picked.id)
+    await sessions.createSession(picked.id)
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Resume / clear session history (Stage 10).
+//
+// History is anchored on the agent's own session id and stamped with the
+// workspace cwd at creation time. ResumeAgentSessionAction is a thin shim
+// over `IAcpSessionService.resumeSession`: the service handles the agent
+// capability gate, session/load round-trip, and rollback on failure. The
+// action just renders the picker and opens the Agents view on success.
+// ---------------------------------------------------------------------------
+
+function relativeTime(timestamp: number): string {
+  const diff = Date.now() - timestamp
+  if (diff < 60_000) return localize('agent.history.justNow', 'just now')
+  if (diff < 3_600_000)
+    return localize('agent.history.minutesAgo', '{count}m ago', {
+      count: Math.floor(diff / 60_000),
+    })
+  if (diff < 86_400_000)
+    return localize('agent.history.hoursAgo', '{count}h ago', {
+      count: Math.floor(diff / 3_600_000),
+    })
+  return localize('agent.history.daysAgo', '{count}d ago', {
+    count: Math.floor(diff / 86_400_000),
+  })
+}
+
+export class ResumeAgentSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.resumeSession'
+  constructor() {
+    super({
+      id: ResumeAgentSessionAction.ID,
+      title: localize2('action.agent.resumeSession', 'Resume Agent Session…'),
+      keybinding: { primary: 'ctrl+shift+h' },
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const history = accessor.get(IAcpSessionHistoryService)
+    const sessions = accessor.get(IAcpSessionService)
+    const quickInput = accessor.get(IQuickInputService)
+    const notification = accessor.get(INotificationService)
+    const layout = accessor.get(ILayoutService)
+    const views = accessor.get(IViewsService)
+    const location = accessor.get(IAcpChatLocationService)
+    const editor = accessor.get(IEditorService)
+    const inst = accessor.get(IInstantiationService)
+    const workspace = accessor.get(IWorkspaceService)
+    const platform = accessor.get(IHostService).platform
+
+    const entries = history.list()
+    if (entries.length === 0) {
+      notification.notify({
+        severity: Severity.Info,
+        message: localize('agent.history.empty', 'No previous agent sessions.'),
+      })
+      return
+    }
+
+    const items: IQuickPickItem[] = entries.map((e) => ({
+      id: e.id,
+      label: e.title,
+      description: e.agentId,
+      iconId: agentIconId(e.agentId),
+      detail: e.cwd
+        ? localize('agent.history.detail', '{time} · {cwd}', {
+            time: relativeTime(e.lastUsedAt),
+            cwd: e.cwd,
+          })
+        : relativeTime(e.lastUsedAt),
+    }))
+
+    const picked = await quickInput.pick(items, {
+      placeholder: localize('agent.resumeSession.placeholder', 'Resume previous agent session'),
+    })
+    if (!picked || !picked.id) return
+
+    // A session whose cwd differs from the open folder must not be resumed live —
+    // that would spawn the agent against a sibling worktree behind this window's
+    // UI (split-brain). Mirror SessionListBody: open it as a read-only preview tab
+    // (the editor resumes it via session/load read-only and lets the user activate
+    // the owning worktree from there) instead of letting resumeSession throw an
+    // AcpForeignWorktreeError into the empty catch below — which looked like the
+    // pick did nothing at all.
+    const entry = entries.find((e) => e.id === picked.id)
+    const currentCwd = workspace.current?.folder.fsPath
+    if (
+      entry &&
+      entry.cwd !== undefined &&
+      currentCwd !== undefined &&
+      !arePathsEqual(entry.cwd, currentCwd, platform)
+    ) {
+      editor.openEditor(
+        inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),
+      )
+      return
+    }
+
+    try {
+      const session = await sessions.resumeSession(picked.id)
+      if (location.location.get() === 'editor') {
+        editor.openEditor(
+          inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+        )
+      } else {
+        sessions.setActive(session.id)
+        if (!layout.getVisible(PartId.SecondarySideBar)) {
+          layout.toggleVisible(PartId.SecondarySideBar)
+        }
+        views.openViewContainer('workbench.view.agents')
+      }
+    } catch {
+      // resumeSession publishes its own notification; nothing to do.
+    }
+  }
+}
+
+export class ClearAgentSessionHistoryAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.clearHistory'
+  constructor() {
+    super({
+      id: ClearAgentSessionHistoryAction.ID,
+      title: localize2('action.agent.clearHistory', 'Clear Agent Session History'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const history = accessor.get(IAcpSessionHistoryService)
+    const dialog = accessor.get(IDialogService)
+    const notification = accessor.get(INotificationService)
+
+    const count = history.list().length
+    if (count === 0) {
+      notification.notify({
+        severity: Severity.Info,
+        message: localize('agent.history.empty', 'No previous agent sessions.'),
+      })
+      return
+    }
+
+    const result = await dialog.confirm({
+      type: 'warning',
+      message: localize('agent.history.clear.confirm', 'Clear all {count} session entries?', {
+        count,
+      }),
+      detail: localize(
+        'agent.history.clear.detail',
+        'This only removes the local history index. Conversations remain stored on the agent side until it prunes them.',
+      ),
+      primaryButton: localize('agent.history.clear.primary', 'Clear'),
+    })
+    if (!result.confirmed) return
+    history.clear()
+    notification.notify({
+      severity: Severity.Info,
+      message: localize('agent.history.clear.done', 'Agent session history cleared.'),
+    })
+  }
+}
+
+export class RefreshAgentSessionsAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.refreshSessions'
+  constructor() {
+    super({
+      id: RefreshAgentSessionsAction.ID,
+      title: localize2('action.agent.refreshSessions', 'Refresh Agent Session List'),
+      category: CATEGORY,
+      f1: true,
+    })
+  }
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    await accessor.get(IAcpSessionService).refreshSessions()
+  }
+}
+
+interface SessionSwitchPickItem extends IQuickPickItem {
+  readonly windowId: number
+  readonly sessionId: string
+}
+
+export class SwitchSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.switchSession'
+  constructor() {
+    super({
+      id: SwitchSessionAction.ID,
+      title: localize2('action.agent.switchSession', 'Switch Session…'),
+      category: CATEGORY,
+      keybinding: { primary: 'alt+s' },
+      menu: [{ id: MenuId.AcpChatContext, group: '3_switch', order: 1 }],
+      f1: true,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor): Promise<void> {
+    const switcher = accessor.get(ISessionSwitcherService)
+    const quickInput = accessor.get(IQuickInputService)
+    const activeSessionId = accessor.get(IAcpSessionService).activeSession.get()?.id
+    const sessions = await switcher.getAllSessions()
+    if (sessions.length === 0) return
+    const items: SessionSwitchPickItem[] = sessions.map((s: SessionSummary) => ({
+      id: `${s.windowId}.${s.sessionId}`,
+      leadingLabel:
+        s.workspaceName.length > 0
+          ? s.workspaceName
+          : localize('agent.switchSession.untitled', 'Untitled'),
+      label: s.title,
+      statusIconId: s.status,
+      windowId: s.windowId,
+      sessionId: s.sessionId,
+    }))
+    const activeItemId = items.find((it) => it.sessionId === activeSessionId)?.id
+    const pick = await quickInput.pick<SessionSwitchPickItem>(items, {
+      placeholder: localize('agent.switchSession.placeholder', 'Switch to a session in any window'),
+      ...(activeItemId !== undefined ? { activeItemId } : {}),
+    })
+    if (!pick) return
+    await switcher.reveal(pick.windowId, pick.sessionId)
+  }
+}

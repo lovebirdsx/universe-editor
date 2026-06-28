@@ -345,13 +345,7 @@ export interface IAcpSession {
 }
 
 /**
- * Local error type signalling "the in-flight prompt was cancelled locally
- * (via cancelTurn)". Distinct from RequestError so callers can map it to a
- * neutral status instead of an error UI.
+ * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
+ * historical `acpSessionModel` / `acpSession` import paths keep working.
  */
-export class AcpAbortError extends Error {
-  constructor(message = 'Aborted') {
-    super(message)
-    this.name = 'AcpAbortError'
-  }
-}
+export { AcpAbortError } from './acpErrors.js'
