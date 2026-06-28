@@ -273,6 +273,14 @@ describe('classifyWorktreeRemoveFailure', () => {
     expect(classifyWorktreeRemoveFailure('fatal: working tree is locked')).toBe('dirty-or-locked')
   })
 
+  it('treats a worktree with submodules as submodule', () => {
+    expect(
+      classifyWorktreeRemoveFailure(
+        'fatal: working trees containing submodules cannot be moved or removed',
+      ),
+    ).toBe('submodule')
+  })
+
   it('falls back to other for unrecognized errors', () => {
     expect(classifyWorktreeRemoveFailure('fatal: not a working tree')).toBe('other')
     expect(classifyWorktreeRemoveFailure('')).toBe('other')

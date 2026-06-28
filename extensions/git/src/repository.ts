@@ -146,7 +146,7 @@ export interface RepoStatus {
 export { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
 import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
 
-export type WorktreeRemoveFailure = 'busy' | 'dirty-or-locked' | 'other'
+export type WorktreeRemoveFailure = 'busy' | 'dirty-or-locked' | 'submodule' | 'other'
 
 /**
  * Classify why `git worktree remove` failed from its stderr. A worktree whose
@@ -154,7 +154,9 @@ export type WorktreeRemoveFailure = 'busy' | 'dirty-or-locked' | 'other'
  * an editor window opened on that worktree, or its integrated terminal — fails
  * with EBUSY/EPERM/EINVAL-style messages that `--force` cannot fix; deleting it
  * needs the holding process closed first. A dirty or locked worktree, by
- * contrast, is exactly what `--force` is for.
+ * contrast, is exactly what `--force` is for. A worktree with initialized
+ * submodules is refused outright by git (even with `--force`); it must have its
+ * submodules deinitialized first.
  */
 export function classifyWorktreeRemoveFailure(stderr: string): WorktreeRemoveFailure {
   const msg = stderr.toLowerCase()
@@ -168,6 +170,9 @@ export function classifyWorktreeRemoveFailure(stderr: string): WorktreeRemoveFai
     msg.includes('operation not permitted')
   ) {
     return 'busy'
+  }
+  if (msg.includes('containing submodules')) {
+    return 'submodule'
   }
   if (
     msg.includes('contains modified or untracked files') ||
@@ -763,14 +768,15 @@ export class Repository {
   /**
    * Remove the worktree at `path`, classifying failures: a folder still held by a
    * running process (an editor window / terminal) can't be forced and needs the
-   * holder closed; a dirty-or-locked worktree offers a `--force` retry. `label` is
-   * the human name used in messages. Refreshes the SCM view on success.
+   * holder closed; a dirty-or-locked worktree offers a `--force` retry; a worktree
+   * with initialized submodules — which git refuses to remove even with `--force` —
+   * has its submodules deinitialized first, then retries. `label` is the human name
+   * used in messages. Refreshes the SCM view on success.
    */
   async removeWorktreeAt(path: string, label: string): Promise<void> {
     const res = await gitExec(['worktree', 'remove', path], this.root, this._log)
     if (res.exitCode === 0) {
-      await gitExec(['worktree', 'prune'], this.root, this._log)
-      await this.refresh()
+      await this._finishWorktreeRemoval()
       return
     }
 
@@ -778,13 +784,12 @@ export class Repository {
     const reason = classifyWorktreeRemoveFailure(stderr)
 
     if (reason === 'busy') {
-      // A directory still held by a running process — typically an editor window
-      // open on this worktree or its terminal. `--force` can't help; the holder
-      // must be closed first. Don't offer a forced delete that's bound to fail.
-      void window.showErrorMessage(
-        `Can't delete worktree '${label}': its folder is in use. ` +
-          `Close any editor windows or terminals opened on ${path} and try again.`,
-      )
+      this._notifyWorktreeBusy(label, path)
+      return
+    }
+
+    if (reason === 'submodule') {
+      await this._removeWorktreeWithSubmodules(path, label)
       return
     }
 
@@ -796,16 +801,14 @@ export class Repository {
       if (force === 'Delete') {
         const forced = await gitExec(['worktree', 'remove', '--force', path], this.root, this._log)
         if (forced.exitCode === 0) {
-          await gitExec(['worktree', 'prune'], this.root, this._log)
-          await this.refresh()
+          await this._finishWorktreeRemoval()
           return
         }
-        const forcedErr = gitErrorText(forced)
-        if (classifyWorktreeRemoveFailure(forcedErr) === 'busy') {
-          void window.showErrorMessage(
-            `Can't delete worktree '${label}': its folder is in use. ` +
-              `Close any editor windows or terminals opened on ${path} and try again.`,
-          )
+        const forcedReason = classifyWorktreeRemoveFailure(gitErrorText(forced))
+        if (forcedReason === 'busy') {
+          this._notifyWorktreeBusy(label, path)
+        } else if (forcedReason === 'submodule') {
+          await this._removeWorktreeWithSubmodules(path, label)
         } else {
           await notifyGitFailure('delete worktree', forced)
         }
@@ -814,6 +817,49 @@ export class Repository {
     }
 
     await notifyGitFailure('delete worktree', res)
+  }
+
+  /**
+   * Git refuses to remove a worktree that still has initialized submodules, even
+   * with `--force`. Deinitialize them inside the worktree first (this empties the
+   * submodule dirs so git no longer treats them as live working trees), then retry
+   * the forced removal.
+   */
+  private async _removeWorktreeWithSubmodules(path: string, label: string): Promise<void> {
+    this._beginProgress('Deinitializing submodules…', 'spinning')
+    try {
+      const deinit = await gitExec(['submodule', 'deinit', '--all', '--force'], path, this._log)
+      if (deinit.exitCode !== 0) {
+        await notifyGitFailure('deinitialize submodules', deinit)
+        return
+      }
+    } finally {
+      this._endProgress()
+    }
+
+    const forced = await gitExec(['worktree', 'remove', '--force', path], this.root, this._log)
+    if (forced.exitCode === 0) {
+      await this._finishWorktreeRemoval()
+      return
+    }
+    if (classifyWorktreeRemoveFailure(gitErrorText(forced)) === 'busy') {
+      this._notifyWorktreeBusy(label, path)
+    } else {
+      await notifyGitFailure('delete worktree', forced)
+    }
+  }
+
+  /** Prune stale worktree metadata and refresh the SCM view after a removal. */
+  private async _finishWorktreeRemoval(): Promise<void> {
+    await gitExec(['worktree', 'prune'], this.root, this._log)
+    await this.refresh()
+  }
+
+  private _notifyWorktreeBusy(label: string, path: string): void {
+    void window.showErrorMessage(
+      `Can't delete worktree '${label}': its folder is in use. ` +
+        `Close any editor windows or terminals opened on ${path} and try again.`,
+    )
   }
 
   /**
