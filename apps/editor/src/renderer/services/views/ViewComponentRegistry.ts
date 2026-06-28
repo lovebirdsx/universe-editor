@@ -9,7 +9,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ComponentType } from 'react'
-import { IDisposable, toDisposable } from '@universe-editor/platform'
+import {
+  IDisposable,
+  IViewDescriptor,
+  ViewRegistry,
+  combinedDisposable,
+  toDisposable,
+} from '@universe-editor/platform'
 
 export interface IViewComponentRegistry {
   register(componentKey: string, component: ComponentType): IDisposable
@@ -34,3 +40,23 @@ class ViewComponentRegistryImpl implements IViewComponentRegistry {
 }
 
 export const ViewComponentRegistry: IViewComponentRegistry = new ViewComponentRegistryImpl()
+
+/** A view descriptor minus the renderer-only componentKey (derived from `id`). */
+export type ViewRegistration = Omit<IViewDescriptor, 'componentKey'>
+
+/**
+ * Single-point view registration: declares the descriptor and binds its React
+ * component together, deriving a stable componentKey from the view `id`. This
+ * removes the cross-file hardcoded-string coupling of the old "three places to
+ * edit" flow (descriptor + componentKey + component binding). Extensions may
+ * still use the lower-level `ViewRegistry.registerView` + `ViewComponentRegistry.register`.
+ */
+export function registerViewWithComponent(
+  registration: ViewRegistration,
+  component: ComponentType,
+): IDisposable {
+  return combinedDisposable(
+    ViewRegistry.registerView({ ...registration, componentKey: registration.id }),
+    ViewComponentRegistry.register(registration.id, component),
+  )
+}

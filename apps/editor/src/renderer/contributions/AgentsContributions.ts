@@ -17,11 +17,13 @@ import {
   PartId,
   ViewContainerLocation,
   ViewContainerRegistry,
-  ViewRegistry,
   autorun,
   localize,
   type IEditorGroup,
 } from '@universe-editor/platform'
+import { registerViewWithComponent } from '../services/views/ViewComponentRegistry.js'
+import { AgentsView } from '../workbench/agents/AgentsView.js'
+import { McpServersView } from '../workbench/agents/McpServersView.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
@@ -225,23 +227,27 @@ export class AgentsViewContainerContribution extends Disposable implements IWork
     )
 
     this._register(
-      ViewRegistry.registerView({
-        id: 'workbench.view.agents.main',
-        name: localize('view.agents.main', 'Agents'),
-        containerId: 'workbench.view.agents',
-        componentKey: 'agents.main',
-        order: 1,
-      }),
+      registerViewWithComponent(
+        {
+          id: 'workbench.view.agents.main',
+          name: localize('view.agents.main', 'Agents'),
+          containerId: 'workbench.view.agents',
+          order: 1,
+        },
+        AgentsView,
+      ),
     )
 
     this._register(
-      ViewRegistry.registerView({
-        id: 'workbench.view.agents.mcp',
-        name: localize('view.agents.mcp', 'MCP Servers'),
-        containerId: 'workbench.view.agents',
-        componentKey: 'agents.mcp',
-        order: 2,
-      }),
+      registerViewWithComponent(
+        {
+          id: 'workbench.view.agents.mcp',
+          name: localize('view.agents.mcp', 'MCP Servers'),
+          containerId: 'workbench.view.agents',
+          order: 2,
+        },
+        McpServersView,
+      ),
     )
   }
 }
