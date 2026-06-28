@@ -9,6 +9,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { app } from 'electron'
 import {
   createNamedLogger,
@@ -17,6 +18,9 @@ import {
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
+import { buildChildEnv } from '../process/env.js'
+import { decodeDiagnostic } from '../process/decode.js'
+import { ManagedChildProcess } from '../process/managedChildProcess.js'
 import type {
   AcpExitEvent,
   AcpLaunchSpec,
@@ -100,65 +104,9 @@ const defaultLookup: AcpCommandLookup = (command) =>
   })
 
 interface ProcEntry {
-  readonly proc: ChildProcessWithoutNullStreams
+  readonly proc: ManagedChildProcess
+  readonly stdoutDecoder: StringDecoder
   exited: boolean
-}
-
-/**
- * Environment variables that must NOT leak into the agent subprocess:
- *   - ELECTRON_RUN_AS_NODE / ELECTRON_NO_ATTACH_CONSOLE / ELECTRON_FORCE_IS_PACKAGED
- *     would make a Node-shaped child reinterpret its own entrypoint as an
- *     Electron helper.
- *   - NODE_OPTIONS could inject `--inspect` (debug port hijack) or
- *     `--require ./evil.js` (arbitrary code execution before the agent code).
- * The agent process is untrusted; treat it like a sandbox boundary even though
- * we still share PATH/HOME/USER/locale variables.
- */
-const ENV_DENYLIST: readonly string[] = [
-  'ELECTRON_RUN_AS_NODE',
-  'ELECTRON_NO_ATTACH_CONSOLE',
-  'ELECTRON_FORCE_IS_PACKAGED',
-  'ELECTRON_DEFAULT_ERROR_MODE',
-  'ELECTRON_ENABLE_LOGGING',
-  'ELECTRON_ENABLE_STACK_DUMPING',
-  'NODE_OPTIONS',
-]
-
-/**
- * Diagnostic-stream (stderr) decoder. stdout carries the UTF-8 JSON-RPC wire and
- * is decoded as UTF-8; stderr, however, can come from the `cmd.exe` shell shim
- * on Windows, which emits messages in the console's OEM code page (e.g. GBK/936
- * on zh-CN) — decoding those as UTF-8 produces mojibake. We try strict UTF-8
- * first (covers the agent's own Node stderr) and fall back to gb18030, which
- * round-trips any byte sequence and is a superset of the GBK family.
- */
-const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true })
-const OEM_FALLBACK = makeFallbackDecoder()
-
-function makeFallbackDecoder(): InstanceType<typeof TextDecoder> {
-  try {
-    return new TextDecoder('gb18030')
-  } catch {
-    return new TextDecoder('utf-8')
-  }
-}
-
-function sanitizeEnv(
-  base: NodeJS.ProcessEnv,
-  overrides: Readonly<Record<string, string>> | undefined,
-): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(base)) {
-    if (ENV_DENYLIST.includes(k)) continue
-    out[k] = v
-  }
-  if (overrides) {
-    for (const [k, v] of Object.entries(overrides)) {
-      if (ENV_DENYLIST.includes(k)) continue
-      out[k] = v
-    }
-  }
-  return out
 }
 
 export class AcpHostMainService extends Disposable implements IAcpHostService {
@@ -194,7 +142,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
         new Error(`AcpHost: cwd must be an absolute path, got ${JSON.stringify(spec.cwd)}`),
       )
     }
-    const env = sanitizeEnv(process.env, spec.env)
+    const env = buildChildEnv(process.env, spec.env ? { overrides: spec.env } : {})
     const options: { cwd?: string; env?: NodeJS.ProcessEnv; shell?: boolean } = { env }
     if (spec.cwd !== undefined) options.cwd = spec.cwd
     if (spec.shell !== undefined) options.shell = spec.shell
@@ -212,9 +160,12 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       options.shell = false
     }
 
-    let proc: ChildProcessWithoutNullStreams
+    let proc: ManagedChildProcess
     try {
-      proc = this._spawn(command, args, options)
+      proc = new ManagedChildProcess(this._spawn(command, args, options), {
+        logger: this._logger,
+        label: handle,
+      })
     } catch (err) {
       this._logger.warn(
         `spawn failed handle=${handle} command=${command}: ${(err as Error).message}`,
@@ -222,38 +173,36 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
       return Promise.reject(err as Error)
     }
 
-    const entry: ProcEntry = { proc, exited: false }
+    const entry: ProcEntry = { proc, stdoutDecoder: new StringDecoder('utf8'), exited: false }
     this._procs.set(handle, entry)
 
-    proc.stdout.setEncoding('utf8')
-    proc.stdout.on('data', (data: string) => {
-      this._onStdout.fire({ handle, data })
+    proc.onStdout((data: Buffer) => {
+      this._onStdout.fire({ handle, data: entry.stdoutDecoder.write(data) })
     })
-    // stderr stays raw so we can pick the right code page (see _decodeDiag).
-    proc.stderr.on('data', (data: Buffer) => {
-      this._onStderr.fire({ handle, data: this._decodeDiag(data) })
+    // stderr is decoded per-chunk with the OEM fallback (Windows cmd.exe shim).
+    proc.onStderr((data: Buffer) => {
+      this._onStderr.fire({ handle, data: decodeDiagnostic(data) })
     })
-    proc.on('error', (err) => {
-      this._logger.warn(`proc error handle=${handle}: ${err.message}`)
-      // Treat spawn failures (ENOENT etc.) as a synthetic exit so callers get
-      // a single, well-defined termination signal — without this, the renderer
-      // would chase an undead handle and hit "Cannot call write after a stream
-      // was destroyed" on the next writeStdin.
+    proc.onDidExit((exit) => {
       if (entry.exited) return
       entry.exited = true
-      this._onExit.fire({ handle, code: null, signal: null, error: err.message })
-      this._procs.delete(handle)
-    })
-    proc.on('exit', (code, signal) => {
-      if (entry.exited) return
-      entry.exited = true
-      const msg = `exit handle=${handle} code=${code} signal=${signal}`
-      if (code === 0 || code === null) {
-        this._logger.info(msg)
+      if (exit.error !== undefined) {
+        // Treat spawn failures (ENOENT etc.) as a synthetic exit so callers get
+        // a single, well-defined termination signal — without this, the renderer
+        // would chase an undead handle and hit "Cannot call write after a stream
+        // was destroyed" on the next writeStdin.
+        this._logger.warn(`proc error handle=${handle}: ${exit.error}`)
+        this._onExit.fire({ handle, code: null, signal: null, error: exit.error })
       } else {
-        this._logger.warn(msg)
+        const msg = `exit handle=${handle} code=${exit.code} signal=${exit.signal}`
+        if (exit.code === 0 || exit.code === null) {
+          this._logger.info(msg)
+        } else {
+          this._logger.warn(msg)
+        }
+        this._onExit.fire({ handle, code: exit.code, signal: exit.signal })
       }
-      this._onExit.fire({ handle, code, signal })
+      proc.dispose()
       this._procs.delete(handle)
     })
 
@@ -266,18 +215,13 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     if (!entry || entry.exited) {
       return Promise.reject(new Error(`AcpHost: unknown or exited handle ${handle}`))
     }
-    // Defend against the narrow race where the child died after `start` but
-    // before the 'exit' / 'error' event reached us — stdin can already be
-    // destroyed even though `entry.exited` is still false.
-    const stdin = entry.proc.stdin
-    if (stdin.destroyed || stdin.writable === false) {
-      return Promise.reject(new Error(`AcpHost: stdin is not writable for handle ${handle}`))
-    }
-    return new Promise<void>((resolve, reject) => {
-      stdin.write(data, 'utf8', (err) => {
-        if (err) reject(err)
-        else resolve()
-      })
+    return entry.proc.writeStdin(data).catch((err: Error) => {
+      // Normalize the managed wrapper's message to AcpHost's contract so the
+      // renderer's existing "not writable" / "unknown or exited" handling holds.
+      if (/not writable|has exited/.test(err.message)) {
+        throw new Error(`AcpHost: stdin is not writable for handle ${handle}`)
+      }
+      throw err
     })
   }
 
@@ -286,11 +230,7 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     if (!entry || entry.exited) {
       return Promise.resolve()
     }
-    try {
-      entry.proc.kill()
-    } catch (err) {
-      this._logger.warn(`kill failed handle=${handle}: ${(err as Error).message}`)
-    }
+    entry.proc.kill()
     return Promise.resolve()
   }
 
@@ -304,23 +244,10 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
     }
   }
 
-  /** Decode a raw stderr chunk: strict UTF-8 first, gb18030 fallback on failure. */
-  private _decodeDiag(buf: Buffer): string {
-    try {
-      return UTF8_STRICT.decode(buf)
-    } catch {
-      return OEM_FALLBACK.decode(buf)
-    }
-  }
-
   override dispose(): void {
     for (const [handle, entry] of this._procs) {
       if (!entry.exited) {
-        try {
-          entry.proc.kill()
-        } catch {
-          // ignore — we're shutting down
-        }
+        entry.proc.dispose()
         this._logger.info(`dispose killed handle=${handle}`)
       }
     }

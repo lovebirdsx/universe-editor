@@ -26,6 +26,7 @@ import {
   type ILogger,
 } from '@universe-editor/platform'
 import type { IPty } from '@lydell/node-pty'
+import { buildChildEnv } from '../process/env.js'
 import type {
   ITerminalCreatedInfo,
   ITerminalDataEvent,
@@ -56,16 +57,7 @@ const defaultSpawner: PtySpawner = (file, args, options) =>
     options,
   )
 
-/** Defense-in-depth env denylist; identical to AcpTerminalMainService. */
-const ENV_DENYLIST: readonly string[] = [
-  'ELECTRON_RUN_AS_NODE',
-  'ELECTRON_NO_ATTACH_CONSOLE',
-  'ELECTRON_FORCE_IS_PACKAGED',
-  'ELECTRON_DEFAULT_ERROR_MODE',
-  'ELECTRON_ENABLE_LOGGING',
-  'ELECTRON_ENABLE_STACK_DUMPING',
-  'NODE_OPTIONS',
-]
+/** Defense-in-depth env denylist lives in process/env.ts (shared with the ACP hosts). */
 
 const DEFAULT_COLS = 80
 const DEFAULT_ROWS = 24
@@ -84,17 +76,9 @@ function sanitizeEnv(
   base: NodeJS.ProcessEnv,
   overrides: Readonly<Record<string, string>>,
 ): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [k, v] of Object.entries(base)) {
-    if (v === undefined) continue
-    if (ENV_DENYLIST.includes(k)) continue
-    out[k] = v
-  }
-  for (const [k, v] of Object.entries(overrides)) {
-    if (ENV_DENYLIST.includes(k)) continue
-    out[k] = v
-  }
-  return out
+  // node-pty requires a string-valued env; buildChildEnv already drops undefined
+  // and denylisted keys, so the cast is safe.
+  return buildChildEnv(base, { overrides }) as Record<string, string>
 }
 
 interface TerminalEntry {

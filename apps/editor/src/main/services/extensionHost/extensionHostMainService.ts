@@ -12,6 +12,7 @@ import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from 'node:chil
 import { existsSync, readdirSync } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import { app } from 'electron'
 import {
   createNamedLogger,
@@ -20,6 +21,9 @@ import {
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
+import { buildChildEnv } from '../process/env.js'
+import { decodeDiagnostic } from '../process/decode.js'
+import { ManagedChildProcess } from '../process/managedChildProcess.js'
 import type {
   ExtHostExitEvent,
   ExtHostStartResult,
@@ -93,45 +97,9 @@ const defaultResolveExtensionsDir: ExtHostExtensionsDirResolver = () =>
 const defaultResolveUserExtensionsDir: ExtHostExtensionsDirResolver = () =>
   path.join(app.getPath('userData'), 'extensions')
 
-/**
- * Variables stripped from the child env (same rationale as AcpHost): the
- * ELECTRON_* flags would make a Node-shaped child reinterpret its entrypoint as
- * an Electron helper, and NODE_OPTIONS could inject --inspect / --require.
- * ELECTRON_RUN_AS_NODE is re-added explicitly after sanitizing because the host
- * IS launched as Electron-as-node.
- */
-const ENV_DENYLIST: readonly string[] = [
-  'ELECTRON_RUN_AS_NODE',
-  'ELECTRON_NO_ATTACH_CONSOLE',
-  'ELECTRON_FORCE_IS_PACKAGED',
-  'ELECTRON_DEFAULT_ERROR_MODE',
-  'ELECTRON_ENABLE_LOGGING',
-  'ELECTRON_ENABLE_STACK_DUMPING',
-  'NODE_OPTIONS',
-]
-
-const UTF8_STRICT = new TextDecoder('utf-8', { fatal: true })
-const OEM_FALLBACK = makeFallbackDecoder()
-
-function makeFallbackDecoder(): InstanceType<typeof TextDecoder> {
-  try {
-    return new TextDecoder('gb18030')
-  } catch {
-    return new TextDecoder('utf-8')
-  }
-}
-
-function sanitizeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(base)) {
-    if (ENV_DENYLIST.includes(k)) continue
-    out[k] = v
-  }
-  return out
-}
-
 interface ProcEntry {
-  readonly proc: ChildProcessWithoutNullStreams
+  readonly proc: ManagedChildProcess
+  readonly stdoutDecoder: StringDecoder
   exited: boolean
 }
 
@@ -169,9 +137,8 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   start(spec?: ExtHostStartSpec): Promise<ExtHostStartResult> {
     const handle = randomUUID()
     const kind = spec?.kind ?? 'trusted'
-    const env = sanitizeEnv(process.env)
-    // Re-added after the denylist strip: the host runs as Electron-as-node.
-    env.ELECTRON_RUN_AS_NODE = '1'
+    // The host runs as Electron-as-node, so re-add ELECTRON_RUN_AS_NODE.
+    const env = buildChildEnv(process.env, { runAsNode: true })
     env.UNIVERSE_EXT_HOST_KIND = kind
 
     const command = process.execPath
@@ -203,41 +170,42 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     }
     args.push(entry)
 
-    let proc: ChildProcessWithoutNullStreams
+    let proc: ManagedChildProcess
     try {
-      proc = this._spawn(command, args, { env })
+      proc = new ManagedChildProcess(this._spawn(command, args, { env }), {
+        logger: this._logger,
+        label: handle,
+      })
     } catch (err) {
       this._logger.warn(`spawn failed handle=${handle} entry=${entry}: ${(err as Error).message}`)
       return Promise.reject(err as Error)
     }
 
-    const procEntry: ProcEntry = { proc, exited: false }
+    const procEntry: ProcEntry = { proc, stdoutDecoder: new StringDecoder('utf8'), exited: false }
     this._procs.set(handle, procEntry)
 
-    proc.stdout.setEncoding('utf8')
-    proc.stdout.on('data', (data: string) => {
-      this._onStdout.fire({ handle, data })
+    proc.onStdout((data: Buffer) => {
+      this._onStdout.fire({ handle, data: procEntry.stdoutDecoder.write(data) })
     })
-    proc.stderr.on('data', (data: Buffer) => {
-      this._onStderr.fire({ handle, data: this._decodeDiag(data) })
+    proc.onStderr((data: Buffer) => {
+      this._onStderr.fire({ handle, data: decodeDiagnostic(data) })
     })
-    proc.on('error', (err) => {
-      this._logger.warn(`proc error handle=${handle}: ${err.message}`)
+    proc.onDidExit((exit) => {
       if (procEntry.exited) return
       procEntry.exited = true
-      this._onExit.fire({ handle, code: null, signal: null, error: err.message })
-      this._procs.delete(handle)
-    })
-    proc.on('exit', (code, signal) => {
-      if (procEntry.exited) return
-      procEntry.exited = true
-      const msg = `exit handle=${handle} code=${code} signal=${signal}`
-      if (code === 0 || code === null) {
-        this._logger.info(msg)
+      if (exit.error !== undefined) {
+        this._logger.warn(`proc error handle=${handle}: ${exit.error}`)
+        this._onExit.fire({ handle, code: null, signal: null, error: exit.error })
       } else {
-        this._logger.warn(msg)
+        const msg = `exit handle=${handle} code=${exit.code} signal=${exit.signal}`
+        if (exit.code === 0 || exit.code === null) {
+          this._logger.info(msg)
+        } else {
+          this._logger.warn(msg)
+        }
+        this._onExit.fire({ handle, code: exit.code, signal: exit.signal })
       }
-      this._onExit.fire({ handle, code, signal })
+      proc.dispose()
       this._procs.delete(handle)
     })
 
@@ -250,15 +218,11 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     if (!entry || entry.exited) {
       return Promise.reject(new Error(`ExtensionHost: unknown or exited handle ${handle}`))
     }
-    const stdin = entry.proc.stdin
-    if (stdin.destroyed || stdin.writable === false) {
-      return Promise.reject(new Error(`ExtensionHost: stdin is not writable for handle ${handle}`))
-    }
-    return new Promise<void>((resolve, reject) => {
-      stdin.write(data, 'utf8', (err) => {
-        if (err) reject(err)
-        else resolve()
-      })
+    return entry.proc.writeStdin(data).catch((err: Error) => {
+      if (/not writable|has exited/.test(err.message)) {
+        throw new Error(`ExtensionHost: stdin is not writable for handle ${handle}`)
+      }
+      throw err
     })
   }
 
@@ -267,11 +231,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     if (!entry || entry.exited) {
       return Promise.resolve()
     }
-    try {
-      entry.proc.kill()
-    } catch (err) {
-      this._logger.warn(`kill failed handle=${handle}: ${(err as Error).message}`)
-    }
+    entry.proc.kill()
     return Promise.resolve()
   }
 
@@ -325,22 +285,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     return supported
   }
 
-  private _decodeDiag(buf: Buffer): string {
-    try {
-      return UTF8_STRICT.decode(buf)
-    } catch {
-      return OEM_FALLBACK.decode(buf)
-    }
-  }
-
   override dispose(): void {
     for (const [handle, entry] of this._procs) {
       if (!entry.exited) {
-        try {
-          entry.proc.kill()
-        } catch {
-          // ignore — shutting down
-        }
+        entry.proc.dispose()
         this._logger.info(`dispose killed handle=${handle}`)
       }
     }

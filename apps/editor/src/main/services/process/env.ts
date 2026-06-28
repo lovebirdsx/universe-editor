@@ -42,6 +42,7 @@ export function buildChildEnv(
 ): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {}
   for (const [k, v] of Object.entries(base)) {
+    if (v === undefined) continue
     if (CHILD_ENV_DENYLIST.includes(k)) continue
     out[k] = v
   }

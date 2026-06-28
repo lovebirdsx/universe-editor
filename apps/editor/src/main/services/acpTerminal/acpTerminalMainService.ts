@@ -22,6 +22,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import * as path from 'node:path'
+import { StringDecoder } from 'node:string_decoder'
 import {
   createNamedLogger,
   Disposable,
@@ -35,6 +36,8 @@ import type {
   TerminalOutputResponse,
   WaitForTerminalExitResponse,
 } from '@agentclientprotocol/sdk'
+import { buildChildEnv } from '../process/env.js'
+import { ManagedChildProcess } from '../process/managedChildProcess.js'
 import type {
   AcpTerminalCreateSpec,
   IAcpTerminalService,
@@ -60,37 +63,10 @@ const defaultSpawner: AcpTerminalSpawner = (command, args, options) =>
     shell: process.platform === 'win32',
   })
 
-/** Defense-in-depth env denylist; identical to AcpHostMainService. */
-const ENV_DENYLIST: readonly string[] = [
-  'ELECTRON_RUN_AS_NODE',
-  'ELECTRON_NO_ATTACH_CONSOLE',
-  'ELECTRON_FORCE_IS_PACKAGED',
-  'ELECTRON_DEFAULT_ERROR_MODE',
-  'ELECTRON_ENABLE_LOGGING',
-  'ELECTRON_ENABLE_STACK_DUMPING',
-  'NODE_OPTIONS',
-]
-
 function envArrayToRecord(env: readonly EnvVariable[] | undefined): Record<string, string> {
   if (!env) return {}
   const out: Record<string, string> = {}
   for (const v of env) out[v.name] = v.value
-  return out
-}
-
-function sanitizeEnv(
-  base: NodeJS.ProcessEnv,
-  overrides: Readonly<Record<string, string>>,
-): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = {}
-  for (const [k, v] of Object.entries(base)) {
-    if (ENV_DENYLIST.includes(k)) continue
-    out[k] = v
-  }
-  for (const [k, v] of Object.entries(overrides)) {
-    if (ENV_DENYLIST.includes(k)) continue
-    out[k] = v
-  }
   return out
 }
 
@@ -102,8 +78,11 @@ const MAX_OUTPUT_BYTE_LIMIT = 16 * 1024 * 1024 // 16 MiB
 const MIN_OUTPUT_BYTE_LIMIT = 1024
 
 interface TerminalEntry {
-  readonly proc: ChildProcessWithoutNullStreams
+  readonly proc: ManagedChildProcess
   readonly byteLimit: number
+  /** Per-stream UTF-8 decoders so a multibyte char split across chunks survives. */
+  readonly stdoutDecoder: StringDecoder
+  readonly stderrDecoder: StringDecoder
   /**
    * Pending `waitForExit` resolvers. Drained when the proc exits or the
    * terminal is released.
@@ -146,24 +125,29 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
         new Error(`AcpTerminal: cwd must be an absolute path, got ${JSON.stringify(spec.cwd)}`),
       )
     }
-    const env = sanitizeEnv(process.env, envArrayToRecord(spec.env))
+    const env = buildChildEnv(process.env, { overrides: envArrayToRecord(spec.env) })
     const options: { cwd?: string; env?: NodeJS.ProcessEnv } = { env }
     if (spec.cwd != null) options.cwd = spec.cwd
 
-    let proc: ChildProcessWithoutNullStreams
+    const id = randomUUID()
+    let proc: ManagedChildProcess
     try {
-      proc = this._spawn(spec.command, spec.args ?? [], options)
+      proc = new ManagedChildProcess(this._spawn(spec.command, spec.args ?? [], options), {
+        logger: this._logger,
+        label: id,
+      })
     } catch (err) {
       this._logger.warn(`spawn failed command=${spec.command}: ${(err as Error).message}`)
       return Promise.reject(err as Error)
     }
 
-    const id = randomUUID()
     const requested = spec.outputByteLimit ?? DEFAULT_OUTPUT_BYTE_LIMIT
     const byteLimit = Math.max(MIN_OUTPUT_BYTE_LIMIT, Math.min(requested, MAX_OUTPUT_BYTE_LIMIT))
     const entry: TerminalEntry = {
       proc,
       byteLimit,
+      stdoutDecoder: new StringDecoder('utf8'),
+      stderrDecoder: new StringDecoder('utf8'),
       waiters: [],
       buffer: '',
       truncated: false,
@@ -171,26 +155,24 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     }
     this._entries.set(id, entry)
 
-    proc.stdout.setEncoding('utf8')
-    proc.stderr.setEncoding('utf8')
-    proc.stdout.on('data', (chunk: string) => this._appendOutput(entry, chunk))
-    proc.stderr.on('data', (chunk: string) => this._appendOutput(entry, chunk))
-    proc.on('error', (err) => {
-      this._logger.warn(`proc error id=${id}: ${err.message}`)
-      // Surface spawn failures (ENOENT etc.) as a synthetic exit so the agent
-      // gets a deterministic terminal status instead of hanging on
-      // wait_for_exit.
+    proc.onStdout((chunk: Buffer) => this._appendOutput(entry, entry.stdoutDecoder.write(chunk)))
+    proc.onStderr((chunk: Buffer) => this._appendOutput(entry, entry.stderrDecoder.write(chunk)))
+    proc.onDidExit((exit) => {
       if (entry.exit !== undefined) return
-      entry.exit = { signal: 'SPAWN_ERROR' }
-      this._appendOutput(entry, `\n[spawn error] ${err.message}\n`)
-      this._drainWaiters(entry)
-    })
-    proc.on('exit', (code, signal) => {
-      if (entry.exit !== undefined) return
-      this._logger.info(`exit id=${id} code=${code} signal=${signal}`)
+      if (exit.error !== undefined) {
+        // Surface spawn failures (ENOENT etc.) as a synthetic exit so the agent
+        // gets a deterministic terminal status instead of hanging on
+        // wait_for_exit.
+        this._logger.warn(`proc error id=${id}: ${exit.error}`)
+        entry.exit = { signal: 'SPAWN_ERROR' }
+        this._appendOutput(entry, `\n[spawn error] ${exit.error}\n`)
+        this._drainWaiters(entry)
+        return
+      }
+      this._logger.info(`exit id=${id} code=${exit.code} signal=${exit.signal}`)
       const info: TerminalExitStatus = {
-        ...(code !== null ? { exitCode: code } : {}),
-        ...(signal !== null ? { signal } : {}),
+        ...(exit.code !== null ? { exitCode: exit.code } : {}),
+        ...(exit.signal !== null ? { signal: exit.signal } : {}),
       }
       entry.exit = info
       this._drainWaiters(entry)
@@ -232,11 +214,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
       return Promise.reject(new Error(`AcpTerminal: unknown terminal ${terminalId}`))
     }
     if (entry.exit !== undefined) return Promise.resolve()
-    try {
-      entry.proc.kill()
-    } catch (err) {
-      this._logger.warn(`kill failed id=${terminalId}: ${(err as Error).message}`)
-    }
+    entry.proc.kill()
     return Promise.resolve()
   }
 
@@ -245,15 +223,10 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     if (!entry) return Promise.resolve()
     if (entry.released) return Promise.resolve()
     entry.released = true
-    // Kill if still alive — release implies the agent no longer cares about
-    // observing the process, so cleanest to stop it.
-    if (entry.exit === undefined) {
-      try {
-        entry.proc.kill()
-      } catch {
-        // ignore — best-effort
-      }
-    }
+    // Release implies the agent no longer cares about the process — dispose the
+    // managed child (immediate SIGKILL if still alive + clears any pending kill
+    // escalation timer), since we're about to drop the entry that owns it.
+    entry.proc.dispose()
     // Reject any in-flight wait_for_exit so the agent doesn't hang on a
     // promise the server can never deliver.
     const releaseErr = new Error(`AcpTerminal: terminal ${terminalId} released`)
@@ -265,13 +238,7 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
 
   override dispose(): void {
     for (const [id, entry] of this._entries) {
-      if (entry.exit === undefined) {
-        try {
-          entry.proc.kill()
-        } catch {
-          // ignore — shutting down
-        }
-      }
+      entry.proc.dispose()
       const err = new Error('AcpTerminal: service disposed')
       for (const w of entry.waiters.splice(0)) w.reject(err)
       this._logger.info(`dispose killed id=${id}`)
