@@ -104,8 +104,12 @@ function scopeChip(
     return { label: entry.cwd, title: entry.cwd }
   }
   if (scope === 'worktree') {
-    if (entry.branch) return { label: entry.branch, title: entry.cwd ?? entry.branch }
-    if (entry.cwd) return { label: pathTail(entry.cwd), title: entry.cwd }
+    if (entry.cwd)
+      return {
+        label: pathTail(entry.cwd),
+        title: entry.branch ? `${entry.cwd} [${entry.branch}]` : entry.cwd,
+      }
+    if (entry.branch) return { label: entry.branch, title: entry.branch }
   }
   return undefined
 }

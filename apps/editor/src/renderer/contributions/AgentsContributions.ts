@@ -180,7 +180,7 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
           },
           'acp.sessions.historyScope': {
             type: 'string',
-            default: 'worktree',
+            default: 'workspace',
             enum: ['workspace', 'worktree', 'all'],
             enumItemLabels: {
               workspace: localize(
