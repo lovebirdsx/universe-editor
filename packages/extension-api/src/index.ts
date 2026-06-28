@@ -57,7 +57,9 @@ export type {
  *  so it re-exports separately from the type-only block above. */
 export { FoldingRangeKind } from 'vscode-languageserver-types'
 
-/** Semantic version of this API surface. The host checks `engines.universe`. */
+/** Semantic version of this API surface. The host checks `engines.universe`.
+ *  Bumping this is governed by COMPATIBILITY.md — keep it in sync with the
+ *  package.json version and the contract test's frozen snapshot. */
 export const version = '0.1.0'
 
 export interface Disposable {
