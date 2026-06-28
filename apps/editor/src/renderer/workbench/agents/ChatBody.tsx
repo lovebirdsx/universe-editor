@@ -28,7 +28,7 @@ import {
   type MutableRefObject,
 } from 'react'
 import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/react-virtual'
-import { Bot, History, Plus } from 'lucide-react'
+import { Bot, History, Loader2, Plus } from 'lucide-react'
 import { IConfigurationService, ICommandService, localize } from '@universe-editor/platform'
 import { useExecuteCommand, useObservable, useService } from '../useService.js'
 import {
@@ -147,6 +147,7 @@ function ChatSessionBody({
 }) {
   const widgetService = useService(IAcpChatWidgetService)
   const timeline = useObservable(session.timeline)
+  const isReplayingHistory = useObservable(session.isReplayingHistory)
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
   const containerRef = useRef<HTMLDivElement | null>(null)
   const handleRef = useRef<WidgetHandle>(NOOP_HANDLE)
@@ -203,6 +204,24 @@ function ChatSessionBody({
     },
     [widgetService],
   )
+
+  // A resumed session is registered (so getById hits and we render here) before
+  // session/load replays its history — the timeline is transiently empty. Show a
+  // loading placeholder rather than flashing the empty-session hint; the replay
+  // flag clears once history lands. Freshly-created sessions never set it, so
+  // their empty timeline still renders the hint immediately.
+  if (isReplayingHistory && !hasTimelineContent) {
+    return (
+      <div className={styles['sessionLoading']} data-testid="acp-session-replaying">
+        <div className={styles['sessionLoadingHeader']}>
+          <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+          <p className={styles['sessionLoadingMessage']}>
+            {localize('acp.session.resuming', 'Resuming agent session...')}
+          </p>
+        </div>
+      </div>
+    )
+  }
 
   const chatClassName = hasTimelineContent
     ? styles['chat']

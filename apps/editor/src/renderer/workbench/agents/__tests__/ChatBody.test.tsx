@@ -71,7 +71,11 @@ function makeMessage(id: string, text: string): AcpMessage {
   return { id, role: 'agent', text, blocks: [{ type: 'text', text }], streaming: false }
 }
 
-function makeSession(id: string, items: readonly TimelineItem[]): IAcpSession {
+function makeSession(
+  id: string,
+  items: readonly TimelineItem[],
+  opts: { isReplayingHistory?: boolean } = {},
+): IAcpSession {
   const collapseMode = observableValue<'default' | 'collapsed' | 'expanded'>(
     't.collapse',
     'default',
@@ -85,6 +89,7 @@ function makeSession(id: string, items: readonly TimelineItem[]): IAcpSession {
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', []),
     timeline: observableValue<readonly TimelineItem[]>('t.timeline', items),
     status: observableValue<AcpSessionStatus>('t.status', 'idle'),
+    isReplayingHistory: observableValue<boolean>('t.replay', opts.isReplayingHistory ?? false),
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
     pendingQuestion: observableValue('t.question', undefined),
@@ -362,6 +367,36 @@ describe('ChatBody — empty session hint', () => {
     )
     expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).not.toBeNull()
     expect(container.querySelector('[data-testid="acp-timeline"]')).toBeNull()
+  })
+
+  it('shows the loading placeholder (not the empty hint) while a resumed session replays history', () => {
+    // Repro: on resume the session is registered (getById hits → ChatBody renders)
+    // BEFORE session/load replays its history, so the timeline is transiently
+    // empty. It must show the "Resuming…" placeholder, not flash the empty-session
+    // hint, until the replay populates the timeline.
+    const { container } = renderChat(makeSession('s1', [], { isReplayingHistory: true }))
+    expect(container.querySelector('[data-testid="acp-session-replaying"]')).not.toBeNull()
+    expect(container.querySelector('[data-testid="acp-empty-session-hint"]')).toBeNull()
+    expect(container.querySelector('[data-testid="acp-chat"]')).toBeNull()
+  })
+
+  it('renders the timeline (not the placeholder) once replayed content has landed', () => {
+    // Even while the replay flag is still set, any visible timeline content means
+    // history has started arriving — render it rather than the spinner.
+    const user: AcpMessage = {
+      id: 'u1',
+      role: 'user',
+      text: 'hello',
+      blocks: [{ type: 'text', text: 'hello' }],
+      streaming: false,
+    }
+    const { container } = renderChat(
+      makeSession('s1', [{ kind: 'message', id: 'u1', message: user }], {
+        isReplayingHistory: true,
+      }),
+    )
+    expect(container.querySelector('[data-testid="acp-session-replaying"]')).toBeNull()
+    expect(container.querySelector('[data-testid="acp-timeline"]')).not.toBeNull()
   })
 
   it('runs the existing session action commands from the hint', () => {

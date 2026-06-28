@@ -714,6 +714,12 @@ export class AcpSessionService
       registered = true
       prior?.dispose()
 
+      // The session is now registered, so getById hits and the editor swaps the
+      // "Resuming…" placeholder for ChatBody — but the timeline is still empty
+      // until session/load replays it below. Mark the replay so ChatBody keeps
+      // showing a loading placeholder instead of flashing the empty-session hint.
+      session.beginHistoryReplay()
+
       const { kept, dropped } = filterMcpServersByCapabilities(
         mcpServers,
         initResult.agentCapabilities?.mcpCapabilities,
@@ -732,6 +738,9 @@ export class AcpSessionService
         timeoutMs,
         'ACP session/load',
       )
+      // Replay finished: timeline is now populated, so ChatBody can render the
+      // history (or the genuine empty-session hint if this session truly has none).
+      session.endHistoryReplay()
       // Per-session history wins over per-agent defaults: a user who picked
       // distinct values for a specific session expects them on resume even if
       // the global default has since changed. Seed BEFORE applying the bag so

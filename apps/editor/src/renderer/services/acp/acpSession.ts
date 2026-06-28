@@ -309,6 +309,15 @@ export interface IAcpSession {
    */
   readonly timeline: IObservable<readonly TimelineItem[]>
   readonly status: IObservable<AcpSessionStatus>
+  /**
+   * True while a resumed session is replaying its history via `session/load`.
+   * The session is registered (so `session/update` replay routes to it) before
+   * the replay finishes, leaving the timeline transiently empty; the chat UI
+   * reads this to keep showing a loading placeholder instead of flashing the
+   * "empty session" hint. Always false for freshly-created sessions — their
+   * empty timeline is the intended end state, not a transient one.
+   */
+  readonly isReplayingHistory: IObservable<boolean>
   /** Latest context-window usage reported by the agent, or undefined if never reported. */
   readonly usage: IObservable<AcpUsage | undefined>
   readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
@@ -344,6 +353,14 @@ export interface IAcpSession {
    * session is already settled.
    */
   whenConnected(): Promise<void>
+  /**
+   * Mark the start of a `session/load` history replay (resume path). Flips
+   * {@link isReplayingHistory} on so the chat UI shows a loading placeholder
+   * rather than the empty-session hint while the timeline is still empty.
+   */
+  beginHistoryReplay(): void
+  /** Mark the replay finished — see {@link beginHistoryReplay}. */
+  endHistoryReplay(): void
   /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
   cycleCollapseMode(): void
   /** Internal — call site is the permission handler. */
@@ -381,6 +398,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly plan: ISettableObservable<readonly AcpPlanEntry[]>
   readonly timeline: ISettableObservable<readonly TimelineItem[]>
   readonly status: ISettableObservable<AcpSessionStatus>
+  readonly isReplayingHistory: ISettableObservable<boolean>
   readonly usage: ISettableObservable<AcpUsage | undefined>
   readonly pendingPermission: ISettableObservable<AcpPendingPermission | undefined>
   readonly pendingQuestion: ISettableObservable<AcpPendingQuestion | undefined>
@@ -507,6 +525,10 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.plan = observableValue<readonly AcpPlanEntry[]>(`acp.session.plan.${id}`, [])
     this.timeline = observableValue<readonly TimelineItem[]>(`acp.session.timeline.${id}`, [])
     this.status = observableValue<AcpSessionStatus>(`acp.session.status.${id}`, 'connecting')
+    this.isReplayingHistory = observableValue<boolean>(
+      `acp.session.isReplayingHistory.${id}`,
+      false,
+    )
     this.usage = observableValue<AcpUsage | undefined>(`acp.session.usage.${id}`, undefined)
     this.pendingPermission = observableValue<AcpPendingPermission | undefined>(
       `acp.session.pendingPermission.${id}`,
@@ -622,6 +644,14 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   whenConnected(): Promise<void> {
     return this._whenConnected
+  }
+
+  beginHistoryReplay(): void {
+    this.isReplayingHistory.set(true, undefined)
+  }
+
+  endHistoryReplay(): void {
+    this.isReplayingHistory.set(false, undefined)
   }
 
   private _flushQueuedPrompts(): void {

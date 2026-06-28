@@ -748,6 +748,38 @@ describe('AcpSessionService.resumeSession — happy path', () => {
     expect(msgs.length).toBe(1)
     expect(msgs[0]?.text).toBe('replayed history')
   })
+
+  it('flags isReplayingHistory only while session/load replays, clearing it afterwards', async () => {
+    // The session is registered (getById hits → ChatBody renders) BEFORE the
+    // history replays, so without this flag the UI flashes the empty-session hint
+    // until the timeline fills. isReplayingHistory must be true during the replay
+    // window and false once it settles, and never set for a fresh session.
+    const built = buildService({
+      loadSessionUpdates: [
+        {
+          sessionId: 'agent-1',
+          update: {
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'replayed history' },
+          },
+        },
+      ],
+      loadSessionResult: {},
+    })
+    svc = built.svc
+    await built.history.initialize()
+    const original = await svc.createSession()
+    await original.whenConnected()
+    // A freshly-created session never enters the replay state.
+    expect(original.isReplayingHistory.get()).toBe(false)
+    const historyId = built.history.list()[0]!.id
+    await svc.closeSession(original.id)
+
+    const resumed = await svc.resumeSession(historyId)
+    // After resume settles the flag is cleared; the timeline carries the replay.
+    expect(resumed.isReplayingHistory.get()).toBe(false)
+    expect(resumed.messages.get().map((m) => m.text)).toEqual(['replayed history'])
+  })
 })
 
 describe('AcpSessionService.resumeSession — failure paths', () => {

@@ -90,6 +90,7 @@ function makeSession(
     plan: observableValue<readonly AcpPlanEntry[]>('t.plan', []),
     timeline,
     status: observableValue<AcpSessionStatus>('t.status', 'idle'),
+    isReplayingHistory: observableValue<boolean>('t.replay', false),
     usage: observableValue<AcpUsage | undefined>('t.usage', undefined),
     pendingPermission: observableValue<AcpPendingPermission | undefined>('t.perm', undefined),
     pendingQuestion: observableValue('t.question', undefined),
