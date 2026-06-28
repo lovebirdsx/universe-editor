@@ -16,7 +16,7 @@ import {
   toDisposable,
 } from '../base/lifecycle.js'
 import { LinkedList } from '../base/linkedList.js'
-import { SyncDescriptor, SyncDescriptor0 } from './descriptors.js'
+import { SyncDescriptor, SyncDescriptor0, SyncFactoryDescriptor } from './descriptors.js'
 import { Graph } from './graph.js'
 import {
   GetLeadingNonServiceArgs,
@@ -270,12 +270,7 @@ export class InstantiationService implements IInstantiationService {
       for (const { data } of roots) {
         const instanceOrDesc = this._getServiceInstanceOrDescriptor(data.id)
         if (instanceOrDesc instanceof SyncDescriptor) {
-          const instance = this._createServiceInstanceWithOwner(
-            data.id,
-            data.desc.ctor,
-            data.desc.staticArguments,
-            data.desc.supportsDelayedInstantiation,
-          )
+          const instance = this._createServiceInstanceWithOwner(data.id, data.desc)
           this._setCreatedServiceInstance(data.id, instance)
         }
         graph.removeNode(data)
@@ -285,44 +280,29 @@ export class InstantiationService implements IInstantiationService {
     return this._getServiceInstanceOrDescriptor(id) as T
   }
 
-  private _createServiceInstanceWithOwner<T>(
-    id: ServiceIdentifier<T>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ctor: any,
-    args: unknown[] = [],
-    supportsDelayedInstantiation: boolean = false,
-  ): T {
+  private _createServiceInstanceWithOwner<T>(id: ServiceIdentifier<T>, desc: SyncDescriptor<T>): T {
     if (this._services.get(id) instanceof SyncDescriptor) {
-      return this._createServiceInstance(
-        id,
-        ctor,
-        args,
-        supportsDelayedInstantiation,
-        this._servicesToMaybeDispose,
-      )
+      return this._createServiceInstance(id, desc, this._servicesToMaybeDispose)
     } else if (this._parent) {
-      return this._parent._createServiceInstanceWithOwner(
-        id,
-        ctor,
-        args,
-        supportsDelayedInstantiation,
-      )
+      return this._parent._createServiceInstanceWithOwner(id, desc)
     } else {
-      throw new Error(`illegalState - creating UNKNOWN service instance ${ctor.name}`)
+      throw new Error(`illegalState - creating UNKNOWN service instance ${desc.ctor.name}`)
     }
   }
 
   private _createServiceInstance<T>(
     _id: ServiceIdentifier<T>,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ctor: any,
-    args: unknown[] = [],
-    supportsDelayedInstantiation: boolean,
+    desc: SyncDescriptor<T>,
     disposeBucket: Set<unknown>,
   ): T {
-    if (!supportsDelayedInstantiation) {
+    const build = (): T =>
+      desc instanceof SyncFactoryDescriptor
+        ? desc.factory({ get: (depId) => this._getOrCreateServiceInstance(depId) })
+        : this._createInstance<T>(desc.ctor, desc.staticArguments)
+
+    if (!desc.supportsDelayedInstantiation) {
       // eager instantiation
-      const result = this._createInstance<T>(ctor, args)
+      const result = build()
       // The container owns this instance via `disposeBucket`; exclude it from
       // leak reports the same way an explicit root DisposableStore would.
       if (isDisposable(result)) {
@@ -337,9 +317,6 @@ export class InstantiationService implements IInstantiationService {
     // idle callback fires, whichever comes first). Until then, `onDid*` /
     // `onWill*` event subscribers are kept in `earlyListeners` and reattached
     // to the real service upon materialization.
-    //
-    // eslint-disable-next-line @typescript-eslint/no-this-alias
-    const self = this
 
     type EarlyListenerData = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -349,7 +326,7 @@ export class InstantiationService implements IInstantiationService {
     const earlyListeners = new Map<string, LinkedList<EarlyListenerData>>()
 
     const idle = new GlobalIdleValue<T>(() => {
-      const result = self._createInstance<T>(ctor, args)
+      const result = build()
 
       // re-attach early listeners to the real service
       for (const [key, values] of earlyListeners) {
@@ -427,7 +404,7 @@ export class InstantiationService implements IInstantiationService {
         return true
       },
       getPrototypeOf(_target: T) {
-        return ctor.prototype
+        return desc.ctor.prototype
       },
     }) as T
   }

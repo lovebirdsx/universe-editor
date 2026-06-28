@@ -9,7 +9,7 @@ import {
   ServicesAccessor,
   _util,
 } from '../../di/instantiation.js'
-import { SyncDescriptor } from '../../di/descriptors.js'
+import { SyncDescriptor, SyncFactoryDescriptor } from '../../di/descriptors.js'
 import { ServiceCollection } from '../../di/serviceCollection.js'
 import { InstantiationService } from '../../di/instantiationService.js'
 
@@ -232,5 +232,114 @@ describe('InstantiationService', () => {
       capturedAccessor = a
     })
     expect(() => capturedAccessor!.get(ILogService)).toThrow()
+  })
+})
+
+describe('SyncFactoryDescriptor', () => {
+  it('builds a service via an explicit factory, no console.trace', () => {
+    const traceSpy = vi.spyOn(console, 'trace').mockImplementation(() => {})
+    try {
+      class Mixed {
+        declare _serviceBrand: undefined
+        constructor(
+          readonly stub: string,
+          readonly log: ILogService,
+        ) {}
+      }
+      const IMixed = createDecorator<Mixed>('factory-basic-test')
+      const log = new LogService()
+      const services = new ServiceCollection([ILogService, log])
+      services.set(
+        IMixed,
+        new SyncFactoryDescriptor<Mixed>((acc) => new Mixed('real-stub', acc.get(ILogService))),
+      )
+      const di = new InstantiationService(services, true)
+
+      const svc = di.invokeFunction((a) => a.get(IMixed))
+      expect(svc.stub).toBe('real-stub')
+      expect(svc.log).toBe(log)
+      expect(traceSpy).not.toHaveBeenCalled()
+    } finally {
+      traceSpy.mockRestore()
+    }
+  })
+
+  it('resolves @-injected descriptor dependencies through the accessor', () => {
+    // The factory's dependency (IDbService) is itself a SyncDescriptor — it must
+    // be materialized on demand when the factory calls accessor.get.
+    const log = new LogService()
+    const services = new ServiceCollection(
+      [ILogService, log],
+      [IDbService, new SyncDescriptor(DbService)],
+    )
+    let captured: IDbService | null = null
+    const IConsumer = createDecorator<{ _serviceBrand: undefined }>('factory-dep-test')
+    services.set(
+      IConsumer,
+      new SyncFactoryDescriptor((acc) => {
+        captured = acc.get(IDbService)
+        return { _serviceBrand: undefined }
+      }),
+    )
+    const di = new InstantiationService(services, true)
+
+    di.invokeFunction((a) => a.get(IConsumer))
+    expect(captured!.query()).toBe('data')
+    expect(log.messages).toContain('DbService created')
+  })
+
+  it('caches the factory result — factory runs once', () => {
+    let runs = 0
+    const IOnce = createDecorator<{ _serviceBrand: undefined; n: number }>('factory-cache-test')
+    const services = new ServiceCollection()
+    services.set(
+      IOnce,
+      new SyncFactoryDescriptor(() => ({ _serviceBrand: undefined as undefined, n: ++runs })),
+    )
+    const di = new InstantiationService(services, true)
+
+    const first = di.invokeFunction((a) => a.get(IOnce))
+    const second = di.invokeFunction((a) => a.get(IOnce))
+    expect(first).toBe(second)
+    expect(runs).toBe(1)
+  })
+
+  it('dispose() disposes a factory-built service instance', () => {
+    let disposed = false
+    class DisposableSvc {
+      declare _serviceBrand: undefined
+      dispose() {
+        disposed = true
+      }
+    }
+    const IDisp = createDecorator<DisposableSvc>('factory-dispose-test')
+    const services = new ServiceCollection()
+    services.set(IDisp, new SyncFactoryDescriptor(() => new DisposableSvc()))
+    const di = new InstantiationService(services, true)
+    di.invokeFunction((a) => a.get(IDisp))
+    di.dispose()
+    expect(disposed).toBe(true)
+  })
+
+  it('detects cycles between factory-built services', () => {
+    const IA = createDecorator<{ _serviceBrand: undefined }>('factory-cycle-a')
+    const IB = createDecorator<{ _serviceBrand: undefined }>('factory-cycle-b')
+    const services = new ServiceCollection()
+    services.set(
+      IA,
+      new SyncFactoryDescriptor((acc) => {
+        acc.get(IB)
+        return { _serviceBrand: undefined }
+      }),
+    )
+    services.set(
+      IB,
+      new SyncFactoryDescriptor((acc) => {
+        acc.get(IA)
+        return { _serviceBrand: undefined }
+      }),
+    )
+    const di = new InstantiationService(services, true)
+    expect(() => di.invokeFunction((a) => a.get(IA))).toThrow(/RECURSIVELY/)
   })
 })

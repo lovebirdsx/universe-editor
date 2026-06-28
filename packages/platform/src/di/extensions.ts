@@ -4,8 +4,8 @@
  *  Source: https://github.com/microsoft/vscode/blob/main/src/vs/platform/instantiation/common/extensions.ts
  *--------------------------------------------------------------------------------------------*/
 
-import { SyncDescriptor } from './descriptors.js'
-import { BrandedService, ServiceIdentifier } from './instantiation.js'
+import { SyncDescriptor, SyncFactoryDescriptor } from './descriptors.js'
+import { BrandedService, ServiceIdentifier, ServicesAccessor } from './instantiation.js'
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const _registry: [ServiceIdentifier<any>, SyncDescriptor<any>][] = []
@@ -47,6 +47,23 @@ export function registerSingleton<T, Services extends BrandedService[]>(
   }
 
   _registry.push([id, ctorOrDescriptor])
+}
+
+/**
+ * Register an application-singleton built by an explicit factory. The factory
+ * receives a {@link ServicesAccessor} to resolve @-injected dependencies and
+ * returns the constructed instance — letting callers pass non-branded static
+ * params (spawner stubs, paths) positionally without `undefined` padding slots.
+ *
+ * Prefer this over `new SyncDescriptor(Foo, [undefined, ...], false)` whenever a
+ * service's constructor has leading static params before its @-injected ones.
+ */
+export function registerSingletonFactory<T>(
+  id: ServiceIdentifier<T>,
+  factory: (accessor: ServicesAccessor) => T,
+  supportsDelayedInstantiation: boolean = false,
+): void {
+  _registry.push([id, new SyncFactoryDescriptor<T>(factory, supportsDelayedInstantiation)])
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
