@@ -33,12 +33,9 @@ import {
   Severity,
   StorageScope,
   localize,
-  observableValue,
-  transaction,
   type HostPlatform,
   type ILogger,
   type IObservable,
-  type ISettableObservable,
   type Event,
 } from '@universe-editor/platform'
 import {
@@ -89,6 +86,7 @@ import {
   ACP_ACTIVE_SESSION_STORAGE_KEY,
   AcpSessionRestoreCoordinator,
 } from './acpSessionRestoreCoordinator.js'
+import { AcpSessionRegistry } from './acpSessionRegistry.js'
 import type { PromptMention } from './promptMentions.js'
 
 export type { PromptMention }
@@ -228,9 +226,10 @@ export class AcpSessionService
 {
   declare readonly _serviceBrand: undefined
 
-  readonly sessions: ISettableObservable<readonly IAcpSession[]>
-  readonly activeSessionId: ISettableObservable<string | undefined>
-  readonly activeSession: ISettableObservable<IAcpSession | undefined>
+  private readonly _sessionStore = new AcpSessionRegistry()
+  readonly sessions: IObservable<readonly IAcpSession[]> = this._sessionStore.sessions
+  readonly activeSessionId: IObservable<string | undefined> = this._sessionStore.activeSessionId
+  readonly activeSession: IObservable<IAcpSession | undefined> = this._sessionStore.activeSession
 
   private readonly _onDidCreate = this._register(new Emitter<IAcpSession>())
   readonly onDidCreate = this._onDidCreate.event
@@ -238,7 +237,6 @@ export class AcpSessionService
   private readonly _onDidCloseSession = this._register(new Emitter<string>())
   readonly onDidCloseSession = this._onDidCloseSession.event
 
-  private _sessions: AcpSession[] = []
   private readonly _logger: ILogger
   private readonly _coordinator: AcpSessionRestoreCoordinator
   private readonly _platform: HostPlatform
@@ -275,9 +273,6 @@ export class AcpSessionService
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
     this._platform = hostService.platform
-    this.sessions = observableValue<readonly IAcpSession[]>('acp.sessions', [])
-    this.activeSessionId = observableValue<string | undefined>('acp.activeSessionId', undefined)
-    this.activeSession = observableValue<IAcpSession | undefined>('acp.activeSession', undefined)
     // Install the notification sink on the (singleton) client service. The
     // pool fans out session/update + session/request_permission via this sink,
     // routing by params.sessionId, so a single sink supports the shared
@@ -299,11 +294,7 @@ export class AcpSessionService
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
           getCurrentCwd: () => this._workspace.current?.folder.fsPath,
           whenWorkspaceReady: () => this._workspace.whenReady,
-          getLiveSessionIds: () => {
-            const ids = new Set<string>()
-            for (const s of this._sessions) ids.add(s.id)
-            return ids
-          },
+          getLiveSessionIds: () => this._sessionStore.liveIds(),
           getHistoryScope: () => this._historyScope(),
         },
       ),
@@ -361,13 +352,7 @@ export class AcpSessionService
    */
   private async _onWorkspaceSwap(): Promise<void> {
     this._suspendActivePersist = true
-    const oldSessions = this._sessions
-    transaction((tx) => {
-      this._sessions = []
-      this.sessions.set(this._sessions, tx)
-      this.activeSessionId.set(undefined, tx)
-      this.activeSession.set(undefined, tx)
-    })
+    const oldSessions = this._sessionStore.clear()
     this._resumingBySessionId.clear()
     for (const session of oldSessions) {
       void session.close().catch((err) => {
@@ -439,12 +424,7 @@ export class AcpSessionService
       session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
       session.seedConfigOptions(seededOptions)
     }
-    transaction((tx) => {
-      this._sessions = [...this._sessions, session]
-      this.sessions.set(this._sessions, tx)
-      this.activeSessionId.set(session.id, tx)
-      this.activeSession.set(session, tx)
-    })
+    this._sessionStore.add(session, { activate: true })
     this._telemetry.publicLog('acp.session_created', { agentId: resolvedAgentId })
     this._onDidCreate.fire(session)
 
@@ -559,14 +539,11 @@ export class AcpSessionService
    * history rows, persisted editor inputs, and protocol notifications carry.
    */
   private _findSession(sessionId: string): AcpSession | undefined {
-    return this._sessions.find((x) => x.id === sessionId || x.sessionIdOnAgent.get() === sessionId)
+    return this._sessionStore.find(sessionId)
   }
 
   setActive(sessionId: string): void {
-    const s = this._findSession(sessionId)
-    if (!s) return
-    this.activeSessionId.set(s.id, undefined)
-    this.activeSession.set(s, undefined)
+    this._sessionStore.setActive(sessionId)
   }
 
   async resumeSession(sessionId: string): Promise<IAcpSession> {
@@ -700,17 +677,9 @@ export class AcpSessionService
       this._wireAuthGuidance(session)
       this._wireConfigOptionsCache(session)
       const captured = session
-      const prior = this._sessions.find((s) => s.id === captured.id)
-      transaction((tx) => {
-        this._sessions = [...this._sessions.filter((s) => s.id !== captured.id), captured]
-        this.sessions.set(this._sessions, tx)
-        // Read-only foreign previews register so getById/timeline work, but must
-        // not become the active session — that belongs to the current worktree.
-        if (!readOnly) {
-          this.activeSessionId.set(captured.id, tx)
-          this.activeSession.set(captured, tx)
-        }
-      })
+      // Read-only foreign previews register so getById/timeline work, but must
+      // not become the active session — that belongs to the current worktree.
+      const prior = this._sessionStore.replace(captured, { activate: !readOnly })
       registered = true
       prior?.dispose()
 
@@ -763,13 +732,7 @@ export class AcpSessionService
       if (registered && session) {
         const captured = session
         // Rollback: drop the partial session before bubbling the error.
-        this._sessions = this._sessions.filter((x) => x.id !== captured.id)
-        this.sessions.set(this._sessions, undefined)
-        if (this.activeSession.get() === captured) {
-          const next = this._sessions[0]
-          this.activeSessionId.set(next?.id, undefined)
-          this.activeSession.set(next, undefined)
-        }
+        this._sessionStore.remove(captured.id)
         captured.dispose()
       } else {
         conn.dispose()
@@ -850,16 +813,10 @@ export class AcpSessionService
     if (!session) return
     const localId = session.id
     await session.close()
-    this._sessions = this._sessions.filter((x) => x.id !== localId)
-    this.sessions.set(this._sessions, undefined)
+    this._sessionStore.remove(localId)
     AcpChatViewStateCache.clear(localId)
     AcpPromptDraftCache.clear(localId)
     AcpQuestionDraftCache.clearSession(localId)
-    if (this.activeSessionId.get() === localId) {
-      const next = this._sessions[0]
-      this.activeSessionId.set(next?.id, undefined)
-      this.activeSession.set(next, undefined)
-    }
     this._telemetry.publicLog('acp.session_closed', { sessionId: localId })
     this._onDidCloseSession.fire(localId)
   }
