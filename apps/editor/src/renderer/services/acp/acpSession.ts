@@ -966,9 +966,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._orphanChildren.clear()
     this._toolCallParent.clear()
     this._terminalOutput.clear()
-    this.messages.set(this._messages, undefined)
-    this.toolCalls.set(this._toolCalls, undefined)
-    this.timeline.set(this._timeline, undefined)
+    this._setImmediate(this.messages, this._messages)
+    this._setImmediate(this.toolCalls, this._toolCalls)
+    this._setImmediate(this.timeline, this._timeline)
     this.dispose()
   }
 
@@ -1334,8 +1334,12 @@ export class AcpSession extends Disposable implements IAcpSession {
     for (const m of this._messages) {
       this._upsertMessageInTimeline(m)
     }
-    this.messages.set(this._messages, undefined)
-    this.timeline.set(this._timeline, undefined)
+    // Write both lanes on the batched tx then commit, so the streaming-flag
+    // clear is observed atomically (one notification) instead of tearing
+    // messages from timeline.
+    const tx = this._batchedTx()
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
     this._commitBatchedTx()
   }
 
@@ -1345,8 +1349,14 @@ export class AcpSession extends Disposable implements IAcpSession {
     const message: AcpMessage = { id, role, blocks, text, streaming: false }
     this._messages = [...this._messages, message]
     this._upsertMessageInTimeline(message)
-    this.messages.set(this._messages, undefined)
-    this.timeline.set(this._timeline, undefined)
+    // Atomic + synchronous: write both observables on the batched tx then commit
+    // immediately. Folding in any chunk tx already pending keeps messages and
+    // timeline from being observed in a torn intermediate state (e.g. a
+    // mid-stream `[cancelled]`/`[error]` sentinel landing between two chunks).
+    const tx = this._batchedTx()
+    this.messages.set(this._messages, tx)
+    this.timeline.set(this._timeline, tx)
+    this._commitBatchedTx()
   }
 
   private _upsertToolCall(call: AcpToolCall, parentId?: string): void {
@@ -1504,6 +1514,25 @@ export class AcpSession extends Disposable implements IAcpSession {
       this._pendingTx = undefined
       tx.finish()
     }
+  }
+
+  /**
+   * Write an observable with an immediate (synchronous) notification. Guarded:
+   * doing this while a batched tx is still pending would let observers see a
+   * torn state (the immediate lane updated, the batched lane not yet flushed) —
+   * exactly the streaming-jitter class the 16ms batcher exists to prevent. All
+   * timeline/messages immediate writes must either commit the pending batch
+   * first or route through here. In dev this throws so the mistake surfaces in
+   * tests; in production it degrades to a plain set.
+   */
+  private _setImmediate<T>(o: ISettableObservable<T>, value: T): void {
+    if (import.meta.env.DEV && this._pendingTx !== undefined) {
+      throw new Error(
+        `AcpSession: immediate set on ${o.debugName} while a batched tx is pending — ` +
+          `commit the batch first to avoid a torn timeline (session ${this.id})`,
+      )
+    }
+    o.set(value, undefined)
   }
 }
 

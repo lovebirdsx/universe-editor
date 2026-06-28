@@ -7,6 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
+  autorun,
   ConfigurationService,
   Emitter,
   Event,
@@ -1127,5 +1128,74 @@ describe('AcpSession.timeline', () => {
         lines: ['+alpha', '+beta'],
       },
     ])
+  })
+})
+
+describe('AcpSession.timeline — batched/immediate atomicity', () => {
+  let svc: AcpSessionService
+  let client: FakeAcpClientService
+
+  beforeEach(() => {
+    // Hanging prompt so the turn stays 'running' and a mid-stream sentinel
+    // (`[cancelled]`) can be appended while a chunk batch is still pending.
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+  })
+
+  afterEach(() => {
+    svc.dispose()
+  })
+
+  it('never exposes messages torn from timeline when a sentinel lands mid-stream', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    // Observe both lanes together; record any frame where the trailing message
+    // is present in one lane but not the other (the torn intermediate state the
+    // 16ms batcher must prevent). Attached before any prompt so it also catches
+    // the user-message append, which runs with no batch pending.
+    let torn = 0
+    const stop = autorun((r) => {
+      const msgs = s.messages.read(r)
+      const tl = s.timeline.read(r)
+      const lastMsg = msgs[msgs.length - 1]
+      if (lastMsg === undefined) return
+      const inTimeline = tl.some((it) => it.kind === 'message' && it.id === lastMsg.id)
+      if (!inTimeline) torn++
+    })
+
+    void s.sendPrompt('go')
+
+    // Open a pending chunk batch, then append a `[cancelled]` sentinel via
+    // cancelTurn while that batch is still pending — the prior bug set messages
+    // and timeline with separate immediate notifications, tearing them.
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'partial' } },
+    })
+    await s.cancelTurn()
+
+    expect(torn).toBe(0)
+    // Final state is consistent: the cancelled sentinel is in both lanes.
+    const msgs = s.messages.get()
+    const last = msgs[msgs.length - 1]!
+    expect(last.text).toBe('[cancelled]')
+    expect(s.timeline.get().some((it) => it.kind === 'message' && it.id === last.id)).toBe(true)
+    stop.dispose()
+  })
+
+  it('appending a mid-stream sentinel does not throw the dev torn-state guard', async () => {
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+    void s.sendPrompt('go')
+    conn.sink.onSessionUpdate({
+      sessionId: 'agent-1',
+      update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'chunk' } },
+    })
+    // _appendMessage runs while the chunk batch is pending; it must commit the
+    // batch rather than tripping the immediate-set guard.
+    await expect(s.cancelTurn()).resolves.toBeUndefined()
   })
 })
