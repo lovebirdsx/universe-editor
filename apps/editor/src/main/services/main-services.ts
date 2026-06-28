@@ -13,10 +13,16 @@
  *  collection in index.ts — they are constructed before the container.
  *--------------------------------------------------------------------------------------------*/
 
-import { registerSingleton, SyncDescriptor } from '@universe-editor/platform'
+import {
+  registerSingleton,
+  registerSingletonFactory,
+  SyncDescriptor,
+} from '@universe-editor/platform'
+import { ILoggerService } from '@universe-editor/platform'
 import { IFileService } from '@universe-editor/platform'
 import { IFileSearchService } from '@universe-editor/platform'
 import { ISecretStorageService } from '@universe-editor/platform'
+import { IMainStorageService } from '../storage.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import {
   IDisposableLeakService,
@@ -68,14 +74,15 @@ import { AiDebugMainService } from './ai/aiDebugService.js'
 import { RemoteSchemaMainService } from './remoteSchema/remoteSchemaMainService.js'
 import { ExchangeRateMainService } from './exchangeRate/exchangeRateMainService.js'
 
-// SyncDescriptor (not the ctor overload) because these constructors mix
-// @-injected services with non-branded static params (spawner stubs, Storage,
-// IUpdateEnvironment, filePath) that carry default values. When a constructor has
-// leading static params BEFORE its @-injected ones (AcpHost, AcpTerminal), the
-// staticArguments must pad those slots with `undefined` so their count matches the
-// first service-arg position — otherwise the kernel logs a console.trace and pads
-// itself. `undefined` makes each default value kick in. All eager
-// (supportsDelayedInstantiation=false): bootstrap resolves them at once.
+// Services whose constructors mix @-injected services with non-branded static
+// params (spawner stubs, Storage, filePath) are registered via
+// registerSingletonFactory: the factory constructs them explicitly, passing the
+// static params (default values via `undefined`) positionally and resolving the
+// injected ones through the accessor. This is a type-checked constructor call —
+// adding/removing a static param is a compile error, not a runtime console.trace
+// from a mismatched `[undefined, ...]` padding count. Pure-injected services
+// keep the plain SyncDescriptor form. All eager (the bootstrap resolves them at
+// once): supportsDelayedInstantiation defaults to false.
 registerSingleton(IPingService, new SyncDescriptor<IPingService>(MainPingService, [], false))
 registerSingleton(IFileService, new SyncDescriptor<IFileService>(FileSystemMainService, [], false))
 registerSingleton(
@@ -90,53 +97,50 @@ registerSingleton(
   IRecentWorkspacesService,
   new SyncDescriptor<RecentWorkspacesMainService>(RecentWorkspacesMainService, [], false),
 )
-registerSingleton(
+registerSingletonFactory(
   IAcpHostService,
-  // 3 leading static params (spawn, lookup, resolveNodeEntry) before @ILoggerService.
-  new SyncDescriptor<IAcpHostService>(AcpHostMainService, [undefined, undefined, undefined], false),
+  (acc) => new AcpHostMainService(undefined, undefined, undefined, acc.get(ILoggerService)),
 )
-registerSingleton(
+registerSingletonFactory(
   IAcpTerminalService,
-  // 1 leading static param (spawn) before @ILoggerService.
-  new SyncDescriptor<IAcpTerminalService>(AcpTerminalMainService, [undefined], false),
+  (acc) => new AcpTerminalMainService(undefined, acc.get(ILoggerService)),
 )
-registerSingleton(
+registerSingletonFactory(
   IExtensionHostService,
-  // 5 leading static params (spawn, resolveEntry, resolveExtensionsDir,
-  // resolveUserExtensionsDir, resolveTsServerPaths) before @ILoggerService.
-  new SyncDescriptor<IExtensionHostService>(
-    ExtensionHostMainService,
-    [undefined, undefined, undefined, undefined, undefined],
-    false,
-  ),
+  (acc) =>
+    new ExtensionHostMainService(
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      acc.get(ILoggerService),
+    ),
 )
 registerSingleton(
   IClaudeBinaryService,
   new SyncDescriptor<IClaudeBinaryService>(ClaudeBinaryMainService, [], false),
 )
-registerSingleton(
+registerSingletonFactory(
   IClaudeConfigService,
-  // 1 leading static param (settingsPath) before @ILoggerService.
-  new SyncDescriptor<IClaudeConfigService>(ClaudeConfigMainService, [undefined], false),
+  (acc) => new ClaudeConfigMainService(undefined, acc.get(ILoggerService)),
 )
 registerSingleton(
   ICodexBinaryService,
   new SyncDescriptor<ICodexBinaryService>(CodexBinaryMainService, [], false),
 )
-registerSingleton(
+registerSingletonFactory(
   ICodexConfigService,
-  // 1 leading static param (configPath) before @ILoggerService.
-  new SyncDescriptor<ICodexConfigService>(CodexConfigMainService, [undefined], false),
+  (acc) => new CodexConfigMainService(undefined, acc.get(ILoggerService)),
 )
 registerSingleton(
   IDisposableLeakService,
   new SyncDescriptor<IDisposableLeakService>(DisposableLeakMainService, [], false),
 )
 registerSingleton(IUpdateService, new SyncDescriptor<IUpdateService>(UpdateMainService, [], false))
-registerSingleton(
+registerSingletonFactory(
   IReleaseNotesService,
-  // 1 leading static param (resolvePath) before @ILoggerService.
-  new SyncDescriptor<IReleaseNotesService>(ReleaseNotesMainService, [undefined], false),
+  (acc) => new ReleaseNotesMainService(undefined, acc.get(ILoggerService)),
 )
 registerSingleton(
   IPerformanceMarksService,
@@ -150,15 +154,14 @@ registerSingleton(
   IConfigLocationService,
   new SyncDescriptor<IConfigLocationService>(ConfigLocationMainService, [], false),
 )
-registerSingleton(
+registerSingletonFactory(
   IUsageService,
-  // 1 leading static param (settingsPath) before @ILoggerService.
-  new SyncDescriptor<IUsageService>(UsageMainService, [undefined], false),
+  (acc) => new UsageMainService(undefined, acc.get(ILoggerService)),
 )
-registerSingleton(
+registerSingletonFactory(
   ISecretStorageService,
-  // 1 leading static param (safeStorage) before @IMainStorageService / @ILoggerService.
-  new SyncDescriptor<ISecretStorageService>(SecretStorageMainService, [undefined], false),
+  (acc) =>
+    new SecretStorageMainService(undefined, acc.get(IMainStorageService), acc.get(ILoggerService)),
 )
 registerSingleton(IAiDebugRecorderService, new SyncDescriptor(AiDebugRecorder, [], false))
 registerSingleton(
@@ -169,13 +172,11 @@ registerSingleton(
   IAiDebugService,
   new SyncDescriptor<IAiDebugService>(AiDebugMainService, [], false),
 )
-registerSingleton(
+registerSingletonFactory(
   IRemoteSchemaService,
-  // 1 leading static param (cacheDir) before @ILoggerService.
-  new SyncDescriptor<IRemoteSchemaService>(RemoteSchemaMainService, [undefined], false),
+  (acc) => new RemoteSchemaMainService(undefined, acc.get(ILoggerService)),
 )
-registerSingleton(
+registerSingletonFactory(
   IExchangeRateService,
-  // 1 leading static param (cacheFile) before @ILoggerService.
-  new SyncDescriptor<IExchangeRateService>(ExchangeRateMainService, [undefined], false),
+  (acc) => new ExchangeRateMainService(undefined, acc.get(ILoggerService)),
 )
