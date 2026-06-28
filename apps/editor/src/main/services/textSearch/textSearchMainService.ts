@@ -3,7 +3,7 @@
  *  Main-process workspace text search backed by ripgrep.
  *--------------------------------------------------------------------------------------------*/
 
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { StringDecoder } from 'node:string_decoder'
 import { rgPath } from '@vscode/ripgrep'
@@ -22,6 +22,7 @@ import {
   type SearchLimitHit,
   type UriComponents,
 } from '@universe-editor/platform'
+import { ManagedChildProcess } from '../process/managedChildProcess.js'
 import {
   ITextSearchMainService,
   type ITextSearchMainComplete,
@@ -70,7 +71,7 @@ interface RgMessage {
 }
 
 interface RunningSearch {
-  readonly process: ChildProcessWithoutNullStreams
+  readonly process: ManagedChildProcess
   cancelled: boolean
   killedForLimit: boolean
 }
@@ -191,7 +192,10 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
         `excludes=${query.excludes.length} configExcludes=${query.configurationExcludes.length}`,
     )
 
-    const child = spawn(rgDiskPath, args, { cwd: root.fsPath })
+    const child = new ManagedChildProcess(spawn(rgDiskPath, args, { cwd: root.fsPath }), {
+      logger: this._logger,
+      label: query.sessionId,
+    })
     const running: RunningSearch = {
       process: child,
       cancelled: false,
@@ -306,22 +310,24 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
     }
 
     return await new Promise<ITextSearchMainComplete>((resolve, reject) => {
-      child.stdout.on('data', (data: Buffer) => handleData(decoder.write(data)))
-      child.stderr.on('data', (data: Buffer) => {
+      child.onStdout((data: Buffer) => handleData(decoder.write(data)))
+      child.onStderr((data: Buffer) => {
         const next = data.toString()
         if (stderr.length + next.length < STDERR_LIMIT) stderr += next
       })
-      child.on('error', (err) => {
+      child.onDidExit((exit) => {
         this._sessions.delete(query.sessionId)
-        reject(err)
-      })
-      child.on('close', (code) => {
+        child.dispose()
+        if (exit.error !== undefined) {
+          reject(new Error(exit.error))
+          return
+        }
+        const code = exit.code
         handleData(decoder.end())
         if (remainder.trim().length > 0) {
           handleLine(remainder.trim())
           remainder = ''
         }
-        this._sessions.delete(query.sessionId)
         const durationMs = Date.now() - startedAt
         const progress = progressOf(
           Math.max(filesScanned, results.size),
@@ -361,7 +367,7 @@ export class TextSearchMainService extends Disposable implements ITextSearchMain
   override dispose(): void {
     for (const session of this._sessions.values()) {
       session.cancelled = true
-      session.process.kill()
+      session.process.dispose()
     }
     this._sessions.clear()
     super.dispose()
