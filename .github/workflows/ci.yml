@@ -233,6 +233,15 @@ jobs:
       - name: Run benchmarks
         run: pnpm --filter @universe-editor/editor bench
 
+      # Build the renderer and report its gzipped bundle size against the
+      # committed baseline. Soft (the whole bench job is continue-on-error) — a
+      # regression shows up in logs/artifact without blocking the PR.
+      - name: Build editor (renderer assets for bundle-size)
+        run: pnpm build --filter=@universe-editor/editor
+
+      - name: Report renderer bundle size
+        run: pnpm bundle-size
+
       - name: Upload benchmark results
         if: always()
         uses: actions/upload-artifact@v4
