@@ -2,13 +2,23 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   ContextKeyService,
+  IEditorService,
+  IHostService,
+  ILayoutService,
+  INotificationService,
+  IQuickInputService,
+  IViewsService,
+  IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
+  observableValue,
   registerAction2,
   type IDisposable,
+  type IQuickPickItem,
 } from '@universe-editor/platform'
 import {
+  ResumeAgentSessionAction,
   ScrollAcpTimelinePageDownAction,
   ScrollAcpTimelinePageUpAction,
   FocusBottomAcpTimelineAction,
@@ -26,6 +36,17 @@ import {
   IAcpChatWidgetService,
   type AcpChatWidget,
 } from '../../services/acp/acpChatWidgetService.js'
+import {
+  AcpForeignWorktreeError,
+  IAcpSessionService,
+  type IAcpSession,
+} from '../../services/acp/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type AcpSessionHistoryEntry,
+} from '../../services/acp/acpSessionHistory.js'
+import { IAcpChatLocationService } from '../../services/acp/acpChatLocationService.js'
+import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 
 describe('Agent timeline navigation actions', () => {
   const disposables: IDisposable[] = []
@@ -306,5 +327,147 @@ describe('Agent chat font zoom actions', () => {
       DecreaseAgentFontSizeAction.ID,
     )
     expect(KeybindingsRegistry.resolveKeybinding('ctrl+0', ctx)).toBe(ResetAgentFontSizeAction.ID)
+  })
+})
+
+describe('ResumeAgentSessionAction', () => {
+  function makeEntry(over: Partial<AcpSessionHistoryEntry>): AcpSessionHistoryEntry {
+    return {
+      id: 'sess-1',
+      agentId: 'fake',
+      sessionIdOnAgent: 'sess-1',
+      title: 'Session 1',
+      createdAt: 0,
+      lastUsedAt: 0,
+      ...over,
+    }
+  }
+
+  function build(opts: {
+    entries: readonly AcpSessionHistoryEntry[]
+    pickIndex: number
+    currentCwd: string | undefined
+    platform?: 'win32' | 'linux'
+    location?: 'editor' | 'sidebar'
+    resumeImpl?: (id: string) => Promise<IAcpSession>
+  }) {
+    const resumeSession = vi.fn(
+      opts.resumeImpl ??
+        ((_id: string) => Promise.resolve({ id: 'live', agentId: 'fake' } as IAcpSession)),
+    )
+    const setActive = vi.fn()
+    const openEditor = vi.fn()
+    const openViewContainer = vi.fn()
+    const notify = vi.fn()
+
+    const sessions = {
+      _serviceBrand: undefined,
+      resumeSession,
+      setActive,
+      getById: () => undefined,
+    } as unknown as IAcpSessionService
+    const history = {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', opts.entries),
+      list: () => opts.entries,
+      get: (id: string) => opts.entries.find((e) => e.id === id),
+    } as unknown as IAcpSessionHistoryService
+    const quickInput = {
+      _serviceBrand: undefined,
+      pick: (items: IQuickPickItem[]) => Promise.resolve(items[opts.pickIndex]),
+    } as unknown as IQuickInputService
+    const location = {
+      _serviceBrand: undefined,
+      location: observableValue('test.loc', opts.location ?? 'editor'),
+    } as unknown as IAcpChatLocationService
+    const layout = {
+      _serviceBrand: undefined,
+      getVisible: () => true,
+      toggleVisible: vi.fn(),
+    } as unknown as ILayoutService
+    const views = {
+      _serviceBrand: undefined,
+      openViewContainer,
+    } as unknown as IViewsService
+    const editor = {
+      _serviceBrand: undefined,
+      openEditor,
+    } as unknown as IEditorService
+    const notification = {
+      _serviceBrand: undefined,
+      notify,
+    } as unknown as INotificationService
+    const workspace = {
+      _serviceBrand: undefined,
+      current: opts.currentCwd ? { folder: { fsPath: opts.currentCwd }, name: 'ws' } : null,
+    } as unknown as IWorkspaceService
+    const host = { _serviceBrand: undefined, platform: opts.platform ?? 'linux' } as IHostService
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, sessions)
+    services.set(IAcpSessionHistoryService, history)
+    services.set(IQuickInputService, quickInput)
+    services.set(IAcpChatLocationService, location)
+    services.set(ILayoutService, layout)
+    services.set(IViewsService, views)
+    services.set(IEditorService, editor)
+    services.set(INotificationService, notification)
+    services.set(IWorkspaceService, workspace)
+    services.set(IHostService, host)
+    // AcpSessionEditorInput.createInstance pulls these at construction.
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    const inst = new InstantiationService(services)
+    return { inst, resumeSession, setActive, openEditor, openViewContainer, notify }
+  }
+
+  async function run(b: { inst: InstantiationService }): Promise<void> {
+    await b.inst.invokeFunction((accessor) => new ResumeAgentSessionAction().run(accessor))
+  }
+
+  it('opens a read-only preview tab (no live resume) for a session from another worktree', async () => {
+    const entry = makeEntry({ cwd: '/repo/wt1', title: 'From worktree' })
+    const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
+    await run(b)
+    // Must NOT spawn a live resume against the foreign worktree (split-brain).
+    expect(b.resumeSession).not.toHaveBeenCalled()
+    // Instead it opens the session as a (read-only) editor tab.
+    expect(b.openEditor).toHaveBeenCalledTimes(1)
+    const opened = b.openEditor.mock.calls[0]?.[0]
+    expect(opened).toBeInstanceOf(AcpSessionEditorInput)
+    expect((opened as AcpSessionEditorInput).sessionId).toBe('sess-1')
+  })
+
+  it('resumes a session whose cwd matches the open workspace', async () => {
+    const entry = makeEntry({ cwd: '/repo/main', title: 'Local' })
+    const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
+    await run(b)
+    expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+  })
+
+  it('resumes a cwd-less (legacy/global) session as belonging here', async () => {
+    const entry = makeEntry({ title: 'Legacy' })
+    const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
+    await run(b)
+    expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+  })
+
+  it('does not silently swallow a foreign worktree pick (regression: nothing happened)', async () => {
+    // Repro of the original bug: picking a foreign-worktree session called
+    // resumeSession, which throws AcpForeignWorktreeError; the empty catch meant
+    // nothing opened and no notification fired — the user saw no response.
+    const entry = makeEntry({ cwd: '/repo/wt1' })
+    const b = build({
+      entries: [entry],
+      pickIndex: 0,
+      currentCwd: '/repo/main',
+      resumeImpl: (id) =>
+        Promise.reject(new AcpForeignWorktreeError(id, '/repo/wt1', '/repo/main')),
+    })
+    await run(b)
+    // The fix routes around resumeSession entirely, so the user gets a tab.
+    expect(b.openEditor).toHaveBeenCalledTimes(1)
   })
 })

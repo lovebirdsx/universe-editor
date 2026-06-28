@@ -11,16 +11,19 @@ import {
   IConfigurationService,
   IDialogService,
   IEditorService,
+  IHostService,
   IInstantiationService,
   INotificationService,
   IQuickInputService,
   IStorageService,
   IViewsService,
+  IWorkspaceService,
   ILayoutService,
   MenuId,
   PartId,
   Severity,
   StorageScope,
+  arePathsEqual,
   localize,
   localize2,
   type IQuickPickItem,
@@ -447,6 +450,8 @@ export class ResumeAgentSessionAction extends Action2 {
     const location = accessor.get(IAcpChatLocationService)
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
+    const workspace = accessor.get(IWorkspaceService)
+    const platform = accessor.get(IHostService).platform
 
     const entries = history.list()
     if (entries.length === 0) {
@@ -474,6 +479,27 @@ export class ResumeAgentSessionAction extends Action2 {
       placeholder: localize('agent.resumeSession.placeholder', 'Resume previous agent session'),
     })
     if (!picked || !picked.id) return
+
+    // A session whose cwd differs from the open folder must not be resumed live —
+    // that would spawn the agent against a sibling worktree behind this window's
+    // UI (split-brain). Mirror SessionListBody: open it as a read-only preview tab
+    // (the editor resumes it via session/load read-only and lets the user activate
+    // the owning worktree from there) instead of letting resumeSession throw an
+    // AcpForeignWorktreeError into the empty catch below — which looked like the
+    // pick did nothing at all.
+    const entry = entries.find((e) => e.id === picked.id)
+    const currentCwd = workspace.current?.folder.fsPath
+    if (
+      entry &&
+      entry.cwd !== undefined &&
+      currentCwd !== undefined &&
+      !arePathsEqual(entry.cwd, currentCwd, platform)
+    ) {
+      editor.openEditor(
+        inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),
+      )
+      return
+    }
 
     try {
       const session = await sessions.resumeSession(picked.id)
