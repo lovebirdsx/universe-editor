@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
 import {
   Event,
+  IConfigurationService,
+  IDialogService,
   IFileSearchService,
   InstantiationService,
   IWorkspaceService,
@@ -16,6 +18,8 @@ import {
   URI,
 } from '@universe-editor/platform'
 import type {
+  IConfigurationService as IConfigurationServiceType,
+  IDialogService as IDialogServiceType,
   IFileSearchService as IFileSearchServiceType,
   ISettableObservable,
   IWorkspace,
@@ -72,6 +76,22 @@ const stubWorkspaceService: IWorkspaceServiceType = {
   async clearRecent() {},
   async removeRecent() {},
 } as unknown as IWorkspaceServiceType
+
+// Returns 0 (disabled) for all config keys so no confirmation dialog fires in tests.
+const stubConfigurationService: IConfigurationServiceType = {
+  _serviceBrand: undefined,
+  get: () => 0 as never,
+  onDidChangeConfiguration: Event.None,
+  update: () => Promise.resolve(),
+  keys: () => [],
+  inspect: () => ({ value: 0 }) as never,
+} as unknown as IConfigurationServiceType
+
+const stubDialogService: IDialogServiceType = {
+  _serviceBrand: undefined,
+  confirm: () => Promise.resolve({ confirmed: true, choice: 'primary' as const }),
+  prompt: () => Promise.resolve(undefined),
+} as unknown as IDialogServiceType
 
 function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   const ws: IWorkspace = { folder, name: 'test' }
@@ -151,6 +171,8 @@ function renderWithServices(
   services.set(IFileSearchService, opts.fileSearch ?? stubFileSearch)
   services.set(IWorkspaceService, opts.workspace ?? stubWorkspaceService)
   services.set(IExcludeService, new FakeExcludeService())
+  services.set(IConfigurationService, stubConfigurationService)
+  services.set(IDialogService, stubDialogService)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>

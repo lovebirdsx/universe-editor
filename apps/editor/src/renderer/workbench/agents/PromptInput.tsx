@@ -26,7 +26,13 @@ import {
   type KeyboardEvent,
   type MutableRefObject,
 } from 'react'
-import { IFileSearchService, IWorkspaceService, localize } from '@universe-editor/platform'
+import {
+  IConfigurationService,
+  IFileSearchService,
+  IWorkspaceService,
+  IDialogService,
+  localize,
+} from '@universe-editor/platform'
 import { dragContainsResources } from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
 import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
@@ -106,11 +112,17 @@ export function PromptInput({
   const fileSearch = useService(IFileSearchService)
   const workspace = useService(IWorkspaceService)
   const exclude = useService(IExcludeService)
+  const config = useService(IConfigurationService)
+  const dialogService = useService(IDialogService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
+  const timeline = useObservable(session.timeline)
   const running = status === 'running'
+  const hasUserMessages = timeline.some(
+    (item) => item.kind === 'message' && item.message.role === 'user',
+  )
   const collapseMode = useObservable(session.collapseMode)
   const totalRunningMs = useSessionTimer(session)
 
@@ -306,9 +318,25 @@ export function PromptInput({
     acceptMention,
   }
 
-  const submit = (e?: FormEvent | KeyboardEvent): void => {
+  const submit = async (e?: FormEvent | KeyboardEvent): Promise<void> => {
     e?.preventDefault()
     if (!text.trim()) return
+
+    const minLen = config.get<number>('acp.prompt.confirmShortFirstMessageLength') ?? 0
+    if (minLen > 0 && !hasUserMessages && text.trim().length < minLen) {
+      const { confirmed } = await dialogService.confirm({
+        message: localize('acp.prompt.confirmShort.message', 'Send this short message?'),
+        detail: localize(
+          'acp.prompt.confirmShort.detail',
+          'Your first message is quite short. Are you sure you want to send it?',
+        ),
+        primaryButton: localize('acp.prompt.confirmShort.send', 'Send'),
+        cancelButton: localize('acp.prompt.confirmShort.cancel', 'Keep Editing'),
+        type: 'info',
+      })
+      if (!confirmed) return
+    }
+
     const value = text
     const recorded = mentions
     setText('')
@@ -329,7 +357,7 @@ export function PromptInput({
     if (popoverOpen) return
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
-      submit(e)
+      void submit(e)
     }
   }
 
@@ -455,7 +483,9 @@ export function PromptInput({
           session={session}
           running={running}
           disabled={!text.trim()}
-          onSend={() => submit()}
+          onSend={() => {
+            void submit()
+          }}
         />
       </div>
     </form>

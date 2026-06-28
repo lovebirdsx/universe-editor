@@ -195,6 +195,15 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Controls which sessions are listed in the Agents session history. "Current Worktree" includes sessions from sibling git worktrees of the same repository; "All" lists sessions across every project.',
             ),
           },
+          'acp.prompt.confirmShortFirstMessageLength': {
+            type: 'number',
+            default: 20,
+            minimum: 0,
+            description: localize(
+              'settings.acp.prompt.confirmShortFirstMessageLength',
+              'Minimum character length for the first message in a session. If the message is shorter, a confirmation dialog is shown before sending. Set to 0 to disable.',
+            ),
+          },
         },
       }),
     )
