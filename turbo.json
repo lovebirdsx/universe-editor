@@ -1,5 +1,6 @@
 {
   "$schema": "https://v2-9-14.turborepo.dev/schema.json",
+  "//": "typecheck dependsOn ^typecheck (not ^build): tsc --build + project references self-build upstream .d.ts. build.outputs lists *.tsbuildinfo so cache hits restore tsc incremental state.",
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -11,10 +12,10 @@
         "package.json",
         "tsconfig*.json"
       ],
-      "outputs": ["dist/**", "out/**", ".tsbuildinfo"]
+      "outputs": ["dist/**", "out/**", "*.tsbuildinfo"]
     },
     "typecheck": {
-      "dependsOn": ["^build", "build"],
+      "dependsOn": ["^typecheck"],
       "outputs": []
     },
     "test": {
