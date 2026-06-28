@@ -4,8 +4,7 @@
  *    • onActivateMatch  — open the file in the editor + reveal the range.
  *    • onReplaceFile    — replace every match in one file, then drop it from results.
  *    • onReplaceMatch   — replace one range, then drop it from results.
- *    • replaceAll       — replace every match across every file (with confirmation
- *                         when the change-count exceeds a threshold).
+ *    • replaceAll       — replace every match across every file (always with confirmation).
  *
  *  The replace path goes through Monaco when the file already has a live model
  *  (so the user gets undo) and through IFileService otherwise.
@@ -14,6 +13,7 @@
 import { useCallback } from 'react'
 import {
   IDialogService,
+  IEditorGroupsService,
   IEditorService,
   IFileService,
   IInstantiationService,
@@ -27,8 +27,7 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MonacoModelRegistry } from '../editor/monaco/MonacoModelRegistry.js'
 import { applyReplacements, type IReplaceEdit } from '../../services/search/replace.js'
-
-const REPLACE_CONFIRM_THRESHOLD = 20
+import { saveReplacedFile } from '../../services/search/saveReplacedFile.js'
 
 export interface ISearchActions {
   readonly onActivateMatch: (
@@ -51,6 +50,7 @@ export function useSearchActions(
   setResults: React.Dispatch<React.SetStateAction<readonly IFileMatch[]>>,
   replacePattern: string,
 ): ISearchActions {
+  const editorGroupsService = useService(IEditorGroupsService)
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
   const fileService = useService(IFileService)
@@ -91,7 +91,7 @@ export function useSearchActions(
       if (edits.length === 0) return
       const model = MonacoModelRegistry.peek(resource)
       if (model) {
-        // Already-open file: route through Monaco so the user can undo / save.
+        // Already-open file: route through Monaco so the user can undo.
         const monacoEdits = edits.map((e) => ({
           range: {
             startLineNumber: e.line,
@@ -102,6 +102,8 @@ export function useSearchActions(
           text: e.replaceText,
         }))
         model.pushEditOperations([], monacoEdits, () => null)
+        // Auto-save across all groups with URI-case-normalised lookup.
+        await saveReplacedFile(resource, editorGroupsService)
       } else {
         let text: string
         try {
@@ -115,7 +117,7 @@ export function useSearchActions(
         }
       }
     },
-    [fileService],
+    [fileService, editorGroupsService],
   )
 
   const replaceFileMatch = useCallback(
@@ -183,15 +185,13 @@ export function useSearchActions(
       0,
     )
     if (totalChanges === 0) return
-    if (totalChanges > REPLACE_CONFIRM_THRESHOLD) {
-      const ok = await dialogService.confirm({
-        message: `在 ${results.length} 个文件中替换 ${totalChanges} 处。继续?`,
-        type: 'warning',
-        primaryButton: '替换',
-        cancelButton: '取消',
-      })
-      if (!ok.confirmed) return
-    }
+    const ok = await dialogService.confirm({
+      message: `在 ${results.length} 个文件中替换 ${totalChanges} 处。继续?`,
+      type: 'warning',
+      primaryButton: '替换',
+      cancelButton: '取消',
+    })
+    if (!ok.confirmed) return
     for (const fm of results) {
       const edits: IReplaceEdit[] = []
       for (const m of fm.matches) {
