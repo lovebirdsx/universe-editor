@@ -143,7 +143,7 @@ function makeHandleRef(): { current: WidgetHandle } {
     current: {
       move: () => {},
       scrollTimeline: () => {},
-      focus: () => {},
+      focus: () => false,
       jumpToPlan: () => {},
       toggleCollapse: () => {},
       cycleCollapseMode: () => {},

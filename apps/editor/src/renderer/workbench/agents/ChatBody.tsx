@@ -74,7 +74,9 @@ const STICK_THRESHOLD_PX = 32
 export interface WidgetHandle {
   move: (direction: AcpTimelineMoveDirection) => void
   scrollTimeline: (target: AcpTimelineScrollTarget) => void
-  focus: () => void
+  /** Pull keyboard focus into this widget. Returns whether focus actually landed
+   *  so callers (Alt+T → focusEditorInput) can fall back when there's no target. */
+  focus: () => boolean
   jumpToPlan: () => void
   toggleCollapse: () => void
   cycleCollapseMode: () => void
@@ -94,7 +96,7 @@ const noop = (): void => {}
 const NOOP_HANDLE: WidgetHandle = {
   move: noop,
   scrollTimeline: noop,
-  focus: noop,
+  focus: () => false,
   jumpToPlan: noop,
   toggleCollapse: noop,
   cycleCollapseMode: noop,
@@ -249,6 +251,7 @@ function ChatSessionBody({
             session={session}
             handleRef={handleRef}
             onFindVisibleChange={handleFindVisibleChange}
+            readOnly={readOnly ?? false}
           />
           {readOnly ? (
             <ReadOnlyChatFooter session={session} />
@@ -289,10 +292,12 @@ function ChatScroll({
   session,
   handleRef,
   onFindVisibleChange,
+  readOnly,
 }: {
   session: IAcpSession
   handleRef: MutableRefObject<WidgetHandle>
   onFindVisibleChange: (open: boolean) => void
+  readOnly: boolean
 }) {
   const timeline = useObservable(session.timeline)
   const status = useObservable(session.status)
@@ -923,13 +928,26 @@ function ChatScroll({
       closeFind()
       containerRef.current?.focus({ preventScroll: true })
     }
+    // Read-only foreign sessions render no PromptInput, so nothing else claims
+    // `handle.focus`. Point Alt+T (focusInput) at the scroll container — the same
+    // tabIndex={-1} host that Alt+J/K keyboard navigation uses — so focus leaves
+    // the terminal and lands on the (browsable) message list instead of nowhere.
+    if (readOnly) {
+      handle.focus = () => {
+        const el = containerRef.current
+        if (!el) return false
+        el.focus({ preventScroll: true })
+        return true
+      }
+    }
     return () => {
       handle.openFind = noop
       handle.closeFind = noop
       handle.findNext = noop
       handle.findPrev = noop
+      if (readOnly) handle.focus = () => false
     }
-  }, [handleRef, openFind, closeFind, nextFind, prevFind])
+  }, [handleRef, openFind, closeFind, nextFind, prevFind, readOnly])
 
   return (
     <div

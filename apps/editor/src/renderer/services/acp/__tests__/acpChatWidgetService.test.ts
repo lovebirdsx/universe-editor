@@ -31,7 +31,7 @@ function makeWidget(
   container.appendChild(child)
   document.body.appendChild(container)
   const moveSpy = vi.fn()
-  const focusSpy = vi.fn()
+  const focusSpy = vi.fn(() => true)
   const widget: AcpChatWidget = {
     sessionId,
     container,

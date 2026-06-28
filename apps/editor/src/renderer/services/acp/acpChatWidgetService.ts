@@ -41,7 +41,7 @@ export interface AcpChatWidget {
   readonly container: HTMLElement
   moveTimeline(direction: AcpTimelineMoveDirection): void
   scrollTimeline(target: AcpTimelineScrollTarget): void
-  focusInput(): void
+  focusInput(): boolean
   /** Reveal the latest ExitPlanMode plan card (a `switch_mode` tool call). */
   jumpToPlan(): void
   /** Toggle the collapsed state of the currently focused timeline item. */
@@ -164,8 +164,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   focusSessionInput(sessionId: string): boolean {
     const target = this.widgetForSession(sessionId)
     if (!target) return false
-    target.focusInput()
-    return true
+    return target.focusInput()
   }
 
   widgetForSession(sessionId: string): AcpChatWidget | undefined {

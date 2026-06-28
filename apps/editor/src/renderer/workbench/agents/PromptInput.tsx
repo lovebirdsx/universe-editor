@@ -135,7 +135,10 @@ export function PromptInput({
     if (!handleRef) return
     const ref = handleRef
     ref.current.focus = () => {
-      textareaRef.current?.focus()
+      const el = textareaRef.current
+      if (!el) return false
+      el.focus()
+      return true
     }
     ref.current.popoverSelectNext = () => {
       const s = popoverStateRef.current
@@ -173,7 +176,7 @@ export function PromptInput({
       else if (s.slashOpen) setSlashDismissed(true)
     }
     return () => {
-      ref.current.focus = () => {}
+      ref.current.focus = () => false
       ref.current.popoverSelectNext = () => {}
       ref.current.popoverSelectPrev = () => {}
       ref.current.popoverAccept = () => {}
