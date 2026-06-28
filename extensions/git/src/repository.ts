@@ -7,9 +7,12 @@
  *
  * All git work goes through `gitExec` (argv arrays, no shell). `refresh` is
  * re-entrant-safe: a change arriving mid-refresh queues exactly one more run.
+ *
+ * Domain helpers live alongside: status→rows in repositoryDecoration.ts, the fs
+ * watcher in repositoryWatcher.ts, worktree operations in repositoryWorktrees.ts,
+ * and types / input-command constants / classifiers in repositoryTypes.ts.
  */
-import { basename, dirname, join, relative } from 'node:path'
-import { watch, type FSWatcher } from 'node:fs'
+import { basename, join, relative } from 'node:path'
 import { readFile, stat } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import {
@@ -18,14 +21,12 @@ import {
   window,
   workspace,
   type Disposable,
-  type QuickPickItem,
   type SourceControl,
   type SourceControlResourceGroup,
-  type SourceControlResourceState,
 } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
-import { gitErrorText, notifyGitFailure } from './gitError.js'
-import { parseStatus, type GitFileStatus } from './statusParser.js'
+import { notifyGitFailure } from './gitError.js'
+import { parseStatus } from './statusParser.js'
 import {
   selectChangedFiles,
   truncateFileDiff,
@@ -34,166 +35,33 @@ import {
   type ChangeEntry,
   type CommitGenContext,
 } from './commitContext.js'
-
-interface Decoration {
-  readonly color: string
-  readonly tooltip: string
-}
-
-const DECORATIONS: Record<string, Decoration> = {
-  M: { color: '#e2c08d', tooltip: 'Modified' },
-  A: { color: '#73c991', tooltip: 'Added' },
-  D: { color: '#c74e39', tooltip: 'Deleted' },
-  R: { color: '#e2c08d', tooltip: 'Renamed' },
-  C: { color: '#e2c08d', tooltip: 'Copied' },
-  U: { color: '#c74e39', tooltip: 'Conflict' },
-  '?': { color: '#73c991', tooltip: 'Untracked' },
-}
-
-const GIT_COMMIT_INPUT_COMMAND = { command: 'git.commit', title: 'Commit' } as const
-const GIT_COMMIT_DISABLED_INPUT_COMMAND = {
-  command: 'git.commit',
-  title: 'Commit',
-  disabled: true,
-} as const
-const GIT_PULL_INPUT_COMMAND = { command: 'git.pull', title: 'Pull' } as const
-const GIT_PULL_REBASE_INPUT_COMMAND = {
-  command: 'git.pullRebase',
-  title: 'Pull Rebase',
-} as const
-const GIT_PUSH_INPUT_COMMAND = { command: 'git.push', title: 'Push' } as const
-
-interface RefreshOptions {
-  readonly fetch?: boolean
-  readonly silent?: boolean
-}
-
-interface FetchOptions {
-  readonly prune?: boolean
-  readonly silent?: boolean
-}
-
-export function gitPrimaryInputCommand({
-  hasChanges,
-  ahead,
-  behind,
-}: {
-  readonly hasChanges: boolean
-  readonly ahead: number
-  readonly behind: number
-}) {
-  if (hasChanges) return GIT_COMMIT_INPUT_COMMAND
-  if (ahead > 0 && behind > 0) return GIT_PULL_REBASE_INPUT_COMMAND
-  if (ahead > 0) return GIT_PUSH_INPUT_COMMAND
-  if (behind > 0) return GIT_PULL_INPUT_COMMAND
-  return GIT_COMMIT_DISABLED_INPUT_COMMAND
-}
-
-function toResourceState(
-  root: string,
-  path: string,
-  letter: string,
-  mergeEditor: boolean,
-): SourceControlResourceState {
-  const decoration = DECORATIONS[letter] ?? { color: '#cccccc', tooltip: letter }
-  // Conflicted (unmerged) files open the 3-way merge editor when enabled;
-  // everything else opens a working-tree diff.
-  const command =
-    letter === 'U' && mergeEditor
-      ? { command: 'git.openMergeEditor', title: 'Resolve in Merge Editor' }
-      : { command: 'git.openChange', title: 'Open Changes' }
-  return {
-    resourceUri: join(root, path),
-    contextValue: letter,
-    decorations: { tooltip: decoration.tooltip, color: decoration.color },
-    command,
-  }
-}
-
-function stagedStates(
-  root: string,
-  files: readonly GitFileStatus[],
-  mergeEditor: boolean,
-): SourceControlResourceState[] {
-  return files
-    .filter((f) => f.kind === 'tracked' && f.index !== '.')
-    .map((f) => toResourceState(root, f.path, f.index, mergeEditor))
-}
-
-function workingStates(
-  root: string,
-  files: readonly GitFileStatus[],
-  mergeEditor: boolean,
-): SourceControlResourceState[] {
-  return files
-    .filter((f) => f.workingTree !== '.')
-    .map((f) => toResourceState(root, f.path, f.workingTree, mergeEditor))
-}
-
-interface RepositoryOptions {
-  /** SourceControl label shown in the SCM view header (e.g. `Git: <submodule>`). */
-  readonly label?: string
-}
-
-/** Branch / sync state the shared status-bar controller renders. */
-export interface RepoStatus {
-  readonly branch: string | undefined
-  readonly ahead: number
-  readonly behind: number
-  /** Non-null while an operation runs: the spinner text + kind to display. */
-  readonly busy: { readonly text: string; readonly kind: 'syncing' | 'spinning' } | undefined
-}
+import { stagedStates, workingStates } from './repositoryDecoration.js'
+import { RepositoryWatcher } from './repositoryWatcher.js'
+import { RepositoryWorktrees } from './repositoryWorktrees.js'
+import {
+  GIT_COMMIT_INPUT_COMMAND,
+  gitPrimaryInputCommand,
+  type FetchOptions,
+  type RefreshOptions,
+  type RepositoryOptions,
+  type RepoStatus,
+} from './repositoryTypes.js'
 
 export { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
-import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
-
-export type WorktreeRemoveFailure = 'busy' | 'dirty-or-locked' | 'submodule' | 'other'
-
-/**
- * Classify why `git worktree remove` failed from its stderr. A worktree whose
- * directory (or a file under it) is still held by a running process — most often
- * an editor window opened on that worktree, or its integrated terminal — fails
- * with EBUSY/EPERM/EINVAL-style messages that `--force` cannot fix; deleting it
- * needs the holding process closed first. A dirty or locked worktree, by
- * contrast, is exactly what `--force` is for. A worktree with initialized
- * submodules is refused outright by git (even with `--force`); it must have its
- * submodules deinitialized first.
- */
-export function classifyWorktreeRemoveFailure(stderr: string): WorktreeRemoveFailure {
-  const msg = stderr.toLowerCase()
-  if (
-    msg.includes('invalid argument') ||
-    msg.includes('permission denied') ||
-    msg.includes('access is denied') ||
-    msg.includes('being used by another process') ||
-    msg.includes('resource busy') ||
-    msg.includes('device or resource busy') ||
-    msg.includes('operation not permitted')
-  ) {
-    return 'busy'
-  }
-  if (msg.includes('containing submodules')) {
-    return 'submodule'
-  }
-  if (
-    msg.includes('contains modified or untracked files') ||
-    msg.includes('use --force') ||
-    msg.includes('is dirty') ||
-    msg.includes('locked working tree') ||
-    msg.includes('is locked')
-  ) {
-    return 'dirty-or-locked'
-  }
-  return 'other'
-}
+export {
+  gitPrimaryInputCommand,
+  classifyWorktreeRemoveFailure,
+  type RepoStatus,
+  type WorktreeRemoveFailure,
+} from './repositoryTypes.js'
 
 export class Repository {
   private readonly _sc: SourceControl
   private readonly _staged: SourceControlResourceGroup
   private readonly _working: SourceControlResourceGroup
-  private readonly _watchers: FSWatcher[] = []
+  private readonly _watcher: RepositoryWatcher
+  private readonly _worktrees: RepositoryWorktrees
   private readonly _changeListeners = new Set<() => void>()
-  private _debounce: ReturnType<typeof setTimeout> | undefined
   private _refreshing = false
   private _queued = false
   private _syncing = false
@@ -223,7 +91,18 @@ export class Repository {
     this._staged.hideWhenEmpty = true
     this._working = this._sc.createResourceGroup('workingTree', 'Changes')
 
-    this._startWatching()
+    this._worktrees = new RepositoryWorktrees({
+      root,
+      ...(this._log !== undefined ? { log: this._log } : {}),
+      beginProgress: (text, kind) => this._beginProgress(text, kind),
+      endProgress: () => this._endProgress(),
+      refresh: () => this.refresh(),
+      listBranches: () => this._listBranches(),
+      run: (args, label, progress) => this._run(args, label, progress),
+    })
+
+    this._watcher = new RepositoryWatcher(root, () => void this.refresh(), this._log)
+    this._watcher.start()
     void this._startAutofetch()
   }
 
@@ -645,223 +524,23 @@ export class Repository {
     await this._run(['checkout', '-b', name.trim()], 'create branch')
   }
 
-  private async _listWorktrees(): Promise<WorktreeInfo[]> {
-    const res = await gitExec(['worktree', 'list', '--porcelain'], this.root, this._log)
-    if (res.exitCode !== 0) return []
-    return parseWorktrees(res.stdout)
+  // --- worktrees: delegated to RepositoryWorktrees (constructed with this repo
+  //     as its narrow host so it reuses progress + refresh + branch listing). ---
+
+  createWorktree(): Promise<void> {
+    return this._worktrees.createWorktree()
   }
 
-  /** Human-readable ref for a worktree: its branch, short detached HEAD, or bare. */
-  private _worktreeRef(wt: WorktreeInfo): string {
-    if (wt.bare) return 'bare'
-    if (wt.branch) return wt.branch
-    if (wt.head) return `(detached at ${wt.head.slice(0, 8)})`
-    return ''
+  openWorktree(newWindow: boolean): Promise<void> {
+    return this._worktrees.openWorktree(newWindow)
   }
 
-  async createWorktree(): Promise<void> {
-    const CREATE_NEW: QuickPickItem = { label: 'Create new branch…', iconId: 'add' }
-    const branches = await this._listBranches()
-    const items: QuickPickItem[] = [CREATE_NEW, ...branches.map((b) => ({ label: b }))]
-    const picked = await window.showQuickPick(items, {
-      placeHolder: 'Select a branch to create the worktree from',
-    })
-    if (!picked) return
-
-    let ref = picked.label
-    const newBranch = picked === CREATE_NEW
-    if (newBranch) {
-      const name = await window.showInputBox({ prompt: 'Name of the new branch' })
-      if (!name) return
-      ref = name.trim()
-    }
-
-    // Default location mirrors VSCode: a sibling `<repo>.worktrees/<name>` folder.
-    const safeName = ref.replace(/[/\\]/g, '-')
-    const defaultPath = join(dirname(this.root), `${basename(this.root)}.worktrees`, safeName)
-    const path = await window.showInputBox({
-      prompt: 'Worktree location',
-      value: defaultPath,
-    })
-    if (!path) return
-
-    const args = newBranch
-      ? ['worktree', 'add', '-b', ref, path.trim()]
-      : ['worktree', 'add', path.trim(), ref]
-    const ok = await this._run(args, 'create worktree', {
-      text: 'Creating worktree…',
-      kind: 'spinning',
-    })
-    if (!ok) return
-
-    const worktreePath = path.trim()
-    try {
-      await stat(join(this.root, '.gitmodules'))
-      this._beginProgress('Initializing submodules…', 'spinning')
-      try {
-        const subRes = await gitExec(
-          ['submodule', 'update', '--init', '--recursive'],
-          worktreePath,
-          this._log,
-        )
-        if (subRes.exitCode !== 0) {
-          void window.showWarningMessage(
-            `Submodule init failed in new worktree: ${gitErrorText(subRes)}`,
-          )
-        }
-      } finally {
-        this._endProgress()
-      }
-    } catch {
-      // no .gitmodules, skip
-    }
-
-    const open = await window.showInformationMessage(
-      `Worktree created at ${worktreePath}.`,
-      'Open in New Window',
-      'Open',
-    )
-    if (open === 'Open') {
-      await commands.executeCommand('_workbench.openFolder', worktreePath)
-    } else if (open === 'Open in New Window') {
-      await commands.executeCommand('_workbench.openFolderInNewWindow', worktreePath)
-    }
+  deleteWorktree(): Promise<void> {
+    return this._worktrees.deleteWorktree()
   }
 
-  async openWorktree(newWindow: boolean): Promise<void> {
-    const worktrees = (await this._listWorktrees()).filter((wt) => !wt.bare)
-    if (worktrees.length <= 1) {
-      void window.showInformationMessage('No other worktrees to open.')
-      return
-    }
-    const pick = await window.showQuickPick(
-      worktrees.map((wt) => ({
-        label: basename(wt.path),
-        description: this._worktreeRef(wt),
-        detail: wt.path,
-      })),
-      { placeHolder: newWindow ? 'Open worktree in new window' : 'Open worktree' },
-    )
-    if (!pick) return
-    await commands.executeCommand(
-      newWindow ? '_workbench.openFolderInNewWindow' : '_workbench.openFolder',
-      pick.detail,
-    )
-  }
-
-  async deleteWorktree(): Promise<void> {
-    const worktrees = (await this._listWorktrees()).filter((wt) => !wt.isMain && !wt.bare)
-    if (worktrees.length === 0) {
-      void window.showInformationMessage('No worktrees to delete.')
-      return
-    }
-    const pick = await window.showQuickPick(
-      worktrees.map((wt) => ({
-        label: basename(wt.path),
-        description: this._worktreeRef(wt),
-        detail: wt.path,
-      })),
-      { placeHolder: 'Select a worktree to delete' },
-    )
-    if (!pick) return
-    await this.removeWorktreeAt(pick.detail, pick.label)
-  }
-
-  /**
-   * Remove the worktree at `path`, classifying failures: a folder still held by a
-   * running process (an editor window / terminal) can't be forced and needs the
-   * holder closed; a dirty-or-locked worktree offers a `--force` retry; a worktree
-   * with initialized submodules — which git refuses to remove even with `--force` —
-   * has its submodules deinitialized first, then retries. `label` is the human name
-   * used in messages. Refreshes the SCM view on success.
-   */
-  async removeWorktreeAt(path: string, label: string): Promise<void> {
-    const res = await gitExec(['worktree', 'remove', path], this.root, this._log)
-    if (res.exitCode === 0) {
-      await this._finishWorktreeRemoval()
-      return
-    }
-
-    const stderr = gitErrorText(res)
-    const reason = classifyWorktreeRemoveFailure(stderr)
-
-    if (reason === 'busy') {
-      this._notifyWorktreeBusy(label, path)
-      return
-    }
-
-    if (reason === 'submodule') {
-      await this._removeWorktreeWithSubmodules(path, label)
-      return
-    }
-
-    if (reason === 'dirty-or-locked') {
-      const force = await window.showWarningMessage(
-        `Worktree '${label}' has changes or is locked. Delete anyway?`,
-        'Delete',
-      )
-      if (force === 'Delete') {
-        const forced = await gitExec(['worktree', 'remove', '--force', path], this.root, this._log)
-        if (forced.exitCode === 0) {
-          await this._finishWorktreeRemoval()
-          return
-        }
-        const forcedReason = classifyWorktreeRemoveFailure(gitErrorText(forced))
-        if (forcedReason === 'busy') {
-          this._notifyWorktreeBusy(label, path)
-        } else if (forcedReason === 'submodule') {
-          await this._removeWorktreeWithSubmodules(path, label)
-        } else {
-          await notifyGitFailure('delete worktree', forced)
-        }
-      }
-      return
-    }
-
-    await notifyGitFailure('delete worktree', res)
-  }
-
-  /**
-   * Git refuses to remove a worktree that still has initialized submodules, even
-   * with `--force`. Deinitialize them inside the worktree first (this empties the
-   * submodule dirs so git no longer treats them as live working trees), then retry
-   * the forced removal.
-   */
-  private async _removeWorktreeWithSubmodules(path: string, label: string): Promise<void> {
-    this._beginProgress('Deinitializing submodules…', 'spinning')
-    try {
-      const deinit = await gitExec(['submodule', 'deinit', '--all', '--force'], path, this._log)
-      if (deinit.exitCode !== 0) {
-        await notifyGitFailure('deinitialize submodules', deinit)
-        return
-      }
-    } finally {
-      this._endProgress()
-    }
-
-    const forced = await gitExec(['worktree', 'remove', '--force', path], this.root, this._log)
-    if (forced.exitCode === 0) {
-      await this._finishWorktreeRemoval()
-      return
-    }
-    if (classifyWorktreeRemoveFailure(gitErrorText(forced)) === 'busy') {
-      this._notifyWorktreeBusy(label, path)
-    } else {
-      await notifyGitFailure('delete worktree', forced)
-    }
-  }
-
-  /** Prune stale worktree metadata and refresh the SCM view after a removal. */
-  private async _finishWorktreeRemoval(): Promise<void> {
-    await gitExec(['worktree', 'prune'], this.root, this._log)
-    await this.refresh()
-  }
-
-  private _notifyWorktreeBusy(label: string, path: string): void {
-    void window.showErrorMessage(
-      `Can't delete worktree '${label}': its folder is in use. ` +
-        `Close any editor windows or terminals opened on ${path} and try again.`,
-    )
+  removeWorktreeAt(path: string, label: string): Promise<void> {
+    return this._worktrees.removeWorktreeAt(path, label)
   }
 
   /**
@@ -1117,37 +796,6 @@ export class Repository {
     this._autofetchTimer = setInterval(() => void this.fetch({ silent: true }), ms)
   }
 
-  private _startWatching(): void {
-    const trigger = (): void => {
-      if (this._debounce) clearTimeout(this._debounce)
-      this._debounce = setTimeout(() => void this.refresh(), 400)
-    }
-    try {
-      this._watchers.push(
-        watch(this.root, { recursive: true }, (_event, filename) => {
-          if (filename && this._isIgnored(filename.toString())) return
-          trigger()
-        }),
-      )
-    } catch {
-      // Recursive watch isn't available on every platform — fall back to the
-      // .git directory so at least index/HEAD changes still drive a refresh.
-      try {
-        this._watchers.push(watch(join(this.root, '.git'), () => trigger()))
-      } catch {
-        console.error('[git] filesystem watch unavailable; auto-refresh disabled')
-        this._log?.('[git] filesystem watch unavailable; auto-refresh disabled')
-      }
-    }
-  }
-
-  /** Within .git, only index/HEAD matter; the rest (objects, logs) is noise. */
-  private _isIgnored(filename: string): boolean {
-    const norm = filename.replace(/\\/g, '/')
-    if (norm !== '.git' && !norm.startsWith('.git/')) return false
-    return norm !== '.git/index' && norm !== '.git/HEAD'
-  }
-
   get commitMessage(): string {
     return this._sc.inputBox.value
   }
@@ -1161,16 +809,9 @@ export class Repository {
 
   dispose(): void {
     this._disposed = true
-    if (this._debounce) clearTimeout(this._debounce)
+    this._watcher.dispose()
     if (this._autofetchInitial) clearTimeout(this._autofetchInitial)
     if (this._autofetchTimer) clearInterval(this._autofetchTimer)
-    for (const w of this._watchers) {
-      try {
-        w.close()
-      } catch {
-        // ignore
-      }
-    }
     this._changeListeners.clear()
     this._sc.dispose()
   }
