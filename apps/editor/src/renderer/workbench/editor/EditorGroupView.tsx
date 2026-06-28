@@ -8,6 +8,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  memo,
   useContext,
   useEffect,
   useLayoutEffect,
@@ -210,7 +211,7 @@ function useActiveGroup(groupsService: IEditorGroupsService): IEditorGroup {
   )
 }
 
-function EditorTab({
+const EditorTab = memo(function EditorTab({
   input,
   isActive,
   isGroupActive,
@@ -339,9 +340,9 @@ function EditorTab({
       </HoverPopup>
     </div>
   )
-}
+})
 
-export function EditorGroupView({
+export const EditorGroupView = memo(function EditorGroupView({
   group,
   groupsService,
   componentMap,
@@ -724,4 +725,4 @@ export function EditorGroupView({
       )}
     </div>
   )
-}
+})

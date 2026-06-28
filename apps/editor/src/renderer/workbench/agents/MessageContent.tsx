@@ -15,7 +15,7 @@
  *  tag and its close tag across separate text blocks.
  *--------------------------------------------------------------------------------------------*/
 
-import { useMemo } from 'react'
+import { memo, useMemo } from 'react'
 import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
@@ -57,7 +57,10 @@ function groupBlocks(blocks: readonly ContentBlock[]): readonly BlockGroup[] {
   return groups
 }
 
-export function MessageContent({ blocks, streaming }: MessageContentProps) {
+export const MessageContent = memo(function MessageContent({
+  blocks,
+  streaming,
+}: MessageContentProps) {
   const groups = useMemo(() => groupBlocks(blocks), [blocks])
   return (
     <div className={styles['messageBody']}>
@@ -70,7 +73,7 @@ export function MessageContent({ blocks, streaming }: MessageContentProps) {
       )}
     </div>
   )
-}
+})
 
 function TextRunSegments({ text, streaming }: { text: string; streaming: boolean }) {
   const segments = useMemo(() => parseCommandWrappers(text), [text])

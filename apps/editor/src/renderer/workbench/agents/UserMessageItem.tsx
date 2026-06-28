@@ -5,7 +5,7 @@
  *  content exceeds the limit a chevron toggle reveals / hides the rest.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
@@ -14,7 +14,11 @@ import styles from './agents.module.css'
 
 const COLLAPSED_MAX_PX = 160
 
-export function UserMessageItem({ blocks }: { blocks: readonly ContentBlock[] }) {
+export const UserMessageItem = memo(function UserMessageItem({
+  blocks,
+}: {
+  blocks: readonly ContentBlock[]
+}) {
   const innerRef = useRef<HTMLDivElement | null>(null)
   const [overflows, setOverflows] = useState(false)
   const [expanded, setExpanded] = useState(false)
@@ -68,4 +72,4 @@ export function UserMessageItem({ blocks }: { blocks: readonly ContentBlock[] })
       )}
     </>
   )
-}
+})
