@@ -24,373 +24,90 @@ import type {
   PromptResponse,
   SessionConfigOption,
   SessionUpdate,
-  ToolCallContent,
 } from '@agentclientprotocol/sdk'
 import type { IAcpClientConnection } from './acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
 import type { ISessionChangeTrackerService } from './sessionChangeTracker.js'
 import type { IAcpSessionTitleService } from './acpSessionTitleService.js'
-import type { DiffHunk } from './diff/reconstructBaseline.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
-import { parseMcpToolName, type McpTransport } from './acpMcpServers.js'
+import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../shared/ai/codexPricing.js'
+import { estimateCodexCost } from './acpSessionCost.js'
 import {
-  estimateCodexCostUSD,
-  extractCodexModelUsage,
-  extractCodexTurnUsage,
-  type CodexModelUsage,
-} from '../../../shared/ai/codexPricing.js'
+  blocksToText,
+  isBlankContentBlock,
+  mergeStreamingBlock,
+  splitToolCallContent,
+} from './acpSessionContent.js'
+import {
+  extractModelBreakdown,
+  readFileChanges,
+  readMcpServer,
+  readParentToolUseId,
+  readTerminalOutput,
+} from './acpSessionUpdateMeta.js'
+import {
+  AcpAbortError,
+  SET_SESSION_TITLE_METHOD,
+  type AcpChildItem,
+  type AcpMcpServerStatus,
+  type AcpMessage,
+  type AcpMessageRole,
+  type AcpPendingPermission,
+  type AcpPendingQuestion,
+  type AcpPlanEntry,
+  type AcpSessionStatus,
+  type AcpToolCall,
+  type AcpToolCallStatus,
+  type AcpUsage,
+  type IAcpSession,
+  type IAcpSessionInitState,
+  type TimelineItem,
+} from './acpSessionModel.js'
 
-// ---------------------------------------------------------------------------
-// Public view model
-// ---------------------------------------------------------------------------
-
-export type AcpMessageRole = 'user' | 'agent' | 'thought'
-
-export interface AcpMessage {
-  readonly id: string
-  readonly role: AcpMessageRole
-  /** Plain-text view of `blocks`, computed via {@link blocksToText}. */
-  readonly text: string
-  /** Structured content blocks — used by the renderer for markdown / images / resource links. */
-  readonly blocks: readonly ContentBlock[]
-  /** True while this message is still receiving streaming chunks; the UI uses this to render a blinking caret. */
-  readonly streaming: boolean
-}
-
-export type AcpToolCallStatus = 'pending' | 'in_progress' | 'completed' | 'failed'
-
-export interface AcpToolCallDiff {
-  readonly path: string
-  /** Empty string when the agent reported `null` (i.e. file creation). */
-  readonly oldText: string
-  readonly newText: string
-}
-
-export interface AcpToolCall {
-  readonly id: string
-  readonly title: string
-  readonly kind: string
-  readonly status: AcpToolCallStatus
-  /** Plain-text view of `blocks`. */
-  readonly text: string
-  /**
-   * Tool call output normalized into ContentBlock[]. ToolCallContent variants
-   * `content` are unwrapped; `terminal` is converted to a placeholder text block.
-   * `diff` entries are *not* included here — they live in `diffs` so the UI can
-   * render a dedicated diff preview.
-   */
-  readonly blocks: readonly ContentBlock[]
-  /** Structured diff entries extracted from ToolCallContent.diff. */
-  readonly diffs: readonly AcpToolCallDiff[]
-  /**
-   * Sub-agent timeline: message / tool_call updates the agent tagged with this
-   * call's id via `_meta.claudeCode.parentToolUseId` (e.g. a Task tool spawning
-   * a subagent). Nested one level deep — the UI folds these inside the parent
-   * card so the subagent's chatter stays out of the main timeline.
-   */
-  readonly children?: readonly AcpChildItem[]
-  /**
-   * Source MCP server name when this tool call is an MCP tool. Derived from the
-   * agent fork's `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Absent
-   * for built-in tools. Drives the "MCP · <server>" attribution badge.
-   */
-  readonly mcpServer?: string
-}
-
-/**
- * One slot inside a parent tool call's {@link AcpToolCall.children}. Structurally
- * identical to {@link TimelineItem} but named separately to make the nesting
- * explicit. Only one level of nesting is supported — a child tool call's own
- * `children` is never populated.
- */
-export type AcpChildItem =
-  | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
-  | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
-
-export type AcpPlanEntryStatus = 'pending' | 'in_progress' | 'completed'
-
-export interface AcpPlanEntry {
-  readonly content: string
-  readonly status: AcpPlanEntryStatus
-  readonly priority?: string
-}
-
-/**
- * Observable view of one configured/connected MCP server. `status` is the raw
- * string from the Claude SDK system-init snapshot (e.g. `connected` / `failed`
- * / `needs-auth` / `pending`). `transport` is seeded from the `acp.mcpServers`
- * config; servers that only appear in the init snapshot (agent-provided) have
- * no known transport.
- */
-export interface AcpMcpServerStatus {
-  readonly name: string
-  readonly status: string
-  readonly transport?: McpTransport
-}
-
-/**
- * A single slot on the unified chat timeline. The UI renders one ordered list
- * of these so message / tool_call cards interleave by arrival order, matching
- * Copilot-style agent chat layout. Plan is *not* a timeline slot — it lives on
- * the dedicated `plan` observable and is rendered as a sticky bar above the
- * scroll, so it stays pinned instead of being pushed out of view by later items.
- *
- * Slot identity rules:
- * - `kind: 'message'` reuses the underlying `message.id` so React keys are
- *   stable across chunk merges.
- * - `kind: 'toolCall'` reuses the agent-issued `toolCallId` so `tool_call_update`
- *   replaces the existing slot in place.
- */
-export type TimelineItem =
-  | { readonly kind: 'message'; readonly id: string; readonly message: AcpMessage }
-  | { readonly kind: 'toolCall'; readonly id: string; readonly call: AcpToolCall }
-
-export interface AcpPendingPermission {
-  readonly toolCallId: string
-  readonly title: string
-  readonly kind?: string
-  readonly options: readonly {
-    readonly optionId: string
-    readonly name: string
-    readonly kind?: string
-  }[]
-  resolve(optionId: string): void
-  cancel(): void
-}
-
-/**
- * ACP extension method carrying the `AskUserQuestion` round-trip. The built-in
- * agent (vendor/claude-agent-acp) sends questions over this method and expects
- * the user's answers back. The string is shared verbatim with the agent fork's
- * `interactive.ts` — keep both in sync.
- */
-export const ASK_USER_QUESTION_METHOD = 'universe-editor/ask_user_question'
-
-/**
- * Custom ACP request that persists an AI-generated session title onto the
- * agent's durable store (the fork backs it with `renameSession`). Shared
- * verbatim with the agent fork's `acp-agent.ts` (`SET_SESSION_TITLE_METHOD`) —
- * keep both in sync. Without this round-trip the title lives only client-side
- * and `session/list`'s `summary` clobbers it after `/compact`.
- */
-export const SET_SESSION_TITLE_METHOD = 'universe-editor/set_session_title'
-
-/** One selectable option of an {@link AskUserQuestion}. */
-export interface AskUserQuestionOption {
-  readonly label: string
-  readonly description?: string
-  /** Rich preview shown side-by-side when this option is focused. */
-  readonly preview?: string
-}
-
-/** A single question in an `AskUserQuestion` tool call. */
-export interface AskUserQuestion {
-  readonly question: string
-  readonly header: string
-  readonly options: readonly AskUserQuestionOption[]
-  readonly multiSelect?: boolean
-}
-
-/** Params the agent sends over {@link ASK_USER_QUESTION_METHOD}. */
-export interface AskUserQuestionRequest {
-  readonly sessionId: string
-  readonly toolCallId: string
-  readonly questions: readonly AskUserQuestion[]
-}
-
-/**
- * Response the client returns to the agent. `answers` is keyed by question
- * text with comma-joined selected labels (matching the SDK's AskUserQuestion
- * output contract); `cancelled` short-circuits to a tool denial.
- */
-export interface AskUserQuestionResult {
-  readonly cancelled?: boolean
-  readonly answers?: Record<string, string>
-  readonly annotations?: Record<string, { preview?: string; notes?: string }>
-}
-
-/** A pending question carousel awaiting the user's answers. */
-export interface AcpPendingQuestion {
-  readonly toolCallId: string
-  readonly questions: readonly AskUserQuestion[]
-  resolve(result: AskUserQuestionResult): void
-  cancel(): void
-}
-
-export type AcpSessionStatus = 'idle' | 'connecting' | 'running' | 'errored' | 'closed'
-
-/** Per-model cost/token breakdown for a session, reported by the agent. */
-export interface AcpModelCost {
-  readonly model: string
-  readonly inputTokens: number
-  readonly outputTokens: number
-  readonly cacheReadTokens: number
-  readonly cacheCreateTokens: number
-  /** Session-cumulative cost in USD for this model, as reported by the agent. */
-  readonly costUSD: number
-}
-
-/** Context-window usage reported by the agent via `usage_update`. */
-export interface AcpUsage {
-  /** Tokens currently in context. */
-  readonly used: number
-  /** Total context window size in tokens. */
-  readonly size: number
-  /** Cumulative session cost, if the agent reports it. */
-  readonly cost?: { readonly amount: number; readonly currency: string }
-  /**
-   * Per-model cost breakdown for the whole session (including sub-agent / Task
-   * work), if the agent reports it. Drives the session cost popover.
-   */
-  readonly models?: readonly AcpModelCost[]
-  /**
-   * True when `cost`/`models` are locally estimated from token counts rather than
-   * reported authoritatively by the agent. Codex sets this (it never reports a
-   * real cost); Claude leaves it unset. The UI labels estimated costs as such.
-   */
-  readonly costEstimated?: boolean
-}
-
-/** Bag of normalized initial session state captured from `session/new`. */
-export interface IAcpSessionInitState {
-  readonly configOptions?: readonly SessionConfigOption[]
-  /** Usage snapshot to seed the arc on resume (restored from history). */
-  readonly usage?: AcpUsage
-  /**
-   * MCP servers forwarded on session/new, seeded into `mcpServers` with a
-   * `pending` status before the SDK init snapshot arrives. Carries the known
-   * transport from config.
-   */
-  readonly mcpServers?: ReadonlyArray<{ readonly name: string; readonly transport: McpTransport }>
-  /** Cumulative running duration in ms, restored from history on resume. */
-  readonly accumulatedRunningMs?: number
-}
-
-export interface IAcpSession {
-  /**
-   * The session's stable local id, generated up-front (a uuid for freshly
-   * created sessions; the agent-issued id for resumed ones). It never changes
-   * for the lifetime of the session, so it is safe to use as a React key /
-   * runtime cache key even before the agent connection is established.
-   *
-   * For the durable, agent-issued protocol id (needed for `session/load`,
-   * history, change-tracking, persistence) read {@link sessionIdOnAgent} — it
-   * is `undefined` until the connection is attached.
-   */
-  readonly id: string
-  readonly agentId: string
-  /**
-   * True for a read-only preview session: spawned to replay (`session/load`) a
-   * session that belongs to a different worktree so its history can be viewed in
-   * this window, without allowing any prompt / config mutation (those would have
-   * side effects against the other worktree). `sendPrompt` / `setConfigOption`
-   * are no-ops when set, and the chat UI hides the prompt input.
-   */
-  readonly readOnly: boolean
-  /**
-   * The agent-issued `sessionId` from `session/new` (a.k.a. `sessionIdOnAgent`).
-   * `undefined` while the session is still connecting; set once
-   * `attachConnection` runs. Durable across editor restarts and the key every
-   * other ACP service (history, change tracker, persistence) talks in.
-   */
-  readonly sessionIdOnAgent: IObservable<string | undefined>
-  readonly title: string
-  readonly messages: IObservable<readonly AcpMessage[]>
-  readonly toolCalls: IObservable<readonly AcpToolCall[]>
-  readonly plan: IObservable<readonly AcpPlanEntry[]>
-  /**
-   * Unified chronological view: message / tool_call / plan slots ordered by
-   * insertion. The canonical observable consumed by the chat UI; the three
-   * lane-specific observables above remain for back-compat and selector reads.
-   */
-  readonly timeline: IObservable<readonly TimelineItem[]>
-  readonly status: IObservable<AcpSessionStatus>
-  /**
-   * True while a resumed session is replaying its history via `session/load`.
-   * The session is registered (so `session/update` replay routes to it) before
-   * the replay finishes, leaving the timeline transiently empty; the chat UI
-   * reads this to keep showing a loading placeholder instead of flashing the
-   * "empty session" hint. Always false for freshly-created sessions — their
-   * empty timeline is the intended end state, not a transient one.
-   */
-  readonly isReplayingHistory: IObservable<boolean>
-  /** Latest context-window usage reported by the agent, or undefined if never reported. */
-  readonly usage: IObservable<AcpUsage | undefined>
-  readonly pendingPermission: IObservable<AcpPendingPermission | undefined>
-  /** Active `AskUserQuestion` carousel awaiting the user's answers, if any. */
-  readonly pendingQuestion: IObservable<AcpPendingQuestion | undefined>
-  /** Configuration options the agent has advertised for this session. */
-  readonly configOptions: IObservable<readonly SessionConfigOption[]>
-  /** Latest agent-advertised slash commands (may be empty). */
-  readonly availableCommands: IObservable<readonly AvailableCommand[]>
-  /**
-   * Configured + connected MCP servers with their latest connection status.
-   * Seeded from config on session/new, then refreshed from the Claude SDK
-   * system-init snapshot. Empty when no MCP servers are involved.
-   */
-  readonly mcpServers: IObservable<readonly AcpMcpServerStatus[]>
-  /** Current timeline collapse mode for this session. */
-  readonly collapseMode: IObservable<CollapseMode>
-  /** Cumulative milliseconds in 'running' status — does not include the current segment if still running. */
-  readonly accumulatedRunningMs: IObservable<number>
-  /** Timestamp (epoch ms) when the current running segment started, or undefined if not running. */
-  readonly runningStartedAt: IObservable<number | undefined>
-  /**
-   * Fires when a prompt (or other agent call) fails because the agent has no
-   * usable credentials. The session itself has no access to the notification /
-   * command services, so AcpSessionService owns the user-facing guidance.
-   */
-  readonly onDidRequireAuth: Event<void>
-  /**
-   * Resolves once the connecting phase settles — i.e. {@link attachConnection}
-   * or {@link failConnection} has run. Lets callers that genuinely need the live
-   * agent connection (and tests injecting agent traffic) await the background
-   * handshake without blocking the initial render. Resolves immediately if the
-   * session is already settled.
-   */
-  whenConnected(): Promise<void>
-  /**
-   * Mark the start of a `session/load` history replay (resume path). Flips
-   * {@link isReplayingHistory} on so the chat UI shows a loading placeholder
-   * rather than the empty-session hint while the timeline is still empty.
-   */
-  beginHistoryReplay(): void
-  /** Mark the replay finished — see {@link beginHistoryReplay}. */
-  endHistoryReplay(): void
-  /** Cycle the timeline collapse mode: default → collapsed → expanded → default. */
-  cycleCollapseMode(): void
-  /** Internal — call site is the permission handler. */
-  presentPermission(p: AcpPendingPermission): void
-  /** Internal — call site is the AskUserQuestion sink. */
-  presentQuestion(q: AcpPendingQuestion): void
-  /**
-   * Send a prompt. If `mentions` are provided, any `@<name>` in the text
-   * whose `<name>` matches a recorded mention is rewritten into a
-   * `resource_link` ContentBlock. Unmatched `@`-tokens stay as text.
-   */
-  sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void>
-  cancelTurn(): Promise<void>
-  close(): Promise<void>
-  /** Change one configuration option via `session/set_config_option`. */
-  setConfigOption(configId: string, value: string): Promise<void>
-}
-
-/**
- * Local error type signalling "the in-flight prompt was cancelled locally
- * (via cancelTurn)". Distinct from RequestError so callers can map it to a
- * neutral status instead of an error UI.
- */
-export class AcpAbortError extends Error {
-  constructor(message = 'Aborted') {
-    super(message)
-    this.name = 'AcpAbortError'
-  }
-}
+// Re-export the view-model types + helpers that moved to sibling modules, so the
+// many `from '.../acpSession.js'` import sites across the renderer keep working.
+export {
+  AcpAbortError,
+  ASK_USER_QUESTION_METHOD,
+  SET_SESSION_TITLE_METHOD,
+} from './acpSessionModel.js'
+export type {
+  AcpChildItem,
+  AcpMcpServerStatus,
+  AcpMessage,
+  AcpMessageRole,
+  AcpModelCost,
+  AcpPendingPermission,
+  AcpPendingQuestion,
+  AcpPlanEntry,
+  AcpPlanEntryStatus,
+  AcpSessionStatus,
+  AcpToolCall,
+  AcpToolCallDiff,
+  AcpToolCallStatus,
+  AcpUsage,
+  AskUserQuestion,
+  AskUserQuestionOption,
+  AskUserQuestionRequest,
+  AskUserQuestionResult,
+  IAcpSession,
+  IAcpSessionInitState,
+  TimelineItem,
+} from './acpSessionModel.js'
+export {
+  blocksToText,
+  hasVisibleMessageContent,
+  isBlankContentBlock,
+  mergeStreamingBlock,
+  splitToolCallContent,
+  timelineItemToText,
+  toolCallToText,
+} from './acpSessionContent.js'
 
 export class AcpSession extends Disposable implements IAcpSession {
   readonly sessionIdOnAgent: ISettableObservable<string | undefined>
@@ -1121,7 +838,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         // latest snapshot — it already folds in every call, so no accumulation.
         const codexCost =
           this.agentId === 'codex'
-            ? this._estimateCodexCost(extractCodexModelUsage((update as { _meta?: unknown })._meta))
+            ? estimateCodexCost(extractCodexModelUsage((update as { _meta?: unknown })._meta))
             : undefined
         if (codexCost != null) {
           const next: AcpUsage = {
@@ -1204,7 +921,7 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _ingestPromptResponse(response: PromptResponse): void {
     if (this.agentId !== 'codex') return
     const usages = extractCodexTurnUsage(response)
-    const estimate = this._estimateCodexCost(usages)
+    const estimate = estimateCodexCost(usages)
     if (estimate == null) return
 
     const tx = this._batchedTx()
@@ -1219,37 +936,6 @@ export class AcpSession extends Disposable implements IAcpSession {
     this.usage.set(next, tx)
     const sid = this.sessionIdOnAgent.get()
     if (sid !== undefined) this._history?.setHistoryUsage(sid, next)
-  }
-
-  /**
-   * Price a snapshot of session-cumulative per-model Codex usage. Returns the
-   * total cost plus the per-model breakdown, or undefined when there is nothing
-   * to price. Token counts are cumulative (the fork reports a running total on
-   * every model call), so callers overwrite rather than accumulate.
-   */
-  private _estimateCodexCost(
-    usages: readonly CodexModelUsage[],
-  ): { cost: { amount: number; currency: string }; models: AcpModelCost[] } | undefined {
-    if (usages.length === 0) return undefined
-    const models: AcpModelCost[] = []
-    let totalUsd = 0
-    for (const u of usages) {
-      const costUSD = estimateCodexCostUSD(u.model, {
-        inputTokens: u.inputTokens,
-        cachedReadTokens: u.cachedReadTokens,
-        outputTokens: u.outputTokens,
-      })
-      totalUsd += costUSD
-      models.push({
-        model: u.model,
-        inputTokens: u.inputTokens,
-        outputTokens: u.outputTokens,
-        cacheReadTokens: u.cachedReadTokens,
-        cacheCreateTokens: 0,
-        costUSD,
-      })
-    }
-    return { cost: { amount: totalUsd, currency: 'USD' }, models }
   }
 
   private _appendChunk(role: AcpMessageRole, block: ContentBlock, parentId?: string): void {
@@ -1528,312 +1214,4 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     o.set(value, undefined)
   }
-}
-
-/** A text block whose content is empty or only whitespace carries nothing. */
-export function isBlankContentBlock(block: ContentBlock): boolean {
-  return block.type === 'text' && block.text.trim().length === 0
-}
-
-/**
- * Read the per-model cost breakdown our agent fork stamps onto `usage_update`
- * via `_meta._universe/modelBreakdown`. Values are session-cumulative and
- * already fold in sub-agent (Task) work. Returns [] when absent or malformed.
- */
-function extractModelBreakdown(update: {
-  _meta?: Record<string, unknown> | null | undefined
-}): readonly AcpModelCost[] {
-  const raw = update._meta?.['_universe/modelBreakdown']
-  if (!Array.isArray(raw)) return []
-  const out: AcpModelCost[] = []
-  for (const item of raw) {
-    if (item == null || typeof item !== 'object') continue
-    const r = item as Record<string, unknown>
-    if (typeof r['model'] !== 'string') continue
-    out.push({
-      model: r['model'],
-      inputTokens: numberOr(r['inputTokens']),
-      outputTokens: numberOr(r['outputTokens']),
-      cacheReadTokens: numberOr(r['cacheReadTokens']),
-      cacheCreateTokens: numberOr(r['cacheCreateTokens']),
-      costUSD: numberOr(r['costUSD']),
-    })
-  }
-  return out
-}
-
-function numberOr(v: unknown): number {
-  return typeof v === 'number' && Number.isFinite(v) ? v : 0
-}
-
-/**
- * Read the vendor-specific sub-agent attribution our agent fork stamps onto each
- * SessionUpdate (`_meta.claudeCode.parentToolUseId`). Returns the id of the
- * parent tool call when this update belongs to a sub-agent, else undefined.
- */
-function readParentToolUseId(update: SessionUpdate): string | undefined {
-  const meta = (update as { _meta?: { claudeCode?: { parentToolUseId?: unknown } } | null })._meta
-  const pid = meta?.claudeCode?.parentToolUseId
-  return typeof pid === 'string' && pid.length > 0 ? pid : undefined
-}
-
-/**
- * Resolve the source MCP server for a tool_call(_update) from the agent fork's
- * `_meta.claudeCode.toolName` (`mcp__<server>__<tool>`). Returns undefined for
- * built-in tools or malformed names.
- */
-function readMcpServer(update: SessionUpdate): string | undefined {
-  const meta = (update as { _meta?: { claudeCode?: { toolName?: unknown } } | null })._meta
-  const toolName = meta?.claudeCode?.toolName
-  if (typeof toolName !== 'string' || toolName.length === 0) return undefined
-  return parseMcpToolName(toolName)?.server
-}
-
-/**
- * Read the codex-acp fork's out-of-band terminal output from a tool_call(_update).
- * The fork streams command output via `_meta.terminal_output_delta` (append-only
- * chunks) or `_meta.terminal_output` (a full snapshot), rather than as `content`
- * blocks. Returns the chunk plus whether it appends to or replaces the accumulator,
- * or undefined when this update carries no terminal output.
- */
-function readTerminalOutput(
-  update: SessionUpdate,
-): { readonly data: string; readonly mode: 'append' | 'replace' } | undefined {
-  const meta = (
-    update as {
-      _meta?: {
-        terminal_output_delta?: { data?: unknown } | null
-        terminal_output?: { data?: unknown } | null
-      } | null
-    }
-  )._meta
-  if (!meta) return undefined
-  const delta = meta.terminal_output_delta?.data
-  if (typeof delta === 'string') return { data: delta, mode: 'append' }
-  const full = meta.terminal_output?.data
-  if (typeof full === 'string') return { data: full, mode: 'replace' }
-  return undefined
-}
-
-/**
- * Extract a whole-file change descriptor from the agent fork's PostToolUse hook
- * payload: `_meta.claudeCode.toolResponse.{filePath, structuredPatch, type,
- * originalFile}`, present only for `Edit`/`Write` tools. Returns undefined for
- * any other tool / shape.
- *
- * `isCreate` is derived from the authoritative SDK signals (`type: 'create'` or
- * `originalFile: null`); when set we keep the descriptor even with zero hunks,
- * because an empty-content Write reports an empty `structuredPatch` yet still
- * created a file the tracker must surface.
- */
-interface FileChangeDescriptor {
-  readonly path: string
-  readonly hunks: readonly DiffHunk[]
-  readonly isCreate: boolean
-}
-
-function readFileChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
-  const structured = readStructuredPatch(update)
-  if (structured) return [structured]
-  return readDiffContentChanges(update)
-}
-
-function readStructuredPatch(update: SessionUpdate): FileChangeDescriptor | undefined {
-  const meta = (
-    update as {
-      _meta?: {
-        claudeCode?: {
-          toolName?: unknown
-          toolResponse?: {
-            filePath?: unknown
-            structuredPatch?: unknown
-            type?: unknown
-            originalFile?: unknown
-          }
-        }
-      } | null
-    }
-  )._meta
-  const cc = meta?.claudeCode
-  if (cc?.toolName !== 'Edit' && cc?.toolName !== 'Write') return undefined
-  const resp = cc?.toolResponse
-  const path = resp?.filePath
-  const patch = resp?.structuredPatch
-  if (typeof path !== 'string' || path.length === 0 || !Array.isArray(patch)) return undefined
-  const isCreate = resp?.type === 'create' || resp?.originalFile === null
-  const hunks: DiffHunk[] = []
-  for (const h of patch) {
-    if (
-      h &&
-      typeof h.newStart === 'number' &&
-      typeof h.newLines === 'number' &&
-      typeof h.oldStart === 'number' &&
-      typeof h.oldLines === 'number' &&
-      Array.isArray(h.lines)
-    ) {
-      hunks.push({
-        oldStart: h.oldStart,
-        oldLines: h.oldLines,
-        newStart: h.newStart,
-        newLines: h.newLines,
-        lines: h.lines.filter((l: unknown): l is string => typeof l === 'string'),
-      })
-    }
-  }
-  if (hunks.length === 0 && !isCreate) return undefined
-  return { path, hunks, isCreate }
-}
-
-function readDiffContentChanges(update: SessionUpdate): readonly FileChangeDescriptor[] {
-  const content = (update as { content?: unknown }).content
-  if (!Array.isArray(content)) return []
-  const changes: FileChangeDescriptor[] = []
-  for (const item of content) {
-    if (!item || typeof item !== 'object') continue
-    const diff = item as { type?: unknown; path?: unknown; oldText?: unknown; newText?: unknown }
-    if (diff.type !== 'diff') continue
-    if (typeof diff.path !== 'string' || diff.path.length === 0) continue
-    if (typeof diff.newText !== 'string') continue
-    const isCreate = diff.oldText == null
-    const oldText = typeof diff.oldText === 'string' ? diff.oldText : ''
-    const hunks = wholeFileDiffHunks(oldText, diff.newText, isCreate)
-    if (hunks.length === 0 && !isCreate) continue
-    changes.push({ path: diff.path, hunks, isCreate })
-  }
-  return changes
-}
-
-function wholeFileDiffHunks(
-  oldText: string,
-  newText: string,
-  isCreate: boolean,
-): readonly DiffHunk[] {
-  if (oldText === newText) return []
-  const oldLines = isCreate ? [] : diffLines(oldText)
-  const newLines = newText.length === 0 && isCreate ? [] : diffLines(newText)
-  return [
-    {
-      oldStart: 1,
-      oldLines: oldLines.length,
-      newStart: 1,
-      newLines: newLines.length,
-      lines: [...oldLines.map((line) => `-${line}`), ...newLines.map((line) => `+${line}`)],
-    },
-  ]
-}
-
-function diffLines(text: string): readonly string[] {
-  return text.length === 0 ? [''] : text.split('\n')
-}
-
-/** True when at least one block would render visible content. */
-export function hasVisibleMessageContent(blocks: readonly ContentBlock[]): boolean {
-  return blocks.some((b) => (b.type === 'text' ? b.text.trim().length > 0 : true))
-}
-export function blocksToText(blocks: readonly ContentBlock[] | undefined): string {
-  if (!blocks) return ''
-  return blocks
-    .map((b) =>
-      b.type === 'text'
-        ? b.text
-        : b.type === 'resource'
-          ? `[resource: ${b.resource.uri}]`
-          : b.type === 'resource_link'
-            ? `[resource: ${b.name ?? b.uri}]`
-            : b.type === 'audio'
-              ? `[audio: ${b.mimeType}]`
-              : `[image: ${b.mimeType}]`,
-    )
-    .join('')
-}
-
-/**
- * Serialize a tool call into copyable plain text — title, diffs, output, and any
- * nested sub-agent items — so the right-click "Copy Message" works on tool-call
- * cards, not just plain messages (mirrors VSCode's chat tool-invocation repr).
- */
-export function toolCallToText(call: AcpToolCall): string {
-  const parts: string[] = []
-  parts.push(call.mcpServer !== undefined ? `${call.title} (MCP · ${call.mcpServer})` : call.title)
-
-  for (const d of call.diffs) {
-    const label = d.oldText.length === 0 ? `[new file: ${d.path}]` : `[diff: ${d.path}]`
-    parts.push(`${label}\n${d.newText}`)
-  }
-
-  const body = call.kind === 'execute' ? call.text : blocksToText(call.blocks)
-  if (body.trim().length > 0) parts.push(body)
-
-  for (const child of call.children ?? []) {
-    const childText = timelineItemToText(child)
-    if (childText.trim().length > 0) {
-      parts.push(
-        childText
-          .split('\n')
-          .map((line) => `  ${line}`)
-          .join('\n'),
-      )
-    }
-  }
-
-  return parts.join('\n\n')
-}
-
-/** Plain-text representation of any timeline slot, suitable for clipboard copy. */
-export function timelineItemToText(item: TimelineItem | AcpChildItem): string {
-  return item.kind === 'message' ? item.message.text : toolCallToText(item.call)
-}
-
-/**
- * Split the SDK's ToolCallContent[] (a discriminated union of content / diff /
- * terminal wrappers) into a flat ContentBlock[] plus structured diff entries.
- * - `content` items are unwrapped into the block list.
- * - `diff` items are pulled out into `diffs` (so the UI can render a dedicated
- *   diff preview); they no longer leak into `blocks` as `[diff: path]`.
- * - `terminal` items are dropped here: the codex-acp fork only sends them as a
- *   placeholder, streaming the real output out-of-band via `_meta.terminal_output*`
- *   (folded into the execute card's `text`; see `_accumulateTerminalOutput`).
- */
-export function splitToolCallContent(content: readonly ToolCallContent[]): {
-  readonly blocks: readonly ContentBlock[]
-  readonly diffs: readonly AcpToolCallDiff[]
-} {
-  const blocks: ContentBlock[] = []
-  const diffs: AcpToolCallDiff[] = []
-  for (const item of content) {
-    switch (item.type) {
-      case 'content':
-        blocks.push(item.content)
-        break
-      case 'diff':
-        diffs.push({
-          path: item.path,
-          oldText: item.oldText ?? '',
-          newText: item.newText,
-        })
-        break
-      case 'terminal':
-        break
-    }
-  }
-  return { blocks, diffs }
-}
-
-/**
- * Merge an incoming streaming chunk into the existing blocks list. Consecutive
- * `text` blocks collapse into a single block so the markdown parser can see a
- * coherent document; non-text blocks (image / resource / resource_link / audio)
- * are appended as-is.
- */
-export function mergeStreamingBlock(
-  blocks: readonly ContentBlock[],
-  chunk: ContentBlock,
-): readonly ContentBlock[] {
-  if (chunk.type === 'text') {
-    const last = blocks[blocks.length - 1]
-    if (last && last.type === 'text') {
-      return [...blocks.slice(0, -1), { type: 'text', text: last.text + chunk.text }]
-    }
-  }
-  return [...blocks, chunk]
 }
