@@ -137,6 +137,49 @@ export class FileSystemMainService implements IFileService {
     }
   }
 
+  /**
+   * Canonical, symlink-followed path. Resolves the longest existing prefix with
+   * `fs.realpath` and re-appends the not-yet-created tail verbatim, so a target
+   * that doesn't exist yet still reveals the real location of its parent. Never
+   * fails with ENOENT.
+   */
+  async realpath(resource: RawUri): Promise<URI> {
+    const uri = ensureFile(reviveUri(resource))
+    try {
+      const real = await this._realpathString(uri.fsPath)
+      this._logger.debug(`realpath ${uri.fsPath} -> ${real}`)
+      return URI.file(real)
+    } catch (err) {
+      const mapped = mapError(err, 'realpath failed')
+      this._logger.warn(`realpath failed ${uri.fsPath} code=${mapped.code}`, mapped.message)
+      throw mapped
+    }
+  }
+
+  private async _realpathString(target: string): Promise<string> {
+    const tail: string[] = []
+    let current = path.resolve(target)
+    // Walk up until an existing ancestor is found; realpath that, then re-apply
+    // the missing segments. A path whose every segment exists resolves on the
+    // first iteration.
+    for (;;) {
+      try {
+        const resolved = await fs.realpath(current)
+        return tail.length === 0 ? resolved : path.join(resolved, ...tail)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+        const parent = path.dirname(current)
+        if (parent === current) {
+          // Reached the filesystem root without an existing ancestor; nothing to
+          // canonicalize, so hand back the normalized input.
+          return path.resolve(target)
+        }
+        tail.unshift(path.basename(current))
+        current = parent
+      }
+    }
+  }
+
   async list(resource: RawUri): Promise<IDirectoryEntry[]> {
     const uri = ensureFile(reviveUri(resource))
     try {

@@ -215,4 +215,51 @@ describe('FileSystemMainService', () => {
       code: 'ENOENT',
     })
   })
+
+  // -------- realpath --------
+
+  it('realpath returns an existing path canonicalized', async () => {
+    const target = URI.file(join(root, 'plain.txt'))
+    await service.writeFile(target, 'x')
+    const real = await service.realpath(target)
+    // On macOS tmpdir is itself a symlink (/var -> /private/var); compare against
+    // the OS realpath of the same input rather than the literal path. Normalize
+    // separators through URI.file (Windows fsPath uses forward slashes).
+    const expected = URI.file(await fs.realpath(join(root, 'plain.txt'))).fsPath
+    expect(real.fsPath).toBe(expected)
+  })
+
+  it('realpath resolves a symlink to its real target', async () => {
+    const realFile = join(root, 'real.txt')
+    await service.writeFile(URI.file(realFile), 'x')
+    const link = join(root, 'link.txt')
+    try {
+      await fs.symlink(realFile, link)
+    } catch {
+      return // symlink creation not permitted (e.g. Windows without privilege)
+    }
+    const resolved = await service.realpath(URI.file(link))
+    expect(resolved.fsPath).toBe(URI.file(await fs.realpath(realFile)).fsPath)
+  })
+
+  it('realpath of a not-yet-existing path resolves the existing prefix', async () => {
+    // parent exists, the file does not — realpath should canonicalize the parent
+    // and re-append the missing tail rather than throwing ENOENT.
+    const missing = URI.file(join(root, 'new-file.txt'))
+    const resolved = await service.realpath(missing)
+    expect(resolved.fsPath).toBe(URI.file(join(await fs.realpath(root), 'new-file.txt')).fsPath)
+  })
+
+  it('realpath follows a symlinked parent directory for a missing child', async () => {
+    const realDir = join(root, 'realdir')
+    await service.createDirectory(URI.file(realDir))
+    const linkDir = join(root, 'linkdir')
+    try {
+      await fs.symlink(realDir, linkDir, 'dir')
+    } catch {
+      return // symlink/junction creation not permitted
+    }
+    const resolved = await service.realpath(URI.file(join(linkDir, 'child.txt')))
+    expect(resolved.fsPath).toBe(URI.file(join(await fs.realpath(realDir), 'child.txt')).fsPath)
+  })
 })

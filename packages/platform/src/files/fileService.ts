@@ -59,6 +59,20 @@ export interface IFileService {
   list(resource: URI): Promise<IDirectoryEntry[]>
 
   /**
+   * Resolves the canonical, symlink-followed path of `resource`. For a path that
+   * doesn't fully exist yet, the longest existing prefix is resolved (following
+   * any symlinks) and the not-yet-created tail is appended verbatim — so a
+   * caller can still learn the real location of a target's parent directory.
+   * Never throws `ENOENT`; other fs errors propagate as `FileSystemError`.
+   *
+   * Used as a defense-in-depth check by the extension/agent fs gateway: a
+   * text-level path policy can be re-run against the real path to catch symlinks
+   * that escape the workspace or point at sensitive locations. Optional:
+   * implementations without symlink semantics may omit it.
+   */
+  realpath?(resource: URI): Promise<URI>
+
+  /**
    * Enumerates the available drive roots (e.g. `['C:', 'D:']`) on Windows. On
    * other platforms there is a single filesystem root, so this returns `[]`.
    * Optional: filesystems without the notion of drives may omit it.

@@ -5,6 +5,12 @@
  *  ACP agents (denies `.ssh`/`.aws`/`.env`…, forbids escaping the workspace
  *  root) before delegating to IFileService. File contents cross the wire as
  *  base64 strings.
+ *
+ *  Defense in depth: the policy is text-level (it can't see symlinks). After it
+ *  passes, we resolve the real, symlink-followed path via IFileService.realpath
+ *  and re-run the policy on it — so a workspace-internal symlink pointing at
+ *  `~/.ssh` (or anywhere outside the root) is still rejected. Falls back to the
+ *  text-only decision if the file service has no realpath.
  *--------------------------------------------------------------------------------------------*/
 
 import { URI, type IFileService } from '@universe-editor/platform'
@@ -25,7 +31,7 @@ export class MainThreadFs implements IMainThreadFs {
     private readonly _files: IFileService,
   ) {}
 
-  private _guard(path: string): URI {
+  private async _guard(path: string): Promise<URI> {
     if (this._cwd === undefined) {
       throw new Error('workspace.fs requires an open workspace folder')
     }
@@ -33,33 +39,57 @@ export class MainThreadFs implements IMainThreadFs {
     if (!decision.ok) {
       throw new Error(`workspace.fs denied: ${decision.reason}`)
     }
-    return URI.file(decision.normalized)
+    const uri = URI.file(decision.normalized)
+    await this._guardRealpath(uri)
+    return uri
+  }
+
+  /**
+   * Second line of defense: re-run the policy against the symlink-resolved real
+   * path. The text policy already vetted the literal path; this catches a
+   * symlink whose real target escapes the workspace or lands on a sensitive
+   * prefix. No-op when the file service can't resolve real paths.
+   */
+  private async _guardRealpath(uri: URI): Promise<void> {
+    if (!this._files.realpath) return
+    let real: URI
+    try {
+      real = await this._files.realpath(uri)
+    } catch {
+      // realpath shouldn't normally fail (it tolerates missing tails), but if it
+      // does we keep the text-level guarantee rather than failing the operation.
+      return
+    }
+    const decision = this._policy.check(this._cwd as string, real.fsPath)
+    if (!decision.ok) {
+      throw new Error(`workspace.fs denied (real path): ${decision.reason}`)
+    }
   }
 
   async $readFile(path: string): Promise<string> {
-    const bytes = await this._files.readFile(this._guard(path))
+    const bytes = await this._files.readFile(await this._guard(path))
     return bytesToBase64(bytes)
   }
 
-  $writeFile(path: string, base64: string): Promise<void> {
-    return this._files.writeFile(this._guard(path), base64ToBytes(base64))
+  async $writeFile(path: string, base64: string): Promise<void> {
+    return this._files.writeFile(await this._guard(path), base64ToBytes(base64))
   }
 
   async $stat(path: string): Promise<IExtHostFileStatDto> {
-    const stat = await this._files.stat(this._guard(path))
+    const stat = await this._files.stat(await this._guard(path))
     return { type: stat.isDirectory ? 'dir' : 'file', size: stat.size, mtime: stat.mtime }
   }
 
   async $readDirectory(path: string): Promise<Array<[string, ExtHostFileType]>> {
-    const entries = await this._files.list(this._guard(path))
+    const entries = await this._files.list(await this._guard(path))
     return entries.map((e) => [e.name, e.isDirectory ? 'dir' : 'file'])
   }
 
-  $createDirectory(path: string): Promise<void> {
-    return this._files.createDirectory(this._guard(path))
+  async $createDirectory(path: string): Promise<void> {
+    return this._files.createDirectory(await this._guard(path))
   }
 
-  $delete(path: string, recursive: boolean): Promise<void> {
-    return this._files.delete(this._guard(path), { recursive })
+  async $delete(path: string, recursive: boolean): Promise<void> {
+    return this._files.delete(await this._guard(path), { recursive })
   }
 }
