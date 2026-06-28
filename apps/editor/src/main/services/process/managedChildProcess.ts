@@ -1,0 +1,157 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Shared lifecycle wrapper for main-process child processes spawned via
+ *  node:child_process. Centralizes what every spawn site previously re-wrote by
+ *  hand: forced kill with a SIGTERM→SIGKILL timeout escalation, a single
+ *  well-defined exit signal (spawn errors are surfaced as a synthetic exit), and
+ *  raw stdout/stderr byte bridging (the caller decides the encoding).
+ *
+ *  It wraps an already-spawned child rather than spawning itself, because spawn
+ *  argument assembly (shell, stdio, cwd, env) differs per call site. Decoding is
+ *  left to the consumer (text search uses a StringDecoder for NDJSON, the ACP
+ *  hosts decode stderr as gb18030) — see env.ts / decode.ts for the shared
+ *  helpers those call sites use.
+ *--------------------------------------------------------------------------------------------*/
+
+import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
+
+export const DEFAULT_KILL_TIMEOUT_MS = 2000
+
+export interface ManagedExit {
+  readonly code: number | null
+  readonly signal: NodeJS.Signals | null
+  /** True when our SIGTERM→SIGKILL escalation forced the process down. */
+  readonly forced: boolean
+  /** Present when the process never started (spawn error, e.g. ENOENT). */
+  readonly error?: string
+}
+
+export interface ManagedChildOptions {
+  /** Grace period before SIGTERM is escalated to SIGKILL. */
+  readonly killTimeoutMs?: number
+  readonly logger?: ILogger
+  /** Identifier used in log lines (e.g. a handle / session id). */
+  readonly label?: string
+}
+
+/**
+ * Wraps a spawned child with a uniform lifecycle. Emits raw stdout/stderr
+ * buffers and exactly one {@link ManagedExit} (whether the child exited, errored
+ * on spawn, or was force-killed).
+ */
+export class ManagedChildProcess extends Disposable {
+  private readonly _onStdout = this._register(new Emitter<Buffer>())
+  readonly onStdout = this._onStdout.event
+
+  private readonly _onStderr = this._register(new Emitter<Buffer>())
+  readonly onStderr = this._onStderr.event
+
+  private readonly _onDidExit = this._register(new Emitter<ManagedExit>())
+  readonly onDidExit = this._onDidExit.event
+
+  private readonly _killTimeoutMs: number
+  private readonly _logger: ILogger | undefined
+  private readonly _label: string
+
+  private _exited = false
+  private _forced = false
+  private _killTimer: ReturnType<typeof setTimeout> | undefined
+
+  constructor(
+    private readonly _child: ChildProcessWithoutNullStreams,
+    options: ManagedChildOptions = {},
+  ) {
+    super()
+    this._killTimeoutMs = options.killTimeoutMs ?? DEFAULT_KILL_TIMEOUT_MS
+    this._logger = options.logger
+    this._label = options.label ?? String(_child.pid ?? 'unknown')
+
+    _child.stdout.on('data', (data: Buffer) => this._onStdout.fire(data))
+    _child.stderr.on('data', (data: Buffer) => this._onStderr.fire(data))
+    _child.on('error', (err) => this._settleExit({ code: null, signal: null, error: err.message }))
+    _child.on('exit', (code, signal) => this._settleExit({ code, signal }))
+  }
+
+  get pid(): number | undefined {
+    return this._child.pid
+  }
+
+  get exited(): boolean {
+    return this._exited
+  }
+
+  writeStdin(data: string): Promise<void> {
+    if (this._exited) {
+      return Promise.reject(new Error(`ManagedChildProcess(${this._label}): process has exited`))
+    }
+    const stdin = this._child.stdin
+    // Defend against the narrow race where the child died after spawn but before
+    // its exit/error event reached us — stdin can already be destroyed.
+    if (stdin.destroyed || stdin.writable === false) {
+      return Promise.reject(new Error(`ManagedChildProcess(${this._label}): stdin is not writable`))
+    }
+    return new Promise<void>((resolve, reject) => {
+      stdin.write(data, 'utf8', (err) => {
+        if (err) reject(err)
+        else resolve()
+      })
+    })
+  }
+
+  /**
+   * Request termination. Sends `signal` (default SIGTERM); if the process has
+   * not exited within `killTimeoutMs`, escalates to SIGKILL. Idempotent.
+   */
+  kill(signal: NodeJS.Signals = 'SIGTERM'): void {
+    if (this._exited || this._killTimer) return
+    this._send(signal)
+    this._killTimer = setTimeout(() => {
+      this._killTimer = undefined
+      if (this._exited) return
+      this._forced = true
+      this._logger?.warn(
+        `ManagedChildProcess(${this._label}): ${signal} timed out after ${this._killTimeoutMs}ms, sending SIGKILL`,
+      )
+      this._send('SIGKILL')
+    }, this._killTimeoutMs)
+  }
+
+  private _send(signal: NodeJS.Signals): void {
+    try {
+      this._child.kill(signal)
+    } catch (err) {
+      this._logger?.warn(
+        `ManagedChildProcess(${this._label}): kill(${signal}) failed: ${(err as Error).message}`,
+      )
+    }
+  }
+
+  private _settleExit(partial: {
+    code: number | null
+    signal: NodeJS.Signals | null
+    error?: string
+  }): void {
+    if (this._exited) return
+    this._exited = true
+    if (this._killTimer) {
+      clearTimeout(this._killTimer)
+      this._killTimer = undefined
+    }
+    const exit: ManagedExit = partial.error
+      ? { ...partial, forced: this._forced, error: partial.error }
+      : { ...partial, forced: this._forced }
+    this._onDidExit.fire(exit)
+  }
+
+  override dispose(): void {
+    if (this._killTimer) {
+      clearTimeout(this._killTimer)
+      this._killTimer = undefined
+    }
+    if (!this._exited) {
+      this._send('SIGKILL')
+    }
+    super.dispose()
+  }
+}
