@@ -60,4 +60,30 @@ describe('parseManifest', () => {
       }),
     ).toThrow(/invalid manifest/)
   })
+
+  it('accepts every supported activation event shape', () => {
+    const m = parseManifest({
+      ...valid,
+      activationEvents: [
+        '*',
+        'onStartupFinished',
+        'onCommand:git.commit',
+        'onLanguage:typescript',
+        'onView:scm',
+      ],
+    })
+    expect(m.activationEvents).toHaveLength(5)
+  })
+
+  it('rejects a misspelled activation event', () => {
+    expect(() => parseManifest({ ...valid, activationEvents: ['onComand:git.commit'] })).toThrow(
+      /invalid manifest/,
+    )
+  })
+
+  it('rejects a parameterized activation event with no argument', () => {
+    expect(() => parseManifest({ ...valid, activationEvents: ['onCommand:'] })).toThrow(
+      /invalid manifest/,
+    )
+  })
 })

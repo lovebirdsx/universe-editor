@@ -72,3 +72,26 @@
 
 - `0.1.0` — 首个有记录的 API 表面。namespaces：`commands` / `window` / `workspace` /
   `languages` / `scm` / `ai`。契约测试与本策略文档同时建立。
+
+## 激活事件清单（activation events）
+
+扩展在 `package.json` 的 `activationEvents` 声明唤醒时机。手写字符串易拼错（拼错则
+永不激活），故：
+
+- **优先用构造器**：`@universe-editor/extensions-common` 的 `ActivationEvents` /
+  `commandActivationEvent` / `languageActivationEvent` / `viewActivationEvent`。
+- **manifest 校验兜底**：宿主扫描时用 `isValidActivationEvent` 校验，未知事件直接
+  报 `invalid manifest` 跳过该扩展（而非静默不激活）。
+
+支持的事件：
+
+| 事件 | 触发时机 | 构造器 |
+|---|---|---|
+| `*` | 扩展系统启动即激活（eager，慎用） | `ActivationEvents.startup` |
+| `onStartupFinished` | 工作台完成初次恢复后 | `ActivationEvents.startupFinished` |
+| `onCommand:<id>` | 贡献的命令首次被调用 | `ActivationEvents.onCommand(id)` |
+| `onLanguage:<languageId>` | 该语言的文档首次打开 | `ActivationEvents.onLanguage(lang)` |
+| `onView:<viewId>` | 贡献的视图首次显示 | `ActivationEvents.onView(viewId)` |
+
+新增事件类型时：在 `extensions-common/src/activation.ts` 加构造器 + 把前缀加入
+`PARAMETERIZED_PREFIXES`，并更新本清单。

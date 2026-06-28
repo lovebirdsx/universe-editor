@@ -5,7 +5,7 @@
  * precise error message we forward to stderr.
  */
 import { z } from 'zod'
-import type { IExtensionManifest } from '@universe-editor/extensions-common'
+import { isValidActivationEvent, type IExtensionManifest } from '@universe-editor/extensions-common'
 
 const commandContributionSchema = z.object({
   command: z.string().min(1),
@@ -80,7 +80,14 @@ const manifestSchema = z.object({
   publisher: z.string().optional(),
   main: z.string().optional(),
   engines: z.object({ universe: z.string().min(1) }),
-  activationEvents: z.array(z.string()).optional(),
+  activationEvents: z
+    .array(
+      z.string().refine(isValidActivationEvent, {
+        message:
+          'unknown activation event (expected "*", "onStartupFinished", or "onCommand:"/"onLanguage:"/"onView:" with an id)',
+      }),
+    )
+    .optional(),
   contributes: contributesSchema.optional(),
 })
 
