@@ -23,6 +23,7 @@ import {
   type SourceControlResourceState,
 } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
+import { gitErrorText, notifyGitFailure } from './gitError.js'
 import { parseStatus, type GitFileStatus } from './statusParser.js'
 import {
   selectChangedFiles,
@@ -401,7 +402,7 @@ export class Repository {
     try {
       const res = await gitExec(['commit', '-m', message], this.root, this._log)
       if (res.exitCode !== 0) {
-        void window.showErrorMessage(`Git commit failed: ${res.stderr.trim() || res.stdout.trim()}`)
+        await notifyGitFailure('commit', res)
         return false
       }
       return true
@@ -428,13 +429,13 @@ export class Repository {
     try {
       const pull = await gitExec(['pull', '--rebase'], this.root, this._log)
       if (pull.exitCode !== 0) {
-        void window.showErrorMessage(`Git pull failed: ${pull.stderr.trim() || pull.stdout.trim()}`)
+        await notifyGitFailure('pull', pull)
         return
       }
       await this._updateSubmodulesIfNeeded()
       const push = await gitExec(['push'], this.root, this._log)
       if (push.exitCode !== 0) {
-        void window.showErrorMessage(`Git push failed: ${push.stderr.trim() || push.stdout.trim()}`)
+        await notifyGitFailure('push', push)
       }
     } finally {
       this._syncing = false
@@ -506,7 +507,7 @@ export class Repository {
       const args = opts?.prune ? ['fetch', '--prune'] : ['fetch']
       const res = await gitExec(args, this.root, this._log)
       if (res.exitCode !== 0 && opts?.silent !== true) {
-        void window.showErrorMessage(`Git fetch failed: ${res.stderr.trim() || res.stdout.trim()}`)
+        await notifyGitFailure('fetch', res)
       }
     } finally {
       this._fetching = false
@@ -672,9 +673,7 @@ export class Repository {
     await gitExec(['checkout', '--', path], this.root, this._log)
     const clean = await gitExec(['clean', '-fd', '--', path], this.root, this._log)
     if (clean.exitCode !== 0) {
-      void window.showErrorMessage(
-        `Git discard failed: ${clean.stderr.trim() || clean.stdout.trim()}`,
-      )
+      await notifyGitFailure('discard', clean)
     }
     await this.refresh()
   }
@@ -687,9 +686,7 @@ export class Repository {
     if (confirm !== 'Discard All Changes') return
     const checkout = await gitExec(['checkout', '--', '.'], this.root, this._log)
     if (checkout.exitCode !== 0) {
-      void window.showErrorMessage(
-        `Git discard failed: ${checkout.stderr.trim() || checkout.stdout.trim()}`,
-      )
+      await notifyGitFailure('discard', checkout)
     }
     await gitExec(['clean', '-fd'], this.root, this._log)
     await this.refresh()
@@ -767,7 +764,7 @@ export class Repository {
         )
         if (subRes.exitCode !== 0) {
           void window.showWarningMessage(
-            `Submodule init failed in new worktree: ${subRes.stderr.trim() || subRes.stdout.trim()}`,
+            `Submodule init failed in new worktree: ${gitErrorText(subRes)}`,
           )
         }
       } finally {
@@ -833,7 +830,7 @@ export class Repository {
       return
     }
 
-    const stderr = res.stderr.trim() || res.stdout.trim()
+    const stderr = gitErrorText(res)
     const reason = classifyWorktreeRemoveFailure(stderr)
 
     if (reason === 'busy') {
@@ -863,20 +860,20 @@ export class Repository {
           await this.refresh()
           return
         }
-        const forcedErr = forced.stderr.trim() || forced.stdout.trim()
+        const forcedErr = gitErrorText(forced)
         if (classifyWorktreeRemoveFailure(forcedErr) === 'busy') {
           void window.showErrorMessage(
             `Can't delete worktree '${pick.label}': its folder is in use. ` +
               `Close any editor windows or terminals opened on ${pick.detail} and try again.`,
           )
         } else {
-          void window.showErrorMessage(`Git delete worktree failed: ${forcedErr}`)
+          await notifyGitFailure('delete worktree', forced)
         }
       }
       return
     }
 
-    void window.showErrorMessage(`Git delete worktree failed: ${stderr}`)
+    await notifyGitFailure('delete worktree', res)
   }
 
   /**
@@ -1054,9 +1051,7 @@ export class Repository {
     try {
       const res = await gitExec(args, this.root, this._log)
       if (res.exitCode !== 0) {
-        void window.showErrorMessage(
-          `Git ${label} failed: ${res.stderr.trim() || res.stdout.trim()}`,
-        )
+        await notifyGitFailure(label, res)
       } else {
         ok = true
       }

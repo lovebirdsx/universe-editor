@@ -28,6 +28,8 @@ import {
 } from './gitGraphSource.js'
 import * as gga from './gitGraphActions.js'
 import { getBlame } from './blameSource.js'
+import { notifyGitFailure, setGitLogShower } from './gitError.js'
+import type { GitExecResult } from './gitService.js'
 
 function resourcePath(arg: unknown): string | undefined {
   return (arg as { resourceUri?: string } | undefined)?.resourceUri
@@ -68,6 +70,8 @@ export async function activate(context: ExtensionContext): Promise<void> {
   const out = window.createOutputChannel('Git')
   context.subscriptions.push(out)
   const log = (msg: string): void => out.appendLine(msg)
+  // Let failure toasts offer an "Open Git Log" button that reveals this channel.
+  setGitLogShower(() => out.show())
 
   const scanOpts = await readScanConfig()
   const { repos, mainRoot } = await discoverRepos(root, scanOpts, log)
@@ -107,12 +111,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
   // switching needs no per-command argument changes.
   let gitGraphRoot = statusBarRoot
 
-  // Run a Git Graph mutating op: report failure, refresh SCM, return ok.
-  const finishOp = async (label: string, p: Promise<boolean>): Promise<boolean> => {
-    const ok = await p
-    if (!ok) {
-      void window.showErrorMessage(`Git Graph: ${label} failed. See the Git output for details.`)
-    }
+  // Run a Git Graph mutating op: report failure (with the real git error), refresh
+  // SCM, return ok.
+  const finishOp = async (label: string, p: Promise<GitExecResult>): Promise<boolean> => {
+    const res = await p
+    const ok = res.exitCode === 0
+    if (!ok) await notifyGitFailure(`Graph: ${label}`, res)
     await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
     return ok
   }
