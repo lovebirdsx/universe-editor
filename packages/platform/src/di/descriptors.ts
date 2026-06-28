@@ -57,6 +57,7 @@ export class SyncFactoryDescriptor<T> extends SyncDescriptor<T> {
     supportsDelayedInstantiation: boolean = false,
   ) {
     super(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       FactoryPlaceholder as unknown as new (...args: any[]) => T,
       [],
       supportsDelayedInstantiation,
