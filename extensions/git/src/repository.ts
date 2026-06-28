@@ -18,6 +18,7 @@ import {
   window,
   workspace,
   type Disposable,
+  type QuickPickItem,
   type SourceControl,
   type SourceControlResourceGroup,
   type SourceControlResourceState,
@@ -659,15 +660,16 @@ export class Repository {
   }
 
   async createWorktree(): Promise<void> {
-    const CREATE_NEW = '$(plus) Create new branch…'
+    const CREATE_NEW: QuickPickItem = { label: 'Create new branch…', iconId: 'add' }
     const branches = await this._listBranches()
-    const pick = await window.showQuickPick([CREATE_NEW, ...branches], {
+    const items: QuickPickItem[] = [CREATE_NEW, ...branches.map((b) => ({ label: b }))]
+    const picked = await window.showQuickPick(items, {
       placeHolder: 'Select a branch to create the worktree from',
     })
-    if (!pick) return
+    if (!picked) return
 
-    let ref = pick
-    const newBranch = pick === CREATE_NEW
+    let ref = picked.label
+    const newBranch = picked === CREATE_NEW
     if (newBranch) {
       const name = await window.showInputBox({ prompt: 'Name of the new branch' })
       if (!name) return

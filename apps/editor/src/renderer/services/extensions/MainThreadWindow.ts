@@ -92,6 +92,7 @@ export class MainThreadWindow extends Disposable implements IMainThreadWindow {
             label: it.label,
             ...(it.description !== undefined ? { description: it.description } : {}),
             ...(it.detail !== undefined ? { detail: it.detail } : {}),
+            ...(it.iconId !== undefined ? { iconId: it.iconId } : {}),
           },
     )
     return this._quickInput

@@ -117,6 +117,7 @@ export interface IExtHostQuickPickItemDto {
   label: string
   description?: string
   detail?: string
+  iconId?: string
 }
 
 export interface IExtHostInputBoxOptions {

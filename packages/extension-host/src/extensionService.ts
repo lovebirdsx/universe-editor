@@ -443,6 +443,7 @@ export class ExtensionService implements IExtensionHostBridge {
             label: it.label,
             ...(it.description !== undefined ? { description: it.description } : {}),
             ...(it.detail !== undefined ? { detail: it.detail } : {}),
+            ...(it.iconId !== undefined ? { iconId: it.iconId } : {}),
           },
     )
     return this._mainThreadWindow

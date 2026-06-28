@@ -128,6 +128,7 @@ export interface QuickPickItem {
   label: string
   description?: string
   detail?: string
+  iconId?: string
 }
 
 export interface InputBoxOptions {
