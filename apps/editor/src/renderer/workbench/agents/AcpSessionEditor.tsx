@@ -19,6 +19,7 @@ import {
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
+import type { AcpSessionHistoryEntry } from '../../services/acp/acpSessionHistory.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { isAuthRequiredError } from '../../services/acp/acpAuthError.js'
 import { ChatBody } from './ChatBody.js'
@@ -45,11 +46,15 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
 
   if (!acpInput) return null
 
-  if (session) return <ChatBody session={session} autoFocus />
+  if (session) {
+    return <ChatBody session={session} readOnly={session.readOnly} autoFocus={!session.readOnly} />
+  }
 
-  // A session whose cwd differs from the open folder must not be resumed here —
+  // A session whose cwd differs from the open folder must not be resumed live —
   // that would spawn the agent against a sibling worktree behind this window's
-  // UI. Show a read-only metadata preview with an activation path instead.
+  // UI. Instead resume it READ-ONLY (replay history via session/load, no prompt /
+  // config side effects) so the user can read the conversation; on failure
+  // (e.g. agent without loadSession) fall back to the metadata-only preview.
   const entry = history.get(acpInput.sessionId)
   const currentCwd = workspace.current?.folder.fsPath
   const isForeign =
@@ -57,7 +62,7 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
     currentCwd !== undefined &&
     !arePathsEqual(entry.cwd, currentCwd, hostService.platform)
   if (entry && isForeign) {
-    return <ForeignSessionPreview key={acpInput.sessionId} entry={entry} />
+    return <ForeignSessionResumer key={acpInput.sessionId} input={acpInput} entry={entry} />
   }
 
   // EditorGroupView 用 `<Component input={active} />`（无 key）渲染激活编辑器，切换 tab
@@ -67,6 +72,59 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   // 会话永远转圈、不发 session/load、也不报错。用 sessionId 作 key 让每个会话拥有独立
   // 的 resume 状态机即可根治。
   return <AcpSessionResumer key={acpInput.sessionId} input={acpInput} />
+}
+
+/**
+ * Read-only resume of a session that belongs to another worktree: kicks off
+ * `resumeSessionReadOnly`, shows a loading header while the agent replays the
+ * conversation, then re-renders into the read-only ChatBody once the session is
+ * registered (the parent's `useObservable(service.sessions)` picks it up and the
+ * `getById` branch above takes over). If the read-only resume fails — e.g. the
+ * agent does not support `session/load` — we fall back to the metadata-only
+ * preview so activation is still reachable.
+ */
+function ForeignSessionResumer({
+  input,
+  entry,
+}: {
+  input: AcpSessionEditorInput
+  entry: AcpSessionHistoryEntry
+}) {
+  const service = useService(IAcpSessionService)
+  const sessionId = input.sessionId
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    setFailed(false)
+    service.resumeSessionReadOnly(sessionId).then(
+      () => {
+        // Success: service.sessions changes → parent re-renders → getById hits →
+        // <ChatBody readOnly>. Nothing to do here.
+      },
+      () => {
+        if (!cancelled) setFailed(true)
+      },
+    )
+    return () => {
+      cancelled = true
+    }
+  }, [service, sessionId])
+
+  if (failed) {
+    return <ForeignSessionPreview key={sessionId} entry={entry} />
+  }
+
+  return (
+    <div className={styles['sessionLoading']} data-testid="acp-foreign-session-loading">
+      <div className={styles['sessionLoadingHeader']}>
+        <Loader2 size={20} strokeWidth={1.75} className={styles['spin']} aria-hidden="true" />
+        <p className={styles['sessionLoadingMessage']}>
+          {localize('acp.foreignSession.loading', 'Loading session history (read-only)...')}
+        </p>
+      </div>
+    </div>
+  )
 }
 
 function AcpSessionResumer({ input }: { input: AcpSessionEditorInput }) {

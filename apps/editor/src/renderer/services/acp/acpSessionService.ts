@@ -155,6 +155,16 @@ export interface IAcpSessionService {
    * dedupe onto a single in-flight promise.
    */
   resumeSession(sessionId: string): Promise<IAcpSession>
+  /**
+   * Resume a session that belongs to a DIFFERENT worktree as a read-only
+   * preview: spawns the agent against the session's own cwd and replays the
+   * conversation via `session/load` so its history can be viewed, but the
+   * resulting session is flagged `readOnly` (no prompt / config mutation) and is
+   * NOT made the active session — it must not displace the current worktree's
+   * working session. The split-brain guard is intentionally bypassed because a
+   * read-only replay has no side effects on the foreign worktree.
+   */
+  resumeSessionReadOnly(sessionId: string): Promise<IAcpSession>
   setActive(sessionId: string): void
   closeSession(sessionId: string): Promise<void>
   getById(sessionId: string): IAcpSession | undefined
@@ -572,14 +582,36 @@ export class AcpSessionService
       this.setActive(existing.id)
       return existing
     }
-    const promise = this._resumeSessionInner(sessionId).finally(() => {
+    const promise = this._resumeSessionInner(sessionId, { readOnly: false }).finally(() => {
       this._resumingBySessionId.delete(sessionId)
     })
     this._resumingBySessionId.set(sessionId, promise)
     return promise
   }
 
-  private async _resumeSessionInner(sessionId: string): Promise<IAcpSession> {
+  async resumeSessionReadOnly(sessionId: string): Promise<IAcpSession> {
+    // Dedupe with the same in-flight map as resumeSession: a read-only preview
+    // and a (hypothetical) live resume for the same id must never both spawn.
+    const inflight = this._resumingBySessionId.get(sessionId)
+    if (inflight) return inflight
+    const existing = this._findSession(sessionId)
+    if (existing && existing.status.get() !== 'closed') {
+      // Already live (read-only or not): reuse it. Do NOT setActive — a foreign
+      // preview must not steal the current worktree's active session.
+      return existing
+    }
+    const promise = this._resumeSessionInner(sessionId, { readOnly: true }).finally(() => {
+      this._resumingBySessionId.delete(sessionId)
+    })
+    this._resumingBySessionId.set(sessionId, promise)
+    return promise
+  }
+
+  private async _resumeSessionInner(
+    sessionId: string,
+    options: { readOnly: boolean },
+  ): Promise<IAcpSession> {
+    const { readOnly } = options
     // History hydration is fire-and-forget at bootstrap; on editor restart the
     // restored AcpSessionEditorInput triggers an auto-resume via useEffect that
     // races with the load. Wait for hydration so a transient empty-state
@@ -598,8 +630,11 @@ export class AcpSessionService
     // on the open folder. If the session belongs to a different worktree, refuse
     // to spawn — the UI routes the user through cross-worktree activation. cwd
     // undefined (legacy/global) is treated as "belongs here" to stay compatible.
+    // Skipped for read-only previews: a `session/load` replay has no side effects
+    // on the foreign worktree, so viewing its history across the boundary is safe.
     const currentCwd = this._workspace.current?.folder.fsPath
     if (
+      !readOnly &&
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
       !arePathsEqual(entry.cwd, currentCwd, this._platform)
@@ -623,7 +658,7 @@ export class AcpSessionService
       // or discard it silently (empty session the agent never persisted);
       // resumeSession's `finally` then clears the in-flight dedup entry so the
       // poisoned promise can no longer make every later Retry/switch a no-op.
-      this._onResumeFailure(entry, err)
+      this._onResumeFailure(entry, err, readOnly)
     }
     const timeoutMs = this._config.get<number>('acp.startupTimeoutMs') ?? DEFAULT_STARTUP_TIMEOUT_MS
     const mcpServers = this._readMcpServers()
@@ -657,6 +692,8 @@ export class AcpSessionService
         this._changeTracker,
         // No title service on resume: restored sessions already carry a durable
         // title, so we must not regenerate (and overwrite) it on the next turn.
+        undefined,
+        readOnly,
       )
       session.attachConnection(conn, entry.sessionIdOnAgent)
       this._register(session)
@@ -667,8 +704,12 @@ export class AcpSessionService
       transaction((tx) => {
         this._sessions = [...this._sessions.filter((s) => s.id !== captured.id), captured]
         this.sessions.set(this._sessions, tx)
-        this.activeSessionId.set(captured.id, tx)
-        this.activeSession.set(captured, tx)
+        // Read-only foreign previews register so getById/timeline work, but must
+        // not become the active session — that belongs to the current worktree.
+        if (!readOnly) {
+          this.activeSessionId.set(captured.id, tx)
+          this.activeSession.set(captured, tx)
+        }
       })
       registered = true
       prior?.dispose()
@@ -724,7 +765,7 @@ export class AcpSessionService
       } else {
         conn.dispose()
       }
-      this._onResumeFailure(entry, err)
+      this._onResumeFailure(entry, err, readOnly)
     }
   }
 
@@ -772,9 +813,13 @@ export class AcpSessionService
    * Any session that has messages (or predates the `hasMessages` flag) surfaces
    * the failure to the user as before. Always rethrows so callers see the error.
    */
-  private _onResumeFailure(entry: AcpSessionHistoryEntry, err: unknown): never {
+  private _onResumeFailure(entry: AcpSessionHistoryEntry, err: unknown, readOnly = false): never {
     const msg = (err as Error).message
-    if (entry.hasMessages === false) {
+    if (readOnly) {
+      // Read-only preview failures (e.g. agent without loadSession) are not
+      // user errors: the UI falls back to the metadata-only preview. Log only.
+      this._logger.info(`read-only resume failed for ${entry.id}: ${msg}`)
+    } else if (entry.hasMessages === false) {
       this._logger.info(`discarding empty session that failed to resume: ${entry.id}`)
       this._history.remove(entry.id)
     } else {

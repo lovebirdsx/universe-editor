@@ -63,6 +63,8 @@ export interface ICreateWindowOptions {
   readonly devToolsOpen?: boolean
   /** Absolute file path to open in the editor at startup (e.g. from CLI double-click). */
   readonly fileToOpen?: string
+  /** ACP session id the renderer should resume once it is up (cross-worktree follow). */
+  readonly sessionToOpen?: string
 }
 
 export interface IWindowMainService {
@@ -73,7 +75,7 @@ export interface IWindowMainService {
   getWindowById(id: number): BrowserWindow | undefined
   getWindows(): ReadonlyArray<BrowserWindow>
   getOpenWindowInfos(): IOpenWindowInfo[]
-  openWindowForFolder(folder?: URI): Promise<void>
+  openWindowForFolder(folder?: URI, sessionToOpen?: string): Promise<void>
   captureSessionForQuit(): Promise<void>
   confirmQuit(): Promise<boolean>
   isQuitConfirmed(): boolean
@@ -166,6 +168,7 @@ export class WindowMainService implements IWindowMainService {
         additionalArguments: [
           `--ue-home-dir=${homedir()}`,
           ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),
+          ...(opts?.sessionToOpen ? [`--ue-open-session=${opts.sessionToOpen}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
         ],
       },
@@ -413,8 +416,12 @@ export class WindowMainService implements IWindowMainService {
    * Open a window for `folder`. When omitted, prompt with a native folder picker
    * first. If the folder is already open in some window, focus it instead of
    * creating a duplicate (single-writer-per-workspace constraint).
+   *
+   * `sessionToOpen` (optional) is an ACP session id the window should resume once
+   * it is up: passed via argv to a freshly created window, or pushed over the
+   * `ue:open-session` IPC channel when an existing window is focused instead.
    */
-  async openWindowForFolder(folder?: URI): Promise<void> {
+  async openWindowForFolder(folder?: URI, sessionToOpen?: string): Promise<void> {
     let resolved = folder ?? null
     if (!resolved) {
       const parent = BrowserWindow.getFocusedWindow()
@@ -430,9 +437,17 @@ export class WindowMainService implements IWindowMainService {
       name: basename(resolved.fsPath) || resolved.fsPath,
     }
     const workspaceId = workspaceIdFromUri(workspace.folder.toString())
-    if (this._focusWindowForWorkspace(workspaceId)) return
+    const existing = this._findWindowForWorkspace(workspaceId)
+    if (existing) {
+      if (!existing.win.isDestroyed()) {
+        if (existing.win.isMinimized()) existing.win.restore()
+        existing.win.focus()
+        if (sessionToOpen) existing.win.webContents.send('ue:open-session', sessionToOpen)
+      }
+      return
+    }
     await this._opts.appServices.recentWorkspaces.add(workspace)
-    await this.createWindow({ workspace })
+    await this.createWindow({ workspace, ...(sessionToOpen ? { sessionToOpen } : {}) })
   }
 
   /**
@@ -496,17 +511,24 @@ export class WindowMainService implements IWindowMainService {
    * (which would also race on the same workspaces/<id>.json backend).
    */
   private _focusWindowForWorkspace(workspaceId: string): boolean {
-    for (const { win, workspace } of this._windows.values()) {
-      const current = workspace.current
+    const entry = this._findWindowForWorkspace(workspaceId)
+    if (!entry) return false
+    if (!entry.win.isDestroyed()) {
+      if (entry.win.isMinimized()) entry.win.restore()
+      entry.win.focus()
+    }
+    return true
+  }
+
+  /** Locate the (live) window entry whose workspace matches `workspaceId`, if any. */
+  private _findWindowForWorkspace(workspaceId: string): WindowEntry | undefined {
+    for (const entry of this._windows.values()) {
+      const current = entry.workspace.current
       if (current && workspaceIdFromUri(current.folder.toString()) === workspaceId) {
-        if (!win.isDestroyed()) {
-          if (win.isMinimized()) win.restore()
-          win.focus()
-        }
-        return true
+        return entry
       }
     }
-    return false
+    return undefined
   }
 
   private _scheduleSessionPersist(): void {

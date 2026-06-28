@@ -284,6 +284,14 @@ export interface IAcpSession {
   readonly id: string
   readonly agentId: string
   /**
+   * True for a read-only preview session: spawned to replay (`session/load`) a
+   * session that belongs to a different worktree so its history can be viewed in
+   * this window, without allowing any prompt / config mutation (those would have
+   * side effects against the other worktree). `sendPrompt` / `setConfigOption`
+   * are no-ops when set, and the chat UI hides the prompt input.
+   */
+  readonly readOnly: boolean
+  /**
    * The agent-issued `sessionId` from `session/new` (a.k.a. `sessionIdOnAgent`).
    * `undefined` while the session is still connecting; set once
    * `attachConnection` runs. Durable across editor restarts and the key every
@@ -487,6 +495,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     private readonly _agentDefaults?: IAcpAgentDefaultsService,
     private readonly _changeTracker?: ISessionChangeTrackerService,
     private readonly _titleService?: IAcpSessionTitleService,
+    readonly readOnly: boolean = false,
   ) {
     super()
     this.sessionIdOnAgent = observableValue<string | undefined>(
@@ -723,6 +732,8 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   async sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void> {
+    // Read-only preview session (foreign worktree): viewing only, no dispatch.
+    if (this.readOnly) return
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
     this._maybeDeriveTitleFromPrompt(text)
     // Always surface the user's message immediately, even while connecting, so
@@ -1135,6 +1146,8 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   setConfigOption(configId: string, value: string): Promise<void> {
+    // Read-only preview: never mutate the foreign session's agent-side config.
+    if (this.readOnly) return Promise.resolve()
     return this._configOptions.setConfigOption(configId, value)
   }
 

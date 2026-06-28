@@ -73,9 +73,6 @@ function categoryIcon(category: SessionConfigOption['category']) {
 
 export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry }) {
   const storage = useService(IStorageService)
-  const windows = useService(IWindowsService)
-  const lifecycle = useService(ILifecycleService)
-  const workspace = useService(IWorkspaceService)
   const [config, setConfig] = useState<ResolvedConfig[] | null>(null)
 
   const cwd = entry.cwd
@@ -120,11 +117,6 @@ export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry
     }
   }, [storage, cwd, entry.id, entry.agentId, entry.configOptions])
 
-  const activate = (newWindow: boolean) => {
-    if (cwd === undefined) return
-    void activateForeignSession({ windows, lifecycle, workspace }, cwd, { newWindow })
-  }
-
   return (
     <div className={styles['foreignPreview']} data-testid="acp-foreign-session-preview">
       <div className={styles['foreignPreviewHeader']}>
@@ -163,25 +155,79 @@ export function ForeignSessionPreview({ entry }: { entry: AcpSessionHistoryEntry
         </div>
       ) : null}
 
-      <div className={styles['foreignPreviewActions']}>
-        <button
-          type="button"
-          className={styles['sessionRetryButton']}
-          onClick={() => activate(true)}
-          data-testid="acp-foreign-activate-new-window"
-        >
-          <SquareArrowOutUpRight size={14} strokeWidth={1.75} aria-hidden="true" />
-          {localize('acp.foreignSession.openInNewWindow', 'Open Worktree in New Window')}
-        </button>
-        <button
-          type="button"
-          className={styles['sessionRetryButton']}
-          onClick={() => activate(false)}
-          data-testid="acp-foreign-activate-switch"
-        >
-          {localize('acp.foreignSession.switch', 'Switch This Window')}
-        </button>
+      <ForeignSessionActions cwd={cwd} sessionId={entry.id} />
+    </div>
+  )
+}
+
+/**
+ * The "open in its own context" actions shared by the metadata-only preview and
+ * the read-only history view's footer: open the owning worktree in a new window
+ * (carrying the session id so it resumes there) or switch this window to it.
+ */
+export function ForeignSessionActions({
+  cwd,
+  sessionId,
+}: {
+  cwd: string | undefined
+  sessionId: string
+}) {
+  const windows = useService(IWindowsService)
+  const lifecycle = useService(ILifecycleService)
+  const workspace = useService(IWorkspaceService)
+
+  const activate = (newWindow: boolean) => {
+    if (cwd === undefined) return
+    void activateForeignSession({ windows, lifecycle, workspace }, cwd, { newWindow, sessionId })
+  }
+
+  return (
+    <div className={styles['foreignPreviewActions']}>
+      <button
+        type="button"
+        className={styles['sessionRetryButton']}
+        onClick={() => activate(true)}
+        data-testid="acp-foreign-activate-new-window"
+      >
+        <SquareArrowOutUpRight size={14} strokeWidth={1.75} aria-hidden="true" />
+        {localize('acp.foreignSession.openInNewWindow', 'Open Worktree in New Window')}
+      </button>
+      <button
+        type="button"
+        className={styles['sessionRetryButton']}
+        onClick={() => activate(false)}
+        data-testid="acp-foreign-activate-switch"
+      >
+        {localize('acp.foreignSession.switch', 'Switch This Window')}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * Compact footer shown under the read-only history view of a foreign session,
+ * replacing the prompt input. Reminds the user it is read-only and offers the
+ * same activation actions as the metadata preview.
+ */
+export function ForeignSessionFooter({ entry }: { entry: AcpSessionHistoryEntry }) {
+  return (
+    <div className={styles['foreignFooter']} data-testid="acp-foreign-session-footer">
+      <div className={styles['foreignFooterInfo']}>
+        <GitBranch size={13} strokeWidth={1.75} aria-hidden="true" />
+        <span className={styles['foreignFooterText']}>
+          {localize(
+            'acp.foreignSession.readOnlyNote',
+            'Read-only — this session belongs to {branch}. Open it in its own context to continue.',
+            {
+              branch:
+                entry.branch ??
+                entry.cwd ??
+                localize('acp.foreignSession.another', 'another worktree'),
+            },
+          )}
+        </span>
       </div>
+      <ForeignSessionActions cwd={entry.cwd} sessionId={entry.id} />
     </div>
   )
 }

@@ -84,6 +84,7 @@ import { QuickAccessContribution } from './QuickAccessContribution.js'
 import { OutlineViewStateContribution } from './OutlineViewStateContribution.js'
 import { SearchPersistenceContribution } from './SearchPersistenceContribution.js'
 import { StartupFileContribution } from './StartupFileContribution.js'
+import { StartupSessionContribution } from './StartupSessionContribution.js'
 
 // Install the Monaco standalone override services (cross-file rename writer +
 // references text-model resolver) on MonacoLoader before any editor is created —
@@ -674,6 +675,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.startupFile',
   StartupFileContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Resume a cross-worktree session this window was opened to follow (argv at
+// cold-launch, or pushed over IPC when an existing window is focused).
+// AfterRestore so the ACP session service + editor groups are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.startupSession',
+  StartupSessionContribution,
   WorkbenchPhase.AfterRestore,
 )
 

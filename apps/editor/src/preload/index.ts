@@ -11,6 +11,10 @@ const OPEN_FILE_FLAG = '--ue-open-file='
 const openFileArg = process.argv.find((a) => a.startsWith(OPEN_FILE_FLAG))
 const openFilePath = openFileArg ? openFileArg.slice(OPEN_FILE_FLAG.length) : undefined
 
+const OPEN_SESSION_FLAG = '--ue-open-session='
+const openSessionArg = process.argv.find((a) => a.startsWith(OPEN_SESSION_FLAG))
+const openSessionId = openSessionArg ? openSessionArg.slice(OPEN_SESSION_FLAG.length) : undefined
+
 const bridge = {
   send(data: Uint8Array): void {
     ipcRenderer.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
@@ -43,6 +47,16 @@ const bridge = {
     }
     ipcRenderer.on('ue:open-file', listener)
     return () => ipcRenderer.removeListener('ue:open-file', listener)
+  },
+  /** ACP session id this window should resume at cold-launch (cross-worktree follow); undefined if none. */
+  openSessionId,
+  /** Listen for a session id pushed by the main process when an already-open window is focused. */
+  onOpenSession(cb: (sessionId: string) => void): () => void {
+    const listener = (_event: IpcRendererEvent, sessionId: unknown): void => {
+      if (typeof sessionId === 'string') cb(sessionId)
+    }
+    ipcRenderer.on('ue:open-session', listener)
+    return () => ipcRenderer.removeListener('ue:open-session', listener)
   },
 }
 

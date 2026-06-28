@@ -15,6 +15,9 @@ import {
   IEditorService,
   IWorkspaceService,
   IHostService,
+  IStorageService,
+  IWindowsService,
+  ILifecycleService,
 } from '@universe-editor/platform'
 import type {
   IEditorService as IEditorServiceType,
@@ -40,6 +43,8 @@ afterEach(() => cleanup())
 interface FakeAcpSessionService extends IAcpSessionServiceType {
   readonly sessionsObs: ReturnType<typeof observableValue<readonly IAcpSession[]>>
   readonly resumeSession: ReturnType<typeof vi.fn> & IAcpSessionServiceType['resumeSession']
+  readonly resumeSessionReadOnly: ReturnType<typeof vi.fn> &
+    IAcpSessionServiceType['resumeSessionReadOnly']
   readonly createSession: ReturnType<typeof vi.fn> & IAcpSessionServiceType['createSession']
   readonly _byId: Map<string, IAcpSession>
 }
@@ -48,6 +53,7 @@ function makeService(
   initial: {
     byId?: Record<string, IAcpSession>
     resumeResult?: () => Promise<IAcpSession>
+    resumeReadOnlyResult?: () => Promise<IAcpSession>
   } = {},
 ): FakeAcpSessionService {
   const byId = new Map<string, IAcpSession>(Object.entries(initial.byId ?? {}))
@@ -58,6 +64,11 @@ function makeService(
     .fn()
     .mockImplementation(
       initial.resumeResult ?? (() => Promise.resolve(undefined as unknown as IAcpSession)),
+    )
+  const resumeSessionReadOnly = vi
+    .fn()
+    .mockImplementation(
+      initial.resumeReadOnlyResult ?? (() => Promise.resolve(undefined as unknown as IAcpSession)),
     )
   const createSession = vi.fn().mockResolvedValue(undefined as unknown as IAcpSession)
   const onDidCloseSession = new Emitter<string>()
@@ -71,6 +82,7 @@ function makeService(
     _byId: byId,
     createSession: createSession as never,
     resumeSession: resumeSession as never,
+    resumeSessionReadOnly: resumeSessionReadOnly as never,
     setActive(): void {},
     async closeSession(): Promise<void> {},
     getById(id: string): IAcpSession | undefined {
@@ -113,10 +125,10 @@ function makeEditor(): IEditorServiceType {
   } as unknown as IEditorServiceType
 }
 
-function makeWorkspace(): IWorkspaceServiceType {
+function makeWorkspace(folderPath?: string): IWorkspaceServiceType {
   return {
     _serviceBrand: undefined,
-    current: undefined,
+    current: folderPath ? { folder: { fsPath: folderPath }, name: 'ws' } : undefined,
   } as unknown as IWorkspaceServiceType
 }
 
@@ -135,13 +147,28 @@ function makeCollection(
   service: FakeAcpSessionService,
   history?: IAcpSessionHistoryServiceType,
   editor: IEditorServiceType = stubEditor,
+  workspace: IWorkspaceServiceType = stubWorkspace,
 ) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, service)
   services.set(IAcpSessionHistoryService, history ?? makeHistory())
   services.set(IEditorService, editor)
-  services.set(IWorkspaceService, stubWorkspace)
+  services.set(IWorkspaceService, workspace)
   services.set(IHostService, stubHost)
+  // ForeignSessionPreview (read-only fallback) pulls these; harmless stubs for
+  // the live/resume tests that never render it.
+  services.set(IStorageService, {
+    _serviceBrand: undefined,
+    // No getForWorkspaceCwd → the preview short-circuits config to [].
+  } as never)
+  services.set(IWindowsService, {
+    _serviceBrand: undefined,
+    openWindow: vi.fn().mockResolvedValue(undefined),
+  } as never)
+  services.set(ILifecycleService, {
+    _serviceBrand: undefined,
+    confirmBeforeShutdown: vi.fn().mockResolvedValue(false),
+  } as never)
   return services
 }
 
@@ -270,5 +297,56 @@ describe('AcpSessionEditor — auto-resume after editor restart', () => {
     // No error UI — the tab is being closed instead.
     expect(screen.queryByTestId('acp-session-resume-error')).toBeNull()
     expect(editor.closeEditor).toHaveBeenCalledWith(input.id)
+  })
+})
+
+describe('AcpSessionEditor — foreign worktree session (read-only)', () => {
+  function foreignHistory(): IAcpSessionHistoryServiceType {
+    return makeHistory((id) => ({
+      id,
+      agentId: 'fake',
+      sessionIdOnAgent: id,
+      title: id,
+      cwd: '/repo/wt1',
+      createdAt: 0,
+      lastUsedAt: 0,
+    }))
+  }
+
+  it('resumes read-only (not live) when the session belongs to another worktree', async () => {
+    const service = makeService()
+    const { input } = buildInput(service, 'sess-foreign', 'fake')
+    const history = foreignHistory()
+    const workspace = makeWorkspace('/repo/main')
+    await act(async () => {
+      const inst = new InstantiationService(makeCollection(service, history, stubEditor, workspace))
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    // Read-only path taken: live resume must NOT fire.
+    expect(service.resumeSessionReadOnly).toHaveBeenCalledWith('sess-foreign')
+    expect(service.resumeSession).not.toHaveBeenCalled()
+    expect(screen.getByTestId('acp-foreign-session-loading')).toBeTruthy()
+  })
+
+  it('falls back to the metadata preview when read-only resume fails', async () => {
+    const service = makeService({
+      resumeReadOnlyResult: () => Promise.reject(new Error('no loadSession')),
+    })
+    const { input } = buildInput(service, 'sess-foreign2', 'fake')
+    const history = foreignHistory()
+    const workspace = makeWorkspace('/repo/main')
+    await act(async () => {
+      const inst = new InstantiationService(makeCollection(service, history, stubEditor, workspace))
+      render(
+        <ServicesContext.Provider value={inst}>
+          <AcpSessionEditor input={input} />
+        </ServicesContext.Provider>,
+      )
+    })
+    expect(await screen.findByTestId('acp-foreign-session-preview')).toBeTruthy()
   })
 })

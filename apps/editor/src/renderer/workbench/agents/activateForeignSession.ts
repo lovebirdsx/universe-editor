@@ -27,16 +27,19 @@ export interface ActivateForeignSessionDeps {
  * Realign the window to a foreign session's worktree so it can be resumed there.
  * `newWindow` (default, plain click) opens the worktree in a new window; the
  * modifier-key path switches the current window after confirming shutdown.
+ * `sessionId` (optional) is handed to the new window so it resumes that exact
+ * session once it is up; the same-window switch does not carry it (the user
+ * reopens from the list there).
  * Returns false when the same-window switch was vetoed by the shutdown guard.
  */
 export async function activateForeignSession(
   deps: ActivateForeignSessionDeps,
   cwd: string,
-  options: { newWindow: boolean },
+  options: { newWindow: boolean; sessionId?: string },
 ): Promise<boolean> {
   const folder = URI.file(cwd)
   if (options.newWindow) {
-    await deps.windows.openWindow(folder)
+    await deps.windows.openWindow(folder, options.sessionId ? { sessionId: options.sessionId } : {})
     return true
   }
   if (await deps.lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return false

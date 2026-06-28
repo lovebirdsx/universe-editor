@@ -511,6 +511,46 @@ describe('AcpSessionService — historyId routing (editor restart)', () => {
     const resumed = await svc.resumeSession(sessionId)
     expect(resumed.id).toBe(sessionId)
   })
+
+  it('resumeSessionReadOnly loads a foreign session without spawning split-brain', async () => {
+    // Open folder is /repo/main; the foreign session belongs to /repo/wt1.
+    const built = buildService({ loadSessionResult: {} }, '/repo/main')
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'foreign-ro',
+      title: 'from worktree',
+      cwd: '/repo/wt1',
+    })
+    // Live resume is refused (guard), but the read-only preview is allowed.
+    await expect(svc.resumeSession('foreign-ro')).rejects.toBeInstanceOf(AcpForeignWorktreeError)
+    const ro = await svc.resumeSessionReadOnly('foreign-ro')
+    expect(ro.readOnly).toBe(true)
+    expect(ro.id).toBe('foreign-ro')
+    // Registered so getById hits, but NOT made the active session.
+    expect(svc.getById('foreign-ro')?.id).toBe('foreign-ro')
+    expect(svc.activeSession.get()).toBeUndefined()
+    // It connected against the session's OWN cwd, not the open folder.
+    expect(built.client.connectArgs.at(-1)?.cwd).toBe('/repo/wt1')
+  })
+
+  it('resumeSessionReadOnly: sendPrompt / setConfigOption are no-ops', async () => {
+    const built = buildService({ loadSessionResult: {} }, '/repo/main')
+    svc = built.svc
+    await built.history.initialize()
+    built.history.add({
+      agentId: 'fake',
+      sessionIdOnAgent: 'foreign-ro2',
+      title: 'from worktree',
+      cwd: '/repo/wt1',
+    })
+    const ro = await svc.resumeSessionReadOnly('foreign-ro2')
+    const before = ro.timeline.get().length
+    await ro.sendPrompt('hello')
+    // No user message appended — the prompt was suppressed.
+    expect(ro.timeline.get().length).toBe(before)
+  })
 })
 
 describe('AcpSessionService — history wiring', () => {

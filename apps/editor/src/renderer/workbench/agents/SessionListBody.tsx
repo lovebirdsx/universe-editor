@@ -310,7 +310,11 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
         <ul className={styles['sessionRows']}>
           {filtered.map((entry) => {
             const live = service.getById(entry.id)
-            const liveSession = live && live.status.get() !== 'closed' ? live : undefined
+            // A read-only foreign preview is a live AcpSession instance but must
+            // not light up the running indicator / timer / "active" styling — it
+            // is a viewer, not the working session.
+            const liveSession =
+              live && live.status.get() !== 'closed' && !live.readOnly ? live : undefined
             const isActive = liveSession !== undefined && liveSession.id === activeId
             const isForeign =
               entry.cwd !== undefined &&
@@ -327,7 +331,11 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 isForeign={isForeign}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
-                  const liveNow = fresh && fresh.status.get() !== 'closed' ? fresh : undefined
+                  // Exclude read-only previews: a live read-only session must not
+                  // be set active; clicking re-opens its (read-only) tab via the
+                  // foreign branch below.
+                  const liveNow =
+                    fresh && fresh.status.get() !== 'closed' && !fresh.readOnly ? fresh : undefined
                   if (liveNow) {
                     service.setActive(liveNow.id)
                   } else if (

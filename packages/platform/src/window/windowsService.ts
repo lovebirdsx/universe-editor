@@ -46,8 +46,13 @@ export interface IWindowsService {
    * a native folder picker first (cancelling is a no-op). If the resolved folder
    * is already open in some window, that window is focused instead of opening a
    * duplicate (single-writer-per-workspace constraint).
+   *
+   * `options.sessionId` carries an ACP session id the target window should
+   * resume once it is up (used to follow a cross-worktree session into the
+   * window that owns its cwd). Delivered via argv on a fresh window or pushed
+   * over IPC when an already-open window is focused instead.
    */
-  openWindow(folder?: URI | UriComponents): Promise<void>
+  openWindow(folder?: URI | UriComponents, options?: { sessionId?: string }): Promise<void>
 
   /** Quit the entire application, closing all windows. */
   quit(): Promise<void>

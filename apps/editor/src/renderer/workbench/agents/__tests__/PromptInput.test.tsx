@@ -189,6 +189,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
   return {
     id: opts.id ?? 's1',
     agentId: 'fake',
+    readOnly: false,
     sessionIdOnAgent: observableValue<string | undefined>('test.sessionIdOnAgent', opts.id ?? 's1'),
     title: 'Fake',
     messages,

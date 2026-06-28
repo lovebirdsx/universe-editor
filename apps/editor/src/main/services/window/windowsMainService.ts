@@ -40,9 +40,9 @@ export class MainWindowsService implements IWindowsService, IDisposable {
     return Promise.resolve()
   }
 
-  openWindow(folder?: URI | UriComponents): Promise<void> {
+  openWindow(folder?: URI | UriComponents, options?: { sessionId?: string }): Promise<void> {
     const resolved = folder == null ? undefined : (URI.revive(folder) as URI)
-    return this._windows.openWindowForFolder(resolved)
+    return this._windows.openWindowForFolder(resolved, options?.sessionId)
   }
 
   quit(): Promise<void> {

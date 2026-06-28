@@ -77,6 +77,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
   return {
     id: 's1',
     agentId: 'fake',
+    readOnly: false,
     sessionIdOnAgent: observableValue<string | undefined>('sid', 's1'),
     title: 'Fake',
     messages: observableValue<readonly AcpMessage[]>('m', []),

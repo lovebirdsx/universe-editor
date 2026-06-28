@@ -38,6 +38,7 @@ import {
 } from '../../services/acp/acpSessionService.js'
 import { hasVisibleMessageContent, timelineItemToText } from '../../services/acp/acpSession.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
+import { IAcpSessionHistoryService } from '../../services/acp/acpSessionHistory.js'
 import {
   IAcpChatWidgetService,
   type AcpChatWidget,
@@ -56,6 +57,7 @@ import { QuestionCard } from './QuestionCard.js'
 import { StickyPlanBar } from './StickyPlanBar.js'
 import { StickyUserMessageBar } from './StickyUserMessageBar.js'
 import { PromptInput } from './PromptInput.js'
+import { ForeignSessionFooter } from './ForeignSessionPreview.js'
 import { ToolCallCard } from './ToolCallCard.js'
 import { roleIcon } from './timelineIcons.js'
 import { UserMessageItem } from './UserMessageItem.js'
@@ -107,7 +109,15 @@ const NOOP_HANDLE: WidgetHandle = {
   findPrev: noop,
 }
 
-export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFocus?: boolean }) {
+export function ChatBody({
+  session,
+  autoFocus,
+  readOnly,
+}: {
+  session?: IAcpSession
+  autoFocus?: boolean
+  readOnly?: boolean
+}) {
   const service = useService(IAcpSessionService)
   const registry = useService(IAcpAgentRegistry)
   const active = useObservable(service.activeSession)
@@ -117,10 +127,24 @@ export function ChatBody({ session, autoFocus }: { session?: IAcpSession; autoFo
     return <EmptyChat onCreate={() => void service.createSession(registry.defaultAgentId())} />
   }
 
-  return <ChatSessionBody session={target} {...(autoFocus !== undefined ? { autoFocus } : {})} />
+  return (
+    <ChatSessionBody
+      session={target}
+      {...(autoFocus !== undefined ? { autoFocus } : {})}
+      {...(readOnly !== undefined ? { readOnly } : {})}
+    />
+  )
 }
 
-function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFocus?: boolean }) {
+function ChatSessionBody({
+  session,
+  autoFocus,
+  readOnly,
+}: {
+  session: IAcpSession
+  autoFocus?: boolean
+  readOnly?: boolean
+}) {
   const widgetService = useService(IAcpChatWidgetService)
   const timeline = useObservable(session.timeline)
   const hasTimelineContent = hasRenderableTimelineContent(timeline)
@@ -184,7 +208,12 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
     ? styles['chat']
     : `${styles['chat']} ${styles['chatEmptySession']}`
   return (
-    <div ref={containerRef} className={chatClassName} data-testid="acp-chat">
+    <div
+      ref={containerRef}
+      className={chatClassName}
+      data-testid="acp-chat"
+      data-readonly={readOnly ? 'true' : 'false'}
+    >
       <StickyUserMessageBar key={`user:${session.id}`} session={session} />
       <StickyPlanBar key={`plan:${session.id}`} session={session} />
       <ChatScroll
@@ -193,17 +222,37 @@ function ChatSessionBody({ session, autoFocus }: { session: IAcpSession; autoFoc
         handleRef={handleRef}
         onFindVisibleChange={handleFindVisibleChange}
       />
-      <PermissionCard session={session} />
-      <QuestionCard key={`question:${session.id}`} session={session} />
-      <PromptInput
-        key={`prompt:${session.id}`}
-        session={session}
-        handleRef={handleRef}
-        onPopoverOpenChange={handlePopoverOpenChange}
-        {...(autoFocus !== undefined ? { autoFocus } : {})}
-      />
+      {readOnly ? (
+        <ReadOnlyChatFooter session={session} />
+      ) : (
+        <>
+          <PermissionCard session={session} />
+          <QuestionCard key={`question:${session.id}`} session={session} />
+          <PromptInput
+            key={`prompt:${session.id}`}
+            session={session}
+            handleRef={handleRef}
+            onPopoverOpenChange={handlePopoverOpenChange}
+            {...(autoFocus !== undefined ? { autoFocus } : {})}
+          />
+        </>
+      )}
     </div>
   )
+}
+
+/**
+ * Footer for a read-only foreign-session view: looks the history entry up by the
+ * session's durable id and renders the "open in its own context" actions in
+ * place of the prompt input.
+ */
+function ReadOnlyChatFooter({ session }: { session: IAcpSession }) {
+  const history = useService(IAcpSessionHistoryService)
+  useObservable(history.entries)
+  const sid = useObservable(session.sessionIdOnAgent) ?? session.id
+  const entry = history.get(sid)
+  if (!entry) return null
+  return <ForeignSessionFooter entry={entry} />
 }
 
 function ChatScroll({
