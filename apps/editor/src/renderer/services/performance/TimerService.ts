@@ -46,20 +46,25 @@ interface IMilestone {
   readonly label: string
 }
 
-// Ordered startup milestones; adjacent pairs become phases. Missing marks are
-// skipped (e.g. a not-yet-reached phase), so the timeline stays contiguous.
+// Startup milestones; the ones actually emitted are sorted by real start time,
+// then adjacent pairs become phases. Sorting (rather than trusting the array
+// order) keeps phase durations non-negative even for lazy marks — the extension
+// host spawn and Monaco init fire on demand and can land after the window mount.
 const MILESTONES: readonly IMilestone[] = [
   { mark: PerfMarks.mainDidStart, label: 'Main process started' },
   { mark: PerfMarks.mainAppReady, label: 'Electron app ready' },
   { mark: PerfMarks.mainDidCreateServices, label: 'Main services created' },
   { mark: PerfMarks.mainWillCreateWindow, label: 'Creating window' },
   { mark: PerfMarks.mainDidShowWindow, label: 'Window shown' },
+  { mark: PerfMarks.extHostDidSpawn, label: 'Extension host spawned' },
   { mark: PerfMarks.rendererWillStartBootstrap, label: 'Renderer bootstrap' },
   { mark: PerfMarks.rendererDidCreateIpc, label: 'IPC ready' },
   { mark: PerfMarks.rendererWillRestore, label: 'Ready phase' },
   { mark: PerfMarks.rendererDidRestoreServices, label: 'Services restored' },
+  { mark: PerfMarks.rendererWillMountReact, label: 'Mounting workbench' },
   { mark: PerfMarks.rendererDidMount, label: 'Workbench mounted' },
   { mark: PerfMarks.rendererDidRestoreEditors, label: 'Editors restored' },
+  { mark: PerfMarks.rendererDidInitializeMonaco, label: 'Monaco initialized' },
 ]
 
 export class TimerService implements ITimerService {
@@ -83,7 +88,11 @@ export class TimerService implements ITimerService {
       if (prev === undefined || m.startTime < prev) at.set(m.name, m.startTime)
     }
 
-    const present = MILESTONES.filter((ms) => at.has(ms.mark))
+    const present = MILESTONES.filter((ms) => at.has(ms.mark)).sort((a, b) => {
+      const ta = at.get(a.mark)
+      const tb = at.get(b.mark)
+      return (ta ?? 0) - (tb ?? 0)
+    })
     const phases: IStartupPhase[] = []
     for (let i = 1; i < present.length; i++) {
       const from = present[i - 1]

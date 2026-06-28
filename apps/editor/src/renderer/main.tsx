@@ -671,6 +671,7 @@ async function bootstrapWorkbench(): Promise<void> {
   const { Workbench } = await import('./workbench/Workbench.js')
   const { WorkbenchErrorBoundary } = await import('./workbench/errors/WorkbenchErrorBoundary.js')
 
+  mark(PerfMarks.rendererWillMountReact)
   reactRoot = createRoot(rootEl)
   reactRoot.render(
     <StrictMode>

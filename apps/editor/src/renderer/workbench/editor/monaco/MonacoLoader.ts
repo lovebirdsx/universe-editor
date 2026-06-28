@@ -8,6 +8,7 @@
 import type * as monaco from 'monaco-editor'
 import {
   Emitter,
+  mark,
   NullLogger,
   type Event,
   type IDisposable,
@@ -17,6 +18,7 @@ import { getCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { bridgeAllMonacoActions } from './monacoActionsBridge.js'
 import { applyMonacoNls } from './monacoNlsBootstrap.js'
 import { registerLogLanguage } from '../../panel/output/monacoLogLanguage.js'
+import { PerfMarks } from '../../../../shared/perf/marks.js'
 
 export type { monaco }
 
@@ -222,6 +224,7 @@ async function loadMonaco(): Promise<typeof monaco> {
           _actionsBridged = true
           _onDidBridgeActions.fire()
         })
+      mark(PerfMarks.rendererDidInitializeMonaco)
       return monacoMod
     })()
   }

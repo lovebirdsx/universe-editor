@@ -16,10 +16,17 @@ export const PerfMarks = {
   mainWillCreateWindow: 'code/main/willCreateWindow',
   mainDidShowWindow: 'code/main/didShowWindow',
 
+  /** Main: first extension-host child process spawned (lazy, may fire after window shown). */
+  extHostDidSpawn: 'code/main/extHostDidSpawn',
+
   rendererWillStartBootstrap: 'code/renderer/willStartBootstrap',
   rendererDidCreateIpc: 'code/renderer/didCreateIpc',
   rendererWillRestore: 'code/renderer/willRestore',
   rendererDidRestoreServices: 'code/renderer/didRestoreServices',
+  /** Renderer: about to createRoot()/render the Workbench React tree. */
+  rendererWillMountReact: 'code/renderer/willMountReact',
   rendererDidMount: 'code/renderer/didMount',
   rendererDidRestoreEditors: 'code/renderer/didRestoreEditors',
+  /** Renderer: monaco-editor finished lazy initialization (lazy, may fire after mount). */
+  rendererDidInitializeMonaco: 'code/renderer/didInitializeMonaco',
 } as const

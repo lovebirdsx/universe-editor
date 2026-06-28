@@ -59,6 +59,24 @@ describe('TimerService', () => {
     expect(first?.duration).toBe(190) // 1200 - 1010
   })
 
+  it('orders lazy marks by real start time (no negative phases)', async () => {
+    // extHost spawn / Monaco init are lazy and may land out of MILESTONES order.
+    const lazy: PerformanceMark[] = [
+      { name: PerfMarks.timeOrigin, startTime: 1000 },
+      { name: PerfMarks.mainDidStart, startTime: 1010 },
+      { name: PerfMarks.rendererDidMount, startTime: 1800 },
+      { name: PerfMarks.extHostDidSpawn, startTime: 1850 },
+      { name: PerfMarks.rendererDidInitializeMonaco, startTime: 2000 },
+    ]
+    const svc = new TimerService(mainMarksStub(lazy))
+    const metrics = await svc.getStartupMetrics()
+    for (const phase of metrics.phases) {
+      expect(phase.duration).toBeGreaterThanOrEqual(0)
+    }
+    const last = metrics.phases[metrics.phases.length - 1]
+    expect(last?.to).toBe('Monaco initialized')
+  })
+
   it('skips missing milestones (partial timeline)', async () => {
     const partial: PerformanceMark[] = [
       { name: PerfMarks.timeOrigin, startTime: 1000 },

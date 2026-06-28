@@ -18,6 +18,7 @@ import {
   createNamedLogger,
   Disposable,
   Emitter,
+  mark,
   type ILogger,
   ILoggerService,
 } from '@universe-editor/platform'
@@ -32,6 +33,7 @@ import type {
   IExtensionHostService,
 } from '../../../shared/ipc/extensionHostService.js'
 import { resolveTsServerPaths } from './tsServerPaths.js'
+import { PerfMarks } from '../../../shared/perf/marks.js'
 
 /** Spawner abstraction — injectable for tests so we don't launch real processes. */
 export type ExtHostSpawner = (
@@ -122,6 +124,9 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   /** Cached result of probing whether this runtime accepts the Node permission model. */
   private _permissionModelSupported: boolean | undefined
 
+  /** Set once the first host process spawns, so the perf mark fires only once. */
+  private _didMarkFirstSpawn = false
+
   constructor(
     private readonly _spawn: ExtHostSpawner = defaultSpawner,
     private readonly _resolveEntry: ExtHostEntryResolver = defaultResolveEntry,
@@ -183,6 +188,11 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
 
     const procEntry: ProcEntry = { proc, stdoutDecoder: new StringDecoder('utf8'), exited: false }
     this._procs.set(handle, procEntry)
+
+    if (!this._didMarkFirstSpawn) {
+      this._didMarkFirstSpawn = true
+      mark(PerfMarks.extHostDidSpawn)
+    }
 
     proc.onStdout((data: Buffer) => {
       this._onStdout.fire({ handle, data: procEntry.stdoutDecoder.write(data) })
