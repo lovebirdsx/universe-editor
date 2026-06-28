@@ -26,6 +26,12 @@ import styles from './agents.module.css'
 
 interface MessageContentProps {
   readonly blocks: readonly ContentBlock[]
+  /**
+   * True while this message is still streaming. Routes the markdown text through
+   * the incremental parser so a long live message doesn't re-parse its whole
+   * accumulated text on every chunk. Off for settled messages and tool output.
+   */
+  readonly streaming?: boolean
 }
 
 type NonTextBlock = Exclude<ContentBlock, { type: 'text' }>
@@ -51,13 +57,13 @@ function groupBlocks(blocks: readonly ContentBlock[]): readonly BlockGroup[] {
   return groups
 }
 
-export function MessageContent({ blocks }: MessageContentProps) {
+export function MessageContent({ blocks, streaming }: MessageContentProps) {
   const groups = useMemo(() => groupBlocks(blocks), [blocks])
   return (
     <div className={styles['messageBody']}>
       {groups.map((g, i) =>
         g.type === 'text-run' ? (
-          <TextRunSegments key={i} text={g.text} />
+          <TextRunSegments key={i} text={g.text} streaming={streaming ?? false} />
         ) : (
           <BlockNode key={i} block={g.block} />
         ),
@@ -66,7 +72,7 @@ export function MessageContent({ blocks }: MessageContentProps) {
   )
 }
 
-function TextRunSegments({ text }: { text: string }) {
+function TextRunSegments({ text, streaming }: { text: string; streaming: boolean }) {
   const segments = useMemo(() => parseCommandWrappers(text), [text])
   return (
     <>
@@ -74,7 +80,7 @@ function TextRunSegments({ text }: { text: string }) {
         seg.type === 'command' ? (
           <CommandInvocationBadge key={i} invocation={seg.invocation} />
         ) : (
-          <MarkdownBlock key={i} text={seg.text} />
+          <MarkdownBlock key={i} text={seg.text} streaming={streaming} />
         ),
       )}
     </>
@@ -109,10 +115,17 @@ function BlockNode({ block }: { block: NonTextBlock }) {
 // Markdown text → React (shared renderer)
 // ---------------------------------------------------------------------------
 
-function MarkdownBlock({ text }: { text: string }) {
+function MarkdownBlock({ text, streaming }: { text: string; streaming: boolean }) {
   const workspaceService = useOptionalService(IWorkspaceService)
   const baseUri = workspaceService?.current?.folder
-  return <MarkdownView text={text} testId="acp-markdown" {...(baseUri ? { baseUri } : {})} />
+  return (
+    <MarkdownView
+      text={text}
+      testId="acp-markdown"
+      streaming={streaming}
+      {...(baseUri ? { baseUri } : {})}
+    />
+  )
 }
 
 // ---------------------------------------------------------------------------

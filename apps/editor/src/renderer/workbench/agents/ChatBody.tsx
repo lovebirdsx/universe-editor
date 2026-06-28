@@ -1193,7 +1193,11 @@ const TimelineSlot = memo(function TimelineSlot({
             'data-sticky-depth': '0',
           }}
         >
-          {isUser ? <UserMessageItem blocks={m.blocks} /> : <MessageContent blocks={m.blocks} />}
+          {isUser ? (
+            <UserMessageItem blocks={m.blocks} />
+          ) : (
+            <MessageContent blocks={m.blocks} streaming={m.streaming} />
+          )}
           {showCaret && (
             <span className={styles['streamingCaret']} aria-hidden="true" data-testid="acp-caret">
               ▍

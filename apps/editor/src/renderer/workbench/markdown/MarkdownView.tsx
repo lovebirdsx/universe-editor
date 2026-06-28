@@ -7,7 +7,7 @@
  *  same component fits both the compact ACP chat and the roomier doc preview.
  *--------------------------------------------------------------------------------------------*/
 
-import { createContext, Fragment, useContext, useMemo, type ReactNode } from 'react'
+import { createContext, Fragment, useContext, useMemo, useRef, type ReactNode } from 'react'
 import { IEditorResolverService, URI } from '@universe-editor/platform'
 import {
   parseMarkdown,
@@ -15,6 +15,10 @@ import {
   type MdNode,
   type TableAlign,
 } from '../../services/acp/markdownRenderer.js'
+import {
+  createMarkdownStreamCache,
+  parseMarkdownStreaming,
+} from '../../services/acp/markdownIncremental.js'
 import {
   looksLikeFilePath,
   matchFullFilePath,
@@ -32,10 +36,18 @@ interface MarkdownViewProps {
   readonly testId?: string
   /** Base URI for resolving relative file-path links (markdown source dir or workspace root). */
   readonly baseUri?: URI
+  /**
+   * When true the text is the live tail of a streaming agent message that grows
+   * one chunk at a time; parse it incrementally (sealed-prefix cache) instead of
+   * re-parsing the whole accumulated string on every chunk. Off by default for
+   * static consumers (doc preview, release notes, help), which keep the simple
+   * memoized full parse.
+   */
+  readonly streaming?: boolean
 }
 
-export function MarkdownView({ text, className, testId, baseUri }: MarkdownViewProps) {
-  const nodes = useMemo(() => parseMarkdown(text), [text])
+export function MarkdownView({ text, className, testId, baseUri, streaming }: MarkdownViewProps) {
+  const nodes = useMarkdownNodes(text, streaming ?? false)
   const openFileLink = useMarkdownFileLink(baseUri)
   return (
     <FileLinkContext.Provider value={openFileLink}>
@@ -49,6 +61,21 @@ export function MarkdownView({ text, className, testId, baseUri }: MarkdownViewP
       </div>
     </FileLinkContext.Provider>
   )
+}
+
+/**
+ * Parse markdown to nodes, incrementally when `streaming`. The incremental cache
+ * lives in a ref tied to this component instance; it self-heals if the text ever
+ * diverges from the cached prefix (message reset / non-monotonic growth).
+ */
+function useMarkdownNodes(text: string, streaming: boolean): readonly MdNode[] {
+  const cacheRef = useRef(createMarkdownStreamCache())
+  const staticNodes = useMemo(
+    () => (streaming ? undefined : parseMarkdown(text)),
+    [text, streaming],
+  )
+  if (staticNodes !== undefined) return staticNodes
+  return parseMarkdownStreaming(text, cacheRef.current)
 }
 
 const FileLinkContext = createContext<(path: string, line?: number, col?: number) => void>(() => {})

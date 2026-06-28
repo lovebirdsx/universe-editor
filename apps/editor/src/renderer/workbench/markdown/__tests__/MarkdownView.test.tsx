@@ -122,4 +122,29 @@ describe('MarkdownView', () => {
     const pre = container.querySelector('pre[data-lang="mermaid"]')
     expect(pre?.textContent).toContain('not a diagram')
   })
+
+  it('streaming mode produces the same DOM as a one-shot render', () => {
+    const full = '# Title\n\nfirst **para**\n\n- a\n- b\n\n```ts\nconst x = 1\n```\n\ntail text'
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    const inst = new InstantiationService(services)
+    const { rerender } = render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text={full.slice(0, 1)} streaming testId="stream-md" />
+      </ServicesContext.Provider>,
+    )
+    // Grow the text chunk by chunk through the incremental path.
+    for (let i = 2; i <= full.length; i++) {
+      rerender(
+        <ServicesContext.Provider value={inst}>
+          <MarkdownView text={full.slice(0, i)} streaming testId="stream-md" />
+        </ServicesContext.Provider>,
+      )
+    }
+    const streamedHtml = screen.getByTestId('stream-md').innerHTML
+    cleanup()
+    renderMarkdown(full, 'stream-md')
+    expect(streamedHtml).toBe(screen.getByTestId('stream-md').innerHTML)
+  })
 })
