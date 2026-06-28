@@ -704,6 +704,14 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.uncommittedChanges': '未提交的更改',
   'gitGraph.uncommittedCount': '未提交的更改（{count}）',
   'gitGraph.viewSettings': '查看设置',
+  'gitGraph.worktree.tooltip': '工作树 {name} · {branch}\n{path}',
+  'gitGraph.worktree.tooltipDetached': '工作树 {name}（已分离）\n{path}',
+  'gitGraph.worktree.open': '打开工作树',
+  'gitGraph.worktree.openNewWindow': '在新窗口打开工作树',
+  'gitGraph.worktree.copyPath': '复制工作树路径',
+  'gitGraph.worktree.delete': '删除工作树…',
+  'gitGraph.worktree.deleteConfirm': '删除工作树"{name}"？',
+  'gitGraph.worktree.deleteDetail': '这会移除位于 {path} 的工作树文件夹，但保留其分支本身。',
 
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',

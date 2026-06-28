@@ -334,6 +334,23 @@
   color: var(--color-editor-bg);
 }
 
+.badgeWorktree {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 14px;
+  border: 1px solid var(--color-accent);
+  color: var(--color-accent);
+  cursor: context-menu;
+}
+
+.badgeWorktreeCurrent {
+  background: var(--color-accent);
+  color: var(--color-button-fg);
+}
+
 .detail {
   display: flex;
   flex-direction: column;

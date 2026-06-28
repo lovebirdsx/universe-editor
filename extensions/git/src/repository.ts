@@ -143,73 +143,8 @@ export interface RepoStatus {
   readonly busy: { readonly text: string; readonly kind: 'syncing' | 'spinning' } | undefined
 }
 
-/** A single linked working tree, as reported by `git worktree list --porcelain`. */
-export interface WorktreeInfo {
-  readonly path: string
-  /** Short branch name, or undefined when detached / bare. */
-  readonly branch: string | undefined
-  /** Abbreviated-or-full HEAD commit, or undefined for a bare worktree. */
-  readonly head: string | undefined
-  readonly bare: boolean
-  readonly detached: boolean
-  /** The first entry is always the main working tree. */
-  readonly isMain: boolean
-}
-
-/**
- * Parse `git worktree list --porcelain` output. Records are blank-line separated;
- * each line is a `key value` pair (or a bare key like `bare` / `detached`). The
- * first record is the main working tree. `branch` carries a full ref
- * (`refs/heads/x`) which we shorten for display.
- */
-export function parseWorktrees(stdout: string): WorktreeInfo[] {
-  const result: WorktreeInfo[] = []
-  let path: string | undefined
-  let head: string | undefined
-  let branch: string | undefined
-  let bare = false
-  let detached = false
-
-  const flush = (): void => {
-    if (path === undefined) return
-    result.push({ path, branch, head, bare, detached, isMain: result.length === 0 })
-    path = undefined
-    head = undefined
-    branch = undefined
-    bare = false
-    detached = false
-  }
-
-  for (const raw of stdout.split('\n')) {
-    const line = raw.trimEnd()
-    if (line === '') {
-      flush()
-      continue
-    }
-    const sep = line.indexOf(' ')
-    const key = sep === -1 ? line : line.slice(0, sep)
-    const value = sep === -1 ? '' : line.slice(sep + 1)
-    switch (key) {
-      case 'worktree':
-        path = value
-        break
-      case 'HEAD':
-        head = value
-        break
-      case 'branch':
-        branch = value.startsWith('refs/heads/') ? value.slice('refs/heads/'.length) : value
-        break
-      case 'bare':
-        bare = true
-        break
-      case 'detached':
-        detached = true
-        break
-    }
-  }
-  flush()
-  return result
-}
+export { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
+import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
 
 export type WorktreeRemoveFailure = 'busy' | 'dirty-or-locked' | 'other'
 
@@ -822,8 +757,17 @@ export class Repository {
       { placeHolder: 'Select a worktree to delete' },
     )
     if (!pick) return
+    await this.removeWorktreeAt(pick.detail, pick.label)
+  }
 
-    const res = await gitExec(['worktree', 'remove', pick.detail], this.root, this._log)
+  /**
+   * Remove the worktree at `path`, classifying failures: a folder still held by a
+   * running process (an editor window / terminal) can't be forced and needs the
+   * holder closed; a dirty-or-locked worktree offers a `--force` retry. `label` is
+   * the human name used in messages. Refreshes the SCM view on success.
+   */
+  async removeWorktreeAt(path: string, label: string): Promise<void> {
+    const res = await gitExec(['worktree', 'remove', path], this.root, this._log)
     if (res.exitCode === 0) {
       await gitExec(['worktree', 'prune'], this.root, this._log)
       await this.refresh()
@@ -838,23 +782,19 @@ export class Repository {
       // open on this worktree or its terminal. `--force` can't help; the holder
       // must be closed first. Don't offer a forced delete that's bound to fail.
       void window.showErrorMessage(
-        `Can't delete worktree '${pick.label}': its folder is in use. ` +
-          `Close any editor windows or terminals opened on ${pick.detail} and try again.`,
+        `Can't delete worktree '${label}': its folder is in use. ` +
+          `Close any editor windows or terminals opened on ${path} and try again.`,
       )
       return
     }
 
     if (reason === 'dirty-or-locked') {
       const force = await window.showWarningMessage(
-        `Worktree '${pick.label}' has changes or is locked. Delete anyway?`,
+        `Worktree '${label}' has changes or is locked. Delete anyway?`,
         'Delete',
       )
       if (force === 'Delete') {
-        const forced = await gitExec(
-          ['worktree', 'remove', '--force', pick.detail],
-          this.root,
-          this._log,
-        )
+        const forced = await gitExec(['worktree', 'remove', '--force', path], this.root, this._log)
         if (forced.exitCode === 0) {
           await gitExec(['worktree', 'prune'], this.root, this._log)
           await this.refresh()
@@ -863,8 +803,8 @@ export class Repository {
         const forcedErr = gitErrorText(forced)
         if (classifyWorktreeRemoveFailure(forcedErr) === 'busy') {
           void window.showErrorMessage(
-            `Can't delete worktree '${pick.label}': its folder is in use. ` +
-              `Close any editor windows or terminals opened on ${pick.detail} and try again.`,
+            `Can't delete worktree '${label}': its folder is in use. ` +
+              `Close any editor windows or terminals opened on ${path} and try again.`,
           )
         } else {
           await notifyGitFailure('delete worktree', forced)

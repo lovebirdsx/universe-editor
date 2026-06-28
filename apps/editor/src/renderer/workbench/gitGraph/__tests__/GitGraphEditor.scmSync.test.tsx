@@ -46,6 +46,7 @@ function makeResult(): GitGraphLoadResult {
         tags: [],
         remotes: [],
         stash: null,
+        worktrees: [],
       },
     ],
     head: HASH,

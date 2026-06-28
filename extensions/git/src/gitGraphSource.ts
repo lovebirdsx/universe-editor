@@ -11,6 +11,8 @@
 import { basename, join } from 'node:path'
 import { gitExec } from './gitService.js'
 import { discoverRepos, type DiscoverOptions } from './repoDiscovery.js'
+import { parseWorktrees } from './worktreeParser.js'
+import { norm } from './pathUtil.js'
 
 /** Field separator inside a record; record separator is NUL (`git -z`). */
 const FIELD = '\x1f'
@@ -30,6 +32,15 @@ export interface GitGraphStash {
   baseHash: string
 }
 
+/** A linked working tree whose HEAD points at a commit. */
+export interface GitGraphWorktree {
+  path: string
+  name: string
+  branch: string | null
+  isCurrent: boolean
+  isMain: boolean
+}
+
 /** A repository the Git Graph view can target (main repo or a submodule). */
 export interface GitGraphRepo {
   root: string
@@ -47,12 +58,15 @@ export interface GitGraphCommit {
   tags: GitGraphTag[]
   remotes: GitGraphRemote[]
   stash: GitGraphStash | null
+  worktrees: GitGraphWorktree[]
 }
 
 export interface GitGraphLoadOptions {
   maxCommits?: number
   order?: 'date' | 'author-date' | 'topo'
   includeRemotes?: boolean
+  /** Absolute path of the open workspace folder, used to mark the current worktree. */
+  workspaceRoot?: string
 }
 
 export interface GitGraphLoadResult {
@@ -232,13 +246,56 @@ export async function getCommits(
       tags: refs.tags.get(h) ?? [],
       remotes: refs.remotes.get(h) ?? [],
       stash: null,
+      worktrees: [],
     }
   })
 
   const stashes = await getStashes(root, log)
   for (const stash of stashes) mergeByDateDesc(commits, stash)
 
+  // Attach linked working trees to the commit their HEAD points at. Only when the
+  // repo actually uses worktrees (>1) — a plain repo shows no worktree badges.
+  const byHash = await getWorktreesByHash(root, opts.workspaceRoot ?? root, log)
+  if (byHash) {
+    for (const commit of commits) {
+      const wts = byHash.get(commit.hash)
+      if (wts) commit.worktrees = wts
+    }
+  }
+
   return { commits, head: refs.head, headName: refs.headName, moreAvailable, uncommittedChanges }
+}
+
+/**
+ * Linked working trees grouped by the (full) commit hash their HEAD points at.
+ * Returns null when the repo has at most one working tree, so callers can skip
+ * attaching badges to a plain repo. The worktree whose path matches the open
+ * workspace folder is flagged `isCurrent`.
+ */
+async function getWorktreesByHash(
+  root: string,
+  currentRoot: string,
+  log: Log,
+): Promise<Map<string, GitGraphWorktree[]> | null> {
+  const res = await gitExec(['worktree', 'list', '--porcelain'], root, log)
+  if (res.exitCode !== 0) return null
+  const list = parseWorktrees(res.stdout).filter((wt) => !wt.bare)
+  if (list.length <= 1) return null
+
+  const current = norm(currentRoot)
+  const byHash = new Map<string, GitGraphWorktree[]>()
+  for (const wt of list) {
+    if (!wt.head) continue
+    const entry: GitGraphWorktree = {
+      path: wt.path,
+      name: basename(wt.path),
+      branch: wt.branch ?? null,
+      isCurrent: norm(wt.path) === current,
+      isMain: wt.isMain,
+    }
+    push(byHash, wt.head, entry)
+  }
+  return byHash
 }
 
 /**
@@ -288,6 +345,7 @@ async function getStashes(root: string, log: Log): Promise<GitGraphCommit[]> {
       tags: [],
       remotes: [],
       stash: { selector, baseHash },
+      worktrees: [],
     })
   }
   return stashes

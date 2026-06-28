@@ -43,6 +43,7 @@ import {
   type GitGraphLoadOptions,
   type GitGraphLoadResult,
   type GitGraphRepoDto,
+  type GitGraphWorktreeDto,
 } from '@universe-editor/extensions-common'
 import { useService, useObservable } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
@@ -157,15 +158,42 @@ function CommitRefs({
   onBranchMenu,
   onRemoteMenu,
   onTagMenu,
+  onWorktreeMenu,
 }: {
   commit: GitGraphCommitDto
   onBranchMenu: (name: string, e: MouseEvent) => void
   onRemoteMenu: (name: string, e: MouseEvent) => void
   onTagMenu: (name: string, e: MouseEvent) => void
+  onWorktreeMenu: (worktree: GitGraphWorktreeDto, e: MouseEvent) => void
 }) {
   return (
     <span className={styles['refs']}>
       {commit.stash && <span className={styles['badgeStash']}>{commit.stash.selector}</span>}
+      {commit.worktrees.map((wt) => (
+        <span
+          key={`w-${wt.path}`}
+          className={`${styles['badgeWorktree']} ${wt.isCurrent ? styles['badgeWorktreeCurrent'] : ''}`}
+          title={
+            wt.branch
+              ? localize('gitGraph.worktree.tooltip', 'Worktree {name} · {branch}\n{path}', {
+                  name: wt.name,
+                  branch: wt.branch,
+                  path: wt.path,
+                })
+              : localize(
+                  'gitGraph.worktree.tooltipDetached',
+                  'Worktree {name} (detached)\n{path}',
+                  {
+                    name: wt.name,
+                    path: wt.path,
+                  },
+                )
+          }
+          onContextMenu={(e) => onWorktreeMenu(wt, e)}
+        >
+          {wt.isCurrent ? `✓ ${wt.name}` : wt.name}
+        </span>
+      ))}
       {commit.heads.map((h) => (
         <span
           key={`h-${h}`}
@@ -266,6 +294,7 @@ const CommitRow = memo(function CommitRow({
   onBranchMenu,
   onRemoteMenu,
   onTagMenu,
+  onWorktreeMenu,
 }: {
   commit: GitGraphCommitDto
   selected: boolean
@@ -274,6 +303,7 @@ const CommitRow = memo(function CommitRow({
   onBranchMenu: (name: string, e: MouseEvent) => void
   onRemoteMenu: (name: string, e: MouseEvent) => void
   onTagMenu: (name: string, e: MouseEvent) => void
+  onWorktreeMenu: (worktree: GitGraphWorktreeDto, e: MouseEvent) => void
 }) {
   return (
     <div
@@ -290,6 +320,7 @@ const CommitRow = memo(function CommitRow({
           onBranchMenu={onBranchMenu}
           onRemoteMenu={onRemoteMenu}
           onTagMenu={onTagMenu}
+          onWorktreeMenu={onWorktreeMenu}
         />
         <span className={styles['message']}>{commit.message}</span>
       </span>
@@ -1038,6 +1069,64 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [dialog, runOp],
   )
 
+  const openWorktreeMenu = useCallback(
+    (worktree: GitGraphWorktreeDto, e: MouseEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const { path, name, isCurrent, isMain } = worktree
+      const items: GitGraphMenuItem[] = []
+      // The current worktree is already open in this window — only offer "new window".
+      if (!isCurrent) {
+        items.push({
+          kind: 'item',
+          label: localize('gitGraph.worktree.open', 'Open worktree'),
+          run: () => void commands.executeCommand(GitGraphCommands.openWorktree, path, false),
+        })
+      }
+      items.push({
+        kind: 'item',
+        label: localize('gitGraph.worktree.openNewWindow', 'Open worktree in new window'),
+        run: () => void commands.executeCommand(GitGraphCommands.openWorktree, path, true),
+      })
+      items.push(
+        { kind: 'sep' },
+        {
+          kind: 'item',
+          label: localize('gitGraph.worktree.copyPath', 'Copy worktree path'),
+          run: () => void navigator.clipboard?.writeText(path),
+        },
+      )
+      // The main and the currently-open worktree can't be removed from here.
+      if (!isCurrent && !isMain) {
+        items.push(
+          { kind: 'sep' },
+          {
+            kind: 'item',
+            label: localize('gitGraph.worktree.delete', 'Delete worktree…'),
+            danger: true,
+            run: async () => {
+              const r = await dialog.confirm({
+                message: localize('gitGraph.worktree.deleteConfirm', "Delete worktree '{name}'?", {
+                  name,
+                }),
+                detail: localize(
+                  'gitGraph.worktree.deleteDetail',
+                  'This removes the worktree folder at {path}. The branch itself is kept.',
+                  { path },
+                ),
+                primaryButton: localize('common.delete', 'Delete'),
+                type: 'warning',
+              })
+              if (r.confirmed) runOp(GitGraphCommands.deleteWorktree, path)
+            },
+          },
+        )
+      }
+      setMenu({ x: e.clientX, y: e.clientY, items })
+    },
+    [commands, dialog, runOp],
+  )
+
   // The rendered rows: a synthetic working-tree node above HEAD when the repo has
   // uncommitted changes, followed by the real (and stash) commits.
   const displayCommits = useMemo<GitGraphCommitDto[]>(() => {
@@ -1056,6 +1145,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         tags: [],
         remotes: [],
         stash: null,
+        worktrees: [],
       }
       return [node, ...result.commits]
     }
@@ -1452,6 +1542,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                     onBranchMenu={openBranchMenu}
                     onRemoteMenu={openRemoteMenu}
                     onTagMenu={openTagMenu}
+                    onWorktreeMenu={openWorktreeMenu}
                   />
                   {i === anchorIndex && (
                     <div className={styles['detail']} style={{ height: DETAIL_HEIGHT }}>

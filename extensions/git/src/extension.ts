@@ -9,7 +9,7 @@
  * `context.subscriptions` so it is torn down on deactivate.
  */
 import { commands, workspace, window, type ExtensionContext } from '@universe-editor/extension-api'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Repository } from './repository.js'
 import { RepositoryManager } from './repositoryManager.js'
@@ -257,7 +257,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     }),
     commands.registerCommand('git-graph.getCommits', (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as GitGraphLoadOptions
-      return getGitGraphCommits(gitGraphRoot, opts, log)
+      return getGitGraphCommits(gitGraphRoot, { ...opts, workspaceRoot: root }, log)
     }),
     commands.registerCommand('git-graph.getCommitDetails', (...args: unknown[]) => {
       const hash = args[0] as string
@@ -285,6 +285,20 @@ export async function activate(context: ExtensionContext): Promise<void> {
         pinned: false,
         preserveFocus: false,
       })
+    }),
+
+    commands.registerCommand('git-graph.openWorktree', async (...args: unknown[]) => {
+      const [path, newWindow] = args as [string, boolean]
+      if (!path) return
+      await commands.executeCommand(
+        newWindow ? '_workbench.openFolderInNewWindow' : '_workbench.openFolder',
+        path,
+      )
+    }),
+    commands.registerCommand('git-graph.deleteWorktree', async (...args: unknown[]) => {
+      const path = args[0] as string
+      if (!path) return
+      await mgr.resolveRepo({ rootUri: gitGraphRoot })?.removeWorktreeAt(path, basename(path))
     }),
 
     // Git Graph — mutating operations targeting a right-clicked object. Each runs

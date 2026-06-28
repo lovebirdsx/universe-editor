@@ -32,6 +32,20 @@ export interface GitGraphStashDto {
   baseHash: string
 }
 
+/** A linked working tree whose HEAD points at a commit. */
+export interface GitGraphWorktreeDto {
+  /** Absolute path of the worktree's folder on disk. */
+  path: string
+  /** Display name (the folder basename). */
+  name: string
+  /** Branch the worktree has checked out, or null when detached. */
+  branch: string | null
+  /** True for the worktree this window is currently opened on. */
+  isCurrent: boolean
+  /** True for the main working tree (cannot be removed). */
+  isMain: boolean
+}
+
 /** A single commit node, with refs that point at it already attached. */
 export interface GitGraphCommitDto {
   hash: string
@@ -48,6 +62,8 @@ export interface GitGraphCommitDto {
   remotes: GitGraphRemoteDto[]
   /** Set when this node is a stash entry, else null. */
   stash: GitGraphStashDto | null
+  /** Linked working trees whose HEAD is this commit. Empty unless the repo uses worktrees. */
+  worktrees: GitGraphWorktreeDto[]
 }
 
 /** A git repository the Git Graph view can switch between (main repo + submodules). */
@@ -135,6 +151,8 @@ export const GitGraphCommands = {
   compareCommits: 'git-graph.compareCommits',
   openFileDiff: 'git-graph.openFileDiff',
   openWorkingTreeFile: 'git-graph.openWorkingTreeFile',
+  openWorktree: 'git-graph.openWorktree',
+  deleteWorktree: 'git-graph.deleteWorktree',
   // Mutating operations — each returns a boolean (ok). Errors are surfaced by the
   // extension; the renderer refreshes the graph afterwards regardless.
   checkout: 'git-graph.checkout',
