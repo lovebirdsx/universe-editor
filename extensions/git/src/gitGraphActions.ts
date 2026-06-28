@@ -183,8 +183,13 @@ export const syncWorktreesToBranch = async (
       continue
     }
     const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
-    if (reset.exitCode === 0) result.synced.push(wt.name)
-    else result.failed.push({ name: wt.name, error: gitErrorText(reset) })
+    if (reset.exitCode !== 0) {
+      result.failed.push({ name: wt.name, error: gitErrorText(reset) })
+      continue
+    }
+    const subUpdate = await gitExec(['submodule', 'update', '--init', '--recursive'], wt.path, log)
+    if (subUpdate.exitCode === 0) result.synced.push(wt.name)
+    else result.failed.push({ name: wt.name, error: gitErrorText(subUpdate) })
   }
   return result
 }

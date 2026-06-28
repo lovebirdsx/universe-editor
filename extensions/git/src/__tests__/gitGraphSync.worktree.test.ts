@@ -26,6 +26,7 @@ function setup(opts: {
   statusFail?: Set<string>
   cherry?: Record<string, string>
   reset?: Record<string, GitExecResult>
+  submoduleFail?: Record<string, string>
 }): Call[] {
   const calls: Call[] = []
   execMock.mockImplementation((args: readonly string[], cwd: string): Promise<GitExecResult> => {
@@ -37,6 +38,10 @@ function setup(opts: {
     if (args[0] === 'cherry') return Promise.resolve(ok(opts.cherry?.[cwd] ?? ''))
     if (args[0] === 'reset') {
       return Promise.resolve(opts.reset?.[cwd] ?? ok())
+    }
+    if (args[0] === 'submodule') {
+      const errMsg = opts.submoduleFail?.[cwd]
+      return Promise.resolve(errMsg ? fail(errMsg) : ok())
     }
     return Promise.resolve(ok())
   })
@@ -129,6 +134,35 @@ describe('syncWorktreesToBranch', () => {
 
     expect(res.failed).toEqual([{ name: 'a', error: 'status boom' }])
     expect(res.synced).toEqual([])
+    expect(res.skippedDirty).toEqual([])
+    expect(res.skippedUnmerged).toEqual([])
+  })
+
+  it('runs submodule update after reset and counts the worktree as synced when it succeeds', async () => {
+    const calls = setup({})
+    const res = await syncWorktreesToBranch('main', [{ path: '/repo.wt/a', name: 'a' }], undefined)
+
+    expect(res.synced).toEqual(['a'])
+    expect(res.failed).toEqual([])
+    const subCalls = calls.filter((c) => c.args[0] === 'submodule')
+    expect(subCalls).toEqual([
+      { args: ['submodule', 'update', '--init', '--recursive'], cwd: '/repo.wt/a' },
+    ])
+  })
+
+  it('moves a worktree to failed when submodule update fails after a successful reset', async () => {
+    setup({ submoduleFail: { '/repo.wt/a': 'fatal: submodule init failed' } })
+    const res = await syncWorktreesToBranch(
+      'main',
+      [
+        { path: '/repo.wt/a', name: 'a' },
+        { path: '/repo.wt/b', name: 'b' },
+      ],
+      undefined,
+    )
+
+    expect(res.synced).toEqual(['b'])
+    expect(res.failed).toEqual([{ name: 'a', error: 'fatal: submodule init failed' }])
     expect(res.skippedDirty).toEqual([])
     expect(res.skippedUnmerged).toEqual([])
   })
