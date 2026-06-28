@@ -1,0 +1,141 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Universe Editor Authors. All rights reserved.
+ *  Tests for useForeignSessionStats — the cross-bucket backfill that fills the
+ *  duration / cost columns for session rows belonging to another worktree. Those
+ *  rows are rebuilt by the hydrate sweep without usage/accumulatedRunningMs; the
+ *  authoritative values live only in each session's own worktree storage bucket.
+ *--------------------------------------------------------------------------------------------*/
+
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createElement, type ReactNode } from 'react'
+import { render, cleanup, waitFor } from '@testing-library/react'
+import {
+  InstantiationService,
+  ServiceCollection,
+  IStorageService,
+  type IStorageService as IStorageServiceType,
+} from '@universe-editor/platform'
+import { ServicesContext } from '../../useService.js'
+import { useForeignSessionStats } from '../useForeignSessionStats.js'
+import type { AcpSessionHistoryEntry } from '../../../services/acp/acpSessionHistory.js'
+
+afterEach(() => cleanup())
+
+const CURRENT_CWD = '/work/current'
+const FOREIGN_CWD = '/work/foreign'
+
+function entry(over: Partial<AcpSessionHistoryEntry> & { id: string }): AcpSessionHistoryEntry {
+  return {
+    agentId: 'claude',
+    sessionIdOnAgent: over.id,
+    title: over.id,
+    createdAt: 1,
+    lastUsedAt: 1,
+    ...over,
+  }
+}
+
+function makeStorage(
+  buckets: Record<string, AcpSessionHistoryEntry[]>,
+  opts: { getForWorkspaceCwd?: boolean } = {},
+): { storage: IStorageServiceType; calls: string[] } {
+  const calls: string[] = []
+  const storage = {
+    _serviceBrand: undefined,
+    async get() {
+      return undefined
+    },
+    async set() {},
+    async remove() {},
+    onDidChangeWorkspaceScope: () => ({ dispose() {} }),
+  } as unknown as IStorageServiceType & { getForWorkspaceCwd?: unknown }
+  if (opts.getForWorkspaceCwd !== false) {
+    ;(storage as { getForWorkspaceCwd: unknown }).getForWorkspaceCwd = vi
+      .fn()
+      .mockImplementation(async (key: string, cwd: string) => {
+        calls.push(`${key}@${cwd}`)
+        const entries = buckets[cwd]
+        if (!entries) return undefined
+        return { schemaVersion: 1, entries }
+      })
+  }
+  return { storage, calls }
+}
+
+function renderStats(
+  storage: IStorageServiceType,
+  entries: readonly AcpSessionHistoryEntry[],
+  currentCwd: string | undefined,
+) {
+  const collection = new ServiceCollection([IStorageService, storage])
+  const instantiation = new InstantiationService(collection)
+  const captured: { value: ReturnType<typeof useForeignSessionStats> | undefined } = {
+    value: undefined,
+  }
+  function Probe(): ReactNode {
+    captured.value = useForeignSessionStats(entries, currentCwd, 'linux')
+    return null
+  }
+  render(createElement(ServicesContext.Provider, { value: instantiation }, createElement(Probe)))
+  return captured
+}
+
+describe('useForeignSessionStats', () => {
+  it('backfills duration/cost from a foreign worktree bucket', async () => {
+    const { storage } = makeStorage({
+      [FOREIGN_CWD]: [
+        entry({
+          id: 's1',
+          cwd: FOREIGN_CWD,
+          accumulatedRunningMs: 5000,
+          usage: { used: 1, size: 2, cost: { amount: 0.5, currency: 'USD' } },
+        }),
+      ],
+    })
+    const captured = renderStats(storage, [entry({ id: 's1', cwd: FOREIGN_CWD })], CURRENT_CWD)
+    await waitFor(() => expect(captured.value?.get('s1')).toBeDefined())
+    const stat = captured.value!.get('s1')
+    expect(stat?.accumulatedRunningMs).toBe(5000)
+    expect(stat?.usage?.cost?.amount).toBe(0.5)
+  })
+
+  it('does not read the current workspace bucket', async () => {
+    const { storage, calls } = makeStorage({
+      [FOREIGN_CWD]: [entry({ id: 'f', cwd: FOREIGN_CWD, accumulatedRunningMs: 10 })],
+    })
+    const captured = renderStats(
+      storage,
+      [entry({ id: 'own', cwd: CURRENT_CWD }), entry({ id: 'f', cwd: FOREIGN_CWD })],
+      CURRENT_CWD,
+    )
+    await waitFor(() => expect(captured.value?.get('f')).toBeDefined())
+    // Only the foreign cwd was read; the current workspace cwd was skipped.
+    expect(calls).toEqual([`acp.sessionHistory@${FOREIGN_CWD}`])
+  })
+
+  it('returns empty when the cross-bucket read is unavailable', async () => {
+    const { storage } = makeStorage({}, { getForWorkspaceCwd: false })
+    const captured = renderStats(storage, [entry({ id: 's1', cwd: FOREIGN_CWD })], CURRENT_CWD)
+    // Stays empty — feature-detect short-circuits.
+    await waitFor(() => expect(captured.value).toBeDefined())
+    expect(captured.value!.size).toBe(0)
+  })
+
+  it('dedupes multiple foreign rows sharing one worktree to a single read', async () => {
+    const { storage, calls } = makeStorage({
+      [FOREIGN_CWD]: [
+        entry({ id: 'a', cwd: FOREIGN_CWD, accumulatedRunningMs: 1 }),
+        entry({ id: 'b', cwd: FOREIGN_CWD, accumulatedRunningMs: 2 }),
+      ],
+    })
+    const captured = renderStats(
+      storage,
+      [entry({ id: 'a', cwd: FOREIGN_CWD }), entry({ id: 'b', cwd: FOREIGN_CWD })],
+      CURRENT_CWD,
+    )
+    await waitFor(() => expect(captured.value?.get('b')).toBeDefined())
+    expect(calls).toEqual([`acp.sessionHistory@${FOREIGN_CWD}`])
+    expect(captured.value!.get('a')?.accumulatedRunningMs).toBe(1)
+    expect(captured.value!.get('b')?.accumulatedRunningMs).toBe(2)
+  })
+})

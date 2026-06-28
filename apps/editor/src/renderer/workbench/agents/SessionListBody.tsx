@@ -37,6 +37,7 @@ import { AgentIcon } from './agentIcon.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { formatCny } from './SessionCostIndicator.js'
 import { useUsdToCnyRate } from './useExchangeRate.js'
+import { useForeignSessionStats, type ForeignSessionStat } from './useForeignSessionStats.js'
 import styles from './agents.module.css'
 
 function scoreSession(entry: AcpSessionHistoryEntry, query: string): number {
@@ -152,6 +153,7 @@ function SessionRow({
   rate,
   scope,
   isForeign,
+  foreignStat,
 }: {
   entry: AcpSessionHistoryEntry
   liveSession: IAcpSession | undefined
@@ -161,11 +163,15 @@ function SessionRow({
   rate: number
   scope: SessionHistoryScope
   isForeign: boolean
+  foreignStat: ForeignSessionStat | undefined
 }) {
   const isRunning = liveSession !== undefined
-  const historyMs = entry.accumulatedRunningMs ?? 0
-  const historyCostUsd = entry.usage?.cost?.amount
-  const historyCostEstimated = entry.usage?.costEstimated === true
+  // Foreign rows are rebuilt by the hydrate sweep without duration/cost; fall
+  // back to the values read from the owning worktree's own storage bucket.
+  const historyMs = entry.accumulatedRunningMs ?? foreignStat?.accumulatedRunningMs ?? 0
+  const historyUsage = entry.usage ?? foreignStat?.usage
+  const historyCostUsd = historyUsage?.cost?.amount
+  const historyCostEstimated = historyUsage?.costEstimated === true
   const chip = scopeChip(entry, scope)
   return (
     <li
@@ -269,6 +275,10 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
 
+  // Foreign (other-worktree) rows lose their duration/cost in the hydrate merge;
+  // backfill them from each owning worktree's own storage bucket.
+  const foreignStats = useForeignSessionStats(filtered, currentCwd, platform)
+
   const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
       e.stopPropagation()
@@ -329,6 +339,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 rate={rate}
                 scope={scope}
                 isForeign={isForeign}
+                foreignStat={foreignStats.get(entry.id)}
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   // Exclude read-only previews: a live read-only session must not
