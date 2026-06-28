@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { gitPrimaryInputCommand, parseWorktrees, Repository } from '../repository.js'
+import {
+  classifyWorktreeRemoveFailure,
+  gitPrimaryInputCommand,
+  parseWorktrees,
+  Repository,
+} from '../repository.js'
 
 interface FakeCommand {
   readonly command: string
@@ -236,6 +241,41 @@ describe('parseWorktrees', () => {
 
   it('returns an empty list for empty output', () => {
     expect(parseWorktrees('')).toEqual([])
+  })
+})
+
+describe('classifyWorktreeRemoveFailure', () => {
+  it('treats an in-use folder as busy (Windows EINVAL / access denied)', () => {
+    expect(
+      classifyWorktreeRemoveFailure(
+        "error: failed to delete 'D:/git_project/universe-editor2': Invalid argument",
+      ),
+    ).toBe('busy')
+    expect(classifyWorktreeRemoveFailure('Access is denied')).toBe('busy')
+    expect(
+      classifyWorktreeRemoveFailure(
+        'The process cannot access the file because it is being used by another process',
+      ),
+    ).toBe('busy')
+  })
+
+  it('treats POSIX busy/permission errors as busy', () => {
+    expect(classifyWorktreeRemoveFailure('rm: cannot remove: Device or resource busy')).toBe('busy')
+    expect(classifyWorktreeRemoveFailure('Operation not permitted')).toBe('busy')
+  })
+
+  it('treats dirty or locked worktrees as dirty-or-locked', () => {
+    expect(
+      classifyWorktreeRemoveFailure(
+        "fatal: '../wt' contains modified or untracked files, use --force to delete it",
+      ),
+    ).toBe('dirty-or-locked')
+    expect(classifyWorktreeRemoveFailure('fatal: working tree is locked')).toBe('dirty-or-locked')
+  })
+
+  it('falls back to other for unrecognized errors', () => {
+    expect(classifyWorktreeRemoveFailure('fatal: not a working tree')).toBe('other')
+    expect(classifyWorktreeRemoveFailure('')).toBe('other')
   })
 })
 

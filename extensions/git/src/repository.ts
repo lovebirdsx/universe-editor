@@ -210,6 +210,41 @@ export function parseWorktrees(stdout: string): WorktreeInfo[] {
   return result
 }
 
+export type WorktreeRemoveFailure = 'busy' | 'dirty-or-locked' | 'other'
+
+/**
+ * Classify why `git worktree remove` failed from its stderr. A worktree whose
+ * directory (or a file under it) is still held by a running process — most often
+ * an editor window opened on that worktree, or its integrated terminal — fails
+ * with EBUSY/EPERM/EINVAL-style messages that `--force` cannot fix; deleting it
+ * needs the holding process closed first. A dirty or locked worktree, by
+ * contrast, is exactly what `--force` is for.
+ */
+export function classifyWorktreeRemoveFailure(stderr: string): WorktreeRemoveFailure {
+  const msg = stderr.toLowerCase()
+  if (
+    msg.includes('invalid argument') ||
+    msg.includes('permission denied') ||
+    msg.includes('access is denied') ||
+    msg.includes('being used by another process') ||
+    msg.includes('resource busy') ||
+    msg.includes('device or resource busy') ||
+    msg.includes('operation not permitted')
+  ) {
+    return 'busy'
+  }
+  if (
+    msg.includes('contains modified or untracked files') ||
+    msg.includes('use --force') ||
+    msg.includes('is dirty') ||
+    msg.includes('locked working tree') ||
+    msg.includes('is locked')
+  ) {
+    return 'dirty-or-locked'
+  }
+  return 'other'
+}
+
 export class Repository {
   private readonly _sc: SourceControl
   private readonly _staged: SourceControlResourceGroup
@@ -770,19 +805,56 @@ export class Repository {
     if (!pick) return
 
     const res = await gitExec(['worktree', 'remove', pick.detail], this.root, this._log)
-    if (res.exitCode !== 0) {
-      // A dirty or locked worktree refuses removal — offer a forced delete.
+    if (res.exitCode === 0) {
+      await gitExec(['worktree', 'prune'], this.root, this._log)
+      await this.refresh()
+      return
+    }
+
+    const stderr = res.stderr.trim() || res.stdout.trim()
+    const reason = classifyWorktreeRemoveFailure(stderr)
+
+    if (reason === 'busy') {
+      // A directory still held by a running process — typically an editor window
+      // open on this worktree or its terminal. `--force` can't help; the holder
+      // must be closed first. Don't offer a forced delete that's bound to fail.
+      void window.showErrorMessage(
+        `Can't delete worktree '${pick.label}': its folder is in use. ` +
+          `Close any editor windows or terminals opened on ${pick.detail} and try again.`,
+      )
+      return
+    }
+
+    if (reason === 'dirty-or-locked') {
       const force = await window.showWarningMessage(
         `Worktree '${pick.label}' has changes or is locked. Delete anyway?`,
         'Delete',
       )
       if (force === 'Delete') {
-        await this._run(['worktree', 'remove', '--force', pick.detail], 'delete worktree')
+        const forced = await gitExec(
+          ['worktree', 'remove', '--force', pick.detail],
+          this.root,
+          this._log,
+        )
+        if (forced.exitCode === 0) {
+          await gitExec(['worktree', 'prune'], this.root, this._log)
+          await this.refresh()
+          return
+        }
+        const forcedErr = forced.stderr.trim() || forced.stdout.trim()
+        if (classifyWorktreeRemoveFailure(forcedErr) === 'busy') {
+          void window.showErrorMessage(
+            `Can't delete worktree '${pick.label}': its folder is in use. ` +
+              `Close any editor windows or terminals opened on ${pick.detail} and try again.`,
+          )
+        } else {
+          void window.showErrorMessage(`Git delete worktree failed: ${forcedErr}`)
+        }
       }
       return
     }
-    await gitExec(['worktree', 'prune'], this.root, this._log)
-    await this.refresh()
+
+    void window.showErrorMessage(`Git delete worktree failed: ${stderr}`)
   }
 
   /**
