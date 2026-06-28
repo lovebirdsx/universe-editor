@@ -125,8 +125,9 @@ export function createStorage(filePath: string): Storage {
       try {
         mkdirSync(dirname(filePath), { recursive: true })
         // Dedicated sync temp file so this can't collide with an in-flight async
-        // writeAll() using tmpPath.
-        writeFileSync(syncTmpPath, JSON.stringify(cache, null, 2), 'utf8')
+        // writeAll() using tmpPath. No pretty-print: this runs on will-quit, where
+        // a smaller serialization shaves the synchronous write that gates exit.
+        writeFileSync(syncTmpPath, JSON.stringify(cache), 'utf8')
         promote(syncTmpPath)
       } catch {
         // best-effort durability backstop
