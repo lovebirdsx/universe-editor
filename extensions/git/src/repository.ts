@@ -755,15 +755,37 @@ export class Repository {
     })
     if (!ok) return
 
+    const worktreePath = path.trim()
+    try {
+      await stat(join(this.root, '.gitmodules'))
+      this._beginProgress('Initializing submodules…', 'spinning')
+      try {
+        const subRes = await gitExec(
+          ['submodule', 'update', '--init', '--recursive'],
+          worktreePath,
+          this._log,
+        )
+        if (subRes.exitCode !== 0) {
+          void window.showWarningMessage(
+            `Submodule init failed in new worktree: ${subRes.stderr.trim() || subRes.stdout.trim()}`,
+          )
+        }
+      } finally {
+        this._endProgress()
+      }
+    } catch {
+      // no .gitmodules, skip
+    }
+
     const open = await window.showInformationMessage(
-      `Worktree created at ${path.trim()}.`,
+      `Worktree created at ${worktreePath}.`,
       'Open in New Window',
       'Open',
     )
     if (open === 'Open') {
-      await commands.executeCommand('_workbench.openFolder', path.trim())
+      await commands.executeCommand('_workbench.openFolder', worktreePath)
     } else if (open === 'Open in New Window') {
-      await commands.executeCommand('_workbench.openFolderInNewWindow', path.trim())
+      await commands.executeCommand('_workbench.openFolderInNewWindow', worktreePath)
     }
   }
 
