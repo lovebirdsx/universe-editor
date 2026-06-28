@@ -8,6 +8,7 @@
  * Read-only queries live in `gitGraphSource.ts`; this file only writes.
  */
 import { gitExec, type GitExecResult } from './gitService.js'
+import { gitErrorText } from './gitError.js'
 
 export type ResetMode = 'soft' | 'mixed' | 'hard'
 
@@ -118,3 +119,72 @@ export const stashPop = (root: string, selector: string, log: Log): Promise<GitE
 
 export const stashDrop = (root: string, selector: string, log: Log): Promise<GitExecResult> =>
   gitExec(['stash', 'drop', selector], root, log)
+
+/** One worktree the sync targets, identified by its on-disk path + display name. */
+export interface SyncWorktreeRef {
+  path: string
+  name: string
+}
+
+export interface WorktreeSyncResult {
+  synced: string[]
+  skippedDirty: string[]
+  skippedUnmerged: string[]
+  failed: { name: string; error: string }[]
+}
+
+/**
+ * Force every given worktree's branch to `targetBranch` via `git reset --hard`,
+ * each command run inside that worktree's own directory. To avoid losing work, a
+ * worktree is reset only when it is both clean (no uncommitted changes) and fully
+ * contained in the target — i.e. every commit unique to the worktree already
+ * exists in `targetBranch` by patch-id. `git cherry` is used rather than ancestry
+ * (`merge-base --is-ancestor`) so squash/rebase-merged worktrees, whose commits
+ * landed in the target under different hashes, are still recognised as merged.
+ * Anything not mergeable is skipped into the matching bucket. `targetBranch` is a
+ * ref name (e.g. `main`), so each reset worktree's branch ends up exactly at the
+ * target commit.
+ */
+export const syncWorktreesToBranch = async (
+  targetBranch: string,
+  worktrees: readonly SyncWorktreeRef[],
+  log: Log,
+): Promise<WorktreeSyncResult> => {
+  const result: WorktreeSyncResult = {
+    synced: [],
+    skippedDirty: [],
+    skippedUnmerged: [],
+    failed: [],
+  }
+  for (const wt of worktrees) {
+    const status = await gitExec(['status', '--porcelain'], wt.path, log)
+    if (status.exitCode !== 0) {
+      result.failed.push({ name: wt.name, error: gitErrorText(status) })
+      continue
+    }
+    if (status.stdout.trim()) {
+      result.skippedDirty.push(wt.name)
+      continue
+    }
+    // Only reset when the worktree's commits are already in the target — otherwise
+    // reset --hard would silently drop them. `git cherry <target> HEAD` lists the
+    // worktree's commits relative to the target: a `+` prefix marks a commit whose
+    // change is NOT yet present in the target (by patch-id), `-` one that is. Any
+    // `+` line means there is unmerged work, so we skip. Empty output (worktree is
+    // an ancestor of the target) is mergeable.
+    const cherry = await gitExec(['cherry', targetBranch, 'HEAD'], wt.path, log)
+    if (cherry.exitCode !== 0) {
+      result.failed.push({ name: wt.name, error: gitErrorText(cherry) })
+      continue
+    }
+    const hasUnmerged = cherry.stdout.split('\n').some((line) => line.startsWith('+'))
+    if (hasUnmerged) {
+      result.skippedUnmerged.push(wt.name)
+      continue
+    }
+    const reset = await gitExec(['reset', '--hard', targetBranch], wt.path, log)
+    if (reset.exitCode === 0) result.synced.push(wt.name)
+    else result.failed.push({ name: wt.name, error: gitErrorText(reset) })
+  }
+  return result
+}

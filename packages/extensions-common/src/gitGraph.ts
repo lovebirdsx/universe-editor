@@ -46,6 +46,24 @@ export interface GitGraphWorktreeDto {
   isMain: boolean
 }
 
+/** A worktree the sync operation targeted, identified by path + display name. */
+export interface GitGraphWorktreeRef {
+  path: string
+  name: string
+}
+
+/** Outcome of `git-graph.syncWorktrees`: each worktree lands in exactly one bucket. */
+export interface GitGraphWorktreeSyncResult {
+  /** Names of worktrees whose branch was reset to the target. */
+  synced: string[]
+  /** Names of worktrees skipped because they had uncommitted changes. */
+  skippedDirty: string[]
+  /** Names of worktrees skipped because they hold commits not contained in the target. */
+  skippedUnmerged: string[]
+  /** Worktrees whose reset failed, with the git error text. */
+  failed: { name: string; error: string }[]
+}
+
 /** A single commit node, with refs that point at it already attached. */
 export interface GitGraphCommitDto {
   hash: string
@@ -153,6 +171,7 @@ export const GitGraphCommands = {
   openWorkingTreeFile: 'git-graph.openWorkingTreeFile',
   openWorktree: 'git-graph.openWorktree',
   deleteWorktree: 'git-graph.deleteWorktree',
+  syncWorktrees: 'git-graph.syncWorktrees',
   // Mutating operations — each returns a boolean (ok). Errors are surfaced by the
   // extension; the renderer refreshes the graph afterwards regardless.
   checkout: 'git-graph.checkout',

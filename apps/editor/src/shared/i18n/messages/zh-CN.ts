@@ -712,6 +712,16 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.worktree.delete': '删除工作树…',
   'gitGraph.worktree.deleteConfirm': '删除工作树"{name}"？',
   'gitGraph.worktree.deleteDetail': '这会移除位于 {path} 的工作树文件夹，但保留其分支本身。',
+  'gitGraph.worktree.syncToThis': '将工作树同步到 {branch}…',
+  'gitGraph.worktree.sync.title': '将工作树同步到 {branch}',
+  'gitGraph.worktree.sync.selectAll': '全选',
+  'gitGraph.worktree.sync.confirm': '同步（{count}）',
+  'gitGraph.worktree.sync.summaryTitle': '工作树同步到 {branch}',
+  'gitGraph.worktree.sync.summarySynced': '已同步：{names}',
+  'gitGraph.worktree.sync.summarySkipped': '已跳过（有未提交更改）：{names}',
+  'gitGraph.worktree.sync.summaryUnmerged': '已跳过（存在不在 {branch} 中的提交）：{names}',
+  'gitGraph.worktree.sync.summaryFailed': '失败：{items}',
+  'gitGraph.worktree.sync.summaryNone': '无可执行的操作。',
 
   // --- Diff editor & Merge ---
   'diffEditor.nextChange': '下一处更改 ({key})',

@@ -521,3 +521,109 @@
   border: none;
   border-top: 1px solid var(--workbench-menu-separator, #3c3c3c);
 }
+
+.pickerBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.pickerDialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 1001;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 420px;
+  max-width: 90vw;
+  max-height: 70vh;
+  padding: 16px;
+  background: var(--color-menu-bg, var(--color-editor-bg));
+  color: var(--color-menu-fg, var(--color-editor-fg));
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.pickerTitle {
+  font-weight: 600;
+}
+
+.pickerSelectAll {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  color: var(--color-editor-fg-muted);
+}
+
+.pickerList {
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 4px;
+}
+
+.pickerRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.pickerRow:hover {
+  background: var(--color-list-hover-bg);
+}
+
+.pickerRowName {
+  flex: 0 0 auto;
+}
+
+.pickerRowDesc {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-editor-fg-muted);
+  font-size: 12px;
+}
+
+.pickerButtons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pickerBtn {
+  padding: 4px 14px;
+  background: var(--color-input-bg, var(--color-editor-bg));
+  color: var(--color-editor-fg);
+  border: 1px solid var(--color-border);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.pickerBtn:hover {
+  background: var(--color-list-hover-bg);
+}
+
+.pickerBtnPrimary {
+  background: var(--color-button-bg);
+  color: var(--color-button-fg);
+  border-color: var(--color-button-bg);
+}
+
+.pickerBtnPrimary:hover {
+  background: var(--color-button-hover-bg);
+}
+
+.pickerBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}

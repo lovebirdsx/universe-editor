@@ -300,6 +300,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
       if (!path) return
       await mgr.resolveRepo({ rootUri: gitGraphRoot })?.removeWorktreeAt(path, basename(path))
     }),
+    commands.registerCommand('git-graph.syncWorktrees', async (...args: unknown[]) => {
+      const [targetBranch, worktrees] = args as [string, gga.SyncWorktreeRef[]]
+      const result = await gga.syncWorktreesToBranch(targetBranch, worktrees ?? [], log)
+      await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
+      return result
+    }),
 
     // Git Graph — mutating operations targeting a right-clicked object. Each runs
     // git, surfaces failures, then refreshes the SCM view; returns ok to the

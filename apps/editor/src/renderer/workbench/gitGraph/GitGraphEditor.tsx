@@ -44,6 +44,7 @@ import {
   type GitGraphLoadResult,
   type GitGraphRepoDto,
   type GitGraphWorktreeDto,
+  type GitGraphWorktreeSyncResult,
 } from '@universe-editor/extensions-common'
 import { useService, useObservable } from '../useService.js'
 import { IScmService } from '../../services/extensions/ScmService.js'
@@ -61,6 +62,10 @@ import {
   type GitGraphMenuItem,
   type GitGraphMenuState,
 } from './GitGraphContextMenu.js'
+import {
+  GitGraphWorktreePickerDialog,
+  type GitGraphWorktreePickerState,
+} from './GitGraphWorktreePickerDialog.js'
 import styles from './GitGraphEditor.module.css'
 
 const ROW_HEIGHT = 24
@@ -342,6 +347,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(() => gitGraphViewState.result === null)
   const [menu, setMenu] = useState<GitGraphMenuState | null>(null)
+  const [worktreePicker, setWorktreePicker] = useState<GitGraphWorktreePickerState | null>(null)
 
   // Selected commit(s): one hash to expand details, two to compare.
   const [selection, setSelection] = useState<string[]>(() => gitGraphViewState.selection)
@@ -1069,11 +1075,77 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [dialog, runOp],
   )
 
+  // Every worktree across the loaded commits — each commit carries only its own,
+  // so flatten them for the sync picker's candidate list.
+  const allWorktrees = useMemo<GitGraphWorktreeDto[]>(() => {
+    if (!result) return []
+    return result.commits.flatMap((c) => c.worktrees)
+  }, [result])
+
+  // Reset the picked worktrees' branches to the target, then report a summary and
+  // reload the graph. dirty worktrees are skipped by the extension side.
+  const runWorktreeSync = useCallback(
+    async (targetBranch: string, selectedPaths: string[]) => {
+      setWorktreePicker(null)
+      const selected = allWorktrees.filter((wt) => selectedPaths.includes(wt.path))
+      const refs = selected.map((wt) => ({ path: wt.path, name: wt.name }))
+      const summary = await commands.executeCommand<GitGraphWorktreeSyncResult>(
+        GitGraphCommands.syncWorktrees,
+        targetBranch,
+        refs,
+      )
+      revalidate()
+      if (!summary) return
+      const lines: string[] = []
+      if (summary.synced.length > 0) {
+        lines.push(
+          localize('gitGraph.worktree.sync.summarySynced', 'Synced: {names}', {
+            names: summary.synced.join(', '),
+          }),
+        )
+      }
+      if (summary.skippedDirty.length > 0) {
+        lines.push(
+          localize(
+            'gitGraph.worktree.sync.summarySkipped',
+            'Skipped (uncommitted changes): {names}',
+            { names: summary.skippedDirty.join(', ') },
+          ),
+        )
+      }
+      if (summary.skippedUnmerged.length > 0) {
+        lines.push(
+          localize(
+            'gitGraph.worktree.sync.summaryUnmerged',
+            'Skipped (commits not in {branch}): {names}',
+            { branch: targetBranch, names: summary.skippedUnmerged.join(', ') },
+          ),
+        )
+      }
+      if (summary.failed.length > 0) {
+        lines.push(
+          localize('gitGraph.worktree.sync.summaryFailed', 'Failed: {items}', {
+            items: summary.failed.map((f) => `${f.name} (${f.error})`).join('; '),
+          }),
+        )
+      }
+      await dialog.confirm({
+        message: localize('gitGraph.worktree.sync.summaryTitle', 'Worktree sync to {branch}', {
+          branch: targetBranch,
+        }),
+        detail:
+          lines.join('\n') || localize('gitGraph.worktree.sync.summaryNone', 'Nothing to do.'),
+        primaryButton: localize('common.ok', 'OK'),
+      })
+    },
+    [allWorktrees, commands, dialog, revalidate],
+  )
+
   const openWorktreeMenu = useCallback(
     (worktree: GitGraphWorktreeDto, e: MouseEvent) => {
       e.preventDefault()
       e.stopPropagation()
-      const { path, name, isCurrent, isMain } = worktree
+      const { path, name, branch, isCurrent, isMain } = worktree
       const items: GitGraphMenuItem[] = []
       // The current worktree is already open in this window — only offer "new window".
       if (!isCurrent) {
@@ -1096,6 +1168,23 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           run: () => void navigator.clipboard?.writeText(path),
         },
       )
+      // Sync other worktrees onto this one's branch (git reset --hard <branch>).
+      // Only meaningful when this worktree has a branch and others exist to sync.
+      const others = allWorktrees
+        .filter((wt) => wt.path !== path)
+        .sort((a, b) => a.name.localeCompare(b.name))
+      if (branch && others.length > 0) {
+        items.push(
+          { kind: 'sep' },
+          {
+            kind: 'item',
+            label: localize('gitGraph.worktree.syncToThis', 'Sync worktrees to {branch}…', {
+              branch,
+            }),
+            run: () => setWorktreePicker({ targetBranch: branch, candidates: others }),
+          },
+        )
+      }
       // The main and the currently-open worktree can't be removed from here.
       if (!isCurrent && !isMain) {
         items.push(
@@ -1124,7 +1213,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       }
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [commands, dialog, runOp],
+    [allWorktrees, commands, dialog, runOp],
   )
 
   // The rendered rows: a synthetic working-tree node above HEAD when the repo has
@@ -1568,6 +1657,13 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       )}
 
       {menu && <GitGraphContextMenu state={menu} onClose={() => setMenu(null)} />}
+      {worktreePicker && (
+        <GitGraphWorktreePickerDialog
+          state={worktreePicker}
+          onConfirm={(paths) => void runWorktreeSync(worktreePicker.targetBranch, paths)}
+          onClose={() => setWorktreePicker(null)}
+        />
+      )}
     </div>
   )
 }

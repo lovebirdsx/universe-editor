@@ -203,3 +203,114 @@ describe('GitGraphEditor worktree badges', () => {
     expect(executeCommand).not.toHaveBeenCalledWith(GitGraphCommands.deleteWorktree, featureWt.path)
   })
 })
+
+describe('GitGraphEditor worktree sync', () => {
+  const detachedWt: GitGraphWorktreeDto = {
+    path: '/repo.worktrees/wip',
+    name: 'wip',
+    branch: null,
+    isCurrent: false,
+    isMain: false,
+  }
+
+  it('offers the sync item when the target has a branch and others exist', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    const labels = within(screen.getByRole('menu'))
+      .getAllByRole('menuitem')
+      .map((el) => el.textContent)
+    expect(labels).toContain('Sync worktrees to main…')
+  })
+
+  it('hides the sync item for a detached target', async () => {
+    gitGraphViewState.result = makeResult([mainWt, detachedWt])
+    renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('wip'))
+    const labels = within(screen.getByRole('menu'))
+      .getAllByRole('menuitem')
+      .map((el) => el.textContent)
+    expect(labels.some((l) => l?.startsWith('Sync worktrees'))).toBe(false)
+  })
+
+  it('hides the sync item when no other worktree exists', async () => {
+    gitGraphViewState.result = makeResult([mainWt])
+    renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    const labels = within(screen.getByRole('menu'))
+      .getAllByRole('menuitem')
+      .map((el) => el.textContent)
+    expect(labels.some((l) => l?.startsWith('Sync worktrees'))).toBe(false)
+  })
+
+  it('syncs the picked worktrees to the target branch on confirm', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    // Picker opens preselected with all candidates — confirm immediately.
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByText(/^Sync \(/))
+    await flush()
+
+    expect(executeCommand).toHaveBeenCalledWith(GitGraphCommands.syncWorktrees, 'main', [
+      { path: featureWt.path, name: featureWt.name },
+    ])
+  })
+
+  it('does not sync when the picker is cancelled', async () => {
+    gitGraphViewState.result = makeResult([mainWt, featureWt])
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+    fireEvent.click(within(screen.getByRole('dialog')).getByText('Cancel'))
+    await flush()
+
+    expect(executeCommand).not.toHaveBeenCalledWith(
+      GitGraphCommands.syncWorktrees,
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
+  it('lists the candidate worktrees in alphabetical order', async () => {
+    const zebra: GitGraphWorktreeDto = {
+      path: '/repo.worktrees/zebra',
+      name: 'zebra',
+      branch: 'br/zebra',
+      isCurrent: false,
+      isMain: false,
+    }
+    const apple: GitGraphWorktreeDto = {
+      path: '/repo.worktrees/apple',
+      name: 'apple',
+      branch: 'br/apple',
+      isCurrent: false,
+      isMain: false,
+    }
+    // Feed them out of order; the picker must still render apple before zebra.
+    gitGraphViewState.result = makeResult([mainWt, zebra, apple])
+    renderEditor()
+    await flush()
+
+    fireEvent.contextMenu(screen.getByText('✓ repo'))
+    fireEvent.click(within(screen.getByRole('menu')).getByText('Sync worktrees to main…'))
+
+    const dialog = screen.getByRole('dialog')
+    const names = within(dialog)
+      .getAllByText(/^(apple|zebra)$/)
+      .map((el) => el.textContent)
+    expect(names).toEqual(['apple', 'zebra'])
+  })
+})
