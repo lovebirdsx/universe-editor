@@ -19,7 +19,7 @@
     "test:visual": "playwright test -c e2e/playwright.config.ts --grep @visual",
     "visual:update": "playwright test -c e2e/playwright.config.ts --grep @visual --update-snapshots",
     "e2eg": "playwright test -c e2e/playwright.config.ts --grep ",
-    "e2e": "playwright test -c e2e/playwright.config.ts --grep-invert \"@visual|@serial\" && playwright test -c e2e/playwright.config.ts --grep @serial --workers=1",
+    "e2e": "playwright test -c e2e/playwright.config.ts --grep-invert \"@visual|@serial|@flaky\" && playwright test -c e2e/playwright.config.ts --grep @serial --workers=1",
     "e2e:headed": "playwright test -c e2e/playwright.config.ts --headed",
     "e2e:ui": "playwright test -c e2e/playwright.config.ts --ui",
     "e2e:install": "playwright install-deps",

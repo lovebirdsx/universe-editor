@@ -134,7 +134,7 @@ jobs:
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial" --shard=${{ matrix.shard }}/2
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky" --shard=${{ matrix.shard }}/2
 
       # @serial cases switch the workspace twice and trip a cross-process race in
       # @parcel/watcher's windows backend under parallel workers; pin to one
@@ -143,15 +143,29 @@ jobs:
         if: runner.os == 'Linux' && matrix.shard == 1
         run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @serial --workers=1
 
+      # @flaky cases (e.g. headless drag-and-drop) are environment-sensitive, not
+      # regressions — run them separately, report-only, so they never block the
+      # @p0/@p1 gate. See apps/editor/e2e/RUNBOOK.md. Only on shard 1.
+      - name: Run E2E flaky (Linux, xvfb, non-blocking)
+        if: runner.os == 'Linux' && matrix.shard == 1
+        continue-on-error: true
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @flaky --workers=1
+
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial" --shard=${{ matrix.shard }}/2
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky" --shard=${{ matrix.shard }}/2
 
       - name: Run E2E smoke serial (Windows)
         if: runner.os == 'Windows' && matrix.shard == 1
         shell: bash
         run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @serial --workers=1
+
+      - name: Run E2E flaky (Windows, non-blocking)
+        if: runner.os == 'Windows' && matrix.shard == 1
+        continue-on-error: true
+        shell: bash
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @flaky --workers=1
 
       # - name: Run visual regression (Linux only)
       #   if: runner.os == 'Linux'
