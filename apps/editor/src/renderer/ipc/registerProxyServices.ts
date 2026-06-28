@@ -3,6 +3,11 @@
  *  Central table of cross-process services: each is a ProxyChannel-derived proxy
  *  bound to a main-side channel. Kept together (rather than registerSingleton'd)
  *  because they are channel bindings, not constructible classes.
+ *
+ *  The binding is data-driven (`PROXY_SERVICE_BINDINGS`): a missing wire-up
+ *  becomes a missing table row (easy to review + testable) rather than a missing
+ *  `services.set(...)` call buried in a long function. A test asserts every entry
+ *  points at a real `ServiceChannels` name.
  *--------------------------------------------------------------------------------------------*/
 
 import {
@@ -17,8 +22,9 @@ import {
   ServiceCollection,
   type HostPlatform,
   type IIpcService,
+  type ServiceIdentifier,
 } from '@universe-editor/platform'
-import { ServiceChannels } from '../../shared/ipc/channelNames.js'
+import { ServiceChannels, type ServiceChannelName } from '../../shared/ipc/channelNames.js'
 import {
   ILogFilesService,
   IPerformanceMarksService,
@@ -39,109 +45,56 @@ import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 
+interface ProxyServiceBinding {
+  readonly id: ServiceIdentifier<object>
+  readonly channel: ServiceChannelName
+  /** Synchronous, pre-resolved properties served locally instead of via the channel. */
+  readonly properties?: (platform: HostPlatform) => ReadonlyMap<string, unknown>
+}
+
+/**
+ * Every cross-process proxy service binding. Order is irrelevant — each row maps
+ * a service identifier to its channel. Add a new ProxyChannel service by adding
+ * one row here (and the channel name in `ServiceChannels`).
+ */
+export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
+  {
+    id: IHostService,
+    channel: ServiceChannels.Host,
+    properties: (platform) => new Map<string, unknown>([['platform', platform]]),
+  },
+  { id: IStorageService, channel: ServiceChannels.Storage },
+  { id: IPingService, channel: ServiceChannels.Ping },
+  { id: IFileService, channel: ServiceChannels.FileSystem },
+  { id: IFileSearchService, channel: ServiceChannels.FileSearch },
+  { id: ITextSearchMainService, channel: ServiceChannels.TextSearch },
+  { id: IFileWatcherService, channel: ServiceChannels.FileWatcher },
+  { id: IUserDataFilesService, channel: ServiceChannels.UserData },
+  { id: IConfigLocationService, channel: ServiceChannels.ConfigLocation },
+  { id: ILogFilesService, channel: ServiceChannels.LogFiles },
+  { id: IAcpHostService, channel: ServiceChannels.AcpHost },
+  { id: IExtensionHostService, channel: ServiceChannels.ExtensionHost },
+  { id: IAcpTerminalService, channel: ServiceChannels.AcpTerminal },
+  { id: ITerminalService, channel: ServiceChannels.Terminal },
+  { id: IClaudeBinaryService, channel: ServiceChannels.ClaudeBinary },
+  { id: ICodexBinaryService, channel: ServiceChannels.CodexBinary },
+  { id: ICodexConfigService, channel: ServiceChannels.CodexConfig },
+  { id: IUpdateService, channel: ServiceChannels.Update },
+  { id: IReleaseNotesService, channel: ServiceChannels.ReleaseNotes },
+  { id: IWindowsService, channel: ServiceChannels.Window },
+  { id: IPerformanceMarksService, channel: ServiceChannels.Performance },
+  { id: ISessionSwitcherService, channel: ServiceChannels.SessionSwitcher },
+  { id: IUsageService, channel: ServiceChannels.Usage },
+  { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },
+]
+
 export function registerProxyChannelServices(
   services: ServiceCollection,
   ipc: IIpcService,
   platform: HostPlatform,
 ): void {
-  services.set(
-    IHostService,
-    ProxyChannel.toService<IHostService>(ipc.getChannel(ServiceChannels.Host), {
-      properties: new Map<string, unknown>([['platform', platform]]),
-    }),
-  )
-  services.set(
-    IStorageService,
-    ProxyChannel.toService<IStorageService>(ipc.getChannel(ServiceChannels.Storage)),
-  )
-  services.set(
-    IPingService,
-    ProxyChannel.toService<IPingService>(ipc.getChannel(ServiceChannels.Ping)),
-  )
-  services.set(
-    IFileService,
-    ProxyChannel.toService<IFileService>(ipc.getChannel(ServiceChannels.FileSystem)),
-  )
-  services.set(
-    IFileSearchService,
-    ProxyChannel.toService<IFileSearchService>(ipc.getChannel(ServiceChannels.FileSearch)),
-  )
-  services.set(
-    ITextSearchMainService,
-    ProxyChannel.toService<ITextSearchMainService>(ipc.getChannel(ServiceChannels.TextSearch)),
-  )
-  services.set(
-    IFileWatcherService,
-    ProxyChannel.toService<IFileWatcherService>(ipc.getChannel(ServiceChannels.FileWatcher)),
-  )
-  services.set(
-    IUserDataFilesService,
-    ProxyChannel.toService<IUserDataFilesService>(ipc.getChannel(ServiceChannels.UserData)),
-  )
-  services.set(
-    IConfigLocationService,
-    ProxyChannel.toService<IConfigLocationService>(ipc.getChannel(ServiceChannels.ConfigLocation)),
-  )
-  services.set(
-    ILogFilesService,
-    ProxyChannel.toService<ILogFilesService>(ipc.getChannel(ServiceChannels.LogFiles)),
-  )
-  services.set(
-    IAcpHostService,
-    ProxyChannel.toService<IAcpHostService>(ipc.getChannel(ServiceChannels.AcpHost)),
-  )
-  services.set(
-    IExtensionHostService,
-    ProxyChannel.toService<IExtensionHostService>(ipc.getChannel(ServiceChannels.ExtensionHost)),
-  )
-  services.set(
-    IAcpTerminalService,
-    ProxyChannel.toService<IAcpTerminalService>(ipc.getChannel(ServiceChannels.AcpTerminal)),
-  )
-  services.set(
-    ITerminalService,
-    ProxyChannel.toService<ITerminalService>(ipc.getChannel(ServiceChannels.Terminal)),
-  )
-  services.set(
-    IClaudeBinaryService,
-    ProxyChannel.toService<IClaudeBinaryService>(ipc.getChannel(ServiceChannels.ClaudeBinary)),
-  )
-  services.set(
-    ICodexBinaryService,
-    ProxyChannel.toService<ICodexBinaryService>(ipc.getChannel(ServiceChannels.CodexBinary)),
-  )
-  services.set(
-    ICodexConfigService,
-    ProxyChannel.toService<ICodexConfigService>(ipc.getChannel(ServiceChannels.CodexConfig)),
-  )
-  services.set(
-    IUpdateService,
-    ProxyChannel.toService<IUpdateService>(ipc.getChannel(ServiceChannels.Update)),
-  )
-  services.set(
-    IReleaseNotesService,
-    ProxyChannel.toService<IReleaseNotesService>(ipc.getChannel(ServiceChannels.ReleaseNotes)),
-  )
-  services.set(
-    IWindowsService,
-    ProxyChannel.toService<IWindowsService>(ipc.getChannel(ServiceChannels.Window)),
-  )
-  services.set(
-    IPerformanceMarksService,
-    ProxyChannel.toService<IPerformanceMarksService>(ipc.getChannel(ServiceChannels.Performance)),
-  )
-  services.set(
-    ISessionSwitcherService,
-    ProxyChannel.toService<ISessionSwitcherService>(
-      ipc.getChannel(ServiceChannels.SessionSwitcher),
-    ),
-  )
-  services.set(
-    IUsageService,
-    ProxyChannel.toService<IUsageService>(ipc.getChannel(ServiceChannels.Usage)),
-  )
-  services.set(
-    IExchangeRateService,
-    ProxyChannel.toService<IExchangeRateService>(ipc.getChannel(ServiceChannels.ExchangeRate)),
-  )
+  for (const { id, channel, properties } of PROXY_SERVICE_BINDINGS) {
+    const options = properties ? { properties: properties(platform) } : undefined
+    services.set(id, ProxyChannel.toService(ipc.getChannel(channel), options))
+  }
 }
