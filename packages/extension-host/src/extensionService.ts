@@ -1,14 +1,17 @@
 /**
- * Orchestrates the host's extensions: stores their command handlers, drives
- * lazy activation by event, and answers the renderer's RPC (contributions,
- * activate-by-event, execute-command). It also backs the global API bridge so
- * `commands.registerCommand` / `executeCommand` from inside an extension route
- * here.
+ * Orchestrates the host's extensions as a thin facade over four collaborators:
+ * - {@link ExtensionCommandRegistry} — command handlers + execution routing,
+ * - {@link LanguageProviderRegistry} — language-feature providers + `provide*` RPC,
+ * - {@link ExtensionActivationService} — lazy activation by event,
+ * - the Host* handle objects in `hostHandles.ts` — status bar / output / editor.
  *
- * Errors are isolated per extension: a failed `activate` or a throwing handler
- * is logged to stderr and never tears down the host or other extensions.
+ * It implements {@link IExtensionHostBridge} (installed on globalThis so the
+ * bundled extension-api delegates here) and answers the renderer's RPC. The
+ * heavy lifting lives in the collaborators; this class wires them to the
+ * MainThread* dependencies and forwards calls.
+ *
+ * Errors are isolated per extension (see ExtensionActivationService).
  */
-import { pathToFileURL } from 'node:url'
 import { Emitter, type Event } from '@universe-editor/platform'
 import {
   FileType,
@@ -20,7 +23,6 @@ import {
   type Disposable,
   type DocumentSelector,
   type DocumentSymbolProvider,
-  type ExtensionContext,
   type FileStat,
   type FoldingRangeProvider,
   type HoverProvider,
@@ -36,11 +38,9 @@ import {
   type SourceControl,
   type StatusBarAlignment,
   type StatusBarItem,
-  type Selection,
   type TextDocument,
   type TextEditor,
   type TextEditorDecorationType,
-  type TextEditorEdit,
   type TypeDefinitionProvider,
   type UriComponents,
   type WorkspaceSymbolProvider,
@@ -48,17 +48,13 @@ import {
 import {
   base64ToBytes,
   bytesToBase64,
-  matchesActivationEvent,
   type ExtHostFileType,
   type IActiveTextEditorDto,
   type ICompletionContext,
-  type IDecorationRangeDto,
-  type IDecorationRenderOptionsDto,
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
-  type ILanguageProviderMetadata,
-  type ISelectionDto,
-  type ITextEditDto,
+  type IReferenceContext,
+  type ISignatureHelpContext,
   type IMainThreadCommands,
   type IMainThreadFs,
   type IMainThreadEditor,
@@ -68,39 +64,37 @@ import {
   type IMainThreadWindow,
   type IMainThreadAi,
   type IMainThreadStorage,
-  type IReferenceContext,
-  type ISignatureHelpContext,
-  type LanguageProviderType,
-  type OverviewRulerLaneDto,
 } from '@universe-editor/extensions-common'
 import type {
   CompletionItem,
   CompletionList,
   Definition,
   DefinitionLink,
-  Diagnostic,
   DocumentSymbol,
   FoldingRange,
   Hover,
   Location,
   Position,
-  Range,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 import type { IScannedExtension } from './extensionScanner.js'
-import {
-  createExtensionContext,
-  installApiBridge,
-  type IExtensionHostBridge,
-} from './apiFactory.js'
+import { installApiBridge, type IExtensionHostBridge } from './apiFactory.js'
 import { HostSourceControl } from './hostScm.js'
 import { HostAi } from './hostAi.js'
 import { ExtHostDocuments, HostTextDocument } from './hostDocuments.js'
-
-type CommandHandler = (...args: unknown[]) => unknown
+import {
+  HostOutputChannel,
+  HostStatusBarItem,
+  HostTextEditor,
+  HostTextEditorDecorationType,
+  toDecorationOptionsDto,
+} from './hostHandles.js'
+import { ExtensionCommandRegistry } from './commandRegistry.js'
+import { LanguageProviderRegistry } from './languageProviderRegistry.js'
+import { ExtensionActivationService } from './activationService.js'
 
 function toFileType(type: ExtHostFileType): FileType {
   return type === 'dir' ? FileType.Directory : FileType.File
@@ -110,266 +104,16 @@ function toFileStat(dto: IExtHostFileStatDto): FileStat {
   return { type: toFileType(dto.type), size: dto.size, mtime: dto.mtime }
 }
 
-function toSelector(selector: DocumentSelector): readonly string[] {
-  return typeof selector === 'string' ? [selector] : selector
-}
-
-/** Any of the language providers a plugin can register, keyed by its handle. */
-type AnyLanguageProvider =
-  | DefinitionProvider
-  | ReferenceProvider
-  | ImplementationProvider
-  | TypeDefinitionProvider
-  | HoverProvider
-  | CompletionItemProvider
-  | SignatureHelpProvider
-  | DocumentSymbolProvider
-  | RenameProvider
-  | WorkspaceSymbolProvider
-  | FoldingRangeProvider
-
-interface RegisteredProvider {
-  readonly type: LanguageProviderType
-  readonly provider: AnyLanguageProvider
-}
-
-/**
- * Host-side DiagnosticCollection. `set`/`clear` push markers to the renderer
- * over `mainThreadLanguages`, keyed by the collection name (the marker owner).
- */
-class HostDiagnosticCollection implements DiagnosticCollection {
-  constructor(
-    readonly name: string,
-    private readonly _languages: IMainThreadLanguages,
-  ) {}
-
-  set(uri: UriComponents, diagnostics: readonly Diagnostic[] | undefined): void {
-    if (diagnostics === undefined) {
-      void this._languages.$clearDiagnostics(this.name, uri)
-    } else {
-      void this._languages.$publishDiagnostics(this.name, uri, diagnostics)
-    }
-  }
-
-  delete(uri: UriComponents): void {
-    void this._languages.$clearDiagnostics(this.name, uri)
-  }
-
-  clear(): void {
-    void this._languages.$clearDiagnostics(this.name)
-  }
-
-  dispose(): void {
-    this.clear()
-  }
-}
-
-interface ActivatedExtension {
-  readonly context: ExtensionContext
-  readonly deactivate?: () => unknown
-}
-
-interface ExtensionModule {
-  activate?: (context: ExtensionContext) => unknown
-  deactivate?: () => unknown
-}
-
-/**
- * Host-side StatusBarItem. Mutations are pushed to the renderer only while the
- * item is shown; hiding/disposing removes its renderer entry. Keyed by `handle`.
- */
-class HostStatusBarItem implements StatusBarItem {
-  private _text = ''
-  private _tooltip: string | undefined
-  private _command: string | undefined
-  private _showProgress: boolean | 'spinning' | 'syncing' | undefined
-  private _visible = false
-
-  constructor(
-    private readonly _handle: number,
-    readonly alignment: StatusBarAlignment,
-    readonly priority: number,
-    private readonly _window: IMainThreadWindow,
-  ) {}
-
-  get text(): string {
-    return this._text
-  }
-  set text(value: string) {
-    this._text = value
-    this._sync()
-  }
-  get tooltip(): string | undefined {
-    return this._tooltip
-  }
-  set tooltip(value: string | undefined) {
-    this._tooltip = value
-    this._sync()
-  }
-  get command(): string | undefined {
-    return this._command
-  }
-  set command(value: string | undefined) {
-    this._command = value
-    this._sync()
-  }
-  get showProgress(): boolean | 'spinning' | 'syncing' | undefined {
-    return this._showProgress
-  }
-  set showProgress(value: boolean | 'spinning' | 'syncing' | undefined) {
-    this._showProgress = value
-    this._sync()
-  }
-
-  show(): void {
-    this._visible = true
-    this._sync()
-  }
-  hide(): void {
-    this._visible = false
-    void this._window.$disposeStatusBarEntry(this._handle)
-  }
-  dispose(): void {
-    this.hide()
-  }
-
-  private _sync(): void {
-    if (!this._visible) return
-    void this._window.$setStatusBarEntry(this._handle, {
-      text: this._text,
-      alignment: this.alignment,
-      priority: this.priority,
-      ...(this._tooltip !== undefined ? { tooltip: this._tooltip } : {}),
-      ...(this._command !== undefined ? { command: this._command } : {}),
-      ...(this._showProgress !== undefined ? { showProgress: this._showProgress } : {}),
-    })
-  }
-}
-
-/**
- * Host-side OutputChannel. Delegates append/clear/show/dispose over RPC to the
- * renderer's MainThreadOutput, which owns the real IOutputChannel instance.
- */
-class HostOutputChannel implements OutputChannel {
-  constructor(
-    private readonly _handle: number,
-    readonly name: string,
-    private readonly _output: IMainThreadOutput,
-  ) {}
-
-  append(text: string): void {
-    void this._output.$append(this._handle, text)
-  }
-
-  appendLine(text: string): void {
-    void this._output.$append(this._handle, `${text}\n`)
-  }
-
-  clear(): void {
-    void this._output.$clearOutputChannel(this._handle)
-  }
-
-  show(): void {
-    void this._output.$showOutputChannel(this._handle)
-  }
-
-  dispose(): void {
-    void this._output.$disposeOutputChannel(this._handle)
-  }
-}
-
-/**
- * Host-side TextEditor handle. A snapshot of the editor at fetch time (document +
- * selections frozen); `edit` and `setSelections` drive the live editor over RPC.
- * An edit carries the snapshot's version so the renderer can reject it if the
- * document moved on, mirroring VSCode's optimistic-edit contract.
- */
-class HostTextEditor implements TextEditor {
-  constructor(
-    readonly document: TextDocument,
-    readonly selections: readonly Selection[],
-    private readonly _version: number,
-    private readonly _editorRpc: IMainThreadEditor,
-  ) {}
-
-  get selection(): Selection {
-    return this.selections[0]!
-  }
-
-  edit(callback: (editBuilder: TextEditorEdit) => void): Promise<boolean> {
-    const edits: ITextEditDto[] = []
-    const builder: TextEditorEdit = {
-      replace: (range, text) => edits.push({ range, text }),
-      insert: (position, text) => edits.push({ range: { start: position, end: position }, text }),
-      delete: (range) => edits.push({ range, text: '' }),
-    }
-    callback(builder)
-    return this._editorRpc.$applyEdits(this.document.uri, this._version, edits)
-  }
-
-  setSelections(selections: readonly Selection[]): Promise<void> {
-    return this._editorRpc.$setSelections(this.document.uri, selections.map(toSelectionDto))
-  }
-
-  setDecorations(decorationType: TextEditorDecorationType, ranges: readonly Range[]): void {
-    const dtos: IDecorationRangeDto[] = ranges.map((range) => ({ range }))
-    void this._editorRpc.$setDecorations(this.document.uri, decorationType.key, dtos)
-  }
-}
-
-/**
- * Host-side decoration type. Allocates a handle, ships the static look to the
- * renderer once, and forwards disposal so the renderer drops the CSS rule and
- * every range it painted.
- */
-class HostTextEditorDecorationType implements TextEditorDecorationType {
-  private _disposed = false
-
-  constructor(
-    readonly key: number,
-    private readonly _editorRpc: IMainThreadEditor,
-  ) {}
-
-  dispose(): void {
-    if (this._disposed) return
-    this._disposed = true
-    void this._editorRpc.$disposeDecorationType(this.key)
-  }
-}
-
-function toSelectionDto(sel: Selection): ISelectionDto {
-  return { anchor: sel.anchor, active: sel.active }
-}
-
-function toDecorationOptionsDto(options: DecorationRenderOptions): IDecorationRenderOptionsDto {
-  return {
-    ...(options.gutterIconPath !== undefined ? { gutterIconPath: options.gutterIconPath } : {}),
-    ...(options.isWholeLine !== undefined ? { isWholeLine: options.isWholeLine } : {}),
-    ...(options.backgroundColor !== undefined ? { backgroundColor: options.backgroundColor } : {}),
-    ...(options.borderColor !== undefined ? { borderColor: options.borderColor } : {}),
-    ...(options.borderWidth !== undefined ? { borderWidth: options.borderWidth } : {}),
-    ...(options.overviewRulerColor !== undefined
-      ? { overviewRulerColor: options.overviewRulerColor }
-      : {}),
-    ...(options.overviewRulerLane !== undefined
-      ? { overviewRulerLane: options.overviewRulerLane as OverviewRulerLaneDto }
-      : {}),
-  }
-}
-
 export class ExtensionService implements IExtensionHostBridge {
-  private readonly _commands = new Map<string, CommandHandler>()
-  private readonly _activated = new Map<string, ActivatedExtension>()
-  private readonly _activating = new Map<string, Promise<void>>()
-  private _statusBarHandle = 0
+  private readonly _commands: ExtensionCommandRegistry
+  private readonly _languageRegistry: LanguageProviderRegistry
+  private readonly _activation: ExtensionActivationService
+  private readonly _documents = new ExtHostDocuments()
   private readonly _sourceControls = new Map<number, HostSourceControl>()
+  private _statusBarHandle = 0
   private _scmHandle = 0
   private _outputHandle = 0
-  private readonly _providers = new Map<number, RegisteredProvider>()
-  private _languageHandle = 0
-  private _diagnosticHandle = 0
   private _decorationTypeHandle = 0
-  private readonly _documents = new ExtHostDocuments()
 
   private readonly _onDidChangeActiveTextEditor = new Emitter<TextEditor | undefined>()
   readonly onDidChangeActiveTextEditor: Event<TextEditor | undefined> =
@@ -393,36 +137,23 @@ export class ExtensionService implements IExtensionHostBridge {
     private readonly _mainThreadAi?: IMainThreadAi,
     private readonly _mainThreadStorage?: IMainThreadStorage,
   ) {
+    this._commands = new ExtensionCommandRegistry(_mainThreadCommands)
+    this._languageRegistry = new LanguageProviderRegistry(() => this._languages(), this._documents)
+    this._activation = new ExtensionActivationService(_extensions, _mainThreadStorage)
     installApiBridge(this)
   }
 
-  // --- IExtensionHostBridge (called from inside extensions via the API) ---
+  // --- IExtensionHostBridge: commands ---
 
-  registerCommand(command: string, handler: CommandHandler): Disposable {
-    if (this._commands.has(command)) {
-      throw new Error(`command already registered: ${command}`)
-    }
-    this._commands.set(command, handler)
-    void this._mainThreadCommands.$registerCommand(command)
-    return {
-      dispose: () => {
-        if (this._commands.delete(command)) {
-          void this._mainThreadCommands.$unregisterCommand(command)
-        }
-      },
-    }
+  registerCommand(command: string, handler: (...args: unknown[]) => unknown): Disposable {
+    return this._commands.register(command, handler)
   }
 
   executeCommand(command: string, args: unknown[]): Promise<unknown> {
-    const handler = this._commands.get(command)
-    if (handler) {
-      return Promise.resolve(handler(...args))
-    }
-    // Not one of this host's commands — forward to a renderer built-in (e.g.
-    // `_workbench.openDiff`). The renderer rejects anything outside its
-    // host-invokable namespace, so this can't loop back into extension commands.
-    return this._mainThreadCommands.$executeCommand(command, args)
+    return this._commands.execute(command, args)
   }
+
+  // --- IExtensionHostBridge: window ---
 
   showMessage(
     severity: 'info' | 'warning' | 'error',
@@ -464,6 +195,17 @@ export class ExtensionService implements IExtensionHostBridge {
     )
   }
 
+  createOutputChannel(name: string): OutputChannel {
+    if (!this._mainThreadOutput) {
+      throw new Error('output channel support is not available in this extension host')
+    }
+    const handle = this._outputHandle++
+    void this._mainThreadOutput.$registerOutputChannel(handle, name)
+    return new HostOutputChannel(handle, name, this._mainThreadOutput)
+  }
+
+  // --- IExtensionHostBridge: scm ---
+
   createSourceControl(id: string, label: string, rootUri?: string): SourceControl {
     if (this._kind === 'restricted') {
       throw new Error(
@@ -484,6 +226,8 @@ export class ExtensionService implements IExtensionHostBridge {
     void this._mainThreadScm.$registerSourceControl(handle, id, label, rootUri)
     return sc
   }
+
+  // --- IExtensionHostBridge: workspace ---
 
   getWorkspaceRoot(): string | undefined {
     return this._workspaceRoot
@@ -535,16 +279,11 @@ export class ExtensionService implements IExtensionHostBridge {
     return this.executeCommand('_workbench.getConfiguration', [fullKey, defaultValue])
   }
 
-  createOutputChannel(name: string): OutputChannel {
-    if (!this._mainThreadOutput) {
-      throw new Error('output channel support is not available in this extension host')
-    }
-    const handle = this._outputHandle++
-    void this._mainThreadOutput.$registerOutputChannel(handle, name)
-    return new HostOutputChannel(handle, name, this._mainThreadOutput)
+  getTextDocuments(): readonly TextDocument[] {
+    return this._documents.all()
   }
 
-  // --- editor: active text editor inspection + edits (trusted-only) ---
+  // --- IExtensionHostBridge: editor (trusted-only) ---
 
   private _editor(): IMainThreadEditor {
     if (!this._mainThreadEditor) {
@@ -582,7 +321,7 @@ export class ExtensionService implements IExtensionHostBridge {
     )
   }
 
-  // --- languages: provider registration (handle-routed, mirrors SCM) ---
+  // --- IExtensionHostBridge: languages ---
 
   private _languages(): IMainThreadLanguages {
     if (!this._mainThreadLanguages) {
@@ -591,47 +330,30 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._mainThreadLanguages
   }
 
-  private _registerProvider(
-    type: LanguageProviderType,
-    selector: DocumentSelector,
-    provider: AnyLanguageProvider,
-    metadata?: ILanguageProviderMetadata,
-  ): Disposable {
-    const languages = this._languages()
-    const handle = this._languageHandle++
-    this._providers.set(handle, { type, provider })
-    void languages.$registerProvider(handle, type, toSelector(selector), metadata)
-    return {
-      dispose: () => {
-        if (this._providers.delete(handle)) void languages.$unregisterProvider(handle)
-      },
-    }
-  }
-
   registerDefinitionProvider(selector: DocumentSelector, provider: DefinitionProvider): Disposable {
-    return this._registerProvider('definition', selector, provider)
+    return this._languageRegistry.registerDefinitionProvider(selector, provider)
   }
 
   registerReferenceProvider(selector: DocumentSelector, provider: ReferenceProvider): Disposable {
-    return this._registerProvider('references', selector, provider)
+    return this._languageRegistry.registerReferenceProvider(selector, provider)
   }
 
   registerImplementationProvider(
     selector: DocumentSelector,
     provider: ImplementationProvider,
   ): Disposable {
-    return this._registerProvider('implementation', selector, provider)
+    return this._languageRegistry.registerImplementationProvider(selector, provider)
   }
 
   registerTypeDefinitionProvider(
     selector: DocumentSelector,
     provider: TypeDefinitionProvider,
   ): Disposable {
-    return this._registerProvider('typeDefinition', selector, provider)
+    return this._languageRegistry.registerTypeDefinitionProvider(selector, provider)
   }
 
   registerHoverProvider(selector: DocumentSelector, provider: HoverProvider): Disposable {
-    return this._registerProvider('hover', selector, provider)
+    return this._languageRegistry.registerHoverProvider(selector, provider)
   }
 
   registerCompletionItemProvider(
@@ -639,11 +361,10 @@ export class ExtensionService implements IExtensionHostBridge {
     provider: CompletionItemProvider,
     triggerCharacters: readonly string[],
   ): Disposable {
-    return this._registerProvider(
-      'completion',
+    return this._languageRegistry.registerCompletionItemProvider(
       selector,
       provider,
-      triggerCharacters.length > 0 ? { triggerCharacters } : undefined,
+      triggerCharacters,
     )
   }
 
@@ -652,48 +373,36 @@ export class ExtensionService implements IExtensionHostBridge {
     provider: SignatureHelpProvider,
     metadata: SignatureHelpProviderMetadata,
   ): Disposable {
-    return this._registerProvider('signatureHelp', selector, provider, {
-      signatureHelpTriggerCharacters: metadata.triggerCharacters,
-      signatureHelpRetriggerCharacters: metadata.retriggerCharacters,
-    })
+    return this._languageRegistry.registerSignatureHelpProvider(selector, provider, metadata)
   }
 
   registerDocumentSymbolProvider(
     selector: DocumentSelector,
     provider: DocumentSymbolProvider,
   ): Disposable {
-    return this._registerProvider('documentSymbol', selector, provider)
+    return this._languageRegistry.registerDocumentSymbolProvider(selector, provider)
   }
 
   registerRenameProvider(selector: DocumentSelector, provider: RenameProvider): Disposable {
-    return this._registerProvider('rename', selector, provider)
+    return this._languageRegistry.registerRenameProvider(selector, provider)
   }
 
   registerWorkspaceSymbolProvider(provider: WorkspaceSymbolProvider): Disposable {
-    return this._registerProvider('workspaceSymbol', [], provider)
+    return this._languageRegistry.registerWorkspaceSymbolProvider(provider)
   }
 
   registerFoldingRangeProvider(
     selector: DocumentSelector,
     provider: FoldingRangeProvider,
   ): Disposable {
-    return this._registerProvider('foldingRange', selector, provider)
+    return this._languageRegistry.registerFoldingRangeProvider(selector, provider)
   }
 
   createDiagnosticCollection(name?: string): DiagnosticCollection {
-    return new HostDiagnosticCollection(
-      name ?? `diagnostics-${this._diagnosticHandle++}`,
-      this._languages(),
-    )
+    return this._languageRegistry.createDiagnosticCollection(name)
   }
 
-  // --- workspace documents ---
-
-  getTextDocuments(): readonly TextDocument[] {
-    return this._documents.all()
-  }
-
-  // --- ai: inference models (trusted-only) ---
+  // --- IExtensionHostBridge: ai (trusted-only) ---
 
   private _aiApi: AiApi | undefined
 
@@ -704,15 +413,7 @@ export class ExtensionService implements IExtensionHostBridge {
     return (this._aiApi ??= new HostAi(this._mainThreadAi))
   }
 
-  // --- RPC surface (called from the renderer) ---
-
-  private _provider<T extends AnyLanguageProvider>(
-    handle: number,
-    type: LanguageProviderType,
-  ): T | undefined {
-    const entry = this._providers.get(handle)
-    return entry && entry.type === type ? (entry.provider as T) : undefined
-  }
+  // --- RPC surface: documents (called from the renderer) ---
 
   /** IExtHostDocuments.$acceptDocumentOpen */
   acceptDocumentOpen(uri: UriComponents, languageId: string, version: number, text: string): void {
@@ -729,158 +430,95 @@ export class ExtensionService implements IExtensionHostBridge {
     this._documents.acceptClose(uri)
   }
 
-  /** IExtHostLanguages.$provideDefinition */
-  async provideDefinition(
+  // --- RPC surface: languages (delegated to the registry) ---
+
+  provideDefinition(
     handle: number,
     uri: UriComponents,
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
-    const provider = this._provider<DefinitionProvider>(handle, 'definition')
-    if (!provider) return null
-    return (
-      (await provider.provideDefinition(this._documents.getOrSynthesize(uri), position)) ?? null
-    )
+    return this._languageRegistry.provideDefinition(handle, uri, position)
   }
 
-  /** IExtHostLanguages.$provideReferences */
-  async provideReferences(
+  provideReferences(
     handle: number,
     uri: UriComponents,
     position: Position,
     context: IReferenceContext,
   ): Promise<Location[] | null> {
-    const provider = this._provider<ReferenceProvider>(handle, 'references')
-    if (!provider) return null
-    return (
-      (await provider.provideReferences(this._documents.getOrSynthesize(uri), position, context)) ??
-      null
-    )
+    return this._languageRegistry.provideReferences(handle, uri, position, context)
   }
 
-  /** IExtHostLanguages.$provideImplementation */
-  async provideImplementation(
+  provideImplementation(
     handle: number,
     uri: UriComponents,
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
-    const provider = this._provider<ImplementationProvider>(handle, 'implementation')
-    if (!provider) return null
-    return (
-      (await provider.provideImplementation(this._documents.getOrSynthesize(uri), position)) ?? null
-    )
+    return this._languageRegistry.provideImplementation(handle, uri, position)
   }
 
-  /** IExtHostLanguages.$provideTypeDefinition */
-  async provideTypeDefinition(
+  provideTypeDefinition(
     handle: number,
     uri: UriComponents,
     position: Position,
   ): Promise<Definition | DefinitionLink[] | null> {
-    const provider = this._provider<TypeDefinitionProvider>(handle, 'typeDefinition')
-    if (!provider) return null
-    return (
-      (await provider.provideTypeDefinition(this._documents.getOrSynthesize(uri), position)) ?? null
-    )
+    return this._languageRegistry.provideTypeDefinition(handle, uri, position)
   }
 
-  /** IExtHostLanguages.$provideHover */
-  async provideHover(
-    handle: number,
-    uri: UriComponents,
-    position: Position,
-  ): Promise<Hover | null> {
-    const provider = this._provider<HoverProvider>(handle, 'hover')
-    if (!provider) return null
-    return (await provider.provideHover(this._documents.getOrSynthesize(uri), position)) ?? null
+  provideHover(handle: number, uri: UriComponents, position: Position): Promise<Hover | null> {
+    return this._languageRegistry.provideHover(handle, uri, position)
   }
 
-  /** IExtHostLanguages.$provideCompletion */
-  async provideCompletion(
+  provideCompletion(
     handle: number,
     uri: UriComponents,
     position: Position,
     context: ICompletionContext,
   ): Promise<CompletionItem[] | CompletionList | null> {
-    const provider = this._provider<CompletionItemProvider>(handle, 'completion')
-    if (!provider) return null
-    return (
-      (await provider.provideCompletionItems(
-        this._documents.getOrSynthesize(uri),
-        position,
-        context,
-      )) ?? null
-    )
+    return this._languageRegistry.provideCompletion(handle, uri, position, context)
   }
 
-  /** IExtHostLanguages.$resolveCompletionItem */
-  async resolveCompletionItem(handle: number, item: CompletionItem): Promise<CompletionItem> {
-    const provider = this._provider<CompletionItemProvider>(handle, 'completion')
-    if (!provider?.resolveCompletionItem) return item
-    return (await provider.resolveCompletionItem(item)) ?? item
+  resolveCompletionItem(handle: number, item: CompletionItem): Promise<CompletionItem> {
+    return this._languageRegistry.resolveCompletionItem(handle, item)
   }
 
-  /** IExtHostLanguages.$provideSignatureHelp */
-  async provideSignatureHelp(
+  provideSignatureHelp(
     handle: number,
     uri: UriComponents,
     position: Position,
     context: ISignatureHelpContext,
   ): Promise<SignatureHelp | null> {
-    const provider = this._provider<SignatureHelpProvider>(handle, 'signatureHelp')
-    if (!provider) return null
-    return (
-      (await provider.provideSignatureHelp(
-        this._documents.getOrSynthesize(uri),
-        position,
-        context,
-      )) ?? null
-    )
+    return this._languageRegistry.provideSignatureHelp(handle, uri, position, context)
   }
 
-  /** IExtHostLanguages.$provideDocumentSymbols */
-  async provideDocumentSymbols(
+  provideDocumentSymbols(
     handle: number,
     uri: UriComponents,
   ): Promise<DocumentSymbol[] | SymbolInformation[] | null> {
-    const provider = this._provider<DocumentSymbolProvider>(handle, 'documentSymbol')
-    if (!provider) return null
-    return (await provider.provideDocumentSymbols(this._documents.getOrSynthesize(uri))) ?? null
+    return this._languageRegistry.provideDocumentSymbols(handle, uri)
   }
 
-  /** IExtHostLanguages.$provideRenameEdits */
-  async provideRenameEdits(
+  provideRenameEdits(
     handle: number,
     uri: UriComponents,
     position: Position,
     newName: string,
   ): Promise<WorkspaceEdit | null> {
-    const provider = this._provider<RenameProvider>(handle, 'rename')
-    if (!provider) return null
-    return (
-      (await provider.provideRenameEdits(
-        this._documents.getOrSynthesize(uri),
-        position,
-        newName,
-      )) ?? null
-    )
+    return this._languageRegistry.provideRenameEdits(handle, uri, position, newName)
   }
 
-  /** IExtHostLanguages.$provideWorkspaceSymbols */
-  async provideWorkspaceSymbols(
+  provideWorkspaceSymbols(
     handle: number,
     query: string,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null> {
-    const provider = this._provider<WorkspaceSymbolProvider>(handle, 'workspaceSymbol')
-    if (!provider) return null
-    return (await provider.provideWorkspaceSymbols(query)) ?? null
+    return this._languageRegistry.provideWorkspaceSymbols(handle, query)
   }
 
-  /** IExtHostLanguages.$provideFoldingRanges */
-  async provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null> {
-    const provider = this._provider<FoldingRangeProvider>(handle, 'foldingRange')
-    if (!provider) return null
-    return (await provider.provideFoldingRanges(this._documents.getOrSynthesize(uri))) ?? null
+  provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null> {
+    return this._languageRegistry.provideFoldingRanges(handle, uri)
   }
+
+  // --- RPC surface: scm / commands / extensions ---
 
   /** IExtHostScm.$onInputBoxValueChange */
   onInputBoxValueChange(handle: number, value: string): void {
@@ -916,44 +554,7 @@ export class ExtensionService implements IExtensionHostBridge {
   }
 
   /** IExtHostExtensions.$activateByEvent */
-  async activateByEvent(event: string): Promise<void> {
-    const pending: Promise<void>[] = []
-    for (const ext of this._extensions) {
-      if (matchesActivationEvent(ext.manifest.activationEvents ?? [], event)) {
-        pending.push(this._activate(ext))
-      }
-    }
-    await Promise.all(pending)
-  }
-
-  private _activate(ext: IScannedExtension): Promise<void> {
-    if (this._activated.has(ext.id)) return Promise.resolve()
-    const inFlight = this._activating.get(ext.id)
-    if (inFlight) return inFlight
-
-    const promise = this._doActivate(ext).finally(() => {
-      this._activating.delete(ext.id)
-    })
-    this._activating.set(ext.id, promise)
-    return promise
-  }
-
-  private async _doActivate(ext: IScannedExtension): Promise<void> {
-    const context = await createExtensionContext(ext, this._mainThreadStorage)
-    try {
-      let deactivate: (() => unknown) | undefined
-      if (ext.mainPath) {
-        const mod = (await import(pathToFileURL(ext.mainPath).href)) as ExtensionModule
-        await mod.activate?.(context)
-        deactivate = mod.deactivate
-      }
-      this._activated.set(ext.id, {
-        context,
-        ...(deactivate !== undefined ? { deactivate } : {}),
-      })
-      console.error(`[ext-host] activated ${ext.id}`)
-    } catch (err) {
-      console.error(`[ext-host] activate failed ${ext.id}: ${(err as Error).stack ?? String(err)}`)
-    }
+  activateByEvent(event: string): Promise<void> {
+    return this._activation.activateByEvent(event)
   }
 }
