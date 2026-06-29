@@ -17,6 +17,7 @@ import { app } from 'electron'
 import {
   createNamedLogger,
   Disposable,
+  DisposableStore,
   Emitter,
   mark,
   type ILogger,
@@ -101,6 +102,8 @@ const defaultResolveUserExtensionsDir: ExtHostExtensionsDirResolver = () =>
 
 interface ProcEntry {
   readonly proc: ManagedChildProcess
+  /** Owns `proc` + its stdout/stderr/exit subscriptions; disposed on exit or service dispose. */
+  readonly store: DisposableStore
   readonly stdoutDecoder: StringDecoder
   exited: boolean
 }
@@ -186,7 +189,14 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       return Promise.reject(err as Error)
     }
 
-    const procEntry: ProcEntry = { proc, stdoutDecoder: new StringDecoder('utf8'), exited: false }
+    const store = new DisposableStore()
+    store.add(proc)
+    const procEntry: ProcEntry = {
+      proc,
+      store,
+      stdoutDecoder: new StringDecoder('utf8'),
+      exited: false,
+    }
     this._procs.set(handle, procEntry)
 
     if (!this._didMarkFirstSpawn) {
@@ -194,30 +204,36 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
       mark(PerfMarks.extHostDidSpawn)
     }
 
-    proc.onStdout((data: Buffer) => {
-      this._onStdout.fire({ handle, data: procEntry.stdoutDecoder.write(data) })
-    })
-    proc.onStderr((data: Buffer) => {
-      this._onStderr.fire({ handle, data: decodeDiagnostic(data) })
-    })
-    proc.onDidExit((exit) => {
-      if (procEntry.exited) return
-      procEntry.exited = true
-      if (exit.error !== undefined) {
-        this._logger.warn(`proc error handle=${handle}: ${exit.error}`)
-        this._onExit.fire({ handle, code: null, signal: null, error: exit.error })
-      } else {
-        const msg = `exit handle=${handle} code=${exit.code} signal=${exit.signal}`
-        if (exit.code === 0 || exit.code === null) {
-          this._logger.info(msg)
+    store.add(
+      proc.onStdout((data: Buffer) => {
+        this._onStdout.fire({ handle, data: procEntry.stdoutDecoder.write(data) })
+      }),
+    )
+    store.add(
+      proc.onStderr((data: Buffer) => {
+        this._onStderr.fire({ handle, data: decodeDiagnostic(data) })
+      }),
+    )
+    store.add(
+      proc.onDidExit((exit) => {
+        if (procEntry.exited) return
+        procEntry.exited = true
+        if (exit.error !== undefined) {
+          this._logger.warn(`proc error handle=${handle}: ${exit.error}`)
+          this._onExit.fire({ handle, code: null, signal: null, error: exit.error })
         } else {
-          this._logger.warn(msg)
+          const msg = `exit handle=${handle} code=${exit.code} signal=${exit.signal}`
+          if (exit.code === 0 || exit.code === null) {
+            this._logger.info(msg)
+          } else {
+            this._logger.warn(msg)
+          }
+          this._onExit.fire({ handle, code: exit.code, signal: exit.signal })
         }
-        this._onExit.fire({ handle, code: exit.code, signal: exit.signal })
-      }
-      proc.dispose()
-      this._procs.delete(handle)
-    })
+        this._procs.delete(handle)
+        store.dispose()
+      }),
+    )
 
     this._logger.info(`start handle=${handle} entry=${entry}`)
     return Promise.resolve({ handle })
@@ -298,7 +314,7 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
   override dispose(): void {
     for (const [handle, entry] of this._procs) {
       if (!entry.exited) {
-        entry.proc.dispose()
+        entry.store.dispose()
         this._logger.info(`dispose killed handle=${handle}`)
       }
     }

@@ -6,6 +6,12 @@ import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ChildProcessWithoutNullStreams } from 'node:child_process'
 import {
+  DisposableTracker,
+  markAsSingleton,
+  NullLogger,
+  setDisposableTracker,
+} from '@universe-editor/platform'
+import {
   AcpHostMainService,
   type AcpCommandLookup,
   type AcpSpawner,
@@ -65,6 +71,17 @@ function fakeSpawnerWith(procs: FakeProc[]): AcpSpawner {
 
 function makeService(spawner: AcpSpawner): AcpHostMainService {
   return new AcpHostMainService(spawner)
+}
+
+// The service creates a NullLogger when no logger service is injected, but never
+// _registers it (it's a shared sink, not owned). Under the leak tracker that
+// unowned Disposable is a false positive, so feed a logger service whose logger
+// is marked as a singleton.
+function makeLeakSafeService(spawner: AcpSpawner): AcpHostMainService {
+  const loggerService = {
+    createLogger: () => markAsSingleton(new NullLogger()),
+  } as unknown as ConstructorParameters<typeof AcpHostMainService>[3]
+  return new AcpHostMainService(spawner, undefined, undefined, loggerService)
 }
 
 describe('AcpHostMainService', () => {
@@ -238,6 +255,41 @@ describe('AcpHostMainService', () => {
     // has not yet propagated through the event loop.
     proc.stdin.destroyed = true
     await expect(svc.writeStdin(handle, 'x')).rejects.toThrow(/stdin is not writable/)
+  })
+})
+
+describe('AcpHostMainService — disposable hygiene', () => {
+  it('releases per-proc stdio/exit subscriptions when the proc exits', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const proc = new FakeProc()
+      const svc = makeLeakSafeService(fakeSpawnerWith([proc]))
+      await svc.start({ command: 'agent', args: [] })
+      // Process exits on its own — the per-proc store must be torn down.
+      proc.emitExit(0, null)
+      svc.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      setDisposableTracker(null)
+    }
+  })
+
+  it('releases per-proc subscriptions for still-live procs on service dispose', async () => {
+    const tracker = new DisposableTracker()
+    setDisposableTracker(tracker)
+    try {
+      const procA = new FakeProc()
+      const procB = new FakeProc()
+      const svc = makeLeakSafeService(fakeSpawnerWith([procA, procB]))
+      await svc.start({ command: 'a', args: [] })
+      await svc.start({ command: 'b', args: [] })
+      // No exit fired: dispose must reclaim the live procs and their subscriptions.
+      svc.dispose()
+      expect(tracker.computeLeakingDisposables()).toBeUndefined()
+    } finally {
+      setDisposableTracker(null)
+    }
   })
 })
 
