@@ -7,22 +7,31 @@
 import { describe, expect, it } from 'vitest'
 import type { monaco } from '../../../../workbench/editor/monaco/MonacoLoader.js'
 import type {
+  CodeAction,
   CompletionItem,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   Hover,
   Location,
+  SelectionRange,
   SignatureHelp,
   WorkspaceEdit,
 } from 'vscode-languageserver-types'
 import {
+  codeActionsToMonaco,
   completionItemToMonaco,
   definitionToMonaco,
   diagnosticToMarker,
+  documentHighlightsToMonaco,
+  documentLinksToMonaco,
   documentSymbolsToMonaco,
   hoverToMonaco,
   monacoPositionToLsp,
   rangeToMonaco,
+  resolvedDocumentLinkToMonaco,
+  selectionRangesToMonaco,
   signatureHelpToMonaco,
   workspaceEditToMonaco,
   workspaceSymbolsToEntries,
@@ -320,5 +329,97 @@ describe('workspaceSymbolsToEntries', () => {
       fakeMonaco,
     )
     expect(out[0]?.range.startLineNumber).toBe(1)
+  })
+})
+
+describe('documentLinksToMonaco', () => {
+  it('maps a link with a target onto a parsed Uri and keeps the LSP source', () => {
+    const link: DocumentLink = { range: range(0, 0, 0, 4), target: 'file:///a.md' }
+    const out = documentLinksToMonaco([link], fakeMonaco)
+    expect(out.links).toHaveLength(1)
+    expect(out.links[0]?.range.startLineNumber).toBe(1)
+    expect(out.links[0]?.url?.toString()).toBe('file:///a.md')
+    expect((out.links[0] as unknown as { _lspLink: DocumentLink })._lspLink).toBe(link)
+  })
+
+  it('leaves an unresolved link (no target) without a url', () => {
+    const out = documentLinksToMonaco([{ range: range(0, 0, 0, 4) }], fakeMonaco)
+    expect(out.links[0]?.url).toBeUndefined()
+  })
+
+  it('returns an empty list for null', () => {
+    expect(documentLinksToMonaco(null, fakeMonaco)).toEqual({ links: [] })
+  })
+})
+
+describe('resolvedDocumentLinkToMonaco', () => {
+  it('maps the resolved target onto the original link url', () => {
+    const original = { range: rangeToMonaco(range(0, 0, 0, 4)) } as monaco.languages.ILink
+    const out = resolvedDocumentLinkToMonaco(
+      { range: range(0, 0, 0, 4), target: 'file:///r.md' },
+      original,
+      fakeMonaco,
+    )
+    expect(out.url?.toString()).toBe('file:///r.md')
+  })
+
+  it('returns the original unchanged when nothing resolved', () => {
+    const original = { range: rangeToMonaco(range(0, 0, 0, 4)) } as monaco.languages.ILink
+    expect(resolvedDocumentLinkToMonaco(null, original, fakeMonaco)).toBe(original)
+  })
+})
+
+describe('documentHighlightsToMonaco', () => {
+  it('offsets the LSP 1/2/3 kind to Monaco 0/1/2', () => {
+    const highlights: DocumentHighlight[] = [
+      { range: range(0, 0, 0, 1), kind: 1 },
+      { range: range(1, 0, 1, 1), kind: 3 },
+    ]
+    const out = documentHighlightsToMonaco(highlights)
+    expect(out[0]?.kind).toBe(0)
+    expect(out[1]?.kind).toBe(2)
+    expect(out[0]?.range.startLineNumber).toBe(1)
+  })
+
+  it('omits kind when the LSP highlight has none', () => {
+    const out = documentHighlightsToMonaco([{ range: range(0, 0, 0, 1) }])
+    expect(out[0]?.kind).toBeUndefined()
+  })
+})
+
+describe('selectionRangesToMonaco', () => {
+  it('flattens each parent chain innermost-to-outermost', () => {
+    const head: SelectionRange = {
+      range: range(2, 2, 2, 4),
+      parent: { range: range(2, 0, 2, 8), parent: { range: range(0, 0, 5, 0) } },
+    }
+    const out = selectionRangesToMonaco([head])
+    expect(out).toHaveLength(1)
+    expect(out[0]?.map((r) => r.range.startLineNumber)).toEqual([3, 3, 1])
+  })
+})
+
+describe('codeActionsToMonaco', () => {
+  it('converts edits + diagnostics and maps disabled reason', () => {
+    const edit: WorkspaceEdit = {
+      changes: { 'file:///a.md': [{ range: range(0, 0, 0, 1), newText: 'x' }] },
+    }
+    const diag: Diagnostic = { range: range(0, 0, 0, 1), message: 'm', severity: 1 }
+    const actions: CodeAction[] = [
+      { title: 'Fix', kind: 'quickfix', isPreferred: true, edit, diagnostics: [diag] },
+      { title: 'Nope', disabled: { reason: 'unavailable' } },
+    ]
+    const out = codeActionsToMonaco(actions, fakeMonaco)
+    expect(out.actions).toHaveLength(2)
+    expect(out.actions[0]?.title).toBe('Fix')
+    expect(out.actions[0]?.kind).toBe('quickfix')
+    expect(out.actions[0]?.isPreferred).toBe(true)
+    expect(out.actions[0]?.edit?.edits).toHaveLength(1)
+    expect(out.actions[0]?.diagnostics).toHaveLength(1)
+    expect(out.actions[1]?.disabled).toBe('unavailable')
+  })
+
+  it('returns an empty list for null', () => {
+    expect(codeActionsToMonaco(null, fakeMonaco).actions).toEqual([])
   })
 })

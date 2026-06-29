@@ -14,11 +14,20 @@
  * Monaco's 1-based coordinates.
  */
 import type {
+  CodeAction,
+  CompletionItem,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
+  Hover,
   Location,
   Position,
+  Range,
+  SelectionRange,
+  TextEdit,
+  WorkspaceEdit,
   WorkspaceSymbol,
 } from 'vscode-languageserver-types'
 
@@ -49,6 +58,29 @@ export interface IMdServer {
   ): Promise<Location[]>
   $provideWorkspaceSymbols(query: string): Promise<WorkspaceSymbol[]>
   $provideFoldingRanges(uri: string): Promise<FoldingRange[]>
+  $provideHover(uri: string, position: Position): Promise<Hover | null>
+  /** Path/fragment/reference completions (`[](`, `#`, `[ref]`); markdown-specific. */
+  $provideCompletion(uri: string, position: Position): Promise<CompletionItem[]>
+  /** Renaming a header rewrites every link that targets it; `null` if not renameable here. */
+  $provideRenameEdits(
+    uri: string,
+    position: Position,
+    newName: string,
+  ): Promise<WorkspaceEdit | null>
+  /** All links in the document; targets are filled in lazily by `$resolveDocumentLink`. */
+  $provideDocumentLinks(uri: string): Promise<DocumentLink[]>
+  /** Fill in a link's `target`; `null` to keep the link as-is. */
+  $resolveDocumentLink(link: DocumentLink): Promise<DocumentLink | null>
+  /** Occurrences of the header/link at `position` within the document. */
+  $provideDocumentHighlights(uri: string, position: Position): Promise<DocumentHighlight[]>
+  /** Smart-select ranges (one chain per requested position). */
+  $provideSelectionRanges(uri: string, positions: Position[]): Promise<SelectionRange[]>
+  /** Quick-fixes / refactors for `range`; the server recomputes diagnostics itself. */
+  $provideCodeActions(uri: string, range: Range, only: readonly string[]): Promise<CodeAction[]>
+  /** Text edits that group/sort link definitions at the bottom (optionally drop unused). */
+  $organizeLinkDefinitions(uri: string): Promise<TextEdit[]>
+  /** All links across the workspace that point at `uri` ("find references to this file"). */
+  $getFileReferences(uri: string): Promise<Location[]>
   $computeDiagnostics(uri: string): Promise<Diagnostic[]>
 }
 

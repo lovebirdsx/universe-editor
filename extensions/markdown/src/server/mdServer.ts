@@ -12,13 +12,15 @@ import {
   createLanguageService,
   DiagnosticLevel,
   githubSlugifier,
+  IncludeWorkspaceHeaderCompletions,
   LogLevel,
   type DiagnosticOptions,
   type ILogger,
   type IMdParser,
+  type MdPathCompletionOptions,
   type Token,
 } from 'vscode-markdown-languageservice'
-import type { Location } from 'vscode-languageserver-types'
+import type { CodeActionContext, Location, Range } from 'vscode-languageserver-types'
 import { type IMdClient, type IMdServer } from './types.js'
 import { DocumentStore } from './documentStore.js'
 import { LspWorkspace } from './lspWorkspace.js'
@@ -38,6 +40,20 @@ const DIAGNOSTIC_OPTIONS: DiagnosticOptions = {
   validateUnusedLinkDefinitions: DiagnosticLevel.hint,
   validateDuplicateLinkDefinitions: DiagnosticLevel.warning,
   ignoreLinks: [],
+}
+
+// Offer header completions from other workspace files (VSCode-native behaviour),
+// so `#` after a file link suggests anchors across the workspace.
+const COMPLETION_OPTIONS: MdPathCompletionOptions = {
+  includeWorkspaceHeaderCompletions: IncludeWorkspaceHeaderCompletions.onSingleOrDoubleHash,
+}
+
+/** Do two 0-based LSP ranges intersect (touching counts)? */
+function rangesOverlap(a: Range, b: Range): boolean {
+  const beforeOther = (x: Range, y: Range): boolean =>
+    x.end.line < y.start.line ||
+    (x.end.line === y.start.line && x.end.character < y.start.character)
+  return !beforeOther(a, b) && !beforeOther(b, a)
 }
 
 export function createMdServer(client: IMdClient, root: URI | undefined): MdServerHandle {
@@ -112,6 +128,76 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
       if (!doc) return []
       return ls.getFoldingRanges(doc, CancellationToken.None)
     },
+
+    $provideHover: async (uri, position) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return null
+      return (await ls.getHover(doc, position, CancellationToken.None)) ?? null
+    },
+
+    $provideCompletion: async (uri, position) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      return ls.getCompletionItems(doc, position, COMPLETION_OPTIONS, CancellationToken.None)
+    },
+
+    $provideRenameEdits: async (uri, position, newName) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return null
+      try {
+        return (await ls.getRenameEdit(doc, position, newName, CancellationToken.None)) ?? null
+      } catch {
+        // RenameNotSupportedAtLocationError when the position isn't a header/link.
+        return null
+      }
+    },
+
+    $provideDocumentLinks: async (uri) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      return ls.getDocumentLinks(doc, CancellationToken.None)
+    },
+
+    $resolveDocumentLink: async (link) =>
+      (await ls.resolveDocumentLink(link, CancellationToken.None)) ?? null,
+
+    $provideDocumentHighlights: async (uri, position) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      return (await ls.getDocumentHighlights(doc, position, CancellationToken.None)) ?? []
+    },
+
+    $provideSelectionRanges: async (uri, positions) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      return (await ls.getSelectionRanges(doc, positions, CancellationToken.None)) ?? []
+    },
+
+    $provideCodeActions: async (uri, range, only) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      // The library needs the diagnostics overlapping the range; recompute and
+      // filter here (the renderer can't ship them — markers drop the `data`).
+      const allDiagnostics = await ls.computeDiagnostics(
+        doc,
+        DIAGNOSTIC_OPTIONS,
+        CancellationToken.None,
+      )
+      const diagnostics = allDiagnostics.filter((d) => rangesOverlap(d.range, range))
+      const context: CodeActionContext = {
+        diagnostics,
+        ...(only.length > 0 ? { only: [...only] } : {}),
+      }
+      return ls.getCodeActions(doc, range, context, CancellationToken.None)
+    },
+
+    $organizeLinkDefinitions: async (uri) => {
+      const doc = await resolveDoc(uri)
+      if (!doc) return []
+      return ls.organizeLinkDefinitions(doc, { removeUnused: true }, CancellationToken.None)
+    },
+
+    $getFileReferences: async (uri) => ls.getFileReferences(URI.parse(uri), CancellationToken.None),
 
     $computeDiagnostics: async (uri) => {
       const doc = await resolveDoc(uri)

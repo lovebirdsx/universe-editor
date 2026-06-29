@@ -9,19 +9,26 @@
 
 import type { IExtHostLanguages } from '@universe-editor/extensions-common'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
+import { PendingDocumentSync } from '../extensions/PendingDocumentSync.js'
 import type { IWorkspaceSymbolProvider } from './LanguageFeaturesService.js'
 import {
   applyResolvedCompletion,
+  codeActionsToMonaco,
   completionListToMonaco,
   definitionToMonaco,
+  documentHighlightsToMonaco,
+  documentLinksToMonaco,
   documentSymbolsToMonaco,
   foldingRangesToMonaco,
   hoverToMonaco,
   locationsToMonaco,
   monacoPositionToLsp,
+  resolvedDocumentLinkToMonaco,
+  selectionRangesToMonaco,
   signatureHelpToMonaco,
   workspaceEditToMonaco,
   type MonacoCompletionItem,
+  type MonacoDocumentLink,
 } from './typescript/lspMonacoConvert.js'
 
 export function createDefinitionProxy(
@@ -99,6 +106,10 @@ export function createCompletionProxy(
     triggerCharacters: [...triggerCharacters],
     provideCompletionItems: async (model, position, context) => {
       const monacoNs = MonacoLoader.get()
+      // Completion fires immediately on a trigger char, ahead of the debounced
+      // document sync; flush the just-typed text to the host first or the
+      // language service parses a stale line (e.g. no `#` yet → no headers).
+      await PendingDocumentSync.flush(model.uri.toString())
       const word = model.getWordUntilPosition(position)
       const defaultRange: monaco.IRange = {
         startLineNumber: position.lineNumber,
@@ -193,6 +204,77 @@ export function createFoldingRangeProxy(
     provideFoldingRanges: async (model) =>
       foldingRangesToMonaco(
         await extHost.$provideFoldingRanges(handle, model.uri),
+        MonacoLoader.get(),
+      ),
+  }
+}
+
+export function createDocumentLinkProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.LinkProvider {
+  return {
+    provideLinks: async (model) =>
+      documentLinksToMonaco(
+        await extHost.$provideDocumentLinks(handle, model.uri),
+        MonacoLoader.get(),
+      ),
+    resolveLink: async (link) => {
+      const monacoLink = link as MonacoDocumentLink
+      if (!monacoLink._lspLink) return link
+      return resolvedDocumentLinkToMonaco(
+        await extHost.$resolveDocumentLink(handle, monacoLink._lspLink),
+        link,
+        MonacoLoader.get(),
+      )
+    },
+  }
+}
+
+export function createDocumentHighlightProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.DocumentHighlightProvider {
+  return {
+    provideDocumentHighlights: async (model, position) =>
+      documentHighlightsToMonaco(
+        await extHost.$provideDocumentHighlights(handle, model.uri, monacoPositionToLsp(position)),
+      ),
+  }
+}
+
+export function createSelectionRangeProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.SelectionRangeProvider {
+  return {
+    provideSelectionRanges: async (model, positions) =>
+      selectionRangesToMonaco(
+        await extHost.$provideSelectionRanges(
+          handle,
+          model.uri,
+          positions.map(monacoPositionToLsp),
+        ),
+      ),
+  }
+}
+
+export function createCodeActionProxy(
+  handle: number,
+  extHost: IExtHostLanguages,
+): monaco.languages.CodeActionProvider {
+  return {
+    provideCodeActions: async (model, range, context) =>
+      codeActionsToMonaco(
+        await extHost.$provideCodeActions(
+          handle,
+          model.uri,
+          {
+            start: { line: range.startLineNumber - 1, character: range.startColumn - 1 },
+            end: { line: range.endLineNumber - 1, character: range.endColumn - 1 },
+          },
+          { ...(context.only ? { only: [context.only] } : {}) },
+        ),
         MonacoLoader.get(),
       ),
   }

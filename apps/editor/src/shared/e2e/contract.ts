@@ -324,6 +324,38 @@ export interface E2EProbe {
   getMarkdownFoldingRanges(uri: string): Promise<ReadonlyArray<readonly [number, number]>>
   /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
   getMarkdownMarkers(uri: string): readonly E2EMarker[]
+  /**
+   * Resolved document-link target URIs for an open markdown file (the link
+   * provider that powers Ctrl+Click navigation), each `resolveLink`-ed.
+   */
+  getMarkdownDocumentLinks(uri: string): Promise<readonly string[]>
+  /** Concatenated hover markdown at a 1-based position (empty when no hover). */
+  getMarkdownHover(uri: string, lineNumber: number, column: number): Promise<string>
+  /** Completion item labels offered at a 1-based position (path / header completions). */
+  getMarkdownCompletions(
+    uri: string,
+    lineNumber: number,
+    column: number,
+  ): Promise<readonly string[]>
+  /** Reference location URIs at a 1-based position (Shift+F12 backing). */
+  getMarkdownReferences(uri: string, lineNumber: number, column: number): Promise<readonly string[]>
+  /**
+   * Run the registered markdown `documentPasteEditProvider` with a single
+   * `mime`/`data` entry over `selection` (default empty caret at 1:1) and return
+   * the first edit's insert text (the snippet body when it is a snippet), or null
+   * when no provider produced an edit. Exercises the paste-to-link enhancement.
+   */
+  getMarkdownPasteEdit(
+    uri: string,
+    mime: string,
+    data: string,
+    selection?: {
+      startLineNumber: number
+      startColumn: number
+      endLineNumber: number
+      endColumn: number
+    },
+  ): Promise<string | null>
   // -- Outline probe --------------------------------------------------------
   /**
    * Flattened symbol names from `IOutlineService.outline` — the SAME observable the

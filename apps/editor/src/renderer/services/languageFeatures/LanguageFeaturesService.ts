@@ -77,6 +77,22 @@ export interface ILanguageFeaturesService {
     languageId: string,
     provider: monaco.languages.FoldingRangeProvider,
   ): IDisposable
+  registerDocumentLinkProvider(
+    languageId: string,
+    provider: monaco.languages.LinkProvider,
+  ): IDisposable
+  registerDocumentHighlightProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentHighlightProvider,
+  ): IDisposable
+  registerSelectionRangeProvider(
+    languageId: string,
+    provider: monaco.languages.SelectionRangeProvider,
+  ): IDisposable
+  registerCodeActionProvider(
+    languageId: string,
+    provider: monaco.languages.CodeActionProvider,
+  ): IDisposable
   registerInlineCompletionsProvider(
     languageSelector: monaco.languages.LanguageSelector,
     provider: monaco.languages.InlineCompletionsProvider,
@@ -310,6 +326,36 @@ export class LanguageFeaturesService extends Disposable implements ILanguageFeat
       languageSelector,
       provider,
     )
+  }
+
+  registerDocumentLinkProvider(
+    languageId: string,
+    provider: monaco.languages.LinkProvider,
+  ): IDisposable {
+    // Links aren't mirrored (no Outline consumer); forward straight to Monaco,
+    // which drives Ctrl+Click navigation through the editor opener.
+    return MonacoLoader.get().languages.registerLinkProvider(languageId, provider)
+  }
+
+  registerDocumentHighlightProvider(
+    languageId: string,
+    provider: monaco.languages.DocumentHighlightProvider,
+  ): IDisposable {
+    return MonacoLoader.get().languages.registerDocumentHighlightProvider(languageId, provider)
+  }
+
+  registerSelectionRangeProvider(
+    languageId: string,
+    provider: monaco.languages.SelectionRangeProvider,
+  ): IDisposable {
+    return MonacoLoader.get().languages.registerSelectionRangeProvider(languageId, provider)
+  }
+
+  registerCodeActionProvider(
+    languageId: string,
+    provider: monaco.languages.CodeActionProvider,
+  ): IDisposable {
+    return MonacoLoader.get().languages.registerCodeActionProvider(languageId, provider)
   }
 
   getWorkspaceSymbolProviders(): readonly IWorkspaceSymbolProvider[] {

@@ -10,6 +10,9 @@
  *
  * IMPORTANT: stdout carries the RPC wire — nothing else may be written there.
  * All diagnostics go to stderr (console.error), which main forwards as onStderr.
+ * To keep that invariant against stray library logging (e.g. a debug
+ * `console.log` inside a language-service dependency), we capture the real
+ * stdout for framing and then point every stdout-bound `console.*` at stderr.
  */
 import { ChannelClient, ChannelServer, Emitter, ProxyChannel } from '@universe-editor/platform'
 import {
@@ -34,7 +37,22 @@ import {
 } from '@universe-editor/extensions-common'
 import { scanExtensions } from './extensionScanner.js'
 import { ExtensionService } from './extensionService.js'
+import { protectStdout } from './stdoutProtection.js'
 import { version as HOST_API_VERSION } from '@universe-editor/extension-api'
+
+// stdout IS the RPC wire — protect it before any extension (and its bundled
+// dependencies) can run a stray `console.log` that would corrupt a frame. This
+// binds the real stdout writer for framing and routes all console.* to stderr.
+const writeFrame = protectStdout({
+  stdout: process.stdout,
+  stderr: process.stderr,
+  set console(c) {
+    globalThis.console = c
+  },
+  get console() {
+    return globalThis.console
+  },
+})
 
 process.on('unhandledRejection', (reason: unknown) => {
   console.error(`[ext-host] unhandled rejection: ${formatUnknownError(reason)}`)
@@ -46,7 +64,7 @@ process.stdin.on('data', (chunk: string) => onData.fire(chunk))
 
 const transport: StdioTransport = {
   write: (frame) => {
-    process.stdout.write(frame)
+    writeFrame(frame)
   },
   onData: onData.event,
 }
@@ -127,6 +145,16 @@ const extHostLanguages: IExtHostLanguages = {
     (await serviceReady).provideWorkspaceSymbols(handle, query),
   $provideFoldingRanges: async (handle, uri) =>
     (await serviceReady).provideFoldingRanges(handle, uri),
+  $provideDocumentLinks: async (handle, uri) =>
+    (await serviceReady).provideDocumentLinks(handle, uri),
+  $resolveDocumentLink: async (handle, link) =>
+    (await serviceReady).resolveDocumentLink(handle, link),
+  $provideDocumentHighlights: async (handle, uri, position) =>
+    (await serviceReady).provideDocumentHighlights(handle, uri, position),
+  $provideSelectionRanges: async (handle, uri, positions) =>
+    (await serviceReady).provideSelectionRanges(handle, uri, positions),
+  $provideCodeActions: async (handle, uri, range, context) =>
+    (await serviceReady).provideCodeActions(handle, uri, range, context),
 }
 const extHostDocuments: IExtHostDocuments = {
   $acceptDocumentOpen: async (uri, languageId, version, text) => {

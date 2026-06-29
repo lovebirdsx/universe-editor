@@ -39,6 +39,7 @@ import { TerminalEditorLifecycleContribution } from '../TerminalEditorLifecycleC
 import { MonacoKeybindingSyncContribution } from '../MonacoKeybindingSyncContribution.js'
 import { MonacoDefaultKeybindingOverrideContribution } from '../MonacoDefaultKeybindingOverrideContribution.js'
 import { DocumentSyncContribution } from '../DocumentSyncContribution.js'
+import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
 import { EditorOpenerContribution } from '../EditorOpenerContribution.js'
 import { PeekNavigationContribution } from '../PeekNavigationContribution.js'
 import {
@@ -309,6 +310,15 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.documentSync',
   DocumentSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Paste-to-link enhancement for markdown: pasting a file uri-list inserts a
+// markdown image/link, pasting a URL over a selection wraps it as `[sel](url)`.
+// AfterRestore so monaco's language-features service is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.markdownPaste',
+  MarkdownPasteContribution,
   WorkbenchPhase.AfterRestore,
 )
 

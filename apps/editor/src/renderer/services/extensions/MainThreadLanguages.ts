@@ -27,14 +27,18 @@ import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { diagnosticToMarker } from '../languageFeatures/typescript/lspMonacoConvert.js'
 import type { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import {
+  createCodeActionProxy,
   createCompletionProxy,
   createDefinitionProxy,
+  createDocumentHighlightProxy,
+  createDocumentLinkProxy,
   createDocumentSymbolProxy,
   createFoldingRangeProxy,
   createHoverProxy,
   createImplementationProxy,
   createReferenceProxy,
   createRenameProxy,
+  createSelectionRangeProxy,
   createSignatureHelpProxy,
   createTypeDefinitionProxy,
   createWorkspaceSymbolProxy,
@@ -148,6 +152,26 @@ export class MainThreadLanguages extends Disposable implements IMainThreadLangua
       case 'foldingRange': {
         const p = createFoldingRangeProxy(handle, ext)
         for (const lang of selector) store.add(lf.registerFoldingRangeProvider(lang, p))
+        break
+      }
+      case 'documentLink': {
+        const p = createDocumentLinkProxy(handle, ext)
+        for (const lang of selector) store.add(lf.registerDocumentLinkProvider(lang, p))
+        break
+      }
+      case 'documentHighlight': {
+        const p = createDocumentHighlightProxy(handle, ext)
+        for (const lang of selector) store.add(lf.registerDocumentHighlightProvider(lang, p))
+        break
+      }
+      case 'selectionRange': {
+        const p = createSelectionRangeProxy(handle, ext)
+        for (const lang of selector) store.add(lf.registerSelectionRangeProvider(lang, p))
+        break
+      }
+      case 'codeAction': {
+        const p = createCodeActionProxy(handle, ext)
+        for (const lang of selector) store.add(lf.registerCodeActionProvider(lang, p))
         break
       }
     }

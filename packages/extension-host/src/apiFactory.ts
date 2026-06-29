@@ -6,11 +6,14 @@
  */
 import type {
   AiApi,
+  CodeActionProvider,
   CompletionItemProvider,
   DecorationRenderOptions,
   DefinitionProvider,
   DiagnosticCollection,
   Disposable,
+  DocumentHighlightProvider,
+  DocumentLinkProvider,
   DocumentSelector,
   DocumentSymbolProvider,
   Event,
@@ -27,6 +30,7 @@ import type {
   QuickPickOptions,
   ReferenceProvider,
   RenameProvider,
+  SelectionRangeProvider,
   SignatureHelpProvider,
   SignatureHelpProviderMetadata,
   SourceControl,
@@ -114,6 +118,19 @@ export interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: FoldingRangeProvider,
   ): Disposable
+  registerDocumentLinkProvider(
+    selector: DocumentSelector,
+    provider: DocumentLinkProvider,
+  ): Disposable
+  registerDocumentHighlightProvider(
+    selector: DocumentSelector,
+    provider: DocumentHighlightProvider,
+  ): Disposable
+  registerSelectionRangeProvider(
+    selector: DocumentSelector,
+    provider: SelectionRangeProvider,
+  ): Disposable
+  registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>

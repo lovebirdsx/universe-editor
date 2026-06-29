@@ -1,6 +1,6 @@
 ---
 name: markdown-subsystem-context
-description: 处理 markdown 相关功能时召回，提供整个 markdown 子系统的上下文地图——两条线（语言特性 LSP 线 + 预览渲染线）的文件分布、各环节职责、关键架构决策与「为什么」、与 typescript 内置插件样板的差异。当任务涉及 extensions/markdown 插件、其进程内语言服务（vscode-markdown-languageservice，extensions/markdown/src/server）、markdown 的 symbols/definition/references/workspace-symbols/诊断（坏链检测）、markdown 文档同步、markdown 预览（MarkdownPreviewInput / MarkdownView / sync scroll）、markdown fs 网关（mdFsBridge），或要理解「markdown 能力在本仓库怎么拼起来、和 TS 有什么不一样」时，先读它建立全局认知。它给上下文 + markdown 专属的「改哪里」与坑；语言插件的通用四数据流/句柄路由套路见 [extend-language-plugin]，TS 对照见 [typescript-subsystem-context]。
+description: 处理 markdown 相关功能时召回，提供整个 markdown 子系统的上下文地图——三条线（语言特性 LSP 线 + 预览渲染线 + 粘贴成链 renderer 增强线）的文件分布、各环节职责、关键架构决策与「为什么」、与 typescript 内置插件样板的差异。当任务涉及 extensions/markdown 插件、其进程内语言服务（vscode-markdown-languageservice，extensions/markdown/src/server）、markdown 的 symbols/definition/references/workspace-symbols/hover/completion/rename/documentLink/highlight/selectionRange/codeAction/folding/诊断（坏链检测）、markdown 文档同步、拖拽/粘贴文件成 markdown 链接、markdown 预览（MarkdownPreviewInput / MarkdownView / sync scroll）、markdown fs 网关（mdFsBridge），或要理解「markdown 能力在本仓库怎么拼起来、和 TS 有什么不一样」时，先读它建立全局认知。它给上下文 + markdown 专属的「改哪里」与坑；语言插件的通用四数据流/句柄路由套路见 [extend-language-plugin]，TS 对照见 [typescript-subsystem-context]。
 disable-model-invocation: true
 ---
 
@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 markdown 已是**内置插件** `extensions/markdown`（按 `extend-language-plugin` 的「迁新语言」套路从 TS 样板迁成）。它和 TS 共用同一套**句柄路由 + 四条数据流 + renderer 句柄壳/转换层**——这些**别在这里找差异**，去 [extend-language-plugin]。本 skill 只讲 **markdown 独有的形态**：它和 TS 的不同点、两条线的地图、为什么这么设计。
 
-> ⚠️ 第一原则：先认领你的改动落在**哪条线**——① 语言特性（symbols/定义/引用/诊断，走插件+句柄路由）还是 ② 预览渲染（MarkdownView，纯 renderer，与 LSP/插件无关）。两条线几乎不相交，改错线白改。
+> ⚠️ 第一原则：先认领你的改动落在**哪条线**——① 语言特性（symbols/定义/引用/hover/补全/诊断…，走插件+句柄路由）、② 预览渲染（MarkdownView，纯 renderer，与 LSP/插件无关），还是 ③ 粘贴成链（拖拽/粘贴文件→markdown 链接，**纯 renderer 编辑增强，不经插件/LSP**）。三条线几乎不相交，改错线白改。
 
 ## 与 typescript 样板的差异速查（最高优先级）
 
@@ -20,7 +20,7 @@ markdown 已是**内置插件** `extensions/markdown`（按 `extend-language-plu
 | 诊断触发 | tsserver PUSH（server 主动推 `publishDiagnostics`） | **debounce-then-pull-then-push**：renderer 文档变 → 插件 200ms 防抖 → `server.$computeDiagnostics(uri)` 主动算 → `diagnosticCollection.set()` 推 |
 | wire 类型 | 直接复用 `vscode-languageserver-types`，verbatim 透传 | **同样直接复用 `vscode-languageserver-types`**：进程内 `createMdServer` 直接返回原生 LSP 类型，插件零转换透传给句柄路由（fs 回调端口 `IMdClient` 仍是自定义小接口） |
 | 崩溃恢复 | 子进程崩溃要 `_resyncAll` 重推所有 open doc | **不存在**（无子进程，进程内调用不会崩） |
-| 额外特性 | 无 | **预览**（VSCode 风 `Open Preview` / `to Side`），TS 没有 |
+| 额外特性 | 无 | **预览**（VSCode 风 `Open Preview` / `to Side`）+ **粘贴/拖拽文件成链**（Monaco documentPasteEditProvider），TS 都没有 |
 | 打包 | 插件 dist + tsls node_modules（runtime-resources 带入） | 插件 **dist 自包含**（esbuild bundle 了 `vscode-markdown-languageservice`），无额外 node_modules |
 
 ## 线 ①：语言特性（LSP 能力）
@@ -29,8 +29,11 @@ markdown 已是**内置插件** `extensions/markdown`（按 `extend-language-plu
 
 ```
 extensions/markdown/src/
-  extension.ts     activate：createMdServer(createMdFsBridge(root), root) → 注册 4 类 provider
-                   （documentSymbol/definition/references/workspaceSymbol，selector=['markdown']）
+  extension.ts     activate：createMdServer(createMdFsBridge(root), root) → 注册全套 provider
+                   （documentSymbol/definition/references/workspaceSymbol/folding/hover/
+                    completion/rename/documentLink/documentHighlight/selectionRange/codeAction，
+                    selector=['markdown']；completion 触发字符 ['[','(','#','/']）
+                   + 两条 server 命令（organizeLinkDefinitions / getFileReferences）
                    + createDiagnosticCollection('markdown') + 文档同步（onDidOpen/Change/Close）
                    诊断：DIDCHANGE_DEBOUNCE_MS=200 防抖 → $computeDiagnostics → diagnostics.set
                    provider 回调零转换：$provideXxx 直接返回原生 LSP 类型透传
@@ -49,7 +52,7 @@ extensions/markdown/src/server/  （进程内库，不是子进程！）
   __tests__/mdServer.test.ts  用 stub IMdClient 驱动真实 language service 的单测（symbols/诊断/workspace）
 ```
 
-renderer 侧**完全复用** TS 的句柄路由壳：`MainThreadLanguages`（句柄→Monaco provider、诊断落 marker）、`languageProviderProxy`、`lspMonacoConvert`、通用 `DocumentSyncContribution`（已广播所有语言）。**markdown 不在 renderer 加任何语言特性代码**。
+renderer 侧**完全复用** TS 的句柄路由壳：`MainThreadLanguages`（句柄→Monaco provider、诊断落 marker）、`languageProviderProxy`、`lspMonacoConvert`、通用 `DocumentSyncContribution`（已广播所有语言）。**LSP 语言特性不在 renderer 加任何 markdown 专属代码**——唯一的 renderer 专属是线 ③「粘贴成链」（编辑增强，不是 LSP）。
 
 诊断 owner = `'markdown'`（`createDiagnosticCollection('markdown')`），必须与 `setModelMarkers` 的 owner 一致。
 
@@ -76,6 +79,26 @@ input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）
 
 > MarkdownView 是**共享渲染器**（ACP 聊天 + 文档预览都用它）。改它要同时顾及两个消费方；样式靠容器继承字号/色，组件本身不写死。
 
+## 线 ③：粘贴/拖拽成链（renderer 编辑增强，不经插件/LSP）
+
+把文件拖进 / 粘贴进 markdown 编辑器时自动生成链接：图片→`![](相对路径)`、其它→`[](相对路径)`、URL→`[选中文本](url)`。这是 **Monaco 内置 `documentPasteEditProvider`** 的能力，VSCode 同款，**与 LSP/插件完全无关**，纯 renderer：
+
+```
+contributions/markdownPasteLinks.ts        纯函数（可单测、无 Monaco 依赖）：
+                                            markdownLinksFromUriList(raw, rootFsPath, platform)
+                                              → text/uri-list 转 markdown 链接（图片 ! 前缀、
+                                                workspace 相对路径、含空格用 <...> 包裹）
+                                            markdownLinkFromUrl(selected, text) → [sel](url) snippet
+contributions/MarkdownPasteContribution.ts  在 markdown 上注册 documentPasteEditProvider，
+                                            注入 @IWorkspaceService/@IHostService，
+                                            pasteMimeTypes ['text/uri-list','text/plain']，
+                                            调上面的纯函数。AfterRestore 阶段注册
+```
+
+注册两处：`contributions/registration/afterRestore.ts`（`workbench.contrib.markdownPaste`）+ `contributions/index.ts` 导出。
+
+> ⚠️ Monaco 的 `documentPasteEditProvider`/`linkProvider`/`hoverProvider`/`completionProvider`/`referenceProvider` 这些内部 registry **没有公开 `monaco.languages.*` API**，只能经 `StandaloneServices.get(ILanguageFeaturesService)` 拿——封装在 `MonacoLoader.getLanguageFeaturesService()`（类型 `MonacoLanguageFeaturesService`），shim 声明在 `renderer/monaco-shims.d.ts`。e2e 探针读这些 registry 也走它。
+
 ## 关键架构决策与「为什么」
 
 - **进程内库而非子进程**：markdown language service 是纯 JS（markdown-it + vscode-markdown-languageservice），host 又是纯 Node，spawn 子进程纯属浪费——直接 `createMdServer()` 在 host 进程内跑。代价：放弃了崩溃隔离，但 JS 库崩溃风险极低，换来零 IPC/零路径解析。
@@ -91,6 +114,7 @@ input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）
 - **fs 行为**（扫描忽略目录、读取容错、新增 client 方法）：`mdFsBridge.ts`（+ `server/types.ts` 的 `IMdClient` + `server/lspWorkspace.ts` 调用方）。
 - **预览渲染/样式/同步滚动**：线 ② 对应文件，**完全不碰插件**。
 - **预览命令/键位/菜单**：`actions/markdownActions.ts`（对标 VSCode：`ctrl+shift+v` / `ctrl+k ctrl+v`）。
+- **粘贴/拖拽成链行为**（图片前缀、相对路径、URL 处理、支持的 mime）：线 ③ 的 `contributions/markdownPasteLinks.ts`（纯函数，优先在这里加单测）+ `MarkdownPasteContribution.ts`（注册/注入）。**不碰插件**。
 
 ## 易踩坑速记
 
@@ -101,6 +125,9 @@ input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）
 5. **esbuild 强制 `vscode-uri` 走 CJS**：`vscode-markdown-languageservice` 用 default import，但 vscode-uri 的 ESM 入口只有 named export，esbuild bundle 不了 ESM 版——`esbuild.config.mjs` 里 `alias` 把 `vscode-uri` 指到 CJS 入口（单测同坑，`vitest.config.ts` 里有同样 alias）。动构建/测试配置别删这个 alias。
 6. **打包靠自动发现**：`scripts/release/runtime-resources.mjs` 的 `discoverBuiltinExtensions` 扫 `extensions/*` 自动带入，按 `package.json` 的 `files`(`["dist"]`)+`main`。新插件天然纳入，不用改 electron-builder.yml。
 7. **预览 input→组件两处必同步**：`EditorArea.tsx` 的 `editorComponentMap` + `BuiltInEditorProvidersContribution.ts`，漏一处预览开不出或恢复不了。
+8. **host stdout 就是 RPC 线，禁止任何 console.log**（已修，勿回退）：markdown LS 进程内跑在 ext host，host 的 **stdout 就是 IPC 帧通道**。`vscode-markdown-languageservice@0.5.0-alpha.13` 在 `pathCompletions.js` 残留一句 `console.log('provideCompletionItems',…)`，被 bundle 进 dist——它写 stdout 会污染帧，renderer 端报 `SyntaxError: Unexpected token 'p', "provideCom"… is not valid JSON`。根治：host bootstrap 用 `protectStdout()`（`packages/extension-host/src/stdoutProtection.ts`）把 `console` 整体重定向到 stderr（VSCode 同款），stdout 只留 framed writer。改 host bootstrap / 升级 md LS 别破坏这层。
+9. **header-fragment 链接 setSelection 崩溃**（已修，勿回退）：md LS 把 `./foo.md#hello` 这类 header 链接的目标编码成 fragment `L1,1`，Monaco `extractSelection` 解出的 range **`endLineNumber`/`endColumn` 是 `undefined`**（无 `-L..` 段），既非合法 IRange 也非 ISelection，`setSelection` 抛 `Invalid arguments`。修法：`EditorOpenerContribution.ts` 的 `normalizeOpenRange(selection)` 把 end 缺省补成 start，再 setSelection/reveal。
+10. **补全 vs 文档同步防抖竞态**（已修，勿回退）：补全在触发字符（如 `#`）上**立即**触发，但 `DocumentSyncContribution` 对文档变更有 200ms 防抖 → ext host 拿到的是**旧文档**，header 补全算不出新标题。修法：补全 proxy 在调 `$provideCompletion` 前先 `await PendingDocumentSync.flush(uri)`（`renderer/services/extensions/PendingDocumentSync.ts` 模块单例；`DocumentSyncContribution` attach 时 `register(key, flush)`、detach 时 `unregister`，`flush` 会清防抖定时器并立即 `_pushChange`）。任何「即时触发的 provider 依赖最新文档」都该走这个 flush。
 
 ## 验证
 
@@ -108,15 +135,17 @@ input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）
 pnpm --filter @universe-editor/markdown test      # server 单测（symbols/诊断/workspace symbols）
 pnpm ext:build                                    # 重建 extensions/markdown dist（改插件/server 后必跑）
 pnpm --filter @universe-editor/editor build       # e2e 跑 out/ 产物，改 renderer 后必重建
-cd apps/editor && pnpm exec playwright test specs/smoke.markdownLsp.spec.ts   # 语言特性 e2e（symbols/workspace/跨文件定义/诊断）
+cd apps/editor && pnpm exec playwright test specs/smoke.markdownLsp.spec.ts   # 语言特性 e2e（symbols/workspace/定义/documentLink/hover/补全/references/诊断/粘贴成链）
 pnpm check                                         # lint+typecheck+test，仅看错误（注：vendor 的 .js.map 缺失告警非失败）
 ```
 
-e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryMarkdownWorkspaceSymbols` / `getMarkdownDefinition` / `getMarkdownMarkers(owner:'markdown')`。
+相关单测：`contributions/__tests__/markdownPasteLinks.test.ts`（粘贴纯函数）、`contributions/__tests__/EditorOpenerContribution.test.ts`（normalizeOpenRange）、`services/extensions/__tests__/PendingDocumentSync.test.ts`（flush 竞态）、`packages/extension-host/src/__tests__/stdoutProtection.test.ts`（stdout 保护）、`services/languageFeatures/typescript/__tests__/lspMonacoConvert.test.ts`（documentLink/highlight/selectionRange/codeAction 转换）。
+
+e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryMarkdownWorkspaceSymbols` / `getMarkdownDefinition` / `getMarkdownMarkers(owner:'markdown')` / `getMarkdownDocumentLinks` / `getMarkdownHover` / `getMarkdownCompletions` / `getMarkdownReferences` / `getMarkdownPasteEdit`（后五个经 `MonacoLoader.getLanguageFeaturesService()` 读 Monaco 内部 registry）。
 
 ## 关键参考路径
 
-- `extensions/markdown/src/extension.ts` —— 插件入口：createMdServer + 4 provider + 文档同步 + 诊断防抖（零转换透传）
+- `extensions/markdown/src/extension.ts` —— 插件入口：createMdServer + 全套 provider（13 类）+ server 命令 + 文档同步 + 诊断防抖（零转换透传）
 - `extensions/markdown/src/mdFsBridge.ts` —— `IMdClient`：经 workspace.fs 的 gated fs
 - `extensions/markdown/esbuild.config.mjs` —— bundle（vscode-uri CJS alias 的坑）
 - `extensions/markdown/src/server/mdServer.ts` —— `createMdServer` + `IMdServer`（直返原生 LSP 类型）+ `DIAGNOSTIC_OPTIONS`
@@ -128,7 +157,12 @@ e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryM
 - `apps/editor/src/renderer/workbench/editor/MarkdownPreviewEditor.tsx` + `useMarkdownSyncScroll.ts` —— 预览组件 + 同步滚动
 - `apps/editor/src/renderer/services/editor/MarkdownPreviewInput.ts` —— 预览虚拟 input
 - `apps/editor/src/renderer/actions/markdownActions.ts` —— 预览命令/键位
-- `apps/editor/e2e/specs/smoke.markdownLsp.spec.ts` —— 语言特性冒烟
+- `apps/editor/src/renderer/contributions/markdownPasteLinks.ts` + `MarkdownPasteContribution.ts` —— 线③ 粘贴/拖拽成链（纯函数 + documentPasteEditProvider 注册）
+- `apps/editor/src/renderer/workbench/editor/monaco/MonacoLoader.ts` —— `getLanguageFeaturesService()`：取 Monaco 内部 ILanguageFeaturesService（paste/link/hover/completion/reference registry 唯一入口）
+- `apps/editor/src/renderer/contributions/EditorOpenerContribution.ts` —— `normalizeOpenRange`（header-fragment 链接 setSelection 修复）
+- `apps/editor/src/renderer/services/extensions/PendingDocumentSync.ts` —— 即时 provider 的「补全前 flush 文档同步防抖」竞态修复
+- `packages/extension-host/src/stdoutProtection.ts` —— `protectStdout`：host console→stderr 重定向，保 stdout 纯 RPC 帧
+- `apps/editor/e2e/specs/smoke.markdownLsp.spec.ts` —— 语言特性 + 粘贴成链冒烟
 - 相关 skill：[extend-language-plugin]（通用语言插件套路）、[typescript-subsystem-context]（TS 子系统对照）
 
 ## 其它

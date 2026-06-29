@@ -8,11 +8,14 @@
 
 import { type monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 import type {
+  CodeAction,
   CompletionItem,
   CompletionList,
   Definition,
   DefinitionLink,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
@@ -20,6 +23,7 @@ import type {
   LocationLink,
   Position,
   Range,
+  SelectionRange,
   SignatureHelp,
   SymbolInformation,
   TextEdit,
@@ -491,4 +495,92 @@ export function foldingRangesToMonaco(
       ...(kind ? { kind } : {}),
     }
   })
+}
+
+/**
+ * Monaco link carrying the originating LSP link, so a two-stage provider can hand
+ * the exact same object back for resolution (`_lspLink`), then map the resolved
+ * `target` onto Monaco's `url` (a Uri Monaco's opener routes through the workbench
+ * editor service). A link with no target yet stays unresolved (no `url`).
+ */
+export interface MonacoDocumentLink extends monaco.languages.ILink {
+  _lspLink: DocumentLink
+}
+
+function documentLinkToMonaco(link: DocumentLink, monacoNs: typeof monaco): MonacoDocumentLink {
+  return {
+    range: rangeToMonaco(link.range),
+    ...(link.target ? { url: monacoNs.Uri.parse(link.target) } : {}),
+    ...(typeof link.tooltip === 'string' ? { tooltip: link.tooltip } : {}),
+    _lspLink: link,
+  }
+}
+
+export function documentLinksToMonaco(
+  links: DocumentLink[] | null,
+  monacoNs: typeof monaco,
+): monaco.languages.ILinksList {
+  if (!links) return { links: [] }
+  return { links: links.map((l) => documentLinkToMonaco(l, monacoNs)) }
+}
+
+/** Map a resolved LSP link's `target` onto the Monaco link Monaco passes to `resolveLink`. */
+export function resolvedDocumentLinkToMonaco(
+  resolved: DocumentLink | null,
+  original: monaco.languages.ILink,
+  monacoNs: typeof monaco,
+): monaco.languages.ILink {
+  if (!resolved?.target) return original
+  return { ...original, url: monacoNs.Uri.parse(resolved.target) }
+}
+
+/** LSP DocumentHighlight[] (kind 1/2/3) → Monaco (kind 0/1/2 — a simple offset). */
+export function documentHighlightsToMonaco(
+  highlights: DocumentHighlight[] | null,
+): monaco.languages.DocumentHighlight[] {
+  if (!highlights) return []
+  return highlights.map((h) => ({
+    range: rangeToMonaco(h.range),
+    ...(h.kind ? { kind: (h.kind - 1) as monaco.languages.DocumentHighlightKind } : {}),
+  }))
+}
+
+/**
+ * LSP SelectionRange (a linked list via `parent`, one per requested position) →
+ * Monaco `SelectionRange[][]` (per position, innermost-to-outermost). Flattens
+ * each chain by walking `parent`.
+ */
+export function selectionRangesToMonaco(
+  ranges: SelectionRange[] | null,
+): monaco.languages.SelectionRange[][] {
+  if (!ranges) return []
+  return ranges.map((head) => {
+    const chain: monaco.languages.SelectionRange[] = []
+    let cur: SelectionRange | undefined = head
+    while (cur) {
+      chain.push({ range: rangeToMonaco(cur.range) })
+      cur = cur.parent
+    }
+    return chain
+  })
+}
+
+/** LSP CodeAction[] → Monaco CodeActionList. Edits/diagnostics converted; commands dropped. */
+export function codeActionsToMonaco(
+  actions: CodeAction[] | null,
+  monacoNs: typeof monaco,
+): monaco.languages.CodeActionList {
+  if (!actions) return { actions: [], dispose: () => {} }
+  const converted = actions.map((a): monaco.languages.CodeAction => {
+    const diagnostics = a.diagnostics?.map((d) => diagnosticToMarker(d, monacoNs))
+    return {
+      title: a.title,
+      ...(a.kind ? { kind: a.kind } : {}),
+      ...(a.isPreferred ? { isPreferred: a.isPreferred } : {}),
+      ...(a.edit ? { edit: workspaceEditToMonaco(a.edit, monacoNs) } : {}),
+      ...(diagnostics && diagnostics.length > 0 ? { diagnostics } : {}),
+      ...(a.disabled ? { disabled: a.disabled.reason } : {}),
+    }
+  })
+  return { actions: converted, dispose: () => {} }
 }

@@ -10,10 +10,13 @@
  * instance.
  */
 import type {
+  CodeActionProvider,
   CompletionItemProvider,
   DefinitionProvider,
   DiagnosticCollection,
   Disposable,
+  DocumentHighlightProvider,
+  DocumentLinkProvider,
   DocumentSelector,
   DocumentSymbolProvider,
   FoldingRangeProvider,
@@ -21,6 +24,7 @@ import type {
   ImplementationProvider,
   ReferenceProvider,
   RenameProvider,
+  SelectionRangeProvider,
   SignatureHelpProvider,
   SignatureHelpProviderMetadata,
   TypeDefinitionProvider,
@@ -28,6 +32,7 @@ import type {
   WorkspaceSymbolProvider,
 } from '@universe-editor/extension-api'
 import {
+  type ICodeActionContext,
   type ICompletionContext,
   type ILanguageProviderMetadata,
   type IMainThreadLanguages,
@@ -36,16 +41,21 @@ import {
   type LanguageProviderType,
 } from '@universe-editor/extensions-common'
 import type {
+  CodeAction,
   CompletionItem,
   CompletionList,
   Definition,
   DefinitionLink,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
   Location,
   Position,
+  Range,
+  SelectionRange,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -66,6 +76,10 @@ type AnyLanguageProvider =
   | RenameProvider
   | WorkspaceSymbolProvider
   | FoldingRangeProvider
+  | DocumentLinkProvider
+  | DocumentHighlightProvider
+  | SelectionRangeProvider
+  | CodeActionProvider
 
 interface RegisteredProvider {
   readonly type: LanguageProviderType
@@ -209,6 +223,34 @@ export class LanguageProviderRegistry {
     provider: FoldingRangeProvider,
   ): Disposable {
     return this._register('foldingRange', selector, provider)
+  }
+
+  registerDocumentLinkProvider(
+    selector: DocumentSelector,
+    provider: DocumentLinkProvider,
+  ): Disposable {
+    return this._register('documentLink', selector, provider)
+  }
+
+  registerDocumentHighlightProvider(
+    selector: DocumentSelector,
+    provider: DocumentHighlightProvider,
+  ): Disposable {
+    return this._register('documentHighlight', selector, provider)
+  }
+
+  registerSelectionRangeProvider(
+    selector: DocumentSelector,
+    provider: SelectionRangeProvider,
+  ): Disposable {
+    return this._register('selectionRange', selector, provider)
+  }
+
+  registerCodeActionsProvider(
+    selector: DocumentSelector,
+    provider: CodeActionProvider,
+  ): Disposable {
+    return this._register('codeAction', selector, provider)
   }
 
   createDiagnosticCollection(name?: string): DiagnosticCollection {
@@ -367,5 +409,57 @@ export class LanguageProviderRegistry {
     const provider = this._provider<FoldingRangeProvider>(handle, 'foldingRange')
     if (!provider) return null
     return (await provider.provideFoldingRanges(this._documents.getOrSynthesize(uri))) ?? null
+  }
+
+  async provideDocumentLinks(handle: number, uri: UriComponents): Promise<DocumentLink[] | null> {
+    const provider = this._provider<DocumentLinkProvider>(handle, 'documentLink')
+    if (!provider) return null
+    return (await provider.provideDocumentLinks(this._documents.getOrSynthesize(uri))) ?? null
+  }
+
+  async resolveDocumentLink(handle: number, link: DocumentLink): Promise<DocumentLink | null> {
+    const provider = this._provider<DocumentLinkProvider>(handle, 'documentLink')
+    if (!provider?.resolveDocumentLink) return null
+    return (await provider.resolveDocumentLink(link)) ?? null
+  }
+
+  async provideDocumentHighlights(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+  ): Promise<DocumentHighlight[] | null> {
+    const provider = this._provider<DocumentHighlightProvider>(handle, 'documentHighlight')
+    if (!provider) return null
+    return (
+      (await provider.provideDocumentHighlights(this._documents.getOrSynthesize(uri), position)) ??
+      null
+    )
+  }
+
+  async provideSelectionRanges(
+    handle: number,
+    uri: UriComponents,
+    positions: Position[],
+  ): Promise<SelectionRange[] | null> {
+    const provider = this._provider<SelectionRangeProvider>(handle, 'selectionRange')
+    if (!provider) return null
+    return (
+      (await provider.provideSelectionRanges(this._documents.getOrSynthesize(uri), positions)) ??
+      null
+    )
+  }
+
+  async provideCodeActions(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+    context: ICodeActionContext,
+  ): Promise<CodeAction[] | null> {
+    const provider = this._provider<CodeActionProvider>(handle, 'codeAction')
+    if (!provider) return null
+    return (
+      (await provider.provideCodeActions(this._documents.getOrSynthesize(uri), range, context)) ??
+      null
+    )
   }
 }

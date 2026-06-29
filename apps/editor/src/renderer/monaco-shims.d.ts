@@ -34,3 +34,11 @@ declare module 'monaco-editor/esm/vs/platform/commands/common/commands.js' {
 declare module 'monaco-editor/esm/vs/platform/list/browser/listService.js' {
   export const IListService: unknown
 }
+
+// ILanguageFeaturesService decorator + lookup key for StandaloneServices.get. We
+// reach its `documentPasteEditProvider` registry to register the markdown
+// paste-to-link provider (no public monaco.languages.* API; see
+// MarkdownPasteContribution / MonacoLoader).
+declare module 'monaco-editor/esm/vs/editor/common/services/languageFeatures.js' {
+  export const ILanguageFeaturesService: unknown
+}

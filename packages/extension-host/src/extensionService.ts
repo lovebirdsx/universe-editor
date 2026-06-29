@@ -16,12 +16,15 @@ import { Emitter, type Event } from '@universe-editor/platform'
 import {
   FileType,
   type AiApi,
+  type CodeActionProvider,
   type CompletionItemProvider,
   type DecorationRenderOptions,
   type DefinitionProvider,
   type DiagnosticCollection,
   type Disposable,
   type DocumentSelector,
+  type DocumentHighlightProvider,
+  type DocumentLinkProvider,
   type DocumentSymbolProvider,
   type FileStat,
   type FoldingRangeProvider,
@@ -33,6 +36,7 @@ import {
   type QuickPickOptions,
   type ReferenceProvider,
   type RenameProvider,
+  type SelectionRangeProvider,
   type SignatureHelpProvider,
   type SignatureHelpProviderMetadata,
   type SourceControl,
@@ -50,6 +54,7 @@ import {
   bytesToBase64,
   type ExtHostFileType,
   type IActiveTextEditorDto,
+  type ICodeActionContext,
   type ICompletionContext,
   type IExtHostFileStatDto,
   type IExtensionDescriptionDto,
@@ -66,15 +71,20 @@ import {
   type IMainThreadStorage,
 } from '@universe-editor/extensions-common'
 import type {
+  CodeAction,
   CompletionItem,
   CompletionList,
   Definition,
   DefinitionLink,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
   Location,
   Position,
+  Range,
+  SelectionRange,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -398,6 +408,34 @@ export class ExtensionService implements IExtensionHostBridge {
     return this._languageRegistry.registerFoldingRangeProvider(selector, provider)
   }
 
+  registerDocumentLinkProvider(
+    selector: DocumentSelector,
+    provider: DocumentLinkProvider,
+  ): Disposable {
+    return this._languageRegistry.registerDocumentLinkProvider(selector, provider)
+  }
+
+  registerDocumentHighlightProvider(
+    selector: DocumentSelector,
+    provider: DocumentHighlightProvider,
+  ): Disposable {
+    return this._languageRegistry.registerDocumentHighlightProvider(selector, provider)
+  }
+
+  registerSelectionRangeProvider(
+    selector: DocumentSelector,
+    provider: SelectionRangeProvider,
+  ): Disposable {
+    return this._languageRegistry.registerSelectionRangeProvider(selector, provider)
+  }
+
+  registerCodeActionsProvider(
+    selector: DocumentSelector,
+    provider: CodeActionProvider,
+  ): Disposable {
+    return this._languageRegistry.registerCodeActionsProvider(selector, provider)
+  }
+
   createDiagnosticCollection(name?: string): DiagnosticCollection {
     return this._languageRegistry.createDiagnosticCollection(name)
   }
@@ -516,6 +554,39 @@ export class ExtensionService implements IExtensionHostBridge {
 
   provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null> {
     return this._languageRegistry.provideFoldingRanges(handle, uri)
+  }
+
+  provideDocumentLinks(handle: number, uri: UriComponents): Promise<DocumentLink[] | null> {
+    return this._languageRegistry.provideDocumentLinks(handle, uri)
+  }
+
+  resolveDocumentLink(handle: number, link: DocumentLink): Promise<DocumentLink | null> {
+    return this._languageRegistry.resolveDocumentLink(handle, link)
+  }
+
+  provideDocumentHighlights(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+  ): Promise<DocumentHighlight[] | null> {
+    return this._languageRegistry.provideDocumentHighlights(handle, uri, position)
+  }
+
+  provideSelectionRanges(
+    handle: number,
+    uri: UriComponents,
+    positions: Position[],
+  ): Promise<SelectionRange[] | null> {
+    return this._languageRegistry.provideSelectionRanges(handle, uri, positions)
+  }
+
+  provideCodeActions(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+    context: ICodeActionContext,
+  ): Promise<CodeAction[] | null> {
+    return this._languageRegistry.provideCodeActions(handle, uri, range, context)
   }
 
   // --- RPC surface: scm / commands / extensions ---

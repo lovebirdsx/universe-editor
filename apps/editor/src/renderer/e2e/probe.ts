@@ -448,6 +448,127 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         startLineNumber: m.startLineNumber,
       }))
     },
+    getMarkdownDocumentLinks: async (uri: string): Promise<readonly string[]> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const targets: string[] = []
+      for (const provider of features.linkProvider.ordered(model)) {
+        const list = await provider.provideLinks(model, NONE_TOKEN)
+        for (const link of list?.links ?? []) {
+          const resolved =
+            !link.url && provider.resolveLink
+              ? ((await provider.resolveLink(link, NONE_TOKEN)) ?? link)
+              : link
+          if (resolved.url) targets.push(resolved.url.toString())
+        }
+      }
+      return targets
+    },
+    getMarkdownHover: async (uri: string, lineNumber: number, column: number): Promise<string> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return ''
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const position = new monacoNs.Position(lineNumber, column)
+      const parts: string[] = []
+      for (const provider of features.hoverProvider.ordered(model)) {
+        const hover = await provider.provideHover(model, position, NONE_TOKEN)
+        for (const c of hover?.contents ?? []) parts.push(c.value)
+      }
+      return parts.join('\n')
+    },
+    getMarkdownCompletions: async (
+      uri: string,
+      lineNumber: number,
+      column: number,
+    ): Promise<readonly string[]> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const position = new monacoNs.Position(lineNumber, column)
+      const labels: string[] = []
+      for (const provider of features.completionProvider.ordered(model)) {
+        const list = await provider.provideCompletionItems(
+          model,
+          position,
+          { triggerKind: 0 },
+          NONE_TOKEN,
+        )
+        for (const item of list?.suggestions ?? []) {
+          labels.push(typeof item.label === 'string' ? item.label : item.label.label)
+        }
+      }
+      return labels
+    },
+    getMarkdownReferences: async (
+      uri: string,
+      lineNumber: number,
+      column: number,
+    ): Promise<readonly string[]> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return []
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const position = new monacoNs.Position(lineNumber, column)
+      const targets: string[] = []
+      for (const provider of features.referenceProvider.ordered(model)) {
+        const locations =
+          (await provider.provideReferences(
+            model,
+            position,
+            { includeDeclaration: true },
+            NONE_TOKEN,
+          )) ?? []
+        for (const loc of locations) targets.push(loc.uri.toString())
+      }
+      return targets
+    },
+    getMarkdownPasteEdit: async (
+      uri: string,
+      mime: string,
+      data: string,
+      selection?: {
+        startLineNumber: number
+        startColumn: number
+        endLineNumber: number
+        endColumn: number
+      },
+    ): Promise<string | null> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return null
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const range =
+        selection ??
+        ({ startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 } as const)
+      const dataTransfer = {
+        get: (m: string) => (m === mime ? { asString: async () => data } : undefined),
+      }
+      for (const provider of features.documentPasteEditProvider.ordered(model)) {
+        const p = provider as {
+          provideDocumentPasteEdits?: (
+            model: unknown,
+            ranges: readonly unknown[],
+            dt: unknown,
+            ctx: unknown,
+            token: unknown,
+          ) => Promise<{ edits: { insertText: string | { snippet: string } }[] } | undefined>
+        }
+        const result = await p.provideDocumentPasteEdits?.(
+          model,
+          [range],
+          dataTransfer,
+          { triggerKind: 0 },
+          NONE_TOKEN,
+        )
+        const insert = result?.edits[0]?.insertText
+        if (insert != null) return typeof insert === 'string' ? insert : insert.snippet
+      }
+      return null
+    },
     getOutlineSymbols: (): readonly string[] => {
       const roots = services.outlineService.outline.get()?.roots ?? []
       const names: string[] = []

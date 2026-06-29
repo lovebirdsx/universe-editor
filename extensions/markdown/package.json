@@ -25,7 +25,8 @@
       { "command": "markdown.editing.headingUp", "title": "Increase Heading Level", "category": "Markdown" },
       { "command": "markdown.editing.headingDown", "title": "Decrease Heading Level", "category": "Markdown" },
       { "command": "markdown.editing.toggleTask", "title": "Toggle Task Completion", "category": "Markdown" },
-      { "command": "markdown.editing.formatTable", "title": "Format Table", "category": "Markdown" }
+      { "command": "markdown.editing.formatTable", "title": "Format Table", "category": "Markdown" },
+      { "command": "markdown.organizeLinkDefinitions", "title": "Organize Link Definitions", "category": "Markdown" }
     ],
     "keybindings": [
       { "command": "markdown.editing.toggleBold", "key": "ctrl+b", "when": "editorTextFocus && editorLangId == markdown" },

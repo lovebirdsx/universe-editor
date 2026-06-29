@@ -38,6 +38,8 @@ export const MARKDOWN_COMMANDS = {
   onTab: 'markdown.editing.onTab',
   onShiftTab: 'markdown.editing.onShiftTab',
   formatTable: 'markdown.editing.formatTable',
+  organizeLinkDefinitions: 'markdown.organizeLinkDefinitions',
+  getFileReferences: 'markdown.getFileReferences',
 } as const
 
 function register(context: ExtensionContext, id: string, handler: () => Promise<void>): void {

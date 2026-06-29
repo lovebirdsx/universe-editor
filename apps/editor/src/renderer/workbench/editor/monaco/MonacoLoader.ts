@@ -41,6 +41,26 @@ export type CodeEditorOpenHandler = (
   sideBySide?: boolean,
 ) => Promise<monaco.editor.ICodeEditor | null>
 
+/** A read-only view of one of monaco's internal `LanguageFeatureRegistry`s. */
+export interface MonacoLanguageFeatureRegistry<T> {
+  register(selector: unknown, provider: T): IDisposable
+  ordered(model: monaco.editor.ITextModel): readonly T[]
+}
+
+/**
+ * The subset of monaco's internal `ILanguageFeaturesService` the workbench
+ * touches: the paste registry (markdown paste-to-link) plus the registries the
+ * E2E probe reads to exercise providers that aren't mirrored on our own
+ * LanguageFeaturesService.
+ */
+export interface MonacoLanguageFeaturesService {
+  readonly documentPasteEditProvider: MonacoLanguageFeatureRegistry<unknown>
+  readonly linkProvider: MonacoLanguageFeatureRegistry<monaco.languages.LinkProvider>
+  readonly hoverProvider: MonacoLanguageFeatureRegistry<monaco.languages.HoverProvider>
+  readonly completionProvider: MonacoLanguageFeatureRegistry<monaco.languages.CompletionItemProvider>
+  readonly referenceProvider: MonacoLanguageFeatureRegistry<monaco.languages.ReferenceProvider>
+}
+
 let _monaco: typeof monaco | undefined
 let _monacoPromise: Promise<typeof monaco> | undefined
 let _logger: ILogger = new NullLogger()
@@ -322,6 +342,22 @@ export const MonacoLoader = {
     return StandaloneServices.get<{
       executeCommand<T = unknown>(id: string, ...args: unknown[]): Promise<T>
     }>(ICommandService)
+  },
+
+  /**
+   * Resolve monaco's internal `ILanguageFeaturesService`. Needed for the
+   * `documentPasteEditProvider` registry (the paste-to-link enhancement has no
+   * public `monaco.languages.*` API), and read by the E2E probe to exercise
+   * link / hover / completion / reference providers through the same registries
+   * Monaco's own features use. Resolves after monaco has initialized.
+   */
+  async getLanguageFeaturesService(): Promise<MonacoLanguageFeaturesService> {
+    await loadMonaco()
+    const [{ StandaloneServices }, { ILanguageFeaturesService }] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'),
+      import('monaco-editor/esm/vs/editor/common/services/languageFeatures.js'),
+    ])
+    return StandaloneServices.get<MonacoLanguageFeaturesService>(ILanguageFeaturesService)
   },
 
   /**

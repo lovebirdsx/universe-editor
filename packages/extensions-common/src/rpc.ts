@@ -14,15 +14,19 @@ import type { UriComponents } from '@universe-editor/platform'
 import type {
   CompletionItem,
   CompletionList,
+  CodeAction,
   Definition,
   DefinitionLink,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
   Location,
   Position,
   Range,
+  SelectionRange,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -219,6 +223,10 @@ export type LanguageProviderType =
   | 'rename'
   | 'workspaceSymbol'
   | 'foldingRange'
+  | 'documentLink'
+  | 'documentHighlight'
+  | 'selectionRange'
+  | 'codeAction'
 
 /** Language ids a provider applies to. Empty for workspace-wide providers. */
 export type DocumentSelector = readonly string[]
@@ -245,6 +253,15 @@ export interface ISignatureHelpContext {
   readonly triggerKind: 1 | 2 | 3
   readonly triggerCharacter?: string
   readonly isRetrigger: boolean
+}
+
+/**
+ * Code-action request context. Only the requested kinds cross the wire; the
+ * markdown server recomputes diagnostics itself (the marker → diagnostic round
+ * trip drops the `data` quick-fixes depend on), so no diagnostics are sent.
+ */
+export interface ICodeActionContext {
+  readonly only?: readonly string[]
 }
 
 /**
@@ -306,6 +323,24 @@ export interface IExtHostLanguages {
     query: string,
   ): Promise<WorkspaceSymbol[] | SymbolInformation[] | null>
   $provideFoldingRanges(handle: number, uri: UriComponents): Promise<FoldingRange[] | null>
+  $provideDocumentLinks(handle: number, uri: UriComponents): Promise<DocumentLink[] | null>
+  $resolveDocumentLink(handle: number, link: DocumentLink): Promise<DocumentLink | null>
+  $provideDocumentHighlights(
+    handle: number,
+    uri: UriComponents,
+    position: Position,
+  ): Promise<DocumentHighlight[] | null>
+  $provideSelectionRanges(
+    handle: number,
+    uri: UriComponents,
+    positions: Position[],
+  ): Promise<SelectionRange[] | null>
+  $provideCodeActions(
+    handle: number,
+    uri: UriComponents,
+    range: Range,
+    context: ICodeActionContext,
+  ): Promise<CodeAction[] | null>
 }
 
 /**

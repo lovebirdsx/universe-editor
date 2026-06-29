@@ -7,7 +7,9 @@
  * service runs directly; filesystem reads go through the gated `workspace.fs`.
  */
 import {
+  commands,
   languages,
+  window,
   workspace,
   type Diagnostic,
   type ExtensionContext,
@@ -18,9 +20,13 @@ import { URI } from 'vscode-uri'
 import { createMdServer } from './server/mdServer.js'
 import type { IMdServer } from './server/types.js'
 import { createMdFsBridge } from './mdFsBridge.js'
-import { registerEditingCommands } from './edit/commands.js'
+import { registerEditingCommands, MARKDOWN_COMMANDS } from './edit/commands.js'
 
 const MARKDOWN_LANGUAGES = ['markdown']
+
+// Triggers markdown path/anchor completion: `[`/`(` open a link, `#` an anchor,
+// `/` a path segment.
+const COMPLETION_TRIGGER_CHARACTERS = ['[', '(', '#', '/']
 
 /** Recompute-diagnostics debounce; markdown files are small, full-text each time. */
 const DIDCHANGE_DEBOUNCE_MS = 200
@@ -56,6 +62,27 @@ export function activate(context: ExtensionContext): void {
   registerProviders(context, server)
   registerDocumentSync(context, server, (uri, diags) => diagnostics.set(uriComponents(uri), diags))
   registerEditingCommands(context)
+  registerServerCommands(context, server)
+}
+
+/** Commands that need the language server (vs. the pure text-editing commands). */
+function registerServerCommands(context: ExtensionContext, server: IMdServer): void {
+  context.subscriptions.push(
+    commands.registerCommand(MARKDOWN_COMMANDS.organizeLinkDefinitions, async () => {
+      const editor = await window.getActiveTextEditor()
+      if (!editor || editor.document.languageId !== 'markdown') return
+      const edits = await server.$organizeLinkDefinitions(uriString(editor.document.uri))
+      if (edits.length === 0) return
+      await editor.edit((builder) => {
+        for (const e of edits) builder.replace(e.range, e.newText)
+      })
+    }),
+    // Invoked by the renderer (explorer/editor "Find File References"), which
+    // hosts the references peek; here we only resolve the locations.
+    commands.registerCommand(MARKDOWN_COMMANDS.getFileReferences, (uri: unknown) =>
+      typeof uri === 'string' ? server.$getFileReferences(uri) : [],
+    ),
+  )
 }
 
 function registerProviders(context: ExtensionContext, server: IMdServer): void {
@@ -75,6 +102,37 @@ function registerProviders(context: ExtensionContext, server: IMdServer): void {
     }),
     languages.registerFoldingRangeProvider(MARKDOWN_LANGUAGES, {
       provideFoldingRanges: (doc) => server.$provideFoldingRanges(uriString(doc.uri)),
+    }),
+    languages.registerHoverProvider(MARKDOWN_LANGUAGES, {
+      provideHover: (doc, position) => server.$provideHover(uriString(doc.uri), position),
+    }),
+    languages.registerCompletionItemProvider(
+      MARKDOWN_LANGUAGES,
+      {
+        provideCompletionItems: (doc, position) =>
+          server.$provideCompletion(uriString(doc.uri), position),
+      },
+      ...COMPLETION_TRIGGER_CHARACTERS,
+    ),
+    languages.registerRenameProvider(MARKDOWN_LANGUAGES, {
+      provideRenameEdits: (doc, position, newName) =>
+        server.$provideRenameEdits(uriString(doc.uri), position, newName),
+    }),
+    languages.registerDocumentLinkProvider(MARKDOWN_LANGUAGES, {
+      provideDocumentLinks: (doc) => server.$provideDocumentLinks(uriString(doc.uri)),
+      resolveDocumentLink: (link) => server.$resolveDocumentLink(link),
+    }),
+    languages.registerDocumentHighlightProvider(MARKDOWN_LANGUAGES, {
+      provideDocumentHighlights: (doc, position) =>
+        server.$provideDocumentHighlights(uriString(doc.uri), position),
+    }),
+    languages.registerSelectionRangeProvider(MARKDOWN_LANGUAGES, {
+      provideSelectionRanges: (doc, positions) =>
+        server.$provideSelectionRanges(uriString(doc.uri), positions),
+    }),
+    languages.registerCodeActionsProvider(MARKDOWN_LANGUAGES, {
+      provideCodeActions: (doc, range, ctx) =>
+        server.$provideCodeActions(uriString(doc.uri), range, ctx.only ?? []),
     }),
   )
 }

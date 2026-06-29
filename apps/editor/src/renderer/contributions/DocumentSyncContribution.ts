@@ -25,6 +25,7 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { basenameOfResource, extensionOfBasename } from '../workbench/files/resourceInfo.js'
 import { IExtensionHostClientService } from '../services/extensions/ExtensionHostClientService.js'
+import { PendingDocumentSync } from '../services/extensions/PendingDocumentSync.js'
 
 const DIDCHANGE_DEBOUNCE_MS = 200
 
@@ -120,6 +121,18 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
       }),
     )
     store.add(model.onWillDispose(() => this._detach(key)))
+
+    // Let a completion (which fires immediately on a trigger char) force the
+    // host's mirror current before it runs, beating the 200ms debounce above.
+    PendingDocumentSync.register(key, () => this._flush(entry))
+  }
+
+  /** If a debounced change is pending for `entry`, cancel the timer and push now. */
+  private async _flush(entry: OpenDoc): Promise<void> {
+    if (entry.timer === undefined) return
+    clearTimeout(entry.timer)
+    entry.timer = undefined
+    await this._pushChange(entry.model)
   }
 
   private async _openDoc(entry: OpenDoc): Promise<void> {
@@ -170,6 +183,7 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
     if (!entry) return
     if (entry.timer) clearTimeout(entry.timer)
     this._open.delete(key)
+    PendingDocumentSync.unregister(key)
     const documents = this._client.getTrustedDocuments()
     if (documents) this._ignore(documents.$acceptDocumentClose(entry.model.uri))
     entry.store.dispose()

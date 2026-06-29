@@ -13,15 +13,19 @@ import type { ScmApi, SourceControl } from './scm.js'
 import type {
   CompletionItem,
   CompletionList,
+  CodeAction,
   Definition,
   DefinitionLink,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
   Location,
   Position,
   Range,
+  SelectionRange,
   SignatureHelp,
   SymbolInformation,
   WorkspaceEdit,
@@ -35,9 +39,12 @@ export * from './scm.js'
 export type {
   CompletionItem,
   CompletionList,
+  CodeAction,
   Definition,
   DefinitionLink,
   Diagnostic,
+  DocumentHighlight,
+  DocumentLink,
   DocumentSymbol,
   FoldingRange,
   Hover,
@@ -46,6 +53,7 @@ export type {
   MarkupContent,
   Position,
   Range,
+  SelectionRange,
   SignatureHelp,
   SymbolInformation,
   TextEdit,
@@ -425,6 +433,39 @@ export interface FoldingRangeProvider {
   provideFoldingRanges(document: TextDocument): ProviderResult<FoldingRange[]>
 }
 
+export interface DocumentLinkProvider {
+  provideDocumentLinks(document: TextDocument): ProviderResult<DocumentLink[]>
+  /** Fill in a link's `target` lazily; Monaco calls this just before navigating. */
+  resolveDocumentLink?(link: DocumentLink): ProviderResult<DocumentLink>
+}
+
+export interface DocumentHighlightProvider {
+  provideDocumentHighlights(
+    document: TextDocument,
+    position: Position,
+  ): ProviderResult<DocumentHighlight[]>
+}
+
+export interface SelectionRangeProvider {
+  provideSelectionRanges(
+    document: TextDocument,
+    positions: Position[],
+  ): ProviderResult<SelectionRange[]>
+}
+
+/** What triggered a code-action request. Mirrors LSP `CodeActionContext` (kinds only). */
+export interface CodeActionContext {
+  readonly only?: readonly string[]
+}
+
+export interface CodeActionProvider {
+  provideCodeActions(
+    document: TextDocument,
+    range: Range,
+    context: CodeActionContext,
+  ): ProviderResult<CodeAction[]>
+}
+
 /**
  * Owns a set of diagnostics surfaced as editor markers. `set` replaces a URI's
  * diagnostics (or clears it with `undefined`); the collection name is the marker
@@ -551,9 +592,21 @@ export interface LanguagesApi {
     selector: DocumentSelector,
     provider: FoldingRangeProvider,
   ): Disposable
+  registerDocumentLinkProvider(
+    selector: DocumentSelector,
+    provider: DocumentLinkProvider,
+  ): Disposable
+  registerDocumentHighlightProvider(
+    selector: DocumentSelector,
+    provider: DocumentHighlightProvider,
+  ): Disposable
+  registerSelectionRangeProvider(
+    selector: DocumentSelector,
+    provider: SelectionRangeProvider,
+  ): Disposable
+  registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
 }
-
 /**
  * The host bridge contract installed on globalThis. KEEP IN SYNC with the
  * producer in `extension-host/src/apiFactory.ts` (same key, same shapes).
@@ -620,6 +673,19 @@ interface IExtensionHostBridge {
     selector: DocumentSelector,
     provider: FoldingRangeProvider,
   ): Disposable
+  registerDocumentLinkProvider(
+    selector: DocumentSelector,
+    provider: DocumentLinkProvider,
+  ): Disposable
+  registerDocumentHighlightProvider(
+    selector: DocumentSelector,
+    provider: DocumentHighlightProvider,
+  ): Disposable
+  registerSelectionRangeProvider(
+    selector: DocumentSelector,
+    provider: SelectionRangeProvider,
+  ): Disposable
+  registerCodeActionsProvider(selector: DocumentSelector, provider: CodeActionProvider): Disposable
   createDiagnosticCollection(name?: string): DiagnosticCollection
   getTextDocuments(): readonly TextDocument[]
   readonly onDidOpenTextDocument: Event<TextDocument>
@@ -694,6 +760,14 @@ export const languages: LanguagesApi = {
   registerWorkspaceSymbolProvider: (provider) => bridge().registerWorkspaceSymbolProvider(provider),
   registerFoldingRangeProvider: (selector, provider) =>
     bridge().registerFoldingRangeProvider(selector, provider),
+  registerDocumentLinkProvider: (selector, provider) =>
+    bridge().registerDocumentLinkProvider(selector, provider),
+  registerDocumentHighlightProvider: (selector, provider) =>
+    bridge().registerDocumentHighlightProvider(selector, provider),
+  registerSelectionRangeProvider: (selector, provider) =>
+    bridge().registerSelectionRangeProvider(selector, provider),
+  registerCodeActionsProvider: (selector, provider) =>
+    bridge().registerCodeActionsProvider(selector, provider),
   createDiagnosticCollection: (name) => bridge().createDiagnosticCollection(name),
 }
 

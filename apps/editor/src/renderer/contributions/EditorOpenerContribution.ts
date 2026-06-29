@@ -98,15 +98,31 @@ async function waitForEditor(
   return FileEditorRegistry.get(input)
 }
 
+/**
+ * Monaco's `extractSelection` encodes a single-position fragment (e.g. a markdown
+ * header link `#hello` → `file.md#L5,1`) as a range whose end fields are
+ * `undefined`. That shape is neither a valid IRange nor ISelection and makes
+ * `setSelection` throw "Invalid arguments", so collapse it into a full cursor
+ * range by filling the end from the start. Exported for testing.
+ */
+export function normalizeOpenRange(selection: monaco.IRange): monaco.IRange {
+  return {
+    startLineNumber: selection.startLineNumber,
+    startColumn: selection.startColumn,
+    endLineNumber: selection.endLineNumber ?? selection.startLineNumber,
+    endColumn: selection.endColumn ?? selection.startColumn,
+  }
+}
+
 function applySelection(
   editor: monaco.editor.IStandaloneCodeEditor,
   selection: monaco.IRange | monaco.IPosition | undefined,
 ): void {
   if (!selection) return
   if ('startLineNumber' in selection) {
-    // A collapsed range (cursor) is fine here — that's what peek "go to" passes.
-    editor.setSelection(selection)
-    editor.revealRangeInCenterIfOutsideViewport(selection)
+    const range = normalizeOpenRange(selection)
+    editor.setSelection(range)
+    editor.revealRangeInCenterIfOutsideViewport(range)
   } else {
     editor.setPosition(selection)
     editor.revealPositionInCenterIfOutsideViewport(selection)
