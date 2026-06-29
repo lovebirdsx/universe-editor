@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { bytesToBase64 } from '@universe-editor/extensions-common'
-import { URI, type IFileService } from '@universe-editor/platform'
+import { URI, relativePathUnder, type IFileService } from '@universe-editor/platform'
 import { MainThreadFs } from '../MainThreadFs.js'
 import type { IAcpPathPolicy } from '../../acp/acpPathPolicy.js'
 
@@ -128,6 +128,42 @@ describe('MainThreadFs', () => {
       }),
     )
     expect(await fs.$readFile('/repo/link')).toBe(bytesToBase64(bytes))
+  })
+
+  it('canonicalizes the cwd before the real-path containment check (Windows 8.3 short name)', async () => {
+    // On Windows CI the temp workspace lives under an 8.3 short name (e.g.
+    // `RUNNER~1`), so `_cwd` is `C:/Users/RUNNER~1/Temp/ws` while realpath always
+    // returns the long form `C:/Users/runneradmin/Temp/ws`. If the guard compared
+    // the real target against the literal short-name cwd it would read as
+    // "escapes workspace root" and deny every gated read of an unopened file —
+    // the markdownLsp / peekNavigation regression seen only on Windows CI.
+    const shortCwd = 'C:/Users/RUNNER~1/Temp/ws'
+    const bytes = new Uint8Array([5, 6])
+    // Real policy semantics: only containment under the *given* cwd is allowed.
+    const platform = 'win32' as const
+    const containmentPolicy: IAcpPathPolicy = {
+      _serviceBrand: undefined,
+      check: (cwd, target) =>
+        relativePathUnder(cwd, target, platform) !== null
+          ? { ok: true, normalized: target }
+          : { ok: false, reason: `path escapes workspace root (${cwd})` },
+    }
+    const fs = new MainThreadFs(
+      shortCwd,
+      containmentPolicy,
+      fakeFiles({
+        // realpath canonicalizes both the cwd and the target to the long form.
+        realpath: (resource) => {
+          const p = (resource as URI).fsPath.replace(/\\/g, '/')
+          return Promise.resolve(URI.file(p.replace('/RUNNER~1/', '/runneradmin/')))
+        },
+        readFile: () => Promise.resolve(bytes),
+      }),
+    )
+    // The ext host requests a file under the (short-name) workspace root, so the
+    // literal target passes the text policy; the real-path re-check must pass too
+    // once the cwd is canonicalized to match realpath's long form.
+    expect(await fs.$readFile(`${shortCwd}/other.md`)).toBe(bytesToBase64(bytes))
   })
 
   it('falls back to the text decision when the file service has no realpath', async () => {

@@ -24,6 +24,9 @@ import {
 import type { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
 
 export class MainThreadFs implements IMainThreadFs {
+  /** Lazily resolved, symlink-followed form of `_cwd` (see `_getCanonicalCwd`). */
+  private _canonicalCwd: Promise<string | undefined> | undefined
+
   constructor(
     /** Workspace root used as the policy's containment boundary. */
     private readonly _cwd: string | undefined,
@@ -63,10 +66,36 @@ export class MainThreadFs implements IMainThreadFs {
       // does we keep the text-level guarantee rather than failing the operation.
       return
     }
-    const decision = this._policy.check(this._cwd as string, real.fsPath)
+    // Compare the canonical target against the *canonical* cwd. `_cwd` may carry
+    // a non-canonical form of the same directory — symlinked, or (on Windows CI,
+    // whose temp dir lives under an 8.3 short name like `RUNNER~1`) the short
+    // name — while realpath always returns the long/real form. Comparing the
+    // real target to a non-canonical cwd would spuriously read as "escapes
+    // workspace root" and deny every gated read of an unopened file.
+    const canonicalCwd = await this._getCanonicalCwd()
+    const decision = this._policy.check(canonicalCwd ?? (this._cwd as string), real.fsPath)
     if (!decision.ok) {
       throw new Error(`workspace.fs denied (real path): ${decision.reason}`)
     }
+  }
+
+  /**
+   * Canonicalize `_cwd` the same way realpath canonicalizes targets, so the
+   * containment check in `_guardRealpath` compares like with like. Resolved
+   * once and cached; falls back to the literal cwd if realpath is unavailable
+   * or throws.
+   */
+  private _getCanonicalCwd(): Promise<string | undefined> {
+    if (this._canonicalCwd) return this._canonicalCwd
+    this._canonicalCwd = (async () => {
+      if (this._cwd === undefined || !this._files.realpath) return this._cwd
+      try {
+        return (URI.revive(await this._files.realpath(URI.file(this._cwd))) as URI).fsPath
+      } catch {
+        return this._cwd
+      }
+    })()
+    return this._canonicalCwd
   }
 
   async $readFile(path: string): Promise<string> {
