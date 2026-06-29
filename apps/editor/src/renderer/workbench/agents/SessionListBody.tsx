@@ -36,6 +36,7 @@ import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.
 import { AgentIcon } from './agentIcon.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { formatCny } from './SessionCostIndicator.js'
+import { findLabel } from './ConfigOptionsBar.js'
 import { useUsdToCnyRate } from './useExchangeRate.js'
 import { useForeignSessionStats, type ForeignSessionStat } from './useForeignSessionStats.js'
 import styles from './agents.module.css'
@@ -133,6 +134,34 @@ function LiveSessionCost({ session, rate }: { session: IAcpSession; rate: number
   )
 }
 
+function LiveSessionModel({ session }: { session: IAcpSession }) {
+  const configOptions = useObservable(session.configOptions)
+  const modelOption = configOptions.find((o) => o.category === 'model')
+  if (!modelOption) return null
+  const label =
+    modelOption.type === 'select'
+      ? findLabel(modelOption.options, modelOption.currentValue)
+      : modelOption.currentValue
+  if (!label) return null
+  return <span className={styles['sessionRowModel']}>{label}</span>
+}
+
+function LiveSessionEffort({ session }: { session: IAcpSession }) {
+  const configOptions = useObservable(session.configOptions)
+  const effortOption = configOptions.find((o) => o.category === 'thought_level')
+  if (!effortOption) return null
+  const label =
+    effortOption.type === 'select'
+      ? findLabel(effortOption.options, effortOption.currentValue)
+      : effortOption.currentValue
+  if (!label) return null
+  return <span className={styles['sessionRowEffort']}>{label}</span>
+}
+
+function formatModelId(id: string): string {
+  return id.replace(/^claude-/, '').replace(/-\d{8}$/, '')
+}
+
 export interface SessionListBodyProps {
   /** Suppress the inline "no sessions" line — popovers render their own. */
   hideEmptyState?: boolean
@@ -172,6 +201,8 @@ function SessionRow({
   const historyUsage = entry.usage ?? foreignStat?.usage
   const historyCostUsd = historyUsage?.cost?.amount
   const historyCostEstimated = historyUsage?.costEstimated === true
+  const historyModel = entry.configOptions?.['MODEL'] ?? entry.usage?.models?.[0]?.model
+  const historyEffort = entry.configOptions?.['effort'] ?? entry.configOptions?.['thought_level']
   const chip = scopeChip(entry, scope)
   return (
     <li
@@ -197,6 +228,16 @@ function SessionRow({
         </span>
         <span className={styles['sessionRowMeta']}>
           {relativeTime(entry.lastUsedAt)}
+          {liveSession !== undefined ? (
+            <LiveSessionModel session={liveSession} />
+          ) : historyModel ? (
+            <span className={styles['sessionRowModel']}>{formatModelId(historyModel)}</span>
+          ) : null}
+          {liveSession !== undefined ? (
+            <LiveSessionEffort session={liveSession} />
+          ) : historyEffort ? (
+            <span className={styles['sessionRowEffort']}>{historyEffort}</span>
+          ) : null}
           {liveSession !== undefined ? (
             <LiveSessionTimer session={liveSession} />
           ) : historyMs > 0 ? (

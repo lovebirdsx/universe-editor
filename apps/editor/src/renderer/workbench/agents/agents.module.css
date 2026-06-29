@@ -1148,6 +1148,20 @@
   flex-shrink: 0;
 }
 
+.sessionRowModel {
+  flex-shrink: 1;
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionRowEffort {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 .sessionRowScope {
   margin-left: auto;
   min-width: 0;
