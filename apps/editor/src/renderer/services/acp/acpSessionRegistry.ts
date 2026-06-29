@@ -52,10 +52,23 @@ export class AcpSessionRegistry {
     return this._sessions
   }
 
-  /** Local ids of all live sessions. */
+  /**
+   * Ids of all live sessions — BOTH the stable local id AND the agent-issued
+   * `sessionIdOnAgent` (when attached). The refresh-mode hydrate prune protects
+   * entries via `preserveIds`, which it matches against the history row's `id`
+   * (equal to `sessionIdOnAgent`). A freshly-created session's local uuid never
+   * equals its agent id, so collecting only local ids would leave a just-created
+   * session unprotected — the replace sweep would prune it the instant the agent
+   * (e.g. codex) hasn't yet surfaced it in `session/list`. Carrying both domains
+   * keeps the protection robust regardless of which id the consumer compares.
+   */
   liveIds(): Set<string> {
     const ids = new Set<string>()
-    for (const s of this._sessions) ids.add(s.id)
+    for (const s of this._sessions) {
+      ids.add(s.id)
+      const agentId = s.sessionIdOnAgent.get()
+      if (agentId !== undefined) ids.add(agentId)
+    }
     return ids
   }
 

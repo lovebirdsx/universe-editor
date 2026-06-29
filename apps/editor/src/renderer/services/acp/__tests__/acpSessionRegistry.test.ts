@@ -149,4 +149,16 @@ describe('AcpSessionRegistry', () => {
     r.add(fakeSession('b'), { activate: false })
     expect([...r.liveIds()].sort()).toEqual(['a', 'b'])
   })
+
+  it('liveIds() also includes the agent-issued id so refresh-prune can protect just-created sessions', () => {
+    const r = new AcpSessionRegistry()
+    // A freshly-created session whose connection has attached: local uuid differs
+    // from the agent-issued sessionId. Both must appear so the refresh-mode prune
+    // (which keys preserveIds against the history row's id === sessionIdOnAgent)
+    // does not drop it before the agent surfaces it in session/list.
+    r.add(fakeSession('local-1', 'agent-1'), { activate: false })
+    // A still-connecting session has no agent id yet — only the local id appears.
+    r.add(fakeSession('local-2'), { activate: false })
+    expect([...r.liveIds()].sort()).toEqual(['agent-1', 'local-1', 'local-2'])
+  })
 })

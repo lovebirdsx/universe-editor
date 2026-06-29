@@ -891,6 +891,21 @@ describe('AcpSessionHistoryService — replaceAgentEntries', () => {
     expect(ids).toEqual(['s-live'])
   })
 
+  it('protects a just-created live session whose preserveIds set carries its agent id (codex refresh repro)', async () => {
+    // Repro for "create a codex session, send a message, click Refresh → it
+    // vanishes". On refresh the prune keys preserveIds against the history row's
+    // id (=== sessionIdOnAgent). The live registry contributes BOTH the local
+    // uuid and the agent id to preserveIds; codex's session/list may not yet
+    // surface the brand-new session, so without the agent id in the set the row
+    // would be pruned. The agent id must keep it.
+    await svc.initialize()
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-just-created', title: 'new', cwd: '/work' })
+    const preserve = new Set<string>(['local-uuid-of-just-created', 's-just-created'])
+    svc.replaceAgentEntries('fake', [], '/work', preserve, 'workspace')
+    const ids = svc.list().map((e) => e.sessionIdOnAgent)
+    expect(ids).toEqual(['s-just-created'])
+  })
+
   it('leaves entries for other agents untouched', async () => {
     await svc.initialize()
     svc.add({ agentId: 'other', sessionIdOnAgent: 's-other', title: 'other', cwd: '/work' })
