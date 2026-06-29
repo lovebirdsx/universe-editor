@@ -37,7 +37,7 @@ const INITIAL_SETTINGS = JSON.stringify(
 )
 const INITIAL_STATE = JSON.stringify({ 'welcome.agentOnboarding.seen': true }, null, 2)
 
-function seedUserData(userDataDir: string): void {
+async function seedUserData(userDataDir: string): Promise<void> {
   writeFileSync(join(userDataDir, 'settings.json'), INITIAL_SETTINGS, 'utf8')
   writeFileSync(join(userDataDir, 'state.json'), INITIAL_STATE, 'utf8')
   // Per-workspace session (open editor groups, layout) lives under
@@ -45,7 +45,23 @@ function seedUserData(userDataDir: string): void {
   // there; without clearing it the next test's reload restores those ghost
   // editors (e.g. getEditorGroupCount returns 2 instead of 1). Wipe the whole
   // directory so every test reloads to a pristine, workspace-less first frame.
-  rmSync(join(userDataDir, 'workspaces'), { recursive: true, force: true })
+  //
+  // Retry loop (not rmSync's built-in maxRetries): a spec that opened a workspace
+  // leaves the main-process storage backend alive with a debounced atomic write
+  // (writeFile <id>.json.tmp → rename) still pending. A window reload does NOT tear
+  // that down, so a fresh `.tmp` can land mid-delete and the parent `rmdir` hits
+  // ENOTEMPTY — which rmSync's own retry does not recover from (its readdir already
+  // passed). Retrying the whole rmSync after the in-flight write settles does.
+  const wsDir = join(userDataDir, 'workspaces')
+  for (let attempt = 0; ; attempt++) {
+    try {
+      rmSync(wsDir, { recursive: true, force: true })
+      return
+    } catch (err) {
+      if (attempt >= 10) throw err
+      await new Promise((resolve) => setTimeout(resolve, 200))
+    }
+  }
 }
 
 async function waitForProbe(page: Page): Promise<void> {
@@ -61,7 +77,7 @@ async function waitForProbe(page: Page): Promise<void> {
  * session's beforeunload persist does NOT clobber it (verified empirically).
  */
 async function resetWindow(page: Page, userDataDir: string): Promise<void> {
-  seedUserData(userDataDir)
+  await seedUserData(userDataDir)
   const loaded = page.waitForEvent('load')
   void page
     .evaluate(() => void window.__E2E__!.runCommand('workbench.action.reloadWindow'))
@@ -113,7 +129,7 @@ export const test = base.extend<SharedE2EFixtures, SharedWorkerFixtures>({
   sharedApp: [
     async ({}, use: (app: WorkerApp) => Promise<void>) => {
       const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-shared-'))
-      seedUserData(userDataDir)
+      await seedUserData(userDataDir)
       const { ELECTRON_RUN_AS_NODE: _ignored, ...inheritedEnv } = process.env
       const app = await electron.launch({
         args: [MAIN_ENTRY, `--user-data-dir=${userDataDir}`],
