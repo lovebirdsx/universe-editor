@@ -58,6 +58,7 @@ import { IUpdateService } from '../shared/ipc/updateService.js'
 import { ITerminalService } from '../shared/ipc/terminalService.js'
 import { type IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
+import { ITimerService } from './services/performance/TimerService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
 import { AiModelClientService } from './services/ai/aiModelClientService.js'
@@ -603,6 +604,7 @@ async function bootstrapWorkbench(): Promise<void> {
     languageFeaturesService: services.get(ILanguageFeaturesService) as ILanguageFeaturesService,
     outlineService,
     aiDebugService: services.get(IAiDebugService) as IAiDebugService,
+    timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
     computeTeardownLeakReport: snapshotLeaks,
   })
   workbenchStore.add(d)

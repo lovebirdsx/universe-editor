@@ -69,6 +69,18 @@ export interface E2EAiDebugRecord {
   readonly responsePreview: string
 }
 
+export interface E2EStartupPhase {
+  readonly label: string
+  readonly from: string
+  readonly to: string
+  readonly duration: number
+}
+
+export interface E2EStartupMetrics {
+  readonly totalTime: number
+  readonly phases: readonly E2EStartupPhase[]
+}
+
 export interface E2EProbe {
   /** Resolves once the workbench has reached LifecyclePhase.Ready. */
   whenReady(): Promise<void>
@@ -418,6 +430,12 @@ export interface E2EProbe {
    * replay ends. Returns undefined when the record id is unknown.
    */
   replayAiDebugRecord(id: string): Promise<string | undefined>
+  /**
+   * Aggregated startup timeline (main + renderer perf marks). Backs the @perf
+   * spec that records startup phase durations as a CI artifact for regression
+   * observability. See renderer TimerService.getStartupMetrics().
+   */
+  getStartupMetrics(): Promise<E2EStartupMetrics>
 }
 
 declare global {

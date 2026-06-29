@@ -15,9 +15,10 @@
 | 一般冒烟 | `@p1` | 并行趟，shard×2 | 是 |
 | 跨进程 native 竞态隔离 | `@serial` | 单独串行趟 `--workers=1`，仅 shard 1 | 是 |
 | 已知不稳定（headless 偶发） | `@flaky` | 单独趟、`continue-on-error`，仅产报告 | **否** |
+| 启动性能观测 | `@perf` | 单独趟、`continue-on-error`，写 startup-metrics 工件 | 否 |
 | 视觉回归 | `@visual` | 默认排除 | 否 |
 
-- 并行趟统一 `--grep-invert "@visual|@serial|@flaky"`，把视觉/串行/不稳定用例从主门禁里剥离。
+- 并行趟统一 `--grep-invert "@visual|@serial|@flaky|@perf"`，把视觉/串行/不稳定/性能用例从主门禁里剥离。
 - `@flaky` 趟保留覆盖（仍然跑、仍上传 trace），但不让环境抖动卡住 PR。修好根因后应摘掉 `@flaky` 让它回归门禁。
 
 ---

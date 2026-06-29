@@ -39,6 +39,7 @@ import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { ITerminalService } from '../../shared/ipc/terminalService.js'
 import type { ILanguageFeaturesService } from '../services/languageFeatures/LanguageFeaturesService.js'
 import type { IOutlineService } from '../services/languageFeatures/OutlineService.js'
+import type { ITimerService } from '../services/performance/TimerService.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -81,6 +82,7 @@ export interface E2EProbeServices {
   readonly languageFeaturesService: ILanguageFeaturesService
   readonly outlineService: IOutlineService
   readonly aiDebugService: IAiDebugService
+  readonly timerService: ITimerService
   /** Tears down React + snapshots the Disposable tracker; see E2EProbe. */
   readonly computeTeardownLeakReport: () => E2EDisposableLeakReport | null
 }
@@ -636,6 +638,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
           if (ended.has(rid)) finish(rid)
         })
       }),
+    getStartupMetrics: async () => {
+      const m = await services.timerService.getStartupMetrics()
+      return {
+        totalTime: m.totalTime,
+        phases: m.phases.map((p) => ({
+          label: p.label,
+          from: p.from,
+          to: p.to,
+          duration: p.duration,
+        })),
+      }
+    },
   }
 
   window[E2E_PROBE_KEY] = probe
