@@ -24,6 +24,34 @@ import { getLogger } from '../logging/logging.js'
 import { IChangeTracker } from '../changeTracker.js'
 import { DebugLocation } from '../debugLocation.js'
 
+/**
+ * Hard cyclic-dependency check. Kept disabled to match VSCode upstream — some
+ * legitimate paths (notably the diff editor) re-enter `get()` and would falsely
+ * trip it. {@link warnCyclicDerived} provides a non-fatal dev-mode signal instead.
+ */
+const checkEnabled = false
+
+const isDevMode = (() => {
+  try {
+    return globalThis.process?.env?.['NODE_ENV'] !== 'production'
+  } catch {
+    return false
+  }
+})()
+
+const _cycleWarned = new WeakSet<object>()
+
+/** Dev-only, once-per-derived warning when a derived re-enters its own compute. */
+function warnCyclicDerived(derived: { debugName: string }): void {
+  getLogger()?.handleDerivedCycle(derived)
+  if (!isDevMode || _cycleWarned.has(derived)) return
+  _cycleWarned.add(derived)
+  console.warn(
+    `[observable] cyclic derived detected: '${derived.debugName}' re-entered its own computation. ` +
+      `This usually means a derived reads (directly or transitively) from itself.`,
+  )
+}
+
 export interface IDerivedReader<TChange = void> extends IReaderWithStore {
   /**
    * Call this to report a change delta or to force report a change, even if the new value is the same as the old value.
@@ -132,10 +160,16 @@ export class Derived<T, TChangeSummary = any, TChange = void>
   }
 
   public override get(): T {
-    const checkEnabled = false // TODO set to true
-    if (this._isComputing && checkEnabled) {
-      // investigate why this fails in the diff editor!
-      throw new BugIndicatingError('Cyclic deriveds are not supported yet!')
+    if (this._isComputing) {
+      // Throwing here breaks legitimate paths that VSCode upstream also keeps alive
+      // (see the diff-editor note below), so the hard check stays disabled. But a
+      // silent re-entrant compute is a genuine cyclic-dependency smell, so surface
+      // it as a dev-only warning instead of letting it corrupt state quietly.
+      if (checkEnabled) {
+        // investigate why this fails in the diff editor!
+        throw new BugIndicatingError('Cyclic deriveds are not supported yet!')
+      }
+      warnCyclicDerived(this)
     }
 
     if (this._observers.size === 0) {

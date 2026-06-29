@@ -2,9 +2,14 @@
 
 仿 VSCode 内核：`apps/editor` 通过本包拿到 DI / Lifecycle / Command / Configuration / Event / IPC / Workbench services。**纯 Node 测试，与 React/Electron/DOM 解耦**。
 
-## 强约束：index.ts re-export
+## 强约束：barrel re-export
 
-**所有对外类型/服务/常量必须在 `src/index.ts` re-export，否则 apps 编译报错**。新增模块文件后立刻去 `src/index.ts` 加 `export * from './xxx/yyy.js'`。
+**所有对外类型/服务/常量必须能从 `src/index.ts` 链路可达，否则 apps 编译报错**。约定为**分组 barrel**：
+
+- 每个子目录有自己的 `index.ts`（`base/index.ts`、`command/index.ts`…）。新增模块文件后，只需在**所在组**的 `index.ts` 加一行 `export * from './yyy.js'`。
+- 根 `src/index.ts` 只 re-export 各组 barrel，**不要**在根里逐文件加导出。
+- 有意不对外的内部文件（如 `command/contextKeyParser.ts`）不进 barrel；`base/observable/` 用自带的 `observable/index.ts` 公共面，其内部文件不单独导出。
+- `src/__tests__/index.test.ts` 的 `barrel coverage` 用例兜底：扫描出"导出了符号但未被任何 barrel 收纳"的文件即报错（新增此类内部文件需加进该用例的 `INTERNAL` 白名单）。
 
 `packages/platform` 是其他子包的依赖，apps 看到的是 `dist/`。改完后 `pnpm dev` 下 watcher 自动重建；离开 dev 模式手动 `pnpm --filter @universe-editor/platform build`。
 
@@ -131,6 +136,6 @@ pnpm --filter @universe-editor/platform test
 
 1. 在 `src/<group>/` 新建文件（例：`src/workbench/myService.ts`）
 2. 写接口 + decorator + 实现
-3. **在 `src/index.ts` 末尾加 `export * from './<group>/myService.js'`**
+3. **在所在组的 `src/<group>/index.ts` 加 `export * from './myService.js'`**（不要动根 `src/index.ts`）
 4. 在 `src/__tests__/<group>/myService.test.ts` 写单测
 5. `pnpm --filter @universe-editor/platform check` 通过

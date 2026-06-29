@@ -124,6 +124,30 @@ function resolveWhen(when: IMenuItem['when']): ContextKeyExpression | undefined 
   return when
 }
 
+/**
+ * The same command may legitimately appear in a menu under different group/order
+ * slots, so we only flag an *exact* duplicate (same kind + target + group + order),
+ * which almost always means a contribution was registered twice.
+ */
+function warnOnDuplicateEntry(
+  menuId: MenuId,
+  existing: ResolvedEntry[],
+  next: ResolvedEntry,
+): void {
+  const target = next.kind === 'item' ? next.command : next.submenu
+  const dup = existing.some((it) => {
+    if (it.kind !== next.kind) return false
+    const itTarget = it.kind === 'item' ? it.command : it.submenu
+    return itTarget === target && it.group === next.group && it.order === next.order
+  })
+  if (dup) {
+    console.warn(
+      `[MenuRegistry] duplicate ${next.kind} '${target}' in menu '${menuId}' ` +
+        `(same group/order) — it was registered more than once.`,
+    )
+  }
+}
+
 class MenuRegistryImpl implements IMenuRegistry {
   private readonly _items = new Map<MenuId, ResolvedEntry[]>()
   private readonly _onDidChangeMenu = new Emitter<MenuId>()
@@ -145,6 +169,7 @@ class MenuRegistryImpl implements IMenuRegistry {
       ...(item.title !== undefined ? { title: item.title } : {}),
       ...(item.icon !== undefined ? { icon: item.icon } : {}),
     }
+    warnOnDuplicateEntry(menuId, items, resolved)
     items.push(resolved)
     this._onDidChangeMenu.fire(menuId)
 
@@ -175,6 +200,7 @@ class MenuRegistryImpl implements IMenuRegistry {
       ...(item.order !== undefined ? { order: item.order } : {}),
       ...(item.icon !== undefined ? { icon: item.icon } : {}),
     }
+    warnOnDuplicateEntry(parent, items, resolved)
     items.push(resolved)
     this._onDidChangeMenu.fire(parent)
 

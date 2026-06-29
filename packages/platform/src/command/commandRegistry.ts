@@ -30,11 +30,24 @@ export interface ICommand {
   metadata?: ICommandMetadata
 }
 
+export interface ICommandRegistrationOptions {
+  /**
+   * Suppress the duplicate-id warning. Set this when intentionally overriding an
+   * existing command (matching VSCode's override semantics).
+   */
+  allowOverride?: boolean
+}
+
 export interface ICommandRegistry {
   /** Fired when a command is added or removed. */
   readonly onDidChangeCommands: Event<void>
-  registerCommand(id: string, handler: ICommandHandler, metadata?: ICommandMetadata): IDisposable
-  registerCommand(command: ICommand): IDisposable
+  registerCommand(
+    id: string,
+    handler: ICommandHandler,
+    metadata?: ICommandMetadata,
+    options?: ICommandRegistrationOptions,
+  ): IDisposable
+  registerCommand(command: ICommand, options?: ICommandRegistrationOptions): IDisposable
   getCommand(id: string): ICommand | undefined
   getCommands(): ReadonlyMap<string, ICommand>
 }
@@ -57,28 +70,42 @@ class CommandsRegistryImpl implements ICommandRegistry {
 
   registerCommand(
     idOrCommand: string | ICommand,
-    handler?: ICommandHandler,
+    handlerOrOptions?: ICommandHandler | ICommandRegistrationOptions,
     metadata?: ICommandMetadata,
+    options?: ICommandRegistrationOptions,
   ): IDisposable {
     let id: string
     let cmd: ICommand
+    let opts: ICommandRegistrationOptions | undefined
 
     if (typeof idOrCommand === 'string') {
+      const handler = handlerOrOptions as ICommandHandler | undefined
       if (!handler) {
         throw new Error(`A command handler must be provided.`)
       }
       id = idOrCommand
       cmd = { id, handler, ...(metadata !== undefined ? { metadata } : {}) }
+      opts = options
     } else {
       id = idOrCommand.id
       cmd = idOrCommand
+      opts = handlerOrOptions as ICommandRegistrationOptions | undefined
     }
 
-    if (!this._commands.has(id)) {
-      this._commands.set(id, new LinkedList<ICommand>())
+    let list = this._commands.get(id)
+    if (!list) {
+      list = new LinkedList<ICommand>()
+      this._commands.set(id, list)
+    } else if (!list.isEmpty() && !opts?.allowOverride) {
+      // A handler already exists for this id. Registration still wins (newest-first,
+      // matching VSCode), but a silent override is a frequent source of hard-to-trace
+      // bugs once multiple contributors (and extensions) participate.
+      console.warn(
+        `[CommandsRegistry] duplicate command id '${id}' — the new handler overrides the existing one. ` +
+          `Pass { allowOverride: true } to silence this if intentional.`,
+      )
     }
 
-    const list = this._commands.get(id)!
     const removeFn = list.unshift(cmd) // stack: newest first
     this._onDidChangeCommands.fire()
 

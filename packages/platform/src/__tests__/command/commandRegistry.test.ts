@@ -67,6 +67,42 @@ describe('CommandsRegistry', () => {
     expect(spy).toHaveBeenCalledTimes(2)
     sub.dispose()
   })
+
+  it('warns when a duplicate id overrides an existing command', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d1 = CommandsRegistry.registerCommand('test.dup', vi.fn())
+    const d2 = CommandsRegistry.registerCommand('test.dup', vi.fn())
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]?.[0]).toContain('test.dup')
+    d2.dispose()
+    d1.dispose()
+    warn.mockRestore()
+  })
+
+  it('allowOverride suppresses the duplicate warning', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d1 = CommandsRegistry.registerCommand('test.dup2', vi.fn())
+    const d2 = CommandsRegistry.registerCommand('test.dup2', vi.fn(), undefined, {
+      allowOverride: true,
+    })
+    expect(warn).not.toHaveBeenCalled()
+    d2.dispose()
+    d1.dispose()
+    warn.mockRestore()
+  })
+
+  it('dispose of the override falls back to the previous handler', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const first = vi.fn()
+    const second = vi.fn()
+    const d1 = CommandsRegistry.registerCommand('test.dup3', first)
+    const d2 = CommandsRegistry.registerCommand('test.dup3', second)
+    expect(CommandsRegistry.getCommand('test.dup3')?.handler).toBe(second)
+    d2.dispose()
+    expect(CommandsRegistry.getCommand('test.dup3')?.handler).toBe(first)
+    d1.dispose()
+    warn.mockRestore()
+  })
 })
 
 describe('MenuRegistry', () => {
@@ -175,6 +211,43 @@ describe('MenuRegistry', () => {
     expect(spy).toHaveBeenCalled()
     d.dispose()
     sub.dispose()
+  })
+
+  it('warns on an exact duplicate (same command, group and order)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d1 = MenuRegistry.addMenuItem(MenuId.EditorContext, {
+      command: 'menu.dup',
+      group: 'g',
+      order: 1,
+    })
+    const d2 = MenuRegistry.addMenuItem(MenuId.EditorContext, {
+      command: 'menu.dup',
+      group: 'g',
+      order: 1,
+    })
+    expect(warn).toHaveBeenCalledOnce()
+    expect(warn.mock.calls[0]?.[0]).toContain('menu.dup')
+    d1.dispose()
+    d2.dispose()
+    warn.mockRestore()
+  })
+
+  it('same command in different group/order is not a duplicate', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const d1 = MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
+      command: 'menu.multi',
+      group: 'a',
+      order: 1,
+    })
+    const d2 = MenuRegistry.addMenuItem(MenuId.EditorTabContext, {
+      command: 'menu.multi',
+      group: 'b',
+      order: 2,
+    })
+    expect(warn).not.toHaveBeenCalled()
+    d1.dispose()
+    d2.dispose()
+    warn.mockRestore()
   })
 })
 
