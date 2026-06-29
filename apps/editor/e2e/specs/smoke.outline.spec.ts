@@ -36,45 +36,55 @@ function writeWorkspace(): { dir: string; aPath: string; bPath: string } {
 }
 
 test.describe('@p1 outline view', () => {
-  test('keeps showing symbols after switching files', async ({ page, workbench }) => {
-    // Cold tsserver start on CI can exceed the 30s default — the spec already
-    // polls with a 20s budget per step (and OutlineService retries for 180s).
-    // Triple the test timeout so a slow cold start doesn't kill it mid-poll.
-    test.slow()
-    await workbench.waitForRestored()
+  // @serial: opens a workspace (parcel watcher subscribe on the main process)
+  // and drives a cold tsserver across a file switch. @parcel/watcher's windows
+  // backend has a cross-process native race — concurrent subscribes from several
+  // e2e worker instances can fault (0xC0000005) the main process, surfacing as
+  // "Target page has been closed". Pin to one worker (same root cause as
+  // smoke.simpleFileDialog / smoke.folderDragNewWindow). See `pnpm e2e`.
+  test(
+    'keeps showing symbols after switching files',
+    { tag: '@serial' },
+    async ({ page, workbench }) => {
+      // Cold tsserver start on CI can exceed the 30s default — the spec already
+      // polls with a 20s budget per step (and OutlineService retries for 180s).
+      // Triple the test timeout so a slow cold start doesn't kill it mid-poll.
+      test.slow()
+      await workbench.waitForRestored()
 
-    const { dir, aPath, bPath } = writeWorkspace()
-    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+      const { dir, aPath, bPath } = writeWorkspace()
+      await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
 
-    // Reveal + focus the Outline view in the secondary sidebar so its DOM renders.
-    await page.evaluate(() => {
-      void window.__E2E__!.runCommand('outline.focus')
-    })
+      // Reveal + focus the Outline view in the secondary sidebar so its DOM renders.
+      await page.evaluate(() => {
+        void window.__E2E__!.runCommand('outline.focus')
+      })
 
-    // First file: the Outline fills in once tsserver has analysed it (cold start).
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
-      .toEqual(expect.arrayContaining(['alpha', 'alphaFn']))
-    // The view itself must render the rows (not just the service observable).
-    await expect(page.getByRole('treeitem', { name: 'alphaFn' })).toBeVisible({ timeout: 10000 })
+      // First file: the Outline fills in once tsserver has analysed it (cold start).
+      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
+        .toEqual(expect.arrayContaining(['alpha', 'alphaFn']))
+      // The view itself must render the rows (not just the service observable).
+      await expect(page.getByRole('treeitem', { name: 'alphaFn' })).toBeVisible({ timeout: 10000 })
 
-    // Switch to the second file: both the service AND the rendered tree must update.
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), bPath)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineUri()), { timeout: 20000 })
-      .toContain('b.ts')
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
-      .toEqual(expect.arrayContaining(['bravo', 'bravoFn']))
-    await expect(page.getByRole('treeitem', { name: 'bravoFn' })).toBeVisible({ timeout: 10000 })
-    await expect(page.getByRole('treeitem', { name: 'alphaFn' })).toHaveCount(0)
+      // Switch to the second file: both the service AND the rendered tree must update.
+      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), bPath)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getOutlineUri()), { timeout: 20000 })
+        .toContain('b.ts')
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
+        .toEqual(expect.arrayContaining(['bravo', 'bravoFn']))
+      await expect(page.getByRole('treeitem', { name: 'bravoFn' })).toBeVisible({ timeout: 10000 })
+      await expect(page.getByRole('treeitem', { name: 'alphaFn' })).toHaveCount(0)
 
-    // Switch back to the first file: symbols must still resolve and render.
-    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
-    await expect
-      .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
-      .toEqual(expect.arrayContaining(['alpha', 'alphaFn']))
-    await expect(page.getByRole('treeitem', { name: 'alphaFn' })).toBeVisible({ timeout: 10000 })
-  })
+      // Switch back to the first file: symbols must still resolve and render.
+      await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
+      await expect
+        .poll(() => page.evaluate(() => window.__E2E__!.getOutlineSymbols()), { timeout: 20000 })
+        .toEqual(expect.arrayContaining(['alpha', 'alphaFn']))
+      await expect(page.getByRole('treeitem', { name: 'alphaFn' })).toBeVisible({ timeout: 10000 })
+    },
+  )
 })
