@@ -23,6 +23,7 @@
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — dirty-diff 复用它对大文件切换做全文 diff，勿退回 O(m·n)
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — 真因:thread/start 内 codex 原生 spawn 的 git rev-parse --git-dir 在 Windows 挂起 ~4.5s(cwd 是 git 仓库才触发);kill 该 git 即恢复;adapter 修不了
 - [reload disposable 泄漏误报](reload-disposable-leak-marksingleton.md) — reload 时 React 组件订阅被 tracker 误报，用 markAsSingleton 兜底；render 期 new disposable 孤儿用 ref 守卫+级联测试
+- [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — markdownLsp/peekNavigation @p1 真回归：IFileService.realpath 返回的 URI 经 ProxyChannel 降级成普通对象 .fsPath 空，guard 误判 empty path 拒读未打开文件；消费端须 URI.revive；诊断前必先 pnpm build
 
 ## 打包 / 构建
 
