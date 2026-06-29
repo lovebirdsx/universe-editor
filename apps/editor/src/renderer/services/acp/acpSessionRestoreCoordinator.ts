@@ -341,8 +341,10 @@ export class AcpSessionRestoreCoordinator extends Disposable {
       if (listCap == null) return
       const scope = this._callbacks.getHistoryScope()
       // `all` scope drops the cwd filter so the agent reports sessions from
-      // every project; workspace/worktree keep the current cwd (the SDK already
-      // folds in sibling worktrees of that cwd via includeWorktrees: true).
+      // every project; workspace/worktree keep the current cwd. Each agent
+      // expands that cwd to its sibling git worktrees itself (Claude via the
+      // SDK's includeWorktrees default, codex via `git worktree list`), so the
+      // `worktree` scope surfaces sessions from every worktree of the repo.
       const listCwd = scope === 'all' ? null : (cwd ?? null)
       const collected: SessionInfo[] = []
       let cursor: string | null | undefined
