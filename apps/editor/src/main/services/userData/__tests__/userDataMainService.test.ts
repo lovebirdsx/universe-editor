@@ -115,6 +115,35 @@ describe('UserDataMainService', () => {
     svc.dispose()
   })
 
+  it('does not create .universe-editor dir when opening a workspace without project settings', async () => {
+    const ws = new FakeWorkspace()
+    const folder = join(tmp, 'project-universe')
+    await fs.mkdir(folder, { recursive: true })
+    const svc = new UserDataMainService(ws as never)
+    ws.fire({ folder: URI.file(folder), name: 'project-universe' })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(await svc.read(UserDataFile.ProjectSettings)).toBe('')
+    await expect(fs.stat(join(folder, '.universe-editor'))).rejects.toMatchObject({
+      code: 'ENOENT',
+    })
+    svc.dispose()
+  })
+
+  it('creates .universe-editor dir when project settings are written', async () => {
+    const ws = new FakeWorkspace()
+    const folder = join(tmp, 'project-universe-write')
+    await fs.mkdir(folder, { recursive: true })
+    const svc = new UserDataMainService(ws as never)
+    ws.fire({ folder: URI.file(folder), name: 'project-universe-write' })
+    await new Promise((r) => setTimeout(r, 20))
+
+    await svc.setValue(UserDataFile.ProjectSettings, ['editor.tabSize'], 2)
+
+    const settingsPath = join(folder, '.universe-editor', 'settings.json')
+    expect(await fs.readFile(settingsPath, 'utf8')).toContain('"editor.tabSize": 2')
+    svc.dispose()
+  })
+
   it('reads an existing .vscode/settings.json', async () => {
     const ws = new FakeWorkspace()
     const folder = join(tmp, 'project2')

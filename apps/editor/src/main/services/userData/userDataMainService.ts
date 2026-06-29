@@ -112,9 +112,16 @@ interface WatchSlot {
   filename: string
   fullPath: string
   readOnly: boolean
+  createParentDirForWatcher: boolean
   watcher: FSWatcher | null
+  watcherStarting: boolean
   pendingFlush: NodeJS.Timeout | null
   suppressUntil: number
+}
+
+interface InstallSlotOptions {
+  readonly readOnly?: boolean
+  readonly createParentDirForWatcher?: boolean
 }
 
 export class UserDataMainService extends Disposable implements IUserDataFilesService {
@@ -138,8 +145,12 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._installSlot(UserDataFile.Settings, join(userFilesDir, 'settings.json'))
     this._installSlot(UserDataFile.Keybindings, join(userFilesDir, 'keybindings.json'))
     this._installSlot(UserDataFile.AiSettings, join(userFilesDir, 'aiSettings.json'))
-    this._installSlot(UserDataFile.VSCodeUserSettings, defaultVSCodeUserSettingsPath(), true)
-    this._installSlot(UserDataFile.VSCodeKeybindings, defaultVSCodeKeybindingsPath(), true)
+    this._installSlot(UserDataFile.VSCodeUserSettings, defaultVSCodeUserSettingsPath(), {
+      readOnly: true,
+    })
+    this._installSlot(UserDataFile.VSCodeKeybindings, defaultVSCodeKeybindingsPath(), {
+      readOnly: true,
+    })
 
     // Project settings track the active workspace. The read-only VSCode layer
     // (.vscode/settings.json) tracks it in parallel for cross-editor compat.
@@ -149,10 +160,12 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
         this._teardownSlot(UserDataFile.VSCodeSettings)
         if (ws) {
           const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
-          this._installSlot(UserDataFile.ProjectSettings, projectPath)
+          this._installSlot(UserDataFile.ProjectSettings, projectPath, {
+            createParentDirForWatcher: false,
+          })
           this._onDidChangeFile.fire({ file: UserDataFile.ProjectSettings, source: 'external' })
           const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
-          this._installSlot(UserDataFile.VSCodeSettings, vscodePath, true)
+          this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
           this._onDidChangeFile.fire({ file: UserDataFile.VSCodeSettings, source: 'external' })
         } else {
           // Workspace closed — let subscribers reset their workspace layers.
@@ -166,11 +179,13 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     void this._workspace.getCurrent().then((ws) => {
       if (ws && !this._slots.has(UserDataFile.ProjectSettings)) {
         const projectPath = join(ws.folder.fsPath, '.universe-editor', 'settings.json')
-        this._installSlot(UserDataFile.ProjectSettings, projectPath)
+        this._installSlot(UserDataFile.ProjectSettings, projectPath, {
+          createParentDirForWatcher: false,
+        })
       }
       if (ws && !this._slots.has(UserDataFile.VSCodeSettings)) {
         const vscodePath = join(ws.folder.fsPath, '.vscode', 'settings.json')
-        this._installSlot(UserDataFile.VSCodeSettings, vscodePath, true)
+        this._installSlot(UserDataFile.VSCodeSettings, vscodePath, { readOnly: true })
       }
     })
   }
@@ -262,16 +277,23 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     this._onDidChangeFile.fire({ file: UserDataFile.AiSettings, source: 'external' })
   }
 
-  private _installSlot(file: UserDataFile, fullPath: string, readOnly = false): void {
+  private _installSlot(
+    file: UserDataFile,
+    fullPath: string,
+    options: InstallSlotOptions = {},
+  ): void {
     const absolute = resolvePath(fullPath)
     const dir = dirname(absolute)
     const filename = basename(absolute)
+    const readOnly = options.readOnly ?? false
     const slot: WatchSlot = {
       dir,
       filename,
       fullPath: absolute,
       readOnly,
+      createParentDirForWatcher: options.createParentDirForWatcher ?? !readOnly,
       watcher: null,
+      watcherStarting: false,
       pendingFlush: null,
       suppressUntil: 0,
     }
@@ -280,17 +302,21 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
   }
 
   private _startWatcher(file: UserDataFile, slot: WatchSlot): void {
+    if (slot.watcher || slot.watcherStarting) return
+    slot.watcherStarting = true
     // Watch the parent dir. fs.watch on a single file disconnects on rename
     // (which is how most editors save), so we always watch one level up.
-    // Read-only slots (e.g. .vscode/settings.json) must NOT create the dir —
-    // we only watch it when it already exists, otherwise we skip silently.
-    const ensureDir = slot.readOnly
-      ? fs.stat(slot.dir).then((s) => {
+    // ProjectSettings and read-only VSCode files must not materialize their
+    // parent dirs just to install a watcher.
+    const ensureDir = slot.createParentDirForWatcher
+      ? fs.mkdir(slot.dir, { recursive: true }).then(() => undefined)
+      : fs.stat(slot.dir).then((s) => {
           if (!s.isDirectory()) throw new Error('not a directory')
         })
-      : fs.mkdir(slot.dir, { recursive: true }).then(() => undefined)
     void ensureDir.then(
       () => {
+        slot.watcherStarting = false
+        if (this._slots.get(file) !== slot) return
         try {
           slot.watcher = watch(slot.dir, { recursive: false }, (_event, eventFilename) => {
             if (eventFilename === null) return
@@ -321,6 +347,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
         }
       },
       () => {
+        slot.watcherStarting = false
         // Directory unavailable (mkdir failed, or read-only dir absent) — skip
         // silently. The file stays readable; a read-only slot whose dir appears
         // later is picked up on the next workspace change.
@@ -343,6 +370,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
       }
       slot.watcher = null
     }
+    slot.watcherStarting = false
     this._slots.delete(file)
   }
 
@@ -366,6 +394,7 @@ export class UserDataMainService extends Disposable implements IUserDataFilesSer
     // the self-write change explicitly so open editors reload without the
     // config layer treating it as an external edit to re-read.
     slot.suppressUntil = Date.now() + SELF_WRITE_SUPPRESS_MS
+    this._startWatcher(file, slot)
     this._onDidChangeFile.fire({ file, source: 'self' })
   }
 }
