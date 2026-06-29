@@ -99,6 +99,23 @@ describe('useForeignSessionStats', () => {
     expect(stat?.usage?.cost?.amount).toBe(0.5)
   })
 
+  it('backfills configOptions (model/effort) from a foreign worktree bucket', async () => {
+    const { storage } = makeStorage({
+      [FOREIGN_CWD]: [
+        entry({
+          id: 's1',
+          cwd: FOREIGN_CWD,
+          configOptions: { MODEL: 'claude-opus-4-8', effort: 'high' },
+        }),
+      ],
+    })
+    const captured = renderStats(storage, [entry({ id: 's1', cwd: FOREIGN_CWD })], CURRENT_CWD)
+    await waitFor(() => expect(captured.value?.get('s1')).toBeDefined())
+    const stat = captured.value!.get('s1')
+    expect(stat?.configOptions?.['MODEL']).toBe('claude-opus-4-8')
+    expect(stat?.configOptions?.['effort']).toBe('high')
+  })
+
   it('does not read the current workspace bucket', async () => {
     const { storage, calls } = makeStorage({
       [FOREIGN_CWD]: [entry({ id: 'f', cwd: FOREIGN_CWD, accumulatedRunningMs: 10 })],

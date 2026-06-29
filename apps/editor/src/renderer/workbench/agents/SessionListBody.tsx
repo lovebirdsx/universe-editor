@@ -201,8 +201,11 @@ function SessionRow({
   const historyUsage = entry.usage ?? foreignStat?.usage
   const historyCostUsd = historyUsage?.cost?.amount
   const historyCostEstimated = historyUsage?.costEstimated === true
-  const historyModel = entry.configOptions?.['MODEL'] ?? entry.usage?.models?.[0]?.model
-  const historyEffort = entry.configOptions?.['effort'] ?? entry.configOptions?.['thought_level']
+  // Foreign rows carry no configOptions on the rebuilt entry — fall back to the
+  // owning worktree bucket (foreignStat) the same way duration/cost do.
+  const historyConfigOptions = entry.configOptions ?? foreignStat?.configOptions
+  const historyModel = historyConfigOptions?.['MODEL'] ?? historyUsage?.models?.[0]?.model
+  const historyEffort = historyConfigOptions?.['effort'] ?? historyConfigOptions?.['thought_level']
   const chip = scopeChip(entry, scope)
   return (
     <li

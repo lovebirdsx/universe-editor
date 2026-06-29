@@ -3,10 +3,11 @@
  *  useForeignSessionStats — cross-bucket backfill for session rows that belong to
  *  another worktree. The hydrate sweep (`session/list`) surfaces foreign sessions
  *  in the current workspace bucket, but rebuilds their history entries WITHOUT the
- *  `usage` / `accumulatedRunningMs` fields — those live only in each session's own
- *  worktree storage bucket (where they were written while the session ran). We read
- *  that owning bucket directly (`IStorageService.getForWorkspaceCwd`) and return a
- *  per-session-id stat map the list uses to fill the duration / cost columns.
+ *  `usage` / `accumulatedRunningMs` / `configOptions` fields — those live only in
+ *  each session's own worktree storage bucket (where they were written while the
+ *  session ran). We read that owning bucket directly (`IStorageService.getForWorkspaceCwd`)
+ *  and return a per-session-id stat map the list uses to fill the duration / cost /
+ *  model / effort columns.
  *
  *  Same cross-bucket pattern as ForeignSessionPreview, which reads the foreign
  *  config out of the owning bucket.
@@ -23,6 +24,7 @@ const SCHEMA_VERSION = 1
 export interface ForeignSessionStat {
   readonly accumulatedRunningMs?: number
   readonly usage?: AcpSessionHistoryEntry['usage']
+  readonly configOptions?: AcpSessionHistoryEntry['configOptions']
 }
 
 interface PersistedHistoryShape {
@@ -81,8 +83,13 @@ export function useForeignSessionStats(
                 ? { accumulatedRunningMs: e.accumulatedRunningMs }
                 : {}),
               ...(e.usage !== undefined ? { usage: e.usage } : {}),
+              ...(e.configOptions !== undefined ? { configOptions: e.configOptions } : {}),
             }
-            if (stat.accumulatedRunningMs !== undefined || stat.usage !== undefined) {
+            if (
+              stat.accumulatedRunningMs !== undefined ||
+              stat.usage !== undefined ||
+              stat.configOptions !== undefined
+            ) {
               next.set(e.id, stat)
             }
           }
