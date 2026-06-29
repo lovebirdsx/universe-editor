@@ -54,7 +54,10 @@ export class MainThreadFs implements IMainThreadFs {
     if (!this._files.realpath) return
     let real: URI
     try {
-      real = await this._files.realpath(uri)
+      // IFileService.realpath returns a URI, but it crosses the IPC boundary as
+      // plain UriComponents (the JSON envelope doesn't revive class instances) —
+      // revive it before reading `.fsPath`, which otherwise yields ''.
+      real = URI.revive(await this._files.realpath(uri)) as URI
     } catch {
       // realpath shouldn't normally fail (it tolerates missing tails), but if it
       // does we keep the text-level guarantee rather than failing the operation.

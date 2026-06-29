@@ -104,6 +104,32 @@ describe('MainThreadFs', () => {
     expect(await fs.$readFile('/repo/link')).toBe(bytesToBase64(bytes))
   })
 
+  it('revives realpath UriComponents that crossed the IPC boundary before re-checking', async () => {
+    // The real IFileService.realpath returns a URI, but ProxyChannel serializes
+    // it through a JSON envelope that doesn't revive class instances — the
+    // consumer receives plain UriComponents whose `.fsPath` getter is absent.
+    // MainThreadFs must URI.revive() it; otherwise it hands the policy an empty
+    // path and every gated read of an unopened file is wrongly denied. A policy
+    // that rejects empty targets (mirroring AcpPathPolicy's "empty path" guard)
+    // turns the regression red.
+    const bytes = new Uint8Array([3, 4])
+    const wireComponents = JSON.parse(JSON.stringify(URI.file('/repo/sub/target.txt')))
+    const emptyAwarePolicy: IAcpPathPolicy = {
+      _serviceBrand: undefined,
+      check: (_cwd, target) =>
+        target ? { ok: true, normalized: target } : { ok: false, reason: 'empty path' },
+    }
+    const fs = new MainThreadFs(
+      '/repo',
+      emptyAwarePolicy,
+      fakeFiles({
+        realpath: () => Promise.resolve(wireComponents as URI),
+        readFile: () => Promise.resolve(bytes),
+      }),
+    )
+    expect(await fs.$readFile('/repo/link')).toBe(bytesToBase64(bytes))
+  })
+
   it('falls back to the text decision when the file service has no realpath', async () => {
     const bytes = new Uint8Array([7])
     const fs = new MainThreadFs(
