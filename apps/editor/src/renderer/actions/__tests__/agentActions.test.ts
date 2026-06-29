@@ -421,6 +421,7 @@ describe('ResumeAgentSessionAction', () => {
     const openEditor = vi.fn()
     const openViewContainer = vi.fn()
     const notify = vi.fn()
+    const pickedItems: IQuickPickItem[][] = []
 
     const sessions = {
       _serviceBrand: undefined,
@@ -436,7 +437,10 @@ describe('ResumeAgentSessionAction', () => {
     } as unknown as IAcpSessionHistoryService
     const quickInput = {
       _serviceBrand: undefined,
-      pick: (items: IQuickPickItem[]) => Promise.resolve(items[opts.pickIndex]),
+      pick: (items: IQuickPickItem[]) => {
+        pickedItems.push(items)
+        return Promise.resolve(items[opts.pickIndex])
+      },
     } as unknown as IQuickInputService
     const location = {
       _serviceBrand: undefined,
@@ -482,7 +486,7 @@ describe('ResumeAgentSessionAction', () => {
       register: vi.fn(),
     } as unknown as IAcpChatWidgetService)
     const inst = new InstantiationService(services)
-    return { inst, resumeSession, setActive, openEditor, openViewContainer, notify }
+    return { inst, resumeSession, setActive, openEditor, openViewContainer, notify, pickedItems }
   }
 
   async function run(b: { inst: InstantiationService }): Promise<void> {
@@ -507,6 +511,35 @@ describe('ResumeAgentSessionAction', () => {
     const b = build({ entries: [entry], pickIndex: 0, currentCwd: '/repo/main' })
     await run(b)
     expect(b.resumeSession).toHaveBeenCalledWith('sess-1')
+  })
+
+  it('shows the session directory name in the picker description', async () => {
+    const entries = [
+      makeEntry({
+        id: 'sess-win',
+        sessionIdOnAgent: 'sess-win',
+        cwd: 'D:\\git_project\\universe-editor\\',
+        title: 'Windows path',
+      }),
+      makeEntry({
+        id: 'sess-posix',
+        sessionIdOnAgent: 'sess-posix',
+        cwd: '/repo/worktree',
+        title: 'POSIX path',
+      }),
+      makeEntry({
+        id: 'sess-legacy',
+        sessionIdOnAgent: 'sess-legacy',
+        title: 'Legacy path',
+      }),
+    ]
+    const b = build({ entries, pickIndex: 0, currentCwd: undefined })
+    await run(b)
+    expect(b.pickedItems[0]?.map((item) => item.description)).toEqual([
+      'universe-editor',
+      'worktree',
+      undefined,
+    ])
   })
 
   it('resumes a cwd-less (legacy/global) session as belonging here', async () => {

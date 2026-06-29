@@ -31,6 +31,7 @@ import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
+import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 import { CATEGORY, resolveNavWidget } from './_agentShared.js'
 
 export class NewAgentSessionAction extends Action2 {
@@ -226,6 +227,14 @@ function relativeTime(timestamp: number): string {
   })
 }
 
+function sessionDirectoryName(cwd: string | undefined): string | undefined {
+  if (cwd === undefined || cwd.length === 0) return undefined
+  const normalized = cwd.replace(/[\\/]+$/, '')
+  if (normalized.length === 0) return cwd
+  const name = basenameOfPath(normalized)
+  return name.length > 0 ? name : cwd
+}
+
 export class ResumeAgentSessionAction extends Action2 {
   static readonly ID = 'workbench.action.agent.resumeSession'
   constructor() {
@@ -259,18 +268,21 @@ export class ResumeAgentSessionAction extends Action2 {
       return
     }
 
-    const items: IQuickPickItem[] = entries.map((e) => ({
-      id: e.id,
-      label: e.title,
-      description: e.agentId,
-      iconId: agentIconId(e.agentId),
-      detail: e.cwd
-        ? localize('agent.history.detail', '{time} · {cwd}', {
-            time: relativeTime(e.lastUsedAt),
-            cwd: e.cwd,
-          })
-        : relativeTime(e.lastUsedAt),
-    }))
+    const items: IQuickPickItem[] = entries.map((e) => {
+      const directoryName = sessionDirectoryName(e.cwd)
+      return {
+        id: e.id,
+        label: e.title,
+        ...(directoryName !== undefined ? { description: directoryName } : {}),
+        iconId: agentIconId(e.agentId),
+        detail: e.cwd
+          ? localize('agent.history.detail', '{time} · {cwd}', {
+              time: relativeTime(e.lastUsedAt),
+              cwd: e.cwd,
+            })
+          : relativeTime(e.lastUsedAt),
+      }
+    })
 
     const picked = await quickInput.pick(items, {
       placeholder: localize('agent.resumeSession.placeholder', 'Resume previous agent session'),
