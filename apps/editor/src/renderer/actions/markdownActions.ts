@@ -21,6 +21,7 @@ import {
   GroupDirection,
   IEditorGroupsService,
   type IEditorGroup,
+  IInstantiationService,
   MenuId,
   localize2,
   type ServicesAccessor,
@@ -135,8 +136,9 @@ export class OpenMarkdownSourceAction extends Action2 {
       return
     }
 
-    // Side-by-side mode: the source is in another group. Search all groups and
-    // activate it; fall back to opening from the source URI.
+    // Side-by-side mode, or a preview opened from a link (no held source):
+    // activate an already-open source tab if there is one, else open the source
+    // file in place of the preview tab (matching the toggle-back UX).
     const sourceUri = active.sourceUri
     for (const g of groups.getGroups()) {
       const found = g.editors.find((e) => e.resource?.toString() === sourceUri.toString())
@@ -146,6 +148,11 @@ export class OpenMarkdownSourceAction extends Action2 {
         return
       }
     }
+
+    const inst = accessor.get(IInstantiationService)
+    const source = inst.createInstance(FileEditorInput, sourceUri)
+    group.openEditor(source, { activate: true, pinned: true, index: previewIndex })
+    group.closeEditor(active)
   }
 }
 

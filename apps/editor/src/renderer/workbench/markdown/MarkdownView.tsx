@@ -27,7 +27,7 @@ import {
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { MermaidBlock } from './MermaidBlock.js'
 import { useService } from '../useService.js'
-import { useMarkdownFileLink } from './useMarkdownFileLink.js'
+import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
 import styles from './markdown.module.css'
 
 interface MarkdownViewProps {
@@ -36,6 +36,12 @@ interface MarkdownViewProps {
   readonly testId?: string
   /** Base URI for resolving relative file-path links (markdown source dir or workspace root). */
   readonly baseUri?: URI
+  /**
+   * When true, links to other markdown files open as a preview (in place on
+   * click, in a new tab on Ctrl/Cmd+click) rather than their source editor.
+   * Enabled by the doc preview; off for ACP chat and other static consumers.
+   */
+  readonly previewLinks?: boolean
   /**
    * When true the text is the live tail of a streaming agent message that grows
    * one chunk at a time; parse it incrementally (sealed-prefix cache) instead of
@@ -46,9 +52,16 @@ interface MarkdownViewProps {
   readonly streaming?: boolean
 }
 
-export function MarkdownView({ text, className, testId, baseUri, streaming }: MarkdownViewProps) {
+export function MarkdownView({
+  text,
+  className,
+  testId,
+  baseUri,
+  previewLinks,
+  streaming,
+}: MarkdownViewProps) {
   const nodes = useMarkdownNodes(text, streaming ?? false)
-  const openFileLink = useMarkdownFileLink(baseUri)
+  const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
   return (
     <FileLinkContext.Provider value={openFileLink}>
       <div
@@ -78,7 +91,9 @@ function useMarkdownNodes(text: string, streaming: boolean): readonly MdNode[] {
   return parseMarkdownStreaming(text, cacheRef.current)
 }
 
-const FileLinkContext = createContext<(path: string, line?: number, col?: number) => void>(() => {})
+const FileLinkContext = createContext<
+  (path: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => void
+>(() => {})
 
 function Block({ node }: { node: MdNode }): ReactNode {
   const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
@@ -214,7 +229,7 @@ function InlineCode({ text }: { text: string }) {
   if (!match) return <code className={styles['inlineCode']}>{text}</code>
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    openFileLink(match.path, match.line, match.col)
+    openFileLink(match.path, match.line, match.col, { toSide: e.ctrlKey || e.metaKey })
   }
   return (
     <a
@@ -237,7 +252,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     e.preventDefault()
     if (isFilePath) {
       const { path, line, col } = splitFilePathLocation(href)
-      openFileLink(path, line, col)
+      openFileLink(path, line, col, { toSide: e.ctrlKey || e.metaKey })
       return
     }
     if (isFile) {
@@ -271,7 +286,7 @@ function FilePathLink({ path, line, col }: { path: string; line?: number; col?: 
   const label = line !== undefined ? `${path}:${line}${col !== undefined ? `:${col}` : ''}` : path
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
-    openFileLink(path, line, col)
+    openFileLink(path, line, col, { toSide: e.ctrlKey || e.metaKey })
   }
   return (
     <a href={label} onClick={onClick} className={styles['mdLink']} data-testid="md-filepath">

@@ -8,7 +8,7 @@
  *  and the underlying buffer is only disposed once all consumers release it.
  *--------------------------------------------------------------------------------------------*/
 
-import { URI, canonicalResourceKey } from '@universe-editor/platform'
+import { Emitter, URI, canonicalResourceKey } from '@universe-editor/platform'
 import type { monaco } from './MonacoLoader.js'
 import { MonacoLoader } from './MonacoLoader.js'
 import { languageForResource } from '../../files/resourceLanguage.js'
@@ -25,6 +25,13 @@ interface Entry {
 
 class Registry {
   private readonly _entries = new Map<string, Entry>()
+
+  /** Fires when a model first appears in the registry (created or adopted), with
+   *  its resource. Consumers that read symbols/text from a shared model (Outline,
+   *  document sync) re-pull when a model they were waiting on shows up — e.g. a
+   *  markdown preview acquiring its source model on demand. */
+  private readonly _onDidAddModel = new Emitter<URI>()
+  readonly onDidAddModel = this._onDidAddModel.event
 
   /**
    * Acquire a TextModel for `resource`. Creates it (with `text` as initial
@@ -53,10 +60,12 @@ class Registry {
     const found = m.editor.getModel(uri)
     if (found && !found.isDisposed()) {
       this._entries.set(key, { model: found, refs: 1, owned: false })
+      this._onDidAddModel.fire(resource)
       return found
     }
     const model = m.editor.createModel(text, languageForResource(resource), uri)
     this._entries.set(key, { model, refs: 1, owned: true })
+    this._onDidAddModel.fire(resource)
     return model
   }
 

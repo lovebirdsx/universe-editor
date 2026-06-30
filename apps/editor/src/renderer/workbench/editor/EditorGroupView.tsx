@@ -601,6 +601,19 @@ export const EditorGroupView = memo(function EditorGroupView({
     if (!Component) {
       return <div className={styles['welcome']}>Component "{provider.componentKey}" missing</div>
     }
+    // Most editors (FileEditor especially) are built to reuse one instance
+    // across input swaps — switching tabs is a cheap setModel, not a rebuild.
+    // The markdown preview is the exception: navigating A→B reuses the same
+    // slot, and instance reuse would keep A's scroll position and leave the
+    // title-bar actions (find / open source) bound to A's stale DOM. Key it by
+    // input id so an in-place swap remounts a clean preview.
+    if (provider.componentKey === 'markdown.preview') {
+      return (
+        <EditorGroupContext.Provider value={group}>
+          <Component key={active.id} input={active} />
+        </EditorGroupContext.Provider>
+      )
+    }
     return (
       <EditorGroupContext.Provider value={group}>
         <Component input={active} />

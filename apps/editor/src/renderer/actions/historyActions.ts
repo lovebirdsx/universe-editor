@@ -20,6 +20,8 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { openMarkdownPreviewInGroup } from '../services/editor/openMarkdownPreview.js'
 
 async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
   const groups = accessor.get(IEditorGroupsService)
@@ -49,7 +51,14 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
       recreated = EditorRegistry.deserialize(entry.typeId, entry.serialized, accessor)
     }
     const input = recreated ?? inst.createInstance(FileEditorInput, entry.resource)
-    groups.activeGroup.openEditor(input, { activate: true, pinned: false })
+    if (input instanceof MarkdownPreviewInput) {
+      // A preview no longer open: re-create it in place of the current preview
+      // tab (matching link-click navigation) so Alt+←/→ walks the trail in one
+      // tab instead of piling up a fresh preview each time.
+      openMarkdownPreviewInGroup(groups.activeGroup, input, false)
+    } else {
+      groups.activeGroup.openEditor(input, { activate: true, pinned: false })
+    }
     opened = input
   }
 

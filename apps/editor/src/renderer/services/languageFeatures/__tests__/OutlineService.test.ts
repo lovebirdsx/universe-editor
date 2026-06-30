@@ -24,9 +24,10 @@ import {
 import type { ILanguageFeaturesService } from '../LanguageFeaturesService.js'
 import { OutlineService } from '../OutlineService.js'
 
-const { markerListeners, previewModels } = vi.hoisted(() => ({
+const { markerListeners, previewModels, modelAddListeners } = vi.hoisted(() => ({
   markerListeners: [] as Array<(resources: readonly { toString(): string }[]) => void>,
   previewModels: new Map<string, unknown>(),
+  modelAddListeners: [] as Array<(uri: { toString(): string }) => void>,
 }))
 
 // OutlineService subscribes to monaco's marker changes to re-pull symbols once a
@@ -54,8 +55,23 @@ vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
 vi.mock('../../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
   MonacoModelRegistry: {
     peek: (resource: { toString(): string }) => previewModels.get(resource.toString()),
+    onDidAddModel: (cb: (uri: { toString(): string }) => void) => {
+      modelAddListeners.push(cb)
+      return {
+        dispose: () => {
+          const i = modelAddListeners.indexOf(cb)
+          if (i >= 0) modelAddListeners.splice(i, 1)
+        },
+      }
+    },
   },
 }))
+
+/** Simulate a model being acquired for `uri` (plant it, then fire the event). */
+function addModel(uri: string, model: unknown): void {
+  previewModels.set(uri, model)
+  for (const cb of [...modelAddListeners]) cb({ toString: () => uri })
+}
 
 function fireMarkers(uri: string): void {
   for (const cb of [...markerListeners]) cb([{ toString: () => uri }])
@@ -152,6 +168,7 @@ describe('OutlineService', () => {
     MarkdownPreviewRegistry._resetForTests()
     previewModels.clear()
     markerListeners.length = 0
+    modelAddListeners.length = 0
   })
 
   function setup(symbols: monaco.languages.DocumentSymbol[], languageId = 'markdown') {
@@ -685,6 +702,31 @@ describe('OutlineService', () => {
     activeEditor.set(preview, undefined)
     await flush()
     expect(svc.outline.get()).toBeUndefined()
+    svc.dispose()
+  })
+
+  it('fills the outline once a link-navigated preview acquires its source model', async () => {
+    const symbols = [makeSymbol('Heading', 1, 9)]
+    const { svc, preview, sourceUri, activeEditor } = setupPreview(symbols)
+    // Link-navigated preview: source model not open yet when it becomes active.
+    previewModels.delete(sourceUri.toString())
+    MarkdownPreviewRegistry.register(sourceUri, makeController().controller)
+    activeEditor.set(preview, undefined)
+    await flush()
+    expect(svc.outline.get()?.roots ?? []).toEqual([])
+
+    // The preview component acquires the source model from disk (async); the
+    // registry's onDidAddModel must drive a re-pull that fills the outline.
+    const model = {
+      uri: { toString: () => sourceUri.toString() },
+      getLanguageId: () => 'markdown',
+      getValue: () => '',
+      isDisposed: () => false,
+      onDidChangeContent: () => ({ dispose: () => {} }),
+    } as unknown as monaco.editor.ITextModel
+    addModel(sourceUri.toString(), model)
+    await flush()
+    expect(svc.outline.get()?.roots).toEqual(symbols)
     svc.dispose()
   })
 })

@@ -73,24 +73,44 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const findRef = useRef(find)
   findRef.current = find
 
+  // Bind to the source's shared Monaco model so edits show live. When the source
+  // file isn't open in any editor (e.g. a preview reached by clicking a link),
+  // there is no shared model — so the Outline view and the markdown language
+  // service, which both read symbols from that model, would find nothing. Create
+  // (acquire) the model from disk for the preview's lifetime and release it on
+  // unmount, so those consumers see the document just like an open source file.
   useEffect(() => {
-    const model = MonacoModelRegistry.peek(sourceUri)
-    if (model) {
+    let released = false
+    let acquired = false
+    let sub: { dispose(): void } | undefined
+
+    const bind = (model: ReturnType<typeof MonacoModelRegistry.peek>): void => {
+      if (!model || released) return
       setContent(model.getValue())
-      const sub = model.onDidChangeContent(() => setContent(model.getValue()))
-      return () => sub.dispose()
+      sub = model.onDidChangeContent(() => setContent(model.getValue()))
     }
-    let cancelled = false
-    void fileService
-      .readFileText(sourceUri)
-      .then((text) => {
-        if (!cancelled) setContent(text)
-      })
-      .catch(() => {
-        if (!cancelled) setContent('')
-      })
+
+    const existing = MonacoModelRegistry.peek(sourceUri)
+    if (existing) {
+      bind(existing)
+    } else {
+      void fileService
+        .readFileText(sourceUri)
+        .then((text) => {
+          if (released) return
+          // Another consumer may have opened the source meanwhile; acquire dedups.
+          acquired = true
+          bind(MonacoModelRegistry.acquire(sourceUri, text))
+        })
+        .catch(() => {
+          if (!released) setContent('')
+        })
+    }
+
     return () => {
-      cancelled = true
+      released = true
+      sub?.dispose()
+      if (acquired) MonacoModelRegistry.release(sourceUri)
     }
   }, [fileService, sourceUri])
 
@@ -236,6 +256,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
         text={content}
         className={styles['previewBody'] ?? ''}
         baseUri={URI.joinPath(sourceUri, '..')}
+        previewLinks
       />
     </div>
   )

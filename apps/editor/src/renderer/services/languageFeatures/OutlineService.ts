@@ -139,6 +139,17 @@ export class OutlineService extends Disposable implements IOutlineService {
       }),
     )
 
+    // A link-navigated preview acquires its source model on demand (after an
+    // async disk read), so the model can appear AFTER we first attached and found
+    // none. Re-attach when the source model we were waiting on shows up.
+    this._register(
+      MonacoModelRegistry.onDidAddModel((uri) => {
+        if (this._currentPreview && uri.toString() === this._currentPreview.sourceUri.toString()) {
+          this._attachActiveEditor()
+        }
+      }),
+    )
+
     // Providers register at AfterRestore — possibly after the first editor is
     // already active — and a freshly-registered server still needs a moment to
     // analyse the file, so its first pull may be empty. Recompute WITH retries.

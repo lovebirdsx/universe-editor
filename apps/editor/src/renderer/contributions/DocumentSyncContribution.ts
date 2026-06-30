@@ -75,6 +75,10 @@ export class DocumentSyncContribution extends Disposable implements IWorkbenchCo
     )
     // Monaco mounts asynchronously after the input becomes active.
     this._register(FileEditorRegistry.onDidChange(() => this._sync()))
+    // A markdown preview reached via a link acquires its source model on demand
+    // (async), after the active-editor autorun already ran and found none. Sync
+    // when that model appears so the language service sees the document.
+    this._register(MonacoModelRegistry.onDidAddModel(() => this._sync()))
     // The host pins the workspace at launch and relaunches on a folder swap; its
     // fresh ExtHostDocuments is empty, so re-push every open document afterwards.
     this._register(this._workspace.onDidChangeWorkspace(() => this._resyncAll()))
