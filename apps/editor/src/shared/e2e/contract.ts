@@ -220,6 +220,27 @@ export interface E2EProbe {
         layoutHeight: number
       }
     | undefined
+  // -- Dirty-diff inline peek (quick diff widget) ---------------------------
+  /**
+   * Open the inline dirty-diff peek at the active editor's given line (the change
+   * containing it, else the closest). Returns whether a peek opened. Backs the
+   * dirty-diff peek spec.
+   */
+  openDirtyDiffPeekAtLine(line: number): boolean
+  /** Snapshot of the inline dirty-diff peek, or undefined when none is open. */
+  getDirtyDiffPeekState():
+    | {
+        open: boolean
+        panelHeightPx: number
+        maxHeightPx: number
+        /** First visible line of the host editor — to assert it scrolled into view. */
+        editorFirstVisibleLine: number
+      }
+    | undefined
+  /** Whether the `dirtyDiffPeekVisible` context key is set. */
+  isDirtyDiffPeekVisible(): boolean
+  /** Resize the open peek by `deltaPx`; returns the resulting panel height in px. */
+  resizeDirtyDiffPeekByPx(deltaPx: number): number | undefined
   // -- ACP probe -----------------------------------------------------------
   /**
    * Inject a test ACP agent that runs `node <jsPath>`. Writes into the Memory

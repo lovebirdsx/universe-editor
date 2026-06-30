@@ -5,6 +5,8 @@ import { findAdjacentChange } from '../DirtyDiffNavigationService.js'
 const region = (startLine: number, endLine = startLine): DirtyDiffRegion => ({
   startLine,
   endLine,
+  originalStartLine: startLine,
+  originalEndLine: endLine,
   kind: 'modified',
 })
 

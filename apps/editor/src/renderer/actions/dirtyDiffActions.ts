@@ -10,6 +10,7 @@ import {
   Action2,
   ICommandService,
   IEditorGroupsService,
+  KeybindingWeight,
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
@@ -21,6 +22,7 @@ import {
   findAdjacentChange,
 } from '../services/scm/DirtyDiffNavigationService.js'
 import { IScmDecorationsService } from '../services/scm/ScmDecorationsService.js'
+import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 
 const WHEN = "editorTextFocus && !isInDiffEditor && quickDiffDecorationCount != '0'"
 
@@ -116,5 +118,58 @@ export class OpenActiveFileChangesAction extends Action2 {
       original: head ?? '',
       modified,
     })
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Inline dirty-diff peek (the quick-diff widget over a gutter change). Open it
+// at the cursor with a keybinding, and close it with Esc — mirroring VSCode's
+// `editor.action.dirtydiff.{next,close}` / `closeQuickDiff`.
+// ---------------------------------------------------------------------------
+
+export class ShowChangeAtCursorAction extends Action2 {
+  static readonly ID = 'workbench.action.editor.showChange'
+
+  constructor() {
+    super({
+      id: ShowChangeAtCursorAction.ID,
+      title: localize2('action.editor.showChange.title', 'Show Change'),
+      category: localize2('command.category.editor', 'Editor'),
+      precondition: WHEN,
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    const host = DirtyDiffPeekRegistry.getHost()
+    if (!host) return
+    const group = accessor.get(IEditorGroupsService).activeGroup
+    const active = group.activeEditor
+    if (!(active instanceof FileEditorInput)) return
+    const editor = FileEditorRegistry.get(active, group.id)
+    host.openAtLine(editor?.getPosition()?.lineNumber ?? 1)
+  }
+}
+
+export class CloseDirtyDiffPeekAction extends Action2 {
+  static readonly ID = 'closeDirtyDiffPeek'
+
+  constructor() {
+    super({
+      id: CloseDirtyDiffPeekAction.ID,
+      title: localize2('action.editor.closeChange.title', 'Close Change Peek'),
+      category: localize2('command.category.editor', 'Editor'),
+      // Outrank both Monaco's own Esc handlers and the workbench's
+      // "focus editor group" Esc (WorkbenchContrib) so the peek closes first.
+      keybinding: {
+        primary: 'escape',
+        when: 'dirtyDiffPeekVisible',
+        weight: KeybindingWeight.WorkbenchContrib + 50,
+      },
+    })
+  }
+
+  override run(): void {
+    DirtyDiffPeekRegistry.getHost()?.closePeek()
   }
 }

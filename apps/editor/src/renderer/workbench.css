@@ -413,6 +413,103 @@ html, body, #root {
   width: 0 !important;
   margin-left: 2px;
 }
+/* The gutter bar is clickable (opens the inline peek), like VSCode. On hover the
+   bar widens (and a transparent hit-area is added via ::before) so it's an easy
+   click target — VSCode does the same with its 6px hover glyph. */
+.dirty-diff-gutter {
+  cursor: pointer;
+}
+.dirty-diff-gutter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -3px;
+  width: 12px;
+}
+.dirty-diff-gutter-added:hover,
+.dirty-diff-gutter-modified:hover {
+  width: 6px !important;
+}
+.dirty-diff-gutter-deleted:hover {
+  border-left-width: 6px;
+}
+
+/* Inline dirty-diff peek (click a gutter bar): a header with a codicon action bar
+   over an EMBEDDED Monaco diff editor (HEAD ↔ current). Mirrors VSCode's
+   QuickDiffWidget / ZoneWidget; the embedded diff gives line numbers (both sides),
+   real syntax highlighting and internal mouse-wheel scrolling for free. The panel
+   is an OVERLAY widget (interactive, scrollable layer) the controller positions:
+   left = 0 (far left, over the line-number margin) to just inside the vertical
+   scrollbar; an empty view zone reserves the band and drives its top/height. */
+.inline-dirty-diff {
+  position: absolute;
+  z-index: 10;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--color-tab-active-border, #0070e0);
+  border-bottom: 1px solid var(--color-tab-active-border, #0070e0);
+  background-color: var(--color-editor-bg, #1a1a1c);
+  overflow: hidden;
+}
+.inline-dirty-diff-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+  padding: 0 4px 0 12px;
+  font-size: 13px;
+  background-color: var(--color-panel-toolbar-bg, #242427);
+  user-select: none;
+}
+.inline-dirty-diff-title {
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--color-editor-fg, #c8c8c8);
+}
+.inline-dirty-diff-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: none;
+}
+.inline-dirty-diff-action.codicon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  cursor: pointer;
+  border-radius: 5px;
+  font-size: 16px;
+  color: var(--color-editor-fg, #c8c8c8);
+}
+.inline-dirty-diff-action.codicon:hover {
+  background-color: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+}
+.inline-dirty-diff-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Grab handle along the panel's bottom edge — drag to resize (VSCode's Sash). */
+.inline-dirty-diff-resize {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 5px;
+  cursor: ns-resize;
+  z-index: 11;
+}
+.inline-dirty-diff-resize:hover {
+  background-color: var(--color-tab-active-border, #0070e0);
+  opacity: 0.5;
+}
 
 /* Inline merge-conflict regions (git markers in a plain file editor). Whole-line
    tints mirror VSCode's merge-conflict extension: green = current/ours,

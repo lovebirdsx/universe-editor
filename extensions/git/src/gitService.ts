@@ -40,12 +40,15 @@ function sanitizeEnv(): NodeJS.ProcessEnv {
  * process can't be spawned at all (e.g. git not installed). Output is collected
  * as bytes and decoded as UTF-8 so NUL-delimited `-z` output survives intact.
  *
- * If `log` is provided, the command and its result are written to it.
+ * If `log` is provided, the command and its result are written to it. When
+ * `options.input` is set it is written to the child's stdin and the stream closed
+ * (e.g. `hash-object --stdin` reads the blob to store from here).
  */
 export function gitExec(
   args: readonly string[],
   cwd: string,
   log?: (msg: string) => void,
+  options?: { readonly input?: string },
 ): Promise<GitExecResult> {
   return new Promise((resolve, reject) => {
     log?.(`> git ${args.join(' ')}`)
@@ -72,6 +75,9 @@ export function gitExec(
       log?.(`  exit ${result.exitCode} (${elapsed}ms)${stderrNote}`)
       resolve(result)
     })
+    if (options?.input !== undefined) {
+      proc.stdin.end(options.input)
+    }
   })
 }
 

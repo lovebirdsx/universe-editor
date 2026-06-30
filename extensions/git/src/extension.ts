@@ -425,6 +425,13 @@ export async function activate(context: ExtensionContext): Promise<void> {
       return repo.getHeadContent(path)
     }),
 
+    commands.registerCommand('git.stageChange', (...args: unknown[]) => {
+      const [path, startLine, endLine] = args as [string, number, number]
+      const repo = mgr.resolveRepo({ resourceUri: path })
+      if (!repo || !path) return false
+      return repo.stageChange(path, startLine, endLine)
+    }),
+
     commands.registerCommand('git.openChange', async (...args: unknown[]) => {
       const [arg, options] = args as [
         unknown,

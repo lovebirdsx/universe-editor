@@ -25,6 +25,7 @@ import {
   type SourceControlResourceGroup,
 } from '@universe-editor/extension-api'
 import { gitExec } from './gitService.js'
+import { selectHunkPatch } from './hunkPatch.js'
 import { notifyGitFailure } from './gitError.js'
 import { parseStatus } from './statusParser.js'
 import {
@@ -202,6 +203,39 @@ export class Repository {
   async stage(paths: readonly string[]): Promise<void> {
     if (paths.length === 0) return
     await this._run(['add', '--', ...paths], 'stage')
+  }
+
+  /**
+   * Stage just the change hunk covering current-document lines [startLine, endLine]
+   * (1-based), mirroring VSCode's "Stage Change". Diffs the index against the
+   * working tree with zero context so each hunk maps 1:1 to a dirty-diff region,
+   * keeps the one overlapping the region, and applies it back with
+   * `git apply --cached`. Returns whether anything was staged.
+   */
+  async stageChange(absPath: string, startLine: number, endLine: number): Promise<boolean> {
+    const rel = relative(this.root, absPath).replace(/\\/g, '/')
+    const diff = await gitExec(['diff', '-U0', '--no-color', '--', rel], this.root, this._log)
+    if (diff.exitCode !== 0) {
+      await notifyGitFailure('stage change', diff)
+      return false
+    }
+    const patch = selectHunkPatch(diff.stdout, startLine, endLine)
+    if (!patch) {
+      this._log?.(`stage change: no hunk at lines ${startLine}-${endLine}`)
+      return false
+    }
+    const apply = await gitExec(
+      ['apply', '--cached', '--unidiff-zero', '--whitespace=nowarn', '-'],
+      this.root,
+      this._log,
+      { input: patch },
+    )
+    if (apply.exitCode !== 0) {
+      await notifyGitFailure('stage change', apply)
+      return false
+    }
+    await this.refresh()
+    return true
   }
 
   async stageAll(): Promise<void> {

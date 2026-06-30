@@ -9,4 +9,10 @@
 
 export const DirtyDiffCommands = {
   getHeadContent: 'git.getHeadContent',
+  /**
+   * Stage a single change hunk. Args: `(fsPath, startLine, endLine)` — the 1-based
+   * current-document line range of the dirty-diff region to stage. Returns whether
+   * anything was staged.
+   */
+  stageChange: 'git.stageChange',
 } as const

@@ -10,9 +10,11 @@ import {
   OpenDiffAction,
 } from './diffActions.js'
 import {
+  CloseDirtyDiffPeekAction,
   GoToNextChangeAction,
   GoToPreviousChangeAction,
   OpenActiveFileChangesAction,
+  ShowChangeAtCursorAction,
 } from './dirtyDiffActions.js'
 import {
   GoToNextMergeConflictAction,
@@ -494,6 +496,8 @@ registerAction2(GoToPreviousDifferenceAction)
 registerAction2(OpenActiveFileChangesAction)
 registerAction2(GoToNextChangeAction)
 registerAction2(GoToPreviousChangeAction)
+registerAction2(ShowChangeAtCursorAction)
+registerAction2(CloseDirtyDiffPeekAction)
 registerAction2(GoToNextMergeConflictAction)
 registerAction2(GoToPreviousMergeConflictAction)
 registerAction2(OpenMergeEditorAction)

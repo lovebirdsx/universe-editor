@@ -45,6 +45,7 @@ import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
+import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
 import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {
   E2E_PROBE_ENABLED_KEY,
@@ -295,6 +296,25 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         layoutHeight: modified.getLayoutInfo().height,
       }
     },
+    openDirtyDiffPeekAtLine: (line: number): boolean =>
+      DirtyDiffPeekRegistry.getHost()?.openAtLine(line) ?? false,
+    getDirtyDiffPeekState: () => {
+      const host = DirtyDiffPeekRegistry.getHost()
+      if (!host || !host.isPeekOpen()) return undefined
+      const group = services.editorGroupsService.activeGroup
+      const active = group?.activeEditor
+      const editor = active instanceof FileEditorInput ? FileEditorRegistry.get(active) : undefined
+      return {
+        open: true,
+        panelHeightPx: host.getPeekPanelHeightPx() ?? 0,
+        maxHeightPx: host.getPeekMaxHeightPx() ?? 0,
+        editorFirstVisibleLine: editor?.getVisibleRanges()[0]?.startLineNumber ?? 0,
+      }
+    },
+    isDirtyDiffPeekVisible: (): boolean =>
+      services.contextKeyService.get('dirtyDiffPeekVisible') === true,
+    resizeDirtyDiffPeekByPx: (deltaPx: number): number | undefined =>
+      DirtyDiffPeekRegistry.getHost()?.resizePeekByPx(deltaPx),
     installAcpEchoAgent: (agentId, jsPath) => {
       services.configurationService.update(
         'acp.agents',
