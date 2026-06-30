@@ -1,10 +1,12 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useMarkdownFileLink — resolve and open a file path clicked inside rendered
- *  markdown. Absolute paths open directly; relative paths resolve against the
- *  view's baseUri (the markdown source's directory, or the workspace root for
- *  agent chat). When the exact path is missing we fall back to a fuzzy workspace
- *  search; if nothing matches we surface a "file not found" notification.
+ *  markdown. Concrete candidates (absolute, relative to the markdown source dir,
+ *  relative to the workspace root) are probed first and opened on the first hit —
+ *  no search, so an existing path opens instantly. Only when none exist do we
+ *  fall back to a workspace file search: a single hit opens directly, several
+ *  hits hand off to Go to File (prefilled with the path) so the user picks the
+ *  intended target, and zero hits surfaces a "file not found" notification.
  *
  *  In `previewLinks` mode (the doc preview) a link to another markdown file opens
  *  as a *preview* rather than its source: a plain click navigates in place
@@ -30,20 +32,26 @@ import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
+import { IExcludeService } from '../../services/exclude/ExcludeService.js'
+import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
 import { useOptionalService } from '../useService.js'
+import { markdownLinkCandidates, searchPatternFor } from './markdownLinkResolve.js'
 
 const CACHE_TTL = 10_000
+const SEARCH_MAX_RESULTS = 10
 
-type CacheEntry = Promise<URI | null> | { uri: URI | null; expiresAt: number }
+/** Outcome of resolving a clicked path: open it, let the user pick, or report it missing. */
+type Resolution =
+  | { readonly kind: 'open'; readonly uri: URI }
+  | { readonly kind: 'pick'; readonly pattern: string }
+  | { readonly kind: 'missing' }
+
+type CacheEntry = { readonly resolution: Resolution; readonly expiresAt: number }
 
 /** Options carried from the click handler (which mouse modifiers were held). */
 export interface OpenMarkdownLinkOptions {
   /** Ctrl/Cmd was held: open a new preview tab instead of navigating in place. */
   readonly toSide?: boolean
-}
-
-function isAbsolutePath(p: string): boolean {
-  return /^[A-Za-z]:[/\\]/.test(p) || p.startsWith('/')
 }
 
 function isMarkdownResource(uri: URI): boolean {
@@ -69,58 +77,83 @@ export function useMarkdownFileLink(
   const groupsService = useOptionalService(IEditorGroupsService)
   const instantiation = useOptionalService(IInstantiationService)
   const notificationService = useOptionalService(INotificationService)
+  const excludeService = useOptionalService(IExcludeService)
+  const quickAccess = useOptionalService(IQuickAccessController)
   const cache = useRef(new Map<string, CacheEntry>())
+  const inflight = useRef(new Map<string, Promise<Resolution>>())
 
   const resolve = useCallback(
-    (rawPath: string): Promise<URI | null> => {
-      if (!fileService) return Promise.resolve(null)
+    (rawPath: string): Promise<Resolution> => {
+      if (!fileService) return Promise.resolve<Resolution>({ kind: 'missing' })
       const now = Date.now()
-      const cached = cache.current.get(rawPath)
-      if (cached instanceof Promise) return cached
-      if (cached !== undefined && cached.expiresAt > now) return Promise.resolve(cached.uri)
+      const cached = cacheGet(cache.current, rawPath, now)
+      if (cached) return Promise.resolve(cached)
+      const running = inflight.current.get(rawPath)
+      if (running) return running
 
-      const promise = (async (): Promise<URI | null> => {
-        const target = isAbsolutePath(rawPath)
-          ? URI.file(rawPath)
-          : baseUri
-            ? URI.joinPath(baseUri, rawPath)
-            : null
-        if (target && (await fileService.exists(target))) return target
+      const promise = (async (): Promise<Resolution> => {
+        const workspaceRoot = workspaceService?.current?.folder
+        // 1. Concrete candidates — open the first that exists, no search needed.
+        for (const candidate of markdownLinkCandidates(rawPath, baseUri, workspaceRoot)) {
+          if (await fileService.exists(candidate)) return { kind: 'open', uri: candidate }
+        }
 
-        const workspace = workspaceService?.current
-        if (!workspace || !fileSearchService) return null
-
-        const pattern = rawPath.split(/[/\\]/).filter(Boolean).join('/')
+        // 2. Fuzzy fallback over the workspace, honoring the same excludes as Go
+        //    to File so we never walk node_modules/dist/.git (the old slow path).
+        if (!workspaceRoot || !fileSearchService) return { kind: 'missing' }
+        const pattern = searchPatternFor(rawPath)
+        if (pattern.length === 0) return { kind: 'missing' }
         const result = await fileSearchService.search({
-          root: workspace.folder,
+          root: workspaceRoot,
           pattern,
           includeExactPathMatches: true,
-          maxResults: 10,
+          maxResults: SEARCH_MAX_RESULTS,
+          ...(excludeService
+            ? {
+                excludes: excludeService.getSearchExcludeGlobs(),
+                ignore: excludeService.getDirNameIgnores(),
+              }
+            : {}),
         })
-        const first = result.results[0]
-        return first ? (URI.revive(first.resource) as URI) : null
+        const hits = result.results
+        if (hits.length === 0) return { kind: 'missing' }
+        if (hits.length === 1) return { kind: 'open', uri: URI.revive(hits[0]!.resource) as URI }
+        // Several matches: let the user disambiguate in Go to File, prefilled.
+        return { kind: 'pick', pattern }
       })()
 
-      cache.current.set(rawPath, promise)
-      void promise.then((uri) => {
-        cache.current.set(rawPath, { uri, expiresAt: Date.now() + CACHE_TTL })
+      inflight.current.set(rawPath, promise)
+      void promise.then((resolution) => {
+        inflight.current.delete(rawPath)
+        // Only cache stable outcomes; a transient 'missing' (services not ready)
+        // shouldn't be pinned for 10s.
+        if (resolution.kind !== 'missing') {
+          cache.current.set(rawPath, { resolution, expiresAt: Date.now() + CACHE_TTL })
+        }
       })
       return promise
     },
-    [fileService, fileSearchService, workspaceService, baseUri],
+    [fileService, fileSearchService, workspaceService, excludeService, baseUri],
   )
 
   return useCallback(
     (rawPath: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => {
       if (!editorService || !instantiation) return
-      void resolve(rawPath).then((uri) => {
-        if (!uri) {
+      void resolve(rawPath).then((resolution) => {
+        if (resolution.kind === 'missing') {
           notificationService?.notify({
             severity: Severity.Warning,
             message: `文件不存在: ${rawPath}`,
           })
           return
         }
+        if (resolution.kind === 'pick') {
+          // Hand off to Go to File so the user picks among the matches. We can't
+          // carry the :line here, but multi-match links are the rare case.
+          void quickAccess?.show(resolution.pattern)
+          return
+        }
+        const uri = resolution.uri
         // A markdown→markdown link in the preview opens as another preview
         // (in place, or to a new tab on Ctrl/Cmd+click). A `:line` location
         // means the user wants the source at that line, so fall through.
@@ -146,6 +179,20 @@ export function useMarkdownFileLink(
         }
       })
     },
-    [resolve, editorService, groupsService, instantiation, notificationService, previewLinks],
+    [
+      resolve,
+      editorService,
+      groupsService,
+      instantiation,
+      notificationService,
+      quickAccess,
+      previewLinks,
+    ],
   )
+}
+
+function cacheGet(map: Map<string, CacheEntry>, key: string, now: number): Resolution | undefined {
+  const entry = map.get(key)
+  if (entry && entry.expiresAt > now) return entry.resolution
+  return undefined
 }

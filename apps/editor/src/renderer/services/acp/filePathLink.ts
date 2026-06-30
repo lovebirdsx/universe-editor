@@ -95,15 +95,26 @@ const EXTS = [
 const EXT_TAIL = '(?![A-Za-z0-9])'
 const EXT = `\\.(?:${EXTS})${EXT_TAIL}`
 
-// Segment: non-whitespace, non-quote, non-angle-bracket, no markdown-significant chars.
-const SEG = '[^\\s"\'<>|*?()\\[\\]]'
+// Characters never allowed inside a path segment: whitespace & control chars,
+// quotes, angle brackets, shell/glob metacharacters, markdown / clause
+// punctuation (backtick, parens, brackets, comma, semicolon, braces) and EVERY
+// non-ASCII char (CJK text + full-width punctuation). Excluding these stops a
+// bare path from crossing an inline-code boundary or swallowing the surrounding
+// prose — the false positives we used to see in mixed Chinese/code sentences.
+const NON_SEG = '\\s\\x00-\\x1f"\'`<>|*?,;{}()\\[\\]\\u0080-\\uffff'
+// Segment for absolute paths (may contain ':' only via the Windows drive prefix,
+// which is matched separately; a ':' here would be the start of a :line suffix).
+const SEG = `[^${NON_SEG}]`
+// Segment for the relative grammar: additionally bars the path separators and
+// ':' so a segment can't span a directory boundary or eat the location suffix.
+const REL_SEG = `[^${NON_SEG}:/\\\\]`
 
 // Windows absolute:   C:\path\file.ts  or  C:/path/file.ts
 const WIN_ABS = `[A-Za-z]:[/\\\\](?:${SEG}+[/\\\\])*${SEG}+${EXT}`
 // Unix absolute or relative dot-slash:  /path/file.ts  ./path/file.ts  ../path/file.ts
 const UNIX_ABS = `\\.{0,2}/(?:${SEG}+/)*${SEG}+${EXT}`
 // Relative with at least one dir component:  src/foo/bar.ts
-const REL = `(?:[^\\s"'<>|*?:()\\[\\]/\\\\]+[/\\\\])+[^\\s"'<>|*?:()\\[\\]/\\\\]+${EXT}`
+const REL = `(?:${REL_SEG}+[/\\\\])+${REL_SEG}+${EXT}`
 
 // Optional :line:col  or  (line,col)
 const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
@@ -157,7 +168,7 @@ export function matchFullFilePath(text: string): FilePathMatch | null {
  */
 export function looksLikeFilePath(href: string): boolean {
   if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false // has a URL scheme
-  return new RegExp(`^(?:${WIN_ABS}|${UNIX_ABS}|${REL}|${SEG}+${EXT})$`).test(href)
+  return new RegExp(`^(?:${WIN_ABS}|${UNIX_ABS}|${REL}|${REL_SEG}+${EXT})$`).test(href)
 }
 
 /** Split a `path:line:col` / `path(line,col)` href into its parts. */

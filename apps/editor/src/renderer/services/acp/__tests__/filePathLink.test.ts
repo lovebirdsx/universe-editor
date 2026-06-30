@@ -77,6 +77,24 @@ describe('matchFilePathAt', () => {
     // The path starts at index 1 ("src/..."), but index 0 ("x") precedes it.
     expect(matchFilePathAt('xsrc/a.ts', 1)).toBeNull()
   })
+
+  it('does NOT cross an inline-code boundary (backtick)', () => {
+    // Regression: a bare path must stop at a backtick, not swallow adjacent code
+    // spans / prose. `（` opens a full-width paren; the old grammar matched from
+    // there straight through `ExplorerView.tsx`, eating two backtick-fenced spans.
+    expect(matchFilePathAt('`workbench-ui/src/tree/`', 0)).toBeNull()
+    const inner = matchFilePathAt('workbench-ui/src/tree/Tree.tsx`', 0)
+    expect(inner?.path).toBe('workbench-ui/src/tree/Tree.tsx')
+  })
+
+  it('does NOT swallow CJK text or full-width punctuation', () => {
+    // Regression (problem 1/2): paths must not extend into Chinese prose or
+    // full-width brackets/middle-dots/dashes around them.
+    expect(matchFilePathAt('（`workbench-ui/src/tree/`）内置虚拟化', 0)).toBeNull()
+    expect(matchFilePathAt('02·P0/P1）——acpSession.ts', 0)).toBeNull()
+    // A clean path immediately followed by CJK stops at the boundary.
+    expect(matchFilePathAt('src/a.ts内置', 0)?.path).toBe('src/a.ts')
+  })
 })
 
 describe('matchFullFilePath', () => {
