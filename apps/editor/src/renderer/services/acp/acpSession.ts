@@ -623,9 +623,11 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
-   * Persist an AI title onto the agent's durable store so it survives `/compact`.
-   * Best-effort + fire-and-forget: agents that don't implement the ext-method
-   * (e.g. codex) reject with methodNotFound and we keep the local-only title,
+   * Persist an AI title onto the agent's durable store so it survives `/compact`
+   * and is reported by `session/list` from other workspaces. Both the Claude and
+   * Codex forks back this ext-method (Claude via `renameSession`, Codex via
+   * `thread/name/set`). Best-effort + fire-and-forget: an agent that doesn't
+   * implement it rejects with methodNotFound and we keep the local-only title,
    * which the `aiTitle` history flag still protects from hydrate overwrites.
    */
   private _pushTitleToAgent(sessionIdOnAgent: string, title: string): void {

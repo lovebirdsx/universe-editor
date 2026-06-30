@@ -11,7 +11,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "jq -r '.tool_input.file_path // empty' | grep -E '\\.(ts|tsx|js|jsx)$' | xargs -d '\\n' -r pnpm exec eslint --fix",
+            "command": "jq -r '.tool_input.file_path // empty' | grep -E '\\.(ts|tsx|js|jsx)$' | grep -v '/vendor/' | xargs -d '\\n' -r pnpm exec eslint --fix",
             "statusMessage": "ESLint fix..."
           }
         ]
