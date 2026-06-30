@@ -15,11 +15,13 @@ import {
   markAsSingleton,
 } from '@universe-editor/platform'
 import type { IMenuItem } from '@universe-editor/platform'
+import { resolveShortcut } from '../titlebar/keybindingFormat.js'
 
 export interface ResolvedViewTitleAction {
   command: string
   label: string
   icon?: string
+  shortcut?: string
 }
 
 function resolveLabel(item: IMenuItem): string {
@@ -38,10 +40,12 @@ function resolve(
   for (const item of items) {
     if (isSubmenuEntry(item)) continue
     if (groupFilter !== undefined && item.group !== groupFilter) continue
+    const shortcut = resolveShortcut(item.command)
     out.push({
       command: item.command,
       label: resolveLabel(item),
       ...(item.icon !== undefined ? { icon: item.icon } : {}),
+      ...(shortcut !== undefined ? { shortcut } : {}),
     })
   }
   return out

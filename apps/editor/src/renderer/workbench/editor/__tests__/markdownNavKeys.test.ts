@@ -47,8 +47,10 @@ describe('reduceNavKey', () => {
     expect(run(['L']).commands).toEqual([{ type: 'goForward' }])
   })
 
-  it('toggles help on ?', () => {
-    expect(run(['?']).commands).toEqual([{ type: 'toggleHelp' }])
+  it('does not handle ? (help is a registered keybinding, not a nav key)', () => {
+    const r = reduceNavKey(INITIAL_NAV_STATE, '?', false)
+    expect(r.handled).toBe(false)
+    expect(r.command).toBeUndefined()
   })
 
   it('resolves gg to scroll-to-top', () => {

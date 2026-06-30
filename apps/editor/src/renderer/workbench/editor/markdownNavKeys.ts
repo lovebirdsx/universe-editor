@@ -16,7 +16,6 @@ export type NavCommand =
   | { readonly type: 'scrollToBottom' }
   | { readonly type: 'goBack' }
   | { readonly type: 'goForward' }
-  | { readonly type: 'toggleHelp' }
 
 /** Mutable parsing state carried between keystrokes. */
 export interface NavKeyState {
@@ -88,8 +87,6 @@ export function reduceNavKey(state: NavKeyState, key: string, shift: boolean): N
       return done({ type: 'goBack' })
     case 'L':
       return done({ type: 'goForward' })
-    case '?':
-      return done({ type: 'toggleHelp' })
     case 'g':
       // First `g`: wait for the second. Carry the count through the chord.
       return { state: { count: state.count, pendingG: true }, handled: true }

@@ -1,8 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { ContextKeyService, EditorInput, URI } from '@universe-editor/platform'
+import { ContextKeyService, Emitter, EditorInput, URI } from '@universe-editor/platform'
 import { focusEditorInput, syncEditorFocusContext } from '../editorFocus.js'
 import { FileEditorRegistry } from '../FileEditorRegistry.js'
 import { DiffEditorRegistry } from '../DiffEditorRegistry.js'
+import { MarkdownPreviewInput } from '../MarkdownPreviewInput.js'
+import {
+  MarkdownPreviewRegistry,
+  type IMarkdownPreviewController,
+} from '../MarkdownPreviewRegistry.js'
 
 class NonMonacoInput extends EditorInput {
   get typeId() {
@@ -134,5 +139,78 @@ describe('syncEditorFocusContext — editorTextFocus reset', () => {
     // Still focused in a Monaco editor: the text-vs-widget distinction stays
     // Monaco's job, so we must not clobber it here.
     expect(cks.get('editorTextFocus')).toBe(true)
+  })
+})
+
+describe('focusEditorInput — markdown preview', () => {
+  // Repro: pressing Esc inside a focused preview routes to FocusActiveEditorGroup
+  // → focusEditorInput(MarkdownPreviewInput). Without a focus() hook this fell
+  // through to focusGroupBody(), moving focus to the editor-group body that wraps
+  // (and so sits outside) the preview container — firing the preview's focusout,
+  // dropping markdownPreviewFocused, and silently disabling f / Ctrl+F. The hook
+  // must instead route focus back into the preview's own scroll container.
+  function makeController(): {
+    controller: IMarkdownPreviewController
+    calls: { focus: number }
+  } {
+    const calls = { focus: 0 }
+    const onDidScroll = new Emitter<void>()
+    const controller: IMarkdownPreviewController = {
+      scrollToLine: () => {},
+      getTopVisibleLine: () => 1,
+      focus: () => {
+        calls.focus += 1
+      },
+      onDidScroll: onDidScroll.event,
+      openFind: () => {},
+      closeFind: () => {},
+      findNext: () => {},
+      findPrev: () => {},
+      showLinkHints: () => {},
+      hideLinkHints: () => {},
+      toggleHelp: () => {},
+    }
+    return { controller, calls }
+  }
+
+  beforeEach(() => {
+    document.body.innerHTML = ''
+    FileEditorRegistry._resetForTests()
+    DiffEditorRegistry._resetForTests()
+    MarkdownPreviewRegistry._resetForTests()
+  })
+  afterEach(() => {
+    document.body.innerHTML = ''
+    MarkdownPreviewRegistry._resetForTests()
+  })
+
+  it('routes focus to the preview controller, not the group body', () => {
+    const cks = new ContextKeyService()
+    const body = mountGroupBody(5)
+    const sourceUri = URI.file('/repo/doc.md')
+    const input = new MarkdownPreviewInput(sourceUri)
+    const { controller, calls } = makeController()
+    MarkdownPreviewRegistry.register(sourceUri, controller)
+
+    const handled = focusEditorInput(input, cks, 5)
+
+    expect(handled).toBe(true)
+    expect(calls.focus).toBe(1)
+    // The group body must NOT have stolen focus (that is the regression).
+    expect(document.activeElement).not.toBe(body)
+  })
+
+  it('falls back to the group body when no preview is mounted', () => {
+    const cks = new ContextKeyService()
+    const body = mountGroupBody(6)
+    const input = new MarkdownPreviewInput(URI.file('/repo/doc.md'))
+
+    // No controller registered: focus() returns false, so focusEditorInput
+    // falls through to the group-body fallback (keyboard input still lands
+    // somewhere sane).
+    const handled = focusEditorInput(input, cks, 6)
+
+    expect(handled).toBe(true)
+    expect(document.activeElement).toBe(body)
   })
 })

@@ -334,6 +334,110 @@ test.describe('@p1 markdown preview', () => {
       .toEqual(expect.stringContaining('index.md'))
   })
 
+  // Regression: pressing Esc inside the focused preview routed to
+  // FocusActiveEditorGroup → focusEditorInput, which (lacking a focus() hook on
+  // MarkdownPreviewInput) moved focus to the editor-group body wrapping the
+  // preview, firing focusout → markdownPreviewFocused=false. Every preview
+  // keybinding (f / Ctrl+F / link hints) then NO-MATCHed forever. The focus()
+  // hook must keep focus inside the preview so the key stays true.
+  test('Escape keeps the preview focused so keys keep working', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const { dir, filePath } = writeLinkedMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    await expect(page.locator('[data-testid="markdown-preview"] a').first()).toBeVisible()
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    await page.bringToFront()
+
+    // Press Escape with no find bar / hints open: focus must stay in the preview.
+    await page.keyboard.press('Escape')
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    // And keys must still work afterwards — `f` still summons link hints.
+    await showLinkHints(page, workbench)
+    await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
+  })
+
+  // Regression: closing the find bar with Esc routes through the global
+  // MarkdownPreviewFindClose command → controller.closeFind(). That path used to
+  // only close the widget without returning focus to the preview, so focus was
+  // left on the (now-removed) find input's slot and markdownPreviewFocused went
+  // false — a second Esc was needed before f / Ctrl+F worked again. closeFind()
+  // must restore focus to the scroll container in one step (mirrors ChatBody).
+  test('Closing find with Escape returns focus to the preview in one step', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const { dir, filePath } = writeLinkedMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    await expect(page.locator('[data-testid="markdown-preview"] a').first()).toBeVisible()
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    await page.bringToFront()
+
+    // Open find via the real Ctrl+F (gated on markdownPreviewFocused). Re-press
+    // while still hidden so a dropped synthetic key self-heals.
+    await expect
+      .poll(
+        async () => {
+          if (!(await workbench.getContextKey<boolean>('markdownPreviewFindVisible'))) {
+            await page.keyboard.press('Control+f')
+          }
+          return workbench.getContextKey<boolean>('markdownPreviewFindVisible')
+        },
+        { timeout: 5000 },
+      )
+      .toBe(true)
+    await expect(page.locator('[data-testid="acp-find-input"]')).toBeFocused()
+
+    // One Escape must both close the bar AND return focus to the preview.
+    await page.keyboard.press('Escape')
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFindVisible'), { timeout: 5000 })
+      .toBe(false)
+    // The single Escape restored focus — no second press needed.
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    // Proof the focus is real: `f` immediately summons link hints, no click.
+    await showLinkHints(page, workbench)
+    await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
+  })
+
   test('Vim keys scroll the preview (j / gg)', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
@@ -475,5 +579,70 @@ test.describe('@p1 markdown preview', () => {
 
     await page.keyboard.press('Escape')
     await expect(help).toHaveCount(0)
+  })
+
+  // Regression: clicking the title-bar buttons moves focus off the preview
+  // (firing focusout → clearActive), so the command must resolve the active
+  // preview via the editor group rather than the now-empty focus handle.
+  // Before the fix the buttons silently did nothing while the shortcut worked.
+  test('clicking the Help title-bar button opens the help overlay', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const mdFsPath = writeLongMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    await expect(page.locator('[data-testid="markdown-preview"] h1').first()).toBeVisible()
+    await page.bringToFront()
+
+    const helpButton = page.locator(
+      '[data-testid="view-title-action-workbench.action.markdownPreview.help"]',
+    )
+    await expect(helpButton).toBeVisible()
+    // The tooltip carries the keybinding hint.
+    await expect(helpButton).toHaveAttribute('title', /\?/)
+
+    const help = page.locator('[data-testid="md-preview-help"]')
+    await helpButton.click()
+    await expect(help).toBeVisible()
+  })
+
+  test('clicking the Find title-bar button opens the find widget', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const mdFsPath = writeLongMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    await expect(page.locator('[data-testid="markdown-preview"] h1').first()).toBeVisible()
+    await page.bringToFront()
+
+    const findButton = page.locator(
+      '[data-testid="view-title-action-workbench.action.markdownPreview.find"]',
+    )
+    await expect(findButton).toBeVisible()
+    // The tooltip carries the keybinding hint (Ctrl+F).
+    await expect(findButton).toHaveAttribute('title', /Ctrl\+F/i)
+
+    await findButton.click()
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFindVisible'), { timeout: 5000 })
+      .toBe(true)
   })
 })

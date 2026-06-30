@@ -29,6 +29,7 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
+import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
 const MARKDOWN_PRECONDITION = 'activeEditorLanguageId == markdown'
 const MARKDOWN_PREVIEW_PRECONDITION = `activeEditorTypeId == '${MarkdownPreviewInput.TYPE_ID}'`
@@ -161,7 +162,23 @@ export class OpenMarkdownSourceAction extends Action2 {
 // preview via MarkdownPreviewRegistry.getActive(), gated by the
 // `markdownPreviewFocused` / `markdownPreviewFindVisible` context keys the
 // MarkdownPreviewEditor maintains (mirrors the chat find commands).
+//
+// `getActive()` tracks the preview holding *keyboard focus*. A keyboard shortcut
+// keeps focus inside the preview, so it resolves directly. But clicking a
+// title-bar button (Find / Help) moves focus onto the button, firing the
+// preview's `focusout` → clearActive(), so by command time getActive() is empty.
+// Fall back to the active editor group's preview so the buttons work too.
 // ---------------------------------------------------------------------------
+
+function activePreviewController(
+  accessor: ServicesAccessor,
+): IMarkdownPreviewController | undefined {
+  const active = MarkdownPreviewRegistry.getActive()
+  if (active) return active
+  const editor = accessor.get(IEditorGroupsService).activeGroup.activeEditor
+  if (editor instanceof MarkdownPreviewInput) return MarkdownPreviewRegistry.get(editor.sourceUri)
+  return undefined
+}
 
 const FIND_CATEGORY = localize2('command.category.markdown', 'Markdown')
 
@@ -184,8 +201,8 @@ export class MarkdownPreviewFindAction extends Action2 {
       f1: true,
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.openFind()
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.openFind()
   }
 }
 
@@ -199,8 +216,8 @@ export class MarkdownPreviewFindNextAction extends Action2 {
       keybinding: { primary: 'f3', when: 'markdownPreviewFindVisible' },
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.findNext()
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.findNext()
   }
 }
 
@@ -214,8 +231,8 @@ export class MarkdownPreviewFindPreviousAction extends Action2 {
       keybinding: { primary: 'shift+f3', when: 'markdownPreviewFindVisible' },
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.findPrev()
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.findPrev()
   }
 }
 
@@ -229,8 +246,8 @@ export class MarkdownPreviewFindCloseAction extends Action2 {
       keybinding: { primary: 'escape', when: 'markdownPreviewFindVisible' },
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.closeFind()
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.closeFind()
   }
 }
 
@@ -254,8 +271,8 @@ export class MarkdownPreviewLinkHintsAction extends Action2 {
       keybinding: { primary: 'f', when: LINK_HINTS_WHEN },
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.showLinkHints(false)
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.showLinkHints(false)
   }
 }
 
@@ -269,8 +286,8 @@ export class MarkdownPreviewLinkHintsToSideAction extends Action2 {
       keybinding: { primary: 'shift+f', when: LINK_HINTS_WHEN },
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.showLinkHints(true)
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.showLinkHints(true)
   }
 }
 
@@ -282,6 +299,17 @@ export class MarkdownPreviewHelpAction extends Action2 {
       title: localize2('action.markdownPreview.help.title', 'Keyboard Shortcuts'),
       category: FIND_CATEGORY,
       icon: 'help',
+      // `?` is physically shift+/. The global handler builds the key from
+      // `e.key` (already the shifted '?'), but whether the shift modifier is
+      // reported varies (real Chromium reports shift+?; Playwright's synthetic
+      // press reports a bare ?). Register both so the binding fires either way.
+      // The plain `?` is listed last so resolveShortcut (newest-first) shows a
+      // clean "?" in the tooltip rather than "Shift+?". Gated like link hints so
+      // it never steals the key while the find bar or hints own the keyboard.
+      keybinding: [
+        { primary: 'shift+?', when: LINK_HINTS_WHEN },
+        { primary: '?', when: LINK_HINTS_WHEN },
+      ],
       menu: [
         {
           id: MenuId.EditorTitle,
@@ -292,7 +320,7 @@ export class MarkdownPreviewHelpAction extends Action2 {
       f1: true,
     })
   }
-  override run(): void {
-    MarkdownPreviewRegistry.getActive()?.toggleHelp()
+  override run(accessor: ServicesAccessor): void {
+    activePreviewController(accessor)?.toggleHelp()
   }
 }

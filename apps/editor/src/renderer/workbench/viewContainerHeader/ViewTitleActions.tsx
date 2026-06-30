@@ -30,13 +30,14 @@ export function ViewTitleActions({ menuId, contextKeyService, group }: Props) {
     <>
       {actions.map((a) => {
         const Icon = resolveHeaderIcon(a.icon)
+        const tooltip = a.shortcut ? `${a.label} (${a.shortcut})` : a.label
         return (
           <button
             key={a.command}
             className={styles['actionBtn']}
             onClick={() => void commandService.executeCommand(a.command, viewId)}
-            title={a.label}
-            aria-label={a.label}
+            title={tooltip}
+            aria-label={tooltip}
             data-testid={`view-title-action-${a.command}`}
           >
             {Icon ? (

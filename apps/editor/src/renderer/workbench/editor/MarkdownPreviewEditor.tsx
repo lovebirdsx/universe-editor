@@ -80,16 +80,16 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
 
   const [helpVisible, setHelpVisible] = useState(false)
   // Stable handle so the controller (registered keyed on sourceUri) can toggle
-  // help without re-running its effect on every help-state change.
+  // help without re-running its effect on every help-state change. The `?` key
+  // reaches this via the MarkdownPreviewHelpAction keybinding → controller.
   const toggleHelpRef = useRef(() => setHelpVisible((v) => !v))
-  // Vimium-style scroll / history / help keys. Disabled while link hints own the
+  // Vimium-style scroll / history keys. Disabled while link hints own the
   // keyboard so the two never contend; H/L route to the existing history commands.
   useMarkdownKeyboardNav(
     rootRef,
     {
       goBack: () => void commandService.executeCommand('workbench.action.goBack'),
       goForward: () => void commandService.executeCommand('workbench.action.goForward'),
-      toggleHelp: () => setHelpVisible((v) => !v),
     },
     !linkHints.active,
   )
@@ -228,7 +228,15 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
       focus: () => el.focus(),
       onDidScroll: onDidScroll.event,
       openFind: () => findRef.current.open(),
-      closeFind: () => findRef.current.close(),
+      // Closing returns keyboard focus to the scroll container so f / Ctrl+F /
+      // vim keys keep working without a click. Esc routes here via the global
+      // MarkdownPreviewFindClose command (the find input's own Esc is shadowed
+      // by the capture-phase keybinding handler), so the focus restore must live
+      // on the controller, not only on the widget's onClose. Mirrors ChatBody.
+      closeFind: () => {
+        findRef.current.close()
+        el.focus({ preventScroll: true })
+      },
       findNext: () => findRef.current.next(),
       findPrev: () => findRef.current.prev(),
       showLinkHints: (inNewTab: boolean) => linkHintsRef.current.show(inNewTab),
@@ -292,7 +300,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
           onPrev={find.prev}
           onClose={() => {
             find.close()
-            rootRef.current?.focus()
+            rootRef.current?.focus({ preventScroll: true })
           }}
         />
       )}

@@ -14,6 +14,7 @@
 
 import { EditorInput, URI, type UriComponents } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
+import { MarkdownPreviewRegistry } from './MarkdownPreviewRegistry.js'
 import type { FileEditorInput } from './FileEditorInput.js'
 
 interface ISerializedMarkdownPreview {
@@ -61,6 +62,22 @@ export class MarkdownPreviewInput extends EditorInput {
   /** Returns the held FileEditorInput only when opened in toggle mode. */
   get sourceInput(): FileEditorInput | undefined {
     return this._sourceInput
+  }
+
+  /**
+   * Move keyboard focus back into the live preview's scroll container (not the
+   * editor-group body). The preview is a plain div with no Monaco registration,
+   * so `focusEditorInput` would otherwise fall back to focusing the group body —
+   * which sits *outside* the preview container and fires its `focusout`, dropping
+   * the `markdownPreviewFocused` context key and silently disabling f / Ctrl+F /
+   * link hints. Routing focus through the controller keeps that key true, just
+   * like the ACP session and terminal editors do via their own focus() hooks.
+   */
+  override focus(): boolean {
+    const controller = MarkdownPreviewRegistry.get(this._sourceUri)
+    if (!controller) return false
+    controller.focus()
+    return true
   }
 
   /**

@@ -2,9 +2,10 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  useMarkdownKeyboardNav — vimium-style scroll & history keys for the markdown
  *  preview (j/k line, h/l horizontal, d/u half-page, Space/Shift+Space full-page,
- *  gg/G top/bottom, H/L history back/forward, ? help). A numeric prefix repeats
- *  scrolls (`3j`). Parsing lives in the pure reduceNavKey reducer; this hook binds
- *  the listener and applies the resolved command to the live scroll container.
+ *  gg/G top/bottom, H/L history back/forward). A numeric prefix repeats scrolls
+ *  (`3j`). Parsing lives in the pure reduceNavKey reducer; this hook binds the
+ *  listener and applies the resolved command to the live scroll container.
+ *  (The `?` help toggle is a registered keybinding, not handled here.)
  *
  *  The listener sits on the container (bubble phase). Link hints, when active, own
  *  the keyboard at the document capture phase and stopPropagation, so these keys
@@ -22,7 +23,6 @@ const LINE_STEP = 60
 export interface MarkdownKeyboardNavCallbacks {
   goBack(): void
   goForward(): void
-  toggleHelp(): void
 }
 
 export function useMarkdownKeyboardNav<T extends HTMLElement>(
@@ -79,9 +79,6 @@ function apply(el: HTMLElement, command: NavCommand, cb: MarkdownKeyboardNavCall
       return
     case 'goForward':
       cb.goForward()
-      return
-    case 'toggleHelp':
-      cb.toggleHelp()
       return
   }
 }
