@@ -17,6 +17,7 @@
 - [新建 session 异步化](async-session-create.md) — createSession 同步返回立即渲染，后台握手；双 id（本地 uuid id vs agent 颁发 sessionIdOnAgent）；queued prompts 自动派发；whenConnected 为测试 await 点
 - [Codex 三种登录方案建模](codex-three-auth-modes.md) — gateway 须自包含 provider（experimental_bearer_token），绝不碰 openai_base_url/requires_openai_auth；统一 applyCredential 原子入口
 - [markdown 预览 vimium 式键盘导航](markdown-preview-link-hints.md) — 线②预览:f/F link hints(BFS 标签算法+capture 键盘+合成 click 复用 onClick)+滚动/前进后退,controller+contextKey+Action2 对称结构
+- [Codex 对齐 Claude skills/memory](codex-claude-skills-memory-parity.md) — codex-acp fork 在 adapter 层读 .claude/skills(extraRoots)+自动注入 .claude/memory/MEMORY.md(developerInstructions);手动开关靠每 skill 静态 openai.yaml + sync-codex-skill-policy.mjs;3 个测试 Windows 反斜杠失败 CI 过
 
 ## 性能 / 疑难根因
 

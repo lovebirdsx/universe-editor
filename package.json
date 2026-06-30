@@ -15,6 +15,8 @@
     "dev": "pnpm --filter=@universe-editor/editor dev",
     "memory:link": "node scripts/link-memory.mjs",
     "memory:status": "node scripts/link-memory.mjs --status",
+    "skills:policy": "node scripts/sync-codex-skill-policy.mjs",
+    "skills:policy:check": "node scripts/sync-codex-skill-policy.mjs --check",
     "bundle-size": "node scripts/bench/bundle-size.mjs",
     "bundle-size:update": "node scripts/bench/bundle-size.mjs --update",
     "agent:build": "node scripts/release/vendor-install.mjs && npm --prefix vendor/claude-agent-acp run build && npm --prefix vendor/codex-acp run build",
