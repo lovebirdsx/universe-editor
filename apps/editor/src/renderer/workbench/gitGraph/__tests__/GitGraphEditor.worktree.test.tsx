@@ -314,3 +314,92 @@ describe('GitGraphEditor worktree sync', () => {
     expect(names).toEqual(['apple', 'zebra'])
   })
 })
+
+describe('GitGraphEditor ref overflow folding', () => {
+  function makeRefResult(over: Partial<GitGraphLoadResult['commits'][number]>): GitGraphLoadResult {
+    return {
+      commits: [
+        {
+          hash: HASH,
+          parents: [],
+          author: 'tester',
+          email: 't@example.com',
+          date: 1,
+          message: 'first',
+          heads: [],
+          tags: [],
+          remotes: [],
+          stash: null,
+          worktrees: [],
+          ...over,
+        },
+      ],
+      head: HASH,
+      headName: 'main',
+      moreAvailable: false,
+      uncommittedChanges: 0,
+    }
+  }
+
+  it('shows all refs when they fit within the budget (no overflow badge)', async () => {
+    gitGraphViewState.result = makeRefResult({ heads: ['main', 'a', 'b', 'c'] })
+    renderEditor()
+    await flush()
+
+    expect(screen.getByText('main')).toBeTruthy()
+    expect(screen.getByText('c')).toBeTruthy()
+    expect(screen.queryByText(/^\+\d+$/)).toBeNull()
+  })
+
+  it('folds refs beyond the budget into a +N badge', async () => {
+    gitGraphViewState.result = makeRefResult({ heads: ['main', 'a', 'b', 'c', 'd'] })
+    renderEditor()
+    await flush()
+
+    // 5 refs > budget → show 3, fold 2.
+    expect(screen.getByText('+2')).toBeTruthy()
+  })
+
+  it('keeps the HEAD branch visible and folds lower-priority refs', async () => {
+    gitGraphViewState.result = makeRefResult({
+      heads: ['main', 'a', 'b'],
+      tags: [
+        { name: 'v1', annotated: false },
+        { name: 'v2', annotated: false },
+      ],
+    })
+    renderEditor()
+    await flush()
+
+    // HEAD branch (main) outranks tags, so it stays inline; tags fold.
+    expect(screen.getByText('main')).toBeTruthy()
+    expect(screen.getByText('+2')).toBeTruthy()
+    expect(screen.queryByText('v1')).toBeNull()
+  })
+
+  it('opens a menu listing the folded refs, each dispatching its kind', async () => {
+    gitGraphViewState.result = makeRefResult({
+      heads: ['main', 'a', 'b'],
+      tags: [
+        { name: 'v1', annotated: false },
+        { name: 'v2', annotated: false },
+      ],
+    })
+    const { executeCommand } = renderEditor()
+    await flush()
+
+    fireEvent.click(screen.getByText('+2'))
+    const menu = screen.getByRole('menu')
+    const labels = within(menu)
+      .getAllByRole('menuitem')
+      .map((el) => el.textContent)
+    expect(labels).toContain('Tag v1')
+    expect(labels).toContain('Tag v2')
+
+    // Picking a folded tag opens that tag's own menu (push-tag dispatches its command).
+    fireEvent.click(within(menu).getByText('Tag v1'))
+    const tagMenu = screen.getByRole('menu')
+    fireEvent.click(within(tagMenu).getByText(/Push tag/))
+    expect(executeCommand).toHaveBeenCalledWith(GitGraphCommands.pushTag, 'v1', 'origin')
+  })
+})

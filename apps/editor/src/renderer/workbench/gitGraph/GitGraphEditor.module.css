@@ -269,6 +269,8 @@
 }
 
 .message {
+  flex: 1 1 auto;
+  min-width: 80px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -297,7 +299,12 @@
 }
 
 .refs {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 55%;
+  display: flex;
+  align-items: center;
+  overflow: hidden;
   white-space: nowrap;
 }
 
@@ -349,6 +356,46 @@
 .badgeWorktreeCurrent {
   background: var(--color-accent);
   color: var(--color-button-fg);
+}
+
+.badgeOverflow {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-right: 4px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  background: var(--color-button-bg);
+  color: var(--color-button-fg);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.badgeOverflow::after {
+  content: '▾';
+  font-size: 9px;
+  opacity: 0.9;
+}
+
+.badgeOverflow:hover {
+  background: var(--color-button-hover-bg);
+}
+
+.badgeOverflow:focus-visible {
+  outline: 1px solid var(--color-focus-border);
+  outline-offset: 1px;
+}
+
+.badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .detail {

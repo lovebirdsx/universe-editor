@@ -158,74 +158,123 @@ function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
   return <span className={styles['colResizer']} onMouseDown={onMouseDown} />
 }
 
+/** Max interactive ref badges shown inline before the rest fold into a `+N`
+ *  overflow badge. stash is always shown and doesn't count against this. */
+const MAX_VISIBLE_REFS = 3
+
+/** One ref attached to a commit, normalized across worktree/head/remote/tag so
+ *  the row can sort by priority and fold the overflow behind a single badge.
+ *  `priority` is ascending importance — lower shows first, higher folds first. */
+interface RefEntry {
+  key: string
+  className: string
+  text: string
+  /** Label used in the overflow menu (carries the ref kind, unlike `text`). */
+  menuLabel: string
+  title?: string
+  priority: number
+  onMenu: (e: MouseEvent) => void
+}
+
 function CommitRefs({
   commit,
+  headName,
   onBranchMenu,
   onRemoteMenu,
   onTagMenu,
   onWorktreeMenu,
+  onOverflowMenu,
 }: {
   commit: GitGraphCommitDto
+  headName: string | null
   onBranchMenu: (name: string, e: MouseEvent) => void
   onRemoteMenu: (name: string, e: MouseEvent) => void
   onTagMenu: (name: string, e: MouseEvent) => void
   onWorktreeMenu: (worktree: GitGraphWorktreeDto, e: MouseEvent) => void
+  onOverflowMenu: (entries: RefEntry[], e: MouseEvent) => void
 }) {
+  const entries: RefEntry[] = []
+  for (const wt of commit.worktrees) {
+    entries.push({
+      key: `w-${wt.path}`,
+      className: `${styles['badge']} ${styles['badgeWorktree']} ${wt.isCurrent ? styles['badgeWorktreeCurrent'] : ''}`,
+      text: wt.isCurrent ? `✓ ${wt.name}` : wt.name,
+      menuLabel: localize('gitGraph.ref.worktree', 'Worktree {name}', { name: wt.name }),
+      title: wt.branch
+        ? localize('gitGraph.worktree.tooltip', 'Worktree {name} · {branch}\n{path}', {
+            name: wt.name,
+            branch: wt.branch,
+            path: wt.path,
+          })
+        : localize('gitGraph.worktree.tooltipDetached', 'Worktree {name} (detached)\n{path}', {
+            name: wt.name,
+            path: wt.path,
+          }),
+      priority: wt.isCurrent ? 1 : 4,
+      onMenu: (e) => onWorktreeMenu(wt, e),
+    })
+  }
+  for (const h of commit.heads) {
+    entries.push({
+      key: `h-${h}`,
+      className: `${styles['badge']} ${styles['badgeHead']}`,
+      text: h,
+      menuLabel: localize('gitGraph.ref.branch', 'Branch {name}', { name: h }),
+      priority: h === headName ? 2 : 3,
+      onMenu: (e) => onBranchMenu(h, e),
+    })
+  }
+  for (const t of commit.tags) {
+    entries.push({
+      key: `t-${t.name}`,
+      className: `${styles['badge']} ${styles['badgeTag']}`,
+      text: t.name,
+      menuLabel: localize('gitGraph.ref.tag', 'Tag {name}', { name: t.name }),
+      priority: 5,
+      onMenu: (e) => onTagMenu(t.name, e),
+    })
+  }
+  for (const r of commit.remotes) {
+    entries.push({
+      key: `r-${r.name}`,
+      className: `${styles['badge']} ${styles['badgeRemote']}`,
+      text: r.name,
+      menuLabel: localize('gitGraph.ref.remote', 'Remote {name}', { name: r.name }),
+      priority: 6,
+      onMenu: (e) => onRemoteMenu(r.name, e),
+    })
+  }
+  entries.sort((a, b) => a.priority - b.priority)
+
+  // Show all when only one would fold (a `+1` badge wastes the space it saves);
+  // otherwise show MAX_VISIBLE_REFS and fold the rest.
+  const visibleCount = entries.length <= MAX_VISIBLE_REFS + 1 ? entries.length : MAX_VISIBLE_REFS
+  const visible = entries.slice(0, visibleCount)
+  const hidden = entries.slice(visibleCount)
+
   return (
     <span className={styles['refs']}>
       {commit.stash && <span className={styles['badgeStash']}>{commit.stash.selector}</span>}
-      {commit.worktrees.map((wt) => (
+      {visible.map((entry) => (
         <span
-          key={`w-${wt.path}`}
-          className={`${styles['badgeWorktree']} ${wt.isCurrent ? styles['badgeWorktreeCurrent'] : ''}`}
-          title={
-            wt.branch
-              ? localize('gitGraph.worktree.tooltip', 'Worktree {name} · {branch}\n{path}', {
-                  name: wt.name,
-                  branch: wt.branch,
-                  path: wt.path,
-                })
-              : localize(
-                  'gitGraph.worktree.tooltipDetached',
-                  'Worktree {name} (detached)\n{path}',
-                  {
-                    name: wt.name,
-                    path: wt.path,
-                  },
-                )
-          }
-          onContextMenu={(e) => onWorktreeMenu(wt, e)}
+          key={entry.key}
+          className={entry.className}
+          title={entry.title}
+          onContextMenu={entry.onMenu}
         >
-          {wt.isCurrent ? `✓ ${wt.name}` : wt.name}
+          {entry.text}
         </span>
       ))}
-      {commit.heads.map((h) => (
-        <span
-          key={`h-${h}`}
-          className={styles['badgeHead']}
-          onContextMenu={(e) => onBranchMenu(h, e)}
+      {hidden.length > 0 && (
+        <button
+          type="button"
+          className={styles['badgeOverflow']}
+          title={hidden.map((e) => e.menuLabel).join('\n')}
+          onClick={(e) => onOverflowMenu(hidden, e)}
         >
-          {h}
-        </span>
-      ))}
-      {commit.remotes.map((r) => (
-        <span
-          key={`r-${r.name}`}
-          className={styles['badgeRemote']}
-          onContextMenu={(e) => onRemoteMenu(r.name, e)}
-        >
-          {r.name}
-        </span>
-      ))}
-      {commit.tags.map((t) => (
-        <span
-          key={`t-${t.name}`}
-          className={styles['badgeTag']}
-          onContextMenu={(e) => onTagMenu(t.name, e)}
-        >
-          {t.name}
-        </span>
-      ))}
+          +{hidden.length}
+        </button>
+      )}
     </span>
   )
 }
@@ -294,21 +343,25 @@ function FileTreeView({
 const CommitRow = memo(function CommitRow({
   commit,
   selected,
+  headName,
   onRowClick,
   onCommitMenu,
   onBranchMenu,
   onRemoteMenu,
   onTagMenu,
   onWorktreeMenu,
+  onOverflowMenu,
 }: {
   commit: GitGraphCommitDto
   selected: boolean
+  headName: string | null
   onRowClick: (hash: string, e: MouseEvent) => void
   onCommitMenu: (commit: GitGraphCommitDto, e: MouseEvent) => void
   onBranchMenu: (name: string, e: MouseEvent) => void
   onRemoteMenu: (name: string, e: MouseEvent) => void
   onTagMenu: (name: string, e: MouseEvent) => void
   onWorktreeMenu: (worktree: GitGraphWorktreeDto, e: MouseEvent) => void
+  onOverflowMenu: (entries: RefEntry[], e: MouseEvent) => void
 }) {
   return (
     <div
@@ -322,10 +375,12 @@ const CommitRow = memo(function CommitRow({
       <span className={styles['description']}>
         <CommitRefs
           commit={commit}
+          headName={headName}
           onBranchMenu={onBranchMenu}
           onRemoteMenu={onRemoteMenu}
           onTagMenu={onTagMenu}
           onWorktreeMenu={onWorktreeMenu}
+          onOverflowMenu={onOverflowMenu}
         />
         <span className={styles['message']}>{commit.message}</span>
       </span>
@@ -1216,7 +1271,28 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [allWorktrees, commands, dialog, runOp],
   )
 
-  // The rendered rows: a synthetic working-tree node above HEAD when the repo has
+  // Folded refs (the `+N` badge): list each hidden ref; clicking one re-dispatches
+  // at the same screen point to its own kind's menu, so every action stays reachable.
+  const openOverflowMenu = useCallback((entries: RefEntry[], e: MouseEvent) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const anchor = {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      preventDefault: () => {},
+      stopPropagation: () => {},
+    } as MouseEvent
+    setMenu({
+      x: e.clientX,
+      y: e.clientY,
+      items: entries.map((entry) => ({
+        kind: 'item' as const,
+        label: entry.menuLabel,
+        run: () => entry.onMenu(anchor),
+      })),
+    })
+  }, [])
+
   // uncommitted changes, followed by the real (and stash) commits.
   const displayCommits = useMemo<GitGraphCommitDto[]>(() => {
     if (!result) return []
@@ -1626,12 +1702,14 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                   <CommitRow
                     commit={c}
                     selected={selected.has(c.hash)}
+                    headName={result.headName}
                     onRowClick={onRowClick}
                     onCommitMenu={openCommitMenu}
                     onBranchMenu={openBranchMenu}
                     onRemoteMenu={openRemoteMenu}
                     onTagMenu={openTagMenu}
                     onWorktreeMenu={openWorktreeMenu}
+                    onOverflowMenu={openOverflowMenu}
                   />
                   {i === anchorIndex && (
                     <div className={styles['detail']} style={{ height: DETAIL_HEIGHT }}>
