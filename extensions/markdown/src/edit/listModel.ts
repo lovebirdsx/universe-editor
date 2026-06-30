@@ -56,5 +56,5 @@ export function renderPrefix(m: {
 
 /** True when the line is a list item whose content is empty (an "open" item). */
 export function isEmptyItem(m: ListMarker): boolean {
-  return m.content.trim().length === 0 && m.checkbox === ''
+  return m.content.trim().length === 0
 }

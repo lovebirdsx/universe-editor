@@ -189,6 +189,24 @@ describe('computeSmartEnter', () => {
     expect(apply(lines, r as EditResult)).toEqual(['1. a', '2. ', '3. c', 'tail'])
   })
 
+  it('exits the list on an empty task item (unchecked)', () => {
+    const lines = ['- [ ] first', '- [ ] ']
+    const r = computeSmartEnter(lines, [sel(1, 6)])
+    expect(apply(lines, r as EditResult)).toEqual(['- [ ] first', ''])
+  })
+
+  it('exits the list on an empty task item (checked)', () => {
+    const lines = ['- [x] first', '- [x] ']
+    const r = computeSmartEnter(lines, [sel(1, 6)])
+    expect(apply(lines, r as EditResult)).toEqual(['- [x] first', ''])
+  })
+
+  it('continues a task item when it has content', () => {
+    const lines = ['- [ ] task']
+    const r = computeSmartEnter(lines, [sel(0, 10)])
+    expect(apply(lines, r as EditResult)).toEqual(['- [ ] task', '- [ ] '])
+  })
+
   it('inserts a blank line above when the cursor is at the start of a task line', () => {
     const lines = ['- [ ] a', '- [ ] b']
     const r = computeSmartEnter(lines, [sel(1, 0)])
