@@ -30,6 +30,7 @@ import type {
 import type { IAcpClientConnection } from './acpClientService.js'
 import type { IAcpSessionHistoryService } from './acpSessionHistory.js'
 import type { IAcpAgentDefaultsService } from './acpAgentDefaultsService.js'
+import { findConfigOptionLabel } from './configOptionLabel.js'
 
 export interface ConfigOptionSessionInfo {
   /** Stable local id — used only to name the observable (survives the whole session). */
@@ -300,7 +301,12 @@ export class ConfigOptionStateMachine {
         this.flushPendingPushes()
       }
       const { agentId } = this._deps.sessionInfo
-      this._deps.history?.setHistoryConfigOption(sessionId, configId, value)
+      this._deps.history?.setHistoryConfigOption(
+        sessionId,
+        configId,
+        value,
+        this._labelOf(configId, value),
+      )
       this._deps.defaults?.setDefault(agentId, configId, value)
       this._deps.telemetry.publicLog('acp.config_option_set', { sessionId, configId })
     } catch (err) {
@@ -315,6 +321,13 @@ export class ConfigOptionStateMachine {
   private _currentValueOf(configId: string): string | undefined {
     const opt = this.configOptions.get().find((o) => o.id === configId)
     return opt && opt.type === 'select' ? opt.currentValue : undefined
+  }
+
+  /** Friendly display name for a value within an option, or undefined when the option/value is unknown. */
+  private _labelOf(configId: string, value: string): string | undefined {
+    const opt = this.configOptions.get().find((o) => o.id === configId)
+    if (!opt || opt.type !== 'select') return undefined
+    return findConfigOptionLabel(opt.options, value)
   }
 
   /** Optimistically flip a select option's `currentValue` in the local observable. */

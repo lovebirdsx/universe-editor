@@ -55,6 +55,7 @@ import {
   type PromptResponse,
   type RequestPermissionRequest,
   type RequestPermissionResponse,
+  type SessionConfigOption,
   type SetSessionConfigOptionRequest,
   type SetSessionConfigOptionResponse,
 } from '@agentclientprotocol/sdk'
@@ -221,6 +222,8 @@ interface StubAgentOptions {
   mcpCapabilities?: McpCapabilities
   /** When true, advertise loadSession so resumeSession can proceed. */
   loadSession?: boolean
+  /** configOptions the agent returns from newSession (and loadSession). */
+  newSessionConfigOptions?: readonly SessionConfigOption[]
 }
 
 class StubAgent implements Agent {
@@ -258,7 +261,12 @@ class StubAgent implements Agent {
 
   newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.newSessionCalls.push(params)
-    return Promise.resolve({ sessionId: this._agentSessionId } as unknown as NewSessionResponse)
+    return Promise.resolve({
+      sessionId: this._agentSessionId,
+      ...(this._opts.newSessionConfigOptions
+        ? { configOptions: this._opts.newSessionConfigOptions }
+        : {}),
+    } as unknown as NewSessionResponse)
   }
 
   prompt(params: PromptRequest): Promise<PromptResponse> {
@@ -1241,6 +1249,68 @@ describe('AcpSessionService — AI session title push-back', () => {
 
       const agent = client.connected[0]!.agent
       expect(agent.extMethodCalls).toHaveLength(0)
+    } finally {
+      svc.dispose()
+    }
+  })
+})
+
+describe('AcpSessionService — configOptions history snapshot', () => {
+  // Codex's protocol ids: `model` + `reasoning_effort` (see vendor/codex-acp).
+  const CODEX_CONFIG: readonly SessionConfigOption[] = [
+    {
+      id: 'model',
+      name: 'Model',
+      category: 'model',
+      type: 'select',
+      currentValue: 'gpt-5-codex',
+      options: [{ value: 'gpt-5-codex', name: 'GPT-5 Codex' }],
+    } as unknown as SessionConfigOption,
+    {
+      id: 'reasoning_effort',
+      name: 'Reasoning effort',
+      category: 'thought_level',
+      type: 'select',
+      currentValue: 'high',
+      options: [{ value: 'high', name: 'high' }],
+    } as unknown as SessionConfigOption,
+  ]
+
+  function makeServiceWithHistory(client: FakeAcpClientService) {
+    const history = makeHistory()
+    const svc = new AcpSessionService(
+      client,
+      new FakeAgentRegistry(),
+      new FakeWorkspaceService(),
+      new ConfigurationService(),
+      new StubNotificationService(),
+      { executeCommand: async () => undefined } as never,
+      new NoopTelemetryService(),
+      new StubPermissionHandler(),
+      new StubLoggerService(),
+      history,
+      new FakeStorage(),
+      makeAgentDefaults(),
+      new StubConfigOptionsCache(),
+      new StubSessionChangeTracker(),
+      new StubSessionTitleService(),
+      FAKE_HOST,
+    )
+    return { svc, history }
+  }
+
+  it('snapshots the default model + reasoning_effort (value AND label) into history on createSession', async () => {
+    const client = new FakeAcpClientService({
+      stubOptions: { newSessionConfigOptions: CODEX_CONFIG },
+    })
+    const { svc, history } = makeServiceWithHistory(client)
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+      const entry = history.get(sid)
+      expect(entry?.configOptions).toEqual({ model: 'gpt-5-codex', reasoning_effort: 'high' })
+      expect(entry?.configLabels).toEqual({ model: 'GPT-5 Codex', reasoning_effort: 'high' })
     } finally {
       svc.dispose()
     }

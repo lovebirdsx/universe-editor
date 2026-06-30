@@ -204,8 +204,20 @@ function SessionRow({
   // Foreign rows carry no configOptions on the rebuilt entry — fall back to the
   // owning worktree bucket (foreignStat) the same way duration/cost do.
   const historyConfigOptions = entry.configOptions ?? foreignStat?.configOptions
-  const historyModel = historyConfigOptions?.['MODEL'] ?? historyUsage?.models?.[0]?.model
-  const historyEffort = historyConfigOptions?.['effort'] ?? historyConfigOptions?.['thought_level']
+  const historyConfigLabels = entry.configLabels ?? foreignStat?.configLabels
+  // Prefer the persisted friendly label; fall back to the raw value (model is
+  // shortened, effort is shown verbatim). Config ids match the ACP protocol:
+  // `model` (Claude + Codex), `reasoning_effort` (Codex) / `effort` (Claude).
+  const historyModelLabel =
+    historyConfigLabels?.['model'] ??
+    ((historyConfigOptions?.['model'] ?? historyUsage?.models?.[0]?.model)
+      ? formatModelId((historyConfigOptions?.['model'] ?? historyUsage?.models?.[0]?.model)!)
+      : undefined)
+  const historyEffortLabel =
+    historyConfigLabels?.['reasoning_effort'] ??
+    historyConfigLabels?.['effort'] ??
+    historyConfigOptions?.['reasoning_effort'] ??
+    historyConfigOptions?.['effort']
   const chip = scopeChip(entry, scope)
   return (
     <li
@@ -233,13 +245,13 @@ function SessionRow({
           {relativeTime(entry.lastUsedAt)}
           {liveSession !== undefined ? (
             <LiveSessionModel session={liveSession} />
-          ) : historyModel ? (
-            <span className={styles['sessionRowModel']}>{formatModelId(historyModel)}</span>
+          ) : historyModelLabel ? (
+            <span className={styles['sessionRowModel']}>{historyModelLabel}</span>
           ) : null}
           {liveSession !== undefined ? (
             <LiveSessionEffort session={liveSession} />
-          ) : historyEffort ? (
-            <span className={styles['sessionRowEffort']}>{historyEffort}</span>
+          ) : historyEffortLabel ? (
+            <span className={styles['sessionRowEffort']}>{historyEffortLabel}</span>
           ) : null}
           {liveSession !== undefined ? (
             <LiveSessionTimer session={liveSession} />

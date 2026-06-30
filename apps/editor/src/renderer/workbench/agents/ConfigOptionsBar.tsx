@@ -16,7 +16,10 @@ import type {
   SessionConfigSelectGroup,
   SessionConfigSelectOption,
 } from '@agentclientprotocol/sdk'
+import { findConfigOptionLabel } from '../../services/acp/configOptionLabel.js'
 import styles from './agents.module.css'
+
+export { findConfigOptionLabel as findLabel }
 
 const CATEGORY_ORDER: SessionConfigOptionCategory[] = ['model', 'mode', 'thought_level']
 
@@ -77,7 +80,7 @@ function ConfigOptionTrigger({
 }) {
   if (option.type !== 'select') return null
   const Icon = categoryIcon(option.category)
-  const currentLabel = findLabel(option.options, option.currentValue)
+  const currentLabel = findConfigOptionLabel(option.options, option.currentValue)
   const testKey = option.category ?? option.id
   const tooltipParts = [option.name]
   if (option.description) tooltipParts.push(option.description)
@@ -204,22 +207,4 @@ function PopoverItem({
       <span className={styles['configPopoverItemName']}>{option.name}</span>
     </div>
   )
-}
-
-export function findLabel(
-  options: readonly SessionConfigSelectOption[] | readonly SessionConfigSelectGroup[],
-  value: string,
-): string {
-  if (options.length === 0) return value
-  const first = options[0]!
-  if ('group' in first) {
-    for (const g of options as readonly SessionConfigSelectGroup[]) {
-      for (const v of g.options) if (v.value === value) return v.name
-    }
-    return value
-  }
-  for (const v of options as readonly SessionConfigSelectOption[]) {
-    if (v.value === value) return v.name
-  }
-  return value
 }

@@ -511,6 +511,34 @@ describe('AcpSessionHistoryService — setHistoryConfigOption', () => {
     const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
     expect(second.configOptions).toEqual({ model: 'A' })
   })
+
+  it('stores the friendly label alongside the value when provided', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryConfigOption(e.id, 'model', 'claude-opus-4-8', 'Opus 4.8')
+    expect(svc.get(e.id)?.configOptions).toEqual({ model: 'claude-opus-4-8' })
+    expect(svc.get(e.id)?.configLabels).toEqual({ model: 'Opus 4.8' })
+  })
+
+  it('writes when only the label changed (value unchanged)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't' })
+    svc.setHistoryConfigOption(e.id, 'model', 'A', 'Old')
+    await flushWrite()
+    const before = storage.setCalls.length
+    svc.setHistoryConfigOption(e.id, 'model', 'A', 'New')
+    await flushWrite()
+    expect(storage.setCalls.length).toBe(before + 1)
+    expect(svc.get(e.id)?.configLabels).toEqual({ model: 'New' })
+  })
+
+  it('preserves configLabels across an add() re-insert', async () => {
+    await svc.initialize()
+    const first = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't1' })
+    svc.setHistoryConfigOption(first.id, 'reasoning_effort', 'high', 'high')
+    const second = svc.add({ agentId: 'a', sessionIdOnAgent: '1', title: 't2' })
+    expect(second.configLabels).toEqual({ reasoning_effort: 'high' })
+  })
 })
 
 describe('AcpSessionHistoryService — setHistoryUsage', () => {

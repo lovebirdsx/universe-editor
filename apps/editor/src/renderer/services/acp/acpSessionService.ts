@@ -113,6 +113,7 @@ export {
   type TimelineItem,
 } from './acpSession.js'
 import { AcpForeignWorktreeError } from './acpErrors.js'
+import { snapshotConfigSelections } from './configOptionLabel.js'
 
 /**
  * Re-exported from ./acpErrors.js (the consolidated ACP error family) so the
@@ -477,6 +478,10 @@ export class AcpSessionService
       // no intermediate frame) and queues the real RPC for the agent to adopt.
       session.setConfigDesired(this._agentDefaults.getDefaults(resolvedAgentId))
       session.applyInitState(initState)
+      // Snapshot the (reconciled) configOption selections into history so the
+      // sidebar can show model / effort on this row even after it stops being
+      // live — including the default selection the user never touched.
+      this._snapshotConfigToHistory(result.sessionId, session.configOptions.get())
       if (result.configOptions) {
         this._configOptionsCache.set(resolvedAgentId, result.configOptions)
       }
@@ -514,6 +519,23 @@ export class AcpSessionService
         agentId: resolvedAgentId,
         error: msg,
       })
+    }
+  }
+
+  /**
+   * Mirror the current configOption selections (value + friendly label) onto the
+   * durable history row so the sidebar can show model / effort after the session
+   * stops being live. Snapshots the default selection too — the per-option
+   * `setHistoryConfigOption` only fires on a *user-driven* change, so without
+   * this a never-touched session would persist no model/effort at all.
+   */
+  private _snapshotConfigToHistory(
+    sessionIdOnAgent: string,
+    options: readonly SessionConfigOption[],
+  ): void {
+    const { values, labels } = snapshotConfigSelections(options)
+    for (const [configId, value] of Object.entries(values)) {
+      this._history.setHistoryConfigOption(sessionIdOnAgent, configId, value, labels[configId])
     }
   }
 
@@ -706,6 +728,7 @@ export class AcpSessionService
       })
       if (loadResult?.configOptions) {
         session.applyInitState({ configOptions: loadResult.configOptions })
+        this._snapshotConfigToHistory(entry.sessionIdOnAgent, session.configOptions.get())
         this._configOptionsCache.set(entry.agentId, loadResult.configOptions)
       }
       this._telemetry.publicLog('acp.session_resumed', {

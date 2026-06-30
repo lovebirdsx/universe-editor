@@ -25,6 +25,7 @@ export interface ForeignSessionStat {
   readonly accumulatedRunningMs?: number
   readonly usage?: AcpSessionHistoryEntry['usage']
   readonly configOptions?: AcpSessionHistoryEntry['configOptions']
+  readonly configLabels?: AcpSessionHistoryEntry['configLabels']
 }
 
 interface PersistedHistoryShape {
@@ -84,11 +85,13 @@ export function useForeignSessionStats(
                 : {}),
               ...(e.usage !== undefined ? { usage: e.usage } : {}),
               ...(e.configOptions !== undefined ? { configOptions: e.configOptions } : {}),
+              ...(e.configLabels !== undefined ? { configLabels: e.configLabels } : {}),
             }
             if (
               stat.accumulatedRunningMs !== undefined ||
               stat.usage !== undefined ||
-              stat.configOptions !== undefined
+              stat.configOptions !== undefined ||
+              stat.configLabels !== undefined
             ) {
               next.set(e.id, stat)
             }

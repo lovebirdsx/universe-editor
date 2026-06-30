@@ -75,6 +75,13 @@ export interface AcpSessionHistoryEntry {
    */
   readonly configOptions?: Readonly<Record<string, string>>
   /**
+   * Friendly display names paired with {@link configOptions} (configId → name).
+   * Mirrored so the sidebar can show the model / effort label on a row that is
+   * no longer live (where the option's `options` list — which maps value→name —
+   * is unavailable). Falls back to the raw value when absent.
+   */
+  readonly configLabels?: Readonly<Record<string, string>>
+  /**
    * Latest context-window usage snapshot the agent reported via `usage_update`.
    * Mirrored here so the usage arc can be restored on resume — `session/load`
    * replay does not re-emit `usage_update`, so without this snapshot the arc
@@ -131,11 +138,11 @@ export interface IAcpSessionHistoryService {
   remove(id: string): void
   clear(): void
   /**
-   * Patch a single configOption value on a history entry. No-op if id is
-   * unknown. Used by `AcpSession.setConfigOption` to mirror user-driven
-   * selections so they survive editor restart.
+   * Patch a single configOption value (and optional friendly label) on a
+   * history entry. No-op if id is unknown. Used by `AcpSession.setConfigOption`
+   * to mirror user-driven selections so they survive editor restart.
    */
-  setHistoryConfigOption(sessionId: string, configId: string, value: string): void
+  setHistoryConfigOption(sessionId: string, configId: string, value: string, label?: string): void
   /**
    * Persist the timeline collapse mode for a session. No-op if id is unknown
    * or the value is unchanged.
@@ -302,6 +309,8 @@ export class AcpSessionHistoryService
     const carriedConfigOptions =
       entry.configOptions ??
       (existingIdx >= 0 ? this._state[existingIdx]!.configOptions : undefined)
+    const carriedConfigLabels =
+      entry.configLabels ?? (existingIdx >= 0 ? this._state[existingIdx]!.configLabels : undefined)
     // Likewise preserve any prior usage snapshot — re-adding the same session
     // (e.g. on resume) must not blow away the restored arc.
     const carriedUsage =
@@ -327,6 +336,7 @@ export class AcpSessionHistoryService
       createdAt,
       lastUsedAt: now,
       ...(carriedConfigOptions !== undefined ? { configOptions: carriedConfigOptions } : {}),
+      ...(carriedConfigLabels !== undefined ? { configLabels: carriedConfigLabels } : {}),
       ...(carriedUsage !== undefined ? { usage: carriedUsage } : {}),
       ...(existingIdx >= 0 && this._state[existingIdx]!.collapseMode !== undefined
         ? { collapseMode: this._state[existingIdx]!.collapseMode }
@@ -371,14 +381,23 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
-  setHistoryConfigOption(sessionId: string, configId: string, value: string): void {
+  setHistoryConfigOption(sessionId: string, configId: string, value: string, label?: string): void {
     const idx = this._state.findIndex((e) => e.id === sessionId)
     if (idx === -1) return
     const cur = this._state[idx]!
     const prevOpts = cur.configOptions ?? {}
-    if (prevOpts[configId] === value) return
+    const prevLabels = cur.configLabels ?? {}
+    const sameValue = prevOpts[configId] === value
+    const sameLabel = label === undefined || prevLabels[configId] === label
+    if (sameValue && sameLabel) return
     const nextOpts: Readonly<Record<string, string>> = { ...prevOpts, [configId]: value }
-    const next: AcpSessionHistoryEntry = { ...cur, configOptions: nextOpts }
+    const nextLabels: Readonly<Record<string, string>> =
+      label !== undefined ? { ...prevLabels, [configId]: label } : prevLabels
+    const next: AcpSessionHistoryEntry = {
+      ...cur,
+      configOptions: nextOpts,
+      ...(label !== undefined ? { configLabels: nextLabels } : {}),
+    }
     this._state = this._state.map((e, i) => (i === idx ? next : e))
     this._publish()
     this._scheduleWrite()
@@ -659,6 +678,7 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     typeof o['createdAt'] === 'number' &&
     typeof o['lastUsedAt'] === 'number' &&
     (o['configOptions'] === undefined || isStringRecord(o['configOptions'])) &&
+    (o['configLabels'] === undefined || isStringRecord(o['configLabels'])) &&
     (o['usage'] === undefined || isValidUsage(o['usage'])) &&
     (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
     (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean')
