@@ -430,13 +430,12 @@ export async function activate(context: ExtensionContext): Promise<void> {
         unknown,
         ({ pinned?: boolean; preserveFocus?: boolean } | undefined)?,
       ]
-      let path = resourcePath(arg)
-      let repoArg: unknown = arg
+      const path = resourcePath(arg)
+      const repoArg: unknown = arg
       // Invoked without a SCM resource (keybinding / toolbar): fall back to the
-      // active editor's file, which the host surfaces via this internal command.
+      // renderer so unsaved editor-buffer changes are included in the diff.
       if (!path) {
-        path = await commands.executeCommand<string | undefined>('_workbench.getActiveEditorFile')
-        repoArg = path ? { resourceUri: path } : undefined
+        return commands.executeCommand('_workbench.openActiveFileChanges')
       }
       return path
         ? mgr

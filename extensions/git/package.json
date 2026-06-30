@@ -39,7 +39,7 @@
       { "command": "git.openWorktree", "title": "Open Worktree", "category": "Git", "icon": "git-worktree" },
       { "command": "git.openWorktreeInNewWindow", "title": "Open Worktree in New Window", "category": "Git", "icon": "empty-window" },
       { "command": "git.deleteWorktree", "title": "Delete Worktree...", "category": "Git", "icon": "remove" },
-      { "command": "git.openChange", "title": "Open Changes", "category": "Git" },
+      { "command": "git.openChange", "title": "Open Changes", "category": "Git", "icon": "compare-changes" },
       { "command": "git.openMergeEditor", "title": "Resolve in Merge Editor", "category": "Git", "icon": "merge" },
       { "command": "git.openFile", "title": "Open File", "category": "Git" },
       { "command": "git.getCommitDiff", "title": "Get Commit Diff", "category": "Git" },
@@ -166,6 +166,9 @@
         { "command": "git.stageAll", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "stage-all" },
         { "command": "git.discardAll", "when": "scmResourceGroup == workingTree", "group": "inline", "icon": "discard-all" },
         { "command": "git.unstageAll", "when": "scmResourceGroup == index", "group": "inline", "icon": "unstage-all" }
+      ],
+      "editor/title": [
+        { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" }
       ]
     },
     "keybindings": [

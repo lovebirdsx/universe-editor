@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { StrictMode } from 'react'
 import { act, render, screen } from '@testing-library/react'
 import {
+  Action2,
   ContextKeyService,
   EditorInput,
   EditorRegistry,
@@ -19,6 +20,8 @@ import {
   registerAction2,
   ServiceCollection,
   URI,
+  MenuId,
+  observableValue,
   type IDisposable,
   type ICommandService as ICommandServiceType,
   type IConfirmResult,
@@ -35,6 +38,12 @@ import {
   FocusTopAcpTimelineAction,
   JumpToAcpPlanAction,
 } from '../../../actions/agentActions.js'
+import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
+import {
+  IScmDecorationsService,
+  scmPathKey,
+  type IScmDecorationsService as IScmDecorationsServiceType,
+} from '../../../services/scm/ScmDecorationsService.js'
 
 const stubDialog: IDialogServiceType = {
   _serviceBrand: undefined,
@@ -49,11 +58,15 @@ const stubCommand: ICommandServiceType = {
   },
 }
 
-function renderWithServices(node: React.ReactNode, opts?: { strict?: boolean }) {
+function renderWithServices(
+  node: React.ReactNode,
+  opts?: { strict?: boolean; configure?: (services: ServiceCollection) => void },
+) {
   const services = new ServiceCollection()
   services.set(IDialogService, stubDialog)
   services.set(ICommandService, stubCommand)
   services.set(IContextKeyService, new ContextKeyService())
+  opts?.configure?.(services)
   const inst = new InstantiationService(services)
   const tree = <ServicesContext.Provider value={inst}>{node}</ServicesContext.Provider>
   return render(opts?.strict ? <StrictMode>{tree}</StrictMode> : tree)
@@ -84,6 +97,7 @@ function FakeComponent({ input }: { input: { label: string } }) {
 const componentMap = new Map<string, React.ComponentType<{ input: { label: string } }>>([
   ['agents.session', FakeComponent],
   ['fake', FakeComponent],
+  ['file', FakeComponent],
 ])
 
 const NAV_COMMANDS_IN_ORDER = [
@@ -108,6 +122,40 @@ function registerNavActions() {
     registerAction2(FocusTopAcpTimelineAction),
     registerAction2(FocusBottomAcpTimelineAction),
   )
+}
+
+class OpenChangesTitleAction extends Action2 {
+  static readonly ID = 'git.openChange'
+
+  constructor() {
+    super({
+      id: OpenChangesTitleAction.ID,
+      title: 'Open Changes',
+      icon: 'compare-changes',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          when: 'resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor',
+          group: 'navigation',
+        },
+      ],
+    })
+  }
+
+  override run(): void {}
+}
+
+function scmDecorationsFor(resource: URI): IScmDecorationsServiceType {
+  const snapshot = observableValue('testScmDecorations', {
+    files: new Map([[scmPathKey(resource.fsPath), { color: '#e2c08d', letter: 'M' }]]),
+    folders: new Map(),
+  })
+  return {
+    _serviceBrand: undefined,
+    decorations: snapshot,
+    getFile: (uri) => snapshot.get().files.get(scmPathKey(uri.fsPath)),
+    getFolder: (uri) => snapshot.get().folders.get(scmPathKey(uri.fsPath)),
+  }
 }
 
 describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
@@ -166,6 +214,36 @@ describe('EditorGroupView — EditorTitle nav icons for ACP session', () => {
     for (const cmd of NAV_COMMANDS_IN_ORDER) {
       expect(screen.queryByTestId(`view-title-action-${cmd}`)).toBeNull()
     }
+  })
+
+  it('renders Open Changes for a file with SCM changes', async () => {
+    disposables.push(registerAction2(OpenChangesTitleAction))
+    disposables.push(
+      EditorRegistry.registerEditorProvider({
+        typeId: FileEditorInput.TYPE_ID,
+        componentKey: 'file',
+      }),
+    )
+
+    const svc = new EditorGroupsService()
+    disposables.push(svc)
+    const resource = URI.file('D:/repo/changed.ts')
+    svc.activeGroup.openEditor(new FileEditorInput(resource, {} as never))
+
+    renderWithServices(
+      <EditorGroupView
+        group={svc.activeGroup}
+        groupsService={svc}
+        componentMap={componentMap as never}
+      />,
+      {
+        configure: (services) => {
+          services.set(IScmDecorationsService, scmDecorationsFor(resource))
+        },
+      },
+    )
+
+    await screen.findByTestId(`view-title-action-${OpenChangesTitleAction.ID}`)
   })
 
   // Regression for the dev-only bug: under React StrictMode the per-group scoped

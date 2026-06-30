@@ -15,6 +15,7 @@ import {
   Download,
   Eye,
   EyeOff,
+  FileDiff,
   FileJson,
   FileSymlink,
   FolderGit2,
@@ -95,6 +96,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'timeline-next': ChevronDown,
   'timeline-top': ArrowUpToLine,
   'timeline-bottom': ArrowDownToLine,
+  'compare-changes': FileDiff,
 }
 
 export function resolveHeaderIcon(name: string | undefined): LucideIcon | undefined {

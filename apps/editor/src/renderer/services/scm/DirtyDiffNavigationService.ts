@@ -8,13 +8,32 @@
  *  VSCode's `quickDiffDecorationCount != '0'` when-clause.
  *--------------------------------------------------------------------------------------------*/
 
-import { createDecorator, IContextKeyService, type IContextKey } from '@universe-editor/platform'
+import {
+  createDecorator,
+  Emitter,
+  IContextKeyService,
+  type Event,
+  type IContextKey,
+  type URI,
+} from '@universe-editor/platform'
 import type { DirtyDiffRegion } from '../../contributions/dirtyDiff.js'
+
+export interface DirtyDiffNavigationState {
+  readonly resource: URI | undefined
+  readonly headContent: string | null | undefined
+  /** Regions for the active editor, sorted ascending by `startLine`. */
+  readonly regions: readonly DirtyDiffRegion[]
+}
 
 export interface IDirtyDiffNavigationService {
   readonly _serviceBrand: undefined
+  readonly onDidChangeState: Event<DirtyDiffNavigationState>
+  readonly state: DirtyDiffNavigationState
+  readonly resource: URI | undefined
+  readonly headContent: string | null | undefined
   /** Regions for the active editor, sorted ascending by `startLine`. */
   readonly regions: readonly DirtyDiffRegion[]
+  setState(state: DirtyDiffNavigationState): void
   setRegions(regions: readonly DirtyDiffRegion[]): void
 }
 
@@ -25,6 +44,11 @@ export const IDirtyDiffNavigationService = createDecorator<IDirtyDiffNavigationS
 export class DirtyDiffNavigationService implements IDirtyDiffNavigationService {
   declare readonly _serviceBrand: undefined
 
+  private readonly _onDidChangeState = new Emitter<DirtyDiffNavigationState>()
+  readonly onDidChangeState: Event<DirtyDiffNavigationState> = this._onDidChangeState.event
+
+  private _resource: URI | undefined
+  private _headContent: string | null | undefined
   private _regions: readonly DirtyDiffRegion[] = []
   private readonly _count: IContextKey<number>
 
@@ -32,13 +56,36 @@ export class DirtyDiffNavigationService implements IDirtyDiffNavigationService {
     this._count = contextKeyService.createKey<number>('quickDiffDecorationCount', 0)
   }
 
+  get state(): DirtyDiffNavigationState {
+    return {
+      resource: this._resource,
+      headContent: this._headContent,
+      regions: this._regions,
+    }
+  }
+
+  get resource(): URI | undefined {
+    return this._resource
+  }
+
+  get headContent(): string | null | undefined {
+    return this._headContent
+  }
+
   get regions(): readonly DirtyDiffRegion[] {
     return this._regions
   }
 
+  setState(state: DirtyDiffNavigationState): void {
+    this._resource = state.resource
+    this._headContent = state.headContent
+    this._regions = state.regions
+    this._count.set(state.regions.length)
+    this._onDidChangeState.fire(this.state)
+  }
+
   setRegions(regions: readonly DirtyDiffRegion[]): void {
-    this._regions = regions
-    this._count.set(regions.length)
+    this.setState({ resource: this._resource, headContent: this._headContent, regions })
   }
 }
 

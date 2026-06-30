@@ -19,6 +19,7 @@ import {
   ICommandService,
   IEditorService,
   autorun,
+  type URI,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { DirtyDiffCommands } from '@universe-editor/extensions-common'
@@ -38,6 +39,7 @@ const COLORS = {
 export class DirtyDiffContribution extends Disposable implements IWorkbenchContribution {
   private _decorations: monaco.editor.IEditorDecorationsCollection | undefined
   private _activeEditor: monaco.editor.IStandaloneCodeEditor | undefined
+  private _activeResource: URI | undefined
   private _activePath: string | undefined
 
   private readonly _editorStore = this._register(new DisposableStore())
@@ -82,6 +84,7 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
   }
 
   private _bind(input: FileEditorInput): void {
+    this._activeResource = input.resource
     this._activePath = input.resource.fsPath
     this._editorStore.clear()
     this._registryStore.clear()
@@ -110,21 +113,27 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
 
   private _refresh(): void {
     const editor = this._activeEditor
+    const resource = this._activeResource
     const path = this._activePath
-    if (!editor || !path) return
+    if (!editor || !resource || !path) return
 
     void this._getHead(path).then((head) => {
-      if (this._activeEditor !== editor || this._activePath !== path) return
+      if (
+        this._activeEditor !== editor ||
+        this._activeResource !== resource ||
+        this._activePath !== path
+      )
+        return
       const model = editor.getModel()
       if (!model) return
       // No HEAD revision means the file is outside the repo (not a workspace file)
       // or untracked / brand new — VSCode shows no dirty-diff marks for either.
       if (head === null) {
-        this._render([])
+        this._render(resource, head, [])
         return
       }
       const regions = computeDirtyDiffRegions(head, model.getValue())
-      this._render(regions)
+      this._render(resource, head, regions)
     })
   }
 
@@ -151,8 +160,12 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
     return p
   }
 
-  private _render(regions: readonly DirtyDiffRegion[]): void {
-    this._navigation.setRegions(regions)
+  private _render(
+    resource: URI,
+    headContent: string | null,
+    regions: readonly DirtyDiffRegion[],
+  ): void {
+    this._navigation.setState({ resource, headContent, regions })
     const collection = this._decorations
     if (!collection) return
     if (regions.length === 0) {
@@ -176,12 +189,13 @@ export class DirtyDiffContribution extends Disposable implements IWorkbenchContr
   }
 
   private _clear(): void {
-    this._navigation.setRegions([])
+    this._navigation.setState({ resource: undefined, headContent: undefined, regions: [] })
     this._editorStore.clear()
     this._registryStore.clear()
     this._decorations?.clear()
     this._decorations = undefined
     this._activeEditor = undefined
+    this._activeResource = undefined
     this._activePath = undefined
   }
 }

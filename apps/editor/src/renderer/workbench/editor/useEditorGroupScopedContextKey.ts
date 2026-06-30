@@ -8,9 +8,11 @@
 
 import { useEffect, useReducer, useRef } from 'react'
 import {
+  autorun,
   combinedDisposable,
   IContextKeyService,
   JSONContributionRegistry,
+  isEqualResource,
   markAsSingleton,
   type IEditorGroup,
   type IScopedContextKeyService,
@@ -18,10 +20,14 @@ import {
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { matchSchemasForUri } from '../../services/preferences/schemaMatch.js'
-import { useService } from '../useService.js'
+import { IDirtyDiffNavigationService } from '../../services/scm/DirtyDiffNavigationService.js'
+import { IScmDecorationsService } from '../../services/scm/ScmDecorationsService.js'
+import { useOptionalService, useService } from '../useService.js'
 
 export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKeyService {
   const rootCtx = useService(IContextKeyService)
+  const dirtyDiff = useOptionalService(IDirtyDiffNavigationService)
+  const scmDecorations = useOptionalService(IScmDecorationsService)
   const scopedRef = useRef<IScopedContextKeyService | null>(null)
   const [, forceUpdate] = useReducer((n: number) => n + 1, 0)
 
@@ -45,9 +51,24 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
     const s = scopedRef.current
     const sync = () => {
       const active = group.activeEditor
+      const resource =
+        active instanceof FileEditorInput || active instanceof DiffEditorInput
+          ? active.resource
+          : undefined
+      const dirtyDiffResource = dirtyDiff?.resource
+      const hasDirtyDiffChanges =
+        active instanceof FileEditorInput &&
+        dirtyDiff !== undefined &&
+        dirtyDiffResource !== undefined &&
+        isEqualResource(dirtyDiffResource, active.resource) &&
+        dirtyDiff.regions.length > 0
+      const hasScmChanges =
+        active instanceof FileEditorInput && scmDecorations?.getFile(active.resource) !== undefined
       s.set('activeEditorLanguageId', active instanceof FileEditorInput ? active.language : '')
       s.set('hasActiveEditor', active !== undefined)
       s.set('isInDiffEditor', active instanceof DiffEditorInput)
+      s.set('resourceScheme', resource?.scheme ?? '')
+      s.set('scmActiveResourceHasChanges', hasDirtyDiffChanges || hasScmChanges)
       s.set(
         'activeEditorHasJsonSchema',
         active instanceof FileEditorInput &&
@@ -67,6 +88,13 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       combinedDisposable(
         group.onDidActiveEditorChange(sync),
         group.onDidChangeModel(sync),
+        dirtyDiff?.onDidChangeState(sync) ?? { dispose: () => {} },
+        scmDecorations
+          ? autorun((reader) => {
+              scmDecorations.decorations.read(reader)
+              sync()
+            })
+          : { dispose: () => {} },
         // Remote schemas (e.g. claude-helper's http schema) register asynchronously
         // after the file opens — re-evaluate so the icon appears once they land.
         JSONContributionRegistry.onDidChangeContributions(sync),
@@ -77,7 +105,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       scopedRef.current?.dispose()
       scopedRef.current = null
     }
-  }, [group, rootCtx])
+  }, [dirtyDiff, group, rootCtx, scmDecorations])
 
   return scopedRef.current
 }

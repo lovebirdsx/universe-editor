@@ -9,7 +9,11 @@ import {
   GoToPreviousDifferenceAction,
   OpenDiffAction,
 } from './diffActions.js'
-import { GoToNextChangeAction, GoToPreviousChangeAction } from './dirtyDiffActions.js'
+import {
+  GoToNextChangeAction,
+  GoToPreviousChangeAction,
+  OpenActiveFileChangesAction,
+} from './dirtyDiffActions.js'
 import {
   GoToNextMergeConflictAction,
   GoToPreviousMergeConflictAction,
@@ -473,6 +477,7 @@ registerAction2(GoToNextDifferenceAction)
 registerAction2(GoToPreviousDifferenceAction)
 
 // Editor — dirty-diff navigation (next/previous change vs git HEAD)
+registerAction2(OpenActiveFileChangesAction)
 registerAction2(GoToNextChangeAction)
 registerAction2(GoToPreviousChangeAction)
 registerAction2(GoToNextMergeConflictAction)
