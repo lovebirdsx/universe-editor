@@ -1,5 +1,27 @@
 [
   {
+    "version": "0.1.25",
+    "date": "2026-06-30",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "git图行引用溢出时折叠为+N按钮",
+          "session历史记录保存配置选项的友好标签，修复codex的历史记录缺失字段的bug",
+          "markdown预览vimium式键盘导航"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "markdown路径解析精准化&加快链接打开的速度和体验"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.24",
     "date": "2026-06-30",
     "groups": [
