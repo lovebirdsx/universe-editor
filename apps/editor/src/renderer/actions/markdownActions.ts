@@ -32,7 +32,14 @@ import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegis
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
 const MARKDOWN_PRECONDITION = 'activeEditorLanguageId == markdown'
+// Command precondition gates *executability* against the globally-active editor,
+// so it reads the root `activeEditorTypeId` key.
 const MARKDOWN_PREVIEW_PRECONDITION = `activeEditorTypeId == '${MarkdownPreviewInput.TYPE_ID}'`
+// EditorTitle menu `when` is evaluated per group against the group-scoped
+// `activeEditorType` key (set by useEditorGroupScopedContextKey). Using the root
+// `activeEditorTypeId` here would hide the preview's title buttons whenever
+// another group became active — they must follow the group, not global focus.
+const MARKDOWN_PREVIEW_MENU_WHEN = `activeEditorType == '${MarkdownPreviewInput.TYPE_ID}'`
 
 function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   const groups = accessor.get(IEditorGroupsService)
@@ -113,9 +120,12 @@ export class OpenMarkdownSourceAction extends Action2 {
       title: localize2('action.markdown.showSource.title', 'Open Source'),
       category: localize2('command.category.markdown', 'Markdown'),
       icon: 'go-to-file',
-      keybinding: { primary: 'ctrl+shift+v' },
-      precondition: MARKDOWN_PREVIEW_PRECONDITION,
-      menu: [{ id: MenuId.EditorTitle, group: 'navigation', when: MARKDOWN_PREVIEW_PRECONDITION }],
+      // No `precondition`: it would AND the root `activeEditorTypeId` onto the
+      // menu `when`, hiding the button whenever another group is active. Gate the
+      // shared `ctrl+shift+v` (vs Open Preview's) on the keybinding `when`
+      // instead, where the global active editor is the right scope.
+      keybinding: { primary: 'ctrl+shift+v', when: MARKDOWN_PREVIEW_PRECONDITION },
+      menu: [{ id: MenuId.EditorTitle, group: 'navigation', when: MARKDOWN_PREVIEW_MENU_WHEN }],
       f1: true,
     })
   }
@@ -195,7 +205,7 @@ export class MarkdownPreviewFindAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           group: 'navigation',
-          when: MARKDOWN_PREVIEW_PRECONDITION,
+          when: MARKDOWN_PREVIEW_MENU_WHEN,
         },
       ],
       f1: true,
@@ -314,7 +324,7 @@ export class MarkdownPreviewHelpAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           group: 'navigation',
-          when: MARKDOWN_PREVIEW_PRECONDITION,
+          when: MARKDOWN_PREVIEW_MENU_WHEN,
         },
       ],
       f1: true,

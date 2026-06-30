@@ -144,6 +144,22 @@ test.describe('@p1 markdown preview', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
       .toBe('markdown.preview')
+
+    // Regression: the preview's title-bar buttons are gated by the group-scoped
+    // `activeEditorType` key, so they must stay visible when another group becomes
+    // active. Before the fix they used the global `activeEditorTypeId` and vanished
+    // the moment focus left the preview group.
+    const helpButton = page.locator(
+      '[data-testid="view-title-action-workbench.action.markdownPreview.help"]',
+    )
+    await expect(helpButton).toBeVisible()
+
+    await workbench.runCommand('workbench.action.focusLeftGroup')
+    await expect
+      .poll(() => workbench.getContextKey<number>('activeEditorGroupIndex'), { timeout: 5000 })
+      .toBe(0)
+
+    await expect(helpButton).toBeVisible()
   })
 
   test('Light theme keeps headings and ordered lists readable in preview', async ({
