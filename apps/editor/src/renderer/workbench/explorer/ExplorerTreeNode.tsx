@@ -16,10 +16,13 @@ import {
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
 } from 'react'
-import { localize, type IFileService, type URI } from '@universe-editor/platform'
+import { localize, type URI } from '@universe-editor/platform'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useDragHandle, useDropTarget, selectionDragUris } from '@universe-editor/workbench-ui'
-import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
+import type {
+  ExplorerTreeService,
+  IExplorerResourceOperation,
+} from '../../services/explorer/ExplorerTreeService.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import styles from './ExplorerView.module.css'
 
@@ -35,6 +38,7 @@ interface Props {
   readonly isSelected: boolean
   readonly isFocused: boolean
   readonly isActiveEditor: boolean
+  readonly isCut: boolean
   /** Topmost dir of the compact chain — drag source when set. */
   readonly compactRoot?: URI
   readonly tree: ExplorerTreeService
@@ -43,9 +47,13 @@ interface Props {
     e: ReactMouseEvent,
     target: { resource: URI; isDirectory: boolean } | null,
   ) => void
-  readonly fileService?: IFileService
   /** Invoked when OS-external / cross-panel resources are dropped onto a directory row. */
   readonly onDropResources?: (destDir: URI, e: ReactDragEvent) => void
+  /** Invoked when Explorer-internal resources are dropped onto a directory row. */
+  readonly onMoveResources?: (
+    resources: readonly IExplorerResourceOperation[],
+    destDir: URI,
+  ) => void
   /** Git status colour for the name; letter shown as a trailing badge. */
   readonly decoColor?: string
   readonly decoLetter?: string
@@ -64,12 +72,13 @@ function ExplorerTreeNodeImpl({
   isSelected,
   isFocused,
   isActiveEditor,
+  isCut,
   compactRoot,
   tree,
   onOpenFile,
   onContextMenu,
-  fileService,
   onDropResources,
+  onMoveResources,
   decoColor,
   decoLetter,
   decoStrike,
@@ -83,6 +92,7 @@ function ExplorerTreeNodeImpl({
     isActiveEditor && styles['active'],
     isSelected && styles['selected'],
     isFocused && styles['focused'],
+    isCut && styles['cut'],
   ]
     .filter(Boolean)
     .join(' ')
@@ -149,12 +159,7 @@ function ExplorerTreeNodeImpl({
       if (!isDirectory) return
       const destDir = dropDirRef.current
       if (payload) {
-        if (!fileService) return
-        const src = payload.resource
-        const srcName = src.path.split('/').pop()
-        if (!srcName) return
-        const dest = destDir.with({ path: `${destDir.path}/${srcName}` })
-        void fileService.rename(src, dest)
+        onMoveResources?.(tree.getContextResourceOperations(payload.resource), destDir)
         return
       }
       onDropResources?.(destDir, e)

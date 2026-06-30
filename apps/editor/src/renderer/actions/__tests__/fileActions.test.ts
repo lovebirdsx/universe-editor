@@ -59,6 +59,13 @@ import { NewFileAction, NewFolderAction, NewUntitledFileAction } from '../fileCr
 import { DeleteFileAction, RenameFileAction } from '../fileMutateActions.js'
 import { OpenFileAction } from '../fileOpenActions.js'
 import {
+  CopyExplorerFileAction,
+  CutFileAction,
+  DuplicateFileAction,
+  MoveFileAction,
+  PasteExplorerFileAction,
+} from '../fileClipboardActions.js'
+import {
   ExplorerTreeService,
   IExplorerTreeService,
 } from '../../services/explorer/ExplorerTreeService.js'
@@ -87,16 +94,47 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
   files: Set<string>
   dirs: Map<string, IDirectoryEntry[]>
   writes: Array<{ path: string; content: string }>
+  copies: Array<{ source: string; target: string }>
+  renames: Array<{ source: string; target: string }>
 } {
   const dirs = new Map<string, IDirectoryEntry[]>()
   for (const [k, v] of Object.entries(initial)) dirs.set(k, v)
   const files = new Set<string>()
   const writes: Array<{ path: string; content: string }> = []
+  const copies: Array<{ source: string; target: string }> = []
+  const renames: Array<{ source: string; target: string }> = []
+  const basename = (resource: URI) => resource.path.split('/').at(-1) ?? resource.path
+  const parent = (resource: URI): URI | null => {
+    const slash = resource.path.lastIndexOf('/')
+    if (slash <= 0) return null
+    return resource.with({ path: resource.path.slice(0, slash) })
+  }
+  const removeParentEntry = (resource: URI) => {
+    const p = parent(resource)
+    if (!p) return
+    const entries = dirs.get(p.toString())
+    if (!entries) return
+    dirs.set(
+      p.toString(),
+      entries.filter((entry) => entry.name !== basename(resource)),
+    )
+  }
+  const upsertParentEntry = (resource: URI, isDirectory: boolean) => {
+    const p = parent(resource)
+    if (!p) return
+    const entries = dirs.get(p.toString()) ?? []
+    const name = basename(resource)
+    if (!entries.some((entry) => entry.name === name)) {
+      dirs.set(p.toString(), [...entries, { name, isFile: !isDirectory, isDirectory }])
+    }
+  }
   return {
     _serviceBrand: undefined,
     files,
     dirs,
     writes,
+    copies,
+    renames,
     async readFile() {
       throw new Error('not used')
     },
@@ -107,6 +145,7 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
       const text = typeof content === 'string' ? content : new TextDecoder().decode(content)
       writes.push({ path: resource.toString(), content: text })
       files.add(resource.toString())
+      upsertParentEntry(resource, false)
     },
     async exists(resource: URI) {
       return files.has(resource.toString()) || dirs.has(resource.toString())
@@ -144,17 +183,51 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): IFileServiceTy
     },
     async createDirectory(resource: URI) {
       dirs.set(resource.toString(), [])
+      upsertParentEntry(resource, true)
     },
     async delete(resource: URI) {
       files.delete(resource.toString())
       dirs.delete(resource.toString())
+      removeParentEntry(resource)
     },
-    async rename(source: URI, target: URI) {
-      if (files.delete(source.toString())) files.add(target.toString())
+    async rename(source: URI, target: URI, opts?: { overwrite?: boolean }) {
+      renames.push({ source: source.toString(), target: target.toString() })
+      if (
+        opts?.overwrite !== true &&
+        (files.has(target.toString()) || dirs.has(target.toString()))
+      ) {
+        throw new Error('target exists')
+      }
+      if (files.delete(source.toString())) {
+        files.add(target.toString())
+        removeParentEntry(source)
+        upsertParentEntry(target, false)
+      }
       const d = dirs.get(source.toString())
       if (d !== undefined) {
         dirs.delete(source.toString())
         dirs.set(target.toString(), d)
+        removeParentEntry(source)
+        upsertParentEntry(target, true)
+      }
+    },
+    async copy(source: URI, target: URI, opts?: { overwrite?: boolean }) {
+      copies.push({ source: source.toString(), target: target.toString() })
+      if (
+        opts?.overwrite !== true &&
+        (files.has(target.toString()) || dirs.has(target.toString()))
+      ) {
+        throw new Error('target exists')
+      }
+      if (files.has(source.toString())) {
+        files.add(target.toString())
+        upsertParentEntry(target, false)
+        return
+      }
+      const d = dirs.get(source.toString())
+      if (d !== undefined) {
+        dirs.set(target.toString(), [...d])
+        upsertParentEntry(target, true)
       }
     },
   } as never
@@ -573,6 +646,11 @@ beforeEach(() => {
   disposables.push(registerAction2(NewUntitledFileAction))
   disposables.push(registerAction2(RenameFileAction))
   disposables.push(registerAction2(DeleteFileAction))
+  disposables.push(registerAction2(CutFileAction))
+  disposables.push(registerAction2(CopyExplorerFileAction))
+  disposables.push(registerAction2(PasteExplorerFileAction))
+  disposables.push(registerAction2(DuplicateFileAction))
+  disposables.push(registerAction2(MoveFileAction))
 })
 afterEach(() => {
   while (disposables.length > 0) disposables.pop()?.dispose()
@@ -747,6 +825,87 @@ describe('fileActions', () => {
       const spy = vi.spyOn(h.fs, 'delete')
       await run(h, DeleteFileAction.ID, { target, isDirectory: true })
       expect(spy).toHaveBeenCalledWith(expect.anything(), { recursive: true })
+    })
+  })
+
+  describe('Explorer clipboard actions', () => {
+    it('CutFileAction stores the selected resource as cut', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const h = makeHarness({ root })
+
+      await run(h, CutFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.tree.hasClipboard).toBe(true)
+      expect(h.tree.clipboardIsCut).toBe(true)
+      expect(h.tree.isCut(source)).toBe(true)
+    })
+
+    it('Copy + Paste copies into the target folder', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const dest = URI.joinPath(root, 'sub')
+      const target = URI.joinPath(dest, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.fs.dirs.set(dest.toString(), [])
+
+      await run(h, CopyExplorerFileAction.ID, { target: source, isDirectory: false })
+      await run(h, PasteExplorerFileAction.ID, { target: dest, isDirectory: true })
+
+      expect(h.fs.copies).toContainEqual({ source: source.toString(), target: target.toString() })
+      expect(h.fs.files.has(target.toString())).toBe(true)
+      expect(h.tree.hasClipboard).toBe(true)
+    })
+
+    it('Cut + Paste moves into the target folder and clears cut state', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const dest = URI.joinPath(root, 'sub')
+      const target = URI.joinPath(dest, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.fs.dirs.set(dest.toString(), [])
+
+      await run(h, CutFileAction.ID, { target: source, isDirectory: false })
+      await run(h, PasteExplorerFileAction.ID, { target: dest, isDirectory: true })
+
+      expect(h.fs.renames).toContainEqual({ source: source.toString(), target: target.toString() })
+      expect(h.fs.files.has(source.toString())).toBe(false)
+      expect(h.fs.files.has(target.toString())).toBe(true)
+      expect(h.tree.hasClipboard).toBe(false)
+    })
+
+    it('DuplicateFileAction prompts with an incremental name and copies to it', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const target = URI.joinPath(root, 'a copy.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.dialog.promptResults.push('a copy.txt')
+
+      await run(h, DuplicateFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.dialog.promptCalls[0]?.initialValue).toBe('a copy.txt')
+      expect(h.fs.copies).toContainEqual({ source: source.toString(), target: target.toString() })
+      expect(h.fs.files.has(target.toString())).toBe(true)
+    })
+
+    it('MoveFileAction picks a destination folder and renames into it', async () => {
+      const root = URI.file('/ws')
+      const source = URI.joinPath(root, 'a.txt')
+      const dest = URI.joinPath(root, 'sub')
+      const target = URI.joinPath(dest, 'a.txt')
+      const h = makeHarness({ root })
+      h.fs.files.add(source.toString())
+      h.fs.dirs.set(dest.toString(), [])
+      h.fileDialog.openResult = dest
+
+      await run(h, MoveFileAction.ID, { target: source, isDirectory: false })
+
+      expect(h.fileDialog.openCalls[0]?.canSelectFolders).toBe(true)
+      expect(h.fs.renames).toContainEqual({ source: source.toString(), target: target.toString() })
+      expect(h.fs.files.has(target.toString())).toBe(true)
     })
   })
 

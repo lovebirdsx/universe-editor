@@ -17,8 +17,10 @@ import {
 } from 'react'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import {
+  combinedDisposable,
   IConfigurationService,
   ICommandService,
+  IContextKeyService,
   IDialogService,
   IEditorResolverService,
   IFileService,
@@ -38,6 +40,7 @@ import {
 import {
   IExplorerTreeService,
   type IExplorerEntry,
+  type IExplorerResourceOperation,
 } from '../../services/explorer/ExplorerTreeService.js'
 import {
   IScmDecorationsService,
@@ -61,6 +64,7 @@ export function ExplorerView() {
   const editorResolverService = useService(IEditorResolverService)
   const workspaceService = useService(IWorkspaceService)
   const commandService = useService(ICommandService)
+  const contextKeyService = useService(IContextKeyService)
   const fileService = useService(IFileService)
   const dialogService = useService(IDialogService)
   const configService = useService(IConfigurationService)
@@ -72,7 +76,12 @@ export function ExplorerView() {
   // fresh active-editor key. Structure changes are handled inside <Tree>.
   const [, setSelectionVersion] = useState(0)
   useEffect(() => {
-    const d = markAsSingleton(tree.onDidChangeSelection(() => setSelectionVersion((v) => v + 1)))
+    const d = markAsSingleton(
+      combinedDisposable(
+        tree.onDidChangeSelection(() => setSelectionVersion((v) => v + 1)),
+        tree.onDidChangeClipboard(() => setSelectionVersion((v) => v + 1)),
+      ),
+    )
     return () => d.dispose()
   }, [tree])
 
@@ -110,6 +119,23 @@ export function ExplorerView() {
       void importDroppedResources(sources, destDir, fileService, dialogService)
     },
     [fileService, dialogService],
+  )
+
+  const onMoveResources = useCallback(
+    (resources: readonly IExplorerResourceOperation[], destDir: URI) => {
+      void (async () => {
+        try {
+          await tree.moveResources(resources, destDir)
+        } catch (err) {
+          await dialogService.confirm({
+            message: localize('dialog.file.move.error', 'Failed to move'),
+            detail: err instanceof Error ? err.message : String(err),
+            type: 'error',
+          })
+        }
+      })()
+    },
+    [tree, dialogService],
   )
 
   const root = tree.root
@@ -153,15 +179,18 @@ export function ExplorerView() {
         isSelected={ctx.isSelected}
         isFocused={ctx.isFocused}
         isActiveEditor={activeKey === key}
+        isCut={
+          tree.isCut(entry.resource) || (entry.compactRoot ? tree.isCut(entry.compactRoot) : false)
+        }
         {...(deco?.color !== undefined ? { decoColor: deco.color } : {})}
         {...(deco?.letter !== undefined ? { decoLetter: deco.letter } : {})}
         {...(deco?.strikeThrough ? { decoStrike: true } : {})}
         {...(deco?.tooltip !== undefined ? { decoTooltip: deco.tooltip } : {})}
         tree={tree}
-        fileService={fileService}
         onOpenFile={openFile}
         onContextMenu={onRowContextMenu}
         onDropResources={onDropResources}
+        onMoveResources={onMoveResources}
       />
     )
   }
@@ -214,6 +243,8 @@ export function ExplorerView() {
           state={menu}
           rootResource={root}
           commandService={commandService}
+          contextKeyService={contextKeyService}
+          tree={tree}
           onClose={() => setMenu(null)}
         />
       )}

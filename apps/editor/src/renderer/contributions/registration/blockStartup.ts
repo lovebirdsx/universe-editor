@@ -25,6 +25,7 @@ import { JsonSchemaBridgeContribution } from '../JsonSchemaBridgeContribution.js
 import { JsonSchemaAssociationsContribution } from '../JsonSchemaAssociationsContribution.js'
 import { InlineCompletionConfigurationContribution } from '../InlineCompletionConfigurationContribution.js'
 import { BuiltInEditorBindingsContribution } from '../BuiltInEditorBindingsContribution.js'
+import { ExplorerClipboardContextContribution } from '../ExplorerClipboardContextContribution.js'
 import { ExplorerMenuContribution } from '../ExplorerMenuContribution.js'
 import { EditMenuContribution } from '../EditMenuContribution.js'
 import { LogLevelContribution } from '../LogLevelContribution.js'
@@ -203,6 +204,12 @@ ContributionsRegistry.registerContribution(
 
 // Explorer right-click menu items registered through MenuRegistry.
 // BlockStartup so they are available before any ExplorerContextMenu renders.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.explorerClipboardContext',
+  ExplorerClipboardContextContribution,
+  WorkbenchPhase.BlockStartup,
+)
+
 ContributionsRegistry.registerContribution(
   'workbench.contrib.explorerMenu',
   ExplorerMenuContribution,

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   CommandsRegistry,
   type ICommandService,
+  type IContextKeyService,
   type MenuId,
   MenuRegistry,
   isSubmenuEntry,
@@ -16,6 +17,7 @@ export interface ContextMenuProps {
   /** Passed as the first argument to each executed command. */
   args?: readonly unknown[]
   commandService: ICommandService
+  contextKeyService?: IContextKeyService
   onClose: () => void
 }
 
@@ -38,6 +40,7 @@ export function ContextMenu({
   anchor,
   args = [],
   commandService,
+  contextKeyService,
   onClose,
 }: ContextMenuProps) {
   const ref = useRef<HTMLUListElement>(null)
@@ -58,7 +61,7 @@ export function ContextMenu({
   }, [onClose])
 
   const rows = useMemo<RowModel[]>(() => {
-    const entries = MenuRegistry.getMenuItems(menuId)
+    const entries = MenuRegistry.getMenuItems(menuId, contextKeyService)
     const result: RowModel[] = []
     let prevGroup: string | undefined = undefined
 
@@ -86,7 +89,7 @@ export function ContextMenu({
     }
 
     return result
-  }, [menuId, args, commandService, onClose])
+  }, [menuId, contextKeyService, args, commandService, onClose])
 
   if (rows.length === 0) return null
 

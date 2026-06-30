@@ -8,11 +8,13 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   CommandsRegistry,
+  ContextKeyService,
   MenuId,
   MenuRegistry,
   URI,
   type ICommandService,
 } from '@universe-editor/platform'
+import type { ExplorerTreeService } from '../../../services/explorer/ExplorerTreeService.js'
 import { ExplorerContextMenu } from '../ExplorerContextMenu.js'
 
 class FakeCommandService {
@@ -69,6 +71,60 @@ describe('ExplorerContextMenu', () => {
       expect(arg?.parent.path).toBe(URI.joinPath(root, 'src').toJSON().path)
       expect(arg?.isDirectory).toBe(false)
     } finally {
+      menuDisposable.dispose()
+      cmdDisposable.dispose()
+    }
+  })
+
+  it('filters menu items with scoped Explorer resource and clipboard context', () => {
+    const cmdId = 'test.explorer.paste'
+    const cmdDisposable = CommandsRegistry.registerCommand(cmdId, () => {}, {
+      description: 'Paste',
+    })
+    const menuDisposable = MenuRegistry.addMenuItem(MenuId.ExplorerContext, {
+      command: cmdId,
+      title: 'Paste',
+      when: 'fileCopied && explorerResourceIsFolder',
+    })
+    const contextKeyService = new ContextKeyService()
+
+    try {
+      const commandService = new FakeCommandService()
+      const root = URI.file('/ws')
+      const file = URI.joinPath(root, 'main.ts')
+      const folder = URI.joinPath(root, 'src')
+      const tree = {
+        hasClipboard: true,
+        hasCutItems: false,
+        isRoot: (resource: URI) => resource.toString() === root.toString(),
+      } as unknown as ExplorerTreeService
+
+      const { unmount } = render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: file, isDirectory: false } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          tree={tree}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.queryByText('Paste')).toBeNull()
+      unmount()
+
+      render(
+        <ExplorerContextMenu
+          state={{ x: 0, y: 0, target: { resource: folder, isDirectory: true } }}
+          rootResource={root}
+          commandService={commandService as unknown as ICommandService}
+          contextKeyService={contextKeyService}
+          tree={tree}
+          onClose={() => {}}
+        />,
+      )
+      expect(screen.getByText('Paste')).toBeDefined()
+    } finally {
+      contextKeyService.dispose()
       menuDisposable.dispose()
       cmdDisposable.dispose()
     }

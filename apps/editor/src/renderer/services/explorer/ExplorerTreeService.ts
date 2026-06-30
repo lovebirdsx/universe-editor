@@ -27,8 +27,16 @@ import {
   type ILoggerService as ILoggerServiceType,
 } from '@universe-editor/platform'
 import { TreeModel, type ITreeDataSource } from '@universe-editor/workbench-ui'
-import { isDescendant, normalizeUri, parentOf, relativeTo, sameUri } from './explorerTreeUtils.js'
+import {
+  dedupe,
+  isDescendant,
+  normalizeUri,
+  parentOf,
+  relativeTo,
+  sameUri,
+} from './explorerTreeUtils.js'
 import { IExcludeService } from '../exclude/ExcludeService.js'
+import { basenameOf, incrementFileName, targetInDirectory } from './explorerFileOperations.js'
 
 export interface IExplorerEntry {
   readonly resource: URI
@@ -42,6 +50,11 @@ export interface IExplorerEntry {
 
 export const IExplorerTreeService = createDecorator<ExplorerTreeService>('explorerTreeService')
 
+export interface IExplorerResourceOperation {
+  readonly resource: URI
+  readonly isDirectory: boolean
+}
+
 interface NodeState {
   children: IExplorerEntry[] | null
   loading: boolean
@@ -49,8 +62,7 @@ interface NodeState {
 }
 
 function basename(resource: URI): string {
-  const segments = resource.path.split('/')
-  return segments[segments.length - 1] ?? ''
+  return basenameOf(resource)
 }
 
 function sortEntries(entries: readonly IDirectoryEntry[], parent: URI): IExplorerEntry[] {
@@ -72,6 +84,8 @@ export class ExplorerTreeService extends Disposable {
   private _root: URI | null = null
   private readonly _nodes = new Map<string, NodeState>()
   private _activeEditorResource: URI | null = null
+  private _clipboardResources: readonly IExplorerResourceOperation[] = []
+  private _clipboardIsCut = false
   private readonly _logger: ILogger
 
   private readonly _dataSource: ITreeDataSource<IExplorerEntry> = {
@@ -119,6 +133,9 @@ export class ExplorerTreeService extends Disposable {
 
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange: Event<void> = this._onDidChange.event
+
+  private readonly _onDidChangeClipboard = this._register(new Emitter<void>())
+  readonly onDidChangeClipboard: Event<void> = this._onDidChangeClipboard.event
 
   private readonly _onReveal = this._register(new Emitter<URI>())
   readonly onReveal: Event<URI> = this._onReveal.event
@@ -172,8 +189,39 @@ export class ExplorerTreeService extends Disposable {
     return this._model.selection.map((id) => URI.parse(id))
   }
 
+  get clipboardResources(): readonly IExplorerResourceOperation[] {
+    return this._clipboardResources
+  }
+
+  get hasClipboard(): boolean {
+    return this._clipboardResources.length > 0
+  }
+
+  get clipboardIsCut(): boolean {
+    return this._clipboardIsCut
+  }
+
+  get hasCutItems(): boolean {
+    return this._clipboardIsCut && this._clipboardResources.length > 0
+  }
+
   isSelected(resource: URI): boolean {
     return this._model.isSelected(resource.toString())
+  }
+
+  isRoot(resource: URI): boolean {
+    return this._root !== null && sameUri(this._root, resource)
+  }
+
+  isDirectory(resource: URI): boolean {
+    if (this.isRoot(resource)) return true
+    const entry = this._findKnownEntry(resource)
+    return entry?.isDirectory ?? false
+  }
+
+  isCut(resource: URI): boolean {
+    if (!this.hasCutItems) return false
+    return this._clipboardResources.some((entry) => sameUri(entry.resource, resource))
   }
 
   get focused(): URI | null {
@@ -191,6 +239,23 @@ export class ExplorerTreeService extends Disposable {
    */
   get selectedResource(): URI | null {
     return this.focused ?? this.selection[0] ?? null
+  }
+
+  getContextResources(primary?: URI | null): readonly URI[] {
+    const focused = primary ?? this.selectedResource
+    const selection = this.selection
+    if (focused && selection.some((resource) => sameUri(resource, focused))) {
+      return selection
+    }
+    if (focused) return [focused]
+    return selection
+  }
+
+  getContextResourceOperations(primary?: URI | null): IExplorerResourceOperation[] {
+    return this.getContextResources(primary).map((resource) => ({
+      resource,
+      isDirectory: this.isDirectory(resource),
+    }))
   }
 
   /**
@@ -362,7 +427,8 @@ export class ExplorerTreeService extends Disposable {
     const target = URI.joinPath(parent, newName)
     try {
       await this._fileService.rename(source, target, { overwrite: false })
-      this._nodes.delete(source.toString())
+      this._deleteNodeSubtree(source)
+      if (this.isCut(source)) this.clearClipboard()
       await this.refresh(parent)
       this._logger.info(`rename ${source.toString()} -> ${target.toString()}`)
       return target
@@ -376,7 +442,8 @@ export class ExplorerTreeService extends Disposable {
     try {
       await this._fileService.delete(target, opts)
       const parent = parentOf(target)
-      this._nodes.delete(target.toString())
+      this._deleteNodeSubtree(target)
+      if (this.isCut(target)) this.clearClipboard()
       if (parent) {
         await this.refresh(parent)
       } else {
@@ -389,12 +456,132 @@ export class ExplorerTreeService extends Disposable {
     }
   }
 
+  setToCopy(resources: readonly IExplorerResourceOperation[], cut: boolean): void {
+    const normalized = dedupe(resources.map((resource) => normalizeUri(resource.resource)))
+      .filter((resource) => !this.isRoot(resource))
+      .map((resource) => ({
+        resource,
+        isDirectory:
+          resources.find((entry) => sameUri(entry.resource, resource))?.isDirectory ?? false,
+      }))
+    this._clipboardResources = normalized
+    this._clipboardIsCut = cut && normalized.length > 0
+    this._logger.info(`${this._clipboardIsCut ? 'cut' : 'copy'} resources=${normalized.length}`)
+    this._onDidChangeClipboard.fire()
+    this._onDidChange.fire()
+  }
+
+  clearClipboard(): void {
+    if (this._clipboardResources.length === 0 && !this._clipboardIsCut) return
+    this._clipboardResources = []
+    this._clipboardIsCut = false
+    this._logger.info('clear clipboard')
+    this._onDidChangeClipboard.fire()
+    this._onDidChange.fire()
+  }
+
+  async duplicate(source: IExplorerResourceOperation, newName: string): Promise<URI> {
+    if (this.isRoot(source.resource)) throw new Error('Cannot duplicate the workspace root.')
+    const parent = parentOf(source.resource)
+    if (!parent) throw new Error('Cannot duplicate a resource without a parent.')
+    const target = URI.joinPath(parent, newName)
+    if (await this._fileService.exists(target)) {
+      throw new Error(`A file or folder named "${newName}" already exists.`)
+    }
+    try {
+      await this._fileService.copy(source.resource, target, { overwrite: false })
+      await this.refresh(parent)
+      this._logger.info(`duplicate ${source.resource.toString()} -> ${target.toString()}`)
+      return target
+    } catch (err) {
+      this._logger.error(
+        `duplicate failed ${source.resource.toString()} -> ${target.toString()}`,
+        err,
+      )
+      throw err
+    }
+  }
+
+  async defaultDuplicateName(source: IExplorerResourceOperation): Promise<string> {
+    const parent = parentOf(source.resource)
+    if (!parent) return incrementFileName(basename(source.resource), source.isDirectory)
+    let name = incrementFileName(basename(source.resource), source.isDirectory)
+    for (let i = 0; i < 200; i++) {
+      const candidate = URI.joinPath(parent, name)
+      if (!(await this._fileService.exists(candidate))) return name
+      name = incrementFileName(name, source.isDirectory)
+    }
+    throw new Error('Unable to find an available duplicate name.')
+  }
+
+  async copyResources(
+    resources: readonly IExplorerResourceOperation[],
+    destinationDir: URI,
+  ): Promise<URI[]> {
+    const sources = this._dedupeOperations(resources).filter(
+      (resource) => !this.isRoot(resource.resource),
+    )
+    const targets: URI[] = []
+    try {
+      for (const source of sources) {
+        this._assertCanPlace(source, destinationDir, 'copy')
+        const target = await this._findAvailableCopyTarget(source, destinationDir)
+        await this._fileService.copy(source.resource, target, { overwrite: false })
+        targets.push(target)
+      }
+      await this._refreshParents([...sources.map((source) => source.resource), ...targets])
+      this._logger.info(`copy resources=${sources.length} destination=${destinationDir.toString()}`)
+      this._selectOperationTargets(targets)
+      return targets
+    } catch (err) {
+      this._logger.error(`copy failed destination=${destinationDir.toString()}`, err)
+      throw err
+    }
+  }
+
+  async moveResources(
+    resources: readonly IExplorerResourceOperation[],
+    destinationDir: URI,
+    opts?: { overwrite?: boolean },
+  ): Promise<URI[]> {
+    const overwrite = opts?.overwrite === true
+    const sources = this._dedupeOperations(resources).filter(
+      (resource) => !this.isRoot(resource.resource),
+    )
+    const clearsCutState = sources.some((source) => this.isCut(source.resource))
+    const targets: URI[] = []
+    try {
+      for (const source of sources) {
+        this._assertCanPlace(source, destinationDir, 'move')
+        const target = targetInDirectory(destinationDir, source.resource)
+        if (sameUri(source.resource, target)) continue
+        if (!overwrite && (await this._fileService.exists(target))) {
+          throw new Error(`A file or folder named "${basename(target)}" already exists.`)
+        }
+        await this._fileService.rename(source.resource, target, { overwrite })
+        this._deleteNodeSubtree(source.resource)
+        targets.push(target)
+      }
+      await this._refreshParents([...sources.map((source) => source.resource), ...targets])
+      if (clearsCutState) this.clearClipboard()
+      this._logger.info(
+        `move resources=${sources.length} destination=${destinationDir.toString()} overwrite=${overwrite}`,
+      )
+      this._selectOperationTargets(targets)
+      return targets
+    } catch (err) {
+      this._logger.error(`move failed destination=${destinationDir.toString()}`, err)
+      throw err
+    }
+  }
+
   private _setRoot(root: URI | null): void {
     const normalized = root ? normalizeUri(root) : null
     this._logger.info(`setRoot ${normalized?.toString() ?? '<none>'}`)
     this._root = normalized
     this._nodes.clear()
     this._activeEditorResource = null
+    this.clearClipboard()
     this._model.reset()
     if (normalized) {
       void this._model.expand(this._rootEntry(normalized))
@@ -454,6 +641,83 @@ export class ExplorerTreeService extends Disposable {
       this._nodes.set(key, node)
     }
     return node
+  }
+
+  private _findKnownEntry(resource: URI): IExplorerEntry | undefined {
+    if (this._root && sameUri(this._root, resource)) return this._rootEntry(this._root)
+    for (const entry of this.getVisibleEntries()) {
+      if (sameUri(entry.resource, resource)) return entry
+      if (entry.compactRoot && sameUri(entry.compactRoot, resource)) {
+        return { resource: entry.compactRoot, name: basename(entry.compactRoot), isDirectory: true }
+      }
+    }
+    for (const node of this._nodes.values()) {
+      const found = node.children?.find((entry) => sameUri(entry.resource, resource))
+      if (found) return found
+    }
+    return undefined
+  }
+
+  private _dedupeOperations(
+    resources: readonly IExplorerResourceOperation[],
+  ): IExplorerResourceOperation[] {
+    const normalized = dedupe(resources.map((resource) => normalizeUri(resource.resource)))
+    return normalized.map((resource) => ({
+      resource,
+      isDirectory:
+        resources.find((entry) => sameUri(entry.resource, resource))?.isDirectory ??
+        this.isDirectory(resource),
+    }))
+  }
+
+  private _assertCanPlace(
+    source: IExplorerResourceOperation,
+    destinationDir: URI,
+    operation: 'copy' | 'move',
+  ): void {
+    if (this.isRoot(source.resource)) {
+      throw new Error(`Cannot ${operation} the workspace root.`)
+    }
+    if (source.isDirectory && isDescendant(source.resource, destinationDir)) {
+      throw new Error('Cannot place a folder inside itself or one of its descendants.')
+    }
+  }
+
+  private async _findAvailableCopyTarget(
+    source: IExplorerResourceOperation,
+    destinationDir: URI,
+  ): Promise<URI> {
+    let name = basename(source.resource)
+    for (let i = 0; i < 200; i++) {
+      const candidate = URI.joinPath(destinationDir, name)
+      if (!(await this._fileService.exists(candidate))) return candidate
+      name = incrementFileName(name, source.isDirectory)
+    }
+    throw new Error('Unable to find an available copy target.')
+  }
+
+  private _deleteNodeSubtree(resource: URI): void {
+    const normalized = normalizeUri(resource)
+    for (const key of [...this._nodes.keys()]) {
+      const nodeResource = normalizeUri(URI.parse(key))
+      if (sameUri(nodeResource, normalized) || isDescendant(normalized, nodeResource)) {
+        this._nodes.delete(key)
+      }
+    }
+  }
+
+  private async _refreshParents(resources: readonly URI[]): Promise<void> {
+    const parents = new Map<string, URI>()
+    for (const resource of resources) {
+      const parent = parentOf(resource)
+      if (parent) parents.set(normalizeUri(parent).toString(), parent)
+    }
+    await Promise.all([...parents.values()].map((parent) => this.refresh(parent)))
+  }
+
+  private _selectOperationTargets(targets: readonly URI[]): void {
+    if (targets.length === 0) return
+    this.setSelection(targets, targets[0] ?? null)
   }
 
   private _isSingleDirChild(resource: URI): boolean {

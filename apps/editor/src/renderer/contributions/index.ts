@@ -25,6 +25,7 @@ export { BuiltInViewContainersContribution } from './BuiltInViewContainersContri
 export { BuiltInViewsContribution } from './BuiltInViewsContribution.js'
 export { BuiltInEditorBindingsContribution } from './BuiltInEditorBindingsContribution.js'
 export { ContextKeyContribution } from './ContextKeyContribution.js'
+export { ExplorerClipboardContextContribution } from './ExplorerClipboardContextContribution.js'
 export { ExplorerMenuContribution } from './ExplorerMenuContribution.js'
 export { SettingsContribution } from './SettingsContribution.js'
 export { FileEditorStatusContribution } from './FileEditorStatusContribution.js'

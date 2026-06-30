@@ -133,6 +133,14 @@ import {
   CopyFileRelativePathAction,
 } from './fileCopyActions.js'
 import {
+  CancelCutExplorerFileAction,
+  CopyExplorerFileAction,
+  CutFileAction,
+  DuplicateFileAction,
+  MoveFileAction,
+  PasteExplorerFileAction,
+} from './fileClipboardActions.js'
+import {
   NewTerminalAction,
   SplitTerminalAction,
   OpenInTerminalAction,
@@ -383,6 +391,12 @@ registerAction2(RevealInOSExplorerAction)
 registerAction2(CopyFileNameAction)
 registerAction2(CopyFilePathAction)
 registerAction2(CopyFileRelativePathAction)
+registerAction2(CutFileAction)
+registerAction2(CopyExplorerFileAction)
+registerAction2(PasteExplorerFileAction)
+registerAction2(CancelCutExplorerFileAction)
+registerAction2(DuplicateFileAction)
+registerAction2(MoveFileAction)
 
 // Window / Help
 registerAction2(NewWindowAction)

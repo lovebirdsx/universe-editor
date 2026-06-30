@@ -4,9 +4,16 @@
  *  Items come from MenuRegistry (ExplorerMenuContribution registers them at BlockStartup).
  *--------------------------------------------------------------------------------------------*/
 
-import { type ICommandService, MenuId } from '@universe-editor/platform'
+import { useEffect, useMemo } from 'react'
+import {
+  markAsSingleton,
+  type ICommandService,
+  type IContextKeyService,
+  MenuId,
+} from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 import type { URI } from '@universe-editor/platform'
+import type { ExplorerTreeService } from '../../services/explorer/ExplorerTreeService.js'
 import { parentOf } from '../../services/explorer/explorerTreeUtils.js'
 
 export interface ContextMenuState {
@@ -20,10 +27,19 @@ interface Props {
   readonly state: ContextMenuState
   readonly rootResource: URI
   readonly commandService: ICommandService
+  readonly contextKeyService?: IContextKeyService
+  readonly tree?: ExplorerTreeService
   readonly onClose: () => void
 }
 
-export function ExplorerContextMenu({ state, rootResource, commandService, onClose }: Props) {
+export function ExplorerContextMenu({
+  state,
+  rootResource,
+  commandService,
+  contextKeyService,
+  tree,
+  onClose,
+}: Props) {
   const target = state.target ?? { resource: rootResource, isDirectory: true }
 
   // Expose both `resource` (RevealInOSExplorer, Refresh) and `target` (Rename,
@@ -32,6 +48,25 @@ export function ExplorerContextMenu({ state, rootResource, commandService, onClo
   const resource = target.resource
   const isDirectory = target.isDirectory
   const parent = target.isDirectory ? target.resource : (parentOf(target.resource) ?? rootResource)
+  const isRoot = tree?.isRoot(resource) ?? resource.toString() === rootResource.toString()
+  const hasClipboard = tree?.hasClipboard ?? false
+  const hasCutItems = tree?.hasCutItems ?? false
+  const scopedContext = useMemo(
+    () =>
+      contextKeyService
+        ? markAsSingleton(
+            contextKeyService.createScoped({
+              explorerResourceIsFolder: isDirectory,
+              explorerResourceIsRoot: isRoot,
+              fileCopied: hasClipboard,
+              explorerResourceCut: hasCutItems,
+            }),
+          )
+        : undefined,
+    [contextKeyService, isDirectory, isRoot, hasClipboard, hasCutItems],
+  )
+
+  useEffect(() => () => scopedContext?.dispose(), [scopedContext])
 
   return (
     <ContextMenu
@@ -46,6 +81,7 @@ export function ExplorerContextMenu({ state, rootResource, commandService, onClo
         },
       ]}
       commandService={commandService}
+      {...(scopedContext ? { contextKeyService: scopedContext } : {})}
       onClose={onClose}
     />
   )

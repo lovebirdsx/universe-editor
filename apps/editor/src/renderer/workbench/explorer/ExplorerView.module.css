@@ -91,6 +91,15 @@
   outline-offset: -1px;
 }
 
+.row.cut {
+  opacity: 0.55;
+}
+
+.row.cut.selected,
+.row.cut.focused {
+  opacity: 0.72;
+}
+
 .chevron {
   flex-shrink: 0;
   display: flex;

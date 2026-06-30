@@ -24,6 +24,7 @@ import {
   type UriComponents,
 } from '@universe-editor/platform'
 import { ExplorerTreeService } from '../ExplorerTreeService.js'
+import { incrementFileName } from '../explorerFileOperations.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../exclude/testing/fakeExcludeService.js'
 
@@ -35,6 +36,7 @@ interface FakeFs extends IFileServiceType {
     writeFile: string[]
     createDirectory: string[]
     rename: string[]
+    copy: string[]
     delete: string[]
   }
 }
@@ -48,7 +50,33 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFs {
     writeFile: [] as string[],
     createDirectory: [] as string[],
     rename: [] as string[],
+    copy: [] as string[],
     delete: [] as string[],
+  }
+  const basename = (resource: URI) => resource.path.split('/').at(-1) ?? resource.path
+  const parent = (resource: URI): URI | null => {
+    const slash = resource.path.lastIndexOf('/')
+    if (slash <= 0) return null
+    return resource.with({ path: resource.path.slice(0, slash) })
+  }
+  const removeParentEntry = (resource: URI) => {
+    const p = parent(resource)
+    if (!p) return
+    const entries = dirs.get(p.toString())
+    if (!entries) return
+    dirs.set(
+      p.toString(),
+      entries.filter((entry) => entry.name !== basename(resource)),
+    )
+  }
+  const upsertParentEntry = (resource: URI, isDirectory: boolean) => {
+    const p = parent(resource)
+    if (!p) return
+    const entries = dirs.get(p.toString()) ?? []
+    const name = basename(resource)
+    if (!entries.some((entry) => entry.name === name)) {
+      dirs.set(p.toString(), [...entries, { name, isFile: !isDirectory, isDirectory }])
+    }
   }
   return {
     _serviceBrand: undefined,
@@ -64,6 +92,7 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFs {
     async writeFile(resource: URI) {
       calls.writeFile.push(resource.toString())
       files.add(resource.toString())
+      upsertParentEntry(resource, false)
     },
     async exists(resource: URI) {
       return files.has(resource.toString()) || dirs.has(resource.toString())
@@ -78,22 +107,86 @@ function makeFs(initial: Record<string, IDirectoryEntry[]> = {}): FakeFs {
     async createDirectory(resource: URI) {
       calls.createDirectory.push(resource.toString())
       dirs.set(resource.toString(), [])
+      upsertParentEntry(resource, true)
     },
     async delete(resource: URI) {
       calls.delete.push(resource.toString())
       files.delete(resource.toString())
       dirs.delete(resource.toString())
-    },
-    async rename(source: URI, target: URI) {
-      calls.rename.push(`${source.toString()}→${target.toString()}`)
-      if (files.delete(source.toString())) files.add(target.toString())
-      const d = dirs.get(source.toString())
-      if (d !== undefined) {
-        dirs.delete(source.toString())
-        dirs.set(target.toString(), d)
+      removeParentEntry(resource)
+      const prefix = resource.toString() + '/'
+      for (const key of [...files]) {
+        if (key.startsWith(prefix)) files.delete(key)
+      }
+      for (const key of [...dirs.keys()]) {
+        if (key.startsWith(prefix)) dirs.delete(key)
       }
     },
-    async copy() {},
+    async rename(source: URI, target: URI, opts?: { overwrite?: boolean }) {
+      calls.rename.push(`${source.toString()}→${target.toString()}`)
+      if (
+        opts?.overwrite !== true &&
+        (files.has(target.toString()) || dirs.has(target.toString()))
+      ) {
+        throw new Error('target exists')
+      }
+      if (files.delete(source.toString())) {
+        if (opts?.overwrite === true) {
+          files.delete(target.toString())
+          dirs.delete(target.toString())
+        }
+        files.add(target.toString())
+        removeParentEntry(source)
+        upsertParentEntry(target, false)
+      }
+      if (dirs.has(source.toString())) {
+        if (opts?.overwrite === true) {
+          files.delete(target.toString())
+          dirs.delete(target.toString())
+        }
+        const moved: Array<[string, IDirectoryEntry[]]> = []
+        const sourcePrefix = source.toString() + '/'
+        for (const [key, value] of dirs) {
+          if (key === source.toString() || key.startsWith(sourcePrefix)) {
+            moved.push([key, value])
+          }
+        }
+        for (const [key] of moved) dirs.delete(key)
+        for (const [key, value] of moved) {
+          dirs.set(key.replace(source.toString(), target.toString()), value)
+        }
+        removeParentEntry(source)
+        upsertParentEntry(target, true)
+      }
+    },
+    async copy(source: URI, target: URI, opts?: { overwrite?: boolean }) {
+      calls.copy.push(`${source.toString()}→${target.toString()}`)
+      if (
+        opts?.overwrite !== true &&
+        (files.has(target.toString()) || dirs.has(target.toString()))
+      ) {
+        throw new Error('target exists')
+      }
+      if (files.has(source.toString())) {
+        files.add(target.toString())
+        upsertParentEntry(target, false)
+        return
+      }
+      if (dirs.has(source.toString())) {
+        const sourcePrefix = source.toString() + '/'
+        for (const [key, value] of [...dirs]) {
+          if (key === source.toString() || key.startsWith(sourcePrefix)) {
+            dirs.set(key.replace(source.toString(), target.toString()), [...value])
+          }
+        }
+        for (const key of [...files]) {
+          if (key.startsWith(sourcePrefix)) {
+            files.add(key.replace(source.toString(), target.toString()))
+          }
+        }
+        upsertParentEntry(target, true)
+      }
+    },
     async listRecursive() {
       return []
     },
@@ -285,6 +378,106 @@ describe('ExplorerTreeService', () => {
     fs.files.add(URI.joinPath(root, 'README.md').toString())
     await tree.delete(URI.joinPath(root, 'README.md'))
     expect(fs.calls.delete).toContain(URI.joinPath(root, 'README.md').toString())
+  })
+
+  it('tracks and clears Explorer clipboard cut state', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    tree.setToCopy([{ resource: readme, isDirectory: false }], true)
+    expect(tree.hasClipboard).toBe(true)
+    expect(tree.clipboardIsCut).toBe(true)
+    expect(tree.isCut(readme)).toBe(true)
+
+    tree.clearClipboard()
+    expect(tree.hasClipboard).toBe(false)
+    expect(tree.isCut(readme)).toBe(false)
+  })
+
+  it('increments duplicate file names like VSCode simple naming', () => {
+    expect(incrementFileName('README.md', false)).toBe('README copy.md')
+    expect(incrementFileName('README copy.md', false)).toBe('README copy 2.md')
+    expect(incrementFileName('README copy 2.md', false)).toBe('README copy 3.md')
+    expect(incrementFileName('src', true)).toBe('src copy')
+  })
+
+  it('finds the next available duplicate name in the same folder', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    fs.files.add(readme.toString())
+    fs.files.add(URI.joinPath(root, 'README copy.md').toString())
+    await expect(tree.defaultDuplicateName({ resource: readme, isDirectory: false })).resolves.toBe(
+      'README copy 2.md',
+    )
+  })
+
+  it('duplicate copies to the prompted sibling name', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    const target = URI.joinPath(root, 'README copy.md')
+    fs.files.add(readme.toString())
+    await tree.duplicate({ resource: readme, isDirectory: false }, 'README copy.md')
+
+    expect(fs.calls.copy).toContain(`${readme.toString()}→${target.toString()}`)
+    expect(fs.files.has(target.toString())).toBe(true)
+  })
+
+  it('copyResources avoids same-folder collisions with incremental names', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    const existing = URI.joinPath(root, 'README copy.md')
+    const target = URI.joinPath(root, 'README copy 2.md')
+    fs.files.add(readme.toString())
+    fs.files.add(existing.toString())
+
+    const copied = await tree.copyResources([{ resource: readme, isDirectory: false }], root)
+
+    expect(copied.map((uri) => uri.toString())).toEqual([target.toString()])
+    expect(fs.files.has(target.toString())).toBe(true)
+  })
+
+  it('moveResources renames into the destination folder', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    const src = URI.joinPath(root, 'src')
+    const target = URI.joinPath(src, 'README.md')
+    fs.files.add(readme.toString())
+
+    const moved = await tree.moveResources([{ resource: readme, isDirectory: false }], src)
+
+    expect(moved.map((uri) => uri.toString())).toEqual([target.toString()])
+    expect(fs.files.has(readme.toString())).toBe(false)
+    expect(fs.files.has(target.toString())).toBe(true)
+  })
+
+  it('moveResources clears cut state for moved resources', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const readme = URI.joinPath(root, 'README.md')
+    const src = URI.joinPath(root, 'src')
+    fs.files.add(readme.toString())
+    tree.setToCopy([{ resource: readme, isDirectory: false }], true)
+
+    await tree.moveResources([{ resource: readme, isDirectory: false }], src)
+
+    expect(tree.hasClipboard).toBe(false)
+    expect(tree.isCut(readme)).toBe(false)
+  })
+
+  it('rejects placing a folder inside itself or a descendant', async () => {
+    const tree = inst.createInstance(ExplorerTreeService)
+    await flush()
+    const src = URI.joinPath(root, 'src')
+    const nested = URI.joinPath(src, 'nested')
+    fs.dirs.set(nested.toString(), [])
+
+    await expect(
+      tree.moveResources([{ resource: src, isDirectory: true }], nested),
+    ).rejects.toThrow(/inside itself/)
   })
 
   it('switching workspace folders drops the prior root', async () => {
