@@ -192,6 +192,9 @@ import {
   MarkdownPreviewFindNextAction,
   MarkdownPreviewFindPreviousAction,
   MarkdownPreviewFindCloseAction,
+  MarkdownPreviewLinkHintsAction,
+  MarkdownPreviewLinkHintsToSideAction,
+  MarkdownPreviewHelpAction,
 } from './markdownActions.js'
 import { FindMarkdownFileReferencesAction } from './markdownFileReferencesActions.js'
 import { ShowJsonSchemaAction } from './jsonSchemaActions.js'
@@ -457,6 +460,9 @@ registerAction2(MarkdownPreviewFindAction)
 registerAction2(MarkdownPreviewFindNextAction)
 registerAction2(MarkdownPreviewFindPreviousAction)
 registerAction2(MarkdownPreviewFindCloseAction)
+registerAction2(MarkdownPreviewLinkHintsAction)
+registerAction2(MarkdownPreviewLinkHintsToSideAction)
+registerAction2(MarkdownPreviewHelpAction)
 registerAction2(FindMarkdownFileReferencesAction)
 
 registerAction2(ShowJsonSchemaAction)

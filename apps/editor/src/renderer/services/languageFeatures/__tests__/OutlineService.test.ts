@@ -651,6 +651,9 @@ describe('OutlineService', () => {
       closeFind: () => {},
       findNext: () => {},
       findPrev: () => {},
+      showLinkHints: () => {},
+      hideLinkHints: () => {},
+      toggleHelp: () => {},
       ...overrides,
     }
     return { controller, scrolled, onDidScroll, focusCount: () => focusCount }

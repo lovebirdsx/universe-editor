@@ -17,6 +17,7 @@
 - [会话级 diff 功能](session-diff-feature.md) — 逆推 baseline 跟踪 agent 改动，Side Bar list/tree 视图 + 单击预览双击钉住，Activity Bar 用 FileStack
 - [新建 session 异步化](async-session-create.md) — createSession 同步返回立即渲染，后台握手；双 id（本地 uuid id vs agent 颁发 sessionIdOnAgent）；queued prompts 自动派发；whenConnected 为测试 await 点
 - [Codex 三种登录方案建模](codex-three-auth-modes.md) — gateway 须自包含 provider（experimental_bearer_token），绝不碰 openai_base_url/requires_openai_auth；统一 applyCredential 原子入口
+- [markdown 预览 vimium 式键盘导航](markdown-preview-link-hints.md) — 线②预览:f/F link hints(BFS 标签算法+capture 键盘+合成 click 复用 onClick)+滚动/前进后退,controller+contextKey+Action2 对称结构
 
 ## 性能 / 疑难根因
 
@@ -24,6 +25,7 @@
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — 真因:thread/start 内 codex 原生 spawn 的 git rev-parse --git-dir 在 Windows 挂起 ~4.5s(cwd 是 git 仓库才触发);kill 该 git 即恢复;adapter 修不了
 - [reload disposable 泄漏误报](reload-disposable-leak-marksingleton.md) — reload 时 React 组件订阅被 tracker 误报，用 markAsSingleton 兜底；render 期 new disposable 孤儿用 ref 守卫+级联测试
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — markdownLsp/peekNavigation @p1 真回归：IFileService.realpath 返回的 URI 经 ProxyChannel 降级成普通对象 .fsPath 空，guard 误判 empty path 拒读未打开文件；消费端须 URI.revive；诊断前必先 pnpm build
+- [editorTextFocus 残留吞裸字符键](editor-text-focus-stuck-swallows-keys.md) — Monaco blur 订阅先于编辑器 dispose 致 editorTextFocus 卡 true，全局键盘守卫把裸 f 当打字吞掉；syncEditorFocusContext 焦点离开 Monaco 时清掉；测裸字符键须真键盘别用 runCommand 绕
 
 ## 打包 / 构建
 

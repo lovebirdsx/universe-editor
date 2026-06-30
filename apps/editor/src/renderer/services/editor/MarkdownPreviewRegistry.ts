@@ -30,6 +30,15 @@ export interface IMarkdownPreviewController {
   findNext(): void
   /** Move to the previous find match. */
   findPrev(): void
+  /**
+   * Show vimium-style link hints over every visible link. `inNewTab` follows the
+   * chosen link to the side (mirrors Ctrl/Cmd+click); otherwise opens in place.
+   */
+  showLinkHints(inNewTab: boolean): void
+  /** Dismiss link hints without following any link. */
+  hideLinkHints(): void
+  /** Toggle the keyboard-shortcut help overlay. */
+  toggleHelp(): void
 }
 
 class MarkdownPreviewRegistryImpl {

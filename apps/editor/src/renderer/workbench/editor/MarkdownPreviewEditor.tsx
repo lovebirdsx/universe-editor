@@ -9,6 +9,7 @@ import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } fro
 import {
   Emitter,
   IContextKeyService,
+  ICommandService,
   IEditorGroupsService,
   IEditorInput,
   IFileService,
@@ -26,6 +27,9 @@ import { MarkdownView } from '../markdown/MarkdownView.js'
 import { collectEntries, lineForPreviewTop, previewTopForLine } from './previewScrollMap.js'
 import { useMarkdownSyncScroll } from './useMarkdownSyncScroll.js'
 import { useFindInContainer } from './useFindInContainer.js'
+import { useMarkdownLinkHints } from './useMarkdownLinkHints.js'
+import { useMarkdownKeyboardNav } from './useMarkdownKeyboardNav.js'
+import { MarkdownPreviewHelp } from './MarkdownPreviewHelp.js'
 import { ChatFindWidget } from '../agents/ChatFindWidget.js'
 import { useService } from '../useService.js'
 import styles from './MarkdownPreviewEditor.module.css'
@@ -41,6 +45,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const fileService = useService(IFileService)
   const groupsService = useService(IEditorGroupsService)
   const contextKeyService = useService(IContextKeyService)
+  const commandService = useService(ICommandService)
   const group = useContext(EditorGroupContext)
   const sourceUri = (input as MarkdownPreviewInput).sourceUri
   const stateKey = sourceUri.toString()
@@ -60,6 +65,33 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const focusedKey = useMemo(
     () => contextKeyService.createKey<boolean>('markdownPreviewFocused', false),
     [contextKeyService],
+  )
+  const linkHintsVisibleKey = useMemo(
+    () => contextKeyService.createKey<boolean>('markdownPreviewLinkHintsVisible', false),
+    [contextKeyService],
+  )
+
+  const linkHints = useMarkdownLinkHints(rootRef)
+  const linkHintsRef = useRef(linkHints)
+  linkHintsRef.current = linkHints
+  useEffect(() => {
+    linkHintsVisibleKey.set(linkHints.active)
+  }, [linkHints.active, linkHintsVisibleKey])
+
+  const [helpVisible, setHelpVisible] = useState(false)
+  // Stable handle so the controller (registered keyed on sourceUri) can toggle
+  // help without re-running its effect on every help-state change.
+  const toggleHelpRef = useRef(() => setHelpVisible((v) => !v))
+  // Vimium-style scroll / history / help keys. Disabled while link hints own the
+  // keyboard so the two never contend; H/L route to the existing history commands.
+  useMarkdownKeyboardNav(
+    rootRef,
+    {
+      goBack: () => void commandService.executeCommand('workbench.action.goBack'),
+      goForward: () => void commandService.executeCommand('workbench.action.goForward'),
+      toggleHelp: () => setHelpVisible((v) => !v),
+    },
+    !linkHints.active,
   )
 
   const find = useFindInContainer(
@@ -199,6 +231,9 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
       closeFind: () => findRef.current.close(),
       findNext: () => findRef.current.next(),
       findPrev: () => findRef.current.prev(),
+      showLinkHints: (inNewTab: boolean) => linkHintsRef.current.show(inNewTab),
+      hideLinkHints: () => linkHintsRef.current.hide(),
+      toggleHelp: () => toggleHelpRef.current(),
     }
     const fire = () => onDidScroll.fire()
     el.addEventListener('scroll', fire, { passive: true })
@@ -217,6 +252,15 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
     }
     el.addEventListener('focusin', onFocusIn)
     el.addEventListener('focusout', onFocusOut)
+
+    // The auto-focus effect above runs before this one on mount, so its
+    // el.focus() fires `focusin` before this listener exists — leaving
+    // markdownPreviewFocused false until the user clicks. Reconcile once now: if
+    // the container already holds focus, mark it active immediately.
+    if (el.contains(el.ownerDocument.activeElement)) {
+      focusedKey.set(true)
+      MarkdownPreviewRegistry.setActive(controller)
+    }
 
     MarkdownPreviewRegistry.register(sourceUri, controller)
     return () => {
@@ -258,6 +302,29 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
         baseUri={URI.joinPath(sourceUri, '..')}
         previewLinks
       />
+      {linkHints.active && (
+        <div className={styles['linkHintsLayer']} data-find-widget aria-hidden="true">
+          {linkHints.markers.map((m, i) => (
+            <span
+              key={i}
+              className={styles['linkHint']}
+              style={{ left: `${m.left}px`, top: `${m.top}px` }}
+              data-testid="md-link-hint"
+              data-link-label={m.label}
+            >
+              {m.label.split('').map((ch, j) => (
+                <span
+                  key={j}
+                  className={j < linkHints.typed.length ? styles['linkHintTyped'] : undefined}
+                >
+                  {ch}
+                </span>
+              ))}
+            </span>
+          ))}
+        </div>
+      )}
+      {helpVisible && <MarkdownPreviewHelp onClose={() => setHelpVisible(false)} />}
     </div>
   )
 }

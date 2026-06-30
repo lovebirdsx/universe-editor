@@ -233,3 +233,66 @@ export class MarkdownPreviewFindCloseAction extends Action2 {
     MarkdownPreviewRegistry.getActive()?.closeFind()
   }
 }
+
+// ---------------------------------------------------------------------------
+// In-preview link hints (vimium-style). `f` overlays a short label on every
+// visible link; typing the label follows it in place. `Shift+F` follows it to
+// the side (like Ctrl/Cmd+click). Gated by `markdownPreviewFocused`, and
+// suppressed while the find bar or hints are already up so letters aren't stolen.
+// ---------------------------------------------------------------------------
+
+const LINK_HINTS_WHEN =
+  'markdownPreviewFocused && !markdownPreviewFindVisible && !markdownPreviewLinkHintsVisible'
+
+export class MarkdownPreviewLinkHintsAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.linkHints'
+  constructor() {
+    super({
+      id: MarkdownPreviewLinkHintsAction.ID,
+      title: localize2('action.markdownPreview.linkHints.title', 'Show Link Hints'),
+      category: FIND_CATEGORY,
+      keybinding: { primary: 'f', when: LINK_HINTS_WHEN },
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.showLinkHints(false)
+  }
+}
+
+export class MarkdownPreviewLinkHintsToSideAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.linkHintsToSide'
+  constructor() {
+    super({
+      id: MarkdownPreviewLinkHintsToSideAction.ID,
+      title: localize2('action.markdownPreview.linkHintsToSide.title', 'Show Link Hints (to Side)'),
+      category: FIND_CATEGORY,
+      keybinding: { primary: 'shift+f', when: LINK_HINTS_WHEN },
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.showLinkHints(true)
+  }
+}
+
+export class MarkdownPreviewHelpAction extends Action2 {
+  static readonly ID = 'workbench.action.markdownPreview.help'
+  constructor() {
+    super({
+      id: MarkdownPreviewHelpAction.ID,
+      title: localize2('action.markdownPreview.help.title', 'Keyboard Shortcuts'),
+      category: FIND_CATEGORY,
+      icon: 'help',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: 'navigation',
+          when: MARKDOWN_PREVIEW_PRECONDITION,
+        },
+      ],
+      f1: true,
+    })
+  }
+  override run(): void {
+    MarkdownPreviewRegistry.getActive()?.toggleHelp()
+  }
+}

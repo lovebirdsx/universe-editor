@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ChevronsDownUp,
   ChevronUp,
+  CircleHelp,
   Cloud,
   Columns2,
   Download,
@@ -83,6 +84,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   // Editor title actions.
   'open-preview': Eye,
   'open-preview-side': Columns2,
+  help: CircleHelp,
   'json-schema': FileJson,
   // Simple file dialog — toggle hidden files.
   eye: Eye,

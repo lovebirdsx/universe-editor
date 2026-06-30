@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ContextKeyService, EditorInput, URI } from '@universe-editor/platform'
-import { focusEditorInput } from '../editorFocus.js'
+import { focusEditorInput, syncEditorFocusContext } from '../editorFocus.js'
 import { FileEditorRegistry } from '../FileEditorRegistry.js'
 import { DiffEditorRegistry } from '../DiffEditorRegistry.js'
 
@@ -88,5 +88,51 @@ describe('focusEditorInput — non-Monaco editors', () => {
   it('returns false when no group body is present and the editor cannot self-focus', () => {
     const cks = new ContextKeyService()
     expect(focusEditorInput(new NonMonacoInput(), cks, 99)).toBe(false)
+  })
+})
+
+describe('syncEditorFocusContext — editorTextFocus reset', () => {
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  // Regression: Monaco's onDidBlurEditorText subscription is disposed before the
+  // editor when a FileEditor unmounts (e.g. a markdown source replaced by its
+  // preview), so the blur never fires and editorTextFocus stays stuck true —
+  // which made the global keybinding handler swallow printable keys like `f`.
+  // syncEditorFocusContext must clear it whenever no Monaco editor holds focus.
+  it('clears editorTextFocus when focus is outside any Monaco editor', () => {
+    const cks = new ContextKeyService()
+    cks.set('editorTextFocus', true)
+
+    const preview = document.createElement('div')
+    preview.tabIndex = 0
+    document.body.appendChild(preview)
+    preview.focus()
+
+    syncEditorFocusContext(cks)
+
+    expect(cks.get('editorFocus')).toBe(false)
+    expect(cks.get('editorTextFocus')).toBe(false)
+  })
+
+  it('leaves editorTextFocus untouched while a Monaco editor holds focus', () => {
+    const cks = new ContextKeyService()
+    cks.set('editorTextFocus', true)
+
+    const monaco = document.createElement('div')
+    monaco.className = 'monaco-editor'
+    const input = document.createElement('div')
+    input.tabIndex = 0
+    monaco.appendChild(input)
+    document.body.appendChild(monaco)
+    input.focus()
+
+    syncEditorFocusContext(cks)
+
+    expect(cks.get('editorFocus')).toBe(true)
+    // Still focused in a Monaco editor: the text-vs-widget distinction stays
+    // Monaco's job, so we must not clobber it here.
+    expect(cks.get('editorTextFocus')).toBe(true)
   })
 })

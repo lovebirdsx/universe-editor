@@ -8,6 +8,16 @@ export function syncEditorFocusContext(contextKeyService: IContextKeyService): v
   const active = document.activeElement
   const hasEditorFocus = active instanceof HTMLElement && active.closest('.monaco-editor') !== null
   contextKeyService.set('editorFocus', hasEditorFocus)
+  // `editorTextFocus` is set true by Monaco's onDidFocusEditorText and cleared by
+  // onDidBlurEditorText — but that blur subscription is disposed before the editor
+  // itself when a FileEditor unmounts (e.g. a markdown source replaced by its
+  // preview), so the blur never fires and the key stays stuck true. A stuck
+  // `editorTextFocus` makes the global keybinding handler treat the (non-Monaco)
+  // preview as a text surface and swallow printable single-key bindings like `f`.
+  // When no Monaco editor holds DOM focus at all, text focus is definitionally
+  // false, so clear it here. We only clear (never set): the text-vs-widget
+  // distinction while a Monaco editor is focused stays Monaco's job.
+  if (!hasEditorFocus) contextKeyService.set('editorTextFocus', false)
 }
 
 /** Minimal shape of Monaco's SuggestController exposed for visibility tracking. */
