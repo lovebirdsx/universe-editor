@@ -147,8 +147,9 @@ export class OpenFolderFromExtensionAction extends Action2 {
   override async run(accessor: ServicesAccessor, fsPath: string): Promise<void> {
     if (!fsPath) return
     const lifecycle = accessor.get(ILifecycleService)
+    const workspace = accessor.get(IWorkspaceService)
     if (await lifecycle.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
-    await accessor.get(IWorkspaceService).openFolder(URI.file(fsPath))
+    await workspace.openFolder(URI.file(fsPath))
   }
 }
 
