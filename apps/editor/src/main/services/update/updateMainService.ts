@@ -123,8 +123,11 @@ export class UpdateMainService implements IUpdateService {
 
   async quitAndInstall(): Promise<void> {
     if (this._state.type !== 'downloaded') return
-    // isSilent=false (show NSIS progress), isForceRunAfter=true (relaunch app).
-    autoUpdater.quitAndInstall(false, true)
+    // isSilent=true → the NSIS installer runs with /S: reinstalls into the same
+    // INSTDIR without the directory-picker, and installer.nsh's IfSilent guards skip
+    // the Defender-exclusion UAC prompt (the first-install exclusion is path-based
+    // and still applies). isForceRunAfter=true relaunches the app after install.
+    autoUpdater.quitAndInstall(true, true)
   }
 
   dispose(): void {
