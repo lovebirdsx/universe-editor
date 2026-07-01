@@ -152,7 +152,6 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         // bespoke typography options below win.
         ...buildBridgedEditorOptions(configService),
         ...getEditorTypographyOptions(configService, fileInput.language),
-        scrollBeyondLastLine: false,
         readOnly: fileInput.isReadonly,
         unicodeHighlight: {
           nonBasicASCII: false,
