@@ -6,6 +6,7 @@
 
 - [AI 基础服务层实施进展](ai-service-foundation-progress.md) — 模型抽象/provider 注册/流式/取消/三层配置/safeStorage 密钥全部完成；platform 契约+main 实现+renderer 门面三层，加 vendor 套路 I，密钥红线
 - [插件系统实施进展](extension-system-progress.md) — VSCode 式外部插件系统 + Git 扩展，Phase 0–6 全部完成（双 host 信任级隔离 + fs 网关 + 真 diff + 崩溃/workspace 重启），关键设计决策与可选后续
+- [插件 manifest NLS 本地化](extension-manifest-nls.md) — 命令title/子菜单label/配置description 走 VSCode 式 %key% + package.nls.json，host 扫描时按 locale 替换；locale 经 env 传入；nls 文件须列进 files 数组否则打包丢失
 - [TypeScript 内置插件](typescript-builtin-plugin.md) — TS 语言能力迁为 extensions/typescript（选项 B 真 VSCode：插件内自 spawn tsserver + 10 类 provider + 文档同步 + 诊断），core 硬编码全删
 - [通用 UI 抽取到 workbench-ui](workbench-ui-consolidation.md) — atoms/layout/overlay/feedback+tokens 全沉淀，editor 留薄 wrapper；展示组件纯数据+回调、图标 props 注入、tokens.css 子路径 alias
 - [SCM submodule 多 repo](scm-submodule-multirepo.md) — submodule 各作独立 provider，命令路由用 rootUri（id 固定 'git'）+ resourceUri 最长前缀匹配
@@ -23,6 +24,8 @@
 - [dirty-diff 内联 peek](dirty-diff-inline-peek-feature.md) — 点击修改色条弹内联 diff(内嵌真 Monaco diff editor:双侧行号+语法高亮+内部滚动;Esc关闭/拖动调高/出视口才滚入;导航+Revert+Stage+打开完整diff);overlay-widget+空view-zone占位(手写DOM diff已删勿回退);Stage 走 git diff -U0→selectHunkPatch→apply --cached(stdin);套路见 skill dirty-diff-inline-peek
 
 ## 性能 / 疑难根因
+
+- [自动更新弹目录选择+Defender 提示](autoupdate-silent-install-coupling.md) — 根因 quitAndInstall 须传 isSilent=true（给 NSIS 加 /S）；updateMainService + electron-updater doInstall + installer.nsh 的 IfSilent 三方耦合
 
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — dirty-diff 复用它对大文件切换做全文 diff，勿退回 O(m·n)
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — 真因:thread/start 内 codex 原生 spawn 的 git rev-parse --git-dir 在 Windows 挂起 ~4.5s(cwd 是 git 仓库才触发);kill 该 git 即恢复;adapter 修不了
