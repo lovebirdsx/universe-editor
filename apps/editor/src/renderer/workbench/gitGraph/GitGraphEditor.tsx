@@ -574,24 +574,36 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   // Background reload: refresh data in place without the loading flicker, keeping
   // the current selection when its commit still exists. Used by auto-refresh and
   // when re-activating a cached tab (stale-while-revalidate).
-  const revalidate = useCallback(() => {
-    void commands
-      .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
-      .then((r) => {
-        if (!r) return
-        setError(null)
-        setResult(r)
-        setSelection((prev) =>
-          prev.filter((h) => h === UNCOMMITTED_HASH || r.commits.some((c) => c.hash === h)),
-        )
-        // Force the detail panel to refetch for the surviving selection — the
-        // working-tree file list in particular changes between reloads.
-        fetchedKeyRef.current = null
-      })
-      .catch(() => {
-        // A transient failure (e.g. host restarting) leaves the stale view in place.
-      })
-  }, [commands])
+  //
+  // `forceDetailRefetch` re-pulls the open detail panel. Only real git changes
+  // (auto-refresh) need it — the working-tree file list may have changed. When
+  // re-activating a cached tab nothing changed, so refetching would just flash
+  // the open commit's detail ("Loading…" → same data); committed diffs are
+  // immutable anyway.
+  const revalidate = useCallback(
+    (forceDetailRefetch = false) => {
+      void commands
+        .executeCommand<GitGraphLoadResult>(GitGraphCommands.getCommits, queryRef.current)
+        .then((r) => {
+          if (!r) return
+          setError(null)
+          setResult(r)
+          setSelection((prev) => {
+            const next = prev.filter(
+              (h) => h === UNCOMMITTED_HASH || r.commits.some((c) => c.hash === h),
+            )
+            // Keep the previous array reference when unchanged so the detail
+            // effect's `selection` dependency doesn't re-run needlessly.
+            return next.length === prev.length && next.every((h, i) => h === prev[i]) ? prev : next
+          })
+          if (forceDetailRefetch) fetchedKeyRef.current = null
+        })
+        .catch(() => {
+          // A transient failure (e.g. host restarting) leaves the stale view in place.
+        })
+    },
+    [commands],
+  )
 
   // Initial load only when nothing is cached; a cached tab revalidates in the
   // background so re-activating it shows fresh data without a flash. If a
@@ -691,7 +703,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         return
       }
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => revalidate(), AUTO_REFRESH_DEBOUNCE)
+      timer = setTimeout(() => revalidate(true), AUTO_REFRESH_DEBOUNCE)
     })
     return () => {
       disposable.dispose()
