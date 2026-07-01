@@ -58,18 +58,28 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
   const activeGroupActiveEditor = activeGroup.activeEditor
   useMarkdownSyncScroll(rootRef, sourceUri)
 
+  // Create the handles without a default value: passing one makes createKey set
+  // the key during render, and the resulting onDidChangeContext fire triggers a
+  // setState in menu components (useMenuItems' useSyncExternalStore) while this
+  // one is rendering — React's "setState while rendering another component"
+  // warning. Initialize to false in the mount effect below instead.
   const findVisibleKey = useMemo(
-    () => contextKeyService.createKey<boolean>('markdownPreviewFindVisible', false),
+    () => contextKeyService.createKey<boolean>('markdownPreviewFindVisible', undefined),
     [contextKeyService],
   )
   const focusedKey = useMemo(
-    () => contextKeyService.createKey<boolean>('markdownPreviewFocused', false),
+    () => contextKeyService.createKey<boolean>('markdownPreviewFocused', undefined),
     [contextKeyService],
   )
   const linkHintsVisibleKey = useMemo(
-    () => contextKeyService.createKey<boolean>('markdownPreviewLinkHintsVisible', false),
+    () => contextKeyService.createKey<boolean>('markdownPreviewLinkHintsVisible', undefined),
     [contextKeyService],
   )
+  useEffect(() => {
+    findVisibleKey.set(false)
+    focusedKey.set(false)
+    linkHintsVisibleKey.set(false)
+  }, [findVisibleKey, focusedKey, linkHintsVisibleKey])
 
   const linkHints = useMarkdownLinkHints(rootRef)
   const linkHintsRef = useRef(linkHints)
