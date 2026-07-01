@@ -10,7 +10,9 @@
 import { createContext, Fragment, useContext, useMemo, useRef, type ReactNode } from 'react'
 import { IEditorResolverService, URI } from '@universe-editor/platform'
 import {
+  isAnchorHref,
   parseMarkdown,
+  slugifyHeading,
   type MdInline,
   type MdNode,
   type TableAlign,
@@ -62,16 +64,30 @@ export function MarkdownView({
 }: MarkdownViewProps) {
   const nodes = useMarkdownNodes(text, streaming ?? false)
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
+  const rootRef = useRef<HTMLDivElement>(null)
+  const scrollToAnchor = useMemo(
+    () =>
+      (id: string): void => {
+        const root = rootRef.current
+        if (!root) return
+        const target = root.querySelector(`[data-anchor="${cssEscape(id)}"]`)
+        target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      },
+    [],
+  )
   return (
     <FileLinkContext.Provider value={openFileLink}>
-      <div
-        className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-        {...(testId !== undefined ? { 'data-testid': testId } : {})}
-      >
-        {nodes.map((node, i) => (
-          <Block key={i} node={node} />
-        ))}
-      </div>
+      <AnchorScrollContext.Provider value={scrollToAnchor}>
+        <div
+          ref={rootRef}
+          className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
+          {...(testId !== undefined ? { 'data-testid': testId } : {})}
+        >
+          {nodes.map((node, i) => (
+            <Block key={i} node={node} />
+          ))}
+        </div>
+      </AnchorScrollContext.Provider>
     </FileLinkContext.Provider>
   )
 }
@@ -95,6 +111,30 @@ const FileLinkContext = createContext<
   (path: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => void
 >(() => {})
 
+// Scrolls to the heading whose slug matches an in-document `#anchor` link. Scoped
+// per MarkdownView so an anchor only targets headings inside the same view.
+const AnchorScrollContext = createContext<(id: string) => void>(() => {})
+
+/** Quote an attribute value for a querySelector, falling back to a manual escape. */
+function cssEscape(value: string): string {
+  const esc = (globalThis.CSS as { escape?: (v: string) => string } | undefined)?.escape
+  return esc ? esc(value) : value.replace(/["\\]/g, '\\$&')
+}
+
+// Normalize an `#anchor` href to a heading slug: strip `#`, URL-decode (authors
+// may percent-encode CJK), then apply the same slug rules used for heading ids,
+// so casing/encoding differences still resolve.
+function decodeAnchor(href: string): string {
+  const raw = href.slice(1)
+  let decoded = raw
+  try {
+    decoded = decodeURIComponent(raw)
+  } catch {
+    // Malformed %-escape — fall back to the raw fragment.
+  }
+  return slugifyHeading(decoded)
+}
+
 function Block({ node }: { node: MdNode }): ReactNode {
   const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
   switch (node.type) {
@@ -102,7 +142,12 @@ function Block({ node }: { node: MdNode }): ReactNode {
       return <p {...lineAttr}>{renderInline(node.children)}</p>
     case 'heading': {
       const Tag = `h${node.level}` as 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'
-      return <Tag {...lineAttr}>{renderInline(node.children)}</Tag>
+      const anchor = slugifyHeading(inlineToText(node.children))
+      return (
+        <Tag {...lineAttr} {...(anchor ? { 'data-anchor': anchor } : {})}>
+          {renderInline(node.children)}
+        </Tag>
+      )
     }
     case 'code_fence':
       return node.lang?.toLowerCase() === 'mermaid' ? (
@@ -191,6 +236,29 @@ function renderInline(nodes: readonly MdInline[]): ReactNode {
   return nodes.map((n, i) => <InlineNode key={i} node={n} />)
 }
 
+/** Flatten inline nodes to their visible text, for computing a heading's slug. */
+function inlineToText(nodes: readonly MdInline[]): string {
+  let out = ''
+  for (const n of nodes) {
+    switch (n.type) {
+      case 'text':
+      case 'code':
+        out += n.text
+        break
+      case 'bold':
+      case 'italic':
+      case 'strike':
+      case 'link':
+        out += inlineToText(n.children)
+        break
+      case 'filepath':
+        out += n.path
+        break
+    }
+  }
+  return out
+}
+
 function InlineNode({ node }: { node: MdInline }): ReactNode {
   switch (node.type) {
     case 'text':
@@ -246,10 +314,16 @@ function InlineCode({ text }: { text: string }) {
 function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   const editorResolver = useService(IEditorResolverService)
   const openFileLink = useContext(FileLinkContext)
+  const scrollToAnchor = useContext(AnchorScrollContext)
+  const isAnchor = isAnchorHref(href)
   const isFile = href.startsWith('file:')
-  const isFilePath = !isFile && looksLikeFilePath(href)
+  const isFilePath = !isFile && !isAnchor && looksLikeFilePath(href)
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
+    if (isAnchor) {
+      scrollToAnchor(decodeAnchor(href))
+      return
+    }
     if (isFilePath) {
       const { path, line, col } = splitFilePathLocation(href)
       openFileLink(path, line, col, { toSide: e.ctrlKey || e.metaKey })
@@ -272,7 +346,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     <a
       href={href}
       onClick={onClick}
-      target={isFile || isFilePath ? undefined : '_blank'}
+      target={isFile || isFilePath || isAnchor ? undefined : '_blank'}
       rel="noopener noreferrer"
       className={styles['mdLink']}
     >

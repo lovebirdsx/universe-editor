@@ -106,6 +106,29 @@ describe('MarkdownView', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
+  it('gives headings a slug anchor id (CJK kept)', () => {
+    const { container } = renderMarkdown('## 子结构：ITalkItem\n\nbody')
+    expect(container.querySelector('[data-anchor="子结构italkitem"]')?.tagName).toBe('H2')
+  })
+
+  it('renders a same-document #anchor link and scrolls to its heading on click', () => {
+    const scrollSpy = vi.fn()
+    // happy-dom doesn't implement scrollIntoView — stub it on the prototype.
+    const proto = globalThis.HTMLElement.prototype as { scrollIntoView?: unknown }
+    const original = proto.scrollIntoView
+    proto.scrollIntoView = scrollSpy
+    try {
+      renderMarkdown('## 子结构：ITalkItem\n\n见下方[子结构](#子结构italkitem)。')
+      const link = screen.getByRole('link', { name: '子结构' })
+      expect(link.getAttribute('href')).toBe('#子结构italkitem')
+      link.click()
+      expect(scrollSpy).toHaveBeenCalledTimes(1)
+    } finally {
+      if (original === undefined) delete proto.scrollIntoView
+      else proto.scrollIntoView = original
+    }
+  })
+
   it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {
     renderMock.mockResolvedValue('<svg id="rendered"><g /></svg>')
     renderMarkdown('```mermaid\ngraph TD; A-->B\n```')

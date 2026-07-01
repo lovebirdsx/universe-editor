@@ -345,7 +345,7 @@ export function parseInline(text: string): readonly MdInline[] {
         if (urlEnd !== -1) {
           const label = text.slice(i + 1, labelEnd)
           const href = text.slice(labelEnd + 2, urlEnd).trim()
-          if (isSafeHref(href) || looksLikeFilePath(href)) {
+          if (isSafeHref(href) || looksLikeFilePath(href) || isAnchorHref(href)) {
             flush()
             out.push({ type: 'link', href, children: parseInline(label) })
             i = urlEnd + 1
@@ -490,6 +490,25 @@ function isWordChar(ch: string | undefined): boolean {
 /** Allow only http(s) and file URLs. */
 export function isSafeHref(href: string): boolean {
   return /^(?:https?:|file:)/i.test(href)
+}
+
+/** True for a same-document anchor link like `#section` (fragment only). */
+export function isAnchorHref(href: string): boolean {
+  return href.length > 1 && href.startsWith('#')
+}
+
+/**
+ * Slugify heading text into a GitHub-style fragment id: lowercased, spaces to
+ * hyphens, punctuation stripped, non-ASCII (incl. CJK) kept verbatim. This must
+ * match how `#anchor` links are written, so `## 子结构：ITalkItem` becomes
+ * `子结构italkitem` — the same slug an author would target with `(#子结构italkitem)`.
+ */
+export function slugifyHeading(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '-')
+    .replace(/[^\p{L}\p{N}-]/gu, '')
 }
 
 // ---------------------------------------------------------------------------

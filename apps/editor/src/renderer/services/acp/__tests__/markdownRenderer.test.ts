@@ -7,9 +7,11 @@
 
 import { describe, expect, it } from 'vitest'
 import {
+  isAnchorHref,
   isSafeHref,
   parseInline,
   parseMarkdown,
+  slugifyHeading,
   type MdInline,
   type MdNode,
 } from '../markdownRenderer.js'
@@ -298,6 +300,21 @@ describe('parseInline — inline layer', () => {
     ])
   })
 
+  it('keeps same-document anchor links (#fragment), including CJK', () => {
+    expect(parseInline('[`ITalkItem[]`](#子结构italkitem)')).toEqual<readonly MdInline[]>([
+      {
+        type: 'link',
+        href: '#子结构italkitem',
+        children: [{ type: 'code', text: 'ITalkItem[]' }],
+      },
+    ])
+    expect(parseInline('见下方[子结构](#子结构italkitem)。')).toEqual<readonly MdInline[]>([
+      text('见下方'),
+      { type: 'link', href: '#子结构italkitem', children: [text('子结构')] },
+      text('。'),
+    ])
+  })
+
   it('detects a bare file path with a dir separator and location', () => {
     expect(parseInline('see src/foo/bar.ts:10:5 now')).toEqual<readonly MdInline[]>([
       text('see '),
@@ -387,5 +404,30 @@ describe('isSafeHref', () => {
   it('is case-insensitive on the scheme prefix', () => {
     expect(isSafeHref('HTTPS://x')).toBe(true)
     expect(isSafeHref('FILE:///x')).toBe(true)
+  })
+})
+
+describe('isAnchorHref', () => {
+  it('accepts a non-empty #fragment', () => {
+    expect(isAnchorHref('#section')).toBe(true)
+    expect(isAnchorHref('#子结构italkitem')).toBe(true)
+  })
+
+  it('rejects a bare #, non-anchors, and mid-string hashes', () => {
+    expect(isAnchorHref('#')).toBe(false)
+    expect(isAnchorHref('https://x#frag')).toBe(false)
+    expect(isAnchorHref('./foo.md#frag')).toBe(false)
+  })
+})
+
+describe('slugifyHeading', () => {
+  it('lowercases, hyphenates spaces, and strips punctuation', () => {
+    expect(slugifyHeading('Hello World!')).toBe('hello-world')
+    expect(slugifyHeading('  Trim  Me  ')).toBe('trim-me')
+  })
+
+  it('keeps CJK letters and matches an authored #anchor target', () => {
+    expect(slugifyHeading('子结构：ITalkItem')).toBe('子结构italkitem')
+    expect(slugifyHeading('### 子结构：ITalkItem'.replace(/^#+\s*/, ''))).toBe('子结构italkitem')
   })
 })
