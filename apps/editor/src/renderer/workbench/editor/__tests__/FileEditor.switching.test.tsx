@@ -42,6 +42,8 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     KeyCode: { F1: 59 },
     editor: {
       createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
+      getModel: (_uri: unknown) => null,
+      EditorOption: { columnSelection: 0 },
       create: () => {
         let model: ReturnType<typeof makeModel> | null = null
         const container = document.createElement('div')
@@ -50,6 +52,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
             model = next
           },
           getModel: () => model,
+          getOption: (_option: unknown) => false,
           updateOptions: () => {},
           addCommand: () => null,
           focus: () => {},
@@ -65,6 +68,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
           onDidFocusEditorText: () => disposable(),
           onDidBlurEditorText: () => disposable(),
           onDidChangeModel: () => disposable(),
+          onDidChangeConfiguration: () => disposable(),
           getContainerDomNode: () => container,
           dispose: () => {},
         }

@@ -55,12 +55,15 @@ vi.mock('../monaco/MonacoLoader.js', () => {
     Uri: { parse: (value: string) => ({ toString: () => value }) },
     editor: {
       createModel: (text: string, language: string, uri: unknown) => makeModel(text, language, uri),
+      getModel: (_uri: unknown) => null,
+      EditorOption: { columnSelection: 0 },
       create: (_container: unknown, options: Record<string, unknown>) => {
         monacoMockState.createOptions = options
         return {
           setModel: () => {},
           dispose: () => {},
           getModel: () => null,
+          getOption: (_option: unknown) => false,
           updateOptions: (options: Record<string, unknown>) => {
             monacoMockState.updateOptionsCalls.push(options)
           },
@@ -75,6 +78,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
           onDidFocusEditorText: () => ({ dispose: () => {} }),
           onDidBlurEditorText: () => ({ dispose: () => {} }),
           onDidChangeModel: () => ({ dispose: () => {} }),
+          onDidChangeConfiguration: () => ({ dispose: () => {} }),
           getContainerDomNode: () => document.createElement('div'),
         }
       },
