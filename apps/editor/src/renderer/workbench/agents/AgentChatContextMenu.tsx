@@ -4,7 +4,7 @@
  *  Items come from MenuRegistry (the agent Action2s register them via their `menu` field).
  *--------------------------------------------------------------------------------------------*/
 
-import { type ICommandService, MenuId } from '@universe-editor/platform'
+import { type ICommandService, type IContextKeyService, MenuId } from '@universe-editor/platform'
 import { ContextMenu } from '@universe-editor/workbench-ui'
 
 export interface AgentChatContextMenuState {
@@ -15,15 +15,17 @@ export interface AgentChatContextMenuState {
 interface Props {
   readonly state: AgentChatContextMenuState
   readonly commandService: ICommandService
+  readonly contextKeyService?: IContextKeyService
   readonly onClose: () => void
 }
 
-export function AgentChatContextMenu({ state, commandService, onClose }: Props) {
+export function AgentChatContextMenu({ state, commandService, contextKeyService, onClose }: Props) {
   return (
     <ContextMenu
       menuId={MenuId.AcpChatContext}
       anchor={{ x: state.x, y: state.y }}
       commandService={commandService}
+      {...(contextKeyService !== undefined ? { contextKeyService } : {})}
       onClose={onClose}
     />
   )

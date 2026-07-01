@@ -6,9 +6,17 @@
 
 import { afterEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { observableValue } from '@universe-editor/platform'
+import {
+  ICommandService,
+  IContextKeyService,
+  InstantiationService,
+  ServiceCollection,
+  observableValue,
+} from '@universe-editor/platform'
 import type { IAcpSession, TimelineItem } from '../../../services/acp/acpSessionService.js'
+import { IAcpChatWidgetService } from '../../../services/acp/acpChatWidgetService.js'
 import { StickyUserMessageBar } from '../StickyUserMessageBar.js'
+import { ServicesContext } from '../../useService.js'
 
 afterEach(() => {
   cleanup()
@@ -29,14 +37,32 @@ function makeSession(id: string, items: TimelineItem[]): IAcpSession {
   } as unknown as IAcpSession
 }
 
+function renderWithServices(node: React.ReactNode) {
+  const services = new ServiceCollection()
+  services.set(ICommandService, {
+    executeCommand: () => Promise.resolve(),
+  } as unknown as ICommandService)
+  services.set(IContextKeyService, {
+    createKey: () => ({ set: () => {} }),
+  } as unknown as IContextKeyService)
+  services.set(IAcpChatWidgetService, {
+    setHasSelection: () => {},
+  } as unknown as IAcpChatWidgetService)
+  const inst = new InstantiationService(services)
+  const Wrapper = ({ children }: { children: React.ReactNode }) => (
+    <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
+  )
+  return render(node, { wrapper: Wrapper })
+}
+
 describe('StickyUserMessageBar', () => {
   it('renders nothing when there is no user message', () => {
-    render(<StickyUserMessageBar session={makeSession('s-empty', [])} />)
+    renderWithServices(<StickyUserMessageBar session={makeSession('s-empty', [])} />)
     expect(screen.queryByTestId('acp-user-bar')).toBeNull()
   })
 
   it('starts collapsed showing the summary, then expands to the full content', () => {
-    render(
+    renderWithServices(
       <StickyUserMessageBar
         session={makeSession('s-one', [message('u1', 'user', 'Hello world')])}
       />,
@@ -51,7 +77,7 @@ describe('StickyUserMessageBar', () => {
   })
 
   it('shows the first user message when several exist', () => {
-    render(
+    renderWithServices(
       <StickyUserMessageBar
         session={makeSession('s-many', [
           message('u1', 'user', 'first request'),

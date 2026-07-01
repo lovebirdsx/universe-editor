@@ -510,3 +510,20 @@ export class CopyFocusedAcpMessageAction extends Action2 {
     if (text) await navigator.clipboard.writeText(text)
   }
 }
+
+export class CopySelectedTextAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.copySelectedText'
+  constructor() {
+    super({
+      id: CopySelectedTextAction.ID,
+      title: localize2('common.copy', 'Copy'),
+      category: CATEGORY,
+      precondition: ACP_NAV_WHEN,
+      menu: [{ id: MenuId.AcpChatContext, group: '1_copy', order: 0, when: 'acpChatHasSelection' }],
+    })
+  }
+  override async run(): Promise<void> {
+    const text = window.getSelection()?.toString()
+    if (text) await navigator.clipboard.writeText(text)
+  }
+}

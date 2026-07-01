@@ -84,6 +84,8 @@ export interface IAcpChatWidgetService {
   /** Push a widget's find open/closed state; the service flips
    *  `acpChatFindVisible` on iff the *focused* widget's find widget is open. */
   setFindVisible(widget: AcpChatWidget, open: boolean): void
+  /** Set `acpChatHasSelection` — true when text is selected at context-menu time. */
+  setHasSelection(hasSelection: boolean): void
 }
 
 export const IAcpChatWidgetService = createDecorator<IAcpChatWidgetService>('acpChatWidgetService')
@@ -105,6 +107,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
   private readonly _key: IContextKey<boolean>
   private readonly _popupKey: IContextKey<boolean>
   private readonly _findKey: IContextKey<boolean>
+  private readonly _selectionKey: IContextKey<boolean>
 
   // Roots every registration's cleanup under this (singleton-rooted) service so
   // the leak detector doesn't report a still-mounted ChatBody's registration
@@ -116,6 +119,7 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     this._key = contextKeyService.createKey<boolean>('acpChatFocused', false)
     this._popupKey = contextKeyService.createKey<boolean>('acpPromptPopupVisible', false)
     this._findKey = contextKeyService.createKey<boolean>('acpChatFindVisible', false)
+    this._selectionKey = contextKeyService.createKey<boolean>('acpChatHasSelection', false)
   }
 
   get lastFocusedWidget(): AcpChatWidget | undefined {
@@ -193,6 +197,10 @@ export class AcpChatWidgetService extends Disposable implements IAcpChatWidgetSe
     if (!entry || entry.findVisible === open) return
     entry.findVisible = open
     this._recomputeFindKey()
+  }
+
+  setHasSelection(hasSelection: boolean): void {
+    this._selectionKey.set(hasSelection)
   }
 
   private _unregister(widget: AcpChatWidget): void {

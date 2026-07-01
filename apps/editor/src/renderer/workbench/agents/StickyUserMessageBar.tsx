@@ -7,12 +7,16 @@
  *  collapsed it shows the first line. Returns null until a user message exists.
  *--------------------------------------------------------------------------------------------*/
 
-import { useState } from 'react'
-import { useObservable } from '../useService.js'
-import type { AcpMessage, IAcpSession, TimelineItem } from '../../services/acp/acpSessionService.js'
+import { useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { ICommandService, IContextKeyService } from '@universe-editor/platform'
+import { useObservable, useService } from '../useService.js'
+import type { IAcpSession, TimelineItem } from '../../services/acp/acpSessionService.js'
+import { IAcpChatWidgetService } from '../../services/acp/acpChatWidgetService.js'
 import { CollapsibleSlot } from '@universe-editor/workbench-ui'
 import { MessageContent } from './MessageContent.js'
 import { roleIcon } from './timelineIcons.js'
+import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
+import { itemSlotKey } from './stickyScroll.js'
 import styles from './agents.module.css'
 
 const SUMMARY_MAX = 80
@@ -25,27 +29,58 @@ function clampLine(text: string): string {
   return firstLine.length > SUMMARY_MAX ? `${firstLine.slice(0, SUMMARY_MAX)}…` : firstLine
 }
 
-function firstUserMessage(timeline: readonly TimelineItem[]): AcpMessage | undefined {
+function firstUserItem(
+  timeline: readonly TimelineItem[],
+): (TimelineItem & { kind: 'message' }) | undefined {
   for (let i = 0; i < timeline.length; i++) {
     const it = timeline[i]
-    if (it?.kind === 'message' && it.message.role === 'user') return it.message
+    if (it?.kind === 'message' && it.message.role === 'user')
+      return it as TimelineItem & { kind: 'message' }
   }
   return undefined
 }
 
-export function StickyUserMessageBar({ session }: { session: IAcpSession }) {
+export function StickyUserMessageBar({
+  session,
+  onFocusSlot,
+}: {
+  session: IAcpSession
+  onFocusSlot?: (key: string) => void
+}) {
   const timeline = useObservable(session.timeline)
   const [collapsed, setCollapsed] = useState(() => userBarCollapsedCache.get(session.id) ?? false)
-  const message = firstUserMessage(timeline)
-  if (!message) return null
+  const [menu, setMenu] = useState<AgentChatContextMenuState | null>(null)
+  const commandService = useService(ICommandService)
+  const contextKeyService = useService(IContextKeyService)
+  const widgetService = useService(IAcpChatWidgetService)
+
+  const item = firstUserItem(timeline)
+  if (!item) return null
+
+  const message = item.message
+  const slotKey = itemSlotKey(item)
+
   const toggle = (): void =>
     setCollapsed((v) => {
       const next = !v
       userBarCollapsedCache.set(session.id, next)
       return next
     })
+
+  const handleContextMenu = (e: ReactMouseEvent): void => {
+    e.preventDefault()
+    onFocusSlot?.(slotKey)
+    widgetService.setHasSelection(!!window.getSelection()?.toString())
+    setMenu({ x: e.clientX, y: e.clientY })
+  }
+
   return (
-    <ul className={styles['stickyUserBar']} data-testid="acp-user-bar">
+    <ul
+      className={styles['stickyUserBar']}
+      data-testid="acp-user-bar"
+      data-timeline-key={slotKey}
+      onContextMenu={handleContextMenu}
+    >
       <CollapsibleSlot
         as="li"
         icon={roleIcon('user')}
@@ -57,6 +92,17 @@ export function StickyUserMessageBar({ session }: { session: IAcpSession }) {
       >
         <MessageContent blocks={message.blocks} />
       </CollapsibleSlot>
+      {menu && (
+        <AgentChatContextMenu
+          state={menu}
+          commandService={commandService}
+          contextKeyService={contextKeyService}
+          onClose={() => {
+            setMenu(null)
+            widgetService.setHasSelection(false)
+          }}
+        />
+      )}
     </ul>
   )
 }
