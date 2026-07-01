@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   Emitter,
+  IEditorGroupsService,
   IEditorResolverService,
   IEditorService,
   IStorageService,
@@ -27,6 +28,7 @@ import {
   ISessionChangeTrackerService,
   type SessionFileChange,
 } from '../../../services/acp/sessionChangeTracker.js'
+import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
 import { sessionChangesViewState } from '../sessionChangesViewState.js'
 import { ServicesContext } from '../../useService.js'
 
@@ -52,6 +54,20 @@ class FakeStorage {
   async remove(): Promise<void> {}
 }
 
+class FakeEditorGroup {
+  activeEditor: unknown
+  opened: Array<{ input: unknown; options: unknown }> = []
+  openEditor(input: unknown, options?: unknown) {
+    this.opened.push({ input, options })
+    this.activeEditor = input
+  }
+}
+
+class FakeEditorGroups {
+  declare readonly _serviceBrand: undefined
+  constructor(readonly activeGroup: FakeEditorGroup) {}
+}
+
 function change(path: string, status: SessionFileChange['status'] = 'modified'): SessionFileChange {
   return { uri: URI.file(path), path, baseline: 'a', current: 'b', status, batchCount: 1 }
 }
@@ -75,6 +91,7 @@ class FakeWorkspace {
 function renderView(changes: readonly SessionFileChange[], root: URI | null = URI.file('/ws')) {
   const services = new ServiceCollection()
   const editor = new FakeEditor()
+  const editorGroup = new FakeEditorGroup()
   const resolver = {
     _serviceBrand: undefined,
     opened: [] as URI[],
@@ -101,6 +118,10 @@ function renderView(changes: readonly SessionFileChange[], root: URI | null = UR
     changesFor: () => changesObs,
   }
   services.set(IEditorService, editor as unknown as IEditorService)
+  services.set(
+    IEditorGroupsService,
+    new FakeEditorGroups(editorGroup) as unknown as IEditorGroupsService,
+  )
   services.set(IStorageService, new FakeStorage() as unknown as IStorageService)
   services.set(IWorkspaceService, new FakeWorkspace(root) as unknown as IWorkspaceService)
   services.set(IEditorResolverService, resolver as unknown as IEditorResolverService)
@@ -112,7 +133,7 @@ function renderView(changes: readonly SessionFileChange[], root: URI | null = UR
       <SessionChangesView />
     </ServicesContext.Provider>,
   )
-  return { ...result, editor, resolver }
+  return { ...result, editor, resolver, editorGroup }
 }
 
 beforeEach(() => sessionChangesViewState.setViewMode('list'))
@@ -149,6 +170,28 @@ describe('SessionChangesView — open file action', () => {
     renderView([change('/ws/src/gone.ts', 'deleted')])
     await screen.findByText('gone.ts')
     expect(screen.queryByTestId('acp-changes-open-file')).not.toBeNull()
+  })
+})
+
+describe('SessionChangesView — markdown preview action', () => {
+  it('shows a preview button for markdown files and opens a markdown preview', async () => {
+    const { editor, editorGroup } = renderView([change('/ws/README.md')])
+    await screen.findByText('README.md')
+    fireEvent.click(screen.getByTestId('acp-changes-open-preview'))
+    await waitFor(() => expect(editorGroup.opened).toHaveLength(1))
+    const previewInput = editorGroup.opened[0]?.input
+    expect(previewInput).toBeInstanceOf(MarkdownPreviewInput)
+    expect((previewInput as MarkdownPreviewInput | undefined)?.sourceUri.fsPath).toContain(
+      'README.md',
+    )
+    // The row's own diff handler must not fire when the preview button is clicked.
+    expect(editor.opened).toHaveLength(0)
+  })
+
+  it('does not show a preview button for non-markdown files', async () => {
+    renderView([change('/ws/src/a.ts')])
+    await screen.findByText('a.ts')
+    expect(screen.queryByTestId('acp-changes-open-preview')).toBeNull()
   })
 })
 

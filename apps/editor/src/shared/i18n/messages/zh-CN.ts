@@ -1057,6 +1057,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.changes.none': '此会话尚未修改任何文件。',
   'acp.changes.noSession': '没有活跃的 Agent 会话。',
   'acp.changes.openFile': '打开文件',
+  'acp.changes.openPreview': '打开预览',
   'acp.changes.viewAsList': '以列表查看',
   'acp.changes.viewAsTree': '以树查看',
   'acp.collapse.collapsed': '时间线：全部折叠 - 点击全部展开',
