@@ -1,5 +1,30 @@
 [
   {
+    "version": "0.1.26",
+    "date": "2026-07-01",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "添加内联diff查看功能",
+          "explorer中添加文件剪贴，粘贴，移动等功能",
+          "editor右上角加入添加打开活动文件变更按钮"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复git graph中右键打开worktree的功能异常",
+          "markdown预览模式下，标题按钮在组切换时保持可见",
+          "markdown编辑器时，如果是空任务项按回车退出列表",
+          "修复markdown预览焦点丢失导致命令不能执行的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.25",
     "date": "2026-06-30",
     "groups": [
