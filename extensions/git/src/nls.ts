@@ -79,12 +79,14 @@ const ZH_CN: Readonly<Record<string, string>> = {
   'git.error.authFailed': '身份验证失败——请检查您的凭据',
 }
 
+const useZhCn = (process.env.UNIVERSE_DISPLAY_LOCALE ?? '').toLowerCase().startsWith('zh')
+
 export function localize(
   key: string,
   defaultMessage: string,
   vars?: Record<string, unknown>,
 ): string {
-  const template = ZH_CN[key] ?? defaultMessage
+  const template = (useZhCn ? ZH_CN[key] : undefined) ?? defaultMessage
   if (!vars) return template
   return template.replace(/\{([^}]+)\}/g, (match, rawKey) => {
     const k = String(rawKey).trim()
