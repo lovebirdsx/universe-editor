@@ -88,9 +88,30 @@ interface PrimaryCommitAction {
 
 /** The commit-button choices; the last one picked becomes the sticky default. */
 const COMMIT_ACTIONS: readonly CommitAction[] = [
-  { id: 'git.commit', label: 'Commit', icon: 'git-commit', command: 'git.commit' },
-  { id: 'git.commitAndPush', label: 'Commit & Push', icon: 'push', command: 'git.commitAndPush' },
-  { id: 'git.commitAndSync', label: 'Commit & Sync', icon: 'sync', command: 'git.commitAndSync' },
+  {
+    id: 'git.commit',
+    label: localize('scm.commit', 'Commit'),
+    icon: 'git-commit',
+    command: 'git.commit',
+  },
+  {
+    id: 'git.commitAmend',
+    label: localize('scm.commitAmend', 'Commit (Amend)'),
+    icon: 'git-commit',
+    command: 'git.commitAmend',
+  },
+  {
+    id: 'git.commitAndPush',
+    label: localize('scm.commitAndPush', 'Commit & Push'),
+    icon: 'push',
+    command: 'git.commitAndPush',
+  },
+  {
+    id: 'git.commitAndSync',
+    label: localize('scm.commitAndSync', 'Commit & Sync'),
+    icon: 'sync',
+    command: 'git.commitAndSync',
+  },
 ]
 const DEFAULT_COMMIT_ACTION = COMMIT_ACTIONS[0]!
 
@@ -447,7 +468,7 @@ const ScmFolderRow = memo(function ScmFolderRow({
           {
             action: {
               id: 'git.unstage',
-              title: 'Unstage Changes',
+              title: localize('scm.unstageChanges', 'Unstage Changes'),
               command: 'git.unstage',
               icon: 'remove',
             },
@@ -457,14 +478,19 @@ const ScmFolderRow = memo(function ScmFolderRow({
           {
             action: {
               id: 'git.discard',
-              title: 'Discard Changes',
+              title: localize('scm.discardChanges', 'Discard Changes'),
               command: 'git.discard',
               icon: 'discard',
             },
             isDir: true,
           },
           {
-            action: { id: 'git.stage', title: 'Stage Changes', command: 'git.stage', icon: 'add' },
+            action: {
+              id: 'git.stage',
+              title: localize('scm.stageChanges', 'Stage Changes'),
+              command: 'git.stage',
+              icon: 'add',
+            },
           },
         ]
 
@@ -754,7 +780,7 @@ function ScmProviderView({ model, revision }: { model: IScmSourceControlModel; r
     if (!acceptCommand) return undefined
     return { label: acceptCommand.title, command: acceptCommand.command, disabled: false }
   }, [acceptCommand, hasLocalChanges, isGitProvider, stickyCommit])
-  const showCommitMenuButton = isGitProvider && hasLocalChanges
+  const showCommitMenuButton = isGitProvider
 
   const collapseAll = (): void => {
     const folderIds = snapshotRef.current.collapsibleIds.filter((id) => id.startsWith('folder:'))

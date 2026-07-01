@@ -17,6 +17,7 @@ import {
   type IResolvedJsonValidation,
 } from '@universe-editor/extensions-common'
 import { parseManifest } from './manifest.js'
+import { loadNlsBundle, localizeManifest } from './nls.js'
 
 export interface IScannedExtension {
   readonly id: string
@@ -71,10 +72,19 @@ async function resolveJsonValidation(
   return resolved
 }
 
-async function scanOne(extensionPath: string, hostApiVersion?: string): Promise<IScannedExtension> {
+async function scanOne(
+  extensionPath: string,
+  hostApiVersion?: string,
+  locale?: string,
+): Promise<IScannedExtension> {
   const manifestPath = path.join(extensionPath, 'package.json')
   const raw = JSON.parse(await readFile(manifestPath, 'utf8')) as unknown
-  const manifest = parseManifest(raw)
+  // Translate `%key%` placeholders against the extension's package.nls*.json
+  // before validation, so contributed titles/labels/descriptions reach the
+  // renderer already localized (VSCode's package.nls scheme).
+  const bundle = await loadNlsBundle(extensionPath, locale)
+  const localized = bundle ? localizeManifest(raw, bundle) : raw
+  const manifest = parseManifest(localized)
   if (hostApiVersion !== undefined && !satisfies(hostApiVersion, manifest.engines.universe)) {
     throw new Error(`requires universe ${manifest.engines.universe}, host API is ${hostApiVersion}`)
   }
@@ -94,10 +104,13 @@ async function scanOne(extensionPath: string, hostApiVersion?: string): Promise<
  * Scan `dir` for extension folders. Returns `[]` if the directory is absent.
  * When `hostApiVersion` is given, extensions whose `engines.universe` range
  * doesn't satisfy it are skipped (logged), same as a malformed manifest.
+ * `locale` selects the `package.nls.<locale>.json` bundle for manifest
+ * localization (falls back to `package.nls.json`, then to the raw `%key%`).
  */
 export async function scanExtensions(
   dir: string,
   hostApiVersion?: string,
+  locale?: string,
 ): Promise<IScannedExtension[]> {
   let entries: Dirent[]
   try {
@@ -112,7 +125,7 @@ export async function scanExtensions(
     if (!entry.isDirectory()) continue
     const extensionPath = path.join(dir, entry.name)
     try {
-      result.push(await scanOne(extensionPath, hostApiVersion))
+      result.push(await scanOne(extensionPath, hostApiVersion, locale))
     } catch (err) {
       console.error(`[ext-host] skipping ${entry.name}: ${(err as Error).message}`)
     }

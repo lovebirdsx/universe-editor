@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "package.nls.json",
+    "package.nls.zh-cn.json"
   ],
   "displayName": "Git",
   "description": "Git source control integration (first-party Universe extension).",
@@ -17,68 +19,69 @@
   ],
   "contributes": {
     "commands": [
-      { "command": "git.commit", "title": "Commit", "category": "Git", "icon": "git-commit" },
-      { "command": "git.commitAndPush", "title": "Commit & Push", "category": "Git", "icon": "push" },
-      { "command": "git.commitAndSync", "title": "Commit & Sync", "category": "Git", "icon": "sync" },
-      { "command": "git.undoLastCommit", "title": "Undo Last Commit", "category": "Git", "icon": "discard" },
-      { "command": "git.refresh", "title": "Refresh", "category": "Git", "icon": "refresh" },
-      { "command": "git.stage", "title": "Stage Changes", "category": "Git", "icon": "add" },
-      { "command": "git.unstage", "title": "Unstage Changes", "category": "Git", "icon": "remove" },
-      { "command": "git.stageAll", "title": "Stage All Changes", "category": "Git", "icon": "stage-all" },
-      { "command": "git.unstageAll", "title": "Unstage All Changes", "category": "Git", "icon": "unstage-all" },
-      { "command": "git.discard", "title": "Discard Changes", "category": "Git", "icon": "discard" },
-      { "command": "git.discardAll", "title": "Discard All Changes", "category": "Git", "icon": "discard-all" },
-      { "command": "git.checkout", "title": "Checkout to...", "category": "Git", "icon": "checkout" },
-      { "command": "git.createBranch", "title": "Create Branch...", "category": "Git", "icon": "create-branch" },
-      { "command": "git.renameBranch", "title": "Rename Branch...", "category": "Git", "icon": "checkout" },
-      { "command": "git.deleteBranch", "title": "Delete Branch...", "category": "Git", "icon": "remove" },
-      { "command": "git.merge", "title": "Merge Branch...", "category": "Git", "icon": "merge" },
-      { "command": "git.rebase", "title": "Rebase Branch...", "category": "Git", "icon": "merge" },
-      { "command": "git.publishBranch", "title": "Publish Branch", "category": "Git", "icon": "push" },
-      { "command": "git.createWorktree", "title": "Create Worktree...", "category": "Git", "icon": "new-folder" },
-      { "command": "git.openWorktree", "title": "Open Worktree", "category": "Git", "icon": "git-worktree" },
-      { "command": "git.openWorktreeInNewWindow", "title": "Open Worktree in New Window", "category": "Git", "icon": "empty-window" },
-      { "command": "git.deleteWorktree", "title": "Delete Worktree...", "category": "Git", "icon": "remove" },
-      { "command": "git.openChange", "title": "Open Changes", "category": "Git", "icon": "compare-changes" },
-      { "command": "git.openMergeEditor", "title": "Resolve in Merge Editor", "category": "Git", "icon": "merge" },
-      { "command": "git.openFile", "title": "Open File", "category": "Git" },
-      { "command": "git.getCommitDiff", "title": "Get Commit Diff", "category": "Git" },
-      { "command": "git.setCommitMessage", "title": "Set Commit Message", "category": "Git" },
-      { "command": "git.pull", "title": "Pull", "category": "Git", "icon": "pull" },
-      { "command": "git.pullRebase", "title": "Pull (Rebase)", "category": "Git", "icon": "pull" },
-      { "command": "git.pullAutostash", "title": "Pull (Autostash)", "category": "Git", "icon": "pull" },
-      { "command": "git.push", "title": "Push", "category": "Git", "icon": "push" },
-      { "command": "git.pushForce", "title": "Push (Force)", "category": "Git", "icon": "push" },
-      { "command": "git.pushTo", "title": "Push to...", "category": "Git", "icon": "push" },
-      { "command": "git.sync", "title": "Sync (Pull & Push)", "category": "Git", "icon": "sync" },
-      { "command": "git.fetch", "title": "Fetch", "category": "Git", "icon": "fetch" },
-      { "command": "git.fetchPrune", "title": "Fetch (Prune)", "category": "Git", "icon": "fetch" },
-      { "command": "git.stash", "title": "Stash", "category": "Git", "icon": "stash" },
-      { "command": "git.stashIncludeUntracked", "title": "Stash (Include Untracked)", "category": "Git", "icon": "stash" },
-      { "command": "git.stashApply", "title": "Apply Stash...", "category": "Git", "icon": "stash" },
-      { "command": "git.stashPop", "title": "Pop Stash...", "category": "Git", "icon": "stash" },
-      { "command": "git.stashDrop", "title": "Drop Stash...", "category": "Git", "icon": "stash" },
-      { "command": "git.addRemote", "title": "Add Remote...", "category": "Git", "icon": "remote" },
-      { "command": "git.removeRemote", "title": "Remove Remote...", "category": "Git", "icon": "remote" },
-      { "command": "git.createTag", "title": "Create Tag...", "category": "Git", "icon": "tag" },
-      { "command": "git.deleteTag", "title": "Delete Tag...", "category": "Git", "icon": "tag" },
-      { "command": "git.submoduleUpdateInit", "title": "Update Submodules", "category": "Git", "icon": "git-submodule" },
-      { "command": "git.submoduleSync", "title": "Sync Submodule URLs", "category": "Git", "icon": "git-submodule" },
-      { "command": "git.blame.toggleEditorDecoration", "title": "Toggle Git Blame Editor Decoration", "category": "Git" },
-      { "command": "git.blame.toggleStatusBarItem", "title": "Toggle Git Blame Status Bar Item", "category": "Git" }
+      { "command": "git.commit", "title": "%git.command.commit.title%", "category": "Git", "icon": "git-commit" },
+      { "command": "git.commitAmend", "title": "%git.command.commitAmend.title%", "category": "Git", "icon": "git-commit" },
+      { "command": "git.commitAndPush", "title": "%git.command.commitAndPush.title%", "category": "Git", "icon": "push" },
+      { "command": "git.commitAndSync", "title": "%git.command.commitAndSync.title%", "category": "Git", "icon": "sync" },
+      { "command": "git.undoLastCommit", "title": "%git.command.undoLastCommit.title%", "category": "Git", "icon": "discard" },
+      { "command": "git.refresh", "title": "%git.command.refresh.title%", "category": "Git", "icon": "refresh" },
+      { "command": "git.stage", "title": "%git.command.stage.title%", "category": "Git", "icon": "add" },
+      { "command": "git.unstage", "title": "%git.command.unstage.title%", "category": "Git", "icon": "remove" },
+      { "command": "git.stageAll", "title": "%git.command.stageAll.title%", "category": "Git", "icon": "stage-all" },
+      { "command": "git.unstageAll", "title": "%git.command.unstageAll.title%", "category": "Git", "icon": "unstage-all" },
+      { "command": "git.discard", "title": "%git.command.discard.title%", "category": "Git", "icon": "discard" },
+      { "command": "git.discardAll", "title": "%git.command.discardAll.title%", "category": "Git", "icon": "discard-all" },
+      { "command": "git.checkout", "title": "%git.command.checkout.title%", "category": "Git", "icon": "checkout" },
+      { "command": "git.createBranch", "title": "%git.command.createBranch.title%", "category": "Git", "icon": "create-branch" },
+      { "command": "git.renameBranch", "title": "%git.command.renameBranch.title%", "category": "Git", "icon": "checkout" },
+      { "command": "git.deleteBranch", "title": "%git.command.deleteBranch.title%", "category": "Git", "icon": "remove" },
+      { "command": "git.merge", "title": "%git.command.merge.title%", "category": "Git", "icon": "merge" },
+      { "command": "git.rebase", "title": "%git.command.rebase.title%", "category": "Git", "icon": "merge" },
+      { "command": "git.publishBranch", "title": "%git.command.publishBranch.title%", "category": "Git", "icon": "push" },
+      { "command": "git.createWorktree", "title": "%git.command.createWorktree.title%", "category": "Git", "icon": "new-folder" },
+      { "command": "git.openWorktree", "title": "%git.command.openWorktree.title%", "category": "Git", "icon": "git-worktree" },
+      { "command": "git.openWorktreeInNewWindow", "title": "%git.command.openWorktreeInNewWindow.title%", "category": "Git", "icon": "empty-window" },
+      { "command": "git.deleteWorktree", "title": "%git.command.deleteWorktree.title%", "category": "Git", "icon": "remove" },
+      { "command": "git.openChange", "title": "%git.command.openChange.title%", "category": "Git", "icon": "compare-changes" },
+      { "command": "git.openMergeEditor", "title": "%git.command.openMergeEditor.title%", "category": "Git", "icon": "merge" },
+      { "command": "git.openFile", "title": "%git.command.openFile.title%", "category": "Git" },
+      { "command": "git.getCommitDiff", "title": "%git.command.getCommitDiff.title%", "category": "Git" },
+      { "command": "git.setCommitMessage", "title": "%git.command.setCommitMessage.title%", "category": "Git" },
+      { "command": "git.pull", "title": "%git.command.pull.title%", "category": "Git", "icon": "pull" },
+      { "command": "git.pullRebase", "title": "%git.command.pullRebase.title%", "category": "Git", "icon": "pull" },
+      { "command": "git.pullAutostash", "title": "%git.command.pullAutostash.title%", "category": "Git", "icon": "pull" },
+      { "command": "git.push", "title": "%git.command.push.title%", "category": "Git", "icon": "push" },
+      { "command": "git.pushForce", "title": "%git.command.pushForce.title%", "category": "Git", "icon": "push" },
+      { "command": "git.pushTo", "title": "%git.command.pushTo.title%", "category": "Git", "icon": "push" },
+      { "command": "git.sync", "title": "%git.command.sync.title%", "category": "Git", "icon": "sync" },
+      { "command": "git.fetch", "title": "%git.command.fetch.title%", "category": "Git", "icon": "fetch" },
+      { "command": "git.fetchPrune", "title": "%git.command.fetchPrune.title%", "category": "Git", "icon": "fetch" },
+      { "command": "git.stash", "title": "%git.command.stash.title%", "category": "Git", "icon": "stash" },
+      { "command": "git.stashIncludeUntracked", "title": "%git.command.stashIncludeUntracked.title%", "category": "Git", "icon": "stash" },
+      { "command": "git.stashApply", "title": "%git.command.stashApply.title%", "category": "Git", "icon": "stash" },
+      { "command": "git.stashPop", "title": "%git.command.stashPop.title%", "category": "Git", "icon": "stash" },
+      { "command": "git.stashDrop", "title": "%git.command.stashDrop.title%", "category": "Git", "icon": "stash" },
+      { "command": "git.addRemote", "title": "%git.command.addRemote.title%", "category": "Git", "icon": "remote" },
+      { "command": "git.removeRemote", "title": "%git.command.removeRemote.title%", "category": "Git", "icon": "remote" },
+      { "command": "git.createTag", "title": "%git.command.createTag.title%", "category": "Git", "icon": "tag" },
+      { "command": "git.deleteTag", "title": "%git.command.deleteTag.title%", "category": "Git", "icon": "tag" },
+      { "command": "git.submoduleUpdateInit", "title": "%git.command.submoduleUpdateInit.title%", "category": "Git", "icon": "git-submodule" },
+      { "command": "git.submoduleSync", "title": "%git.command.submoduleSync.title%", "category": "Git", "icon": "git-submodule" },
+      { "command": "git.blame.toggleEditorDecoration", "title": "%git.command.blame.toggleEditorDecoration.title%", "category": "Git" },
+      { "command": "git.blame.toggleStatusBarItem", "title": "%git.command.blame.toggleStatusBarItem.title%", "category": "Git" }
     ],
     "submenus": [
-      { "id": "git.commitMenu", "label": "Commit", "icon": "git-commit" },
-      { "id": "git.changesMenu", "label": "Changes", "icon": "stage-all" },
-      { "id": "git.pullMenu", "label": "Pull", "icon": "pull" },
-      { "id": "git.pushMenu", "label": "Push", "icon": "push" },
-      { "id": "git.fetchMenu", "label": "Fetch", "icon": "fetch" },
-      { "id": "git.branchMenu", "label": "Branch", "icon": "checkout" },
-      { "id": "git.worktreeMenu", "label": "Worktree", "icon": "git-worktree" },
-      { "id": "git.stashMenu", "label": "Stash", "icon": "stash" },
-      { "id": "git.remoteMenu", "label": "Remote", "icon": "remote" },
-      { "id": "git.tagsMenu", "label": "Tags", "icon": "tag" },
-      { "id": "git.submoduleMenu", "label": "Submodules", "icon": "git-submodule" }
+      { "id": "git.commitMenu", "label": "%git.submenu.commit.label%", "icon": "git-commit" },
+      { "id": "git.changesMenu", "label": "%git.submenu.changes.label%", "icon": "stage-all" },
+      { "id": "git.pullMenu", "label": "%git.submenu.pull.label%", "icon": "pull" },
+      { "id": "git.pushMenu", "label": "%git.submenu.push.label%", "icon": "push" },
+      { "id": "git.fetchMenu", "label": "%git.submenu.fetch.label%", "icon": "fetch" },
+      { "id": "git.branchMenu", "label": "%git.submenu.branch.label%", "icon": "checkout" },
+      { "id": "git.worktreeMenu", "label": "%git.submenu.worktree.label%", "icon": "git-worktree" },
+      { "id": "git.stashMenu", "label": "%git.submenu.stash.label%", "icon": "stash" },
+      { "id": "git.remoteMenu", "label": "%git.submenu.remote.label%", "icon": "remote" },
+      { "id": "git.tagsMenu", "label": "%git.submenu.tags.label%", "icon": "tag" },
+      { "id": "git.submoduleMenu", "label": "%git.submenu.submodule.label%", "icon": "git-submodule" }
     ],
     "menus": {
       "scm/title": [
@@ -99,8 +102,9 @@
       ],
       "git.commitMenu": [
         { "command": "git.commit", "group": "1@1", "icon": "git-commit" },
-        { "command": "git.commitAndPush", "group": "1@2", "icon": "push" },
-        { "command": "git.commitAndSync", "group": "1@3", "icon": "sync" },
+        { "command": "git.commitAmend", "group": "1@2", "icon": "git-commit" },
+        { "command": "git.commitAndPush", "group": "1@3", "icon": "push" },
+        { "command": "git.commitAndSync", "group": "1@4", "icon": "sync" },
         { "command": "git.undoLastCommit", "group": "2@1", "icon": "discard" }
       ],
       "git.changesMenu": [
@@ -193,75 +197,75 @@
         "git.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Whether git source control is enabled."
+          "description": "%git.config.enabled.description%"
         },
         "git.mergeEditor": {
           "type": "boolean",
           "default": true,
-          "description": "Open conflicted files in the 3-way merge editor. When false, conflicts open as a working-tree diff and are resolved inline via conflict markers."
+          "description": "%git.config.mergeEditor.description%"
         },
         "git.autoRepositoryDetection": {
           "type": "boolean",
           "default": true,
-          "description": "Scan workspace subfolders for nested git repositories. When false, only the workspace root is used."
+          "description": "%git.config.autoRepositoryDetection.description%"
         },
         "git.repositoryScanMaxDepth": {
           "type": "number",
           "default": 3,
           "minimum": -1,
-          "description": "Maximum subfolder depth to scan for nested git repositories. -1 means unlimited."
+          "description": "%git.config.repositoryScanMaxDepth.description%"
         },
         "git.repositoryScanIgnoredFolders": {
           "type": "array",
           "items": { "type": "string" },
           "default": ["node_modules"],
-          "description": "Folder names skipped while scanning for nested git repositories."
+          "description": "%git.config.repositoryScanIgnoredFolders.description%"
         },
         "git.pullSubmoduleUpdate": {
           "type": "boolean",
           "default": true,
-          "description": "After a successful pull, automatically run `git submodule update --init --recursive` when the repository contains submodules."
+          "description": "%git.config.pullSubmoduleUpdate.description%"
         },
         "git.autofetch": {
           "type": "boolean",
           "default": true,
-          "description": "Periodically fetch from the remote so the status bar shows incoming/outgoing commits."
+          "description": "%git.config.autofetch.description%"
         },
         "git.autofetchPeriod": {
           "type": "number",
           "default": 180,
           "minimum": 30,
-          "description": "Interval (in seconds) between automatic fetches when git.autofetch is enabled."
+          "description": "%git.config.autofetchPeriod.description%"
         },
         "git.blame.editorDecoration.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show the blame information for the line the cursor is on at the end of the line."
+          "description": "%git.config.blame.editorDecoration.enabled.description%"
         },
         "git.blame.editorDecoration.template": {
           "type": "string",
           "default": "${subject}, ${authorName} (${authorDateAgo})",
-          "description": "Template for the inline blame annotation. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}."
+          "description": "%git.config.blame.editorDecoration.template.description%"
         },
         "git.blame.editorDecoration.disableHover": {
           "type": "boolean",
           "default": false,
-          "description": "Disable the hover that shows full commit info when pointing at the inline blame annotation."
+          "description": "%git.config.blame.editorDecoration.disableHover.description%"
         },
         "git.blame.statusBarItem.enabled": {
           "type": "boolean",
           "default": true,
-          "description": "Show the blame information for the line the cursor is on in the status bar."
+          "description": "%git.config.blame.statusBarItem.enabled.description%"
         },
         "git.blame.statusBarItem.template": {
           "type": "string",
           "default": "${authorName} (${authorDateAgo})",
-          "description": "Template for the blame information status bar item. Tokens: ${hash}, ${hashShort}, ${subject}, ${authorName}, ${authorEmail}, ${authorDate}, ${authorDateAgo}."
+          "description": "%git.config.blame.statusBarItem.template.description%"
         },
         "git.blame.ignoreWhitespace": {
           "type": "boolean",
           "default": false,
-          "description": "Ignore whitespace changes when computing blame information."
+          "description": "%git.config.blame.ignoreWhitespace.description%"
         }
       }
     }

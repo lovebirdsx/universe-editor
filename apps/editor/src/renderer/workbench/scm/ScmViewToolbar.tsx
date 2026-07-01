@@ -99,7 +99,7 @@ export function ScmViewToolbar() {
     }
     return rows
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected?.rootUri, viewMode, revision, runCommand])
+  }, [selected?.rootUri, selected?.id, viewMode, revision, runCommand])
 
   const repoRows = useMemo<OverflowRow[]>(
     () =>

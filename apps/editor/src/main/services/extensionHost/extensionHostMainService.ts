@@ -176,6 +176,10 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     if (spec?.workspaceRoot !== undefined) {
       env.UNIVERSE_WORKSPACE_ROOT = spec.workspaceRoot
     }
+    // Display locale for manifest NLS (package.nls.<locale>.json) resolution.
+    if (spec?.locale !== undefined) {
+      env.UNIVERSE_DISPLAY_LOCALE = spec.locale
+    }
     args.push(entry)
 
     let proc: ManagedChildProcess

@@ -29,6 +29,7 @@ import {
 import * as gga from './gitGraphActions.js'
 import { getBlame } from './blameSource.js'
 import { notifyGitFailure, setGitLogShower } from './gitError.js'
+import { localize } from './nls.js'
 import type { GitExecResult } from './gitService.js'
 
 function resourcePath(arg: unknown): string | undefined {
@@ -126,17 +127,42 @@ export async function activate(context: ExtensionContext): Promise<void> {
     if (!repo) return false
     const message = repo.commitMessage.trim()
     if (!message) {
-      await window.showWarningMessage('Type a commit message first.')
+      await window.showWarningMessage(
+        localize('git.commit.noMessage', 'Type a commit message first.'),
+      )
       return false
     }
     if (!repo.hasStagedChanges) {
       if (!repo.hasChanges) {
-        await window.showWarningMessage('There are no changes to commit.')
+        await window.showWarningMessage(
+          localize('git.commit.noChanges', 'There are no changes to commit.'),
+        )
         return false
       }
       await repo.stageAll()
     }
     const ok = await repo.commit(message)
+    if (ok) repo.commitMessage = ''
+    return ok
+  }
+
+  // Amend the last commit. If the message box is empty, loads the last commit
+  // message into the box so the user can review/edit before confirming.
+  const commitAmendSmart = async (repo: Repository | undefined): Promise<boolean> => {
+    if (!repo) return false
+    const message = repo.commitMessage.trim()
+    if (!message) {
+      const lastMsg = await repo.getLastCommitMessage()
+      if (!lastMsg) {
+        await window.showWarningMessage(
+          localize('git.commit.noCommitsToAmend', 'No commits to amend.'),
+        )
+        return false
+      }
+      repo.commitMessage = lastMsg
+      return false
+    }
+    const ok = await repo.commitAmend(message)
     if (ok) repo.commitMessage = ''
     return ok
   }
@@ -154,6 +180,7 @@ export async function activate(context: ExtensionContext): Promise<void> {
     ),
 
     commands.registerCommand('git.commit', (arg) => commitSmart(mgr.resolveRepo(arg))),
+    commands.registerCommand('git.commitAmend', (arg) => commitAmendSmart(mgr.resolveRepo(arg))),
     commands.registerCommand('git.commitAndPush', async (arg) => {
       const repo = mgr.resolveRepo(arg)
       if (await commitSmart(repo)) await repo?.push()
@@ -178,11 +205,14 @@ export async function activate(context: ExtensionContext): Promise<void> {
       const repo = mgr.resolveRepo(arg)
       const path = resourcePath(arg)
       if (!repo || !path) return
+      const BTN_DISCARD = localize('git.btn.discardChanges', 'Discard Changes')
       const confirm = await window.showWarningMessage(
-        `Discard changes in ${repo.basename(path)}? This cannot be undone.`,
-        'Discard Changes',
+        localize('git.discard.fileConfirm', "Discard changes in '{0}'? This cannot be undone.", {
+          0: repo.basename(path),
+        }),
+        BTN_DISCARD,
       )
-      if (confirm !== 'Discard Changes') return
+      if (confirm !== BTN_DISCARD) return
       if (isDirectoryArg(arg)) {
         await repo.discardFolder(path)
       } else {

@@ -12,6 +12,7 @@ import { gitExec } from './gitService.js'
 import { gitErrorText, notifyGitFailure } from './gitError.js'
 import { parseWorktrees, type WorktreeInfo } from './worktreeParser.js'
 import { classifyWorktreeRemoveFailure } from './repositoryTypes.js'
+import { localize } from './nls.js'
 
 /** The slice of the repository the worktree operations need. */
 export interface WorktreeHost {
@@ -54,18 +55,26 @@ export class RepositoryWorktrees {
   }
 
   async createWorktree(): Promise<void> {
-    const CREATE_NEW: QuickPickItem = { label: 'Create new branch…', iconId: 'add' }
+    const CREATE_NEW: QuickPickItem = {
+      label: localize('git.worktree.createNewBranch', 'Create new branch…'),
+      iconId: 'add',
+    }
     const branches = await this._host.listBranches()
     const items: QuickPickItem[] = [CREATE_NEW, ...branches.map((b) => ({ label: b }))]
     const picked = await window.showQuickPick(items, {
-      placeHolder: 'Select a branch to create the worktree from',
+      placeHolder: localize(
+        'git.pick.branchForWorktree',
+        'Select a branch to create the worktree from',
+      ),
     })
     if (!picked) return
 
     let ref = picked.label
     const newBranch = picked === CREATE_NEW
     if (newBranch) {
-      const name = await window.showInputBox({ prompt: 'Name of the new branch' })
+      const name = await window.showInputBox({
+        prompt: localize('git.input.newBranchName', 'Name of the new branch'),
+      })
       if (!name) return
       ref = name.trim()
     }
@@ -74,7 +83,7 @@ export class RepositoryWorktrees {
     const safeName = ref.replace(/[/\\]/g, '-')
     const defaultPath = join(dirname(this._root), `${basename(this._root)}.worktrees`, safeName)
     const path = await window.showInputBox({
-      prompt: 'Worktree location',
+      prompt: localize('git.input.worktreeLocation', 'Worktree location'),
       value: defaultPath,
     })
     if (!path) return
@@ -83,7 +92,7 @@ export class RepositoryWorktrees {
       ? ['worktree', 'add', '-b', ref, path.trim()]
       : ['worktree', 'add', path.trim(), ref]
     const ok = await this._host.run(args, 'create worktree', {
-      text: 'Creating worktree…',
+      text: localize('git.progress.creatingWorktree', 'Creating worktree…'),
       kind: 'spinning',
     })
     if (!ok) return
@@ -91,7 +100,10 @@ export class RepositoryWorktrees {
     const worktreePath = path.trim()
     try {
       await stat(join(this._root, '.gitmodules'))
-      this._host.beginProgress('Initializing submodules…', 'spinning')
+      this._host.beginProgress(
+        localize('git.progress.initializingSubmodules', 'Initializing submodules…'),
+        'spinning',
+      )
       try {
         const subRes = await gitExec(
           ['submodule', 'update', '--init', '--recursive'],
@@ -100,7 +112,11 @@ export class RepositoryWorktrees {
         )
         if (subRes.exitCode !== 0) {
           void window.showWarningMessage(
-            `Submodule init failed in new worktree: ${gitErrorText(subRes)}`,
+            localize(
+              'git.worktree.submoduleInitFailed',
+              'Submodule init failed in new worktree: {0}',
+              { 0: gitErrorText(subRes) },
+            ),
           )
         }
       } finally {
@@ -110,14 +126,16 @@ export class RepositoryWorktrees {
       // no .gitmodules, skip
     }
 
+    const BTN_OPEN_IN_NEW_WINDOW = localize('git.btn.openInNewWindow', 'Open in New Window')
+    const BTN_OPEN = localize('git.btn.open', 'Open')
     const open = await window.showInformationMessage(
-      `Worktree created at ${worktreePath}.`,
-      'Open in New Window',
-      'Open',
+      localize('git.worktree.created', 'Worktree created at {0}.', { 0: worktreePath }),
+      BTN_OPEN_IN_NEW_WINDOW,
+      BTN_OPEN,
     )
-    if (open === 'Open') {
+    if (open === BTN_OPEN) {
       await commands.executeCommand('_workbench.openFolder', worktreePath)
-    } else if (open === 'Open in New Window') {
+    } else if (open === BTN_OPEN_IN_NEW_WINDOW) {
       await commands.executeCommand('_workbench.openFolderInNewWindow', worktreePath)
     }
   }
@@ -125,7 +143,9 @@ export class RepositoryWorktrees {
   async openWorktree(newWindow: boolean): Promise<void> {
     const worktrees = (await this._listWorktrees()).filter((wt) => !wt.bare)
     if (worktrees.length <= 1) {
-      void window.showInformationMessage('No other worktrees to open.')
+      void window.showInformationMessage(
+        localize('git.worktree.noneToOpen', 'No other worktrees to open.'),
+      )
       return
     }
     const pick = await window.showQuickPick(
@@ -134,7 +154,11 @@ export class RepositoryWorktrees {
         description: this._worktreeRef(wt),
         detail: wt.path,
       })),
-      { placeHolder: newWindow ? 'Open worktree in new window' : 'Open worktree' },
+      {
+        placeHolder: newWindow
+          ? localize('git.pick.openWorktreeInNewWindow', 'Open worktree in new window')
+          : localize('git.pick.openWorktree', 'Open worktree'),
+      },
     )
     if (!pick) return
     await commands.executeCommand(
@@ -146,7 +170,9 @@ export class RepositoryWorktrees {
   async deleteWorktree(): Promise<void> {
     const worktrees = (await this._listWorktrees()).filter((wt) => !wt.isMain && !wt.bare)
     if (worktrees.length === 0) {
-      void window.showInformationMessage('No worktrees to delete.')
+      void window.showInformationMessage(
+        localize('git.worktree.noneToDelete', 'No worktrees to delete.'),
+      )
       return
     }
     const pick = await window.showQuickPick(
@@ -155,7 +181,7 @@ export class RepositoryWorktrees {
         description: this._worktreeRef(wt),
         detail: wt.path,
       })),
-      { placeHolder: 'Select a worktree to delete' },
+      { placeHolder: localize('git.pick.worktreeToDelete', 'Select a worktree to delete') },
     )
     if (!pick) return
     await this.removeWorktreeAt(pick.detail, pick.label)
@@ -190,11 +216,16 @@ export class RepositoryWorktrees {
     }
 
     if (reason === 'dirty-or-locked') {
+      const BTN_DELETE = localize('git.btn.delete', 'Delete')
       const force = await window.showWarningMessage(
-        `Worktree '${label}' has changes or is locked. Delete anyway?`,
-        'Delete',
+        localize(
+          'git.worktree.dirtyConfirm',
+          "Worktree '{0}' has changes or is locked. Delete anyway?",
+          { 0: label },
+        ),
+        BTN_DELETE,
       )
-      if (force === 'Delete') {
+      if (force === BTN_DELETE) {
         const forced = await gitExec(['worktree', 'remove', '--force', path], this._root, this._log)
         if (forced.exitCode === 0) {
           await this._finishWorktreeRemoval()
@@ -222,7 +253,10 @@ export class RepositoryWorktrees {
    * the forced removal.
    */
   private async _removeWorktreeWithSubmodules(path: string, label: string): Promise<void> {
-    this._host.beginProgress('Deinitializing submodules…', 'spinning')
+    this._host.beginProgress(
+      localize('git.progress.deinitializingSubmodules', 'Deinitializing submodules…'),
+      'spinning',
+    )
     try {
       const deinit = await gitExec(['submodule', 'deinit', '--all', '--force'], path, this._log)
       if (deinit.exitCode !== 0) {
@@ -253,8 +287,11 @@ export class RepositoryWorktrees {
 
   private _notifyWorktreeBusy(label: string, path: string): void {
     void window.showErrorMessage(
-      `Can't delete worktree '${label}': its folder is in use. ` +
-        `Close any editor windows or terminals opened on ${path} and try again.`,
+      localize(
+        'git.worktree.busy',
+        "Can't delete worktree '{0}': its folder is in use. Close any editor windows or terminals opened on {1} and try again.",
+        { 0: label, 1: path },
+      ),
     )
   }
 }

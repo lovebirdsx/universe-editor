@@ -24,6 +24,7 @@ import {
   type SourceControl,
   type SourceControlResourceGroup,
 } from '@universe-editor/extension-api'
+import { localize } from './nls.js'
 import { gitExec } from './gitService.js'
 import { selectHunkPatch } from './hunkPatch.js'
 import { notifyGitFailure } from './gitError.js'
@@ -85,12 +86,21 @@ export class Repository {
     opts: RepositoryOptions = {},
   ) {
     this._sc = scm.createSourceControl('git', opts.label ?? 'Git', root)
-    this._sc.inputBox.placeholder = 'Message (Ctrl+Enter to commit)'
+    this._sc.inputBox.placeholder = localize(
+      'git.input.placeholder',
+      'Message (Ctrl+Enter to commit)',
+    )
     this._sc.acceptInputCommand = GIT_COMMIT_INPUT_COMMAND
 
-    this._staged = this._sc.createResourceGroup('index', 'Staged Changes')
+    this._staged = this._sc.createResourceGroup(
+      'index',
+      localize('git.group.staged', 'Staged Changes'),
+    )
     this._staged.hideWhenEmpty = true
-    this._working = this._sc.createResourceGroup('workingTree', 'Changes')
+    this._working = this._sc.createResourceGroup(
+      'workingTree',
+      localize('git.group.changes', 'Changes'),
+    )
 
     this._worktrees = new RepositoryWorktrees({
       root,
@@ -252,7 +262,7 @@ export class Repository {
   }
 
   async commit(message: string): Promise<boolean> {
-    this._beginProgress('Committing…', 'spinning')
+    this._beginProgress(localize('git.progress.committing', 'Committing…'), 'spinning')
     try {
       const res = await gitExec(['commit', '-m', message], this.root, this._log)
       if (res.exitCode !== 0) {
@@ -266,11 +276,31 @@ export class Repository {
     }
   }
 
+  async getLastCommitMessage(): Promise<string> {
+    const res = await gitExec(['log', '-1', '--format=%B', 'HEAD'], this.root, this._log)
+    return res.exitCode === 0 ? res.stdout.trimEnd() : ''
+  }
+
+  async commitAmend(message: string): Promise<boolean> {
+    this._beginProgress(localize('git.progress.amendingCommit', 'Amending commit…'), 'spinning')
+    try {
+      const res = await gitExec(['commit', '--amend', '-m', message], this.root, this._log)
+      if (res.exitCode !== 0) {
+        await notifyGitFailure('commit --amend', res)
+        return false
+      }
+      return true
+    } finally {
+      this._endProgress()
+      await this.refresh()
+    }
+  }
+
   async undoLastCommit(): Promise<void> {
     const msgRes = await gitExec(['log', '-1', '--format=%B', 'HEAD'], this.root, this._log)
     const lastMessage = msgRes.exitCode === 0 ? msgRes.stdout.trimEnd() : ''
     await this._run(['reset', '--soft', 'HEAD~1'], 'undo last commit', {
-      text: 'Undoing…',
+      text: localize('git.progress.undoing', 'Undoing…'),
       kind: 'spinning',
     })
     if (lastMessage) this.commitMessage = lastMessage
@@ -279,7 +309,7 @@ export class Repository {
   async sync(): Promise<void> {
     if (this._syncing) return
     this._syncing = true
-    this._beginProgress('Syncing…', 'syncing')
+    this._beginProgress(localize('git.progress.syncing', 'Syncing…'), 'syncing')
     try {
       const pull = await gitExec(['pull', '--rebase'], this.root, this._log)
       if (pull.exitCode !== 0) {
@@ -299,13 +329,16 @@ export class Repository {
   }
 
   async pull(): Promise<void> {
-    const ok = await this._run(['pull'], 'pull', { text: 'Pulling…', kind: 'syncing' })
+    const ok = await this._run(['pull'], 'pull', {
+      text: localize('git.progress.pulling', 'Pulling…'),
+      kind: 'syncing',
+    })
     if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async pullRebase(): Promise<void> {
     const ok = await this._run(['pull', '--rebase'], 'pull (rebase)', {
-      text: 'Pulling…',
+      text: localize('git.progress.pulling', 'Pulling…'),
       kind: 'syncing',
     })
     if (ok) await this._updateSubmodulesIfNeeded()
@@ -313,24 +346,31 @@ export class Repository {
 
   async pullAutostash(): Promise<void> {
     const ok = await this._run(['pull', '--rebase', '--autostash'], 'pull (autostash)', {
-      text: 'Pulling…',
+      text: localize('git.progress.pulling', 'Pulling…'),
       kind: 'syncing',
     })
     if (ok) await this._updateSubmodulesIfNeeded()
   }
 
   async push(): Promise<void> {
-    await this._run(['push'], 'push', { text: 'Pushing…', kind: 'syncing' })
+    await this._run(['push'], 'push', {
+      text: localize('git.progress.pushing', 'Pushing…'),
+      kind: 'syncing',
+    })
   }
 
   async pushForce(): Promise<void> {
+    const BTN_FORCE_PUSH = localize('git.btn.forcePush', 'Force Push')
     const confirm = await window.showWarningMessage(
-      'Force push to the remote? This overwrites the remote branch history and can discard others’ commits.',
-      'Force Push',
+      localize(
+        'git.push.forceConfirm',
+        'Force push to the remote? This overwrites the remote branch history and can discard others’ commits.',
+      ),
+      BTN_FORCE_PUSH,
     )
-    if (confirm !== 'Force Push') return
+    if (confirm !== BTN_FORCE_PUSH) return
     await this._run(['push', '--force-with-lease'], 'push (force)', {
-      text: 'Pushing…',
+      text: localize('git.progress.pushing', 'Pushing…'),
       kind: 'syncing',
     })
   }
@@ -338,14 +378,17 @@ export class Repository {
   async pushTo(): Promise<void> {
     const remotes = await this._listRemotes()
     if (remotes.length === 0) {
-      void window.showWarningMessage('No remotes configured.')
+      void window.showWarningMessage(localize('git.remote.none', 'No remotes configured.'))
       return
     }
     const remote = await window.showQuickPick(remotes, {
-      placeHolder: 'Select a remote to push to',
+      placeHolder: localize('git.pick.remoteToPush', 'Select a remote to push to'),
     })
     if (!remote) return
-    await this._run(['push', remote], 'push', { text: 'Pushing…', kind: 'syncing' })
+    await this._run(['push', remote], 'push', {
+      text: localize('git.progress.pushing', 'Pushing…'),
+      kind: 'syncing',
+    })
   }
 
   async fetch(opts?: FetchOptions): Promise<void> {
@@ -356,7 +399,7 @@ export class Repository {
   private async _fetchRemote(opts?: FetchOptions): Promise<void> {
     if (this._fetching) return
     this._fetching = true
-    this._beginProgress('Fetching…', 'spinning')
+    this._beginProgress(localize('git.progress.fetching', 'Fetching…'), 'spinning')
     try {
       const args = opts?.prune ? ['fetch', '--prune'] : ['fetch']
       const res = await gitExec(args, this.root, this._log)
@@ -371,7 +414,9 @@ export class Repository {
 
   async stashPush(includeUntracked = false): Promise<void> {
     if (!this.hasChanges) {
-      void window.showInformationMessage('There are no changes to stash.')
+      void window.showInformationMessage(
+        localize('git.stash.noChanges', 'There are no changes to stash.'),
+      )
       return
     }
     const args = includeUntracked ? ['stash', 'push', '-u'] : ['stash', 'push']
@@ -379,32 +424,40 @@ export class Repository {
   }
 
   async stashApply(pop = false): Promise<void> {
-    const ref = await this._pickStash(pop ? 'Select a stash to pop' : 'Select a stash to apply')
+    const ref = await this._pickStash(
+      pop
+        ? localize('git.pick.stashToPop', 'Select a stash to pop')
+        : localize('git.pick.stashToApply', 'Select a stash to apply'),
+    )
     if (!ref) return
     await this._run(['stash', pop ? 'pop' : 'apply', ref], pop ? 'stash pop' : 'stash apply')
   }
 
   async stashDrop(): Promise<void> {
-    const ref = await this._pickStash('Select a stash to drop')
+    const ref = await this._pickStash(localize('git.pick.stashToDrop', 'Select a stash to drop'))
     if (!ref) return
     await this._run(['stash', 'drop', ref], 'stash drop')
   }
 
   async merge(): Promise<void> {
-    const branch = await this._pickBranch('Select a branch to merge into the current branch')
+    const branch = await this._pickBranch(
+      localize('git.pick.branchToMerge', 'Select a branch to merge into the current branch'),
+    )
     if (!branch) return
     await this._run(['merge', branch], 'merge')
   }
 
   async rebase(): Promise<void> {
-    const branch = await this._pickBranch('Select a branch to rebase onto')
+    const branch = await this._pickBranch(
+      localize('git.pick.branchToRebase', 'Select a branch to rebase onto'),
+    )
     if (!branch) return
     await this._run(['rebase', branch], 'rebase')
   }
 
   async renameBranch(): Promise<void> {
     const name = await window.showInputBox({
-      prompt: 'New branch name',
+      prompt: localize('git.input.newBranchName', 'New branch name'),
       ...(this._branch !== undefined ? { value: this._branch } : {}),
     })
     if (!name) return
@@ -414,21 +467,26 @@ export class Repository {
   async deleteBranch(): Promise<void> {
     const branches = (await this._listBranches()).filter((b) => b !== this._branch)
     if (branches.length === 0) {
-      void window.showInformationMessage('No other branches to delete.')
+      void window.showInformationMessage(
+        localize('git.branch.noOtherToDelete', 'No other branches to delete.'),
+      )
       return
     }
     const branch = await window.showQuickPick(branches, {
-      placeHolder: 'Select a branch to delete',
+      placeHolder: localize('git.pick.branchToDelete', 'Select a branch to delete'),
     })
     if (!branch) return
     const res = await gitExec(['branch', '-d', branch], this.root, this._log)
     if (res.exitCode !== 0) {
       // Not fully merged — offer a force delete.
+      const BTN_DELETE = localize('git.btn.delete', 'Delete')
       const force = await window.showWarningMessage(
-        `Branch '${branch}' is not fully merged. Delete anyway?`,
-        'Delete',
+        localize('git.branch.notFullyMerged', "Branch '{0}' is not fully merged. Delete anyway?", {
+          0: branch,
+        }),
+        BTN_DELETE,
       )
-      if (force === 'Delete') await this._run(['branch', '-D', branch], 'delete branch')
+      if (force === BTN_DELETE) await this._run(['branch', '-D', branch], 'delete branch')
       return
     }
     await this.refresh()
@@ -436,26 +494,30 @@ export class Repository {
 
   async publishBranch(): Promise<void> {
     if (this._branch === undefined) {
-      void window.showWarningMessage('No branch to publish.')
+      void window.showWarningMessage(localize('git.branch.noneToPublish', 'No branch to publish.'))
       return
     }
     const remotes = await this._listRemotes()
     let remote = remotes[0] ?? 'origin'
     if (remotes.length > 1) {
-      const pick = await window.showQuickPick(remotes, { placeHolder: 'Select a remote' })
+      const pick = await window.showQuickPick(remotes, {
+        placeHolder: localize('git.pick.remote', 'Select a remote'),
+      })
       if (!pick) return
       remote = pick
     }
     await this._run(['push', '-u', remote, this._branch], 'publish branch', {
-      text: 'Publishing…',
+      text: localize('git.progress.publishing', 'Publishing…'),
       kind: 'syncing',
     })
   }
 
   async addRemote(): Promise<void> {
-    const name = await window.showInputBox({ prompt: 'Remote name (e.g. origin)' })
+    const name = await window.showInputBox({
+      prompt: localize('git.input.remoteName', 'Remote name (e.g. origin)'),
+    })
     if (!name) return
-    const url = await window.showInputBox({ prompt: 'Remote URL' })
+    const url = await window.showInputBox({ prompt: localize('git.input.remoteUrl', 'Remote URL') })
     if (!url) return
     await this._run(['remote', 'add', name.trim(), url.trim()], 'add remote')
   }
@@ -463,16 +525,18 @@ export class Repository {
   async removeRemote(): Promise<void> {
     const remotes = await this._listRemotes()
     if (remotes.length === 0) {
-      void window.showInformationMessage('No remotes configured.')
+      void window.showInformationMessage(localize('git.remote.none', 'No remotes configured.'))
       return
     }
-    const remote = await window.showQuickPick(remotes, { placeHolder: 'Select a remote to remove' })
+    const remote = await window.showQuickPick(remotes, {
+      placeHolder: localize('git.pick.remoteToRemove', 'Select a remote to remove'),
+    })
     if (!remote) return
     await this._run(['remote', 'remove', remote], 'remove remote')
   }
 
   async createTag(): Promise<void> {
-    const name = await window.showInputBox({ prompt: 'Tag name' })
+    const name = await window.showInputBox({ prompt: localize('git.input.tagName', 'Tag name') })
     if (!name) return
     await this._run(['tag', name.trim()], 'create tag')
   }
@@ -480,17 +544,19 @@ export class Repository {
   async deleteTag(): Promise<void> {
     const tags = await this._listTags()
     if (tags.length === 0) {
-      void window.showInformationMessage('No tags to delete.')
+      void window.showInformationMessage(localize('git.tag.noneToDelete', 'No tags to delete.'))
       return
     }
-    const tag = await window.showQuickPick(tags, { placeHolder: 'Select a tag to delete' })
+    const tag = await window.showQuickPick(tags, {
+      placeHolder: localize('git.pick.tagToDelete', 'Select a tag to delete'),
+    })
     if (!tag) return
     await this._run(['tag', '-d', tag], 'delete tag')
   }
 
   async submoduleUpdateInit(): Promise<void> {
     await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
-      text: 'Updating submodules…',
+      text: localize('git.progress.updatingSubmodules', 'Updating submodules…'),
       kind: 'spinning',
     })
   }
@@ -505,7 +571,7 @@ export class Repository {
       return
     }
     await this._run(['submodule', 'update', '--init', '--recursive'], 'submodule update', {
-      text: 'Updating submodules…',
+      text: localize('git.progress.updatingSubmodules', 'Updating submodules…'),
       kind: 'spinning',
     })
   }
@@ -533,11 +599,15 @@ export class Repository {
   }
 
   async discardAll(): Promise<void> {
+    const BTN_DISCARD_ALL = localize('git.btn.discardAll', 'Discard All Changes')
     const confirm = await window.showWarningMessage(
-      'Discard all changes in the working tree? This cannot be undone.',
-      'Discard All Changes',
+      localize(
+        'git.discard.allConfirm',
+        'Discard all changes in the working tree? This cannot be undone.',
+      ),
+      BTN_DISCARD_ALL,
     )
-    if (confirm !== 'Discard All Changes') return
+    if (confirm !== BTN_DISCARD_ALL) return
     const checkout = await gitExec(['checkout', '--', '.'], this.root, this._log)
     if (checkout.exitCode !== 0) {
       await notifyGitFailure('discard', checkout)
@@ -547,13 +617,17 @@ export class Repository {
   }
 
   async checkout(): Promise<void> {
-    const pick = await this._pickBranch('Select a branch to checkout')
+    const pick = await this._pickBranch(
+      localize('git.pick.branchToCheckout', 'Select a branch to checkout'),
+    )
     if (!pick) return
     await this._run(['checkout', pick], 'checkout')
   }
 
   async createBranch(): Promise<void> {
-    const name = await window.showInputBox({ prompt: 'Name of the new branch' })
+    const name = await window.showInputBox({
+      prompt: localize('git.input.newBranchName', 'Name of the new branch'),
+    })
     if (!name) return
     await this._run(['checkout', '-b', name.trim()], 'create branch')
   }
@@ -790,7 +864,9 @@ export class Repository {
   private async _pickBranch(placeHolder: string): Promise<string | undefined> {
     const branches = await this._listBranches()
     if (branches.length === 0) {
-      void window.showInformationMessage('No branches available.')
+      void window.showInformationMessage(
+        localize('git.branch.noneAvailable', 'No branches available.'),
+      )
       return undefined
     }
     return window.showQuickPick(branches, { placeHolder })
@@ -808,7 +884,7 @@ export class Repository {
       })
       .filter((s) => s.ref)
     if (stashes.length === 0) {
-      void window.showInformationMessage('No stashes.')
+      void window.showInformationMessage(localize('git.stash.none', 'No stashes.'))
       return undefined
     }
     const pick = await window.showQuickPick(

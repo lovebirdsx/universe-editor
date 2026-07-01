@@ -51,6 +51,12 @@ export interface ExtHostStartSpec {
    * trusted → bundled built-in dir; restricted → `<userData>/extensions`.
    */
   readonly extensionsDir?: string
+  /**
+   * Display locale (e.g. `zh-CN`) used to localize each extension manifest's
+   * `%key%` placeholders against its `package.nls.<locale>.json`. Omitted →
+   * the default `package.nls.json` (English) bundle.
+   */
+  readonly locale?: string
 }
 
 /**

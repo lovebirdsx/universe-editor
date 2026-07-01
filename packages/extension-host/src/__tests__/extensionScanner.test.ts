@@ -142,4 +142,37 @@ describe('scanExtensions', () => {
       { fileMatch: ['**/.claude/settings.json'], url: 'https://example.com/schema.json' },
     ])
   })
+
+  it('localizes %key% manifest placeholders against package.nls.<locale>.json', async () => {
+    const root = join(dir, 'loc')
+    await mkdir(root, { recursive: true })
+    await writeFile(
+      join(root, 'package.json'),
+      JSON.stringify({
+        ...goodManifest,
+        name: 'loc',
+        contributes: { commands: [{ command: 'loc.hi', title: '%loc.hi.title%' }] },
+      }),
+      'utf8',
+    )
+    await writeFile(
+      join(root, 'package.nls.json'),
+      JSON.stringify({ 'loc.hi.title': 'Hi' }),
+      'utf8',
+    )
+    await writeFile(
+      join(root, 'package.nls.zh-cn.json'),
+      JSON.stringify({ 'loc.hi.title': '你好' }),
+      'utf8',
+    )
+
+    const [zh] = await scanExtensions(dir, undefined, 'zh-CN')
+    expect(zh?.manifest.contributes?.commands?.[0]?.title).toBe('你好')
+
+    const [en] = await scanExtensions(dir, undefined, 'en-US')
+    expect(en?.manifest.contributes?.commands?.[0]?.title).toBe('Hi')
+
+    const [dflt] = await scanExtensions(dir)
+    expect(dflt?.manifest.contributes?.commands?.[0]?.title).toBe('Hi')
+  })
 })

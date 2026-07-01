@@ -49,6 +49,7 @@ import {
 } from '../../../shared/ipc/extensionHostService.js'
 import { ILanguageFeaturesService } from '../languageFeatures/LanguageFeaturesService.js'
 import { IAcpPathPolicy } from '../acp/acpPathPolicy.js'
+import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { IScmService } from './ScmService.js'
 import { HostConnection, type HostConnectionDeps } from './HostConnection.js'
 
@@ -202,6 +203,7 @@ export class ExtensionHostClientService extends Disposable implements IExtension
     const workspaceRoot = this._workspace.current?.folder.fsPath
     const spec: ExtHostStartSpec = {
       kind,
+      locale: getCurrentLocale(),
       ...(workspaceRoot !== undefined ? { workspaceRoot } : {}),
     }
     const { handle } = await this._host.start(spec)

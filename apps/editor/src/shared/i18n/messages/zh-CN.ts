@@ -646,6 +646,12 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'scm.openFile': '打开文件',
   'scm.viewAsList': '以列表查看',
   'scm.viewAsTree': '以树查看',
+  'scm.commitAmend': '提交（修正）',
+  'scm.commitAndPush': '提交并推送',
+  'scm.commitAndSync': '提交并同步',
+  'scm.unstageChanges': '取消暂存更改',
+  'scm.discardChanges': '放弃更改',
+  'scm.stageChanges': '暂存更改',
 
   // --- Git graph ---
   'gitGraph.checkout': '检出',

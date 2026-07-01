@@ -8,6 +8,7 @@
  */
 import { window } from '@universe-editor/extension-api'
 import type { GitExecResult } from './gitService.js'
+import { localize } from './nls.js'
 
 /** The raw reason a git command failed: stderr first, stdout as fallback,
  *  exit-code as a last resort so the toast never ends in a bare "failed:". */
@@ -24,24 +25,30 @@ export function classifyGitError(res: GitExecResult): string | undefined {
   const msg = `${res.stderr}\n${res.stdout}`.toLowerCase()
 
   if (msg.includes('not fully merged')) {
-    return 'the branch has unmerged commits — use force delete to discard them'
+    return localize(
+      'git.error.notFullyMerged',
+      'the branch has unmerged commits — use force delete to discard them',
+    )
   }
   if (
     msg.includes('non-fast-forward') ||
     msg.includes('updates were rejected') ||
     msg.includes('tip of your current branch is behind')
   ) {
-    return "the remote has commits you don't have locally — pull first, or force push"
+    return localize(
+      'git.error.nonFastForward',
+      "the remote has commits you don't have locally — pull first, or force push",
+    )
   }
   if (
     msg.includes('would be overwritten') ||
     msg.includes('your local changes') ||
     msg.includes('commit your changes or stash them')
   ) {
-    return 'commit or stash your local changes first'
+    return localize('git.error.localChanges', 'commit or stash your local changes first')
   }
   if (msg.includes('conflict')) {
-    return 'resolve the conflicts, then continue'
+    return localize('git.error.conflict', 'resolve the conflicts, then continue')
   }
   if (
     msg.includes('did not match any') ||
@@ -49,13 +56,16 @@ export function classifyGitError(res: GitExecResult): string | undefined {
     msg.includes('pathspec') ||
     msg.includes('not a valid ref')
   ) {
-    return 'no such branch, tag, or commit'
+    return localize('git.error.notFound', 'no such branch, tag, or commit')
   }
   if (msg.includes('could not read from remote') || msg.includes('repository not found')) {
-    return 'the remote is unreachable — check the URL and your network'
+    return localize(
+      'git.error.remoteUnreachable',
+      'the remote is unreachable — check the URL and your network',
+    )
   }
   if (msg.includes('authentication failed') || msg.includes('permission denied (publickey)')) {
-    return 'authentication failed — check your credentials'
+    return localize('git.error.authFailed', 'authentication failed — check your credentials')
   }
   return undefined
 }
@@ -67,7 +77,7 @@ export function setGitLogShower(fn: () => void): void {
   showGitLog = fn
 }
 
-const OPEN_LOG = 'Open Git Log'
+const OPEN_LOG = localize('git.btn.openGitLog', 'Open Git Log')
 
 /**
  * Surface a failed git command: `Git <label> failed: <reason> — <hint>`, with an

@@ -185,11 +185,12 @@ server.registerChannel(ExtHostChannels.extHostEditor, ProxyChannel.fromService(e
 
 async function main(): Promise<void> {
   const kind = process.env.UNIVERSE_EXT_HOST_KIND === 'restricted' ? 'restricted' : 'trusted'
+  const locale = process.env.UNIVERSE_DISPLAY_LOCALE || undefined
   const dir =
     kind === 'restricted'
       ? process.env.UNIVERSE_USER_EXTENSIONS_DIR
       : process.env.UNIVERSE_BUILTIN_EXTENSIONS_DIR
-  const extensions = dir ? await scanExtensions(dir, HOST_API_VERSION) : []
+  const extensions = dir ? await scanExtensions(dir, HOST_API_VERSION, locale) : []
   if (!dir) {
     console.error(`[ext-host] no extensions directory configured for ${kind} host`)
   } else {
