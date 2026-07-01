@@ -17,6 +17,7 @@ import {
   type IDisposable,
 } from '@universe-editor/platform'
 import { useService } from './useService.js'
+import { isEditableTarget } from './domUtils.js'
 import { formatChord } from './titlebar/keybindingFormat.js'
 import { IKeyboardDebugService } from '../services/keybinding/keyboardDebugService.js'
 import { IUserKeybindingsService } from '../services/keybindings/UserKeybindingsService.js'
@@ -71,13 +72,6 @@ function buildKeyString(e: KeyboardEvent): string {
 function isModifierOnly(key: string): boolean {
   const k = key.toLowerCase()
   return k === 'control' || k === 'shift' || k === 'alt' || k === 'meta'
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) return false
-  const tag = target.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true
-  return target.isContentEditable
 }
 
 // Treat ctrl / alt / meta as "functional" modifiers. Shift alone is part of

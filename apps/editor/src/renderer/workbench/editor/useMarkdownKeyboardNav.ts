@@ -16,6 +16,7 @@
 
 import { useEffect, useRef, type MutableRefObject } from 'react'
 import { INITIAL_NAV_STATE, reduceNavKey, type NavCommand } from './markdownNavKeys.js'
+import { isEditableTarget } from '../domUtils.js'
 
 /** Pixels per "line" for j/k — matches vimium's scrollStepSize default. */
 const LINE_STEP = 60
@@ -39,6 +40,11 @@ export function useMarkdownKeyboardNav<T extends HTMLElement>(
     let state = INITIAL_NAV_STATE
 
     const onKeyDown = (e: KeyboardEvent): void => {
+      // Yield to text-entry controls (the in-preview find box, any embedded
+      // input): their bare characters mean "type", not "scroll". Without this
+      // the reducer claims j/k/g/Space/digits and preventDefault()s them, so
+      // those keys never land in the find input.
+      if (isEditableTarget(e.target)) return
       // Leave modified chords (Ctrl/Alt/Meta) to keybindings; Shift is allowed
       // (it distinguishes Space/Shift+Space and the capital G/H/L keys).
       if (e.ctrlKey || e.altKey || e.metaKey) return
