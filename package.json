@@ -11,6 +11,7 @@
     "lint": "turbo run lint",
     "lint:fix": "turbo run lint:fix",
     "check": "turbo run lint typecheck test",
+    "docs:check": "node scripts/check-doc-links.mjs",
     "check:full": "turbo run lint typecheck test build",
     "dev": "pnpm --filter=@universe-editor/editor dev",
     "memory:link": "node scripts/link-memory.mjs",

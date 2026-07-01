@@ -345,7 +345,14 @@ export function parseInline(text: string): readonly MdInline[] {
         if (urlEnd !== -1) {
           const label = text.slice(i + 1, labelEnd)
           const href = text.slice(labelEnd + 2, urlEnd).trim()
-          if (isSafeHref(href) || looksLikeFilePath(href) || isAnchorHref(href)) {
+          if (
+            isSafeHref(href) ||
+            looksLikeFilePath(href) ||
+            isAnchorHref(href) ||
+            (href.includes('#') &&
+              !href.startsWith('#') &&
+              looksLikeFilePath(href.slice(0, href.indexOf('#'))))
+          ) {
             flush()
             out.push({ type: 'link', href, children: parseInline(label) })
             i = urlEnd + 1

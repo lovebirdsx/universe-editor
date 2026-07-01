@@ -7,7 +7,15 @@
  *  same component fits both the compact ACP chat and the roomier doc preview.
  *--------------------------------------------------------------------------------------------*/
 
-import { createContext, Fragment, useContext, useMemo, useRef, type ReactNode } from 'react'
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  type ReactNode,
+} from 'react'
 import { IEditorResolverService, URI } from '@universe-editor/platform'
 import {
   isAnchorHref,
@@ -52,6 +60,11 @@ interface MarkdownViewProps {
    * memoized full parse.
    */
   readonly streaming?: boolean
+  /**
+   * Anchor slug to scroll into view after the first render. Used by DocEditor to
+   * implement cross-document `[text](./other.md#section)` navigation.
+   */
+  readonly initialAnchor?: string
 }
 
 export function MarkdownView({
@@ -61,6 +74,7 @@ export function MarkdownView({
   baseUri,
   previewLinks,
   streaming,
+  initialAnchor,
 }: MarkdownViewProps) {
   const nodes = useMarkdownNodes(text, streaming ?? false)
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
@@ -75,6 +89,16 @@ export function MarkdownView({
       },
     [],
   )
+
+  // Scroll to a cross-document anchor after the headings are rendered.
+  const initialAnchorRef = useRef(initialAnchor)
+  useEffect(() => {
+    const anchor = initialAnchorRef.current
+    if (!anchor) return
+    const id = setTimeout(() => scrollToAnchor(slugifyHeading(anchor)), 50)
+    return () => clearTimeout(id)
+  }, [scrollToAnchor])
+
   return (
     <FileLinkContext.Provider value={openFileLink}>
       <AnchorScrollContext.Provider value={scrollToAnchor}>
@@ -114,6 +138,13 @@ const FileLinkContext = createContext<
 // Scrolls to the heading whose slug matches an in-document `#anchor` link. Scoped
 // per MarkdownView so an anchor only targets headings inside the same view.
 const AnchorScrollContext = createContext<(id: string) => void>(() => {})
+
+/**
+ * When provided by a parent (e.g. DocEditor), relative `.md` links are routed
+ * to the handler instead of the file-system resolver. The raw href is passed
+ * (e.g. `"../git/commit.md#amend"`) and the handler resolves it to a DocId.
+ */
+export const DocLinkContext = createContext<((href: string) => void) | undefined>(undefined)
 
 /** Quote an attribute value for a querySelector, falling back to a manual escape. */
 function cssEscape(value: string): string {
@@ -315,13 +346,22 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   const editorResolver = useService(IEditorResolverService)
   const openFileLink = useContext(FileLinkContext)
   const scrollToAnchor = useContext(AnchorScrollContext)
+  const openDocLink = useContext(DocLinkContext)
   const isAnchor = isAnchorHref(href)
   const isFile = href.startsWith('file:')
   const isFilePath = !isFile && !isAnchor && looksLikeFilePath(href)
+  // A relative doc link: starts with ./ or ../ and the path portion ends in .md
+  const isRelativeDocLink =
+    openDocLink !== undefined && /^\.\.?\//.test(href) && /\.md(#[^#]*)?$/.test(href)
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     if (isAnchor) {
       scrollToAnchor(decodeAnchor(href))
+      return
+    }
+    // Doc-to-doc relative link: intercept before file-path resolution.
+    if (isRelativeDocLink && openDocLink) {
+      openDocLink(href)
       return
     }
     if (isFilePath) {
@@ -346,7 +386,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     <a
       href={href}
       onClick={onClick}
-      target={isFile || isFilePath || isAnchor ? undefined : '_blank'}
+      target={isFile || isFilePath || isAnchor || isRelativeDocLink ? undefined : '_blank'}
       rel="noopener noreferrer"
       className={styles['mdLink']}
     >

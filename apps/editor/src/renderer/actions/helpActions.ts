@@ -32,7 +32,7 @@ export class OpenEditorGuideAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new DocEditorInput('editor-guide'))
+    accessor.get(IEditorService).openEditor(new DocEditorInput('getting-started/editor-guide'))
   }
 }
 
@@ -49,7 +49,7 @@ export class OpenAgentGuideAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    accessor.get(IEditorService).openEditor(new DocEditorInput('agent-guide'))
+    accessor.get(IEditorService).openEditor(new DocEditorInput('getting-started/agent-guide'))
   }
 }
 

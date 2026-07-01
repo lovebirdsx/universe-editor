@@ -16,7 +16,7 @@ import type {
   IConfigurationService as IConfigurationServiceType,
   IEditorResolverService as IEditorResolverServiceType,
 } from '@universe-editor/platform'
-import { MarkdownView } from '../MarkdownView.js'
+import { MarkdownView, DocLinkContext } from '../MarkdownView.js'
 import { ServicesContext } from '../../useService.js'
 
 // Monaco won't load under happy-dom; stub so CodeBlock falls back to plain text.
@@ -169,5 +169,62 @@ describe('MarkdownView', () => {
     cleanup()
     renderMarkdown(full, 'stream-md')
     expect(streamedHtml).toBe(screen.getByTestId('stream-md').innerHTML)
+  })
+})
+
+describe('DocLinkContext', () => {
+  it('routes a relative .md link to the doc-link handler instead of window.open', () => {
+    const openDocLink = vi.fn()
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    const inst = new InstantiationService(services)
+    render(
+      <ServicesContext.Provider value={inst}>
+        <DocLinkContext.Provider value={openDocLink}>
+          <MarkdownView text="[提交改动](../git/commit.md)" />
+        </DocLinkContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    const link = screen.getByRole('link', { name: '提交改动' })
+    expect(link.getAttribute('target')).toBeNull()
+    link.click()
+    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md')
+    expect(windowOpen).not.toHaveBeenCalled()
+    windowOpen.mockRestore()
+  })
+
+  it('routes a relative .md#anchor link to the doc-link handler', () => {
+    const openDocLink = vi.fn()
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    const inst = new InstantiationService(services)
+    render(
+      <ServicesContext.Provider value={inst}>
+        <DocLinkContext.Provider value={openDocLink}>
+          <MarkdownView text="[查看 amend](../git/commit.md#amend-section)" />
+        </DocLinkContext.Provider>
+      </ServicesContext.Provider>,
+    )
+    screen.getByRole('link', { name: '查看 amend' }).click()
+    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md#amend-section')
+  })
+
+  it('falls through to window.open when DocLinkContext is absent', () => {
+    const windowOpen = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    const inst = new InstantiationService(services)
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text="[外部链接](https://example.com)" />
+      </ServicesContext.Provider>,
+    )
+    screen.getByRole('link', { name: '外部链接' }).click()
+    expect(windowOpen).toHaveBeenCalledWith('https://example.com', '_blank', 'noopener,noreferrer')
+    windowOpen.mockRestore()
   })
 })

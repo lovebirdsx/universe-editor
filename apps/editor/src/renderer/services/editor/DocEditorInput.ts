@@ -1,21 +1,26 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  DocEditorInput — a virtual EditorInput that renders one of the built-in guide
- *  documents (see docRegistry) as formatted markdown. Carries only a `docId`;
- *  the content is resolved from DOCS by the DocEditor component.
+ *  documents (see docRegistry) as formatted markdown. Carries a path-style `docId`
+ *  (e.g. "getting-started/editor-guide"); the title is extracted from the document's
+ *  first H1 heading.
  *--------------------------------------------------------------------------------------------*/
 
-import { EditorInput, URI, localize } from '@universe-editor/platform'
-import { DOCS, isDocId, type DocId } from './docRegistry.js'
+import { EditorInput, URI } from '@universe-editor/platform'
+import { getDocTitle, isDocId } from './docRegistry.js'
 
 interface ISerializedDoc {
-  readonly docId: DocId
+  readonly docId: string
 }
 
 export class DocEditorInput extends EditorInput {
   static readonly TYPE_ID = 'doc'
 
-  constructor(private readonly _docId: DocId) {
+  constructor(
+    private readonly _docId: string,
+    /** Anchor to scroll to when the document first renders (not persisted). */
+    readonly initialAnchor?: string,
+  ) {
     super()
   }
 
@@ -27,13 +32,12 @@ export class DocEditorInput extends EditorInput {
     return URI.from({ scheme: 'universe', path: `/doc/${this._docId}` })
   }
 
-  get docId(): DocId {
+  get docId(): string {
     return this._docId
   }
 
   override getName(): string {
-    const entry = DOCS[this._docId]
-    return localize(entry.titleKey, entry.titleFallback)
+    return getDocTitle(this._docId)
   }
 
   override serialize(): ISerializedDoc {

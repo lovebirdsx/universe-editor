@@ -127,6 +127,10 @@ export default defineConfig({
       tsconfigRaw: decoratorTsconfigRaw,
     },
     server: {
+      fs: {
+        // Allow serving docs/user/ which lives at the repo root (outside apps/editor/).
+        allow: [resolve(__dirname, '../..')],
+      },
       warmup: {
         // Paths are resolved relative to vite root (src/renderer), not __dirname.
         clientFiles: ['./main.tsx', './workbench/Workbench.tsx'],
