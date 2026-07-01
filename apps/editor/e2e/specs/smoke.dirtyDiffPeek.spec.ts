@@ -14,7 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect, _electron as electron } from '@playwright/test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
@@ -59,7 +59,14 @@ test.describe('@p1 dirty diff peek', () => {
       'utf8',
     )
 
-    const repoDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ddp-repo-'))
+    // `git rev-parse --show-toplevel` (used by the git extension to key its repo)
+    // always returns the LONG canonical path. On CI Windows `os.tmpdir()` is an 8.3
+    // short path (`C:\Users\RUNNER~1\...`), so the raw mkdtemp path wouldn't match
+    // the toplevel — `getHeadContent`'s `relative(root, file)` would break and dirty
+    // -diff regions would never compute. realpath.native normalizes to the long form.
+    const repoDir = realpathSync.native(
+      mkdtempSync(join(tmpdir(), 'universe-editor-e2e-ddp-repo-')),
+    )
     git(repoDir, 'init')
     git(repoDir, 'config', 'user.email', 'e2e@example.com')
     git(repoDir, 'config', 'user.name', 'E2E')
