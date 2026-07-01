@@ -116,6 +116,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Actions ---
   'action.about.title': '关于 Universe Editor',
+  'action.agent.addSelectionToChat': '将选区添加到 Agent 聊天',
   'action.agent.cancelTurn': '取消 Agent 回合',
   'action.agent.clearHistory': '清除 Agent 会话历史',
   'action.agent.copyFocusedMessage': '复制消息',
@@ -1067,6 +1068,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.confirmClose.close': '关闭',
   'acp.confirmClose.detail': '关闭将停止正在运行的 agent。',
   'acp.confirmClose.message': '会话 "{title}" 仍在运行。',
+  'acp.context.remove': '移除上下文',
   'acp.cost.col.cost': '费用',
   'acp.cost.col.input': '输入',
   'acp.cost.col.model': '模型',

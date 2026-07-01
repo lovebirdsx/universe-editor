@@ -88,8 +88,9 @@ import {
 } from './acpSessionRestoreCoordinator.js'
 import { AcpSessionRegistry } from './acpSessionRegistry.js'
 import type { PromptMention } from './promptMentions.js'
+import type { SelectionContext } from './promptContext.js'
 
-export type { PromptMention }
+export type { PromptMention, SelectionContext }
 export {
   AcpAbortError,
   type AcpMessage,

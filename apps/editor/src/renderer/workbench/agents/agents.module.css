@@ -1852,6 +1852,58 @@
   position: relative;
 }
 
+/* Selection-context chips shown above the textarea (Add Selection to Chat). */
+.contextChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-bottom: 3px;
+}
+
+.contextChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: 100%;
+  padding: 1px 3px 1px 5px;
+  font-size: 0.9em;
+  line-height: 1.4;
+  color: var(--color-input-fg, #d4d4d4);
+  background: var(--color-badge-bg, #3c3c3c);
+  border: 1px solid var(--color-input-border, #555);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.contextChip:hover {
+  border-color: var(--color-focus-border, #0070e0);
+}
+
+.contextChipLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contextChipRemove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  border-radius: 2px;
+}
+
+.contextChipRemove:hover {
+  opacity: 1;
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.1));
+}
+
+
 /* Anchor for PopoverList above the prompt textarea (slash / mention). The
    popover's own surface styling lives in workbench-ui; this only positions it. */
 .promptPopover {

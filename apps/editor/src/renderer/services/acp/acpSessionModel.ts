@@ -12,6 +12,7 @@ import type { Event, IObservable } from '@universe-editor/platform'
 import type { McpTransport } from './acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { PromptMention } from './promptMentions.js'
+import type { SelectionContext } from './promptContext.js'
 
 export type AcpMessageRole = 'user' | 'agent' | 'thought'
 
@@ -336,8 +337,16 @@ export interface IAcpSession {
    * Send a prompt. If `mentions` are provided, any `@<name>` in the text
    * whose `<name>` matches a recorded mention is rewritten into a
    * `resource_link` ContentBlock. Unmatched `@`-tokens stay as text.
+   *
+   * `contexts` are editor selections the user explicitly attached; each leads
+   * the prompt as a context block (an EmbeddedResource when the agent supports
+   * `embeddedContext`, else a fenced-code text block).
    */
-  sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void>
+  sendPrompt(
+    text: string,
+    mentions?: readonly PromptMention[],
+    contexts?: readonly SelectionContext[],
+  ): Promise<void>
   cancelTurn(): Promise<void>
   close(): Promise<void>
   /** Change one configuration option via `session/set_config_option`. */

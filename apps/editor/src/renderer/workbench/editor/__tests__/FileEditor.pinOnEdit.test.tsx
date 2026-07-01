@@ -68,6 +68,7 @@ vi.mock('../monaco/MonacoLoader.js', () => {
             monacoMockState.updateOptionsCalls.push(options)
           },
           addCommand: () => null,
+          addAction: () => ({ dispose: () => {} }),
           focus: () => {},
           saveViewState: () => null,
           restoreViewState: () => {},

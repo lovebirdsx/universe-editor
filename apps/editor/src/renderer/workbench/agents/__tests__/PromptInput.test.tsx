@@ -447,7 +447,7 @@ describe('PromptInput — submit and cancel', () => {
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'hello world' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(session.sendPrompt).toHaveBeenCalledWith('hello world', [])
+    expect(session.sendPrompt).toHaveBeenCalledWith('hello world', [], [])
     expect(ta.value).toBe('')
   })
 
@@ -484,7 +484,7 @@ describe('PromptInput — submit and cancel', () => {
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'steer left' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(session.sendPrompt).toHaveBeenCalledWith('steer left', [])
+    expect(session.sendPrompt).toHaveBeenCalledWith('steer left', [], [])
     expect(ta.value).toBe('')
   })
 
@@ -743,7 +743,7 @@ describe('PromptInput — draft persistence', () => {
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'send me' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(session.sendPrompt).toHaveBeenCalledWith('send me', [])
+    expect(session.sendPrompt).toHaveBeenCalledWith('send me', [], [])
     expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
   })
 })

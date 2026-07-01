@@ -31,6 +31,8 @@ import {
   IFileSearchService,
   IWorkspaceService,
   IDialogService,
+  IEditorService,
+  IInstantiationService,
   localize,
 } from '@universe-editor/platform'
 import { dragContainsResources } from '@universe-editor/workbench-ui'
@@ -39,7 +41,14 @@ import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'luc
 import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
-import type { IAcpSession, PromptMention } from '../../services/acp/acpSessionService.js'
+import type {
+  IAcpSession,
+  PromptMention,
+  SelectionContext,
+} from '../../services/acp/acpSessionService.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { URI } from '@universe-editor/platform'
 import type { WidgetHandle } from './ChatBody.js'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
@@ -53,11 +62,13 @@ import {
   type MentionFileEntry,
 } from '../../services/acp/mentionFileSearch.js'
 import { MentionPopover } from './MentionPopover.js'
+import { SelectionContextChips } from './SelectionContextChips.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
+import { AcpPromptContextInbox } from '../../services/acp/acpPromptContextInbox.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { UsageIndicator } from './UsageIndicator.js'
 import { SessionCostIndicator } from './SessionCostIndicator.js'
@@ -102,6 +113,9 @@ export function PromptInput({
   const [mentions, setMentions] = useState<readonly PromptMention[]>(
     () => AcpPromptDraftCache.load(session.id)?.mentions ?? [],
   )
+  const [contexts, setContexts] = useState<readonly SelectionContext[]>(
+    () => AcpPromptDraftCache.load(session.id)?.contexts ?? [],
+  )
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -114,6 +128,8 @@ export function PromptInput({
   const exclude = useService(IExcludeService)
   const config = useService(IConfigurationService)
   const dialogService = useService(IDialogService)
+  const editorService = useService(IEditorService)
+  const instantiation = useService(IInstantiationService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
@@ -203,6 +219,24 @@ export function PromptInput({
     if (autoFocus) textareaRef.current?.focus()
   }, [autoFocus])
 
+  // Drain any SelectionContexts the "Add Selection to Agent Chat" command
+  // deposited for this session before its ChatBody mounted, and keep draining
+  // while mounted (the command deposits then fires onDidDeposit). Keyed on the
+  // local session id — same key the command deposits under.
+  useEffect(() => {
+    const pull = (): void => {
+      const incoming = AcpPromptContextInbox.drain(session.id)
+      if (incoming.length === 0) return
+      setContexts((prev) => mergeContexts(prev, incoming))
+      textareaRef.current?.focus()
+    }
+    pull()
+    const sub = AcpPromptContextInbox.onDidDeposit((id) => {
+      if (id === session.id) pull()
+    })
+    return () => sub.dispose()
+  }, [session.id])
+
   // On mount, restore the saved caret position into the textarea DOM so the
   // cursor lands at the right spot when the user refocuses after switching
   // editor tabs.
@@ -214,13 +248,17 @@ export function PromptInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // mount only — session.id is stable for this component instance
 
-  // Persist the unsent draft (text + recorded mentions) per session so
-  // switching tabs / sessions and coming back restores it (see
-  // AcpPromptDraftCache).
+  // Persist the unsent draft (text + recorded mentions + attached contexts) per
+  // session so switching tabs / sessions and coming back restores it (see
+  // AcpPromptDraftCache). Kept alive while any of the three is non-empty so a
+  // draft with only attached selections (no text yet) survives a tab switch.
   useEffect(() => {
-    if (text) AcpPromptDraftCache.save(session.id, { text, mentions, caret })
-    else AcpPromptDraftCache.clear(session.id)
-  }, [text, mentions, caret, session.id])
+    if (text || contexts.length > 0) {
+      AcpPromptDraftCache.save(session.id, { text, mentions, contexts, caret })
+    } else {
+      AcpPromptDraftCache.clear(session.id)
+    }
+  }, [text, mentions, contexts, caret, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
@@ -342,14 +380,46 @@ export function PromptInput({
 
     const value = text
     const recorded = mentions
+    const attached = contexts
     setText('')
     AcpPromptDraftCache.clear(session.id)
     setMentions([])
+    setContexts([])
     setSlashDismissed(false)
     setMentionDismissed(false)
     setSlashIndex(0)
     setMentionIndex(0)
-    void session.sendPrompt(value, recorded)
+    void session.sendPrompt(value, recorded, attached)
+  }
+
+  const revealContext = (ctx: SelectionContext): void => {
+    let resource: URI
+    try {
+      resource = URI.parse(ctx.uri)
+    } catch {
+      return
+    }
+    editorService.openEditor(instantiation.createInstance(FileEditorInput, resource), {
+      pinned: false,
+    })
+    // Reveal against the active editor input: openEditor dedupes by resource, so
+    // FileEditorRegistry may only know the pre-existing instance (see search).
+    const reveal = (): boolean => {
+      const active = editorService.activeEditor.get()
+      if (!(active instanceof FileEditorInput)) return false
+      const editor = FileEditorRegistry.get(active)
+      if (!editor) return false
+      editor.setSelection({
+        startLineNumber: ctx.startLine,
+        startColumn: 1,
+        endLineNumber: ctx.endLine,
+        endColumn: 1,
+      })
+      editor.revealLineInCenter(ctx.startLine)
+      return true
+    }
+    if (reveal()) return
+    setTimeout(reveal, 50)
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
@@ -420,6 +490,11 @@ export function PromptInput({
 
   return (
     <form className={styles['promptForm']} onSubmit={submit}>
+      <SelectionContextChips
+        contexts={contexts}
+        onRemove={(i) => setContexts((prev) => prev.filter((_, idx) => idx !== i))}
+        onReveal={revealContext}
+      />
       <div className={styles['promptComposer']}>
         {slashOpen ? (
           <SlashCommandPopover
@@ -527,6 +602,26 @@ function mergeMention(
 ): readonly PromptMention[] {
   const out = prev.filter((m) => m.name !== next.name)
   out.push(next)
+  return out
+}
+
+/**
+ * Append incoming selection contexts, dropping duplicates (same file + exact
+ * line range) so re-triggering on the same selection doesn't stack chips.
+ */
+function mergeContexts(
+  prev: readonly SelectionContext[],
+  incoming: readonly SelectionContext[],
+): readonly SelectionContext[] {
+  const key = (c: SelectionContext): string => `${c.uri}:${c.startLine}-${c.endLine}`
+  const seen = new Set(prev.map(key))
+  const out = [...prev]
+  for (const c of incoming) {
+    const k = key(c)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(c)
+  }
   return out
 }
 

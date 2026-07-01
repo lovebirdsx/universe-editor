@@ -65,8 +65,8 @@ describe('AcpSessionConnection — phases', () => {
 describe('AcpSessionConnection — queued prompts', () => {
   it('flushes queued prompts exactly once on connect, in order', () => {
     const c = new AcpSessionConnection()
-    const p1 = c.enqueue('first', [])
-    const p2 = c.enqueue('second', [])
+    const p1 = c.enqueue('first', [], [])
+    const p2 = c.enqueue('second', [], [])
     void p1
     void p2
     const drained = c.open(FAKE_CONN)
@@ -78,7 +78,7 @@ describe('AcpSessionConnection — queued prompts', () => {
   it('resolves a queued prompt when the drained deferred is resolved', async () => {
     const c = new AcpSessionConnection()
     const done = vi.fn()
-    const p = c.enqueue('hello', []).then(done)
+    const p = c.enqueue('hello', [], []).then(done)
     const [q] = c.open(FAKE_CONN)
     q!.resolve()
     await p
@@ -87,7 +87,7 @@ describe('AcpSessionConnection — queued prompts', () => {
 
   it('REJECTS queued prompts on fail (not silently dropped)', async () => {
     const c = new AcpSessionConnection()
-    const p = c.enqueue('lost', [])
+    const p = c.enqueue('lost', [], [])
     c.fail('agent crashed')
     await expect(p).rejects.toBeInstanceOf(AcpConnectionError)
     await expect(p).rejects.toThrow('agent crashed')
@@ -95,7 +95,7 @@ describe('AcpSessionConnection — queued prompts', () => {
 
   it('REJECTS queued prompts on close before connect', async () => {
     const c = new AcpSessionConnection()
-    const p = c.enqueue('lost', [])
+    const p = c.enqueue('lost', [], [])
     c.close()
     await expect(p).rejects.toBeInstanceOf(AcpConnectionError)
   })

@@ -35,6 +35,7 @@ import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { isAuthRequiredError } from './acpAuthError.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
+import { composeContextBlocks, type SelectionContext } from './promptContext.js'
 import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../shared/ai/codexPricing.js'
 import { estimateCodexCost } from './acpSessionCost.js'
 import {
@@ -210,6 +211,14 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private readonly _connection = new AcpSessionConnection()
 
+  /**
+   * Whether the connected agent advertised `promptCapabilities.embeddedContext`.
+   * Resolved once from the pooled `initialize()` response on attach and cached so
+   * `_dispatchPrompt` can pick the EmbeddedResource vs fenced-text wire shape for
+   * attached selection contexts without awaiting per prompt. `false` until known.
+   */
+  private _embeddedContextSupported = false
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -302,6 +311,14 @@ export class AcpSession extends Disposable implements IAcpSession {
   attachConnection(conn: IAcpClientConnection, sessionIdOnAgent: string): void {
     const drained = this._connection.open(conn)
     if (this._connection.phase !== 'connected') return
+    // Cache the embeddedContext capability so _dispatchPrompt can shape attached
+    // selection contexts without awaiting the initialize response per prompt.
+    conn.initializeResult
+      .then((res) => {
+        this._embeddedContextSupported =
+          res.agentCapabilities?.promptCapabilities?.embeddedContext === true
+      })
+      .catch(() => {})
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
     // Connection close → seal the session.
     const onClose = (): void => {
@@ -360,7 +377,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
-      this._dispatchPrompt(q.text, q.mentions).then(q.resolve, q.reject)
+      this._dispatchPrompt(q.text, q.mentions, q.contexts).then(q.resolve, q.reject)
     }
   }
 
@@ -463,7 +480,11 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._cancelPendingQuestion()
   }
 
-  async sendPrompt(text: string, mentions?: readonly PromptMention[]): Promise<void> {
+  async sendPrompt(
+    text: string,
+    mentions?: readonly PromptMention[],
+    contexts?: readonly SelectionContext[],
+  ): Promise<void> {
     // Read-only preview session (foreign worktree): viewing only, no dispatch.
     if (this.readOnly) return
     // 顺序敏感：派生 title 必须发生在 _appendMessage 之前——它依赖 _messages 仍为空来识别首条 prompt。
@@ -477,7 +498,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
       try {
-        await this._connection.enqueue(text, mentions ?? [])
+        await this._connection.enqueue(text, mentions ?? [], contexts ?? [])
       } catch {
         // Connection failed before this queued prompt could be dispatched. The
         // failure is already surfaced as an [error] timeline message by
@@ -488,7 +509,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     // Connection failed during startup — nothing to dispatch onto.
     if (this._conn === undefined) return
-    await this._dispatchPrompt(text, mentions ?? [])
+    await this._dispatchPrompt(text, mentions ?? [], contexts ?? [])
   }
 
   /**
@@ -498,7 +519,11 @@ export class AcpSession extends Disposable implements IAcpSession {
    * (`sendPrompt`) already did so the message shows immediately even while the
    * prompt was queued.
    */
-  private async _dispatchPrompt(text: string, mentions: readonly PromptMention[]): Promise<void> {
+  private async _dispatchPrompt(
+    text: string,
+    mentions: readonly PromptMention[],
+    contexts: readonly SelectionContext[],
+  ): Promise<void> {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
     if (conn === undefined || sid === undefined) return
@@ -506,11 +531,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._history?.touch(sid)
     this._history?.setHistoryHasMessages(sid)
     const prompt = composePromptBlocks(text, mentions)
+    // Attached selections lead the prompt as context blocks (EmbeddedResource
+    // when the agent supports it, else a fenced-code text block).
+    const contextBlocks = composeContextBlocks(contexts, this._embeddedContextSupported)
+    const body = prompt.length > 0 ? [...prompt] : [{ type: 'text' as const, text }]
     const params: PromptRequest = {
       sessionId: sid,
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
-      prompt: prompt.length > 0 ? [...prompt] : [{ type: 'text', text }],
+      prompt: [...contextBlocks, ...body],
     }
     const abort = new AbortController()
     this._inFlight.add(abort)

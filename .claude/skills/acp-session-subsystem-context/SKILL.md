@@ -98,6 +98,8 @@ disable-model-invocation: true
 - **加配置项交互**：`acpSessionConfigOptions.ts`（推送/echo）+ `ConfigOptionsBar.tsx`（UI）+ `acpAgentDefaultsService.ts`（默认值持久化）。
 - **改恢复/重连**：`acpSessionRestoreCoordinator.ts` + `acpSessionEditorInput.ts`（tab 序列化）+ `acpSessionHistory.ts`（条目）。
 - **加 agent / 改权限 / MCP / 沙盒 / 入站方法**：直接看 CLAUDE.md 套路 ACP-A/D/F/C。
+- **把 editor 选区作为上下文推给 input**（"Add Selection to Agent Chat"，Cursor Ctrl+L 式）：`promptContext.ts`（`SelectionContext` 类型 + `composeContextBlocks`：embeddedContext→`EmbeddedResource`，否则降级围栏文本块）+ `acpSession.ts`（`sendPrompt`/`_dispatchPrompt` 第三参 `contexts`，attach 时缓存 `_embeddedContextSupported`，context block 置于 prompt 前）+ `acpSessionConnection.ts`（`QueuedPrompt`/`enqueue` 带 contexts）+ 命令 `actions/agentContextActions.ts`（`FileEditorRegistry.get(activeEditor).getSelections()` 取多选区）+ UI `SelectionContextChips.tsx` + `PromptInput.tsx`（contexts state/持久化/reveal）+ 右键菜单走 Monaco `editor.addAction`（FileEditor.tsx，Monaco 自带右键菜单**不读**我们的 MenuRegistry）。draft cache 加 `contexts` 字段，按**本地 id** 缓存（未发送草稿）。
+  - **路由关键坑**：命令**不能直接调** `widget.addSelectionContext`——用户在文件编辑器里选文本时，目标 session 的 ChatBody 常常**没挂载**（editor 模式 session tab 没打开，或刚 `createSession` 还没渲染），widget 为 undefined 会静默丢弃。正解：`acpPromptContextInbox.ts`（模块单例收件箱，按**本地 session id** 存 + `onDidDeposit` 事件）。命令流程：定位/创建目标 session（activeSession 否则 createSession）→ `deposit(session.id, contexts)` → 打开并聚焦该 chat（editor 模式 openEditor AcpSessionEditorInput / sidebar 模式 openViewContainer + `focusSessionInput`）。PromptInput 挂载时 `drain` + 订阅 `onDidDeposit` 即时消费，跨「未挂载→挂载」不丢。
 
 ## 关键架构决策与「为什么」
 

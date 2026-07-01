@@ -8,10 +8,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { PromptMention } from './promptMentions.js'
+import type { SelectionContext } from './promptContext.js'
 
 export interface AcpPromptDraft {
   readonly text: string
   readonly mentions: readonly PromptMention[]
+  readonly contexts?: readonly SelectionContext[]
   readonly caret?: number
 }
 

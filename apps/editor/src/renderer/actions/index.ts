@@ -275,6 +275,7 @@ import {
   ChatFindPreviousAction,
   ChatFindCloseAction,
 } from './agentActions.js'
+import { agentContextActions } from './agentContextActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -575,3 +576,4 @@ registerAction2(ChatFindAction)
 registerAction2(ChatFindNextAction)
 registerAction2(ChatFindPreviousAction)
 registerAction2(ChatFindCloseAction)
+for (const action of agentContextActions) registerAction2(action)

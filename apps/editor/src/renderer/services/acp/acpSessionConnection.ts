@@ -26,6 +26,7 @@
 
 import type { IAcpClientConnection } from './acpClientService.js'
 import type { PromptMention } from './promptMentions.js'
+import type { SelectionContext } from './promptContext.js'
 import { AcpConnectionError } from './acpErrors.js'
 
 export type AcpConnectionPhase = 'connecting' | 'connected' | 'failed' | 'closed'
@@ -38,6 +39,7 @@ export type AcpConnectionPhase = 'connecting' | 'connected' | 'failed' | 'closed
 export interface QueuedPrompt {
   readonly text: string
   readonly mentions: readonly PromptMention[]
+  readonly contexts: readonly SelectionContext[]
   readonly resolve: () => void
   readonly reject: (err: Error) => void
 }
@@ -82,9 +84,13 @@ export class AcpSessionConnection {
    * promise resolves when the prompt is eventually dispatched (on `open`) and
    * rejects if the connection fails / closes first.
    */
-  enqueue(text: string, mentions: readonly PromptMention[]): Promise<void> {
+  enqueue(
+    text: string,
+    mentions: readonly PromptMention[],
+    contexts: readonly SelectionContext[],
+  ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this._queued.push({ text, mentions, resolve, reject })
+      this._queued.push({ text, mentions, contexts, resolve, reject })
     })
   }
 

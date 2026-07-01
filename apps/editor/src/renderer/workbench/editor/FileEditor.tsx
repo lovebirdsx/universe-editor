@@ -20,6 +20,7 @@ import {
   IContextKeyService,
   IEditorGroupsService,
   IFocusStackService,
+  localize,
   markAsSingleton,
   PartId,
 } from '@universe-editor/platform'
@@ -165,6 +166,20 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     ed.addCommand(monacoNs.KeyCode.F1, () => {
       void commandService.executeCommand('workbench.action.showCommands')
     })
+    // Surface "Add Selection to Agent Chat" in Monaco's native context menu.
+    // Monaco's right-click menu reads its own action registry, not our
+    // MenuRegistry, so we mirror the command as an editor action here. Gated on a
+    // non-empty selection so it only shows when there's something to attach.
+    const addSelectionAction = ed.addAction({
+      id: 'workbench.action.agent.addSelectionToChat',
+      label: localize('action.agent.addSelectionToChat', 'Add Selection to Agent Chat'),
+      contextMenuGroupId: '1_agent',
+      contextMenuOrder: 1,
+      precondition: 'editorHasSelection',
+      run: () => {
+        void commandService.executeCommand('workbench.action.agent.addSelectionToChat')
+      },
+    })
     // Bridge Monaco widget focus → `editorFocus` contextKey, so the global ESC
     // binding (FocusActiveEditorGroupAction) bows out while Monaco has focus and
     // Monaco's own ESC handling (cancel multi-cursor, close find widget, dismiss
@@ -232,6 +247,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       inlineSuggestSub.dispose()
       inlineEditSub.dispose()
       columnSelectionSub.dispose()
+      addSelectionAction.dispose()
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null
