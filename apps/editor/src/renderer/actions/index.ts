@@ -128,7 +128,11 @@ import {
   OpenWithDefaultAppAction,
   RefreshExplorerAction,
 } from './fileOpenActions.js'
-import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from './revealActions.js'
+import {
+  RevealActiveFileInExplorerAction,
+  RevealInExplorerAction,
+  RevealInOSExplorerAction,
+} from './revealActions.js'
 import {
   CopyFileNameAction,
   CopyFilePathAction,
@@ -388,6 +392,7 @@ registerAction2(RenameFileAction)
 registerAction2(DeleteFileAction)
 registerAction2(OpenWithDefaultAppAction)
 registerAction2(RefreshExplorerAction)
+registerAction2(RevealInExplorerAction)
 registerAction2(RevealActiveFileInExplorerAction)
 registerAction2(RevealInOSExplorerAction)
 registerAction2(CopyFileNameAction)

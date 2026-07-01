@@ -134,6 +134,7 @@ export const EN_US_MESSAGES: MessageMap = {
   'reload.leakDetected.message': 'Detected {count} un-disposed Disposable(s)',
   'action.replace.title': 'Replace',
   'action.revealActiveFileInExplorer.title': 'Reveal Active File in Explorer',
+  'action.revealInExplorer.title': 'Reveal in Explorer View',
   'action.save.title': 'Save',
   'action.saveAs.title': 'Save As…',
   'action.showAllCommands.title': 'Show All Commands',

@@ -307,6 +307,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'action.resetConfigLocation.title': '将配置目录重置为默认值',
   'action.resetViewLocations.title': '重置视图位置',
   'action.revealActiveFileInExplorer.title': '在资源管理器中定位当前文件',
+  'action.revealInExplorer.title': '在资源管理器视图中显示',
   'action.revealDeclaration.title': '转到声明',
   'action.revealDefinition.title': '转到定义',
   'action.revealDefinitionAside.title': '在侧边打开定义',

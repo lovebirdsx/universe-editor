@@ -25,7 +25,11 @@ import {
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
-import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from '../revealActions.js'
+import {
+  RevealActiveFileInExplorerAction,
+  RevealInExplorerAction,
+  RevealInOSExplorerAction,
+} from '../revealActions.js'
 import {
   IExplorerTreeService,
   type ExplorerTreeService,
@@ -121,11 +125,67 @@ function run(inst: InstantiationService, id: string, args?: unknown): Promise<un
 
 const disposables: Array<{ dispose(): void }> = []
 beforeEach(() => {
+  disposables.push(registerAction2(RevealInExplorerAction))
   disposables.push(registerAction2(RevealActiveFileInExplorerAction))
   disposables.push(registerAction2(RevealInOSExplorerAction))
 })
 afterEach(() => {
   while (disposables.length > 0) disposables.pop()?.dispose()
+})
+
+describe('RevealInExplorerAction', () => {
+  it('uses the VSCode-compatible command id', () => {
+    expect(RevealInExplorerAction.ID).toBe('revealInExplorer')
+  })
+
+  it('reveals a direct URI argument', async () => {
+    const target = URI.file('/ws/src/from-uri.ts')
+    const h = makeHarness()
+
+    await run(h.inst, RevealInExplorerAction.ID, target.toJSON())
+
+    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.tree.revealed).toEqual([target.toString()])
+  })
+
+  it('reveals a context resource argument', async () => {
+    const target = URI.file('/ws/src/from-menu.ts')
+    const h = makeHarness()
+
+    await run(h.inst, RevealInExplorerAction.ID, { resource: target.toJSON() })
+
+    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.tree.revealed).toEqual([target.toString()])
+  })
+
+  it('reveals a source-control resourceUri path', async () => {
+    const target = URI.file('/ws/src/from-scm.ts')
+    const h = makeHarness()
+
+    await run(h.inst, RevealInExplorerAction.ID, { resourceUri: target.fsPath })
+
+    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.tree.revealed).toEqual([target.toString()])
+  })
+
+  it('falls back to the active file editor when invoked without an argument', async () => {
+    const target = URI.file('/ws/src/active.ts')
+    const h = makeHarness(makeFileInput(target))
+
+    await run(h.inst, RevealInExplorerAction.ID)
+
+    expect(h.views.openedContainers).toEqual(['workbench.view.explorer'])
+    expect(h.tree.revealed).toEqual([target.toString()])
+  })
+
+  it('does nothing for non-file resources', async () => {
+    const h = makeHarness()
+
+    await run(h.inst, RevealInExplorerAction.ID, URI.parse('untitled:Untitled-1').toJSON())
+
+    expect(h.views.openedContainers).toHaveLength(0)
+    expect(h.tree.revealed).toHaveLength(0)
+  })
 })
 
 describe('RevealActiveFileInExplorerAction', () => {

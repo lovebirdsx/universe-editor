@@ -57,4 +57,17 @@ describe('MainThreadCommands', () => {
     // Clean up the global CommandsRegistry so other tests aren't polluted.
     root.dispose()
   })
+
+  it('allows VSCode-compatible built-in commands from the host', async () => {
+    const executeCommand = vi.fn().mockResolvedValue('ok')
+    const mt = new MainThreadCommands(fakeExtHost().service, {
+      executeCommand,
+    } as unknown as ICommandService)
+
+    await expect(
+      mt.$executeCommand('revealInExplorer', [{ resourceUri: '/ws/a.ts' }]),
+    ).resolves.toBe('ok')
+
+    expect(executeCommand).toHaveBeenCalledWith('revealInExplorer', { resourceUri: '/ws/a.ts' })
+  })
 })

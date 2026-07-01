@@ -18,11 +18,17 @@ import {
 import { type IExtHostCommands, type IMainThreadCommands } from '@universe-editor/extensions-common'
 
 /**
- * Commands the host is allowed to invoke back in the renderer. Restricted to the
- * `_workbench.` internal namespace so host→renderer execution can never re-enter
- * an extension-contributed command (which would route back to the host and loop).
+ * Commands the host is allowed to invoke back in the renderer. The broad lane is
+ * restricted to the `_workbench.` internal namespace; VSCode-compatible built-in
+ * command IDs are added one by one so host→renderer execution cannot re-enter an
+ * extension-contributed command and loop.
  */
 const HOST_INVOKABLE_PREFIX = '_workbench.'
+const HOST_INVOKABLE_BUILT_INS = new Set(['revealInExplorer'])
+
+function isHostInvokableCommand(id: string): boolean {
+  return id.startsWith(HOST_INVOKABLE_PREFIX) || HOST_INVOKABLE_BUILT_INS.has(id)
+}
 
 /** Notifies the owner which connection owns a runtime-registered command (for routing). */
 export interface CommandOwnershipLedger {
@@ -62,10 +68,10 @@ export class MainThreadCommands extends Disposable implements IMainThreadCommand
   }
 
   $executeCommand(id: string, args: unknown[]): Promise<unknown> {
-    if (!id.startsWith(HOST_INVOKABLE_PREFIX)) {
+    if (!isHostInvokableCommand(id)) {
       return Promise.reject(
         new Error(
-          `extension host may only execute ${HOST_INVOKABLE_PREFIX}* commands, not "${id}"`,
+          `extension host may only execute ${HOST_INVOKABLE_PREFIX}* commands or allowlisted built-ins, not "${id}"`,
         ),
       )
     }
