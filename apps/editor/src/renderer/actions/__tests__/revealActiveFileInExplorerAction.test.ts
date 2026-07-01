@@ -9,6 +9,7 @@ import {
   IEditorGroupsService,
   IHostService,
   IViewsService,
+  IWorkspaceService,
   InstantiationService,
   ServiceCollection,
   URI,
@@ -21,6 +22,8 @@ import {
   type IHostService as IHostServiceType,
   type IObservable,
   type IViewsService as IViewsServiceType,
+  type IWorkspace,
+  type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
 import { RevealActiveFileInExplorerAction, RevealInOSExplorerAction } from '../revealActions.js'
 import {
@@ -77,7 +80,25 @@ class FakeHost {
   }
 }
 
-function makeHarness(active?: EditorInput, selectedResource?: URI) {
+function makeWorkspaceService(folder?: URI): IWorkspaceServiceType {
+  const current: IWorkspace | null = folder ? { folder, name: 'workspace' } : null
+  const workspaceEmitter = new Emitter<IWorkspace | null>()
+  const recentEmitter = new Emitter<readonly []>()
+  return {
+    _serviceBrand: undefined,
+    current,
+    recent: [],
+    onDidChangeWorkspace: workspaceEmitter.event,
+    onDidChangeRecent: recentEmitter.event,
+    whenReady: Promise.resolve(),
+    async openFolder() {},
+    async closeFolder() {},
+    async removeRecent() {},
+    async clearRecent() {},
+  } as IWorkspaceServiceType
+}
+
+function makeHarness(active?: EditorInput, selectedResource?: URI, workspaceFolder?: URI) {
   const views = new FakeViews()
   const tree = new FakeExplorerTree()
   tree.selectedResource = selectedResource ?? null
@@ -87,6 +108,7 @@ function makeHarness(active?: EditorInput, selectedResource?: URI) {
   services.set(IViewsService, views)
   services.set(IExplorerTreeService, tree as unknown as ExplorerTreeService)
   services.set(IHostService, host as unknown as IHostServiceType)
+  services.set(IWorkspaceService, makeWorkspaceService(workspaceFolder))
   const inst = new InstantiationService(services)
   return { inst, views, tree, host }
 }
@@ -168,5 +190,14 @@ describe('RevealInOSExplorerAction', () => {
     await run(h.inst, RevealInOSExplorerAction.ID)
 
     expect(h.host.shownItems).toEqual([selected.fsPath])
+  })
+
+  it('falls back to the workspace folder when no file is selected', async () => {
+    const workspace = URI.file('/ws')
+    const h = makeHarness(undefined, undefined, workspace)
+
+    await run(h.inst, RevealInOSExplorerAction.ID)
+
+    expect(h.host.shownItems).toEqual([workspace.fsPath])
   })
 })
