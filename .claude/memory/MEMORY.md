@@ -19,6 +19,7 @@
 - [markdown 预览 vimium 式键盘导航](markdown-preview-link-hints.md) — 线②预览:f/F link hints(BFS 标签算法+capture 键盘+合成 click 复用 onClick)+滚动/前进后退,controller+contextKey+Action2 对称结构
 - [Codex 对齐 Claude skills/memory](codex-claude-skills-memory-parity.md) — codex-acp fork 在 adapter 层读 .claude/skills(extraRoots)+自动注入 .claude/memory/MEMORY.md(developerInstructions);手动开关靠每 skill 静态 openai.yaml + sync-codex-skill-policy.mjs;3 个测试 Windows 反斜杠失败 CI 过
 - [Codex AI 标题跨工作区持久化](codex-ai-title-persistence-parity.md) — codex 非当前工作区 session 标题回退成首条用户消息;根因 fork 缺 set_session_title ext-method,AI 标题只留工作区本地;对称补 thread/name/set 桥接;含 eslint hook 污染 vendor 的运维坑
+- [外部 session AI 标题跨 bucket 回填](foreign-session-ai-title-crossbucket-backfill.md) — 跨 worktree 窗口看外部 session 标题卡首条消息(渲染层,非 agent 侧);hydrate 每 cwd 只跑一次+JSONL 删后 session/list 修不回;复用 useForeignSessionStats 从归属 bucket 回填 title(仅 aiTitle 才覆盖)+reconcile 写回(title-only 不打 aiTitle)
 - [dirty-diff 内联 peek](dirty-diff-inline-peek-feature.md) — 点击修改色条弹内联 diff(内嵌真 Monaco diff editor:双侧行号+语法高亮+内部滚动;Esc关闭/拖动调高/出视口才滚入;导航+Revert+Stage+打开完整diff);overlay-widget+空view-zone占位(手写DOM diff已删勿回退);Stage 走 git diff -U0→selectHunkPatch→apply --cached(stdin);套路见 skill dirty-diff-inline-peek
 
 ## 性能 / 疑难根因

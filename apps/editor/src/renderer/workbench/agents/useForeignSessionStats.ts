@@ -26,6 +26,17 @@ export interface ForeignSessionStat {
   readonly usage?: AcpSessionHistoryEntry['usage']
   readonly configOptions?: AcpSessionHistoryEntry['configOptions']
   readonly configLabels?: AcpSessionHistoryEntry['configLabels']
+  /**
+   * Authoritative title read from the owning worktree's own bucket, surfaced
+   * ONLY when that entry carries `aiTitle: true`. The current-workspace copy of
+   * a foreign session is a hydrate cache built from `session/list`'s `summary`;
+   * if the owning workspace set an AI title after the (once-per-cwd) hydrate
+   * already ran — or the session's JSONL was later deleted so `session/list`
+   * can no longer report it — that cache stays frozen on the first user message.
+   * Reading the owning bucket recovers the real title. Left undefined when the
+   * owning entry has no AI title (nothing authoritative to prefer).
+   */
+  readonly title?: string
 }
 
 interface PersistedHistoryShape {
@@ -86,12 +97,16 @@ export function useForeignSessionStats(
               ...(e.usage !== undefined ? { usage: e.usage } : {}),
               ...(e.configOptions !== undefined ? { configOptions: e.configOptions } : {}),
               ...(e.configLabels !== undefined ? { configLabels: e.configLabels } : {}),
+              // Only an AI-generated title in the owning bucket is authoritative
+              // enough to override the current bucket's hydrate cache.
+              ...(e.aiTitle === true && e.title.length > 0 ? { title: e.title } : {}),
             }
             if (
               stat.accumulatedRunningMs !== undefined ||
               stat.usage !== undefined ||
               stat.configOptions !== undefined ||
-              stat.configLabels !== undefined
+              stat.configLabels !== undefined ||
+              stat.title !== undefined
             ) {
               next.set(e.id, stat)
             }

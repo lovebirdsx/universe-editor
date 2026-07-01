@@ -116,6 +116,38 @@ describe('useForeignSessionStats', () => {
     expect(stat?.configOptions?.['effort']).toBe('high')
   })
 
+  it('backfills an AI-generated title from the owning worktree bucket', async () => {
+    const { storage } = makeStorage({
+      [FOREIGN_CWD]: [
+        entry({ id: 's1', cwd: FOREIGN_CWD, title: '合并提交到 main 分支', aiTitle: true }),
+      ],
+    })
+    // Current bucket only has the stale first-message title; the owning bucket
+    // carries the authoritative AI title.
+    const captured = renderStats(
+      storage,
+      [entry({ id: 's1', cwd: FOREIGN_CWD, title: '帮我合并 abc 到 main' })],
+      CURRENT_CWD,
+    )
+    await waitFor(() => expect(captured.value?.get('s1')?.title).toBeDefined())
+    expect(captured.value!.get('s1')?.title).toBe('合并提交到 main 分支')
+  })
+
+  it('does NOT backfill a title that is not AI-generated', async () => {
+    const { storage } = makeStorage({
+      [FOREIGN_CWD]: [
+        // Owning bucket title is just the first prompt (aiTitle unset) — not
+        // authoritative, so we must not surface it as an override.
+        entry({ id: 's1', cwd: FOREIGN_CWD, title: 'first prompt text' }),
+      ],
+    })
+    const captured = renderStats(storage, [entry({ id: 's1', cwd: FOREIGN_CWD })], CURRENT_CWD)
+    // Give the async read a chance to resolve, then assert no title override.
+    await waitFor(() => expect(captured.value).toBeDefined())
+    // The stat map may be empty (no other fields either) — the key point is no title.
+    expect(captured.value!.get('s1')?.title).toBeUndefined()
+  })
+
   it('does not read the current workspace bucket', async () => {
     const { storage, calls } = makeStorage({
       [FOREIGN_CWD]: [entry({ id: 'f', cwd: FOREIGN_CWD, accumulatedRunningMs: 10 })],

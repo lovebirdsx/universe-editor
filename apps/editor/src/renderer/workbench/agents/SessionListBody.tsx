@@ -231,7 +231,7 @@ function SessionRow({
       <div className={styles['sessionRowTitle']}>
         <span className={styles['sessionRowLabelLine']}>
           <AgentIcon agentId={entry.agentId} size={14} className={styles['sessionRowAgentIcon']} />
-          <span className={styles['sessionRowLabel']}>{entry.title}</span>
+          <span className={styles['sessionRowLabel']}>{foreignStat?.title ?? entry.title}</span>
           {isForeign ? (
             <GitBranch
               size={12}
@@ -334,6 +334,23 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   // Foreign (other-worktree) rows lose their duration/cost in the hydrate merge;
   // backfill them from each owning worktree's own storage bucket.
   const foreignStats = useForeignSessionStats(filtered, currentCwd, platform)
+
+  // Reconcile authoritative foreign titles back into this bucket. A foreign
+  // session's title in the current bucket is only a hydrate cache; if the owning
+  // workspace set an AI title after our once-per-cwd hydrate ran (or the session
+  // JSONL was deleted so `session/list` can no longer report it), that cache is
+  // stuck on the first user message. `useForeignSessionStats` reads the real
+  // title from the owning bucket; write it back (title-only — never flag
+  // `aiTitle`, so a later hydrate can still update it) so the tab label + window
+  // title, which read `history.entries`, self-heal too.
+  useEffect(() => {
+    for (const e of entries) {
+      const authoritative = foreignStats.get(e.id)?.title
+      if (authoritative !== undefined && authoritative !== e.title) {
+        history.updateInfo(e.id, { title: authoritative })
+      }
+    }
+  }, [entries, foreignStats, history])
 
   const onSearchKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Escape') {
