@@ -8,6 +8,7 @@
  *   - isInDiffEditor / textCompareEditorVisible                  (active editor is a diff)
  *   - editorFocus                                                (Monaco widget DOM focus)
  *   - editorTextFocus                                            (Monaco text input focus)
+ *   - editorColumnSelection                                      (Monaco column-selection mode)
  *   - editorLangId / editorReadonly                              (active editor attributes, monaco parity)
  *   - editorHasDefinitionProvider                               (definition provider for active lang)
  *   - editorHasImplementationProvider                           (impl provider for active lang)
@@ -175,6 +176,10 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
     // editorFocus which covers any monaco widget. Written by FileEditor through
     // onDidFocus/BlurEditorText.
     contextKeyService.createKey<boolean>('editorTextFocus', false)
+
+    // True when the active Monaco editor has editor.columnSelection enabled.
+    // Written by FileEditor from Monaco's live editor option.
+    contextKeyService.createKey<boolean>('editorColumnSelection', false)
 
     // True while Monaco's completion (suggest) widget is open. Monaco keeps this
     // on its own scoped context-key service; FileEditor mirrors it here so global

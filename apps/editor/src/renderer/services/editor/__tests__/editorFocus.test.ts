@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { ContextKeyService, Emitter, EditorInput, URI } from '@universe-editor/platform'
-import { focusEditorInput, syncEditorFocusContext } from '../editorFocus.js'
+import {
+  bridgeEditorColumnSelection,
+  focusEditorInput,
+  syncEditorFocusContext,
+} from '../editorFocus.js'
 import { FileEditorRegistry } from '../FileEditorRegistry.js'
 import { DiffEditorRegistry } from '../DiffEditorRegistry.js'
 import { MarkdownPreviewInput } from '../MarkdownPreviewInput.js'
@@ -8,6 +12,7 @@ import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
 } from '../MarkdownPreviewRegistry.js'
+import type { monaco } from '../../../workbench/editor/monaco/MonacoLoader.js'
 
 class NonMonacoInput extends EditorInput {
   get typeId() {
@@ -139,6 +144,39 @@ describe('syncEditorFocusContext — editorTextFocus reset', () => {
     // Still focused in a Monaco editor: the text-vs-widget distinction stays
     // Monaco's job, so we must not clobber it here.
     expect(cks.get('editorTextFocus')).toBe(true)
+  })
+})
+
+describe('bridgeEditorColumnSelection', () => {
+  it('mirrors Monaco columnSelection option into the global context key', () => {
+    const cks = new ContextKeyService()
+    const option = 28
+    const onDidChangeConfiguration = new Emitter<{ hasChanged(id: number): boolean }>()
+    let enabled = false
+    const editor = {
+      getOption(id: number) {
+        expect(id).toBe(option)
+        return enabled
+      },
+      onDidChangeConfiguration: onDidChangeConfiguration.event,
+    } as unknown as monaco.editor.IStandaloneCodeEditor
+    const monacoNs = {
+      editor: { EditorOption: { columnSelection: option } },
+    } as unknown as typeof monaco
+
+    const disposable = bridgeEditorColumnSelection(editor, monacoNs, cks)
+    expect(cks.get('editorColumnSelection')).toBe(false)
+
+    enabled = true
+    onDidChangeConfiguration.fire({ hasChanged: (id) => id === option })
+    expect(cks.get('editorColumnSelection')).toBe(true)
+
+    enabled = false
+    onDidChangeConfiguration.fire({ hasChanged: () => false })
+    expect(cks.get('editorColumnSelection')).toBe(true)
+
+    disposable.dispose()
+    expect(cks.get('editorColumnSelection')).toBe(false)
   })
 })
 

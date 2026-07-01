@@ -40,6 +40,7 @@ import {
   bridgeInlineSuggestionVisible,
   bridgeInlineEditState,
   bridgeSuggestWidgetVisible,
+  bridgeEditorColumnSelection,
   focusStandaloneEditor,
   syncEditorFocusContext,
 } from '../../services/editor/editorFocus.js'
@@ -219,6 +220,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // Mirror inline-edit (Next Edit Suggestion) state for the Tab jump/accept
     // arbitration, for the same editContext reason.
     const inlineEditSub = bridgeInlineEditState(ed, contextKeyService)
+    const columnSelectionSub = bridgeEditorColumnSelection(ed, monacoNs, contextKeyService)
     editorRef.current = ed
     return () => {
       focusSub.dispose()
@@ -229,6 +231,7 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       suggestSub.dispose()
       inlineSuggestSub.dispose()
       inlineEditSub.dispose()
+      columnSelectionSub.dispose()
       ed.dispose()
       queueMicrotask(() => syncEditorFocusContext(contextKeyService))
       editorRef.current = null

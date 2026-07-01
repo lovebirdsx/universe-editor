@@ -27,6 +27,8 @@ const KC_KeyZ = 56
 const KC_KeyY = 55
 const KC_KeyA = 31
 const KC_F1 = 59
+const KC_UpArrow = 16
+const KC_DownArrow = 18
 
 type NlsGlobals = { __MONACO_NLS__?: Record<string, string> }
 
@@ -149,6 +151,90 @@ describe('bridgeMonacoActionsForTests', () => {
     expect(getMonacoDefaultKeybinding('undo')).toEqual({ key: 'ctrl+z' })
     expect(getMonacoDefaultKeybinding('redo')).toEqual({ key: 'ctrl+y' })
     expect(getMonacoDefaultKeybinding('editor.action.selectAll')).toEqual({ key: 'ctrl+a' })
+  })
+
+  it('registers cursor column selection core commands with VSCode default keys', () => {
+    const coreCommands: CoreCommand[] = [
+      {
+        id: 'cursorColumnSelectUp',
+        label: 'Column Select Up',
+        keybindings: [
+          { primary: CtrlCmd | Shift | Alt | KC_UpArrow, when: 'editorTextFocus' },
+          {
+            primary: Shift | KC_UpArrow,
+            when: 'editorTextFocus && editorColumnSelection',
+          },
+        ],
+      },
+      {
+        id: 'cursorColumnSelectDown',
+        label: 'Column Select Down',
+        keybindings: [
+          { primary: CtrlCmd | Shift | Alt | KC_DownArrow, when: 'editorTextFocus' },
+          {
+            primary: Shift | KC_DownArrow,
+            when: 'editorTextFocus && editorColumnSelection',
+          },
+        ],
+      },
+    ]
+
+    registered = bridgeMonacoActionsForTests(makeRegistry([]), coreCommands)
+
+    const cmds = CommandsRegistry.getCommands()
+    expect(cmds.get('cursorColumnSelectUp')?.metadata).toEqual({
+      description: 'Column Select Up',
+      category: 'Editor',
+    })
+    expect(cmds.get('cursorColumnSelectDown')?.metadata).toEqual({
+      description: 'Column Select Down',
+      category: 'Editor',
+    })
+    expect(getMonacoDefaultKeybinding('cursorColumnSelectUp')).toEqual({
+      key: 'alt+ctrl+shift+arrowup',
+    })
+    expect(getMonacoDefaultKeybinding('cursorColumnSelectDown')).toEqual({
+      key: 'alt+ctrl+shift+arrowdown',
+    })
+
+    const bindings = KeybindingsRegistry.getAllKeybindings()
+      .filter(
+        (kb) => kb.command === 'cursorColumnSelectUp' || kb.command === 'cursorColumnSelectDown',
+      )
+      .map((kb) => ({
+        command: kb.command,
+        key: kb.key,
+        when: typeof kb.when === 'string' ? kb.when : kb.when?.serialize(),
+        weight: kb.weight,
+      }))
+      .sort((a, b) => `${a.command}:${a.key}`.localeCompare(`${b.command}:${b.key}`))
+
+    expect(bindings).toEqual([
+      {
+        command: 'cursorColumnSelectDown',
+        key: 'alt+ctrl+shift+down',
+        when: 'editorTextFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      },
+      {
+        command: 'cursorColumnSelectDown',
+        key: 'shift+down',
+        when: 'editorColumnSelection && editorTextFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      },
+      {
+        command: 'cursorColumnSelectUp',
+        key: 'alt+ctrl+shift+up',
+        when: 'editorTextFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      },
+      {
+        command: 'cursorColumnSelectUp',
+        key: 'shift+up',
+        when: 'editorColumnSelection && editorTextFocus',
+        weight: KeybindingWeight.MonacoDefault,
+      },
+    ])
   })
 
   it('falls back to English when NLS table is missing the key', () => {

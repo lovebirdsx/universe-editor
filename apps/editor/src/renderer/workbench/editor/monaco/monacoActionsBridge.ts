@@ -2,8 +2,9 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  monacoActionsBridge — at MonacoLoader bootstrap time, enumerate every
  *  EditorAction registered with monaco's internal EditorContributionRegistry
- *  (find, replace, formatDocument, rename, …), plus a small hand-listed set
- *  of core editor commands (undo / redo / selectAll) that monaco registers
+ *  (find, replace, formatDocument, rename, …), plus a hand-listed set
+ *  of core editor commands (undo / redo / selectAll / cursorColumnSelect*)
+ *  that monaco registers
  *  outside that registry, and mirror them into our own CommandsRegistry so
  *  the Keyboard Shortcuts editor can list and rebind them.
  *
@@ -56,14 +57,23 @@ export interface IMonacoEditorExtensionsRegistry {
   getEditorActions(): readonly IMonacoEditorAction[]
 }
 
+export interface CoreCommandKeybinding {
+  /** Numeric KeyMod | KeyCode encoding, same form the decoder accepts. */
+  primary: number
+  /** Registry when-clause. Defaults to `editorFocus`, matching mirrored EditorActions. */
+  when?: string
+}
+
 export interface CoreCommand {
   id: string
   /** English fallback shown when __MONACO_NLS__ has no translation. */
   label: string
   /** NLS key monaco itself uses for this command's command-palette title. */
-  nlsKey: string
-  /** Numeric KeyMod | KeyCode encoding, same form the decoder accepts. */
-  primary: number
+  nlsKey?: string
+  /** Back-compat shorthand for a single default keybinding. */
+  primary?: number
+  /** Default keybindings to mirror into the registry. */
+  keybindings?: readonly CoreCommandKeybinding[]
 }
 
 /**
@@ -91,7 +101,11 @@ function strokeToRegistryKey(stroke: string): string {
  * MonacoDefault tier, gated on `editorFocus` so it only competes while an
  * editor widget holds focus.
  */
-function registerMonacoDefault(commandId: string, decoded: DecodedKeybinding): IDisposable {
+function registerMonacoDefault(
+  commandId: string,
+  decoded: DecodedKeybinding,
+  when = 'editorFocus',
+): IDisposable {
   if (decoded.chords) {
     const chords: readonly [string, string] = [
       strokeToRegistryKey(decoded.chords[0]),
@@ -100,14 +114,14 @@ function registerMonacoDefault(commandId: string, decoded: DecodedKeybinding): I
     return KeybindingsRegistry.registerKeybinding({
       chords,
       command: commandId,
-      when: 'editorFocus',
+      when,
       weight: KeybindingWeight.MonacoDefault,
     })
   }
   return KeybindingsRegistry.registerKeybinding({
     key: strokeToRegistryKey(decoded.key!),
     command: commandId,
-    when: 'editorFocus',
+    when,
     weight: KeybindingWeight.MonacoDefault,
   })
 }
@@ -147,12 +161,22 @@ function allPrimariesOf(kbOpts: IMonacoEditorAction['_kbOpts']): number[] {
   return out
 }
 
+function coreKeybindingsOf(core: CoreCommand): readonly CoreCommandKeybinding[] {
+  if (core.keybindings) return core.keybindings
+  return typeof core.primary === 'number' ? [{ primary: core.primary }] : []
+}
+
 // Core editor commands Monaco registers outside the EditorAction registry, so
 // the loop above never sees them. Mirror them by hand so undo/redo/select-all
-// show up in our CommandsRegistry (Edit menu, Keyboard Shortcuts editor) and
-// their default keys participate in registry arbitration like every other
-// Monaco default.
+// and cursor column selection show up in our CommandsRegistry (Edit menu,
+// Keyboard Shortcuts editor) and their default keys participate in registry
+// arbitration like every other Monaco default.
 const ctrl = (token: string): number => MASK_CTRLCMD | TOKEN_TO_KEYCODE[token]!
+const KEYMOD_SHIFT = 0x0400
+const KEYMOD_ALT = 0x0200
+const shift = (token: string): number => KEYMOD_SHIFT | TOKEN_TO_KEYCODE[token]!
+const ctrlAltShift = (token: string): number =>
+  MASK_CTRLCMD | KEYMOD_ALT | KEYMOD_SHIFT | TOKEN_TO_KEYCODE[token]!
 
 const CORE_COMMANDS: readonly CoreCommand[] = [
   { id: 'undo', label: 'Undo', nlsKey: 'undo', primary: ctrl('z') },
@@ -162,6 +186,22 @@ const CORE_COMMANDS: readonly CoreCommand[] = [
     label: 'Select All',
     nlsKey: 'editor.action.selectAll',
     primary: ctrl('a'),
+  },
+  {
+    id: 'cursorColumnSelectUp',
+    label: 'Column Select Up',
+    keybindings: [
+      { primary: ctrlAltShift('arrowup'), when: 'editorTextFocus' },
+      { primary: shift('arrowup'), when: 'editorTextFocus && editorColumnSelection' },
+    ],
+  },
+  {
+    id: 'cursorColumnSelectDown',
+    label: 'Column Select Down',
+    keybindings: [
+      { primary: ctrlAltShift('arrowdown'), when: 'editorTextFocus' },
+      { primary: shift('arrowdown'), when: 'editorTextFocus && editorColumnSelection' },
+    ],
   },
 ]
 
@@ -187,11 +227,14 @@ export function bridgeMonacoActionsForTests(
   const seenIds = new Set<string>()
   const installedDefaults: string[] = []
 
-  const recordDefaults = (commandId: string, primaries: readonly number[]): void => {
-    for (const primary of primaries) {
+  const recordDefaults = (
+    commandId: string,
+    keybindings: readonly CoreCommandKeybinding[],
+  ): void => {
+    for (const { primary, when } of keybindings) {
       const decoded = decodeMonacoKeybinding(primary)
       if (!decoded) continue
-      disposables.push(registerMonacoDefault(commandId, decoded))
+      disposables.push(registerMonacoDefault(commandId, decoded, when))
       if (!_defaults.has(commandId)) {
         _defaults.set(commandId, decoded)
         installedDefaults.push(commandId)
@@ -211,13 +254,16 @@ export function bridgeMonacoActionsForTests(
       }),
     )
 
-    recordDefaults(action.id, allPrimariesOf(action._kbOpts))
+    recordDefaults(
+      action.id,
+      allPrimariesOf(action._kbOpts).map((primary) => ({ primary })),
+    )
   }
 
   for (const core of coreCommands) {
     if (seenIds.has(core.id)) continue
     seenIds.add(core.id)
-    const label = nlsLookup(core.nlsKey, core.label)
+    const label = core.nlsKey ? nlsLookup(core.nlsKey, core.label) : core.label
     disposables.push(
       CommandsRegistry.registerCommand({
         id: core.id,
@@ -225,7 +271,7 @@ export function bridgeMonacoActionsForTests(
         handler: makeHandler(core.id),
       }),
     )
-    recordDefaults(core.id, [core.primary])
+    recordDefaults(core.id, coreKeybindingsOf(core))
   }
 
   disposables.push({

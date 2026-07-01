@@ -165,6 +165,25 @@ export function bridgeInlineEditState(
   }
 }
 
+export function bridgeEditorColumnSelection(
+  editor: monaco.editor.IStandaloneCodeEditor,
+  monacoNs: typeof monaco,
+  contextKeyService: IContextKeyService,
+): IDisposable {
+  const option = monacoNs.editor.EditorOption.columnSelection
+  const sync = () => contextKeyService.set('editorColumnSelection', editor.getOption(option))
+  sync()
+  const sub = editor.onDidChangeConfiguration((event) => {
+    if (event.hasChanged(option)) sync()
+  })
+  return {
+    dispose: () => {
+      sub.dispose()
+      contextKeyService.set('editorColumnSelection', false)
+    },
+  }
+}
+
 export function focusEditorInput(
   input: EditorInput,
   contextKeyService: IContextKeyService,
