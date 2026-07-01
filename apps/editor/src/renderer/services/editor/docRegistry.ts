@@ -3,7 +3,7 @@
  *  docRegistry — loads the user-facing guide documents from docs/user/<locale>/ via
  *  Vite's import.meta.glob (eager, ?raw). No runtime disk read; all content is
  *  bundled at build time. DocId is the locale-relative path without the .md suffix
- *  (e.g. "getting-started/editor-guide", "index").
+ *  (e.g. "getting-started/interface-tour", "index").
  *--------------------------------------------------------------------------------------------*/
 
 import type { SupportedLocale } from '../../../shared/i18n/availableLocales.js'

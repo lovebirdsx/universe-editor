@@ -18,8 +18,10 @@
 
 第一次使用？从这里开始，5 分钟跑通第一个项目。
 
-- [编辑器导览](./getting-started/editor-guide.md)
-- [AI Agent 快速入门](./getting-started/agent-guide.md)
+- [下载与安装](./getting-started/installation.md)
+- [界面导览](./getting-started/interface-tour.md)
+- [打开第一个项目](./getting-started/first-project.md)
+- [命令面板](./getting-started/command-palette.md)
 
 ## AI Agent
 
@@ -90,5 +92,5 @@ Git 集成：提交、分支、GitGraph、Blame、冲突解决。
 
 ## 下一步
 
-- [快速上手：编辑器导览](./getting-started/editor-guide.md)
-- [快速上手：AI Agent](./getting-started/agent-guide.md)
+- [快速上手：下载与安装](./getting-started/installation.md)
+- [AI Agent：Agent 是什么，能帮你做什么](./ai-agent/overview.md)

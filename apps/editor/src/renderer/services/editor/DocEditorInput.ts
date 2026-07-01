@@ -2,7 +2,7 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *  DocEditorInput — a virtual EditorInput that renders one of the built-in guide
  *  documents (see docRegistry) as formatted markdown. Carries a path-style `docId`
- *  (e.g. "getting-started/editor-guide"); the title is extracted from the document's
+ *  (e.g. "getting-started/interface-tour"); the title is extracted from the document's
  *  first H1 heading.
  *--------------------------------------------------------------------------------------------*/
 

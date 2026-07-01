@@ -102,7 +102,7 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
               type="button"
               className={styles['welcome-doc-item']}
               onClick={() =>
-                editorService.openEditor(new DocEditorInput('getting-started/editor-guide'))
+                editorService.openEditor(new DocEditorInput('getting-started/interface-tour'))
               }
             >
               {localize('welcome.editorGuide', 'Editor Guide')}
@@ -112,9 +112,7 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
             <button
               type="button"
               className={styles['welcome-doc-item']}
-              onClick={() =>
-                editorService.openEditor(new DocEditorInput('getting-started/agent-guide'))
-              }
+              onClick={() => editorService.openEditor(new DocEditorInput('ai-agent/overview'))}
             >
               {localize('welcome.agentGuide', 'Agent Guide')}
             </button>
