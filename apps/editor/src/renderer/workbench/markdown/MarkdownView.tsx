@@ -146,26 +146,6 @@ const AnchorScrollContext = createContext<(id: string) => void>(() => {})
  */
 export const DocLinkContext = createContext<((href: string) => void) | undefined>(undefined)
 
-/** Quote an attribute value for a querySelector, falling back to a manual escape. */
-function cssEscape(value: string): string {
-  const esc = (globalThis.CSS as { escape?: (v: string) => string } | undefined)?.escape
-  return esc ? esc(value) : value.replace(/["\\]/g, '\\$&')
-}
-
-// Normalize an `#anchor` href to a heading slug: strip `#`, URL-decode (authors
-// may percent-encode CJK), then apply the same slug rules used for heading ids,
-// so casing/encoding differences still resolve.
-function decodeAnchor(href: string): string {
-  const raw = href.slice(1)
-  let decoded = raw
-  try {
-    decoded = decodeURIComponent(raw)
-  } catch {
-    // Malformed %-escape — fall back to the raw fragment.
-  }
-  return slugifyHeading(decoded)
-}
-
 function Block({ node }: { node: MdNode }): ReactNode {
   const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
   switch (node.type) {
