@@ -32,6 +32,7 @@ import { useMarkdownKeyboardNav } from './useMarkdownKeyboardNav.js'
 import { MarkdownPreviewHelp } from './MarkdownPreviewHelp.js'
 import { ChatFindWidget } from '../agents/ChatFindWidget.js'
 import { useService } from '../useService.js'
+import { findMarkdownAnchor } from '../markdown/markdownAnchors.js'
 import styles from './MarkdownPreviewEditor.module.css'
 import './markdownFindHighlight.css'
 
@@ -231,6 +232,7 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
       scrollToLine: (line: number) => {
         el.scrollTop = previewTopForLine(collectEntries(el), line)
       },
+      scrollToAnchor: (anchor: string) => scrollPreviewToAnchor(el, anchor),
       getTopVisibleLine: () => {
         const entries = collectEntries(el)
         return entries.length === 0 ? undefined : lineForPreviewTop(entries, el.scrollTop)
@@ -345,4 +347,21 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
       {helpVisible && <MarkdownPreviewHelp onClose={() => setHelpVisible(false)} />}
     </div>
   )
+}
+
+function scrollPreviewToAnchor(root: HTMLElement, anchor: string): void {
+  const startedAt = Date.now()
+  const schedule =
+    typeof requestAnimationFrame === 'function'
+      ? requestAnimationFrame
+      : (cb: FrameRequestCallback) => setTimeout(() => cb(Date.now()), 16)
+  const tryReveal = (): void => {
+    const target = findMarkdownAnchor(root, anchor)
+    if (target) {
+      target.scrollIntoView({ block: 'start', behavior: 'smooth' })
+      return
+    }
+    if (Date.now() - startedAt < RESTORE_WINDOW_MS) schedule(tryReveal)
+  }
+  tryReveal()
 }

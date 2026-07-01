@@ -10,6 +10,7 @@ import {
   matchFilePathAt,
   matchFullFilePath,
   splitFilePathLocation,
+  splitFilePathTarget,
 } from '../filePathLink.js'
 
 describe('matchFilePathAt', () => {
@@ -34,6 +35,16 @@ describe('matchFilePathAt', () => {
   it('matches ./ and ../ prefixes', () => {
     expect(matchFilePathAt('./a/b.ts', 0)?.path).toBe('./a/b.ts')
     expect(matchFilePathAt('../a/b.ts', 0)?.path).toBe('../a/b.ts')
+  })
+
+  it('strips an @ marker from explicit file mentions', () => {
+    expect(matchFilePathAt('@src/a.ts', 0)).toEqual({
+      full: '@src/a.ts',
+      path: 'src/a.ts',
+      line: undefined,
+      col: undefined,
+    })
+    expect(matchFilePathAt('@path/to/file', 0)?.path).toBe('path/to/file')
   })
 
   it('captures :line:col location', () => {
@@ -121,6 +132,13 @@ describe('looksLikeFilePath', () => {
     expect(looksLikeFilePath('index.ts')).toBe(true)
   })
 
+  it('accepts cross-file markdown fragments and @ file mentions', () => {
+    expect(looksLikeFilePath('./foo.md#hello')).toBe(true)
+    expect(looksLikeFilePath('@src/a.ts')).toBe(true)
+    expect(looksLikeFilePath('@path/to/file')).toBe(true)
+    expect(looksLikeFilePath('@./foo.md#hello')).toBe(true)
+  })
+
   it('rejects URL schemes', () => {
     expect(looksLikeFilePath('https://example.com')).toBe(false)
     expect(looksLikeFilePath('file:///a.ts')).toBe(false)
@@ -142,6 +160,24 @@ describe('splitFilePathLocation', () => {
       path: '../foo.md',
       line: undefined,
       col: undefined,
+    })
+  })
+})
+
+describe('splitFilePathTarget', () => {
+  it('strips @ and separates a cross-file fragment', () => {
+    expect(splitFilePathTarget('@./foo.md#hello')).toEqual({
+      path: './foo.md',
+      fragment: 'hello',
+    })
+  })
+
+  it('keeps a line location before the fragment', () => {
+    expect(splitFilePathTarget('@src/a.ts:10:5#hello')).toEqual({
+      path: 'src/a.ts',
+      line: 10,
+      col: 5,
+      fragment: 'hello',
     })
   })
 })

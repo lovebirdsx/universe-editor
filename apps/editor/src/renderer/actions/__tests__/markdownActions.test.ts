@@ -153,6 +153,7 @@ describe('Markdown preview commands fall back to the active preview when focus l
     const onDidScroll = new Emitter<void>()
     const controller: IMarkdownPreviewController = {
       scrollToLine: () => {},
+      scrollToAnchor: () => {},
       getTopVisibleLine: () => 1,
       focus: () => {},
       onDidScroll: onDidScroll.event,

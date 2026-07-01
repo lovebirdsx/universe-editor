@@ -115,6 +115,10 @@ const WIN_ABS = `[A-Za-z]:[/\\\\](?:${SEG}+[/\\\\])*${SEG}+${EXT}`
 const UNIX_ABS = `\\.{0,2}/(?:${SEG}+/)*${SEG}+${EXT}`
 // Relative with at least one dir component:  src/foo/bar.ts
 const REL = `(?:${REL_SEG}+[/\\\\])+${REL_SEG}+${EXT}`
+// @-prefixed mentions are explicit file references, so they may omit a known extension.
+const WIN_ABS_NO_EXT = `[A-Za-z]:[/\\\\](?:${SEG}+[/\\\\])*${SEG}+`
+const UNIX_ABS_NO_EXT = `\\.{0,2}/(?:${SEG}+/)*${SEG}+`
+const REL_NO_EXT = `(?:${REL_SEG}+[/\\\\])+${REL_SEG}+`
 
 // Optional :line:col  or  (line,col)
 const LOC = `(?::(\\d+)(?::(\\d+))?|\\((\\d+)(?:,(\\d+))?\\))?`
@@ -124,6 +128,9 @@ export const FILE_PATH_PATTERN = `(${WIN_ABS}|${UNIX_ABS}|${REL})${LOC}`
 
 // Anchored at the start of a slice so callers can probe position-by-position.
 const FILE_PATH_AT_RE = new RegExp(`^${FILE_PATH_PATTERN}`)
+const AT_FILE_PATH_AT_RE = new RegExp(
+  `^@(${WIN_ABS_NO_EXT}|${UNIX_ABS_NO_EXT}|${REL_NO_EXT})${LOC}`,
+)
 
 export interface FilePathMatch {
   /** Full matched text including any location suffix. */
@@ -134,6 +141,17 @@ export interface FilePathMatch {
   readonly col: number | undefined
 }
 
+export interface FilePathTarget {
+  readonly path: string
+  readonly line?: number
+  readonly col?: number
+  readonly fragment?: string
+}
+
+export function stripFilePathLinkPrefix(href: string): string {
+  return href.startsWith('@') && href.length > 1 ? href.slice(1) : href
+}
+
 /**
  * Try to match a file path anchored at index {@link i} of {@link text}. Returns
  * `null` when no path starts there. Mirrors the inline parser's left-to-right
@@ -142,7 +160,9 @@ export interface FilePathMatch {
 export function matchFilePathAt(text: string, i: number): FilePathMatch | null {
   // Avoid matching mid-token (e.g. the `src/a.ts` inside `xsrc/a.ts`).
   if (i > 0 && /[A-Za-z0-9_]/.test(text[i - 1] ?? '')) return null
-  const m = FILE_PATH_AT_RE.exec(text.slice(i))
+  const slice = text.slice(i)
+  const atPrefixed = slice.startsWith('@')
+  const m = atPrefixed ? AT_FILE_PATH_AT_RE.exec(slice) : FILE_PATH_AT_RE.exec(slice)
   if (!m) return null
   const full = m[0]
   const path = m[1] ?? ''
@@ -167,8 +187,15 @@ export function matchFullFilePath(text: string): FilePathMatch | null {
  * path rather than a URL. Used to let `[doc](../foo.md)` resolve as a file.
  */
 export function looksLikeFilePath(href: string): boolean {
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href)) return false // has a URL scheme
-  return new RegExp(`^(?:${WIN_ABS}|${UNIX_ABS}|${REL}|${REL_SEG}+${EXT})$`).test(href)
+  const atPrefixed = href.startsWith('@')
+  const target = stripFilePathLinkPrefix(href)
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return false // has a URL scheme
+  const { pathWithLocation } = splitFilePathFragment(target)
+  if (pathWithLocation.length === 0) return false
+  const pathPattern = atPrefixed
+    ? `(?:${WIN_ABS_NO_EXT}|${UNIX_ABS_NO_EXT}|${REL_NO_EXT}|${REL_SEG}+${EXT})`
+    : `(?:${WIN_ABS}|${UNIX_ABS}|${REL}|${REL_SEG}+${EXT})`
+  return new RegExp(`^${pathPattern}${LOC}$`).test(pathWithLocation)
 }
 
 /** Split a `path:line:col` / `path(line,col)` href into its parts. */
@@ -183,5 +210,31 @@ export function splitFilePathLocation(href: string): {
     path: m[1] ?? href,
     line: parseInt(m[2] ?? m[4] ?? '', 10) || undefined,
     col: parseInt(m[3] ?? m[5] ?? '', 10) || undefined,
+  }
+}
+
+/** Split an explicit markdown file href into path, optional location, and optional #fragment. */
+export function splitFilePathTarget(href: string): FilePathTarget {
+  const target = stripFilePathLinkPrefix(href)
+  const { pathWithLocation, fragment } = splitFilePathFragment(target)
+  const { path, line, col } = splitFilePathLocation(pathWithLocation)
+  return {
+    path,
+    ...(line !== undefined ? { line } : {}),
+    ...(col !== undefined ? { col } : {}),
+    ...(fragment !== undefined ? { fragment } : {}),
+  }
+}
+
+function splitFilePathFragment(href: string): {
+  readonly pathWithLocation: string
+  readonly fragment: string | undefined
+} {
+  const index = href.indexOf('#')
+  if (index === -1) return { pathWithLocation: href, fragment: undefined }
+  const fragment = href.slice(index + 1)
+  return {
+    pathWithLocation: href.slice(0, index),
+    fragment: fragment.length > 0 ? fragment : undefined,
   }
 }

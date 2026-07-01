@@ -195,6 +195,7 @@ describe('focusEditorInput — markdown preview', () => {
     const onDidScroll = new Emitter<void>()
     const controller: IMarkdownPreviewController = {
       scrollToLine: () => {},
+      scrollToAnchor: () => {},
       getTopVisibleLine: () => 1,
       focus: () => {
         calls.focus += 1

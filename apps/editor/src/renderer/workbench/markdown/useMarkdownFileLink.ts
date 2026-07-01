@@ -31,9 +31,11 @@ import {
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
+import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
 import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { IQuickAccessController } from '../../services/quickInput/QuickAccessController.js'
+import { stripFilePathLinkPrefix } from '../../services/acp/filePathLink.js'
 import { useOptionalService } from '../useService.js'
 import { markdownLinkCandidates, searchPatternFor } from './markdownLinkResolve.js'
 
@@ -52,6 +54,8 @@ type CacheEntry = { readonly resolution: Resolution; readonly expiresAt: number 
 export interface OpenMarkdownLinkOptions {
   /** Ctrl/Cmd was held: open a new preview tab instead of navigating in place. */
   readonly toSide?: boolean
+  /** Markdown heading fragment from a cross-file link (`foo.md#section`). */
+  readonly fragment?: string
 }
 
 function isMarkdownResource(uri: URI): boolean {
@@ -85,23 +89,24 @@ export function useMarkdownFileLink(
   const resolve = useCallback(
     (rawPath: string): Promise<Resolution> => {
       if (!fileService) return Promise.resolve<Resolution>({ kind: 'missing' })
+      const normalizedRawPath = stripFilePathLinkPrefix(rawPath)
       const now = Date.now()
-      const cached = cacheGet(cache.current, rawPath, now)
+      const cached = cacheGet(cache.current, normalizedRawPath, now)
       if (cached) return Promise.resolve(cached)
-      const running = inflight.current.get(rawPath)
+      const running = inflight.current.get(normalizedRawPath)
       if (running) return running
 
       const promise = (async (): Promise<Resolution> => {
         const workspaceRoot = workspaceService?.current?.folder
         // 1. Concrete candidates — open the first that exists, no search needed.
-        for (const candidate of markdownLinkCandidates(rawPath, baseUri, workspaceRoot)) {
+        for (const candidate of markdownLinkCandidates(normalizedRawPath, baseUri, workspaceRoot)) {
           if (await fileService.exists(candidate)) return { kind: 'open', uri: candidate }
         }
 
         // 2. Fuzzy fallback over the workspace, honoring the same excludes as Go
         //    to File so we never walk node_modules/dist/.git (the old slow path).
         if (!workspaceRoot || !fileSearchService) return { kind: 'missing' }
-        const pattern = searchPatternFor(rawPath)
+        const pattern = searchPatternFor(normalizedRawPath)
         if (pattern.length === 0) return { kind: 'missing' }
         const result = await fileSearchService.search({
           root: workspaceRoot,
@@ -122,13 +127,13 @@ export function useMarkdownFileLink(
         return { kind: 'pick', pattern }
       })()
 
-      inflight.current.set(rawPath, promise)
+      inflight.current.set(normalizedRawPath, promise)
       void promise.then((resolution) => {
-        inflight.current.delete(rawPath)
+        inflight.current.delete(normalizedRawPath)
         // Only cache stable outcomes; a transient 'missing' (services not ready)
         // shouldn't be pinned for 10s.
         if (resolution.kind !== 'missing') {
-          cache.current.set(rawPath, { resolution, expiresAt: Date.now() + CACHE_TTL })
+          cache.current.set(normalizedRawPath, { resolution, expiresAt: Date.now() + CACHE_TTL })
         }
       })
       return promise
@@ -143,7 +148,7 @@ export function useMarkdownFileLink(
         if (resolution.kind === 'missing') {
           notificationService?.notify({
             severity: Severity.Warning,
-            message: `文件不存在: ${rawPath}`,
+            message: `文件不存在: ${stripFilePathLinkPrefix(rawPath)}`,
           })
           return
         }
@@ -158,11 +163,9 @@ export function useMarkdownFileLink(
         // (in place, or to a new tab on Ctrl/Cmd+click). A `:line` location
         // means the user wants the source at that line, so fall through.
         if (previewLinks && groupsService && line === undefined && isMarkdownResource(uri)) {
-          openMarkdownPreviewInGroup(
-            groupsService.activeGroup,
-            new MarkdownPreviewInput(uri),
-            opts?.toSide === true,
-          )
+          const preview = new MarkdownPreviewInput(uri)
+          openMarkdownPreviewInGroup(groupsService.activeGroup, preview, opts?.toSide === true)
+          if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }
         const input = instantiation.createInstance(FileEditorInput, uri)

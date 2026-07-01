@@ -16,6 +16,8 @@ import { Emitter, type URI } from '@universe-editor/platform'
 export interface IMarkdownPreviewController {
   /** Scroll the preview so the block at `line` (1-based source line) is at the top. */
   scrollToLine(line: number): void
+  /** Scroll to a rendered markdown heading fragment (`#hello` or `hello`). */
+  scrollToAnchor(anchor: string): void
   /** Source line (1-based) currently at the top of the preview viewport, if measurable. */
   getTopVisibleLine(): number | undefined
   /** Move keyboard focus to the preview container (so it can be scrolled/navigated). */
@@ -43,6 +45,7 @@ export interface IMarkdownPreviewController {
 
 class MarkdownPreviewRegistryImpl {
   private readonly _map = new Map<string, IMarkdownPreviewController[]>()
+  private readonly _pendingAnchors = new Map<string, string>()
   private readonly _onDidChange = new Emitter<URI>()
   readonly onDidChange = this._onDidChange.event
 
@@ -56,6 +59,11 @@ class MarkdownPreviewRegistryImpl {
     list.push(controller)
     this._map.set(key, list)
     this._onDidChange.fire(sourceUri)
+    const pendingAnchor = this._pendingAnchors.get(key)
+    if (pendingAnchor !== undefined) {
+      this._pendingAnchors.delete(key)
+      controller.scrollToAnchor(pendingAnchor)
+    }
   }
 
   unregister(sourceUri: URI, controller: IMarkdownPreviewController): void {
@@ -75,6 +83,16 @@ class MarkdownPreviewRegistryImpl {
     return list[list.length - 1]
   }
 
+  revealAnchor(sourceUri: URI, anchor: string): void {
+    if (!anchor) return
+    const controller = this.get(sourceUri)
+    if (controller) {
+      controller.scrollToAnchor(anchor)
+      return
+    }
+    this._pendingAnchors.set(sourceUri.toString(), anchor)
+  }
+
   setActive(controller: IMarkdownPreviewController): void {
     this._activeController = controller
   }
@@ -89,6 +107,7 @@ class MarkdownPreviewRegistryImpl {
 
   _resetForTests(): void {
     this._map.clear()
+    this._pendingAnchors.clear()
     this._activeController = undefined
   }
 }

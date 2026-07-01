@@ -7,17 +7,32 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import {
+  Emitter,
   IConfigurationService,
+  IEditorGroupsService,
+  IEditorService,
   IEditorResolverService,
+  IFileService,
   InstantiationService,
   ServiceCollection,
+  URI,
+  type EditorInput,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService as IConfigurationServiceType,
+  IEditorGroup,
+  IEditorGroupsService as IEditorGroupsServiceType,
+  IEditorService as IEditorServiceType,
   IEditorResolverService as IEditorResolverServiceType,
+  IFileService as IFileServiceType,
 } from '@universe-editor/platform'
 import { MarkdownView, DocLinkContext } from '../MarkdownView.js'
 import { ServicesContext } from '../../useService.js'
+import { MarkdownPreviewInput } from '../../../services/editor/MarkdownPreviewInput.js'
+import {
+  MarkdownPreviewRegistry,
+  type IMarkdownPreviewController,
+} from '../../../services/editor/MarkdownPreviewRegistry.js'
 
 // Monaco won't load under happy-dom; stub so CodeBlock falls back to plain text.
 vi.mock('../../editor/monaco/MonacoLoader.js', () => ({
@@ -37,6 +52,8 @@ vi.mock('../mermaidLoader.js', () => ({
 
 afterEach(() => {
   cleanup()
+  MarkdownPreviewRegistry._resetForTests()
+  vi.restoreAllMocks()
   renderMock.mockReset()
 })
 
@@ -55,6 +72,91 @@ function makeConfig(): IConfigurationServiceType {
     get: () => 'dark',
     onDidChangeConfiguration: () => ({ dispose: () => {} }),
   } as unknown as IConfigurationServiceType
+}
+
+function makeFileService(exists: (resource: URI) => boolean | Promise<boolean>): IFileServiceType {
+  return {
+    _serviceBrand: undefined,
+    async readFile() {
+      return new Uint8Array()
+    },
+    async readFileText() {
+      return ''
+    },
+    async writeFile() {},
+    async exists(resource: URI) {
+      return exists(resource)
+    },
+    async stat(resource: URI) {
+      return { resource, isFile: true, isDirectory: false, size: 0, mtime: 0 }
+    },
+    async list() {
+      return []
+    },
+    async createDirectory() {},
+    async delete() {},
+    async rename() {},
+    async copy() {},
+    async listRecursive() {
+      return []
+    },
+  }
+}
+
+function makeEditorService(openEditor = vi.fn()): IEditorServiceType {
+  return {
+    _serviceBrand: undefined,
+    openEditor,
+  } as unknown as IEditorServiceType
+}
+
+function makeGroupsService(opened: { editor: EditorInput; options: unknown }[]) {
+  let activeEditor: EditorInput | undefined
+  const group = {
+    get activeEditor() {
+      return activeEditor
+    },
+    get editors() {
+      return activeEditor ? [activeEditor] : []
+    },
+    openEditor(editor: EditorInput, options?: unknown) {
+      opened.push({ editor, options })
+      activeEditor = editor
+    },
+    closeEditor: () => true,
+    indexOf: () => -1,
+  } as unknown as IEditorGroup
+  return {
+    _serviceBrand: undefined,
+    get activeGroup() {
+      return group
+    },
+    get groups() {
+      return [group]
+    },
+    getGroups: () => [group],
+  } as unknown as IEditorGroupsServiceType
+}
+
+function makePreviewController(
+  overrides: Partial<IMarkdownPreviewController> = {},
+): IMarkdownPreviewController {
+  const onDidScroll = new Emitter<void>()
+  return {
+    scrollToLine: () => {},
+    scrollToAnchor: () => {},
+    getTopVisibleLine: () => 1,
+    focus: () => {},
+    onDidScroll: onDidScroll.event,
+    openFind: () => {},
+    closeFind: () => {},
+    findNext: () => {},
+    findPrev: () => {},
+    showLinkHints: () => {},
+    hideLinkHints: () => {},
+    toggleHelp: () => {},
+    ...overrides,
+  }
 }
 
 function renderMarkdown(text: string, testId?: string) {
@@ -127,6 +229,70 @@ describe('MarkdownView', () => {
       if (original === undefined) delete proto.scrollIntoView
       else proto.scrollIntoView = original
     }
+  })
+
+  it('opens cross-file markdown fragment links as previews and queues anchor reveal', async () => {
+    const opened: { editor: EditorInput; options: unknown }[] = []
+    const openExternal = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    services.set(
+      IFileService,
+      makeFileService((resource) => resource.path === '/repo/docs/foo.md'),
+    )
+    services.set(IEditorService, makeEditorService())
+    services.set(IEditorGroupsService, makeGroupsService(opened))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView
+          text="* [foo](./foo.md#hello)"
+          baseUri={URI.file('/repo/docs')}
+          previewLinks
+        />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'foo' }).click()
+    await waitFor(() => expect(opened).toHaveLength(1))
+    expect(openExternal).not.toHaveBeenCalled()
+    const preview = opened[0]!.editor
+    expect(preview).toBeInstanceOf(MarkdownPreviewInput)
+    expect((preview as MarkdownPreviewInput).sourceUri.path).toBe('/repo/docs/foo.md')
+
+    const scrollToAnchor = vi.fn()
+    MarkdownPreviewRegistry.register(
+      (preview as MarkdownPreviewInput).sourceUri,
+      makePreviewController({ scrollToAnchor }),
+    )
+    expect(scrollToAnchor).toHaveBeenCalledWith('hello')
+  })
+
+  it('strips @ from explicit file links before resolving them', async () => {
+    const openEditor = vi.fn()
+    const exists = vi.fn((resource: URI) => resource.path === '/repo/docs/path/to/file')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService(openEditor))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text="[file](@path/to/file)" baseUri={URI.file('/repo/docs')} />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'file' }).click()
+    await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
+    expect(exists).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/repo/docs/path/to/file' }),
+    )
+    const input = openEditor.mock.calls[0]?.[0] as { resource: URI } | undefined
+    expect(input?.resource.path).toBe('/repo/docs/path/to/file')
   })
 
   it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {

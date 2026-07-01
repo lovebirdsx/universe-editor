@@ -642,6 +642,7 @@ describe('OutlineService', () => {
     const onDidScroll = new Emitter<void>()
     const controller: IMarkdownPreviewController = {
       scrollToLine: (line: number) => scrolled.push(line),
+      scrollToAnchor: () => {},
       getTopVisibleLine: () => 1,
       focus: () => {
         focusCount += 1

@@ -32,12 +32,13 @@ import {
 import {
   looksLikeFilePath,
   matchFullFilePath,
-  splitFilePathLocation,
+  splitFilePathTarget,
 } from '../../services/acp/filePathLink.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { MermaidBlock } from './MermaidBlock.js'
 import { useService } from '../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
+import { findMarkdownAnchor } from './markdownAnchors.js'
 import styles from './markdown.module.css'
 
 interface MarkdownViewProps {
@@ -81,11 +82,10 @@ export function MarkdownView({
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollToAnchor = useMemo(
     () =>
-      (id: string): void => {
+      (anchor: string): void => {
         const root = rootRef.current
         if (!root) return
-        const target = root.querySelector(`[data-anchor="${cssEscape(id)}"]`)
-        target?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+        findMarkdownAnchor(root, anchor)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
       },
     [],
   )
@@ -356,7 +356,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
   const onClick = (e: React.MouseEvent<HTMLAnchorElement>): void => {
     e.preventDefault()
     if (isAnchor) {
-      scrollToAnchor(decodeAnchor(href))
+      scrollToAnchor(href)
       return
     }
     // Doc-to-doc relative link: intercept before file-path resolution.
@@ -365,8 +365,11 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       return
     }
     if (isFilePath) {
-      const { path, line, col } = splitFilePathLocation(href)
-      openFileLink(path, line, col, { toSide: e.ctrlKey || e.metaKey })
+      const { path, line, col, fragment } = splitFilePathTarget(href)
+      openFileLink(path, line, col, {
+        toSide: e.ctrlKey || e.metaKey,
+        ...(fragment !== undefined ? { fragment } : {}),
+      })
       return
     }
     if (isFile) {
