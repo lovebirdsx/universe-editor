@@ -182,12 +182,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       })),
     getUpdateState: async (): Promise<E2EUpdateState> => {
       const s = await services.updateService.getState()
+      // Flatten the discriminated-union state into the stable E2E contract. The
+      // one-shot idle flags (error / notAvailable) surface as their own statuses.
+      let status: string = s.type
+      if (s.type === 'idle') {
+        status = s.notAvailable ? 'not-available' : s.error !== undefined ? 'error' : 'idle'
+      }
       return {
-        status: s.status,
+        status,
         currentVersion: s.currentVersion,
-        ...(s.version !== undefined && { version: s.version }),
-        ...(s.percent !== undefined && { percent: s.percent }),
-        ...(s.error !== undefined && { error: s.error }),
+        ...('version' in s && s.version !== undefined && { version: s.version }),
+        ...(s.type === 'downloading' && { percent: s.percent }),
+        ...(s.type === 'idle' && s.error !== undefined && { error: s.error }),
       }
     },
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),

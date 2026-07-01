@@ -499,7 +499,9 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.enum.terminal.powershell': 'PowerShell',
   'settings.enum.terminal.pwsh': 'PowerShell Core',
   'settings.enum.terminal.wt': 'Windows Terminal',
+  'settings.enum.update.default': '自动检查',
   'settings.enum.update.manual': '手动',
+  'settings.enum.update.none': '从不检查',
   'settings.enum.update.start': '启动时检查',
   'settings.enum.wordWrap.bounded': '视口与列宽较小值',
   'settings.enum.wordWrap.off': '关闭',
@@ -560,7 +562,8 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'settings.update': '更新',
   'settings.update.checkIntervalMinutes.description':
     '运行时检查更新的频率（分钟）。0 表示禁用周期检查。',
-  'settings.update.mode.description': '控制编辑器是否自动检查更新。',
+  'settings.update.mode.description':
+    '控制编辑器是否自动检查更新。none：从不；manual：仅通过命令；start：启动后不久检查一次；default：启动时检查并周期检查。',
   'settings.workbench.chat.virtualizationThreshold.description':
     'Agent 会话时间线项超过此数量时启用虚拟滚动。',
   'settings.workbench.colorTheme.description': '工作台颜色主题。',
@@ -879,7 +882,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
 
   // --- Update ---
   'update.availableMsg': '有新版本（{version}）可用。',
-  'update.availableShort': '有可用更新',
   'update.availableTooltip': '有新版本（{version}）可用 - 点击下载',
   'update.check': '检查更新',
   'update.checkFailed': '无法检查更新：{error}',
@@ -892,7 +894,6 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'update.later': '稍后',
   'update.restart': '重启以更新',
   'update.restartNow': '立即重启',
-  'update.restartShort': '重启以更新',
   'update.upToDate': '你正在运行最新版本（{version}）。',
 
   // --- Workbench error & Monaco ---

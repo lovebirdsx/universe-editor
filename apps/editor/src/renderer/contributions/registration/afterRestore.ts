@@ -184,8 +184,9 @@ ContributionsRegistry.registerContribution(
   WorkbenchPhase.AfterRestore,
 )
 
-// Auto-update: status-bar entry + prompt notifications, driven by the main-side
-// update state machine. AfterRestore so the status bar + notifications are live.
+// Auto-update: prompt notifications driven by the main-side update state machine
+// (the always-visible indicator lives in the title bar). AfterRestore so the
+// notification service is live.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.update',
   UpdateContribution,

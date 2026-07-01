@@ -468,15 +468,17 @@ export class SettingsContribution extends Disposable implements IWorkbenchContri
         properties: {
           'update.mode': {
             type: 'string',
-            default: 'start',
-            enum: ['start', 'manual'],
+            default: 'default',
+            enum: ['none', 'manual', 'start', 'default'],
             enumItemLabels: {
-              start: localize('settings.enum.update.start', 'Check on Startup'),
+              none: localize('settings.enum.update.none', 'Never Check'),
               manual: localize('settings.enum.update.manual', 'Manual'),
+              start: localize('settings.enum.update.start', 'Check on Startup'),
+              default: localize('settings.enum.update.default', 'Check Automatically'),
             },
             description: localize(
               'settings.update.mode.description',
-              'Controls whether the editor checks for updates automatically.',
+              'Controls whether the editor checks for updates automatically. none: never; manual: only via the command; start: once shortly after launch; default: on launch and periodically.',
             ),
           },
           'update.checkIntervalMinutes': {

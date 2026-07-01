@@ -4,15 +4,7 @@
  *  download / install commands back the status-bar entry + notification actions.
  *--------------------------------------------------------------------------------------------*/
 
-import {
-  Action2,
-  INotificationService,
-  MenuId,
-  Severity,
-  localize,
-  localize2,
-  type ServicesAccessor,
-} from '@universe-editor/platform'
+import { Action2, MenuId, localize2, type ServicesAccessor } from '@universe-editor/platform'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 
 export class CheckForUpdatesAction extends Action2 {
@@ -28,31 +20,9 @@ export class CheckForUpdatesAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const update = accessor.get(IUpdateService)
-    const notification = accessor.get(INotificationService)
-    const handle = notification.status(localize('update.checking', 'Checking for updates…'))
-    try {
-      await update.checkForUpdates()
-      const state = await update.getState()
-      // 'available' is surfaced by UpdateContribution's notification; don't repeat it.
-      if (state.status === 'not-available') {
-        notification.notify({
-          severity: Severity.Info,
-          message: localize('update.upToDate', 'You are running the latest version ({version}).', {
-            version: state.currentVersion,
-          }),
-        })
-      } else if (state.status === 'error') {
-        notification.notify({
-          severity: Severity.Warning,
-          message: localize('update.checkFailed', 'Could not check for updates: {error}', {
-            error: state.error ?? '',
-          }),
-        })
-      }
-    } finally {
-      handle.dispose()
-    }
+    // explicit=true: the outcome ("up to date" / "check failed" / "available")
+    // is surfaced by UpdateContribution off the resulting state change.
+    await accessor.get(IUpdateService).checkForUpdates(true)
   }
 }
 

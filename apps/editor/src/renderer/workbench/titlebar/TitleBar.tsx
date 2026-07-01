@@ -11,6 +11,7 @@ import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { LayoutControls } from './LayoutControls.js'
 import { MenuBar } from './MenuBar.js'
+import { UpdateIndicator } from './UpdateIndicator.js'
 import { WindowControls } from './WindowControls.js'
 import styles from './TitleBar.module.css'
 
@@ -104,6 +105,7 @@ export function TitleBar() {
       </div>
       <MenuBar />
       <div className={styles['title']}>{title}</div>
+      <UpdateIndicator />
       <LayoutControls />
       {!isMac && <WindowControls />}
     </header>

@@ -83,14 +83,11 @@ test.describe('@p1 auto-update', () => {
     const state = await workbench.getUpdateState()
     expect(state.version).toBe(FUTURE_VERSION)
 
-    // UI link: an "available" status-bar entry (sparkle, right-aligned) appears.
-    // The always-present AI entry is also sparkle/right but carries no text, so
-    // match on the update entry's label to disambiguate.
-    const entries = await workbench.statusBar.entriesFromProbe()
-    const updateEntry = entries.find(
-      (e) => e.alignment === 'right' && e.icon === 'sparkle' && e.text.length > 0,
-    )
-    expect(updateEntry).toBeDefined()
+    // UI link: the icon-only title-bar update indicator becomes visible, with a
+    // tooltip carrying the available version.
+    const indicator = workbench.page.getByTestId('titlebar-update-indicator')
+    await expect(indicator).toBeVisible()
+    await expect(indicator).toHaveAttribute('title', new RegExp(FUTURE_VERSION))
   })
 
   test('reports the running version, distinct from the feed version', async ({ workbench }) => {

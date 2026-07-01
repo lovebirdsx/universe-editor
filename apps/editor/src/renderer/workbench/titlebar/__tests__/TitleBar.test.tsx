@@ -18,6 +18,7 @@ import {
 } from '@universe-editor/platform'
 import { EditorGroupsService } from '../../../services/editor/EditorGroupsService.js'
 import { FileEditorInput } from '../../../services/editor/FileEditorInput.js'
+import { IUpdateService } from '../../../../shared/ipc/updateService.js'
 import { ServicesContext } from '../../useService.js'
 import { TitleBar } from '../TitleBar.js'
 
@@ -104,6 +105,14 @@ function makeContainer(
     _serviceBrand: undefined,
     executeCommand: () => Promise.resolve(undefined),
   } as unknown as ICommandService)
+  sc.set(IUpdateService, {
+    _serviceBrand: undefined,
+    onDidChangeState: () => ({ dispose: () => {} }),
+    getState: async () => ({ type: 'idle', currentVersion: '0.0.0' }),
+    checkForUpdates: async () => {},
+    downloadUpdate: async () => {},
+    quitAndInstall: async () => {},
+  } as unknown as IUpdateService)
   return new InstantiationService(sc)
 }
 

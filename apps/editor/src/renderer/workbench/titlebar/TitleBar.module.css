@@ -230,3 +230,61 @@
 .layout-btn--active {
   color: var(--color-foreground, #c8c8c8);
 }
+
+.update-btn {
+  position: relative;
+  width: 28px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  cursor: default;
+  border-radius: 3px;
+  color: var(--color-foreground-muted, #8a8a92);
+  -webkit-app-region: no-drag;
+  flex-shrink: 0;
+}
+
+.update-btn:hover {
+  background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.06));
+  color: var(--color-foreground, #c8c8c8);
+}
+
+.update-btn--prominent {
+  color: var(--color-accent, #0070e0);
+}
+
+.update-btn--prominent:hover {
+  color: var(--color-accent, #0070e0);
+}
+
+.update-spin {
+  animation: update-spin 1s linear infinite;
+}
+
+@keyframes update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.update-progress {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  bottom: 2px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--color-border, rgba(255, 255, 255, 0.12));
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  display: block;
+  height: 100%;
+  background: var(--color-accent, #0070e0);
+  transition: width 0.15s ease-out;
+}
