@@ -484,6 +484,48 @@
   background: var(--color-list-hover-bg);
 }
 
+.treeFileRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 1px 0;
+  cursor: pointer;
+  color: var(--color-editor-fg);
+  line-height: 20px;
+}
+
+.treeFileRow:hover {
+  background: var(--color-list-hover-bg);
+}
+
+.fileActionBtn {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--color-editor-fg-muted);
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.treeFileRow:hover .fileActionBtn {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.fileActionBtn:hover {
+  background: var(--color-toolbar-btn-hover-bg, rgba(255, 255, 255, 0.1));
+  color: var(--color-editor-fg);
+}
+
 .chevron {
   flex: 0 0 auto;
   width: 12px;
@@ -518,7 +560,8 @@
 }
 
 .filePath {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

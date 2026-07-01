@@ -30,10 +30,13 @@ import {
   autorun,
   ICommandService,
   IDialogService,
+  IEditorResolverService,
   IStorageService,
   StorageScope,
+  URI,
   localize,
 } from '@universe-editor/platform'
+import { FileSymlink } from 'lucide-react'
 import {
   GitGraphCommands,
   type GitGraphCommitDto,
@@ -284,12 +287,14 @@ function FileTreeView({
   collapsed,
   onToggle,
   onOpen,
+  onOpenFile,
   depth = 0,
 }: {
   nodes: readonly FileTreeNode[]
   collapsed: ReadonlySet<string>
   onToggle: (path: string) => void
   onOpen: (file: GitGraphFileChangeDto) => void
+  onOpenFile?: (file: GitGraphFileChangeDto) => void
   depth?: number
 }) {
   return (
@@ -312,24 +317,37 @@ function FileTreeView({
                 collapsed={collapsed}
                 onToggle={onToggle}
                 onOpen={onOpen}
+                {...(onOpenFile !== undefined ? { onOpenFile } : {})}
                 depth={depth + 1}
               />
             )}
           </Fragment>
         ) : (
-          <button
+          <div
             key={`f:${node.file.path}`}
-            type="button"
-            className={styles['treeRow']}
+            className={styles['treeFileRow']}
             style={{ paddingLeft: depth * 12 + 8 + 14 }}
-            onClick={() => onOpen(node.file)}
             title={STATUS_LABEL[node.file.status.charAt(0)] ?? node.file.status}
+            onClick={() => onOpen(node.file)}
           >
             <span className={`${styles['fileStatus']} ${statusClass(node.file.status) ?? ''}`}>
               {node.file.status.charAt(0)}
             </span>
             <span className={styles['filePath']}>{node.name}</span>
-          </button>
+            {onOpenFile && (
+              <button
+                type="button"
+                className={styles['fileActionBtn']}
+                title={localize('gitGraph.openFile', 'Open File')}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onOpenFile(node.file)
+                }}
+              >
+                <FileSymlink size={14} />
+              </button>
+            )}
+          </div>
         ),
       )}
     </>
@@ -396,6 +414,7 @@ const CommitRow = memo(function CommitRow({
 export function GitGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
+  const editorResolverService = useService(IEditorResolverService)
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
   const [result, setResult] = useState<GitGraphLoadResult | null>(() => gitGraphViewState.result)
@@ -806,6 +825,16 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       void commands.executeCommand(GitGraphCommands.openWorkingTreeFile, file.path)
     },
     [commands],
+  )
+
+  const openSourceFile = useCallback(
+    (file: GitGraphFileChangeDto) => {
+      if (!selectedRepo) return
+      void editorResolverService.openEditor(URI.joinPath(URI.file(selectedRepo), file.path), {
+        pinned: true,
+      })
+    },
+    [editorResolverService, selectedRepo],
   )
 
   // Run a mutating op, then revalidate in place so the scroll position and
@@ -1398,6 +1427,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 collapsed={collapsed}
                 onToggle={toggleDir}
                 onOpen={openWorkingTreeFile}
+                onOpenFile={openSourceFile}
               />
             )}
           </div>
@@ -1434,6 +1464,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 collapsed={collapsed}
                 onToggle={toggleDir}
                 onOpen={(f) => openFile(f, selection[0]!, selection[1]!)}
+                onOpenFile={openSourceFile}
               />
             )}
           </div>
@@ -1480,6 +1511,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               collapsed={collapsed}
               onToggle={toggleDir}
               onOpen={(f) => openFile(f, details.parents[0] ?? '', details.hash)}
+              onOpenFile={openSourceFile}
             />
           )}
         </div>

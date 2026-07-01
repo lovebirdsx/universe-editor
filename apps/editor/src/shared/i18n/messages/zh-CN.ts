@@ -683,6 +683,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.newTagName': '新标签名称',
   'gitGraph.noCommitDetails': '没有提交详情。',
   'gitGraph.noFileChanges': '没有文件更改。',
+  'gitGraph.openFile': '打开文件',
   'gitGraph.noUncommittedChanges': '没有未提交的更改。',
   'gitGraph.onBranch': ' · 位于 {branch}',
   'gitGraph.onlyFirstParent': '仅跟随第一父提交',
