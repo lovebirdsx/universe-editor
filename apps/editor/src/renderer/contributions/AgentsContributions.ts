@@ -206,6 +206,16 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Minimum character length for the first message in a session. If the message is shorter, a confirmation dialog is shown before sending. Set to 0 to disable.',
             ),
           },
+          'acp.prompt.historyMaxEntries': {
+            type: 'number',
+            default: 50,
+            minimum: 1,
+            maximum: 500,
+            description: localize(
+              'settings.acp.prompt.historyMaxEntries',
+              'Maximum number of prompt history entries stored globally (shared across all workspaces). Older entries are dropped when the limit is reached.',
+            ),
+          },
         },
       }),
     )

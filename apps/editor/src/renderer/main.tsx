@@ -122,6 +122,10 @@ import { IOutlineService, OutlineService } from './services/languageFeatures/Out
 import { AcpPathPolicy, IAcpPathPolicy } from './services/acp/acpPathPolicy.js'
 import { AcpClientService, IAcpClientService } from './services/acp/acpClientService.js'
 import { AcpSessionService, IAcpSessionService } from './services/acp/acpSessionService.js'
+import {
+  AcpPromptHistoryService,
+  IAcpPromptHistoryService,
+} from './services/acp/acpPromptHistoryService.js'
 // Side-effect import: registers IAcpSessionFilterService before the
 // getSingletonServiceDescriptors() snapshot below picks it up.
 import './services/acp/acpSessionFilterService.js'
@@ -512,6 +516,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // initialize() on the lifecycle timeline.
   const acpSessionService = workbenchStore.add(instantiation.createInstance(AcpSessionService))
   services.set(IAcpSessionService, acpSessionService)
+
+  // Global prompt input history: persisted across workspaces/worktrees in GLOBAL scope.
+  const acpPromptHistoryService = workbenchStore.add(
+    instantiation.createInstance(AcpPromptHistoryService),
+  )
+  services.set(IAcpPromptHistoryService, acpPromptHistoryService)
 
   // Renderer-only AGENTS UI state. ChatWidget tracks focused ChatBody for
   // single-target action dispatch and session-specific focusing.

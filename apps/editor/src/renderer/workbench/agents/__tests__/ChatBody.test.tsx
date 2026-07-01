@@ -43,6 +43,7 @@ import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ChatBody } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import styles from '../agents.module.css'
+import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
 
 // All cases here stay below the virtualization threshold, so the virtualizer's
 // return value is never used. The real @tanstack/react-virtual, however, attaches
@@ -180,6 +181,11 @@ function makeInstantiation(
       return Promise.resolve(undefined)
     },
   } as unknown as ICommandService)
+  services.set(IAcpPromptHistoryService, {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly string[]>('t.history', []),
+    push: () => {},
+  } as IAcpPromptHistoryService)
   return new InstantiationService(services)
 }
 

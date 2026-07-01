@@ -44,6 +44,7 @@ import type { WidgetHandle } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
+import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
 
 afterEach(() => {
   cleanup()
@@ -92,6 +93,12 @@ const stubDialogService: IDialogServiceType = {
   confirm: () => Promise.resolve({ confirmed: true, choice: 'primary' as const }),
   prompt: () => Promise.resolve(undefined),
 } as unknown as IDialogServiceType
+
+const stubHistoryService: IAcpPromptHistoryService = {
+  _serviceBrand: undefined,
+  entries: observableValue<readonly string[]>('test.history', []),
+  push: () => {},
+}
 
 function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   const ws: IWorkspace = { folder, name: 'test' }
@@ -174,6 +181,7 @@ function renderWithServices(
   services.set(IExcludeService, new FakeExcludeService())
   services.set(IConfigurationService, stubConfigurationService)
   services.set(IDialogService, stubDialogService)
+  services.set(IAcpPromptHistoryService, stubHistoryService)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>

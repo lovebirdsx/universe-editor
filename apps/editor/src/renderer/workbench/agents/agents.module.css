@@ -2232,3 +2232,11 @@
   line-height: 1.4;
   font-size: calc(var(--agent-font-size, 13px) * 0.929);
 }
+
+.historyEntry {
+  flex: 1;
+  font-family: var(--font-ui);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

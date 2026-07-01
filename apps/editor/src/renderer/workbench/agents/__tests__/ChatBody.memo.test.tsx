@@ -40,6 +40,7 @@ import { IAcpChatWidgetService } from '../../../services/acp/acpChatWidgetServic
 import { AcpChatViewStateCache } from '../../../services/acp/acpChatViewStateCache.js'
 import type { SessionConfigOption, ContentBlock } from '@agentclientprotocol/sdk'
 import { ServicesContext } from '../../useService.js'
+import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
 
 // Replace MessageContent with a counter keyed by its first text block so we can
 // detect exactly which slots re-rendered.
@@ -163,6 +164,11 @@ function makeInstantiation(threshold?: number) {
       key === 'workbench.chat.virtualizationThreshold' ? threshold : undefined,
     onDidChangeConfiguration: Event.None,
   } as unknown as IConfigurationService)
+  services.set(IAcpPromptHistoryService, {
+    _serviceBrand: undefined,
+    entries: observableValue<readonly string[]>('t.history', []),
+    push: () => {},
+  } as IAcpPromptHistoryService)
   return new InstantiationService(services)
 }
 

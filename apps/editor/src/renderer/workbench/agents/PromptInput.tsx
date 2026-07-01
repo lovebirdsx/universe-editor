@@ -18,6 +18,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import {
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -64,11 +65,13 @@ import {
 import { MentionPopover } from './MentionPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
+import { PromptHistoryPopover } from './PromptHistoryPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
 import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import { AcpPromptContextInbox } from '../../services/acp/acpPromptContextInbox.js'
+import { IAcpPromptHistoryService } from '../../services/acp/acpPromptHistoryService.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { UsageIndicator } from './UsageIndicator.js'
 import { SessionCostIndicator } from './SessionCostIndicator.js'
@@ -80,13 +83,18 @@ import styles from './agents.module.css'
 interface PopoverHandleState {
   slashOpen: boolean
   mentionOpen: boolean
+  historyOpen: boolean
   slashMatches: readonly AvailableCommand[]
   mentionMatches: readonly MentionFileEntry[]
   slashIndex: number
   mentionIndex: number
+  historyIndex: number
+  historyEntries: readonly string[]
   mentionQuery: ActiveMentionQuery | null
   acceptSlash: (cmd: AvailableCommand) => void
   acceptMention: (entry: MentionFileEntry, q: ActiveMentionQuery) => void
+  acceptHistory: () => void
+  restoreHistoryDraft: () => void
 }
 
 export function PromptInput({
@@ -105,6 +113,8 @@ export function PromptInput({
   const [dropActive, setDropActive] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const [historyIndex, setHistoryIndex] = useState(0)
   // User-driven dismissal of the popover for the current token. Reset
   // every time the token disappears so the popover comes back when the
   // user starts a fresh command/mention.
@@ -119,6 +129,9 @@ export function PromptInput({
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  // Saves the in-progress draft text when the user enters history navigation mode,
+  // so Escape / Down-past-end restores it.
+  const historyDraftRef = useRef('')
   // Latest popover state + accept callbacks, read by the WidgetHandle methods
   // (bound once) when a suggestion command fires. Refreshed every render.
   const popoverStateRef = useRef<PopoverHandleState | null>(null)
@@ -130,11 +143,13 @@ export function PromptInput({
   const dialogService = useService(IDialogService)
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
+  const historyService = useService(IAcpPromptHistoryService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
   const timeline = useObservable(session.timeline)
+  const historyEntries = useObservable(historyService.entries)
   const running = status === 'running'
   const hasUserMessages = timeline.some(
     (item) => item.kind === 'message' && item.message.role === 'user',
@@ -159,6 +174,12 @@ export function PromptInput({
     ref.current.popoverSelectNext = () => {
       const s = popoverStateRef.current
       if (!s) return
+      if (s.historyOpen) {
+        if (s.historyIndex < s.historyEntries.length - 1) {
+          setHistoryIndex((i) => i + 1)
+        }
+        return
+      }
       if (s.mentionOpen && s.mentionMatches.length > 0) {
         setMentionIndex((i) => (i + 1) % s.mentionMatches.length)
       } else if (s.slashOpen && s.slashMatches.length > 0) {
@@ -168,6 +189,14 @@ export function PromptInput({
     ref.current.popoverSelectPrev = () => {
       const s = popoverStateRef.current
       if (!s) return
+      if (s.historyOpen) {
+        if (s.historyIndex > 0) {
+          setHistoryIndex((i) => i - 1)
+        } else {
+          s.restoreHistoryDraft()
+        }
+        return
+      }
       if (s.mentionOpen && s.mentionMatches.length > 0) {
         setMentionIndex((i) => (i - 1 + s.mentionMatches.length) % s.mentionMatches.length)
       } else if (s.slashOpen && s.slashMatches.length > 0) {
@@ -177,6 +206,10 @@ export function PromptInput({
     ref.current.popoverAccept = () => {
       const s = popoverStateRef.current
       if (!s) return
+      if (s.historyOpen) {
+        s.acceptHistory()
+        return
+      }
       if (s.mentionOpen && s.mentionQuery !== null && s.mentionMatches.length > 0) {
         const target = s.mentionMatches[s.mentionIndex] ?? s.mentionMatches[0]
         if (target) s.acceptMention(target, s.mentionQuery)
@@ -188,6 +221,10 @@ export function PromptInput({
     ref.current.popoverHide = () => {
       const s = popoverStateRef.current
       if (!s) return
+      if (s.historyOpen) {
+        s.restoreHistoryDraft()
+        return
+      }
       if (s.mentionOpen) setMentionDismissed(true)
       else if (s.slashOpen) setSlashDismissed(true)
     }
@@ -210,6 +247,11 @@ export function PromptInput({
     if (prev !== undefined && prev !== session.id) {
       textareaRef.current?.focus()
     }
+  }, [session.id])
+
+  // Close the history popover when switching sessions.
+  useEffect(() => {
+    setHistoryOpen(false)
   }, [session.id])
 
   // Initial-mount focus for callers that opt in (full-screen editor).
@@ -301,7 +343,7 @@ export function PromptInput({
   // Report popover open/closed up to the widget service, which flips
   // `acpPromptPopupVisible` for the focused widget. The suggestion commands
   // (Select Next/Prev, Accept, Hide) gate their keybindings on that contextKey.
-  const popoverOpen = slashOpen || mentionOpen
+  const popoverOpen = slashOpen || mentionOpen || historyOpen
   useEffect(() => {
     onPopoverOpenChange?.(popoverOpen)
   }, [onPopoverOpenChange, popoverOpen])
@@ -347,16 +389,48 @@ export function PromptInput({
     })
   }
 
+  const acceptHistory = useCallback((): void => {
+    setHistoryOpen(false)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) el.setSelectionRange(el.value.length, el.value.length)
+    })
+  }, [])
+
+  const restoreHistoryDraft = useCallback((): void => {
+    const draft = historyDraftRef.current
+    setHistoryOpen(false)
+    setText(draft)
+    setCaret(draft.length)
+    requestAnimationFrame(() => {
+      const el = textareaRef.current
+      if (el) el.setSelectionRange(draft.length, draft.length)
+    })
+  }, [])
+
+  // Sync textarea text when the user navigates through history entries.
+  useEffect(() => {
+    if (!historyOpen) return
+    const entry = historyEntries[historyIndex] ?? ''
+    setText(entry)
+    setCaret(entry.length)
+  }, [historyOpen, historyIndex, historyEntries])
+
   popoverStateRef.current = {
     slashOpen,
     mentionOpen,
+    historyOpen,
     slashMatches,
     mentionMatches,
     slashIndex,
     mentionIndex,
+    historyIndex,
+    historyEntries,
     mentionQuery,
     acceptSlash,
     acceptMention,
+    acceptHistory,
+    restoreHistoryDraft,
   }
 
   const submit = async (e?: FormEvent | KeyboardEvent): Promise<void> => {
@@ -385,10 +459,12 @@ export function PromptInput({
     AcpPromptDraftCache.clear(session.id)
     setMentions([])
     setContexts([])
+    setHistoryOpen(false)
     setSlashDismissed(false)
     setMentionDismissed(false)
     setSlashIndex(0)
     setMentionIndex(0)
+    historyService.push(value)
     void session.sendPrompt(value, recorded, attached)
   }
 
@@ -423,6 +499,19 @@ export function PromptInput({
   }
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
+    // Open history popover when ↑ is pressed on the first line and no other
+    // popover is active. Once open, navigation is routed through the global
+    // WidgetHandle commands gated on `acpPromptPopupVisible`.
+    if (!popoverOpen && e.key === 'ArrowUp') {
+      const ta = textareaRef.current
+      if (ta && isOnFirstLine(ta) && historyEntries.length > 0) {
+        e.preventDefault()
+        historyDraftRef.current = text
+        setHistoryIndex(0)
+        setHistoryOpen(true)
+        return
+      }
+    }
     // Popover navigation / accept / hide is handled by global commands gated on
     // `acpPromptPopupVisible` (see agentActions). When a popover is open the
     // global handler consumes those keys before they reach here. We only own the
@@ -496,7 +585,17 @@ export function PromptInput({
         onReveal={revealContext}
       />
       <div className={styles['promptComposer']}>
-        {slashOpen ? (
+        {historyOpen && historyEntries.length > 0 ? (
+          <PromptHistoryPopover
+            entries={historyEntries}
+            activeIndex={Math.min(historyIndex, Math.max(historyEntries.length - 1, 0))}
+            onSelect={(entry) => {
+              setText(entry)
+              acceptHistory()
+            }}
+            onHover={setHistoryIndex}
+          />
+        ) : slashOpen ? (
           <SlashCommandPopover
             commands={slashMatches}
             activeIndex={Math.min(slashIndex, Math.max(slashMatches.length - 1, 0))}
@@ -519,6 +618,7 @@ export function PromptInput({
             .join(' ')}
           value={text}
           onChange={(e) => {
+            if (historyOpen) setHistoryOpen(false)
             const v = e.target.value
             const c = e.target.selectionStart ?? v.length
             setText(v)
@@ -589,6 +689,11 @@ export function extractSlashQuery(text: string, caret: number): string | null {
   while (end < text.length && !/\s/.test(text[end]!)) end++
   if (caret > end) return null
   return text.slice(1, end)
+}
+
+/** Returns true when the textarea cursor sits on the first line (no newline before it). */
+function isOnFirstLine(ta: HTMLTextAreaElement): boolean {
+  return !ta.value.slice(0, ta.selectionStart).includes('\n')
 }
 
 /**
