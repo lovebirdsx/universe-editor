@@ -201,7 +201,7 @@ import {
 } from './gitBlameActions.js'
 import { ShowStartupPerformanceAction } from './performanceActions.js'
 import { ToggleKeybindingsTroubleshootingAction } from './developerActions.js'
-import { OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
+import { OpenDocsAction, OpenEditorGuideAction, OpenAgentGuideAction } from './helpActions.js'
 import {
   OpenMarkdownPreviewAction,
   OpenMarkdownPreviewToSideAction,
@@ -416,6 +416,7 @@ registerAction2(SwitchWindowAction)
 registerAction2(ExitAction)
 registerAction2(ToggleDevToolsAction)
 registerAction2(AboutAction)
+registerAction2(OpenDocsAction)
 registerAction2(OpenEditorGuideAction)
 registerAction2(OpenAgentGuideAction)
 registerAction2(OpenUserDataFolderAction)

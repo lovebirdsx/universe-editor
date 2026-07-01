@@ -95,8 +95,17 @@ export function WelcomeEditor(_props: { input: IEditorInput }) {
         </li>
       </ul>
       <section className={styles['welcome-docs']}>
-        <h2>{localize('welcome.gettingStarted', 'Getting Started')}</h2>
+        <h2>{localize('welcome.docs.title', 'Documentation')}</h2>
         <ul>
+          <li>
+            <button
+              type="button"
+              className={styles['welcome-doc-item']}
+              onClick={() => editorService.openEditor(new DocEditorInput('index'))}
+            >
+              {localize('welcome.docs.center', 'Browse the documentation center')}
+            </button>
+          </li>
           <li>
             <button
               type="button"

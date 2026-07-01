@@ -19,6 +19,23 @@ import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { renderReleaseNotesMarkdown } from '../services/releaseNotes/releaseNotes.js'
 
+export class OpenDocsAction extends Action2 {
+  static readonly ID = 'workbench.action.openDocs'
+  constructor() {
+    super({
+      id: OpenDocsAction.ID,
+      title: localize2('action.openDocs.title', 'Documentation'),
+      category: localize2('command.category.help', 'Help'),
+      menu: { id: MenuId.MenubarHelpMenu, group: '0_docs', order: 0 },
+      f1: true,
+    })
+  }
+
+  override run(accessor: ServicesAccessor): void {
+    accessor.get(IEditorService).openEditor(new DocEditorInput('index'))
+  }
+}
+
 export class OpenEditorGuideAction extends Action2 {
   static readonly ID = 'workbench.action.openEditorGuide'
   constructor() {

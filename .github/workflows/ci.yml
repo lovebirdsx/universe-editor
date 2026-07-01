@@ -34,6 +34,9 @@ jobs:
           restore-keys: |
             turbo-${{ runner.os }}-
 
+      - name: Docs link check
+        run: pnpm docs:check
+
       - name: Lint
         run: pnpm lint
 
