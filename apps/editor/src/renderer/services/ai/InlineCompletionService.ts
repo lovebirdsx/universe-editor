@@ -521,22 +521,35 @@ const SYSTEM_PROMPT = [
   'You are an inline text completion engine, like GitHub Copilot.',
   'The user message contains the document around the cursor: text before the',
   'cursor is wrapped as <|prefix|>…<|cursor|>, text after as <|cursor|>…<|suffix|>.',
-  'Your output is inserted verbatim at the cursor, immediately after the prefix.',
-  'If the completion should begin on a new line (for example a new list item, a',
-  'new statement, or a new paragraph), your output MUST start with a newline',
-  'character — otherwise it is glued onto the end of the current line.',
-  'Output ONLY the raw text to insert — no explanations, no markdown code fences,',
-  'no repetition of the surrounding text. Keep it focused; use multiple lines only',
-  'when natural. If nothing should be inserted, output nothing.',
+  'Your reply MUST begin with a single directive line declaring whether the',
+  'completion starts on its own new line: write `<|newline|>true` when it should',
+  'begin on a fresh line (for example a new list item, statement, or paragraph),',
+  'or `<|newline|>false` when it continues the current line right after the prefix.',
+  'Put the directive on its own line, then the raw text to insert on the following',
+  'lines. Do NOT add a leading newline yourself — the directive alone controls',
+  'that, and the editor applies it.',
+  'After the directive output ONLY the raw text to insert — no explanations, no',
+  'markdown code fences, no repetition of the surrounding text. Keep it focused;',
+  'use multiple lines only when natural. If nothing should be inserted, reply with',
+  '`<|newline|>false` and no text.',
 ].join(' ')
 
 /**
- * Clean a model reply into insertable text: strip code fences the model may wrap
- * around its answer, drop a tail that merely repeats the suffix, and collapse to
- * a single line when multiline is off. Exported for unit tests.
+ * Clean a model reply into insertable text: read the leading `<|newline|>` line
+ * directive (whether the completion starts on a fresh line), strip code fences
+ * the model may wrap around its answer, drop a tail that merely repeats the
+ * suffix, and collapse to a single line when multiline is off. Exported for unit
+ * tests.
+ *
+ * Rather than trust the model to emit a leading `\n` (unreliable — it forgets or
+ * adds spurious ones), we make it declare the intent explicitly and apply the
+ * newline here. When the directive is absent (older/weaker models), we fall back
+ * to honoring whatever leading newline the model produced.
  */
 export function sanitizeCompletion(raw: string, suffix: string, multiline: boolean): string {
-  let text = stripCodeFence(raw)
+  const { newline, body } = parseNewlineDirective(raw)
+
+  let text = stripCodeFence(body)
   // Models sometimes echo the suffix back; if our reply ends with the start of
   // the existing suffix, trim that overlap so we don't duplicate it.
   text = trimSuffixOverlap(text, suffix)
@@ -544,8 +557,33 @@ export function sanitizeCompletion(raw: string, suffix: string, multiline: boole
     const nl = text.indexOf('\n')
     if (nl !== -1) text = text.slice(0, nl)
   }
+
+  if (newline !== undefined) {
+    // The directive is authoritative: if the model leaked a leading newline into
+    // the body, strip it along with the now-meaningless new-line indentation,
+    // then apply exactly what the directive declared. A leading space with no
+    // newline is left intact — it's real content (e.g. ` = 1`).
+    text = text.replace(/^\r?\n\s*/, '')
+    // Never offer a pure-whitespace completion.
+    if (text.trim().length === 0) return ''
+    return newline ? '\n' + text : text
+  }
+
   // Never offer a pure-whitespace completion.
   return text.trim().length === 0 ? '' : text
+}
+
+/**
+ * Pull the leading `<|newline|>true|false` directive off a reply. Returns the
+ * declared newline intent (undefined when the model omitted the directive) and
+ * the remaining body. Tolerant of surrounding whitespace and case. Only a single
+ * separator newline after the directive is consumed — content the model glued
+ * onto the same line (e.g. `<|newline|>false孟浩然`) stays in the body.
+ */
+function parseNewlineDirective(raw: string): { newline: boolean | undefined; body: string } {
+  const match = /^\s*<\|newline\|>\s*(true|false)[^\S\r\n]*\r?\n?/i.exec(raw)
+  if (!match) return { newline: undefined, body: raw }
+  return { newline: match[1]!.toLowerCase() === 'true', body: raw.slice(match[0].length) }
 }
 
 function stripCodeFence(raw: string): string {

@@ -213,6 +213,45 @@ describe('sanitizeCompletion', () => {
   it('returns empty for whitespace-only replies', () => {
     expect(sanitizeCompletion('   \n  ', '', true)).toBe('')
   })
+
+  it('prepends a newline when the directive declares true', () => {
+    expect(sanitizeCompletion('<|newline|>true\nconst a = 1', '', true)).toBe('\nconst a = 1')
+  })
+
+  it('keeps the completion on the current line when the directive declares false', () => {
+    expect(sanitizeCompletion('<|newline|>false\nconst a = 1', '', true)).toBe('const a = 1')
+  })
+
+  it('ignores a leaked leading newline in the body, trusting the directive', () => {
+    // Directive says false but the model still emitted a stray newline → strip it.
+    expect(sanitizeCompletion('<|newline|>false\n\n  x', '', true)).toBe('x')
+    // Directive says true and the model also added its own newline → collapse to one.
+    expect(sanitizeCompletion('<|newline|>true\n\nx', '', true)).toBe('\nx')
+  })
+
+  it('parses the directive case-insensitively with surrounding whitespace', () => {
+    expect(sanitizeCompletion('  <|newline|> TRUE \nfoo', '', true)).toBe('\nfoo')
+  })
+
+  it('keeps body glued onto the directive line (no separating newline)', () => {
+    // Real model output: `<|newline|>false孟浩然` — directive and body share a line.
+    expect(sanitizeCompletion('<|newline|>false孟浩然', '', true)).toBe('孟浩然')
+    expect(sanitizeCompletion('<|newline|>true孟浩然', '', true)).toBe('\n孟浩然')
+  })
+
+  it('applies the directive before code-fence stripping and suffix trim', () => {
+    expect(sanitizeCompletion('<|newline|>true\n```ts\nfoobar\n```', 'bar baz', true)).toBe('\nfoo')
+  })
+
+  it('returns empty when the directive is present but the body is blank', () => {
+    expect(sanitizeCompletion('<|newline|>false\n', '', true)).toBe('')
+    expect(sanitizeCompletion('<|newline|>true\n   ', '', true)).toBe('')
+  })
+
+  it('falls back to honoring a leading newline when the directive is absent', () => {
+    // Older/weaker models without the directive: keep the historical behavior.
+    expect(sanitizeCompletion('\nconst a = 1', '', true)).toBe('\nconst a = 1')
+  })
 })
 
 describe('InlineCompletionService.provide', () => {
