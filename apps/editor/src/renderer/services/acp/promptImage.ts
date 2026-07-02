@@ -1,7 +1,7 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Prompt images — pictures the user attaches to a prompt by pasting (Ctrl+V),
- *  dropping an image file, or picking one via the attach button. Mirrors the
+ *  Prompt images — pictures the user attaches to a prompt by pasting (Ctrl+V)
+ *  or dropping an image file. Mirrors the
  *  SelectionContext pipeline: a typed value carried on PromptInput state +
  *  QueuedPrompt, serialized into ACP `image` ContentBlocks on submit.
  *
@@ -22,7 +22,7 @@ export interface PromptImage {
   readonly dataBase64: string
   /** Decoded byte size, used for the size-limit check and the chip tooltip. */
   readonly byteSize: number
-  /** Original file name when available (drop / file picker); absent for pastes. */
+  /** Original file name when available from a drop; absent for pastes. */
   readonly name?: string
 }
 
@@ -34,7 +34,7 @@ export interface ImageLimits {
   readonly maxCount: number
 }
 
-/** MIME types we accept. Kept in sync with the file picker's `accept` attr. */
+/** MIME types we accept for pasted or dropped images. */
 export const SUPPORTED_IMAGE_MIME: readonly string[] = [
   'image/png',
   'image/jpeg',
@@ -77,7 +77,7 @@ export function composeImageBlocks(images: readonly PromptImage[]): readonly Con
 }
 
 /**
- * Read a browser File/Blob (from paste, drop, or the file picker) into a
+ * Read a browser File/Blob (from paste or drop) into a
  * {@link PromptImage}. Rejects if the reader fails. Does NOT validate — the
  * caller runs {@link validateImage} first (it needs the current count).
  */

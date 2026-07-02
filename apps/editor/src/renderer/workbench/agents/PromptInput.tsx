@@ -42,13 +42,7 @@ import {
 } from '@universe-editor/platform'
 import { dragContainsResources } from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
-import {
-  AlignJustify,
-  FoldVertical,
-  ImagePlus,
-  UnfoldVertical,
-  type LucideIcon,
-} from 'lucide-react'
+import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
 import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
@@ -342,7 +336,7 @@ export function PromptInput({
     [config],
   )
 
-  // Ingest images from paste / drop / picker. Gates on the agent capability,
+  // Ingest images from paste / drop. Gates on the agent capability,
   // validates each file, then reads it to base64 and appends. Warns once per
   // batch on the first rejection so a bad paste isn't silent.
   const acceptImageFiles = useCallback(
@@ -762,13 +756,6 @@ export function PromptInput({
     void acceptImageFiles(files)
   }
 
-  const onPickImages = (e: React.ChangeEvent<HTMLInputElement>): void => {
-    const files = Array.from(e.target.files ?? [])
-    // Reset so picking the same file twice still fires onChange.
-    e.target.value = ''
-    if (files.length > 0) void acceptImageFiles(files)
-  }
-
   return (
     <form className={styles['promptForm']} onSubmit={submit}>
       <SelectionContextChips
@@ -852,7 +839,6 @@ export function PromptInput({
         ) : null}
         <SessionCostIndicator session={session} />
         <UsageIndicator />
-        {imageSupported ? <AttachImageButton onPick={onPickImages} /> : null}
         <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton
@@ -910,37 +896,6 @@ function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): str
         n: limits.maxCount,
       })
   }
-}
-
-function AttachImageButton({
-  onPick,
-}: {
-  onPick: (e: React.ChangeEvent<HTMLInputElement>) => void
-}) {
-  const inputRef = useRef<HTMLInputElement | null>(null)
-  const label = localize('acp.image.attach', 'Attach image')
-  return (
-    <>
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/png,image/jpeg,image/webp,image/gif"
-        multiple
-        hidden
-        onChange={onPick}
-        data-testid="acp-image-file-input"
-      />
-      <button
-        type="button"
-        className={styles['collapseToggle']}
-        onClick={() => inputRef.current?.click()}
-        title={label}
-        aria-label={label}
-      >
-        <ImagePlus size={14} strokeWidth={1.75} aria-hidden="true" />
-      </button>
-    </>
-  )
 }
 
 /**
