@@ -16,6 +16,7 @@ import { FileEditor } from './FileEditor.js'
 import { DiffEditor } from './DiffEditor.js'
 import { MergeEditor } from './MergeEditor.js'
 import { MarkdownPreviewEditor } from './MarkdownPreviewEditor.js'
+import { ImageEditor } from './ImageEditor.js'
 import { ReleaseNotesEditor } from './ReleaseNotesEditor.js'
 import { StartupPerformanceEditor } from './StartupPerformanceEditor.js'
 import { DocEditor } from './DocEditor.js'
@@ -37,6 +38,7 @@ editorComponentMap.set('file', FileEditor)
 editorComponentMap.set('diff', DiffEditor)
 editorComponentMap.set('merge', MergeEditor)
 editorComponentMap.set('markdown.preview', MarkdownPreviewEditor)
+editorComponentMap.set('image', ImageEditor)
 editorComponentMap.set('releaseNotes', ReleaseNotesEditor)
 editorComponentMap.set('startupPerformance', StartupPerformanceEditor)
 editorComponentMap.set('doc', DocEditor)

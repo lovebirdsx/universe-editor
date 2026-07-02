@@ -21,6 +21,7 @@ import {
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { PerfMarks } from '../shared/perf/marks.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
+import { installImageProtocol, registerImageScheme } from './ipc/imageProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
@@ -63,6 +64,10 @@ import './services/main-services.js'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 mark(PerfMarks.mainDidStart)
+
+// Must run before app.whenReady(): Electron only accepts privileged-scheme
+// registration during this window. The handler is installed after ready below.
+registerImageScheme()
 
 // Single entry point for CLI args / env vars / deployment config. Must be built
 // before any app.getPath('userData') call (e.g. new LogMainService()). The file
@@ -300,6 +305,7 @@ void app.whenReady().then(async () => {
   if (!hasSingleInstanceLock) return
   mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
+  installImageProtocol()
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
   mark(PerfMarks.mainDidCreateServices)

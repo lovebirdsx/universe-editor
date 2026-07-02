@@ -22,6 +22,7 @@ import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { ImageEditorInput } from '../services/editor/ImageEditorInput.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
@@ -105,6 +106,13 @@ export class BuiltInEditorProvidersContribution
         typeId: MarkdownPreviewInput.TYPE_ID,
         componentKey: 'markdown.preview',
         deserialize: (data) => MarkdownPreviewInput.deserialize(data),
+      }),
+    )
+    this._register(
+      EditorRegistry.registerEditorProvider({
+        typeId: ImageEditorInput.TYPE_ID,
+        componentKey: 'image',
+        deserialize: (data) => ImageEditorInput.deserialize(data),
       }),
     )
     this._register(

@@ -18,6 +18,8 @@ import {
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { ImageEditorInput } from '../services/editor/ImageEditorInput.js'
+import { IMAGE_FILE_EXTENSIONS } from '../services/editor/imageFileTypes.js'
 
 export class BuiltInEditorBindingsContribution
   extends Disposable
@@ -43,6 +45,23 @@ export class BuiltInEditorBindingsContribution
         (uri) => this._inst.createInstance(FileEditorInput, uri),
       ),
     )
+
+    // Image files open with the image preview editor by default (priority 100 >
+    // the catch-all's 1). "Reopen With..." lets the user fall back to the text
+    // editor for e.g. inspecting SVG source. Mirrors VSCode's media-preview.
+    for (const ext of IMAGE_FILE_EXTENSIONS) {
+      this._register(
+        this._resolver.registerEditor(
+          `**/*${ext}`,
+          {
+            typeId: ImageEditorInput.TYPE_ID,
+            displayName: 'Image Preview',
+            priority: 100,
+          },
+          (uri) => this._inst.createInstance(ImageEditorInput, uri),
+        ),
+      )
+    }
 
     // "Reopen With..." entry in the editor tab context menu.
     // EditorTabContextMenu passes { resource: state.resource.toJSON() } as args.
