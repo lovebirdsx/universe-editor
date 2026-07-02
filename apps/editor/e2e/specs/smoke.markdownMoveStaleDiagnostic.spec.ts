@@ -42,7 +42,6 @@ test.describe('@p1 markdown move: no stale broken-link diagnostic', () => {
     await workbench.waitForRestored()
 
     const { dir, aPath, bPath, subDir } = writeWorkspace()
-    const aUri = `file:///${aPath}`
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
     await page.evaluate(() =>
       window.__E2E__!.updateConfigValue('markdown.updateLinksOnFileMove.enabled', 'always'),
@@ -50,6 +49,10 @@ test.describe('@p1 markdown move: no stale broken-link diagnostic', () => {
 
     // 1) Open A so the language service caches its (old) link, then close it.
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath, { pinned: true }), aPath)
+    // Capture A's canonical URI from the editor rather than hand-building `file:///${aPath}`:
+    // on posix, tmpdir() paths start with `/`, so the manual form becomes `file:////tmp/...`
+    // (empty authority + leading `//`) which URI.parse rejects — Windows paths (`C:/…`) don't.
+    const aUri = (await page.evaluate(() => window.__E2E__!.getActiveEditorUri())) as string
     await expect
       .poll(() => page.evaluate((uri) => window.__E2E__!.getMarkdownMarkers(uri).length, aUri), {
         timeout: 15000,
