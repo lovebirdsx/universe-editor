@@ -102,11 +102,17 @@ const EXT = `\\.(?:${EXTS})${EXT_TAIL}`
 // bare path from crossing an inline-code boundary or swallowing the surrounding
 // prose — the false positives we used to see in mixed Chinese/code sentences.
 const NON_SEG = '\\s\\x00-\\x1f"\'`<>|*?,;{}()\\[\\]\\u0080-\\uffff'
-// Segment for absolute paths (may contain ':' only via the Windows drive prefix,
-// which is matched separately; a ':' here would be the start of a :line suffix).
-const SEG = `[^${NON_SEG}]`
-// Segment for the relative grammar: additionally bars the path separators and
-// ':' so a segment can't span a directory boundary or eat the location suffix.
+// Segment for absolute paths. Excludes the path separators '/' and '\' (a
+// segment can't span a directory boundary) while still allowing ':' — a raw
+// colon may appear inside a segment; the Windows drive prefix and the :line
+// suffix are matched separately. Excluding the separators is CRITICAL: when SEG
+// could itself contain '/', the `(?:SEG+/)*SEG+` alternations in WIN_ABS/UNIX_ABS
+// degenerated into a classic `(a+)+` shape and backtracked catastrophically
+// (exponentially) on slash-dense non-path text — e.g. an 8KB base64 `data:` URL
+// pasted into a message froze the renderer for tens of seconds.
+const SEG = `[^${NON_SEG}/\\\\]`
+// Segment for the relative grammar: additionally bars ':' so a segment can't eat
+// the location suffix. (Separators are already excluded by SEG above.)
 const REL_SEG = `[^${NON_SEG}:/\\\\]`
 
 // Windows absolute:   C:\path\file.ts  or  C:/path/file.ts

@@ -89,8 +89,9 @@ import {
 import { AcpSessionRegistry } from './acpSessionRegistry.js'
 import type { PromptMention } from './promptMentions.js'
 import type { SelectionContext } from './promptContext.js'
+import type { PromptImage } from './promptImage.js'
 
-export type { PromptMention, SelectionContext }
+export type { PromptMention, SelectionContext, PromptImage }
 export {
   AcpAbortError,
   type AcpMessage,

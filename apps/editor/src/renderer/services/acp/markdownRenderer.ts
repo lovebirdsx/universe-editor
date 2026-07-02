@@ -296,7 +296,7 @@ export function parseInline(text: string): readonly MdInline[] {
         if (urlEnd !== -1) {
           const alt = text.slice(i + 2, labelEnd)
           const src = text.slice(labelEnd + 2, urlEnd).trim()
-          if (isSafeHref(src)) {
+          if (isSafeHref(src) || isImageDataUrl(src)) {
             flush()
             out.push({ type: 'image', src, alt })
             i = urlEnd + 1
@@ -345,6 +345,15 @@ export function parseInline(text: string): readonly MdInline[] {
         if (urlEnd !== -1) {
           const label = text.slice(i + 1, labelEnd)
           const href = text.slice(labelEnd + 2, urlEnd).trim()
+          // An image embedded as a plain link — e.g. `[@image](data:image/..)`,
+          // how agents without an ACP image block carry a picture — renders as a
+          // real image (the label becomes its alt text).
+          if (isImageDataUrl(href)) {
+            flush()
+            out.push({ type: 'image', src: href, alt: label })
+            i = urlEnd + 1
+            continue
+          }
           if (
             isSafeHref(href) ||
             looksLikeFilePath(href) ||
@@ -497,6 +506,17 @@ function isWordChar(ch: string | undefined): boolean {
 /** Allow only http(s) and file URLs. */
 export function isSafeHref(href: string): boolean {
   return /^(?:https?:|file:)/i.test(href)
+}
+
+/**
+ * True for an inline base64 image data URL (`data:image/png;base64,...`). Only
+ * `image/*` is allowed — never arbitrary `data:` (which could carry scripts).
+ * Agents that lack an ACP image content block sometimes embed a picture as a
+ * markdown link/image with such a URL; we render those as real images instead of
+ * leaking a multi-KB string into the text.
+ */
+export function isImageDataUrl(href: string): boolean {
+  return /^data:image\/[a-z0-9.+-]+;base64,/i.test(href)
 }
 
 /** True for a same-document anchor link like `#section` (fragment only). */

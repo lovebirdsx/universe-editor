@@ -5,12 +5,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, act } from '@testing-library/react'
+import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import {
   Event,
   IConfigurationService,
   IDialogService,
   IFileSearchService,
+  IFileService,
+  INotificationService,
   InstantiationService,
   IWorkspaceService,
   observableValue,
@@ -21,6 +23,8 @@ import type {
   IConfigurationService as IConfigurationServiceType,
   IDialogService as IDialogServiceType,
   IFileSearchService as IFileSearchServiceType,
+  IFileService as IFileServiceType,
+  INotificationService as INotificationServiceType,
   ISettableObservable,
   IWorkspace,
   IWorkspaceService as IWorkspaceServiceType,
@@ -49,6 +53,7 @@ import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistory
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
+  notifySpy.mockClear()
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
 })
@@ -78,10 +83,15 @@ const stubWorkspaceService: IWorkspaceServiceType = {
   async removeRecent() {},
 } as unknown as IWorkspaceServiceType
 
-// Returns 0 (disabled) for all config keys so no confirmation dialog fires in tests.
+// Returns 0 (disabled) for the confirm-length key so no confirmation dialog
+// fires in tests; image limits get sane defaults so paste tests can attach.
 const stubConfigurationService: IConfigurationServiceType = {
   _serviceBrand: undefined,
-  get: () => 0 as never,
+  get: ((key: string) => {
+    if (key === 'acp.prompt.image.maxSizeMB') return 5
+    if (key === 'acp.prompt.image.maxCount') return 5
+    return 0
+  }) as never,
   onDidChangeConfiguration: Event.None,
   update: () => Promise.resolve(),
   keys: () => [],
@@ -99,6 +109,17 @@ const stubHistoryService: IAcpPromptHistoryService = {
   entries: observableValue<readonly string[]>('test.history', []),
   push: () => {},
 }
+
+const notifySpy = vi.fn()
+const stubNotificationService: INotificationServiceType = {
+  _serviceBrand: undefined,
+  notify: notifySpy,
+} as unknown as INotificationServiceType
+
+const stubFileService: IFileServiceType = {
+  _serviceBrand: undefined,
+  readFile: async () => new Uint8Array([1, 2, 3, 4]),
+} as unknown as IFileServiceType
 
 function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   const ws: IWorkspace = { folder, name: 'test' }
@@ -182,6 +203,8 @@ function renderWithServices(
   services.set(IConfigurationService, stubConfigurationService)
   services.set(IDialogService, stubDialogService)
   services.set(IAcpPromptHistoryService, stubHistoryService)
+  services.set(INotificationService, stubNotificationService)
+  services.set(IFileService, stubFileService)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -194,6 +217,7 @@ interface FakeSessionOptions {
   readonly status?: AcpSessionStatus
   readonly commands?: readonly AvailableCommand[]
   readonly usage?: AcpUsage
+  readonly imageSupported?: boolean
 }
 
 interface FakeSession extends IAcpSession {
@@ -240,6 +264,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     collapseMode: observableValue('test.collapseMode', 'default' as const),
     accumulatedRunningMs: observableValue('test.arm', 0),
     runningStartedAt: observableValue<number | undefined>('test.rsa', undefined),
+    imageSupported: observableValue<boolean>('test.imageSupported', opts.imageSupported ?? false),
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},
@@ -456,7 +481,7 @@ describe('PromptInput — submit and cancel', () => {
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'hello world' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(session.sendPrompt).toHaveBeenCalledWith('hello world', [], [])
+    expect(session.sendPrompt).toHaveBeenCalledWith('hello world', [], [], [])
     expect(ta.value).toBe('')
   })
 
@@ -493,7 +518,7 @@ describe('PromptInput — submit and cancel', () => {
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'steer left' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(session.sendPrompt).toHaveBeenCalledWith('steer left', [], [])
+    expect(session.sendPrompt).toHaveBeenCalledWith('steer left', [], [], [])
     expect(ta.value).toBe('')
   })
 
@@ -752,7 +777,81 @@ describe('PromptInput — draft persistence', () => {
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'send me' } })
     fireEvent.keyDown(ta, { key: 'Enter' })
-    expect(session.sendPrompt).toHaveBeenCalledWith('send me', [], [])
+    expect(session.sendPrompt).toHaveBeenCalledWith('send me', [], [], [])
     expect(AcpPromptDraftCache.load('s1')).toBeUndefined()
+  })
+
+  describe('image attachments', () => {
+    function makeImageFile(name = 'shot.png', type = 'image/png', size = 128): File {
+      const file = new File([new Uint8Array(size)], name, { type })
+      // happy-dom's File doesn't always reflect byte length in `size`; force it.
+      Object.defineProperty(file, 'size', { value: size })
+      return file
+    }
+
+    function pasteImage(ta: HTMLTextAreaElement, file: File): void {
+      fireEvent.paste(ta, {
+        clipboardData: {
+          items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+          files: [file],
+        },
+      })
+    }
+
+    it('pasting an image attaches a chip when the agent supports images', async () => {
+      const session = makeSession({ imageSupported: true })
+      renderWithServices(<PromptInput session={session} />)
+      const ta = getTextarea()
+      pasteImage(ta, makeImageFile())
+      // FileReader → base64 is async; the chip appears once the read settles.
+      expect(await screen.findByTestId('acp-prompt-image-chips')).toBeTruthy()
+      expect(notifySpy).not.toHaveBeenCalled()
+    })
+
+    it('sends attached images with the prompt', async () => {
+      const session = makeSession({ imageSupported: true })
+      renderWithServices(<PromptInput session={session} />)
+      const ta = getTextarea()
+      pasteImage(ta, makeImageFile())
+      await screen.findByTestId('acp-prompt-image-chips')
+      fireEvent.change(ta, { target: { value: 'look at this' } })
+      fireEvent.keyDown(ta, { key: 'Enter' })
+      const call = session.sendPrompt.mock.calls[0]
+      expect(call).toBeDefined()
+      const [text, mentions, contexts, images] = call!
+      expect(text).toBe('look at this')
+      expect(mentions).toEqual([])
+      expect(contexts).toEqual([])
+      expect(images).toHaveLength(1)
+      expect(images[0].mimeType).toBe('image/png')
+    })
+
+    it('rejects the paste and warns when the agent does not support images', async () => {
+      const session = makeSession({ imageSupported: false })
+      renderWithServices(<PromptInput session={session} />)
+      const ta = getTextarea()
+      pasteImage(ta, makeImageFile())
+      await waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1))
+      expect(screen.queryByTestId('acp-prompt-image-chips')).toBeNull()
+    })
+
+    it('dragging an in-app image (URI only, no File) attaches it', async () => {
+      const session = makeSession({ imageSupported: true })
+      renderWithServices(<PromptInput session={session} />)
+      const ta = getTextarea()
+      const uri = URI.file('/repo/assets/pic.png').toString()
+      // A resource drop must be claimed (default prevented) so it never bubbles
+      // to the editor group body, which would open the image as an editor.
+      const notPrevented = fireEvent.drop(ta, {
+        dataTransfer: {
+          files: [],
+          types: ['text/uri-list'],
+          getData: (mime: string) => (mime === 'text/uri-list' ? uri : ''),
+        },
+      })
+      expect(notPrevented).toBe(false)
+      // The image is read via IFileService and attached as a chip.
+      expect(await screen.findByTestId('acp-prompt-image-chips')).toBeTruthy()
+    })
   })
 })

@@ -97,6 +97,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     collapseMode: observableValue('cm', 'default' as const),
     accumulatedRunningMs: observableValue('arm', 0),
     runningStartedAt: observableValue<number | undefined>('rsa', undefined),
+    imageSupported: observableValue<boolean>('imageSupported', false),
     onDidRequireAuth: Event.None,
     presentPermission: () => {},
     presentQuestion: () => {},

@@ -9,11 +9,13 @@
 
 import type { PromptMention } from './promptMentions.js'
 import type { SelectionContext } from './promptContext.js'
+import type { PromptImage } from './promptImage.js'
 
 export interface AcpPromptDraft {
   readonly text: string
   readonly mentions: readonly PromptMention[]
   readonly contexts?: readonly SelectionContext[]
+  readonly images?: readonly PromptImage[]
   readonly caret?: number
 }
 

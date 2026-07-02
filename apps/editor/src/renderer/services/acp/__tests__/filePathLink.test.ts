@@ -106,6 +106,23 @@ describe('matchFilePathAt', () => {
     // A clean path immediately followed by CJK stops at the boundary.
     expect(matchFilePathAt('src/a.ts内置', 0)?.path).toBe('src/a.ts')
   })
+
+  it('does not catastrophically backtrack on a slash-dense data: URL (freeze repro)', () => {
+    // Regression: restoring a session with an image lands the image as a
+    // `[@image](data:image/png;base64,<~8KB>)` markdown text block. The inline
+    // parser probes matchFilePathAt at every position; the base64 body is dense
+    // with '/' and '+' and ends without a valid extension. When the path
+    // segment class could itself contain '/', the `(?:SEG+/)*SEG+` groups
+    // degenerated into `(a+)+` and backtracked exponentially — a single 8KB URL
+    // froze the renderer for tens of seconds. This must stay linear.
+    const base64 = Array.from({ length: 4000 }, (_, i) => 'ab/cd+ef'[i % 8]).join('')
+    const url = `data:image/png;base64,${base64}`
+    const start = Date.now()
+    for (let i = 0; i < url.length; i++) matchFilePathAt(url, i)
+    // Comfortably linear; the buggy version never returned within the vitest
+    // timeout. A generous ceiling avoids CI-machine flakiness.
+    expect(Date.now() - start).toBeLessThan(1000)
+  })
 })
 
 describe('matchFullFilePath', () => {

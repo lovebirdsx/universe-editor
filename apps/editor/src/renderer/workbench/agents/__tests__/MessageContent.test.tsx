@@ -108,6 +108,23 @@ describe('MessageContent', () => {
     expect(img.src).toBe('data:image/png;base64,YWJjZA==')
   })
 
+  it('opens the preview popover when the image block is clicked and closes on second click', () => {
+    renderContent([{ type: 'image', mimeType: 'image/png', data: 'YWJjZA==' }])
+    fireEvent.click(screen.getByTestId('acp-image-block'))
+    expect(screen.getByTestId('acp-image-preview-popover')).toBeTruthy()
+    fireEvent.click(screen.getByTestId('acp-image-block'))
+    expect(screen.queryByTestId('acp-image-preview-popover')).toBeNull()
+  })
+
+  it('renders a restored Codex text-embedded image as a ChatImage thumbnail', () => {
+    const dataUrl = 'data:image/png;base64,YWJjZA=='
+    renderContent([{ type: 'text', text: `[@image](${dataUrl})` }])
+    const img = screen.getByTestId('acp-image-block') as HTMLImageElement
+    expect(img.src).toBe(dataUrl)
+    // the raw markdown text must not leak through
+    expect(screen.queryByText(/\[@image\]/)).toBeNull()
+  })
+
   it('renders an audio placeholder', () => {
     renderContent([{ type: 'audio', mimeType: 'audio/wav', data: 'd2F2' }])
     const node = screen.getByTestId('acp-audio-block')

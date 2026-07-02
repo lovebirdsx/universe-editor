@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isAnchorHref,
+  isImageDataUrl,
   isSafeHref,
   parseInline,
   parseMarkdown,
@@ -404,6 +405,43 @@ describe('isSafeHref', () => {
   it('is case-insensitive on the scheme prefix', () => {
     expect(isSafeHref('HTTPS://x')).toBe(true)
     expect(isSafeHref('FILE:///x')).toBe(true)
+  })
+})
+
+describe('isImageDataUrl', () => {
+  it('accepts base64 data: URLs with an image/* mime type', () => {
+    expect(isImageDataUrl('data:image/png;base64,AAAA')).toBe(true)
+    expect(isImageDataUrl('data:image/jpeg;base64,/9j/')).toBe(true)
+    expect(isImageDataUrl('data:image/svg+xml;base64,PHN2')).toBe(true)
+    expect(isImageDataUrl('DATA:IMAGE/PNG;BASE64,AAAA')).toBe(true)
+  })
+
+  it('rejects non-image or non-base64 data: URLs (XSS guard)', () => {
+    expect(isImageDataUrl('data:text/html;base64,PHNjcmlwdD4=')).toBe(false)
+    expect(isImageDataUrl('data:image/png,rawtext')).toBe(false)
+    expect(isImageDataUrl('https://x/a.png')).toBe(false)
+    expect(isImageDataUrl('javascript:alert(1)')).toBe(false)
+  })
+})
+
+describe('parseInline — data:image embeds', () => {
+  const dataUrl = 'data:image/png;base64,iVBORw0KGgo='
+
+  it('parses ![alt](data:image/...) into an image node', () => {
+    expect(parseInline(`![shot](${dataUrl})`)).toEqual<readonly MdInline[]>([
+      { type: 'image', src: dataUrl, alt: 'shot' },
+    ])
+  })
+
+  it('parses [label](data:image/...) into an image node (Codex text form)', () => {
+    expect(parseInline(`[@image](${dataUrl})`)).toEqual<readonly MdInline[]>([
+      { type: 'image', src: dataUrl, alt: '@image' },
+    ])
+  })
+
+  it('still rejects non-image data: links as text', () => {
+    const r = parseInline('[x](data:text/html;base64,PHNjcmlwdD4=)')
+    expect(r.some((n) => n.type === 'image' || n.type === 'link')).toBe(false)
   })
 })
 

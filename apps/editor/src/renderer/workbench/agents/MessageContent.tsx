@@ -15,13 +15,14 @@
  *  tag and its close tag across separate text blocks.
  *--------------------------------------------------------------------------------------------*/
 
-import { memo, useMemo } from 'react'
+import { memo, useMemo, type ReactNode } from 'react'
 import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { parseCommandWrappers } from '../../services/acp/commandWrapper.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
 import { useOptionalService, useService } from '../useService.js'
 import { CommandInvocationBadge } from './CommandInvocationBadge.js'
+import { ChatImage } from './ChatImage.js'
 import styles from './agents.module.css'
 
 interface MessageContentProps {
@@ -126,9 +127,17 @@ function MarkdownBlock({ text, streaming }: { text: string; streaming: boolean }
       text={text}
       testId="acp-markdown"
       streaming={streaming}
+      renderImage={renderChatImage}
       {...(baseUri ? { baseUri } : {})}
     />
   )
+}
+
+// An image an agent embedded in markdown text (e.g. a base64 `data:` image on
+// session restore) renders as the same thumbnail-with-preview control used for
+// ACP image content blocks.
+function renderChatImage(src: string, alt: string): ReactNode {
+  return <ChatImage src={src} alt={alt} testId="acp-image-block" />
 }
 
 // ---------------------------------------------------------------------------
@@ -179,13 +188,5 @@ function ResourceLink({
 
 function ImageBlock({ mimeType, data }: { readonly mimeType: string; readonly data: string }) {
   const src = `data:${mimeType};base64,${data}`
-  return (
-    <img
-      src={src}
-      alt=""
-      className={styles['imageBlock']}
-      data-testid="acp-image-block"
-      data-mime={mimeType}
-    />
-  )
+  return <ChatImage src={src} alt="" testId="acp-image-block" mimeType={mimeType} />
 }

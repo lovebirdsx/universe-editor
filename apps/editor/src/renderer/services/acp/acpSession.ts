@@ -36,6 +36,7 @@ import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.
 import { isAuthRequiredError } from './acpAuthError.js'
 import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 import { composeContextBlocks, type SelectionContext } from './promptContext.js'
+import { composeImageBlocks, type PromptImage } from './promptImage.js'
 import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../shared/ai/codexPricing.js'
 import { estimateCodexCost } from './acpSessionCost.js'
 import {
@@ -219,6 +220,14 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private _embeddedContextSupported = false
 
+  /**
+   * Whether the connected agent advertised `promptCapabilities.image`. Cached
+   * from the same `initialize()` response so the UI can gate the paste/drop/pick
+   * entry points. Observable because the capability arrives async after attach,
+   * and the prompt input reacts to it. `false` until known.
+   */
+  readonly imageSupported: ISettableObservable<boolean>
+
   constructor(
     readonly id: string,
     readonly agentId: string,
@@ -272,6 +281,7 @@ export class AcpSession extends Disposable implements IAcpSession {
       `acp.session.runningStartedAt.${id}`,
       undefined,
     )
+    this.imageSupported = observableValue<boolean>(`acp.session.imageSupported.${id}`, false)
     this._configOptions = new ConfigOptionStateMachine({
       getConn: () => this._conn,
       telemetry: _telemetry,
@@ -315,8 +325,9 @@ export class AcpSession extends Disposable implements IAcpSession {
     // selection contexts without awaiting the initialize response per prompt.
     conn.initializeResult
       .then((res) => {
-        this._embeddedContextSupported =
-          res.agentCapabilities?.promptCapabilities?.embeddedContext === true
+        const caps = res.agentCapabilities?.promptCapabilities
+        this._embeddedContextSupported = caps?.embeddedContext === true
+        this.imageSupported.set(caps?.image === true, undefined)
       })
       .catch(() => {})
     this.sessionIdOnAgent.set(sessionIdOnAgent, undefined)
@@ -377,7 +388,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
-      this._dispatchPrompt(q.text, q.mentions, q.contexts).then(q.resolve, q.reject)
+      this._dispatchPrompt(q.text, q.mentions, q.contexts, q.images).then(q.resolve, q.reject)
     }
   }
 
@@ -484,6 +495,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     text: string,
     mentions?: readonly PromptMention[],
     contexts?: readonly SelectionContext[],
+    images?: readonly PromptImage[],
   ): Promise<void> {
     // Read-only preview session (foreign worktree): viewing only, no dispatch.
     if (this.readOnly) return
@@ -492,13 +504,13 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Always surface the user's message immediately, even while connecting, so
     // typing feels instant. The wire dispatch is deferred until the connection
     // is ready (queued) so the prompt is not lost.
-    this._appendMessage('user', text)
+    this._appendMessage('user', text, composeImageBlocks(images ?? []))
     void this._maybeGenerateTitle(text)
     // Still connecting — buffer the prompt; the returned promise settles when it
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
       try {
-        await this._connection.enqueue(text, mentions ?? [], contexts ?? [])
+        await this._connection.enqueue(text, mentions ?? [], contexts ?? [], images ?? [])
       } catch {
         // Connection failed before this queued prompt could be dispatched. The
         // failure is already surfaced as an [error] timeline message by
@@ -509,7 +521,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     // Connection failed during startup — nothing to dispatch onto.
     if (this._conn === undefined) return
-    await this._dispatchPrompt(text, mentions ?? [], contexts ?? [])
+    await this._dispatchPrompt(text, mentions ?? [], contexts ?? [], images ?? [])
   }
 
   /**
@@ -523,6 +535,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     text: string,
     mentions: readonly PromptMention[],
     contexts: readonly SelectionContext[],
+    images: readonly PromptImage[],
   ): Promise<void> {
     const conn = this._conn
     const sid = this.sessionIdOnAgent.get()
@@ -534,12 +547,15 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Attached selections lead the prompt as context blocks (EmbeddedResource
     // when the agent supports it, else a fenced-code text block).
     const contextBlocks = composeContextBlocks(contexts, this._embeddedContextSupported)
+    // Attached images lead the prompt as `image` ContentBlocks (after any
+    // selection context, before the user's text).
+    const imageBlocks = composeImageBlocks(images)
     const body = prompt.length > 0 ? [...prompt] : [{ type: 'text' as const, text }]
     const params: PromptRequest = {
       sessionId: sid,
       // Fall back to a single text block for empty/no-mention prompts so we
       // keep the wire shape stable even for trivial cases.
-      prompt: [...contextBlocks, ...body],
+      prompt: [...contextBlocks, ...imageBlocks, ...body],
     }
     const abort = new AbortController()
     this._inFlight.add(abort)
@@ -1054,9 +1070,16 @@ export class AcpSession extends Disposable implements IAcpSession {
     this._commitBatchedTx()
   }
 
-  private _appendMessage(role: AcpMessageRole, text: string): void {
+  private _appendMessage(
+    role: AcpMessageRole,
+    text: string,
+    leadingBlocks: readonly ContentBlock[] = [],
+  ): void {
     const id = `m${++this._msgCounter}`
-    const blocks: readonly ContentBlock[] = [{ type: 'text', text }]
+    // Image (or other) blocks lead, then the text block. Skip an empty text
+    // block so an image-only message doesn't carry a blank paragraph.
+    const textBlocks: readonly ContentBlock[] = text.length > 0 ? [{ type: 'text', text }] : []
+    const blocks: readonly ContentBlock[] = [...leadingBlocks, ...textBlocks]
     const message: AcpMessage = { id, role, blocks, text, streaming: false }
     this._messages = [...this._messages, message]
     this._upsertMessageInTimeline(message)

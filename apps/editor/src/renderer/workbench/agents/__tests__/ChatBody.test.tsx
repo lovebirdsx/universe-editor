@@ -100,6 +100,7 @@ function makeSession(
     collapseMode,
     accumulatedRunningMs: observableValue('t.arm', 0),
     runningStartedAt: observableValue<number | undefined>('t.rsa', undefined),
+    imageSupported: observableValue<boolean>('t.imageSupported', false),
     cycleCollapseMode: () => {
       const cur = collapseMode.get()
       const next = cur === 'default' ? 'collapsed' : cur === 'collapsed' ? 'expanded' : 'default'

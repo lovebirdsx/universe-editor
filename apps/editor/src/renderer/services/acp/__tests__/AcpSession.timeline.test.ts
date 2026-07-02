@@ -649,6 +649,36 @@ describe('AcpSession.timeline', () => {
     expect(endAgent?.streaming).toBe(false)
   })
 
+  it('dispatches attached images as leading image blocks and shows them on the user message', async () => {
+    svc.dispose()
+    client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })
+    svc = makeService(client)
+    const s = await svc.createSession()
+    await s.whenConnected()
+    const conn = client.connected[0]!
+
+    const promptPromise = s.sendPrompt('look', undefined, undefined, [
+      { id: 'i1', mimeType: 'image/png', dataBase64: 'AAA', byteSize: 3 },
+    ])
+    await new Promise((r) => setTimeout(r, 10))
+
+    expect(conn.agent.promptCalls).toHaveLength(1)
+    const blocks = conn.agent.promptCalls[0]!.prompt
+    // Image leads, then the text block.
+    expect(blocks[0]).toEqual({ type: 'image', data: 'AAA', mimeType: 'image/png' })
+    expect(blocks.some((b) => b.type === 'text' && b.text === 'look')).toBe(true)
+
+    // The user message on the timeline carries the image block too.
+    const userMsg = s.timeline
+      .get()
+      .flatMap((it) => (it.kind === 'message' ? [it.message] : []))
+      .find((m) => m.role === 'user')
+    expect(userMsg?.blocks.some((b) => b.type === 'image')).toBe(true)
+
+    await s.cancelTurn()
+    await promptPromise
+  })
+
   it('user prompt and [cancelled] sentinel messages are never marked streaming', async () => {
     svc.dispose()
     client = new FakeAcpClientService({ stubOptions: { promptHangs: true } })

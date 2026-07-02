@@ -55,6 +55,29 @@ async function runPrompt(id, params) {
   const turn = { cancelled: false }
   activeTurns.set(sessionId, turn)
 
+  // Test directive: "emit-image:<count>x<kb>" makes the agent stream <count>
+  // image chunks of ~<kb> KB base64 each. This reproduces the resume path where
+  // session/load replays stored images as full-base64 stdout lines — the case
+  // that used to freeze the renderer via the protocol tracer.
+  const imageDirective = /^emit-image:(\d+)x(\d+)/.exec(userText)
+  if (imageDirective) {
+    const count = Number(imageDirective[1])
+    const kb = Number(imageDirective[2])
+    const data = 'A'.repeat(kb * 1024)
+    for (let i = 0; i < count; i++) {
+      if (turn.cancelled) break
+      notify('session/update', {
+        sessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'image', mimeType: 'image/png', data },
+        },
+      })
+    }
+    activeTurns.delete(sessionId)
+    return reply(id, { stopReason: 'end_turn' })
+  }
+
   // Emit two streaming chunks.
   notify('session/update', {
     sessionId,

@@ -208,6 +208,35 @@ describe('MarkdownView', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
+  it('renders a data:image embed as a plain <img> by default', () => {
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgo='
+    const { container } = renderMarkdown(`![shot](${dataUrl})`)
+    const img = container.querySelector('img')
+    expect(img?.getAttribute('src')).toBe(dataUrl)
+    expect(img?.getAttribute('alt')).toBe('shot')
+  })
+
+  it('delegates image rendering to the renderImage prop when provided', () => {
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgo='
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver())
+    services.set(IConfigurationService, makeConfig())
+    const inst = new InstantiationService(services)
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView
+          text={`[@image](${dataUrl})`}
+          renderImage={(src, alt) => (
+            <span data-testid="custom-img" data-src={src} data-alt={alt} />
+          )}
+        />
+      </ServicesContext.Provider>,
+    )
+    const el = screen.getByTestId('custom-img')
+    expect(el.getAttribute('data-src')).toBe(dataUrl)
+    expect(el.getAttribute('data-alt')).toBe('@image')
+  })
+
   it('gives headings a slug anchor id (CJK kept)', () => {
     const { container } = renderMarkdown('## 子结构：ITalkItem\n\nbody')
     expect(container.querySelector('[data-anchor="子结构italkitem"]')?.tagName).toBe('H2')

@@ -216,6 +216,26 @@ export class AgentsConfigurationContribution extends Disposable implements IWork
               'Maximum number of prompt history entries stored globally (shared across all workspaces). Older entries are dropped when the limit is reached.',
             ),
           },
+          'acp.prompt.image.maxSizeMB': {
+            type: 'number',
+            default: 5,
+            minimum: 1,
+            maximum: 50,
+            description: localize(
+              'settings.acp.prompt.image.maxSizeMB',
+              'Maximum size in megabytes for a single image pasted, dropped, or attached to a prompt. Larger images are rejected.',
+            ),
+          },
+          'acp.prompt.image.maxCount': {
+            type: 'number',
+            default: 5,
+            minimum: 1,
+            maximum: 20,
+            description: localize(
+              'settings.acp.prompt.image.maxCount',
+              'Maximum number of images that can be attached to a single prompt.',
+            ),
+          },
         },
       }),
     )

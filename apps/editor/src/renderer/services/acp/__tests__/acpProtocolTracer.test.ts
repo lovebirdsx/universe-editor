@@ -5,7 +5,7 @@
 import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { LogLevel, NullLogger } from '@universe-editor/platform'
 import { OutputChannel } from '../../output/OutputService.js'
-import { AcpProtocolTracer } from '../acpProtocolTracer.js'
+import { AcpProtocolTracer, redactForTrace } from '../acpProtocolTracer.js'
 
 const enc = (msg: unknown): string => JSON.stringify(msg) + '\n'
 
@@ -116,6 +116,44 @@ describe('AcpProtocolTracer', () => {
     ])
   })
 
+  it('elides an oversized line (multi-MB base64 frame) instead of parsing it', () => {
+    const bigData = 'A'.repeat(4 * 1024 * 1024)
+    const line = enc({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: { update: { content: { type: 'image', data: bigData } } },
+    })
+    // Arrives as ~64KB chunks, the way stdout is delivered over IPC on resume.
+    const CHUNK = 64 * 1024
+    for (let i = 0; i < line.length; i += CHUNK) {
+      tracer.traceInboundChunk(line.slice(i, i + CHUNK))
+    }
+    const out = channel.content.get()
+    expect(out).not.toContain(bigData)
+    expect(out).toMatch(/← <large frame \d+ bytes elided>/)
+    expect(out.length).toBeLessThan(2000)
+    expect(logger.infoLines).toHaveLength(1)
+    expect(logger.infoLines[0]).toMatch(/← <large frame \d+ bytes elided>$/)
+  })
+
+  it('does not rescan the whole buffer on every chunk (scan offset advances)', () => {
+    // A large partial line split across many chunks must not accumulate past the
+    // cap; once it does, it is dropped and the next real line still parses.
+    const CHUNK = 64 * 1024
+    const partial = 'x'.repeat(2 * 1024 * 1024)
+    for (let i = 0; i < partial.length; i += CHUNK) {
+      tracer.traceInboundChunk(partial.slice(i, i + CHUNK))
+    }
+    // No newline seen yet → nothing emitted, buffer was capped (dropped), not held.
+    expect(channel.content.get()).toBe('')
+    // Close the oversized line, then send a normal one.
+    tracer.traceInboundChunk('\n')
+    tracer.traceInboundChunk(enc({ jsonrpc: '2.0', method: 'ping', params: { n: 1 } }))
+    const out = channel.content.get()
+    expect(out).toMatch(/← <large frame \d+ bytes elided>/)
+    expect(out).toContain("← Notification 'ping'")
+  })
+
   it('falls back to <unparseable> on bad JSON without throwing', () => {
     expect(() => tracer.traceInboundChunk('not-json{garbage}\n')).not.toThrow()
     expect(channel.content.get()).toContain('<unparseable>')
@@ -133,5 +171,77 @@ describe('AcpProtocolTracer', () => {
     expect(logger.infoLines.some((l) => l.startsWith(`[claude#xyz789] ← Response '?' (1)`))).toBe(
       true,
     )
+  })
+
+  it('redacts base64 image payloads instead of serializing them verbatim', () => {
+    const bigData = 'A'.repeat(500_000)
+    tracer.traceInboundChunk(
+      enc({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'sess_img',
+          update: {
+            type: 'user_message_chunk',
+            content: { type: 'image', mimeType: 'image/png', data: bigData },
+          },
+        },
+      }),
+    )
+    const out = channel.content.get()
+    expect(out).not.toContain(bigData)
+    expect(out).toContain('<base64 500000 chars>')
+    expect(out.length).toBeLessThan(2000)
+    expect(logger.infoLines[0]).toContain('<base64 500000 chars>')
+    expect(logger.infoLines[0]).not.toContain(bigData)
+  })
+})
+
+describe('redactForTrace', () => {
+  it('replaces image data with a byte-count placeholder', () => {
+    const redacted = redactForTrace({
+      type: 'image',
+      mimeType: 'image/png',
+      data: 'x'.repeat(9000),
+    }) as Record<string, unknown>
+    expect(redacted.data).toBe('<base64 9000 chars>')
+    expect(redacted.mimeType).toBe('image/png')
+  })
+
+  it('replaces audio data too', () => {
+    const redacted = redactForTrace({ type: 'audio', data: 'y'.repeat(5000) }) as Record<
+      string,
+      unknown
+    >
+    expect(redacted.data).toBe('<base64 5000 chars>')
+  })
+
+  it('truncates oversized non-media strings', () => {
+    expect(redactForTrace('z'.repeat(3000))).toBe('<string 3000 chars>')
+    expect(redactForTrace('short')).toBe('short')
+  })
+
+  it('leaves small text content untouched', () => {
+    const redacted = redactForTrace({ type: 'text', text: 'hello' }) as Record<string, unknown>
+    expect(redacted.text).toBe('hello')
+  })
+
+  it('recurses through arrays and nested objects', () => {
+    const redacted = redactForTrace({
+      content: [
+        { type: 'image', data: 'q'.repeat(4000) },
+        { type: 'text', text: 'ok' },
+      ],
+    }) as { content: Array<Record<string, unknown>> }
+    expect(redacted.content[0]!.data).toBe('<base64 4000 chars>')
+    expect(redacted.content[1]!.text).toBe('ok')
+  })
+
+  it('handles circular references without throwing', () => {
+    const obj: Record<string, unknown> = { name: 'root' }
+    obj.self = obj
+    expect(() => redactForTrace(obj)).not.toThrow()
+    const redacted = redactForTrace(obj) as Record<string, unknown>
+    expect(redacted.self).toBe('<circular>')
   })
 })

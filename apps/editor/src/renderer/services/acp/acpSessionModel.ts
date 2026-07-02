@@ -13,6 +13,7 @@ import type { McpTransport } from './acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
 import type { PromptMention } from './promptMentions.js'
 import type { SelectionContext } from './promptContext.js'
+import type { PromptImage } from './promptImage.js'
 
 export type AcpMessageRole = 'user' | 'agent' | 'thought'
 
@@ -306,6 +307,12 @@ export interface IAcpSession {
   /** Timestamp (epoch ms) when the current running segment started, or undefined if not running. */
   readonly runningStartedAt: IObservable<number | undefined>
   /**
+   * Whether the connected agent advertised `promptCapabilities.image`. The
+   * prompt input gates its paste/drop/pick entry points on this. Arrives async
+   * after the connection attaches; `false` until known.
+   */
+  readonly imageSupported: IObservable<boolean>
+  /**
    * Fires when a prompt (or other agent call) fails because the agent has no
    * usable credentials. The session itself has no access to the notification /
    * command services, so AcpSessionService owns the user-facing guidance.
@@ -341,11 +348,17 @@ export interface IAcpSession {
    * `contexts` are editor selections the user explicitly attached; each leads
    * the prompt as a context block (an EmbeddedResource when the agent supports
    * `embeddedContext`, else a fenced-code text block).
+   *
+   * `images` are pictures the user pasted / dropped / picked; each becomes an
+   * `image` ContentBlock leading the prompt. Only sent when the agent advertised
+   * `promptCapabilities.image` (the input gates on it), but the session accepts
+   * them unconditionally — the gate lives in the UI.
    */
   sendPrompt(
     text: string,
     mentions?: readonly PromptMention[],
     contexts?: readonly SelectionContext[],
+    images?: readonly PromptImage[],
   ): Promise<void>
   cancelTurn(): Promise<void>
   close(): Promise<void>

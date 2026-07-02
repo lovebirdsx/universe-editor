@@ -30,15 +30,25 @@ import {
 import {
   IConfigurationService,
   IFileSearchService,
+  IFileService,
   IWorkspaceService,
   IDialogService,
   IEditorService,
   IInstantiationService,
+  INotificationService,
+  Severity,
+  generateUuid,
   localize,
 } from '@universe-editor/platform'
 import { dragContainsResources } from '@universe-editor/workbench-ui'
 import { readDroppedResources, toMentionName } from '../../services/dnd/resourceDropTransfer.js'
-import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'lucide-react'
+import {
+  AlignJustify,
+  FoldVertical,
+  ImagePlus,
+  UnfoldVertical,
+  type LucideIcon,
+} from 'lucide-react'
 import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
@@ -47,6 +57,15 @@ import type {
   PromptMention,
   SelectionContext,
 } from '../../services/acp/acpSessionService.js'
+import {
+  blobToPromptImage,
+  bytesToPromptImage,
+  mimeTypeForFileName,
+  validateImage,
+  type ImageLimits,
+  type ImageRejectReason,
+  type PromptImage,
+} from '../../services/acp/promptImage.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
 import { URI } from '@universe-editor/platform'
@@ -64,6 +83,7 @@ import {
 } from '../../services/acp/mentionFileSearch.js'
 import { MentionPopover } from './MentionPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
+import { PromptImageChips } from './PromptImageChips.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { PromptHistoryPopover } from './PromptHistoryPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
@@ -126,6 +146,9 @@ export function PromptInput({
   const [contexts, setContexts] = useState<readonly SelectionContext[]>(
     () => AcpPromptDraftCache.load(session.id)?.contexts ?? [],
   )
+  const [images, setImages] = useState<readonly PromptImage[]>(
+    () => AcpPromptDraftCache.load(session.id)?.images ?? [],
+  )
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -144,12 +167,15 @@ export function PromptInput({
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
   const historyService = useService(IAcpPromptHistoryService)
+  const notification = useService(INotificationService)
+  const fileService = useService(IFileService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
   const commands = useObservable(session.availableCommands)
   const timeline = useObservable(session.timeline)
   const historyEntries = useObservable(historyService.entries)
+  const imageSupported = useObservable(session.imageSupported)
   const running = status === 'running'
   const hasUserMessages = timeline.some(
     (item) => item.kind === 'message' && item.message.role === 'user',
@@ -290,23 +316,137 @@ export function PromptInput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // mount only — session.id is stable for this component instance
 
-  // Persist the unsent draft (text + recorded mentions + attached contexts) per
-  // session so switching tabs / sessions and coming back restores it (see
-  // AcpPromptDraftCache). Kept alive while any of the three is non-empty so a
-  // draft with only attached selections (no text yet) survives a tab switch.
+  // Persist the unsent draft (text + recorded mentions + attached contexts +
+  // attached images) per session so switching tabs / sessions and coming back
+  // restores it (see AcpPromptDraftCache). Kept alive while any of the four is
+  // non-empty so a draft with only attachments (no text yet) survives a tab
+  // switch.
   useEffect(() => {
-    if (text || contexts.length > 0) {
-      AcpPromptDraftCache.save(session.id, { text, mentions, contexts, caret })
+    if (text || contexts.length > 0 || images.length > 0) {
+      AcpPromptDraftCache.save(session.id, { text, mentions, contexts, images, caret })
     } else {
       AcpPromptDraftCache.clear(session.id)
     }
-  }, [text, mentions, contexts, caret, session.id])
+  }, [text, mentions, contexts, images, caret, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
     () => (slashQuery === null ? [] : filterCommands(commands, slashQuery)),
     [commands, slashQuery],
   )
+  const imageLimits = useMemo<ImageLimits>(
+    () => ({
+      maxBytes: (config.get<number>('acp.prompt.image.maxSizeMB') ?? 5) * 1024 * 1024,
+      maxCount: config.get<number>('acp.prompt.image.maxCount') ?? 5,
+    }),
+    [config],
+  )
+
+  // Ingest images from paste / drop / picker. Gates on the agent capability,
+  // validates each file, then reads it to base64 and appends. Warns once per
+  // batch on the first rejection so a bad paste isn't silent.
+  const acceptImageFiles = useCallback(
+    async (fileList: readonly File[]): Promise<void> => {
+      if (fileList.length === 0) return
+      if (!imageSupported) {
+        notification.notify({
+          severity: Severity.Info,
+          message: localize(
+            'acp.image.unsupported',
+            'The current agent does not support image input.',
+          ),
+        })
+        return
+      }
+      let rejection: ImageRejectReason | null = null
+      const accepted: PromptImage[] = []
+      // Snapshot the count up front and grow it as we accept, so a single batch
+      // that exceeds maxCount is capped correctly.
+      let count = images.length
+      for (const file of fileList) {
+        const reason = validateImage(
+          { mimeType: file.type, byteSize: file.size },
+          count,
+          imageLimits,
+        )
+        if (reason !== null) {
+          rejection ??= reason
+          continue
+        }
+        try {
+          accepted.push(await blobToPromptImage(file, generateUuid(), file.name || undefined))
+          count++
+        } catch {
+          rejection ??= 'unsupported-type'
+        }
+      }
+      if (accepted.length > 0) {
+        setImages((prev) => [...prev, ...accepted])
+        textareaRef.current?.focus()
+      }
+      if (rejection !== null) {
+        notification.notify({
+          severity: Severity.Warning,
+          message: imageRejectMessage(rejection, imageLimits),
+        })
+      }
+    },
+    [imageSupported, images.length, imageLimits, notification],
+  )
+
+  // Attach images dragged from inside the app (Explorer): an internal drag
+  // carries only a URI, so the bytes are read via IFileService. Mirrors
+  // acceptImageFiles' gating + validation + one-shot rejection warning.
+  const acceptImageUris = useCallback(
+    async (uris: readonly URI[]): Promise<void> => {
+      if (uris.length === 0) return
+      if (!imageSupported) {
+        notification.notify({
+          severity: Severity.Info,
+          message: localize(
+            'acp.image.unsupported',
+            'The current agent does not support image input.',
+          ),
+        })
+        return
+      }
+      let rejection: ImageRejectReason | null = null
+      const accepted: PromptImage[] = []
+      let count = images.length
+      for (const uri of uris) {
+        const fileName = uri.path.slice(uri.path.lastIndexOf('/') + 1)
+        try {
+          const bytes = await fileService.readFile(uri)
+          const image = bytesToPromptImage(bytes, generateUuid(), fileName)
+          const reason = validateImage(
+            { mimeType: image.mimeType, byteSize: image.byteSize },
+            count,
+            imageLimits,
+          )
+          if (reason !== null) {
+            rejection ??= reason
+            continue
+          }
+          accepted.push(image)
+          count++
+        } catch {
+          rejection ??= 'unsupported-type'
+        }
+      }
+      if (accepted.length > 0) {
+        setImages((prev) => [...prev, ...accepted])
+        textareaRef.current?.focus()
+      }
+      if (rejection !== null) {
+        notification.notify({
+          severity: Severity.Warning,
+          message: imageRejectMessage(rejection, imageLimits),
+        })
+      }
+    },
+    [imageSupported, images.length, imageLimits, notification, fileService],
+  )
+
   // Slash popover takes precedence: a buffer that starts with `/` is a
   // slash command, even if it also contains `@`. The mention parser is
   // caret-aware so it only fires when the user is actively typing `@…`.
@@ -435,10 +575,11 @@ export function PromptInput({
 
   const submit = async (e?: FormEvent | KeyboardEvent): Promise<void> => {
     e?.preventDefault()
-    if (!text.trim()) return
+    // Allow an image-only prompt (no text) as long as something is attached.
+    if (!text.trim() && images.length === 0) return
 
     const minLen = config.get<number>('acp.prompt.confirmShortFirstMessageLength') ?? 0
-    if (minLen > 0 && !hasUserMessages && text.trim().length < minLen) {
+    if (minLen > 0 && !hasUserMessages && text.trim().length < minLen && images.length === 0) {
       const { confirmed } = await dialogService.confirm({
         message: localize('acp.prompt.confirmShort.message', 'Send this short message?'),
         detail: localize(
@@ -455,17 +596,19 @@ export function PromptInput({
     const value = text
     const recorded = mentions
     const attached = contexts
+    const attachedImages = images
     setText('')
     AcpPromptDraftCache.clear(session.id)
     setMentions([])
     setContexts([])
+    setImages([])
     setHistoryOpen(false)
     setSlashDismissed(false)
     setMentionDismissed(false)
     setSlashIndex(0)
     setMentionIndex(0)
     historyService.push(value)
-    void session.sendPrompt(value, recorded, attached)
+    void session.sendPrompt(value, recorded, attached, attachedImages)
   }
 
   const revealContext = (ctx: SelectionContext): void => {
@@ -550,13 +693,38 @@ export function PromptInput({
 
   const onPromptDrop = (e: React.DragEvent<HTMLTextAreaElement>): void => {
     setDropActive(false)
-    const resources = readDroppedResources(e)
-    if (resources.length === 0) return
+    if (!dragContainsResources(e.dataTransfer)) return
+    // A resource drop is ours to handle: preventDefault + stopPropagation up
+    // front so it can never bubble to the editor group body (which would open
+    // the file) or trigger the browser's navigate-to-file default — even when
+    // the drop lands on a part of the input we don't end up consuming.
     e.preventDefault()
-    // Prevent the drop from bubbling to the editor group body, which would
-    // otherwise open the dropped files as editors instead of @-mentioning them.
     e.stopPropagation()
-    const picks = resources.map((uri) => toMentionName(uri, workspaceRoot))
+
+    // OS-external image files carry real File objects; route them by MIME.
+    const imageFiles = Array.from(e.dataTransfer.files ?? []).filter((f) =>
+      f.type.startsWith('image/'),
+    )
+    if (imageFiles.length > 0) void acceptImageFiles(imageFiles)
+
+    // Split remaining resources: image URIs (internal drag from Explorer, or
+    // OS files whose File object we already consumed above) become attachments;
+    // everything else becomes an @-mention.
+    const droppedFileCount = e.dataTransfer.files?.length ?? 0
+    const resources = readDroppedResources(e)
+    const imageUris: URI[] = []
+    const mentionUris: URI[] = []
+    for (const uri of resources) {
+      if (mimeTypeForFileName(uri.path) !== '') imageUris.push(uri)
+      else mentionUris.push(uri)
+    }
+    // Only read image URIs when there were no File objects for them (internal
+    // drag). When the OS provided Files we already handled them via imageFiles;
+    // reading again would double-attach.
+    if (droppedFileCount === 0 && imageUris.length > 0) void acceptImageUris(imageUris)
+
+    if (mentionUris.length === 0) return
+    const picks = mentionUris.map((uri) => toMentionName(uri, workspaceRoot))
     let next = text
     let pos = textareaRef.current?.selectionStart ?? caret
     for (const p of picks) {
@@ -577,12 +745,40 @@ export function PromptInput({
     })
   }
 
+  // Ctrl+V of a screenshot / copied image: pull image files out of the
+  // clipboard and attach them. Non-image pastes fall through to the textarea.
+  const onPromptPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const files: File[] = []
+    for (const item of Array.from(items)) {
+      if (item.kind === 'file' && item.type.startsWith('image/')) {
+        const file = item.getAsFile()
+        if (file) files.push(file)
+      }
+    }
+    if (files.length === 0) return
+    e.preventDefault()
+    void acceptImageFiles(files)
+  }
+
+  const onPickImages = (e: React.ChangeEvent<HTMLInputElement>): void => {
+    const files = Array.from(e.target.files ?? [])
+    // Reset so picking the same file twice still fires onChange.
+    e.target.value = ''
+    if (files.length > 0) void acceptImageFiles(files)
+  }
+
   return (
     <form className={styles['promptForm']} onSubmit={submit}>
       <SelectionContextChips
         contexts={contexts}
         onRemove={(i) => setContexts((prev) => prev.filter((_, idx) => idx !== i))}
         onReveal={revealContext}
+      />
+      <PromptImageChips
+        images={images}
+        onRemove={(id) => setImages((prev) => prev.filter((img) => img.id !== id))}
       />
       <div className={styles['promptComposer']}>
         {historyOpen && historyEntries.length > 0 ? (
@@ -636,6 +832,7 @@ export function PromptInput({
           onDragOver={onPromptDragOver}
           onDragLeave={onPromptDragLeave}
           onDrop={onPromptDrop}
+          onPaste={onPromptPaste}
           placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
           rows={3}
           spellCheck={false}
@@ -655,12 +852,13 @@ export function PromptInput({
         ) : null}
         <SessionCostIndicator session={session} />
         <UsageIndicator />
+        {imageSupported ? <AttachImageButton onPick={onPickImages} /> : null}
         <CollapseToggleButton mode={collapseMode} onCycle={() => session.cycleCollapseMode()} />
         {running ? <StopButton onCancel={() => void session.cancelTurn()} /> : null}
         <SendButton
           session={session}
           running={running}
-          disabled={!text.trim()}
+          disabled={!text.trim() && images.length === 0}
           onSend={() => {
             void submit()
           }}
@@ -694,6 +892,55 @@ export function extractSlashQuery(text: string, caret: number): string | null {
 /** Returns true when the textarea cursor sits on the first line (no newline before it). */
 function isOnFirstLine(ta: HTMLTextAreaElement): boolean {
   return !ta.value.slice(0, ta.selectionStart).includes('\n')
+}
+
+function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): string {
+  switch (reason) {
+    case 'unsupported-type':
+      return localize(
+        'acp.image.reject.type',
+        'Unsupported image type. Use PNG, JPEG, WebP, or GIF.',
+      )
+    case 'too-large':
+      return localize('acp.image.reject.size', 'Image is too large (max {mb} MB).', {
+        mb: Math.round(limits.maxBytes / (1024 * 1024)),
+      })
+    case 'too-many':
+      return localize('acp.image.reject.count', 'Too many images attached (max {n}).', {
+        n: limits.maxCount,
+      })
+  }
+}
+
+function AttachImageButton({
+  onPick,
+}: {
+  onPick: (e: React.ChangeEvent<HTMLInputElement>) => void
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null)
+  const label = localize('acp.image.attach', 'Attach image')
+  return (
+    <>
+      <input
+        ref={inputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        multiple
+        hidden
+        onChange={onPick}
+        data-testid="acp-image-file-input"
+      />
+      <button
+        type="button"
+        className={styles['collapseToggle']}
+        onClick={() => inputRef.current?.click()}
+        title={label}
+        aria-label={label}
+      >
+        <ImagePlus size={14} strokeWidth={1.75} aria-hidden="true" />
+      </button>
+    </>
+  )
 }
 
 /**

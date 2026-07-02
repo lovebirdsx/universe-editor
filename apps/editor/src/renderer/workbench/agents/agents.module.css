@@ -415,13 +415,28 @@
   flex-shrink: 0;
 }
 
-.imageBlock {
-  max-width: 100%;
-  max-height: 320px;
+/* Shared thumbnail used by both the message body and the prompt attachment
+   chips. 88×88 display range, aspect ratio preserved, click opens the preview
+   popover (positioned relative to this wrapper). */
+.chatImageWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.chatImageThumb {
+  width: 88px;
+  height: 88px;
+  object-fit: contain;
   border-radius: 4px;
   border: 1px solid var(--color-border, #333);
+  background: var(--color-badge-bg, #3c3c3c);
   margin: 2px 0;
   display: block;
+  cursor: zoom-in;
+}
+
+.chatImageThumb:hover {
+  border-color: var(--color-focus-border, #0070e0);
 }
 
 .audioBlock {
@@ -1901,6 +1916,77 @@
 .contextChipRemove:hover {
   opacity: 1;
   background: var(--color-toolbar-hover-bg, rgba(255, 255, 255, 0.1));
+}
+
+/* Image attachment thumbnails above the prompt textarea. */
+.imageChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 3px;
+}
+
+.imageChip {
+  position: relative;
+  display: inline-flex;
+}
+
+.imageChipRemove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+  border: none;
+  border-radius: 3px;
+  background: var(--color-badge-bg, rgba(0, 0, 0, 0.6));
+  color: var(--color-input-fg, #d4d4d4);
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.imageChipRemove:hover {
+  opacity: 1;
+  background: var(--color-toolbar-hover-bg, rgba(0, 0, 0, 0.85));
+}
+
+/* Anchored image preview popover (like SessionCostPopover) with wheel-zoom +
+   drag-to-pan. Portaled to <body> and positioned in viewport coordinates (JS
+   sets left/top) so it is never clipped by a scroll container and can flip
+   above/below + clamp near a window edge. */
+.imagePreviewPopover {
+  position: fixed;
+  z-index: 1000;
+  padding: 4px;
+  background: var(--color-menu-bg, #252526);
+  border: 1px solid var(--color-menu-border, #454545);
+  border-radius: 4px;
+  box-shadow: 0 4px 16px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
+}
+
+.imagePreviewStage {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: min(420px, 60vw);
+  height: min(420px, 60vh);
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+}
+
+.imagePreviewStage:active {
+  cursor: grabbing;
+}
+
+.imagePreviewImg {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  user-select: none;
+  will-change: transform;
 }
 
 

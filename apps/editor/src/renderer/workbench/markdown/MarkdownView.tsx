@@ -66,6 +66,12 @@ interface MarkdownViewProps {
    * implement cross-document `[text](./other.md#section)` navigation.
    */
   readonly initialAnchor?: string
+  /**
+   * Custom renderer for inline images. ACP chat passes ChatImage so an embedded
+   * picture (incl. base64 `data:` images an agent inlined as markdown) shows as a
+   * clickable thumbnail with a preview popover. Defaults to a plain `<img>`.
+   */
+  readonly renderImage?: (src: string, alt: string) => ReactNode
 }
 
 export function MarkdownView({
@@ -76,6 +82,7 @@ export function MarkdownView({
   previewLinks,
   streaming,
   initialAnchor,
+  renderImage,
 }: MarkdownViewProps) {
   const nodes = useMarkdownNodes(text, streaming ?? false)
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
@@ -102,15 +109,17 @@ export function MarkdownView({
   return (
     <FileLinkContext.Provider value={openFileLink}>
       <AnchorScrollContext.Provider value={scrollToAnchor}>
-        <div
-          ref={rootRef}
-          className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-          {...(testId !== undefined ? { 'data-testid': testId } : {})}
-        >
-          {nodes.map((node, i) => (
-            <Block key={i} node={node} />
-          ))}
-        </div>
+        <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
+          <div
+            ref={rootRef}
+            className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
+            {...(testId !== undefined ? { 'data-testid': testId } : {})}
+          >
+            {nodes.map((node, i) => (
+              <Block key={i} node={node} />
+            ))}
+          </div>
+        </ImageRenderContext.Provider>
       </AnchorScrollContext.Provider>
     </FileLinkContext.Provider>
   )
@@ -134,6 +143,15 @@ function useMarkdownNodes(text: string, streaming: boolean): readonly MdNode[] {
 const FileLinkContext = createContext<
   (path: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => void
 >(() => {})
+
+const defaultRenderImage = (src: string, alt: string): ReactNode => (
+  <img src={src} alt={alt} className={styles['mdImage']} />
+)
+
+// Injectable inline-image renderer (ACP chat swaps in ChatImage). Defaults to a
+// plain <img> for docs/preview/help consumers.
+const ImageRenderContext =
+  createContext<(src: string, alt: string) => ReactNode>(defaultRenderImage)
 
 // Scrolls to the heading whose slug matches an in-document `#anchor` link. Scoped
 // per MarkdownView so an anchor only targets headings inside the same view.
@@ -283,7 +301,7 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
     case 'code':
       return <InlineCode text={node.text} />
     case 'image':
-      return <img src={node.src} alt={node.alt} className={styles['mdImage']} />
+      return <InlineImage src={node.src} alt={node.alt} />
     case 'softbreak':
       return <Fragment>{'\n'}</Fragment>
     case 'filepath':
@@ -297,6 +315,11 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
     case 'link':
       return <SafeLink href={node.href}>{renderInline(node.children)}</SafeLink>
   }
+}
+
+function InlineImage({ src, alt }: { src: string; alt: string }) {
+  const renderImage = useContext(ImageRenderContext)
+  return <>{renderImage(src, alt)}</>
 }
 
 // Inline code that is exactly one file path becomes a clickable monospace link
