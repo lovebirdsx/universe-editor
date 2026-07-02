@@ -14,9 +14,9 @@ import {
   NullLogger,
   observableValue,
   StorageScope,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type {
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -64,7 +64,7 @@ import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
-const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
+const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
 // ---------------------------------------------------------------------------
 // Minimal stubs (mirrors the pattern in AcpSessionService.test.ts)
@@ -266,7 +266,7 @@ function makeHistory() {
     new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
 }
 
@@ -305,7 +305,7 @@ describe('AcpSessionService — onDidCloseSession', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
   })
 

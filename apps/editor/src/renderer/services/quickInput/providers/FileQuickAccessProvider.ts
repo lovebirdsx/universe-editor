@@ -10,9 +10,9 @@ import {
   IEditorGroupsService,
   IFileSearchService,
   IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   URI,
-  isEqualResource,
   localize,
   toDisposable,
   type IQuickAccessProvider,
@@ -49,6 +49,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IRecentFilesService private readonly _recentFiles: IRecentFilesService,
     @IExcludeService private readonly _exclude: IExcludeService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
@@ -62,7 +63,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
     if (opts.addRecent) this._recentFiles.add(uri, label)
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+        if (editor instanceof FileEditorInput && this._uriIdentity.isEqual(editor.resource, uri)) {
           this._groups.activateGroup(group)
           group.setActive(editor)
           return

@@ -17,8 +17,8 @@ import {
   IEditorService,
   IFileService,
   IInstantiationService,
+  IUriIdentityService,
   URI,
-  isEqualResource,
   type IFileMatch,
   type ITextSearchMatch,
 } from '@universe-editor/platform'
@@ -55,6 +55,7 @@ export function useSearchActions(
   const instantiation = useService(IInstantiationService)
   const fileService = useService(IFileService)
   const dialogService = useService(IDialogService)
+  const uriIdentity = useService(IUriIdentityService)
 
   const onActivateMatch = useCallback(
     (resource: URI, match: ITextSearchMatch, rangeIndex: number, preview = true) => {
@@ -103,7 +104,7 @@ export function useSearchActions(
         }))
         model.pushEditOperations([], monacoEdits, () => null)
         // Auto-save across all groups with URI-case-normalised lookup.
-        await saveReplacedFile(resource, editorGroupsService)
+        await saveReplacedFile(resource, editorGroupsService, uriIdentity)
       } else {
         let text: string
         try {
@@ -117,7 +118,7 @@ export function useSearchActions(
         }
       }
     },
-    [fileService, editorGroupsService],
+    [fileService, editorGroupsService, uriIdentity],
   )
 
   const replaceFileMatch = useCallback(
@@ -142,10 +143,10 @@ export function useSearchActions(
 
   const onReplaceFile = useCallback(
     (resource: URI) => {
-      const fm = results.find((r) => isEqualResource(URI.revive(r.resource) as URI, resource))
+      const fm = results.find((r) => uriIdentity.isEqual(URI.revive(r.resource) as URI, resource))
       if (fm) replaceFileMatch(fm)
     },
-    [results, replaceFileMatch],
+    [results, replaceFileMatch, uriIdentity],
   )
 
   const onReplaceMatch = useCallback(

@@ -25,6 +25,7 @@ import {
   type IStorageService,
   type IViewsService,
   type IWorkspaceService,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type { IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import type { IExtensionHostService } from '../../../../shared/ipc/extensionHostService.js'
@@ -114,6 +115,7 @@ function makeService(host: IExtensionHostService, workspaceChange = Event.None) 
     {} as IStorageService,
     {} as ILayoutService,
     {} as IViewsService,
+    new UriIdentityService('linux'),
   )
 }
 

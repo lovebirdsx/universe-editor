@@ -7,11 +7,13 @@ import {
   ILayoutService,
   INotificationService,
   IQuickInputService,
+  IUriIdentityService,
   IViewsService,
   IWorkspaceService,
   InstantiationService,
   KeybindingsRegistry,
   ServiceCollection,
+  UriIdentityService,
   observableValue,
   registerAction2,
   type IDisposable,
@@ -480,6 +482,7 @@ describe('ResumeAgentSessionAction', () => {
     services.set(INotificationService, notification)
     services.set(IWorkspaceService, workspace)
     services.set(IHostService, host)
+    services.set(IUriIdentityService, new UriIdentityService(opts.platform ?? 'linux'))
     // AcpSessionEditorInput.createInstance pulls these at construction.
     services.set(IAcpChatWidgetService, {
       _serviceBrand: undefined,

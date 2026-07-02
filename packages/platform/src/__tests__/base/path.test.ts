@@ -3,7 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { arePathsEqual, normalizeFsPath, relativePathUnder } from '../../base/path.js'
+import {
+  arePathsEqual,
+  getPathComparisonKey,
+  normalizeFsPath,
+  relativePathUnder,
+} from '../../base/path.js'
 
 describe('normalizeFsPath', () => {
   it('converts backslashes to forward slashes', () => {
@@ -74,6 +79,30 @@ describe('arePathsEqual', () => {
 
   it('distinguishes different drives on win32', () => {
     expect(arePathsEqual('C:\\a', 'D:\\a', 'win32')).toBe(false)
+  })
+})
+
+describe('getPathComparisonKey', () => {
+  it('agrees with arePathsEqual: equal paths share a key', () => {
+    // Same normalize + case policy, so a keyed collection never disagrees with a
+    // pairwise arePathsEqual check.
+    expect(getPathComparisonKey('D:\\a\\B', 'win32')).toBe(getPathComparisonKey('d:/a/b', 'win32'))
+    expect(getPathComparisonKey('/a/B', 'linux')).not.toBe(getPathComparisonKey('/a/b', 'linux'))
+  })
+
+  it('folds drive-letter + path case only on case-insensitive platforms', () => {
+    expect(getPathComparisonKey('d:/A/b', 'win32')).toBe('d:/a/b')
+    expect(getPathComparisonKey('d:/A/b', 'darwin')).toBe('d:/a/b')
+    expect(getPathComparisonKey('/A/b', 'linux')).toBe('/A/b')
+  })
+
+  it('keeps escaped paths distinct rather than collapsing them', () => {
+    // Unlike arePathsEqual (which refuses escaped paths), the key retains the
+    // marker so two different escaped paths still get two different keys.
+    const a = getPathComparisonKey('../a', 'linux')
+    const b = getPathComparisonKey('../b', 'linux')
+    expect(a).not.toBe(b)
+    expect(a.startsWith('__ESCAPED__')).toBe(true)
   })
 })
 

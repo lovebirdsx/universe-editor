@@ -11,7 +11,7 @@
 import { useEffect, type RefObject } from 'react'
 import {
   IEditorGroupsService,
-  isEqualResource,
+  IUriIdentityService,
   markAsSingleton,
   type IDisposable,
   type URI,
@@ -78,6 +78,7 @@ export function useMarkdownSyncScroll(
   sourceUri: URI,
 ): void {
   const groupsService = useService(IEditorGroupsService)
+  const uriIdentity = useService(IUriIdentityService)
 
   useEffect(() => {
     const root = previewRootRef.current
@@ -91,7 +92,10 @@ export function useMarkdownSyncScroll(
     const findEditor = (): monaco.editor.IStandaloneCodeEditor | undefined => {
       for (const group of groupsService.groups) {
         for (const editor of group.editors) {
-          if (editor instanceof FileEditorInput && isEqualResource(editor.resource, sourceUri)) {
+          if (
+            editor instanceof FileEditorInput &&
+            uriIdentity.isEqual(editor.resource, sourceUri)
+          ) {
             const inst = FileEditorRegistry.get(editor)
             if (inst) return inst
           }
@@ -134,5 +138,5 @@ export function useMarkdownSyncScroll(
       editorScrollSub?.dispose()
       regSub.dispose()
     }
-  }, [groupsService, sourceUri, previewRootRef])
+  }, [groupsService, sourceUri, previewRootRef, uriIdentity])
 }

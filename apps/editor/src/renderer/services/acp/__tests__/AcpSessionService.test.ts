@@ -18,10 +18,10 @@ import {
   NullLogger,
   observableValue,
   StorageScope,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -34,7 +34,7 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 
-const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
+const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -188,7 +188,7 @@ function makeHistory(): AcpSessionHistoryService {
     new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
 }
 
@@ -412,7 +412,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
   })
 
@@ -704,7 +704,7 @@ describe('AcpSessionService', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     const s = await svc.createSession()
     await s.whenConnected()
@@ -745,7 +745,7 @@ describe('AcpSessionService', () => {
         new StubConfigOptionsCache(),
         new StubSessionChangeTracker(),
         new StubSessionTitleService(),
-        FAKE_HOST,
+        FAKE_URI_IDENTITY,
       )
     }
 
@@ -998,7 +998,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     // createSession returns synchronously now; the handshake fails in the
     // background after the startup timeout fires, sealing the session via
@@ -1031,7 +1031,7 @@ describe('AcpSessionService — startup timeout', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     const s = await svc.createSession()
     // Submit a prompt while still connecting — it is buffered by the connection
@@ -1070,7 +1070,7 @@ describe('AcpSessionService — mcpServers capability gating', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
   }
 
@@ -1208,7 +1208,7 @@ describe('AcpSessionService — AI session title push-back', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       title,
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     return { svc, history }
   }
@@ -1294,7 +1294,7 @@ describe('AcpSessionService — configOptions history snapshot', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     return { svc, history }
   }

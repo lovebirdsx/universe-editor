@@ -3,7 +3,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { URI, canonicalResourceKey, isEqualResource } from '../../base/uri.js'
+import {
+  URI,
+  getResourceComparisonKey,
+  isEqualResource,
+  isEqualOrParentResource,
+} from '../../base/uri.js'
 
 describe('URI — parse', () => {
   it('parses scheme + authority + path + query + fragment', () => {
@@ -200,31 +205,90 @@ describe('URI — isUri', () => {
 describe('URI — isEqualResource', () => {
   it('treats the Windows drive letter case-insensitively', () => {
     // The editor keeps the uppercase drive; a value round-tripped through Monaco
-    // arrives lower-cased + percent-encoded — both must compare equal.
+    // arrives lower-cased + percent-encoded — both must compare equal on any platform.
     expect(
-      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///d%3A/x/Foo.ts')),
+      isEqualResource(
+        URI.parse('file:///D:/x/Foo.ts'),
+        URI.parse('file:///d%3A/x/Foo.ts'),
+        'win32',
+      ),
+    ).toBe(true)
+    expect(
+      isEqualResource(
+        URI.parse('file:///D:/x/Foo.ts'),
+        URI.parse('file:///d%3A/x/Foo.ts'),
+        'linux',
+      ),
     ).toBe(true)
   })
 
   it('still distinguishes different paths', () => {
     expect(
-      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///D:/x/Bar.ts')),
+      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///D:/x/Bar.ts'), 'win32'),
     ).toBe(false)
   })
 
-  it('keeps the rest of the path case-sensitive', () => {
+  it('folds path case on win32/darwin but not on linux (the core bug fix)', () => {
+    const a = URI.parse('file:///D:/x/Foo.ts')
+    const b = URI.parse('file:///d:/X/foo.ts')
+    // Windows / macOS: same file regardless of directory + name casing.
+    expect(isEqualResource(a, b, 'win32')).toBe(true)
+    expect(isEqualResource(a, b, 'darwin')).toBe(true)
+    // Linux: case matters, these are two different files.
+    expect(isEqualResource(a, b, 'linux')).toBe(false)
+  })
+
+  it('normalizes separators and `.`/`..` before comparing', () => {
     expect(
-      isEqualResource(URI.parse('file:///D:/x/Foo.ts'), URI.parse('file:///d:/X/Foo.ts')),
-    ).toBe(false)
+      isEqualResource(URI.file('D:\\proj\\src'), URI.file('D:/proj/lib/../src'), 'win32'),
+    ).toBe(true)
   })
 
   it('is undefined-safe', () => {
-    expect(isEqualResource(undefined, undefined)).toBe(true)
-    expect(isEqualResource(URI.parse('file:///D:/x'), undefined)).toBe(false)
+    expect(isEqualResource(undefined, undefined, 'linux')).toBe(true)
+    expect(isEqualResource(URI.parse('file:///D:/x'), undefined, 'win32')).toBe(false)
   })
 
-  it('canonicalResourceKey lower-cases only the leading drive letter', () => {
-    expect(canonicalResourceKey(URI.parse('file:///D:/x/Foo.ts'))).toBe('file:///d:/x/Foo.ts')
-    expect(canonicalResourceKey(URI.parse('file:///usr/Bin'))).toBe('file:///usr/Bin')
+  it('keeps authority-only file URIs distinct (no empty-fsPath collision)', () => {
+    // `file://a` / `file://b` carry their name in the authority with an empty path.
+    // A key derived from fsPath would blank both out and merge them.
+    const a = URI.parse('file://a')
+    const b = URI.parse('file://b')
+    expect(getResourceComparisonKey(a, 'linux')).not.toBe(getResourceComparisonKey(b, 'linux'))
+    expect(isEqualResource(a, b, 'linux')).toBe(false)
+    expect(isEqualResource(a, URI.parse('file://a'), 'win32')).toBe(true)
+  })
+
+  it('keeps distinct UNC hosts distinct', () => {
+    expect(isEqualResource(URI.file('//host1/share/f'), URI.file('//host2/share/f'), 'win32')).toBe(
+      false,
+    )
+    expect(isEqualResource(URI.file('//host/share/f'), URI.file('//HOST/share/f'), 'win32')).toBe(
+      true,
+    )
+  })
+
+  it('getResourceComparisonKey folds drive-letter case and platform case', () => {
+    // Drive letter always normalized; whole path lower-cased only on case-insensitive platforms.
+    expect(getResourceComparisonKey(URI.parse('file:///D:/x/Foo.ts'), 'win32')).toBe('d:/x/foo.ts')
+    expect(getResourceComparisonKey(URI.parse('file:///d:/x/Foo.ts'), 'linux')).toBe('D:/x/Foo.ts')
+    expect(getResourceComparisonKey(URI.parse('file:///usr/Bin'), 'linux')).toBe('/usr/Bin')
+    expect(getResourceComparisonKey(URI.parse('file:///usr/Bin'), 'darwin')).toBe('/usr/bin')
+  })
+})
+
+describe('URI — isEqualOrParentResource', () => {
+  it('matches nested paths at a segment boundary', () => {
+    const parent = URI.file('/a/b')
+    expect(isEqualOrParentResource(URI.file('/a/b/c'), parent, 'linux')).toBe(true)
+    expect(isEqualOrParentResource(URI.file('/a/b'), parent, 'linux')).toBe(true)
+    // `/a/bc` is NOT under `/a/b` — must not match on a non-boundary prefix.
+    expect(isEqualOrParentResource(URI.file('/a/bc'), parent, 'linux')).toBe(false)
+  })
+
+  it('applies the platform case policy', () => {
+    const parent = URI.file('D:/Proj')
+    expect(isEqualOrParentResource(URI.file('d:/proj/src'), parent, 'win32')).toBe(true)
+    expect(isEqualOrParentResource(URI.file('/proj/src'), URI.file('/Proj'), 'linux')).toBe(false)
   })
 })

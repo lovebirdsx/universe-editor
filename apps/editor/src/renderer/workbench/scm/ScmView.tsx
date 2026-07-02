@@ -286,8 +286,14 @@ export function buildSnapshot(
   return { roots, childrenMap, parentMap, collapsibleIds }
 }
 
-/** Case-insensitive, separator-agnostic path key for matching SCM rows. */
+/**
+ * Case-insensitive, separator-agnostic path key for matching SCM rows. Mirrors
+ * scmPathKey — a self-contained SCM-domain key that only needs to agree with
+ * itself, so it is intentionally not routed through IUriIdentityService.
+ */
+
 function pathKey(p: string): string {
+  // eslint-disable-next-line no-restricted-syntax -- centralized SCM-domain key (see doc above)
   return p.replace(/\\/g, '/').toLowerCase()
 }
 

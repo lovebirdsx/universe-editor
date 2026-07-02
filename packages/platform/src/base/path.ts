@@ -55,7 +55,14 @@ export function normalizeFsPath(p: string): string {
   return stripTrailingSlash((escaped ? ESCAPED_PREFIX : '') + joined)
 }
 
-function isCaseInsensitive(platform: HostPlatform): boolean {
+/**
+ * Whether the given host platform treats filesystem paths case-insensitively.
+ * win32/darwin fold case; linux (and unknown) are case-sensitive. This is the
+ * single source of truth for the case policy — the URI comparison-key layer
+ * ({@link getResourceComparisonKey}) reuses it so string-path and URI equality
+ * never diverge.
+ */
+export function isCaseInsensitive(platform: HostPlatform): boolean {
   return platform === 'win32' || platform === 'darwin'
 }
 
@@ -79,6 +86,22 @@ export function arePathsEqual(
   if (na.startsWith(ESCAPED_PREFIX) || nb.startsWith(ESCAPED_PREFIX)) return false
   if (isCaseInsensitive(platform)) return na.toLowerCase() === nb.toLowerCase()
   return na === nb
+}
+
+/**
+ * A stable comparison key for an absolute filesystem path string, usable as a
+ * `Map`/`Set` key. Two paths that {@link arePathsEqual} produce the same key,
+ * and two that don't produce different keys — same normalize + case policy, so a
+ * keyed collection never disagrees with a pairwise comparison. Prefer
+ * `IUriIdentityService.getPathComparisonKey` over calling this directly.
+ *
+ * Unlike `arePathsEqual`, this keeps working for a path that escapes the root
+ * (the `__ESCAPED__` marker is retained, folded like any other segment) so a
+ * caller building a key never silently collapses distinct escaped paths.
+ */
+export function getPathComparisonKey(path: string, platform: HostPlatform): string {
+  const norm = normalizeFsPath(path)
+  return isCaseInsensitive(platform) ? norm.toLowerCase() : norm
 }
 
 /**

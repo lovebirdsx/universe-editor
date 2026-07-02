@@ -14,7 +14,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useMemo, useState } from 'react'
-import { IStorageService, arePathsEqual, type HostPlatform } from '@universe-editor/platform'
+import { IStorageService, IUriIdentityService } from '@universe-editor/platform'
 import { useService } from '../useService.js'
 import type { AcpSessionHistoryEntry } from '../../services/acp/acpSessionHistory.js'
 
@@ -53,9 +53,9 @@ interface PersistedHistoryShape {
 export function useForeignSessionStats(
   entries: readonly AcpSessionHistoryEntry[],
   currentCwd: string | undefined,
-  platform: HostPlatform,
 ): ReadonlyMap<string, ForeignSessionStat> {
   const storage = useService(IStorageService)
+  const uriIdentity = useService(IUriIdentityService)
   const [stats, setStats] = useState<ReadonlyMap<string, ForeignSessionStat>>(() => new Map())
 
   // The distinct set of owning worktree cwds we must read, sorted so the joined
@@ -65,11 +65,11 @@ export function useForeignSessionStats(
     const set = new Set<string>()
     for (const e of entries) {
       if (e.cwd === undefined) continue
-      if (currentCwd !== undefined && arePathsEqual(e.cwd, currentCwd, platform)) continue
+      if (currentCwd !== undefined && uriIdentity.arePathsEqual(e.cwd, currentCwd)) continue
       set.add(e.cwd)
     }
     return [...set].sort()
-  }, [entries, currentCwd, platform])
+  }, [entries, currentCwd, uriIdentity])
 
   const key = foreignCwds.join('\n')
 

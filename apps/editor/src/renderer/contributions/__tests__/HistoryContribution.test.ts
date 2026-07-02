@@ -15,6 +15,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   derived,
   observableValue,
   type IEditorInput,
@@ -140,7 +141,7 @@ function setup() {
   services.set(IFileService, makeFileService())
   const contextKeyService = new ContextKeyService()
   services.set(IContextKeyService, contextKeyService)
-  const historyService = new HistoryService()
+  const historyService = new HistoryService(new UriIdentityService('linux'))
   services.set(IHistoryService, historyService)
   const editor = makeFakeEditorService()
   services.set(IEditorService, editor.service)

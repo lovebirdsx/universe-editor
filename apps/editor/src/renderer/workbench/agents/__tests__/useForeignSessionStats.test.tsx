@@ -13,6 +13,8 @@ import {
   InstantiationService,
   ServiceCollection,
   IStorageService,
+  IUriIdentityService,
+  UriIdentityService,
   type IStorageService as IStorageServiceType,
 } from '@universe-editor/platform'
 import { ServicesContext } from '../../useService.js'
@@ -67,13 +69,16 @@ function renderStats(
   entries: readonly AcpSessionHistoryEntry[],
   currentCwd: string | undefined,
 ) {
-  const collection = new ServiceCollection([IStorageService, storage])
+  const collection = new ServiceCollection(
+    [IStorageService, storage],
+    [IUriIdentityService, new UriIdentityService('linux')],
+  )
   const instantiation = new InstantiationService(collection)
   const captured: { value: ReturnType<typeof useForeignSessionStats> | undefined } = {
     value: undefined,
   }
   function Probe(): ReactNode {
-    captured.value = useForeignSessionStats(entries, currentCwd, 'linux')
+    captured.value = useForeignSessionStats(entries, currentCwd)
     return null
   }
   render(createElement(ServicesContext.Provider, { value: instantiation }, createElement(Probe)))

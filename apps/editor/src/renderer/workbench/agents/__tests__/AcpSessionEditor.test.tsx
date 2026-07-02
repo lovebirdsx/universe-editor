@@ -10,11 +10,13 @@ import { render, screen, cleanup, act, fireEvent } from '@testing-library/react'
 import {
   InstantiationService,
   ServiceCollection,
+  UriIdentityService,
   observableValue,
   Emitter,
   IEditorService,
   IWorkspaceService,
   IHostService,
+  IUriIdentityService,
   IStorageService,
   IWindowsService,
   ILifecycleService,
@@ -155,6 +157,7 @@ function makeCollection(
   services.set(IEditorService, editor)
   services.set(IWorkspaceService, workspace)
   services.set(IHostService, stubHost)
+  services.set(IUriIdentityService, new UriIdentityService('win32'))
   // ForeignSessionPreview (read-only fallback) pulls these; harmless stubs for
   // the live/resume tests that never render it.
   services.set(IStorageService, {

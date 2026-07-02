@@ -6,7 +6,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { Emitter, type IConfigurationService } from '@universe-editor/platform'
+import { Emitter, UriIdentityService, type IConfigurationService } from '@universe-editor/platform'
 import { RecentEditsTracker, type IContentChangeLike } from '../RecentEditsTracker.js'
 
 class FakeConfig implements Partial<IConfigurationService> {
@@ -24,7 +24,11 @@ function change(line: number, text: string, deleted = 0): IContentChangeLike {
 }
 
 function createTracker(config = new FakeConfig()) {
-  const tracker = new RecentEditsTracker(config as unknown as IConfigurationService)
+  // win32 so the Windows drive-letter case-reconciliation test below holds.
+  const tracker = new RecentEditsTracker(
+    config as unknown as IConfigurationService,
+    new UriIdentityService('win32'),
+  )
   return { tracker, config }
 }
 

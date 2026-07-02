@@ -30,6 +30,8 @@ import {
   IUserDataFilesService,
   IWorkspaceService,
   IFocusTrackerService,
+  IUriIdentityService,
+  UriIdentityService,
   type IWorkspaceServiceWire,
   ConfigurationService,
   ContributionService,
@@ -312,6 +314,11 @@ async function bootstrapWorkbench(): Promise<void> {
   // main-side channel. The full table lives in registerProxyServices.ts.
   const platform = normalizePlatform(window.ipc?.platform)
   registerProxyChannelServices(services, ipcService, platform)
+
+  // Single source of truth for resource / path comparison. Binds the host
+  // platform once so consumers never thread `platform` through or hand-roll
+  // case-folding. No dependencies — set early; many services inject it.
+  services.set(IUriIdentityService, new UriIdentityService(platform))
   await initializeRendererNls(
     services.get(IUserDataFilesService) as IUserDataFilesService,
     window.navigator.language,
@@ -449,7 +456,7 @@ async function bootstrapWorkbench(): Promise<void> {
   // HistoryService: bounded back/forward navigation across editors. Records
   // are pushed by HistoryContribution from Monaco cursor changes; GoBack /
   // GoForward actions pop entries and reopen + restore selection.
-  const historyService = workbenchStore.add(new HistoryService())
+  const historyService = workbenchStore.add(instantiation.createInstance(HistoryService))
   services.set(IHistoryService, historyService)
 
   const recentFilesService = workbenchStore.add(instantiation.createInstance(RecentFilesService))

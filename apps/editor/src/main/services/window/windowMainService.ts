@@ -12,8 +12,10 @@ import { homedir } from 'node:os'
 import {
   DisposableStore,
   Emitter,
+  isEqualOrParentResource,
   localize,
   mark,
+  normalizePlatform,
   ShutdownReason,
   URI,
   type Event,
@@ -341,8 +343,8 @@ export class WindowMainService implements IWindowMainService {
       return
     }
 
-    // Normalise the file path for platform-insensitive prefix matching.
-    const fileNorm = fileToOpen ? fileToOpen.toLowerCase().replace(/\\/g, '/') : undefined
+    // The file (if any) is routed to the first window whose workspace contains it.
+    const fileUri = fileToOpen ? URI.file(fileToOpen) : undefined
 
     const seen = new Set<string>()
     let fileAssigned = false
@@ -358,9 +360,14 @@ export class WindowMainService implements IWindowMainService {
       // Decide whether to route the file to this window.
       let windowFileToOpen: string | undefined
       if (fileToOpen && !fileAssigned) {
-        if (fileNorm && entry.workspace) {
-          const folderNorm = entry.workspace.folder.fsPath.toLowerCase().replace(/\\/g, '/') + '/'
-          if (fileNorm.startsWith(folderNorm)) {
+        if (fileUri && entry.workspace) {
+          if (
+            isEqualOrParentResource(
+              fileUri,
+              entry.workspace.folder,
+              normalizePlatform(process.platform),
+            )
+          ) {
             windowFileToOpen = fileToOpen
             fileAssigned = true
           }

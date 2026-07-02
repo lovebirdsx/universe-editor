@@ -18,6 +18,14 @@ export default [
       'no-restricted-imports': [
         'error',
         {
+          paths: [
+            {
+              name: '@universe-editor/platform',
+              importNames: ['canonicalResourceKey'],
+              message:
+                'canonicalResourceKey 已删除，请用 IUriIdentityService.getComparisonKey / getResourceComparisonKey。',
+            },
+          ],
           patterns: [
             {
               group: ['**/workbench/**/*Service*'],
@@ -40,6 +48,14 @@ export default [
       'no-restricted-imports': [
         'error',
         {
+          paths: [
+            {
+              name: '@universe-editor/platform',
+              importNames: ['canonicalResourceKey'],
+              message:
+                'canonicalResourceKey 已删除，请用 IUriIdentityService.getComparisonKey / getResourceComparisonKey。',
+            },
+          ],
           patterns: [
             {
               group: ['**/workbench/**/*Service*'],

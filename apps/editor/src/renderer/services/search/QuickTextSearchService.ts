@@ -9,11 +9,11 @@ import {
   IInstantiationService,
   IQuickInputService,
   ITextSearchService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationType,
   URI,
   createDecorator,
-  isEqualResource,
   localize,
   registerSingleton,
   type IFileMatch,
@@ -217,6 +217,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {}
 
   async show(): Promise<void> {
@@ -422,7 +423,10 @@ export class QuickTextSearchService implements IQuickTextSearchService {
   private _openFile(resource: URI, pinned: boolean): FileEditorInput {
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && isEqualResource(editor.resource, resource)) {
+        if (
+          editor instanceof FileEditorInput &&
+          this._uriIdentity.isEqual(editor.resource, resource)
+        ) {
           this._groups.activateGroup(group)
           group.setActive(editor)
           if (pinned) group.pinEditor(editor)

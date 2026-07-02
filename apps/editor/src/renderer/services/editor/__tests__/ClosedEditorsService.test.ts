@@ -14,6 +14,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   registerAction2,
   type Event,
   type IFocusEntry,
@@ -134,7 +135,7 @@ afterEach(() => {
 describe('ClosedEditorsService — stack behavior', () => {
   it('popMostRecent returns undefined when no editor has been closed', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     expect(svc.popMostRecent()).toBeUndefined()
     svc.dispose()
     groups.dispose()
@@ -142,7 +143,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('returns the most recently closed editor entry', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const a = new FakeVirtualInput('a')
     const b = new FakeVirtualInput('b')
     groups.activeGroup.openEditor(a)
@@ -158,7 +159,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('captures typeId correctly for non-text (virtual) editors', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const input = new FakeNoSerializeInput('x')
     groups.activeGroup.openEditor(input)
     groups.activeGroup.closeEditor(input)
@@ -172,7 +173,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('captures serializedData from editor.serialize() when implemented', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const input = new FakeVirtualInput('ser')
     groups.activeGroup.openEditor(input)
     const expectedData = input.serialize()
@@ -187,7 +188,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('serializedData is null for editors without serialize()', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const input = new FakeNoSerializeInput('noser')
     groups.activeGroup.openEditor(input)
     groups.activeGroup.closeEditor(input)
@@ -201,7 +202,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('popMostRecent skips entries whose editor is already open', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const a = new FakeVirtualInput('skip-a')
     const b = new FakeVirtualInput('skip-b')
     groups.activeGroup.openEditor(a)
@@ -222,7 +223,7 @@ describe('ClosedEditorsService — stack behavior', () => {
 
   it('stack is LIFO — most recently closed comes first', () => {
     const groups = new EditorGroupsService()
-    const svc = new ClosedEditorsService(groups)
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const a = new FakeVirtualInput('lifo-a')
     const b = new FakeVirtualInput('lifo-b')
     groups.activeGroup.openEditor(a)
@@ -257,7 +258,7 @@ describe('ReopenClosedEditorAction', () => {
 
   function makeHarness() {
     const groups = new EditorGroupsService()
-    const closedSvc = new ClosedEditorsService(groups)
+    const closedSvc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
     const focusSvc = new FakeFocusStackService()
 
     const services = new ServiceCollection()

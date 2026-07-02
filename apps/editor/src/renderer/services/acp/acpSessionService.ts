@@ -17,23 +17,21 @@
 
 import {
   autorun,
-  arePathsEqual,
   createDecorator,
   Disposable,
   Emitter,
   generateUuid,
   ICommandService,
   IConfigurationService,
-  IHostService,
   ILoggerService,
   INotificationService,
   IStorageService,
   ITelemetryService,
+  IUriIdentityService,
   IWorkspaceService,
   Severity,
   StorageScope,
   localize,
-  type HostPlatform,
   type ILogger,
   type IObservable,
   type Event,
@@ -227,7 +225,6 @@ export class AcpSessionService
 
   private readonly _logger: ILogger
   private readonly _coordinator: AcpSessionRestoreCoordinator
-  private readonly _platform: HostPlatform
 
   /**
    * In-flight `resumeSession` promises keyed by sessionId. Concurrent callers
@@ -256,11 +253,10 @@ export class AcpSessionService
     private readonly _configOptionsCache: IAcpConfigOptionsCacheService,
     @ISessionChangeTrackerService private readonly _changeTracker: ISessionChangeTrackerService,
     @IAcpSessionTitleService private readonly _titleService: IAcpSessionTitleService,
-    @IHostService hostService: IHostService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpSession', name: 'ACP Session' })
-    this._platform = hostService.platform
     // Install the notification sink on the (singleton) client service. The
     // pool fans out session/update + session/request_permission via this sink,
     // routing by params.sessionId, so a single sink supports the shared
@@ -276,7 +272,7 @@ export class AcpSessionService
         this._notification,
         this._telemetry,
         loggerService,
-        hostService.platform,
+        this._uriIdentity,
         {
           resumeSession: (sessionId) => this.resumeSession(sessionId),
           hasActiveSession: () => this.activeSessionId.get() !== undefined,
@@ -623,7 +619,7 @@ export class AcpSessionService
       !readOnly &&
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
-      !arePathsEqual(entry.cwd, currentCwd, this._platform)
+      !this._uriIdentity.arePathsEqual(entry.cwd, currentCwd)
     ) {
       this._logger.info(
         `[acp] refusing cross-worktree resume of ${sessionId}: session cwd=${entry.cwd} current=${currentCwd}`,

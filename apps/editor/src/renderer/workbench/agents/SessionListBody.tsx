@@ -16,11 +16,9 @@ import {
   IConfigurationService,
   ConfigurationTarget,
   IWorkspaceService,
-  IHostService,
   IEditorService,
   IInstantiationService,
-  arePathsEqual,
-  type HostPlatform,
+  IUriIdentityService,
 } from '@universe-editor/platform'
 import { X, Trash2, GitBranch } from 'lucide-react'
 import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
@@ -293,7 +291,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const filterService = useService(IAcpSessionFilterService)
   const config = useService(IConfigurationService)
   const workspace = useService(IWorkspaceService)
-  const hostService = useService(IHostService)
+  const uriIdentity = useService(IUriIdentityService)
   const dialogService = useService(IDialogService)
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
@@ -315,7 +313,6 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
     return () => d.dispose()
   }, [config])
 
-  const platform: HostPlatform = hostService.platform
   const currentCwd = workspace.current?.folder.fsPath
 
   // In `workspace` scope keep only exact-cwd rows so narrowing applies instantly
@@ -323,8 +320,10 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   // hydrate sweep's scoping (which already bounds what the bucket contains).
   const scoped = useMemo(() => {
     if (scope !== 'workspace' || currentCwd === undefined) return entries
-    return entries.filter((e) => e.cwd === undefined || arePathsEqual(e.cwd, currentCwd, platform))
-  }, [entries, scope, currentCwd, platform])
+    return entries.filter(
+      (e) => e.cwd === undefined || uriIdentity.arePathsEqual(e.cwd, currentCwd),
+    )
+  }, [entries, scope, currentCwd, uriIdentity])
 
   const filtered = useMemo(() => filterSessions(scoped, query), [scoped, query])
 
@@ -333,7 +332,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
 
   // Foreign (other-worktree) rows lose their duration/cost in the hydrate merge;
   // backfill them from each owning worktree's own storage bucket.
-  const foreignStats = useForeignSessionStats(filtered, currentCwd, platform)
+  const foreignStats = useForeignSessionStats(filtered, currentCwd)
 
   // Reconcile authoritative foreign titles back into this bucket. A foreign
   // session's title in the current bucket is only a hydrate cache; if the owning
@@ -402,7 +401,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
             const isForeign =
               entry.cwd !== undefined &&
               currentCwd !== undefined &&
-              !arePathsEqual(entry.cwd, currentCwd, platform)
+              !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
             return (
               <SessionRow
                 key={entry.id}
@@ -425,7 +424,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                   } else if (
                     entry.cwd !== undefined &&
                     currentCwd !== undefined &&
-                    !arePathsEqual(entry.cwd, currentCwd, platform)
+                    !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
                   ) {
                     // Foreign worktree: don't resume (would spawn the agent
                     // against another worktree behind this window's UI). Open a

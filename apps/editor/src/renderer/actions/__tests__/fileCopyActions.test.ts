@@ -2,14 +2,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   CommandsRegistry,
   Emitter,
-  IHostService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationService,
   ServiceCollection,
+  UriIdentityService,
   URI,
   registerAction2,
   type IRecentWorkspace,
-  type IHostService as IHostServiceType,
   type IWorkspace,
   type IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
@@ -36,17 +36,10 @@ function stubClipboard() {
   return writeText
 }
 
-function makeHostService(): IHostServiceType {
-  return {
-    _serviceBrand: undefined,
-    platform: 'win32',
-  } as unknown as IHostServiceType
-}
-
 async function runCopyRelativePath(workspace: IWorkspaceServiceType, target: URI): Promise<void> {
   const services = new ServiceCollection()
   services.set(IWorkspaceService, workspace)
-  services.set(IHostService, makeHostService())
+  services.set(IUriIdentityService, new UriIdentityService('win32'))
   const inst = new InstantiationService(services)
   const cmd = CommandsRegistry.getCommand(CopyFileRelativePathAction.ID)
   if (!cmd) throw new Error(`${CopyFileRelativePathAction.ID} is not registered`)

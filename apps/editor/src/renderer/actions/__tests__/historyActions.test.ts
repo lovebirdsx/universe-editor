@@ -10,6 +10,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   registerAction2,
   type IDisposable,
   type IFileService as IFileServiceType,
@@ -52,7 +53,7 @@ function makeFakeFileService(): IFileServiceType {
 function setup() {
   FileEditorRegistry._resetForTests()
   const groups = new EditorGroupsService()
-  const history = new HistoryService()
+  const history = new HistoryService(new UriIdentityService('linux'))
 
   const services = new ServiceCollection()
   services.set(IEditorGroupsService, groups)

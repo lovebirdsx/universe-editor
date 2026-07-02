@@ -12,11 +12,11 @@ import {
   IEditorGroupsService,
   IInstantiationService,
   ILifecycleService,
+  IUriIdentityService,
   IWindowsService,
   IWorkspaceService,
   ShutdownReason,
   URI,
-  isEqualResource,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
@@ -82,9 +82,10 @@ function revealExistingOrOpen(
   groups: IEditorGroupsService,
   uri: URI,
 ): FileEditorInput {
+  const uriIdentity = accessor.get(IUriIdentityService)
   for (const group of groups.groups) {
     for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+      if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
         groups.activateGroup(group)
         group.setActive(editor)
         return editor

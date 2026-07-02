@@ -11,8 +11,8 @@ import {
   autorun,
   combinedDisposable,
   IContextKeyService,
+  IUriIdentityService,
   JSONContributionRegistry,
-  isEqualResource,
   markAsSingleton,
   type IEditorGroup,
   type IScopedContextKeyService,
@@ -26,6 +26,7 @@ import { useOptionalService, useService } from '../useService.js'
 
 export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKeyService {
   const rootCtx = useService(IContextKeyService)
+  const uriIdentity = useService(IUriIdentityService)
   const dirtyDiff = useOptionalService(IDirtyDiffNavigationService)
   const scmDecorations = useOptionalService(IScmDecorationsService)
   const scopedRef = useRef<IScopedContextKeyService | null>(null)
@@ -60,7 +61,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
         active instanceof FileEditorInput &&
         dirtyDiff !== undefined &&
         dirtyDiffResource !== undefined &&
-        isEqualResource(dirtyDiffResource, active.resource) &&
+        uriIdentity.isEqual(dirtyDiffResource, active.resource) &&
         dirtyDiff.regions.length > 0
       const hasScmChanges =
         active instanceof FileEditorInput && scmDecorations?.getFile(active.resource) !== undefined
@@ -106,7 +107,7 @@ export function useEditorGroupScopedContextKey(group: IEditorGroup): IContextKey
       scopedRef.current?.dispose()
       scopedRef.current = null
     }
-  }, [dirtyDiff, group, rootCtx, scmDecorations])
+  }, [dirtyDiff, group, rootCtx, scmDecorations, uriIdentity])
 
   return scopedRef.current
 }

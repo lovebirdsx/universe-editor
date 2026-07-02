@@ -20,6 +20,9 @@ const _empty = ''
 const _slash = '/'
 const _regexp = /^(([^:/?#]+?):)?(\/\/([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?/
 
+import { normalizeFsPath, isCaseInsensitive } from './path.js'
+import type { HostPlatform } from '../host/hostService.js'
+
 export interface UriComponents {
   scheme: string
   authority?: string
@@ -234,22 +237,84 @@ export class URI implements UriComponents {
 }
 
 /**
- * A comparison key for a resource with the Windows drive letter lower-cased, so
- * `/D:/x` and `/d:/x` collapse to one value. The platform keeps the drive letter
- * as written (`D:`), while values that round-tripped through Monaco's URI arrive
- * lower-cased (`d:`); this reconciles the two.
+ * A platform-aware comparison key for a resource. Two URIs that address the same
+ * resource — accounting for path separators, redundant `.`/`..` segments,
+ * Windows drive-letter case, and (on win32/darwin) path case — collapse to the
+ * same key. On linux the path is compared case-sensitively.
+ *
+ * This is the single identity function for resources: {@link ResourceMap} /
+ * {@link ResourceSet} use it as their hash key, and {@link isEqualResource} /
+ * {@link isEqualOrParentResource} are defined in terms of it, so map de-dup and
+ * equality never disagree. Prefer `IUriIdentityService` (which injects the
+ * platform once) over calling this directly.
+ *
+ * Only `file:` URIs get filesystem normalization; other schemes fall back to
+ * `toString()` with the path lower-cased on case-insensitive platforms.
  */
-export function canonicalResourceKey(uri: URI): string {
-  const path = uri.path.replace(/^\/([A-Za-z]):/, (_m, drive: string) => `/${drive.toLowerCase()}:`)
-  return uri.with({ path }).toString()
+export function getResourceComparisonKey(uri: URI, platform: HostPlatform): string {
+  const ci = isCaseInsensitive(platform)
+  if (uri.scheme === 'file') {
+    // Normalize the path (folds separators, drive-letter case and `.`/`..`), and
+    // keep the authority separately so `file://a` and `file://b` — or two distinct
+    // UNC hosts — never collide. Going through `fsPath` would drop an authority
+    // whenever the path is empty, silently merging those. Lower-case the whole key
+    // on case-insensitive platforms so `Foo.ts` and `foo.ts` match there, not on linux.
+    const norm = normalizeFsPath(pathWithoutAuthority(uri))
+    const key = uri.authority ? `//${uri.authority}${norm}` : norm
+    return ci ? key.toLowerCase() : key
+  }
+  const key = uri.toString()
+  return ci ? key.toLowerCase() : key
 }
 
-/** Whether two URIs address the same resource, treating the Windows drive
- *  letter case-insensitively (see {@link canonicalResourceKey}). */
-export function isEqualResource(a: URI | undefined, b: URI | undefined): boolean {
+/**
+ * The local-path portion of a `file:` URI, independent of its authority.
+ * Strips the leading slash before a Windows drive (`/D:/x` → `D:/x`) so
+ * {@link normalizeFsPath} can fold the drive-letter case, but — unlike
+ * {@link URI.fsPath} — never folds the authority into the path, so
+ * {@link getResourceComparisonKey} can keep hosts distinct.
+ */
+function pathWithoutAuthority(uri: URI): string {
+  const p = uri.path
+  if (
+    p.charCodeAt(0) === 47 /* / */ &&
+    ((p.charCodeAt(1) >= 65 /* A */ && p.charCodeAt(1) <= 90) /* Z */ ||
+      (p.charCodeAt(1) >= 97 /* a */ && p.charCodeAt(1) <= 122)) /* z */ &&
+    p.charCodeAt(2) === 58 /* : */
+  ) {
+    return p.substr(1)
+  }
+  return p
+}
+
+/** Whether two URIs address the same resource under the platform's case policy
+ *  (see {@link getResourceComparisonKey}). */
+export function isEqualResource(
+  a: URI | undefined,
+  b: URI | undefined,
+  platform: HostPlatform,
+): boolean {
   if (a === b) return true
   if (!a || !b) return false
-  return canonicalResourceKey(a) === canonicalResourceKey(b)
+  return getResourceComparisonKey(a, platform) === getResourceComparisonKey(b, platform)
+}
+
+/** Whether `resource` is equal to, or nested under, `parent` (both `file:` URIs)
+ *  under the platform's case policy. Non-file schemes fall back to key equality. */
+export function isEqualOrParentResource(
+  resource: URI | undefined,
+  parent: URI | undefined,
+  platform: HostPlatform,
+): boolean {
+  if (!resource || !parent) return false
+  if (resource === parent) return true
+  const rKey = getResourceComparisonKey(resource, platform)
+  const pKey = getResourceComparisonKey(parent, platform)
+  if (rKey === pKey) return true
+  if (resource.scheme !== parent.scheme || resource.authority !== parent.authority) return false
+  // Boundary-aware containment: `/a/b` is a parent of `/a/b/c` but not of `/a/bc`.
+  const pWithSep = pKey.endsWith('/') ? pKey : pKey + '/'
+  return rKey.startsWith(pWithSep)
 }
 
 function decodeURIComponentSafe(value: string): string {

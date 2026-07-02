@@ -13,12 +13,12 @@ import {
   IInstantiationService,
   INotificationService,
   IQuickInputService,
+  IUriIdentityService,
   IUserDataFilesService,
   MenuId,
   Severity,
   URI,
   UserDataFile,
-  isEqualResource,
   localize,
   localize2,
   type IQuickPickItem,
@@ -55,12 +55,13 @@ async function openUserDataFile(
     files: IUserDataFilesService
     groups: IEditorGroupsService
     instantiation: IInstantiationService
+    uriIdentity: IUriIdentityService
   },
   file: UserDataFile,
   template: string,
   options?: { readOnly?: boolean; seedTemplate?: boolean },
 ): Promise<void> {
-  const { files, groups, instantiation } = services
+  const { files, groups, instantiation, uriIdentity } = services
 
   const uriComponents = await files.getFileUri(file)
   if (!uriComponents) return
@@ -79,7 +80,7 @@ async function openUserDataFile(
   // De-dupe: if already open, reactivate.
   for (const group of groups.groups) {
     for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+      if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
         groups.activateGroup(group)
         group.setActive(editor)
         return
@@ -96,11 +97,13 @@ function userDataFileServices(accessor: ServicesAccessor): {
   files: IUserDataFilesService
   groups: IEditorGroupsService
   instantiation: IInstantiationService
+  uriIdentity: IUriIdentityService
 } {
   return {
     files: accessor.get(IUserDataFilesService),
     groups: accessor.get(IEditorGroupsService),
     instantiation: accessor.get(IInstantiationService),
+    uriIdentity: accessor.get(IUriIdentityService),
   }
 }
 

@@ -99,6 +99,7 @@ import {
   InstantiationService,
   observableValue,
   ServiceCollection,
+  UriIdentityService,
   URI,
   type IConfigurationChangeEvent,
   type IFileService as IFileServiceType,
@@ -241,7 +242,10 @@ describe('FileEditor tab switching', () => {
     services.set(IContextKeyService, new ContextKeyService())
     services.set(
       IRecentEditsTracker,
-      new RecentEditsTracker(new FakeConfigurationService() as never),
+      new RecentEditsTracker(
+        new FakeConfigurationService() as never,
+        new UriIdentityService('linux'),
+      ),
     )
     services.set(IFocusStackService, {
       _serviceBrand: undefined,

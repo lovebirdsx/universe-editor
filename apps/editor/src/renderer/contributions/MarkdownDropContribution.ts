@@ -15,7 +15,7 @@
 import {
   Disposable,
   IFileService,
-  IHostService,
+  IUriIdentityService,
   IWorkspaceService,
   type IDisposable,
   type IWorkbenchContribution,
@@ -53,7 +53,7 @@ export class MarkdownDropContribution extends Disposable implements IWorkbenchCo
 
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
-    @IHostService private readonly _host: IHostService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IFileService private readonly _fileService: IFileService,
   ) {
     super()
@@ -80,7 +80,7 @@ export class MarkdownDropContribution extends Disposable implements IWorkbenchCo
           model.uri.toString(),
           {
             workspaceFolderFsPath: this._workspace.current?.folder.fsPath,
-            platform: this._host.platform,
+            platform: this._uriIdentity.platform,
             fileService: this._fileService,
           },
           () => token.isCancellationRequested,

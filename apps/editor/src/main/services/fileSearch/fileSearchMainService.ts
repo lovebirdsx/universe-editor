@@ -7,9 +7,11 @@ import { promises as fs } from 'node:fs'
 import path from 'node:path'
 import {
   createNamedLogger,
+  getPathComparisonKey,
   IFileSearchService,
   ILoggerService,
   makeExcludeMatcher,
+  normalizePlatform,
   URI,
   type IFileSearchComplete,
   type IFileSearchMatch,
@@ -184,7 +186,7 @@ export class FileSearchMainService implements IFileSearchService {
     const results = scored
       .sort((a, b) => b.score - a.score || a.relativePath.localeCompare(b.relativePath))
       .filter((match) => {
-        const key = process.platform === 'win32' ? match.fsPath.toLowerCase() : match.fsPath
+        const key = getPathComparisonKey(match.fsPath, normalizePlatform(process.platform))
         if (seen.has(key)) return false
         seen.add(key)
         return true

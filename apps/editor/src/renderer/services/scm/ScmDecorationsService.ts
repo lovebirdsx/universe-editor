@@ -40,8 +40,17 @@ export interface IScmDecorationsService {
 export const IScmDecorationsService =
   createDecorator<IScmDecorationsService>('scmDecorationsService')
 
-/** Case-insensitive, separator-agnostic path key, matching the SCM view's keying. */
+/**
+ * Case-insensitive, separator-agnostic path key, matching the SCM view's keying.
+ *
+ * This is a self-contained SCM-domain key (like MonacoModelRegistry's model key):
+ * the decoration Map and every lookup go through this one function, so it only has
+ * to agree with itself, never with filesystem identity elsewhere. It is therefore
+ * intentionally NOT routed through IUriIdentityService — keep all SCM keying here.
+ */
+
 export function scmPathKey(p: string): string {
+  // eslint-disable-next-line no-restricted-syntax -- centralized SCM-domain key (see doc above)
   return p.replace(/\\/g, '/').toLowerCase()
 }
 

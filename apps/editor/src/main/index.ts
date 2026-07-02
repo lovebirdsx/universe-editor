@@ -13,7 +13,9 @@ import {
   ILoggerService,
   IFileSearchService,
   IFileService,
+  isEqualOrParentResource,
   mark,
+  normalizePlatform,
   URI,
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
@@ -181,14 +183,13 @@ if (!hasSingleInstanceLock) {
       // Route the file to the window whose workspace contains it; else first window.
       let targetWin: BrowserWindow | undefined
       if (resolvedPath) {
-        const fileNorm = resolvedPath.toLowerCase().replace(/\\/g, '/')
+        const fileUri = URI.file(resolvedPath)
         for (const info of services.windows.getOpenWindowInfos()) {
           const folder = info.folder
           if (folder) {
             const revived = URI.revive(folder)
             if (!revived) continue
-            const folderNorm = revived.fsPath.toLowerCase().replace(/\\/g, '/') + '/'
-            if (fileNorm.startsWith(folderNorm)) {
+            if (isEqualOrParentResource(fileUri, revived, normalizePlatform(process.platform))) {
               targetWin = services.windows.getWindowById(info.id)
               break
             }

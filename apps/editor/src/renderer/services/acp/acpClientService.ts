@@ -31,12 +31,10 @@ import {
   INotificationService,
   IProgressService,
   ITelemetryService,
-  IHostService,
+  IUriIdentityService,
   ProgressLocation,
   Severity,
   URI,
-  normalizeFsPath,
-  type HostPlatform,
 } from '@universe-editor/platform'
 import type { IDisposable, ILogger, IOutputChannel } from '@universe-editor/platform'
 import {
@@ -213,7 +211,6 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
   private readonly _logger: ILogger
   private readonly _protocolLogger: ILogger
-  private readonly _platform: HostPlatform
   /** Maps pool-key → in-flight or settled PoolEntry. Stored as Promise so
    *  concurrent `connect()` calls share the same spawn. On creation failure
    *  the catch handler evicts the entry. */
@@ -242,7 +239,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     @IConfigurationService private readonly _config: IConfigurationService,
     @IProgressService private readonly _progress: IProgressService,
     @ILoggerService loggerService: ILoggerService,
-    @IHostService hostService: IHostService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     this._logger = loggerService.createLogger({ id: 'acpClient', name: 'ACP Client' })
@@ -250,7 +247,6 @@ export class AcpClientService extends Disposable implements IAcpClientService {
       id: 'acpProtocol',
       name: 'ACP Protocol',
     })
-    this._platform = hostService.platform
 
     // A window reload destroys this renderer without disposing its services
     // (that's what the leak detector watches for), so the async dispose() path
@@ -369,10 +365,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
   private _poolKey(agentId: string, cwd: string): string {
     if (!cwd) return `${agentId} `
-    const norm = normalizeFsPath(cwd)
-    if (norm.startsWith('__ESCAPED__')) return `${agentId} ${cwd}`
-    const ci = this._platform === 'win32' || this._platform === 'darwin'
-    return `${agentId} ${ci ? norm.toLowerCase() : norm}`
+    return `${agentId} ${this._uriIdentity.getPathComparisonKey(cwd)}`
   }
 
   /**

@@ -23,11 +23,11 @@ import {
   NullLogger,
   observableValue,
   StorageScope,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
   IFileService,
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -80,7 +80,7 @@ import { StubSessionTitleService } from './stubSessionTitleService.js'
 import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 
-const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
+const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
 // ---------------------------------------------------------------------------
 // In-memory host that bridges string stdio to a real AgentSideConnection.
@@ -422,14 +422,14 @@ function build(storage: FakeStorage): Built {
     config,
     new StubProgressService(),
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   const history = new AcpSessionHistoryService(
     storage,
     new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
@@ -453,7 +453,7 @@ function build(storage: FakeStorage): Built {
     new StubConfigOptionsCache(),
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   return {
     client,

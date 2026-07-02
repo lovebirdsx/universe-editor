@@ -13,12 +13,12 @@ import {
   ILayoutService,
   IOutputService,
   IQuickInputService,
+  IUriIdentityService,
   IViewsService,
   LogLevel,
   MenuId,
   PartId,
   URI,
-  isEqualResource,
   localize,
   localize2,
   type IQuickPickItem,
@@ -266,7 +266,13 @@ export class OpenActiveLogFileAction extends Action2 {
     const descriptors = await logFilesService.listLogFiles()
     const descriptor = descriptors.find((candidate) => candidate.name === currentName)
     if (!descriptor) return
-    await openLogDescriptorInEditor(logFilesService, groups, instantiation, descriptor)
+    await openLogDescriptorInEditor(
+      logFilesService,
+      groups,
+      instantiation,
+      accessor.get(IUriIdentityService),
+      descriptor,
+    )
   }
 }
 
@@ -296,7 +302,13 @@ export class OpenLogFileAction extends Action2 {
       localize('quickInput.openLogFile.placeholder', 'Select a log file to open in the editor'),
     )
     if (!descriptor) return
-    await openLogDescriptorInEditor(logFilesService, groups, instantiation, descriptor)
+    await openLogDescriptorInEditor(
+      logFilesService,
+      groups,
+      instantiation,
+      accessor.get(IUriIdentityService),
+      descriptor,
+    )
   }
 }
 
@@ -304,6 +316,7 @@ async function openLogDescriptorInEditor(
   logFilesService: ILogFilesService,
   groups: IEditorGroupsService,
   instantiation: IInstantiationService,
+  uriIdentity: IUriIdentityService,
   descriptor: LogFileDescriptor,
 ): Promise<void> {
   const fsPath = await logFilesService.resolveLogPath(descriptor.id)
@@ -311,7 +324,7 @@ async function openLogDescriptorInEditor(
 
   for (const group of groups.groups) {
     for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+      if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
         groups.activateGroup(group)
         group.setActive(editor)
         return

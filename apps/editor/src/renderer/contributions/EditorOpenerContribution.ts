@@ -19,8 +19,8 @@ import {
   Disposable,
   IEditorGroupsService,
   IInstantiationService,
+  IUriIdentityService,
   URI,
-  isEqualResource,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import {
@@ -35,6 +35,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
   constructor(
     @IEditorGroupsService private readonly _groupsService: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     void MonacoLoader.registerCodeEditorOpenHandler((input, source) =>
@@ -69,7 +70,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
   private _revealExistingOrOpen(uri: URI): FileEditorInput {
     for (const group of this._groupsService.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+        if (editor instanceof FileEditorInput && this._uriIdentity.isEqual(editor.resource, uri)) {
           this._groupsService.activateGroup(group)
           group.setActive(editor)
           return editor

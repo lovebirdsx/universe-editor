@@ -25,6 +25,8 @@ import type { AsyncSubscription, BackendType, Event as ParcelEvent } from '@parc
 import {
   createNamedLogger,
   Emitter,
+  normalizePlatform,
+  relativePathUnder,
   type Event,
   type FileChangeType,
   type IDisposable,
@@ -95,10 +97,7 @@ function reviveUri(value: UriComponents): URI {
 }
 
 function isUnder(fsPath: string, rootFsPath: string): boolean {
-  const norm = (p: string) => p.toLowerCase().replace(/\\/g, '/')
-  const root = norm(rootFsPath)
-  const file = norm(fsPath)
-  return file === root || file.startsWith(root + '/')
+  return relativePathUnder(rootFsPath, fsPath, normalizePlatform(platform)) !== null
 }
 
 export class FileWatcherMainService implements IFileWatcherService, IDisposable {

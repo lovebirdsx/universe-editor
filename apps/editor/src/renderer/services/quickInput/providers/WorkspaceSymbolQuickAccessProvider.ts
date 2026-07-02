@@ -9,15 +9,12 @@
 
 import {
   IEditorGroupsService,
-  IHostService,
   IInstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   URI,
-  isEqualResource,
   localize,
-  relativePathUnder,
   toDisposable,
-  type HostPlatform,
   type IQuickAccessProvider,
   type IQuickAccessProviderRunOptions,
   type IQuickItemHighlight,
@@ -51,9 +48,9 @@ let emptyQueryCache:
   | { readonly rootKey: string; readonly entries: readonly WorkspaceSymbolEntry[] }
   | undefined
 
-function relativePath(root: URI | undefined, uri: URI, platform: HostPlatform): string {
+function relativePath(root: URI | undefined, uri: URI, uriIdentity: IUriIdentityService): string {
   if (!root) return uri.fsPath
-  return relativePathUnder(root.fsPath, uri.fsPath, platform) ?? uri.fsPath
+  return uriIdentity.relativePathUnder(root.fsPath, uri.fsPath) ?? uri.fsPath
 }
 
 /** A workspace symbol from any language server, normalized for the picker. */
@@ -71,7 +68,7 @@ interface UnifiedWorkspaceSymbol {
 function tsEntryToUnified(
   entry: WorkspaceSymbolEntry,
   root: URI | undefined,
-  platform: HostPlatform,
+  uriIdentity: IUriIdentityService,
 ): UnifiedWorkspaceSymbol {
   const uri = URI.parse(entry.uri.toString())
   return {
@@ -81,7 +78,7 @@ function tsEntryToUnified(
     uri,
     lineNumber: entry.range.startLineNumber,
     column: entry.range.startColumn,
-    description: relativePath(root, uri, platform),
+    description: relativePath(root, uri, uriIdentity),
   }
 }
 
@@ -112,7 +109,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
     @IEditorGroupsService private readonly _groups: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @ILanguageFeaturesService private readonly _langFeatures: ILanguageFeaturesService,
-    @IHostService private readonly _host: IHostService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {}
 
   provide(picker: IQuickPick<IQuickPickItem>, options: IQuickAccessProviderRunOptions): void {
@@ -133,7 +130,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
 
     const render = (entries: readonly WorkspaceSymbolEntry[], query: string): void => {
       byId.clear()
-      const merged = entries.map((e) => tsEntryToUnified(e, root, this._host.platform))
+      const merged = entries.map((e) => tsEntryToUnified(e, root, this._uriIdentity))
       // An empty (match-all) query has no relevance signal and concatenates
       // multiple providers, so sort by name (then path) for a stable, predictable
       // list — and so the leading MAX_RESULTS slice keeps an alphabetical head
@@ -214,7 +211,10 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       let input: FileEditorInput | undefined
       for (const group of this._groups.groups) {
         for (const editor of group.editors) {
-          if (editor instanceof FileEditorInput && isEqualResource(editor.resource, uri)) {
+          if (
+            editor instanceof FileEditorInput &&
+            this._uriIdentity.isEqual(editor.resource, uri)
+          ) {
             this._groups.activateGroup(group)
             group.setActive(editor)
             input = editor

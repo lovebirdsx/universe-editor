@@ -122,6 +122,7 @@ import {
   InstantiationService,
   observableValue,
   ServiceCollection,
+  UriIdentityService,
   URI,
   type IFileService as IFileServiceType,
 } from '@universe-editor/platform'
@@ -257,7 +258,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     services.set(IContextKeyService, new ContextKeyService())
     services.set(
       IRecentEditsTracker,
-      new RecentEditsTracker(new FakeConfigurationService() as never),
+      new RecentEditsTracker(
+        new FakeConfigurationService() as never,
+        new UriIdentityService('linux'),
+      ),
     )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/bom.txt'))
@@ -290,7 +294,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     services.set(IContextKeyService, new ContextKeyService())
     services.set(
       IRecentEditsTracker,
-      new RecentEditsTracker(new FakeConfigurationService() as never),
+      new RecentEditsTracker(
+        new FakeConfigurationService() as never,
+        new UriIdentityService('linux'),
+      ),
     )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/mixed.md'))
@@ -321,7 +328,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     services.set(IContextKeyService, new ContextKeyService())
     services.set(
       IRecentEditsTracker,
-      new RecentEditsTracker(new FakeConfigurationService() as never),
+      new RecentEditsTracker(
+        new FakeConfigurationService() as never,
+        new UriIdentityService('linux'),
+      ),
     )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
@@ -369,7 +379,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     services.set(IContextKeyService, new ContextKeyService())
     services.set(
       IRecentEditsTracker,
-      new RecentEditsTracker(new FakeConfigurationService() as never),
+      new RecentEditsTracker(
+        new FakeConfigurationService() as never,
+        new UriIdentityService('linux'),
+      ),
     )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))
@@ -415,7 +428,10 @@ describe('FileEditor — auto-pin on first edit', () => {
     services.set(IContextKeyService, new ContextKeyService())
     services.set(
       IRecentEditsTracker,
-      new RecentEditsTracker(new FakeConfigurationService() as never),
+      new RecentEditsTracker(
+        new FakeConfigurationService() as never,
+        new UriIdentityService('linux'),
+      ),
     )
     const inst = new InstantiationService(services)
     const input = inst.createInstance(FileEditorInput, URI.file('/ws/a.txt'))

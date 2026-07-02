@@ -15,6 +15,8 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
+  IUriIdentityService,
   type CancellationToken,
   type IDisposable,
   type IEditorGroupsService as IEditorGroupsServiceType,
@@ -208,6 +210,7 @@ function setup(
   services.set(IEditorGroupsService, makeGroups())
   services.set(IRecentFilesService, recent)
   services.set(IExcludeService, opts.exclude ?? new FakeExcludeService())
+  services.set(IUriIdentityService, new UriIdentityService('linux'))
   const inst = new InstantiationService(services)
   services.set(IInstantiationService, inst as unknown as IInstantiationService)
   const provider = inst.createInstance(FileQuickAccessProvider)

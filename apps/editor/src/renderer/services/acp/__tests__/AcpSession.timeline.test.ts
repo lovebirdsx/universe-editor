@@ -16,10 +16,10 @@ import {
   NullLogger,
   observableValue,
   StorageScope,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -68,7 +68,7 @@ import type { IAcpAgentRegistry } from '../acpAgentRegistry.js'
 import type { IAcpPermissionHandler } from '../acpPermissionHandler.js'
 import { createInMemoryAcpPair } from '../testing/inMemoryAcpPair.js'
 
-const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
+const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 
 class FakeAgentRegistry implements IAcpAgentRegistry {
   declare readonly _serviceBrand: undefined
@@ -173,7 +173,7 @@ function makeHistory(): AcpSessionHistoryService {
     new FakeWorkspaceService(),
     new NoopTelemetryService(),
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
 }
 
@@ -299,7 +299,7 @@ function makeService(
     new StubConfigOptionsCache(),
     changeTracker,
     new StubSessionTitleService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
 }
 

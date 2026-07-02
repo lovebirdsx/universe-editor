@@ -9,17 +9,16 @@ import {
   Action2,
   IDialogService,
   IEditorService,
-  IHostService,
   IInstantiationService,
   INotificationService,
   IQuickInputService,
+  IUriIdentityService,
   IViewsService,
   IWorkspaceService,
   ILayoutService,
   MenuId,
   PartId,
   Severity,
-  arePathsEqual,
   localize,
   localize2,
   type IQuickPickItem,
@@ -257,7 +256,7 @@ export class ResumeAgentSessionAction extends Action2 {
     const editor = accessor.get(IEditorService)
     const inst = accessor.get(IInstantiationService)
     const workspace = accessor.get(IWorkspaceService)
-    const platform = accessor.get(IHostService).platform
+    const uriIdentity = accessor.get(IUriIdentityService)
 
     const entries = history.list()
     if (entries.length === 0) {
@@ -302,7 +301,7 @@ export class ResumeAgentSessionAction extends Action2 {
       entry &&
       entry.cwd !== undefined &&
       currentCwd !== undefined &&
-      !arePathsEqual(entry.cwd, currentCwd, platform)
+      !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
     ) {
       editor.openEditor(
         inst.createInstance(AcpSessionEditorInput, entry.id, entry.agentId, entry.title),

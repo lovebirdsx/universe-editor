@@ -10,9 +10,9 @@
 import {
   Disposable,
   IEditorGroupsService,
+  IUriIdentityService,
   URI,
   createDecorator,
-  isEqualResource,
   type IDisposable,
   type IEditorGroup,
 } from '@universe-editor/platform'
@@ -39,7 +39,10 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
   private readonly _stack: ClosedEditorEntry[] = []
   private readonly _groupWatchers = new Map<number, IDisposable>()
 
-  constructor(@IEditorGroupsService private readonly _groups: IEditorGroupsService) {
+  constructor(
+    @IEditorGroupsService private readonly _groups: IEditorGroupsService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+  ) {
     super()
 
     for (const g of this._groups.groups) this._watchGroup(g)
@@ -66,7 +69,7 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
       const entry = this._stack.pop()!
       // Skip entries whose editor is already open somewhere (e.g. after detach/move).
       const alreadyOpen = this._groups.groups.some((g) =>
-        g.editors.some((e) => isEqualResource(e.resource, entry.resource)),
+        g.editors.some((e) => this._uriIdentity.isEqual(e.resource, entry.resource)),
       )
       if (!alreadyOpen) return entry
     }

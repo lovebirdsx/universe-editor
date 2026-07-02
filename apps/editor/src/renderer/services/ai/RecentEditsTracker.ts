@@ -13,8 +13,8 @@
 import {
   Disposable,
   IConfigurationService,
+  IUriIdentityService,
   URI,
-  canonicalResourceKey,
   createDecorator,
 } from '@universe-editor/platform'
 
@@ -59,7 +59,10 @@ export class RecentEditsTracker extends Disposable implements IRecentEditsTracke
 
   private readonly _byUri = new Map<string, IRecentEdit[]>()
 
-  constructor(@IConfigurationService private readonly _config: IConfigurationService) {
+  constructor(
+    @IConfigurationService private readonly _config: IConfigurationService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+  ) {
     super()
     this._register({ dispose: () => this._byUri.clear() })
   }
@@ -104,10 +107,11 @@ export class RecentEditsTracker extends Disposable implements IRecentEditsTracke
 
   // FileEditor records under the platform URI (drive letter as written) while
   // InlineCompletionService reads under the Monaco model URI (drive letter
-  // lower-cased after a round-trip). Canonicalize so both resolve to one file.
+  // lower-cased after a round-trip). Use the platform-aware comparison key so
+  // both resolve to one file.
   private _key(uri: string): string {
     try {
-      return canonicalResourceKey(URI.parse(uri))
+      return this._uriIdentity.getComparisonKey(URI.parse(uri))
     } catch {
       return uri
     }

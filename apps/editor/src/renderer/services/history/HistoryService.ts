@@ -16,11 +16,11 @@
 import {
   Disposable,
   Emitter,
+  IUriIdentityService,
   type IHistoryEntry,
   type IHistoryService,
   type IHistorySelection,
   URI,
-  isEqualResource,
 } from '@universe-editor/platform'
 
 const MAX_DEPTH = 50
@@ -31,8 +31,12 @@ const MAX_DEPTH = 50
 // the window and does not clear the forward stack.
 const SUPPRESS_WINDOW_MS = 1000
 
-function sameFile(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolean {
-  return isEqualResource(a.resource, b.resource)
+function sameFile(
+  uriIdentity: IUriIdentityService,
+  a: IHistoryEntry,
+  b: Omit<IHistoryEntry, 'timestamp'>,
+): boolean {
+  return uriIdentity.isEqual(a.resource, b.resource)
 }
 
 function sameLine(a: IHistoryEntry, b: Omit<IHistoryEntry, 'timestamp'>): boolean {
@@ -61,6 +65,10 @@ export class HistoryService extends Disposable implements IHistoryService {
   private readonly _onDidChange = this._register(new Emitter<void>())
   readonly onDidChange = this._onDidChange.event
 
+  constructor(@IUriIdentityService private readonly _uriIdentity: IUriIdentityService) {
+    super()
+  }
+
   record(entry: Omit<IHistoryEntry, 'timestamp'>): void {
     const reviveResource =
       entry.resource instanceof URI ? entry.resource : (URI.revive(entry.resource) as URI)
@@ -85,7 +93,7 @@ export class HistoryService extends Disposable implements IHistoryService {
       ...(entry.serialized !== undefined && { serialized: entry.serialized }),
     }
     const top = this._back[this._back.length - 1]
-    if (top && sameFile(top, next) && sameLine(top, next)) {
+    if (top && sameFile(this._uriIdentity, top, next) && sameLine(top, next)) {
       // Replace top in-place so the latest column / selection wins without
       // creating a duplicate stack entry.
       this._back[this._back.length - 1] = { ...next, timestamp: Date.now() }

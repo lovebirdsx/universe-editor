@@ -10,7 +10,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { IEditorService, IWorkspaceService, URI, isEqualResource } from '@universe-editor/platform'
+import {
+  IEditorService,
+  IUriIdentityService,
+  IWorkspaceService,
+  URI,
+} from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { SearchInputBar } from './SearchInputBar.js'
 import { SearchResultsTree, type SearchResultsTreeHandle } from './SearchResultsTree.js'
@@ -68,6 +73,7 @@ export function SearchView() {
   const rootUri = workspaceService.current?.folder ?? null
 
   const editorService = useService(IEditorService)
+  const uriIdentity = useService(IUriIdentityService)
   // Read latest results from a ref so the focusable getter can stay stable.
   const resultsRef = useRef(results)
   resultsRef.current = results
@@ -83,7 +89,7 @@ export function SearchView() {
       const current = resultsRef.current
       if (current.length > 0 && resource && treeRef.current) {
         const inResults = current.some((fm) =>
-          isEqualResource(URI.revive(fm.resource) as URI, resource),
+          uriIdentity.isEqual(URI.revive(fm.resource) as URI, resource),
         )
         if (inResults) {
           const preferId =
@@ -94,7 +100,7 @@ export function SearchView() {
         }
       }
       return inputRef.current
-    }, [editorService]),
+    }, [editorService, uriIdentity]),
   )
 
   // Persist transient state so switching sidebars away and back restores it.

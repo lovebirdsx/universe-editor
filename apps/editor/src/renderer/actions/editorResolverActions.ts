@@ -8,8 +8,8 @@ import {
   IEditorGroupsService,
   IEditorResolverService,
   IQuickInputService,
+  IUriIdentityService,
   URI,
-  isEqualResource,
   localize,
   localize2,
   type ServicesAccessor,
@@ -35,6 +35,7 @@ export class ReopenWithAction extends Action2 {
     const resolver = accessor.get(IEditorResolverService)
     const quickInput = accessor.get(IQuickInputService)
     const groups = accessor.get(IEditorGroupsService)
+    const uriIdentity = accessor.get(IUriIdentityService)
 
     const rawResource = args?.resource
     if (!rawResource) return
@@ -50,7 +51,7 @@ export class ReopenWithAction extends Action2 {
     if (!pick) return
 
     const group = groups.activeGroup
-    const existing = group.editors.find((e) => isEqualResource(e.resource, uri))
+    const existing = group.editors.find((e) => uriIdentity.isEqual(e.resource, uri))
     if (existing) group.closeEditor(existing)
 
     await resolver.openEditor(uri, { preferredTypeId: pick.id, pinned: true })

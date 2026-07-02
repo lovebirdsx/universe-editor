@@ -1,11 +1,10 @@
 import {
   Action2,
   IEditorGroupsService,
-  IHostService,
+  IUriIdentityService,
   IWorkspaceService,
   MenuId,
   localize2,
-  relativePathUnder,
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
@@ -72,11 +71,9 @@ export class CopyFileRelativePathAction extends Action2 {
     const root = accessor.get(IWorkspaceService).current?.folder
     let value = uri.fsPath
     if (root) {
-      const relativePath = relativePathUnder(
-        root.fsPath,
-        uri.fsPath,
-        accessor.get(IHostService).platform,
-      )
+      const relativePath = accessor
+        .get(IUriIdentityService)
+        .relativePathUnder(root.fsPath, uri.fsPath)
       value = relativePath ?? value
     }
     await navigator.clipboard.writeText(value)

@@ -14,12 +14,12 @@ import {
   NoopTelemetryService,
   NullLogger,
   observableValue,
+  UriIdentityService,
   type IDisposable,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
   IFileService,
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -300,7 +300,7 @@ function makeService(opts: { autoInitialize?: boolean; startupTimeoutMs?: number
         task({ report: () => {} }),
     } as unknown as IProgressService,
     new StubLoggerService(),
-    { platform: 'linux' } as IHostService,
+    new UriIdentityService('linux'),
   )
   svc.setNotificationSink(sink)
   // Connect now awaits initializeResult — auto-respond to the SDK's

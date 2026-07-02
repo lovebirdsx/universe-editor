@@ -30,6 +30,7 @@ import {
   type IQuickInputService,
   type IStatusBarService,
   type IStorageService,
+  type IUriIdentityService,
   type IViewsService,
 } from '@universe-editor/platform'
 import {
@@ -74,6 +75,8 @@ export interface HostConnectionDeps {
   readonly languageFeatures?: ILanguageFeaturesService
   /** Wired only for the trusted connection — active-editor control is trusted-only. */
   readonly editorService?: IEditorService
+  /** Wired with editorService (trusted-only) so MainThreadEditor can compare resources. */
+  readonly uriIdentity?: IUriIdentityService
   /** Wired only for the trusted connection — AI models are trusted-only. */
   readonly aiModel?: IAiModelService
   /** Wired only for the trusted connection — persisted extension state. */
@@ -178,7 +181,9 @@ export class HostConnection extends Disposable {
       const extHostEditor = ProxyChannel.toService<IExtHostEditor>(
         client.getChannel(ExtHostChannels.extHostEditor),
       )
-      const mainThreadEditor = store.add(new MainThreadEditor(deps.editorService, extHostEditor))
+      const mainThreadEditor = store.add(
+        new MainThreadEditor(deps.editorService, deps.uriIdentity!, extHostEditor),
+      )
       server.registerChannel(
         ExtHostChannels.mainThreadEditor,
         ProxyChannel.fromService(mainThreadEditor),

@@ -16,10 +16,10 @@ import {
   NullLogger,
   observableValue,
   StorageScope,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -32,7 +32,7 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 
-const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
+const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -399,7 +399,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
@@ -424,7 +424,7 @@ function buildService(opts: FakeAcpClientOptions = {}): {
     configOptionsCache,
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   return { svc, client, history, agentDefaults, configOptionsCache }
 }

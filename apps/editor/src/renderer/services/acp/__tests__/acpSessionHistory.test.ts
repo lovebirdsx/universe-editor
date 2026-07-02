@@ -11,8 +11,8 @@ import {
   NullLogger,
   StorageScope,
   URI,
+  UriIdentityService,
   type HostPlatform,
-  type IHostService,
   type ILogger,
   type ILoggerService,
   type IStorageService,
@@ -97,8 +97,8 @@ interface MakeOptions {
   platform?: HostPlatform
 }
 
-function makeStubHost(platform: HostPlatform): IHostService {
-  return { platform } as IHostService
+function makeUriIdentity(platform: HostPlatform): UriIdentityService {
+  return new UriIdentityService(platform)
 }
 
 function makeService(opts: MakeOptions = {}): {
@@ -113,7 +113,7 @@ function makeService(opts: MakeOptions = {}): {
     workspace,
     new NoopTelemetryService(),
     new StubLoggerService(),
-    makeStubHost(opts.platform ?? 'linux'),
+    makeUriIdentity(opts.platform ?? 'linux'),
   )
   return { svc, storage, workspace }
 }

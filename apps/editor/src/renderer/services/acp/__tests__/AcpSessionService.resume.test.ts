@@ -19,10 +19,10 @@ import {
   NullLogger,
   observableValue,
   StorageScope,
+  UriIdentityService,
 } from '@universe-editor/platform'
 import type {
   IConfigurationService,
-  IHostService,
   ILogger,
   ILoggerService,
   INotification,
@@ -35,7 +35,7 @@ import type {
   IWorkspaceService,
 } from '@universe-editor/platform'
 
-const FAKE_HOST: IHostService = { platform: 'linux' } as IHostService
+const FAKE_URI_IDENTITY = new UriIdentityService('linux')
 import {
   AgentSideConnection,
   ClientSideConnection,
@@ -396,7 +396,7 @@ function buildService(
     new FakeWorkspaceService(),
     telemetry,
     new StubLoggerService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   const agentDefaults = new AcpAgentDefaultsService(
     new FakeStorage(),
@@ -420,7 +420,7 @@ function buildService(
     new StubConfigOptionsCache(),
     new StubSessionChangeTracker(),
     new StubSessionTitleService(),
-    FAKE_HOST,
+    FAKE_URI_IDENTITY,
   )
   return { svc, client, history, agentDefaults, notifications, storage }
 }
@@ -992,7 +992,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     svc = new AcpSessionService(
       client,
@@ -1015,7 +1015,7 @@ describe('AcpSessionService.resumeSession — editor-restart race', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     // Kick off history hydration but DO NOT await — race the resume call.
     void history.initialize()
@@ -1105,7 +1105,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     svc = new AcpSessionService(
       client,
@@ -1128,7 +1128,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     expect(svc.activeSession.get()).toBeUndefined()
     await svc.tryRestoreActiveSession()
@@ -1156,7 +1156,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     svc = new AcpSessionService(
       client,
@@ -1179,7 +1179,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     // Let _loadPendingRestore() resolve.
     await Promise.resolve()
@@ -1202,7 +1202,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     svc = new AcpSessionService(
       client,
@@ -1225,7 +1225,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     await Promise.resolve()
     await svc.tryRestoreActiveSession()
@@ -1253,7 +1253,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new FakeWorkspaceService(),
       telemetry,
       new StubLoggerService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     svc = new AcpSessionService(
       client,
@@ -1276,7 +1276,7 @@ describe('AcpSessionService.tryRestoreActiveSession', () => {
       new StubConfigOptionsCache(),
       new StubSessionChangeTracker(),
       new StubSessionTitleService(),
-      FAKE_HOST,
+      FAKE_URI_IDENTITY,
     )
     await Promise.resolve()
     await Promise.all([svc.tryRestoreActiveSession(), svc.tryRestoreActiveSession()])

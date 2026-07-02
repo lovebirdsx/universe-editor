@@ -3,8 +3,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { URI } from '@universe-editor/platform'
+import { URI, UriIdentityService } from '@universe-editor/platform'
 import { HistoryService } from '../HistoryService.js'
+
+const makeHistoryService = () => new HistoryService(new UriIdentityService('linux'))
 
 function entry(path: string, line?: number, col?: number) {
   return {
@@ -22,7 +24,7 @@ function entry(path: string, line?: number, col?: number) {
 
 describe('HistoryService', () => {
   it('canGoBack reflects depth (>=2 entries required)', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     expect(h.canGoBack()).toBe(false)
     h.record(entry('/a.ts'))
     expect(h.canGoBack()).toBe(false)
@@ -31,7 +33,7 @@ describe('HistoryService', () => {
   })
 
   it('records distinct files into back stack', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.record(entry('/c.ts'))
@@ -44,7 +46,7 @@ describe('HistoryService', () => {
   })
 
   it('replaces top in place when same file + same line (latest column wins)', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts', 10, 1))
     h.record(entry('/a.ts', 10, 5))
     expect(h.getBackStack().length).toBe(1)
@@ -52,7 +54,7 @@ describe('HistoryService', () => {
   })
 
   it('replaces top when previous has no selection but new entry does', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/a.ts', 5))
     expect(h.getBackStack().length).toBe(1)
@@ -60,21 +62,21 @@ describe('HistoryService', () => {
   })
 
   it('pushes new entry when same file but different line', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts', 10))
     h.record(entry('/a.ts', 50))
     expect(h.getBackStack().length).toBe(2)
   })
 
   it('caps back stack at MAX_DEPTH=50', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     for (let i = 0; i < 60; i++) h.record(entry(`/f${i}.ts`))
     expect(h.getBackStack().length).toBe(50)
     expect(h.getBackStack()[0]?.resource.fsPath).toBe(URI.file('/f10.ts').fsPath)
   })
 
   it('goBack returns previous entry and pushes current to forward stack', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.record(entry('/c.ts'))
@@ -86,14 +88,14 @@ describe('HistoryService', () => {
   })
 
   it('goBack returns undefined when fewer than 2 entries', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     expect(h.goBack()).toBeUndefined()
     h.record(entry('/a.ts'))
     expect(h.goBack()).toBeUndefined()
   })
 
   it('goForward returns popped entry and pushes to back', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.goBack()
@@ -104,12 +106,12 @@ describe('HistoryService', () => {
   })
 
   it('goForward returns undefined when forward stack empty', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     expect(h.goForward()).toBeUndefined()
   })
 
   it('record after goBack drops the forward stack (real navigation, not the synthetic one)', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.record(entry('/c.ts'))
@@ -124,7 +126,7 @@ describe('HistoryService', () => {
   })
 
   it('suppresses the next record after goBack (caller-initiated navigation)', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.record(entry('/c.ts'))
@@ -136,7 +138,7 @@ describe('HistoryService', () => {
   })
 
   it('suppresses the next record after goForward', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.goBack()
@@ -151,7 +153,7 @@ describe('HistoryService', () => {
     // synchronous active-editor change AND the debounced cursor flush. All of
     // them must be swallowed; if any leaks through, record() clears forward and
     // GoForward (alt+right) silently breaks.
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     const target = h.goBack()
@@ -165,7 +167,7 @@ describe('HistoryService', () => {
   })
 
   it('a record for a different resource inside the window closes suppression', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts'))
     h.record(entry('/b.ts'))
     h.record(entry('/c.ts'))
@@ -180,7 +182,7 @@ describe('HistoryService', () => {
   })
 
   it('fires onDidChange on record, goBack, goForward, clear', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     let count = 0
     h.onDidChange(() => count++)
     h.record(entry('/a.ts'))
@@ -195,7 +197,7 @@ describe('HistoryService', () => {
   })
 
   it('clear empties both stacks and is a no-op when already empty', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     let count = 0
     h.onDidChange(() => count++)
     h.clear()
@@ -209,7 +211,7 @@ describe('HistoryService', () => {
   })
 
   it('revives plain UriComponents in record()', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     const components = URI.file('/x.ts').toJSON()
     // Cast away type: simulates a non-URI-instance payload (IPC boundary).
     h.record({ resource: components as unknown as URI })
@@ -217,7 +219,7 @@ describe('HistoryService', () => {
   })
 
   it('updateCurrent rewrites the selection of the matching entry in place', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts', 1, 1))
     h.record(entry('/b.ts'))
     h.updateCurrent(URI.file('/a.ts'), {
@@ -234,7 +236,7 @@ describe('HistoryService', () => {
   })
 
   it('updateCurrent does not touch the forward stack', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts', 1))
     h.record(entry('/b.ts'))
     h.goBack() // forward = [b]
@@ -244,7 +246,7 @@ describe('HistoryService', () => {
   })
 
   it('updateCurrent is a no-op when the resource has no entry', () => {
-    const h = new HistoryService()
+    const h = makeHistoryService()
     h.record(entry('/a.ts', 1))
     let fired = 0
     h.onDidChange(() => fired++)

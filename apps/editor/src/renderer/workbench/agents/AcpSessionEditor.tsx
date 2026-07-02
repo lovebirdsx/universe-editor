@@ -12,8 +12,7 @@ import {
   IEditorInput,
   IEditorService,
   IWorkspaceService,
-  IHostService,
-  arePathsEqual,
+  IUriIdentityService,
   localize,
 } from '@universe-editor/platform'
 import { useObservable, useService } from '../useService.js'
@@ -35,7 +34,7 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   const service = useService(IAcpSessionService)
   const history = useService(IAcpSessionHistoryService)
   const workspace = useService(IWorkspaceService)
-  const hostService = useService(IHostService)
+  const uriIdentity = useService(IUriIdentityService)
   useObservable(service.sessions)
   // 订阅 history 是为了让水化完成时触发重渲，让一个尚未 resume 的 session 在 history
   // 条目到位后能被重新评估。
@@ -60,7 +59,7 @@ export function AcpSessionEditor({ input }: { input: IEditorInput }) {
   const isForeign =
     entry?.cwd !== undefined &&
     currentCwd !== undefined &&
-    !arePathsEqual(entry.cwd, currentCwd, hostService.platform)
+    !uriIdentity.arePathsEqual(entry.cwd, currentCwd)
   if (entry && isForeign) {
     return <ForeignSessionResumer key={acpInput.sessionId} input={acpInput} entry={entry} />
   }

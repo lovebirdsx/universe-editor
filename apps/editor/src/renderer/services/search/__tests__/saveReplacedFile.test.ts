@@ -16,11 +16,15 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   type IEditorGroupsService,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
 import { MonacoModelRegistry } from '../../../workbench/editor/monaco/MonacoModelRegistry.js'
 import { saveReplacedFile } from '../saveReplacedFile.js'
+
+// The C:/c: drive-letter case in this suite requires the case-insensitive policy.
+const uriIdentity = new UriIdentityService('win32')
 
 function makeFs(initial: Record<string, string> = {}): IFileService & {
   store: Record<string, string>
@@ -94,7 +98,7 @@ describe('saveReplacedFile', () => {
     model.setValue('world')
     input.setDirty(true)
 
-    await saveReplacedFile(uri, makeGroups([[input]]) as IEditorGroupsService)
+    await saveReplacedFile(uri, makeGroups([[input]]) as IEditorGroupsService, uriIdentity)
 
     expect(fs.writes).toEqual([{ path: uri.toString(), content: 'world' }])
     expect(input.isDirty).toBe(false)
@@ -119,7 +123,7 @@ describe('saveReplacedFile', () => {
     input.setDirty(true)
 
     // saveReplacedFile must save even when the caller passes uppercaseUri.
-    await saveReplacedFile(uppercaseUri, makeGroups([[input]]) as IEditorGroupsService)
+    await saveReplacedFile(uppercaseUri, makeGroups([[input]]) as IEditorGroupsService, uriIdentity)
 
     expect(input.isDirty).toBe(false)
     expect(fs.writes).toHaveLength(1)
@@ -142,7 +146,7 @@ describe('saveReplacedFile', () => {
     input.setDirty(true)
 
     // Group 0 (active) is empty; group 1 holds the file.
-    await saveReplacedFile(uri, makeGroups([[], [input]]) as IEditorGroupsService)
+    await saveReplacedFile(uri, makeGroups([[], [input]]) as IEditorGroupsService, uriIdentity)
 
     expect(input.isDirty).toBe(false)
     expect(fs.writes).toHaveLength(1)
@@ -159,7 +163,7 @@ describe('saveReplacedFile', () => {
     const input = inst.createInstance(FileEditorInput, otherUri)
 
     // uri does not match otherUri — save must not be called.
-    await saveReplacedFile(uri, makeGroups([[input]]) as IEditorGroupsService)
+    await saveReplacedFile(uri, makeGroups([[input]]) as IEditorGroupsService, uriIdentity)
 
     expect(fs.writes).toHaveLength(0)
 

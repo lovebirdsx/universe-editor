@@ -18,16 +18,14 @@
 
 import {
   createDecorator,
-  IHostService,
   IStorageService,
   ILoggerService,
   ITelemetryService,
+  IUriIdentityService,
   IWorkspaceService,
   InstantiationType,
-  arePathsEqual,
   observableValue,
   registerSingleton,
-  type HostPlatform,
   type IObservable,
   type ISettableObservable,
 } from '@universe-editor/platform'
@@ -265,14 +263,14 @@ export class AcpSessionHistoryService
 
   readonly entries: ISettableObservable<readonly AcpSessionHistoryEntry[]>
 
-  private readonly _platform: HostPlatform
+  private readonly _uriIdentity: IUriIdentityService
 
   constructor(
     @IStorageService storage: IStorageService,
     @IWorkspaceService workspace: IWorkspaceService,
     @ITelemetryService telemetry: ITelemetryService,
     @ILoggerService loggerService: ILoggerService,
-    @IHostService hostService: IHostService,
+    @IUriIdentityService uriIdentity: IUriIdentityService,
   ) {
     super(storage, workspace, telemetry, loggerService, {
       storageKey: STORAGE_KEY,
@@ -280,7 +278,7 @@ export class AcpSessionHistoryService
       loggerName: 'ACP History',
       persistFailureEvent: 'acp.session_history_persist_failed',
     })
-    this._platform = hostService.platform
+    this._uriIdentity = uriIdentity
     this.entries = observableValue<readonly AcpSessionHistoryEntry[]>('acp.sessionHistory', [])
   }
 
@@ -510,7 +508,7 @@ export class AcpSessionHistoryService
       if (
         scope === 'workspace' &&
         typeof info.cwd === 'string' &&
-        !arePathsEqual(info.cwd, currentCwd, this._platform)
+        !this._uriIdentity.arePathsEqual(info.cwd, currentCwd)
       )
         continue
       reportedSessionIds.add(info.sessionId)
@@ -533,7 +531,7 @@ export class AcpSessionHistoryService
       if (existing) {
         const lastUsedAt = Math.max(existing.lastUsedAt, protocolTs ?? 0)
         const sameTitle = existing.title === title
-        const sameCwd = existing.cwd === cwd || arePathsEqual(existing.cwd, cwd, this._platform)
+        const sameCwd = existing.cwd === cwd || this._uriIdentity.arePathsEqual(existing.cwd, cwd)
         const sameBranch = existing.branch === branch
         const sameLastUsed = existing.lastUsedAt === lastUsedAt
         if (sameTitle && sameCwd && sameBranch && sameLastUsed) continue
@@ -572,7 +570,8 @@ export class AcpSessionHistoryService
       for (const [key, entry] of byKey) {
         if (entry.agentId !== agentId) continue
         if (entry.cwd === undefined) continue
-        if (scope === 'workspace' && !arePathsEqual(entry.cwd, currentCwd, this._platform)) continue
+        if (scope === 'workspace' && !this._uriIdentity.arePathsEqual(entry.cwd, currentCwd))
+          continue
         if (reportedSessionIds.has(entry.sessionIdOnAgent)) continue
         if (preserveIds.has(entry.id)) continue
         byKey.delete(key)

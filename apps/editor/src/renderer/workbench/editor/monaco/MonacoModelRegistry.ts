@@ -8,12 +8,29 @@
  *  and the underlying buffer is only disposed once all consumers release it.
  *--------------------------------------------------------------------------------------------*/
 
-import { Emitter, URI, canonicalResourceKey } from '@universe-editor/platform'
+import { Emitter, URI } from '@universe-editor/platform'
 import type { monaco } from './MonacoLoader.js'
 import { MonacoLoader } from './MonacoLoader.js'
 import { languageForResource } from '../../files/resourceLanguage.js'
 
 export { languageForResource }
+
+/**
+ * Key a resource by its Monaco-normalized URI: lower-case only the leading
+ * Windows drive letter, leaving the rest of the path untouched.
+ *
+ * This deliberately mirrors how Monaco's own `Uri.parse` normalizes a URI (it
+ * lower-cases the drive letter) so this registry's entries line up 1:1 with
+ * Monaco's internal model table. It is NOT filesystem path identity — a caller
+ * asking "are these the same file?" must use `IUriIdentityService.isEqual`,
+ * which is platform-aware (folds case on win32/darwin). Here we intentionally
+ * stay case-sensitive on the path so a registry entry never claims a model that
+ * Monaco considers distinct.
+ */
+function monacoModelKey(uri: URI): string {
+  const path = uri.path.replace(/^\/([A-Za-z]):/, (_m, drive: string) => `/${drive.toLowerCase()}:`)
+  return uri.with({ path }).toString()
+}
 
 interface Entry {
   readonly model: monaco.editor.ITextModel
@@ -40,7 +57,7 @@ class Registry {
    * already exists — callers wanting to overwrite should mutate the model
    * directly via `model.setValue()`.
    *
-   * Keyed by {@link canonicalResourceKey} so the same file reached via an
+   * Keyed by {@link monacoModelKey} so the same file reached via an
    * uppercase-drive platform URI (an open editor) and a lowercased one (a value
    * round-tripped through Monaco, e.g. a workspace-symbol target) maps to a
    * single entry and model — otherwise the second `createModel` for what Monaco
@@ -49,7 +66,7 @@ class Registry {
   acquire(resource: URI, text: string): monaco.editor.ITextModel {
     const m = MonacoLoader.get()
     const uri = m.Uri.parse(resource.toString())
-    const key = canonicalResourceKey(resource)
+    const key = monacoModelKey(resource)
     const existing = this._entries.get(key)
     if (existing) {
       existing.refs++
@@ -71,7 +88,7 @@ class Registry {
 
   /** Look up an existing model without changing its refcount. */
   peek(resource: URI): monaco.editor.ITextModel | undefined {
-    return this._entries.get(canonicalResourceKey(resource))?.model
+    return this._entries.get(monacoModelKey(resource))?.model
   }
 
   /**
@@ -80,7 +97,7 @@ class Registry {
    * last release are no-ops.
    */
   release(resource: URI): void {
-    const key = canonicalResourceKey(resource)
+    const key = monacoModelKey(resource)
     const entry = this._entries.get(key)
     if (!entry) return
     entry.refs--

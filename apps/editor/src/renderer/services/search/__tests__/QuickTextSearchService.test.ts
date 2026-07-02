@@ -11,6 +11,7 @@ import {
   InstantiationService,
   ServiceCollection,
   URI,
+  UriIdentityService,
   type Event as IEvent,
   type IFileMatch,
   type IInputOptions,
@@ -218,6 +219,7 @@ function setup(root: URI | null = URI.file('/repo')) {
     workspace,
     groups,
     instantiation,
+    new UriIdentityService('linux'),
   )
   return { service, quickInput, textSearch, workspace, groups, instantiation, root }
 }

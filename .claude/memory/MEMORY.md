@@ -4,6 +4,7 @@
 
 ## 功能实现进展
 
+- [路径/URI 比较根治收敛](path-comparison-convergence.md) — 四套散乱手写机制→IUriIdentityService 单一入口(DI 绑一次 platform)+base 内核纯函数+ResourceMap；修 authority-only file URI 键碰撞；main 侧走内核+normalizePlatform；MonacoModelKey/SCM 键/acpPathPolicy 为刻意保留的独立身份域
 - [AI 基础服务层实施进展](ai-service-foundation-progress.md) — 模型抽象/provider 注册/流式/取消/三层配置/safeStorage 密钥全部完成；platform 契约+main 实现+renderer 门面三层，加 vendor 套路 I，密钥红线
 - [插件系统实施进展](extension-system-progress.md) — VSCode 式外部插件系统 + Git 扩展，Phase 0–6 全部完成（双 host 信任级隔离 + fs 网关 + 真 diff + 崩溃/workspace 重启），关键设计决策与可选后续
 - [插件 manifest NLS 本地化](extension-manifest-nls.md) — 命令title/子菜单label/配置description 走 VSCode 式 %key% + package.nls.json，host 扫描时按 locale 替换；locale 经 env 传入；nls 文件须列进 files 数组否则打包丢失
@@ -22,6 +23,7 @@
 - [Codex AI 标题跨工作区持久化](codex-ai-title-persistence-parity.md) — codex 非当前工作区 session 标题回退成首条用户消息;根因 fork 缺 set_session_title ext-method,AI 标题只留工作区本地;对称补 thread/name/set 桥接;含 eslint hook 污染 vendor 的运维坑
 - [外部 session AI 标题跨 bucket 回填](foreign-session-ai-title-crossbucket-backfill.md) — 跨 worktree 窗口看外部 session 标题卡首条消息(渲染层,非 agent 侧);hydrate 每 cwd 只跑一次+JSONL 删后 session/list 修不回;复用 useForeignSessionStats 从归属 bucket 回填 title(仅 aiTitle 才覆盖)+reconcile 写回(title-only 不打 aiTitle)
 - [dirty-diff 内联 peek](dirty-diff-inline-peek-feature.md) — 点击修改色条弹内联 diff(内嵌真 Monaco diff editor:双侧行号+语法高亮+内部滚动;Esc关闭/拖动调高/出视口才滚入;导航+Revert+Stage+打开完整diff);overlay-widget+空view-zone占位(手写DOM diff已删勿回退);Stage 走 git diff -U0→selectHunkPatch→apply --cached(stdin);套路见 skill dirty-diff-inline-peek
+- [markdown 预览本地图片](markdown-preview-local-images-app-scheme.md) — prod renderer 页面从 file:// 改为自定义 universe-app scheme(shell+资源同源,_resource_ 路径前缀);对齐 VSCode asWebviewUri+localResourceRoots(工作区根+文档目录边界,renderer 经 IResourceAccessService 声明);根因=自定义 secure scheme 从 file:// 页跨源被 Chromium 拦在 handler 前
 - [ACP 输入框图片支持](acp-prompt-image-feature.md) — 粘贴/拖拽/附件三入口+能力降级+限额可配;88×88 共享 ChatImage 控件(缩略图+锚定预览弹窗 portal+fixed 视口定位防遮挡);恢复卡死**真因=filePathLink.ts 正则灾难回溯**(SEG 含/退化成(a+)+,遇 data:URL >35s),非 tracer;codex 恢复图片**在渲染层解析文本 image**(markdownRenderer.isImageDataUrl+MarkdownView.renderImage 注入,不改 vendor);tracer O(m²)+超大行丢弃是独立修复
 
 ## 性能 / 疑难根因
@@ -38,6 +40,10 @@
 ## 打包 / 构建
 
 - [electron-builder asarUnpack + pnpm workspace](electron-builder-asarunpack-pnpm-workspace.md) — platform/workbench-ui 必须放 devDependencies，否则打包崩
+
+## 工程约定 / 护栏
+
+- [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — no-restricted-syntax 禁手写 fsPath 大小写折叠/路径身份键(精准不误伤 slug/模型 id)；flat config 同名规则替换非合并的坑；测试+SCM 域豁免
 
 ## 测试 flaky / 环境问题(非回归)
 
