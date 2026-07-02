@@ -952,9 +952,74 @@ export function extractSlashQuery(text: string, caret: number): string | null {
   return text.slice(1, end)
 }
 
-/** Returns true when the textarea cursor sits on the first line (no newline before it). */
+/** Returns true when the textarea cursor sits on the first visual line. */
 function isOnFirstLine(ta: HTMLTextAreaElement): boolean {
-  return !ta.value.slice(0, ta.selectionStart).includes('\n')
+  const caret = ta.selectionStart ?? 0
+  const beforeCaret = ta.value.slice(0, caret)
+  if (beforeCaret.includes('\n')) return false
+  if (caret === 0) return true
+
+  const doc = ta.ownerDocument
+  const win = doc.defaultView
+  if (!win || !doc.body || ta.clientWidth <= 0) return true
+
+  const computed = win.getComputedStyle(ta)
+  const mirror = doc.createElement('div')
+  mirror.setAttribute('aria-hidden', 'true')
+  mirror.style.position = 'absolute'
+  mirror.style.visibility = 'hidden'
+  mirror.style.pointerEvents = 'none'
+  mirror.style.left = '-10000px'
+  mirror.style.top = '0'
+  mirror.style.width = `${ta.clientWidth}px`
+  mirror.style.height = 'auto'
+  mirror.style.minHeight = '0'
+  mirror.style.maxHeight = 'none'
+  mirror.style.overflow = 'visible'
+  mirror.style.boxSizing = 'border-box'
+  mirror.style.whiteSpace = 'pre-wrap'
+  mirror.style.overflowWrap = 'break-word'
+
+  const copiedProperties = [
+    'direction',
+    'font-family',
+    'font-size',
+    'font-style',
+    'font-variant',
+    'font-weight',
+    'letter-spacing',
+    'line-height',
+    'padding-bottom',
+    'padding-left',
+    'padding-right',
+    'padding-top',
+    'tab-size',
+    'text-indent',
+    'text-rendering',
+    'text-transform',
+    'word-break',
+    'word-spacing',
+  ]
+  for (const property of copiedProperties) {
+    mirror.style.setProperty(property, computed.getPropertyValue(property))
+  }
+
+  const firstLineProbe = doc.createElement('span')
+  firstLineProbe.setAttribute('data-acp-prompt-line-probe', 'start')
+  firstLineProbe.textContent = '\u200b'
+  const caretProbe = doc.createElement('span')
+  caretProbe.setAttribute('data-acp-prompt-line-probe', 'caret')
+  caretProbe.textContent = '\u200b'
+  mirror.append(firstLineProbe, doc.createTextNode(beforeCaret), caretProbe)
+
+  try {
+    doc.body.appendChild(mirror)
+    const firstTop = firstLineProbe.getBoundingClientRect().top
+    const caretTop = caretProbe.getBoundingClientRect().top
+    return Math.abs(caretTop - firstTop) <= 1
+  } finally {
+    mirror.remove()
+  }
 }
 
 function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): string {

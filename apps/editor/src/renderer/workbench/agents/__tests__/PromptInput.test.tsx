@@ -60,6 +60,7 @@ afterEach(() => {
   nextPick = undefined
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
+  stubHistoryEntries.set([], undefined)
 })
 
 const stubFileSearch: IFileSearchServiceType = {
@@ -108,9 +109,10 @@ const stubDialogService: IDialogServiceType = {
   prompt: () => Promise.resolve(undefined),
 } as unknown as IDialogServiceType
 
+const stubHistoryEntries = observableValue<readonly string[]>('test.history', [])
 const stubHistoryService: IAcpPromptHistoryService = {
   _serviceBrand: undefined,
-  entries: observableValue<readonly string[]>('test.history', []),
+  entries: stubHistoryEntries,
   push: () => {},
 }
 
@@ -305,6 +307,26 @@ const COMMANDS: readonly AvailableCommand[] = [
 
 function getTextarea(): HTMLTextAreaElement {
   return screen.getByTestId('acp-prompt-input') as HTMLTextAreaElement
+}
+
+function setPromptHistory(entries: readonly string[]): void {
+  act(() => {
+    stubHistoryEntries.set(entries, undefined)
+  })
+}
+
+function makeDomRect(top: number): DOMRect {
+  return {
+    x: 0,
+    y: top,
+    top,
+    bottom: top,
+    left: 0,
+    right: 0,
+    width: 0,
+    height: 0,
+    toJSON: () => ({}),
+  } as DOMRect
 }
 
 describe('extractSlashQuery', () => {
@@ -561,6 +583,33 @@ describe('PromptInput — submit and cancel', () => {
       session.commandsObs.set(COMMANDS, undefined)
     })
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+  })
+})
+
+describe('PromptInput — history navigation', () => {
+  it('does not open history when ArrowUp should move within a soft-wrapped line', () => {
+    setPromptHistory(['previous prompt'])
+    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const probe = this.getAttribute('data-acp-prompt-line-probe')
+      if (probe === 'start') return makeDomRect(10)
+      if (probe === 'caret') return makeDomRect(34)
+      return originalGetBoundingClientRect.call(this)
+    })
+
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const ta = getTextarea()
+    Object.defineProperty(ta, 'clientWidth', { value: 120, configurable: true })
+    const longLine = 'this is a long prompt line that wraps visually before the caret'
+    fireEvent.change(ta, { target: { value: longLine } })
+    ta.setSelectionRange(longLine.length, longLine.length)
+
+    fireEvent.keyDown(ta, { key: 'ArrowUp' })
+
+    expect(screen.queryByTestId('acp-history-popover')).toBeNull()
+    expect(ta.value).toBe(longLine)
   })
 })
 
