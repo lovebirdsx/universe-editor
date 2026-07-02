@@ -32,6 +32,7 @@ import {
 import { SettingsEditorInput } from '../services/editor/SettingsEditorInput.js'
 import { KeybindingsEditorInput } from '../services/editor/KeybindingsEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import {
   dispatchKeybindingsEditorFocusSearch,
   dispatchSettingsEditorFocusSearch,
@@ -88,7 +89,7 @@ async function openUserDataFile(
 
   const input = instantiation.createInstance(FileEditorInput, uri)
   if (options?.readOnly) input.markReadonly()
-  groups.activeGroup.openEditor(input)
+  openInLockAwareGroup(groups, input)
 }
 
 function userDataFileServices(accessor: ServicesAccessor): {
@@ -165,7 +166,7 @@ export class OpenSettingsAction extends Action2 {
       }
     }
 
-    groups.activeGroup.openEditor(new SettingsEditorInput())
+    openInLockAwareGroup(groups, new SettingsEditorInput())
     dispatchSettingsEditorFocusSearch()
   }
 }
@@ -197,7 +198,7 @@ export class OpenKeybindingsEditorAction extends Action2 {
       }
     }
 
-    groups.activeGroup.openEditor(new KeybindingsEditorInput())
+    openInLockAwareGroup(groups, new KeybindingsEditorInput())
     dispatchKeybindingsEditorFocusSearch()
   }
 }
@@ -386,7 +387,7 @@ export class OpenWorkspaceSettingsAction extends Action2 {
 
     const input = new SettingsEditorInput()
     input.switchTarget(ConfigurationTarget.Project)
-    groups.activeGroup.openEditor(input)
+    openInLockAwareGroup(groups, input)
     dispatchSettingsEditorSwitchTarget(ConfigurationTarget.Project)
   }
 }

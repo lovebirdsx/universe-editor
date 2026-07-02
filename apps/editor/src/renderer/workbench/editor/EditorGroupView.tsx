@@ -62,9 +62,10 @@ import {
 } from '../../services/scm/ScmDecorationsService.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { EditorTitleActions } from './EditorTitleActions.js'
+import { ToggleEditorGroupLockAction } from '../../actions/editorActions.js'
 import { FileIcon } from '../files/fileIconTheme.js'
 import { resolveAgentIcon } from '../agents/agentIcon.js'
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Lock } from 'lucide-react'
 import styles from './EditorArea.module.css'
 
 const EMPTY_DECORATIONS: IObservable<IScmDecorationsSnapshot> = observableValue(
@@ -196,7 +197,7 @@ function useGroupVersion(group: IEditorGroup): string {
       return () => combined.dispose()
     },
     () =>
-      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}`,
+      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.isLocked ? 'L' : ''}`,
   )
 }
 
@@ -704,6 +705,21 @@ export const EditorGroupView = memo(function EditorGroupView({
             </button>
           )}
           <div className={styles['editorActionsBar']}>
+            {group.isLocked && (
+              <button
+                className={styles['groupLockIndicator']}
+                data-testid="editor-group-lock-indicator"
+                title={localize('editorGroup.unlock', 'Unlock Group')}
+                aria-label={localize('editorGroup.unlock', 'Unlock Group')}
+                onClick={() =>
+                  void commandService.executeCommand(ToggleEditorGroupLockAction.ID, {
+                    groupId: group.id,
+                  })
+                }
+              >
+                <Lock size={13} strokeWidth={1.75} aria-hidden="true" />
+              </button>
+            )}
             <EditorTitleActions group={group} />
           </div>
         </div>

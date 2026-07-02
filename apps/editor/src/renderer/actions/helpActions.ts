@@ -17,6 +17,7 @@ import {
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { renderReleaseNotesMarkdown } from '../services/releaseNotes/releaseNotes.js'
 
 export class OpenDocsAction extends Action2 {
@@ -95,6 +96,6 @@ export class ShowReleaseNotesAction extends Action2 {
       localize('releaseNotes.title', 'Release Notes'),
       'all',
     )
-    groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+    openInLockAwareGroup(groups, input, { activate: true, pinned: true })
   }
 }

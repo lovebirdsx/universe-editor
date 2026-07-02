@@ -16,6 +16,7 @@ import {
 } from '@universe-editor/platform'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
 import { ReleaseNotesInput } from '../services/editor/ReleaseNotesInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import {
   compareVersions,
   renderReleaseNotesMarkdown,
@@ -69,7 +70,7 @@ export class ReleaseNotesContribution extends Disposable implements IWorkbenchCo
         localize('releaseNotes.whatsNew', "What's New in {version}", { version: currentVersion }),
         'whatsNew',
       )
-      this._groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+      openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
     }
     await this._storage.set(LAST_VERSION_KEY, currentVersion, StorageScope.GLOBAL)
   }

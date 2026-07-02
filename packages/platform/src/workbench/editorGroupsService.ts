@@ -63,6 +63,14 @@ export interface IEditorGroupsService {
   readonly _serviceBrand: undefined
 
   readonly activeGroup: IEditorGroup
+  /**
+   * The group a freshly-opened editor should land in. Equals `activeGroup`
+   * unless it is locked, in which case the first unlocked group is returned
+   * (a new group is created + activated if every group is locked). Callers
+   * that open a *new* resource should prefer this over `activeGroup`; revealing
+   * an already-open editor should keep using `activeGroup`.
+   */
+  readonly activeGroupForOpen: IEditorGroup
   readonly groups: readonly IEditorGroup[]
   readonly count: number
   readonly orientation: GroupOrientation

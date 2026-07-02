@@ -10,6 +10,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { StartupPerformanceInput } from '../services/editor/StartupPerformanceInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 
 export class ShowStartupPerformanceAction extends Action2 {
   static readonly ID = 'workbench.action.showStartupPerformance'
@@ -24,8 +25,9 @@ export class ShowStartupPerformanceAction extends Action2 {
   }
 
   override run(accessor: ServicesAccessor): void {
-    accessor
-      .get(IEditorGroupsService)
-      .activeGroup.openEditor(new StartupPerformanceInput(), { activate: true, pinned: true })
+    openInLockAwareGroup(accessor.get(IEditorGroupsService), new StartupPerformanceInput(), {
+      activate: true,
+      pinned: true,
+    })
   }
 }

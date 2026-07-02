@@ -24,6 +24,7 @@ export type EditorGroupModelChangeKind =
   | 'active'
   | 'pin'
   | 'previewReplace'
+  | 'lock'
 
 export interface IEditorGroupModelChangeEvent {
   kind: EditorGroupModelChangeKind
@@ -56,6 +57,12 @@ export interface IEditorGroupModel {
   readonly activationId: number
   /** Whether the most recent activation asked to keep keyboard focus off the editor. */
   readonly lastActivationPreservedFocus: boolean
+  /**
+   * A locked group does not accept editors opened for a fresh resource: the
+   * open is routed to another (unlocked) group instead. Editors already in the
+   * group can still be re-activated. Mirrors VSCode's `IEditorGroup.isLocked`.
+   */
+  readonly isLocked: boolean
 
   readonly onDidChangeModel: Event<IEditorGroupModelChangeEvent>
   readonly onDidActiveEditorChange: Event<void>
@@ -73,6 +80,8 @@ export interface IEditorGroupModel {
   setActive(editor: EditorInput, options?: { preserveFocus?: boolean }): void
   pinEditor(editor: EditorInput): void
   isPinned(editor: EditorInput): boolean
+  /** Lock or unlock this group. No-op if already in the requested state. */
+  lock(locked: boolean): void
 
   getEditorByIndex(index: number): EditorInput | undefined
   indexOf(editor: EditorInput): number
@@ -92,6 +101,7 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
   private _previewEditor: EditorInput | undefined = undefined
   private _activationId = 0
   private _lastActivationPreservedFocus = false
+  private _locked = false
   private readonly _mru: EditorInput[] = []
   /**
    * Owns the lifetime of editors that belong to this group: each `openEditor`
@@ -130,6 +140,16 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
 
   get lastActivationPreservedFocus(): boolean {
     return this._lastActivationPreservedFocus
+  }
+
+  get isLocked(): boolean {
+    return this._locked
+  }
+
+  lock(locked: boolean): void {
+    if (this._locked === locked) return
+    this._locked = locked
+    this._onDidChangeModel.fire({ kind: 'lock', editor: undefined })
   }
 
   openEditor(editor: EditorInput, options?: IOpenEditorOptions): void {

@@ -48,6 +48,7 @@ import {
 import { Badge, Button, Checkbox, IconButton, Input } from '@universe-editor/workbench-ui'
 import { useService } from '../useService.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../../services/editor/openInLockAwareGroup.js'
 import { AddProviderDialog } from './AddProviderDialog.js'
 import styles from './AiSettingsEditor.module.css'
 
@@ -265,7 +266,7 @@ export function AiModelsPanel() {
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = instantiation.createInstance(FileEditorInput, URI.revive(uri) as URI)
-    void editorGroups.activeGroup.openEditor(input, { activate: true })
+    void openInLockAwareGroup(editorGroups, input, { activate: true })
   }, [aiModel, editorGroups, instantiation, userData])
 
   return (

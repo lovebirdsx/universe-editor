@@ -24,6 +24,7 @@ import { IRecentFilesService } from '../../recentFiles/recentFilesService.js'
 import { IExcludeService } from '../../exclude/ExcludeService.js'
 import { resourceIconId } from '../quickPickResourceIcon.js'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 
 const GO_TO_FILE_MAX_RESULTS = 512
 const GO_TO_FILE_SEARCH_DELAY_MS = 200
@@ -69,7 +70,7 @@ export class FileQuickAccessProvider implements IQuickAccessProvider {
       }
     }
     const input = this._instantiation.createInstance(FileEditorInput, uri)
-    this._groups.activeGroup.openEditor(input, { activate: true, pinned: opts.pinned })
+    openInLockAwareGroup(this._groups, input, { activate: true, pinned: opts.pinned })
   }
 
   private _provideWorkspace(

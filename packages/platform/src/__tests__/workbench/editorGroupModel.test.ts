@@ -285,3 +285,41 @@ describe('EditorGroupModel — group id', () => {
     expect(b.id).toBeGreaterThan(a.id)
   })
 })
+
+describe('EditorGroupModel — lock', () => {
+  it('defaults to unlocked', () => {
+    expect(new EditorGroupModel().isLocked).toBe(false)
+  })
+
+  it('lock(true)/lock(false) flips state and fires a lock event', () => {
+    const model = new EditorGroupModel()
+    const events: IEditorGroupModelChangeEvent[] = []
+    model.onDidChangeModel((e) => events.push(e))
+    model.lock(true)
+    expect(model.isLocked).toBe(true)
+    model.lock(false)
+    expect(model.isLocked).toBe(false)
+    expect(events.filter((e) => e.kind === 'lock')).toHaveLength(2)
+  })
+
+  it('lock() is a no-op (no event) when already in the requested state', () => {
+    const model = new EditorGroupModel()
+    const spy = vi.fn()
+    model.onDidChangeModel(spy)
+    model.lock(false)
+    expect(spy).not.toHaveBeenCalled()
+    model.lock(true)
+    model.lock(true)
+    expect(spy.mock.calls.filter((c) => c[0].kind === 'lock')).toHaveLength(1)
+  })
+
+  it('a locked group still accepts and activates editors at the model level', () => {
+    // The lock is enforced by the routing layer (activeGroupForOpen), not the
+    // model — the model itself must remain a passive container.
+    const model = new EditorGroupModel()
+    model.lock(true)
+    const a = make('a')
+    model.openEditor(a)
+    expect(model.activeEditor).toBe(a)
+  })
+})

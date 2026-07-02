@@ -25,6 +25,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { AiSettingsEditorInput } from '../services/editor/AiSettingsEditorInput.js'
 import { buildModelPickItems } from './aiModelPickItems.js'
 
@@ -91,7 +92,7 @@ export class ManageModelsAction extends Action2 {
         }
       }
     }
-    groups.activeGroup.openEditor(new AiSettingsEditorInput())
+    openInLockAwareGroup(groups, new AiSettingsEditorInput())
   }
 }
 
@@ -116,7 +117,7 @@ export class OpenAiSettingsJsonAction extends Action2 {
     const uri = await userData.getFileUri(UserDataFile.AiSettings)
     if (!uri) return
     const input = inst.createInstance(FileEditorInput, URI.revive(uri) as URI)
-    groups.activeGroup.openEditor(input, { activate: true })
+    openInLockAwareGroup(groups, input, { activate: true })
   }
 }
 

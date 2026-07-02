@@ -224,3 +224,44 @@ describe('EditorGroupsService — auto-close empty group', () => {
     expect(svc.count).toBe(2)
   })
 })
+
+describe('EditorGroupsService — lock-aware routing (activeGroupForOpen)', () => {
+  it('returns the active group when it is unlocked', () => {
+    const svc = new EditorGroupsService()
+    expect(svc.activeGroupForOpen).toBe(svc.activeGroup)
+  })
+
+  it('routes to the first unlocked group when the active group is locked', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    svc.activateGroup(first)
+    first.lock(true)
+    expect(svc.activeGroupForOpen).toBe(second)
+  })
+
+  it('creates a new group when every group is locked', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    first.lock(true)
+    expect(svc.count).toBe(1)
+    const target = svc.activeGroupForOpen
+    expect(target).not.toBe(first)
+    expect(target.isLocked).toBe(false)
+    expect(svc.count).toBe(2)
+    expect(svc.activeGroup).toBe(target)
+  })
+
+  it('lock state survives serialize → restore', () => {
+    const svc = new EditorGroupsService()
+    const first = svc.activeGroup
+    const second = svc.addGroup(first, GroupDirection.Right)
+    second.lock(true)
+    const state = svc.toJSON()
+
+    const other = new EditorGroupsService()
+    other.restore(state)
+    const restoredLocked = other.groups.filter((g) => g.isLocked)
+    expect(restoredLocked).toHaveLength(1)
+  })
+})

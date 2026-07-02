@@ -6,6 +6,7 @@ import {
 } from '@universe-editor/platform'
 import type { IWorkbenchContribution } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import type { IpcBridge } from '../../preload/index.js'
 
 /**
@@ -32,6 +33,6 @@ export class StartupFileContribution extends Disposable implements IWorkbenchCon
   private _openFile(filePath: string): void {
     console.log(`[StartupFileContribution] opening file: ${filePath}`)
     const input = this._instantiation.createInstance(FileEditorInput, URI.file(filePath))
-    void this._editorGroups.activeGroup.openEditor(input, { activate: true })
+    void openInLockAwareGroup(this._editorGroups, input, { activate: true })
   }
 }

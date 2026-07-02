@@ -20,6 +20,7 @@ import {
 import { IRecentFilesService } from '../services/recentFiles/recentFilesService.js'
 import { IQuickAccessController } from '../services/quickInput/QuickAccessController.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { confirmLargeFile } from '../services/editor/largeFileGuard.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
@@ -55,7 +56,7 @@ export class OpenFileAction extends Action2 {
     if (!picked) return
     if (!(await confirmLargeFile(picked, fileService, dialog))) return
     const input = inst.createInstance(FileEditorInput, picked)
-    groups.activeGroup.openEditor(input, { activate: true })
+    openInLockAwareGroup(groups, input, { activate: true })
   }
 }
 

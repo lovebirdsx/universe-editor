@@ -80,6 +80,7 @@ import {
   SplitEditorLeftAction,
   SplitEditorRightAction,
   SplitEditorUpAction,
+  ToggleEditorGroupLockAction,
   ToggleMinimapAction,
   ToggleWordWrapAction,
 } from './editorActions.js'
@@ -322,6 +323,9 @@ registerAction2(SplitEditorRightAction)
 registerAction2(SplitEditorDownAction)
 registerAction2(SplitEditorLeftAction)
 registerAction2(SplitEditorUpAction)
+
+// Editor — group lock
+registerAction2(ToggleEditorGroupLockAction)
 
 // Editor — group focus
 registerAction2(FocusNextGroupAction)

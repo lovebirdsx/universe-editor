@@ -59,6 +59,13 @@ export function resolveTargetEditor(
     }
   }
 
+  // A group-only argument (e.g. the editor-title `…` overflow) targets that
+  // group's active editor rather than the workbench-active group.
+  if (isTabActionArg(arg) && arg.groupId !== undefined && !arg.resource) {
+    const g = groups.getGroup(arg.groupId)
+    if (g?.activeEditor) return { group: g, editor: g.activeEditor }
+  }
+
   const active = groups.activeGroup
   const editor = active.activeEditor
   return editor ? { group: active, editor } : undefined

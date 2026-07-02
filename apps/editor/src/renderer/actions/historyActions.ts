@@ -21,6 +21,7 @@ import {
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { openMarkdownPreviewInGroup } from '../services/editor/openMarkdownPreview.js'
 
 async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Promise<void> {
@@ -57,7 +58,7 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
       // tab instead of piling up a fresh preview each time.
       openMarkdownPreviewInGroup(groups.activeGroup, input, false)
     } else {
-      groups.activeGroup.openEditor(input, { activate: true, pinned: false })
+      openInLockAwareGroup(groups, input, { activate: true, pinned: false })
     }
     opened = input
   }

@@ -25,6 +25,12 @@ export interface IAction2Menu {
   group?: string
   order?: number
   when?: ContextKeyExpression | string
+  /**
+   * Per-placement title override. Lets one command show different labels in
+   * different menus (e.g. a toggle command rendered as "Lock" vs "Unlock"
+   * gated by a when-clause). Falls back to the action's `title`.
+   */
+  title?: string | ICommandActionTitle
 }
 
 export interface IAction2Keybinding {
@@ -149,7 +155,7 @@ export function registerAction2(ctor: new () => Action2): IDisposable {
       ...(when !== undefined ? { when } : {}),
       ...(menu.group !== undefined ? { group: menu.group } : {}),
       ...(menu.order !== undefined ? { order: menu.order } : {}),
-      title: titleString(desc.title),
+      title: titleString(menu.title ?? desc.title),
       ...(desc.icon !== undefined ? { icon: desc.icon } : {}),
     }
     disposables.push(MenuRegistry.addMenuItem(menu.id, item))

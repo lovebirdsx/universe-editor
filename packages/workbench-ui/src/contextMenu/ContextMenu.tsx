@@ -18,6 +18,12 @@ export interface ContextMenuProps {
   args?: readonly unknown[]
   commandService: ICommandService
   contextKeyService?: IContextKeyService
+  /**
+   * Optional predicate to keep only certain menu groups. Used by the editor
+   * title `…` overflow to show everything *except* the primary `navigation`
+   * group (which is rendered as inline icon buttons).
+   */
+  groupFilter?: (group: string) => boolean
   onClose: () => void
 }
 
@@ -41,6 +47,7 @@ export function ContextMenu({
   args = [],
   commandService,
   contextKeyService,
+  groupFilter,
   onClose,
 }: ContextMenuProps) {
   const ref = useRef<HTMLUListElement>(null)
@@ -69,6 +76,7 @@ export function ContextMenu({
       if (isSubmenuEntry(entry)) continue
 
       const group = entry.group ?? ''
+      if (groupFilter && !groupFilter(group)) continue
       if (prevGroup !== undefined && prevGroup !== group) {
         result.push({ kind: 'separator', id: `sep-${prevGroup}-${group}` })
       }
@@ -89,7 +97,7 @@ export function ContextMenu({
     }
 
     return result
-  }, [menuId, contextKeyService, args, commandService, onClose])
+  }, [menuId, contextKeyService, args, commandService, onClose, groupFilter])
 
   if (rows.length === 0) return null
 

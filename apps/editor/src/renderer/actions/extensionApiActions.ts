@@ -22,6 +22,7 @@ import {
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 
 /** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */
 export class GetConfigurationAction extends Action2 {
@@ -91,7 +92,7 @@ function revealExistingOrOpen(
     }
   }
   const input = accessor.get(IInstantiationService).createInstance(FileEditorInput, uri)
-  groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+  openInLockAwareGroup(groups, input, { activate: true, pinned: true })
   return input
 }
 

@@ -18,6 +18,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { IExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { reviveUri } from './fileActionsCommon.js'
@@ -53,7 +54,7 @@ export class NewUntitledFileAction extends Action2 {
     const inst = accessor.get(IInstantiationService)
     const groups = accessor.get(IEditorGroupsService)
     const input = inst.createInstance(UntitledEditorInput)
-    groups.activeGroup.openEditor(input, { activate: true })
+    openInLockAwareGroup(groups, input, { activate: true })
   }
 }
 
@@ -83,7 +84,7 @@ export class NewFileAction extends Action2 {
     try {
       const created = await tree.createFile(parent, name)
       const input = inst.createInstance(FileEditorInput, created)
-      groups.activeGroup.openEditor(input, { activate: true })
+      openInLockAwareGroup(groups, input, { activate: true })
     } catch (err) {
       await dialog.confirm({
         message: localize('dialog.file.create.error.file', 'Failed to create file'),

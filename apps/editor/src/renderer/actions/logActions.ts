@@ -26,6 +26,7 @@ import {
 } from '@universe-editor/platform'
 import { ILogFilesService, type LogFileDescriptor } from '../../shared/ipc/services.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { revealOutputPanel } from '../services/output/revealOutputPanel.js'
 
 const LOG_READ_MAX_BYTES = 1024 * 1024
@@ -318,7 +319,7 @@ async function openLogDescriptorInEditor(
     }
   }
   const input = instantiation.createInstance(FileEditorInput, uri).markReadonly()
-  groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+  openInLockAwareGroup(groups, input, { activate: true, pinned: true })
 }
 
 export class ClearOutputAction extends Action2 {

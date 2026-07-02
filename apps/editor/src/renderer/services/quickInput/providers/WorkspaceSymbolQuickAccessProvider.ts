@@ -25,6 +25,7 @@ import {
   type IQuickPickItem,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import { ILanguageFeaturesService } from '../../languageFeatures/LanguageFeaturesService.js'
 import {
@@ -224,7 +225,7 @@ export class WorkspaceSymbolQuickAccessProvider implements IQuickAccessProvider 
       }
       if (!input) {
         input = this._instantiation.createInstance(FileEditorInput, uri)
-        this._groups.activeGroup.openEditor(input, { activate: true, pinned: true })
+        openInLockAwareGroup(this._groups, input, { activate: true, pinned: true })
       }
       void revealPosition(input, symbol.lineNumber, symbol.column)
     }

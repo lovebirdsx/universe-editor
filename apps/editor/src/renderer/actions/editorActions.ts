@@ -557,8 +557,55 @@ export class SplitEditorUpAction extends Action2 {
 }
 
 // ---------------------------------------------------------------------------
-// Group focus
+// Group lock
 // ---------------------------------------------------------------------------
+
+/**
+ * Resolve which group a lock command targets: the `{ groupId }` from a title/
+ * context-menu argument, else the active group.
+ */
+function resolveTargetGroup(groups: IEditorGroupsService, arg: unknown): IEditorGroup | undefined {
+  if (typeof arg === 'object' && arg !== null && 'groupId' in arg) {
+    const groupId = (arg as { groupId?: unknown }).groupId
+    if (typeof groupId === 'number') return groups.getGroup(groupId)
+  }
+  return groups.activeGroup
+}
+
+export class ToggleEditorGroupLockAction extends Action2 {
+  static readonly ID = 'workbench.action.toggleEditorGroupLock'
+  constructor() {
+    super({
+      id: ToggleEditorGroupLockAction.ID,
+      title: localize2('action.toggleEditorGroupLock.title', 'Toggle Editor Group Lock'),
+      category: localize2('command.category.view', 'View'),
+      precondition: 'hasActiveEditor',
+      menu: [
+        {
+          id: MenuId.EditorTitle,
+          group: '9_lock',
+          order: 10,
+          when: '!activeEditorGroupLocked',
+          title: localize2('action.lockEditorGroup.title', 'Lock Group'),
+        },
+        {
+          id: MenuId.EditorTitle,
+          group: '9_lock',
+          order: 10,
+          when: 'activeEditorGroupLocked',
+          title: localize2('action.unlockEditorGroup.title', 'Unlock Group'),
+        },
+      ],
+      f1: true,
+    })
+  }
+  override run(accessor: ServicesAccessor, arg?: unknown): void {
+    const groups = accessor.get(IEditorGroupsService)
+    const group = resolveTargetGroup(groups, arg)
+    if (!group) return
+    group.lock(!group.isLocked)
+  }
+}
 
 export class FocusNextGroupAction extends Action2 {
   static readonly ID = 'workbench.action.focusNextGroup'

@@ -226,6 +226,10 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       false,
     )
     const activeEditorIsDirty = contextKeyService.createKey<boolean>('activeEditorIsDirty', false)
+    const activeEditorGroupLocked = contextKeyService.createKey<boolean>(
+      'activeEditorGroupLocked',
+      false,
+    )
 
     const syncGroupKeys = () => {
       const active = editorGroupsService.activeGroup
@@ -236,6 +240,7 @@ export class ContextKeyContribution extends Disposable implements IWorkbenchCont
       groupEditorsCount.set(active.count)
       activeEditorGroupIndex.set(active.index)
       activeEditorGroupEmpty.set(active.count === 0)
+      activeEditorGroupLocked.set(active.isLocked)
       const activeEditor = active.activeEditor
       activeEditorIsFirstInGroup.set(activeEditor !== undefined && active.isFirst(activeEditor))
       activeEditorIsLastInGroup.set(activeEditor !== undefined && active.isLast(activeEditor))

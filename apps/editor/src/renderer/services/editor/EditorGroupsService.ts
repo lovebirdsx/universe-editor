@@ -99,6 +99,18 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     return this._activeGroup.get()
   }
 
+  get activeGroupForOpen(): IEditorGroup {
+    const active = this._activeGroup.get()
+    if (!active.isLocked) return active
+    const unlocked = this._groups.find((g) => !g.isLocked)
+    if (unlocked) return unlocked
+    // Every group is locked — open into a fresh, unlocked group next to the
+    // active one and make it the active target (VSCode parity).
+    const created = this.addGroup(active, GroupDirection.Right)
+    this.activateGroup(created)
+    return created
+  }
+
   get groups(): readonly IEditorGroup[] {
     return this._groups
   }
@@ -330,6 +342,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
           data: e.serialize?.() ?? null,
         })),
         activeIndex: activeIdx >= 0 ? activeIdx : 0,
+        ...(group.isLocked ? { locked: true } : {}),
         ...(Object.keys(viewStates).length > 0 && { viewStates }),
       }
     }) as ISerializedGrid<ISerializedEditorGroupData>
@@ -406,6 +419,8 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
       hydrated.forEach((input) => target.openEditor(input, { activate: false }))
       const activeIdx = Math.min(leaf.data.activeIndex, hydrated.length - 1)
       if (activeIdx >= 0 && hydrated[activeIdx]) target.setActive(hydrated[activeIdx]!)
+      // Apply the exact locked state (the reused seed group may carry a stale lock).
+      target.lock(leaf.data.locked === true)
       if (leaf.data.viewStates) EditorViewStateCache.restoreGroup(target.id, leaf.data.viewStates)
       if (target.id === state.activeGroupId) restoredActive = target
     })
@@ -433,6 +448,7 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     }
     const seed = this._groups[0]!
     seed.closeAllEditors()
+    seed.lock(false)
     this._activeGroup.set(seed, undefined)
     this._onDidActiveGroupChange.fire(seed)
   }

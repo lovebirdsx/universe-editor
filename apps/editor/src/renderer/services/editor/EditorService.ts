@@ -120,8 +120,11 @@ export class EditorService extends Disposable implements IEditorService {
   }
 
   openEditor(input: IEditorInput, options?: IOpenEditorServiceOptions): void {
-    const group = this._groupsService.activeGroup
-    const existing = group.editors.find((e) => e.id === input.id)
+    const activeGroup = this._groupsService.activeGroup
+    const existing = activeGroup.editors.find((e) => e.id === input.id)
+    // A brand-new editor lands in the lock-aware target group; re-activating one
+    // already in the active group stays put.
+    const group = existing ? activeGroup : this._groupsService.activeGroupForOpen
     this._suppressGroupSync++
     try {
       if (existing) {
@@ -142,6 +145,11 @@ export class EditorService extends Disposable implements IEditorService {
           input instanceof EditorInput ? input : new LegacyEditorInput(input),
           options,
         )
+        // Routed away from a locked active group: make the target active so the
+        // new editor is what the user sees (unless the caller preserves focus).
+        if (group !== activeGroup && options?.activate !== false) {
+          this._groupsService.activateGroup(group)
+        }
       }
     } finally {
       this._suppressGroupSync--

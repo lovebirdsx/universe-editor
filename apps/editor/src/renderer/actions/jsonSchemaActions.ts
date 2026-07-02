@@ -14,6 +14,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { SchemaViewerInput } from '../services/editor/SchemaViewerInput.js'
 import { matchSchemasForUri } from '../services/preferences/schemaMatch.js'
 import { basenameOfResource } from '../workbench/files/resourceInfo.js'
@@ -59,7 +60,7 @@ export class ShowJsonSchemaAction extends Action2 {
 
     const name = basenameOfResource(active.resource)
     const content = JSON.stringify(schemas[0]!.schema, null, 2)
-    groups.activeGroup.openEditor(new SchemaViewerInput(name, content), {
+    openInLockAwareGroup(groups, new SchemaViewerInput(name, content), {
       activate: true,
       pinned: true,
     })

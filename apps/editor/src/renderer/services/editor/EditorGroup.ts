@@ -69,6 +69,12 @@ export class EditorGroup implements IEditorGroup, IGridView {
   get lastActivationPreservedFocus() {
     return this.model.lastActivationPreservedFocus
   }
+  get isLocked() {
+    return this.model.isLocked
+  }
+  lock(locked: boolean): void {
+    this.model.lock(locked)
+  }
   get onDidChangeModel() {
     return this.model.onDidChangeModel
   }

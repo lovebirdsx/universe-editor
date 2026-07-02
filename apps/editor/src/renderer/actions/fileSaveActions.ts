@@ -19,6 +19,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { UntitledEditorInput } from '../services/editor/UntitledEditorInput.js'
 import { parentOf } from '../services/explorer/explorerTreeUtils.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
@@ -90,7 +91,7 @@ export class SaveFileAsAction extends Action2 {
     // Replace the editor with one bound to the new resource. The original input
     // is closed; its dirty state goes with it.
     const newInput = inst.createInstance(FileEditorInput, picked)
-    groups.activeGroup.openEditor(newInput, { activate: true })
+    openInLockAwareGroup(groups, newInput, { activate: true })
     groups.activeGroup.closeEditor(active)
   }
 }

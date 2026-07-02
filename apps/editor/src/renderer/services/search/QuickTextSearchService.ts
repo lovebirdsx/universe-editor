@@ -25,6 +25,7 @@ import {
   type QuickPickInput,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
+import { openInLockAwareGroup } from '../editor/openInLockAwareGroup.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 
 export interface IQuickTextSearchService {
@@ -431,7 +432,7 @@ export class QuickTextSearchService implements IQuickTextSearchService {
     }
 
     const input = this._instantiation.createInstance(FileEditorInput, resource)
-    this._groups.activeGroup.openEditor(input, { activate: true, pinned })
+    openInLockAwareGroup(this._groups, input, { activate: true, pinned })
     return input
   }
 
