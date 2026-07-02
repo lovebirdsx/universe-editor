@@ -19,6 +19,7 @@
 import { useCallback, useRef } from 'react'
 import {
   IEditorGroupsService,
+  IEditorResolverService,
   IEditorService,
   IFileSearchService,
   IFileService,
@@ -87,6 +88,7 @@ export function useMarkdownFileLink(
   const fileSearchService = useOptionalService(IFileSearchService)
   const workspaceService = useOptionalService(IWorkspaceService)
   const editorService = useOptionalService(IEditorService)
+  const editorResolver = useOptionalService(IEditorResolverService)
   const groupsService = useOptionalService(IEditorGroupsService)
   const instantiation = useOptionalService(IInstantiationService)
   const notificationService = useOptionalService(INotificationService)
@@ -191,6 +193,15 @@ export function useMarkdownFileLink(
           if (opts?.fragment) MarkdownPreviewRegistry.revealAnchor(uri, opts.fragment)
           return
         }
+        // A `:line` location targets the text source at that line, which only a
+        // FileEditorInput can honor (the resolver carries no selection). Without
+        // a line, route through the editor resolver so specialized editors win —
+        // e.g. an image extension opens the image preview instead of showing the
+        // binary as garbled text (mirrors the explorer / dropped-file path).
+        if (line === undefined && editorResolver) {
+          void editorResolver.openEditor(uri, { pinned: true })
+          return
+        }
         const input = instantiation.createInstance(FileEditorInput, uri)
         editorService.openEditor(input, { pinned: true })
         if (line !== undefined) {
@@ -209,6 +220,7 @@ export function useMarkdownFileLink(
       resolve,
       fileService,
       editorService,
+      editorResolver,
       groupsService,
       instantiation,
       notificationService,

@@ -24,4 +24,9 @@ metadata:
 
 带 `instanceof FileEditorInput` 守卫的按-resource 查找（EditorOpenerContribution/logActions/preferencesActions/extensionApiActions）不受影响，无需改。
 
+**2026-07 追加（markdown 点开图片链接显示乱码）**：从 markdown 打开文件的两条路径都**直接 `new FileEditorInput` 绕过了 `IEditorResolverService`**（唯一把图片扩展名路由到 `ImageEditorInput` 的地方，`**/*.png` 等 priority 100 注册在 `BuiltInEditorBindingsContribution`）→ 图片被文本编辑器当二进制打开成乱码。修两处，都改成走 resolver（对齐资源管理器 / `openDroppedResource` 的正确姿势）：
+- 线②预览/渲染视图：`useMarkdownFileLink.ts` 无 `:line` 时 `editorResolver.openEditor(uri)`；带 `:line` 仍用 `FileEditorInput`（resolver 不携带 selection，行链接只指文本）。
+- 线①源码编辑器 documentLink：`EditorOpenerContribution._open` 加 `isImageResource(target)` 分支→ `editorResolver.openEditor` + `return null`（无文本光标可放，不报 monaco editor）。此即上一段"不受影响"的例外。
+测试：`MarkdownView.test.tsx`(图片链接经 resolver + @ 链接改断言 resolver)。注意 `[x](./a.png)` 这类**相对**图片路径在预览里根本不解析成链接——`filePathLink.ts` 的 `EXTS` 白名单不含图片扩展名，只有绝对路径（`/…`、`D:/…`）才 `looksLikeFilePath`；源码编辑器则靠 markdown LSP 的 documentLink 认到图片。
+
 与路径身份收敛（[[path-comparison-convergence]]）同源异层：那个治"文件系统身份键碰撞"，这个治"编辑器身份键碰撞"。测试：`imageEditor.test.ts`、`ClosedEditorsService.test.ts`、`editorActions.test.ts`；e2e `smoke.imageEditor`(含 Reopen With image→file)。

@@ -57,12 +57,14 @@ afterEach(() => {
   renderMock.mockReset()
 })
 
-function makeResolver(): IEditorResolverServiceType {
+function makeResolver(
+  openEditor: (uri: URI, options?: unknown) => Promise<void> = vi.fn().mockResolvedValue(undefined),
+): IEditorResolverServiceType {
   return {
     _serviceBrand: undefined,
     registerEditor: () => ({ dispose: () => {} }),
     resolveEditors: () => [],
-    openEditor: vi.fn().mockResolvedValue(undefined),
+    openEditor,
   } as unknown as IEditorResolverServiceType
 }
 
@@ -307,13 +309,13 @@ describe('MarkdownView', () => {
   })
 
   it('strips @ from explicit file links before resolving them', async () => {
-    const openEditor = vi.fn()
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
     const exists = vi.fn((resource: URI) => resource.path === '/repo/docs/path/to/file')
     const services = new ServiceCollection()
-    services.set(IEditorResolverService, makeResolver())
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
     services.set(IConfigurationService, makeConfig())
     services.set(IFileService, makeFileService(exists))
-    services.set(IEditorService, makeEditorService(openEditor))
+    services.set(IEditorService, makeEditorService())
     const inst = new InstantiationService(services)
 
     render(
@@ -323,12 +325,36 @@ describe('MarkdownView', () => {
     )
 
     screen.getByRole('link', { name: 'file' }).click()
-    await waitFor(() => expect(openEditor).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
     expect(exists).toHaveBeenCalledWith(
       expect.objectContaining({ path: '/repo/docs/path/to/file' }),
     )
-    const input = openEditor.mock.calls[0]?.[0] as { resource: URI } | undefined
-    expect(input?.resource.path).toBe('/repo/docs/path/to/file')
+    expect(resolverOpen.mock.calls[0]?.[0]?.path).toBe('/repo/docs/path/to/file')
+  })
+
+  it('opens a clicked image link through the editor resolver (image preview, not garbled text)', async () => {
+    const resolverOpen = vi.fn().mockResolvedValue(undefined)
+    const openEditor = vi.fn()
+    const exists = vi.fn((resource: URI) => resource.path === '/repo/docs/pic.png')
+    const services = new ServiceCollection()
+    services.set(IEditorResolverService, makeResolver(resolverOpen))
+    services.set(IConfigurationService, makeConfig())
+    services.set(IFileService, makeFileService(exists))
+    services.set(IEditorService, makeEditorService(openEditor))
+    const inst = new InstantiationService(services)
+
+    render(
+      <ServicesContext.Provider value={inst}>
+        <MarkdownView text="[shot](/repo/docs/pic.png)" baseUri={URI.file('/repo/docs')} />
+      </ServicesContext.Provider>,
+    )
+
+    screen.getByRole('link', { name: 'shot' }).click()
+    await waitFor(() => expect(resolverOpen).toHaveBeenCalledTimes(1))
+    // Routed via the resolver so image extensions map to the image preview.
+    expect(resolverOpen.mock.calls[0]?.[0]?.path).toBe('/repo/docs/pic.png')
+    // Must NOT bypass the resolver by opening a bare FileEditorInput directly.
+    expect(openEditor).not.toHaveBeenCalled()
   })
 
   it('routes a mermaid fence to MermaidBlock and injects the rendered svg', async () => {

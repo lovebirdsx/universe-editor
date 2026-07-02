@@ -18,6 +18,7 @@
 import {
   Disposable,
   IEditorGroupsService,
+  IEditorResolverService,
   IFileService,
   IInstantiationService,
   IUriIdentityService,
@@ -32,6 +33,7 @@ import {
 } from '../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { isImageResource } from '../services/editor/imageFileTypes.js'
 
 export class EditorOpenerContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -40,6 +42,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
     @IFileService private readonly _fileService: IFileService,
     @IWindowsService private readonly _windowsService: IWindowsService,
+    @IEditorResolverService private readonly _editorResolver: IEditorResolverService,
   ) {
     super()
     void MonacoLoader.registerCodeEditorOpenHandler((input, source) =>
@@ -66,6 +69,15 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     // monaco, so we always use a new window here (parity with a dropped folder).
     if (await this._isDirectory(target)) {
       await this._windowsService.openWindow(target)
+      return null
+    }
+
+    // An image link target (a markdown `[pic](./a.png)` documentLink) must route
+    // through the editor resolver so it opens in the image preview — opening it as
+    // a text FileEditorInput would show the binary as garbled text. There is no
+    // text cursor to place, so report no monaco editor.
+    if (isImageResource(target)) {
+      void this._editorResolver.openEditor(target, { pinned: true })
       return null
     }
 
