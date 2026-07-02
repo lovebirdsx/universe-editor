@@ -28,6 +28,7 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
@@ -218,6 +219,14 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
    * The original (HEAD) side is a snapshot that a discard does not affect, so
    * only the modified side is refreshed — after a discard it equals HEAD and the
    * diff collapses to empty.
+   *
+   * A file open in an editor with *unsaved* edits is the exception: its live
+   * buffer, not the (stale) disk text, is the modified side's truth — refreshing
+   * from disk would clobber the user's in-progress edit that
+   * DiffLiveContentSyncContribution mirrors into the diff. When a live model
+   * exists we push its value (which equals disk for a clean file, incl. after an
+   * SCM discard that reverts the model); only when no model is loaded do we fall
+   * back to reading disk.
    */
   private async _refreshChangedDiffEditors(changedKeys: Set<string>): Promise<void> {
     const byUri = new Map<string, DiffEditorInput[]>()
@@ -233,12 +242,19 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     }
     for (const inputs of byUri.values()) {
       const uri = inputs[0]!.originalUri
+      // The editor buffer wins over disk when the file is open: it may hold
+      // unsaved edits the stale fs event must not clobber.
+      const liveModel = MonacoModelRegistry.peek(uri)
       let text: string
-      try {
-        text = await this._fileService.readFileText(uri)
-      } catch {
-        // Gone from disk — the deletion path closes it; nothing to refresh.
-        continue
+      if (liveModel && !liveModel.isDisposed()) {
+        text = liveModel.getValue()
+      } else {
+        try {
+          text = await this._fileService.readFileText(uri)
+        } catch {
+          // Gone from disk — the deletion path closes it; nothing to refresh.
+          continue
+        }
       }
       for (const input of inputs) input.update(input.originalContent, text)
     }

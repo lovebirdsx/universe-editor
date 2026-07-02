@@ -24,9 +24,18 @@
 const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
+const crypto = require('node:crypto')
 
 let buffer = ''
 let nextSessionId = 1
+
+// The tracked file lives in the shared os.tmpdir(), and every agent process hands
+// out the same `sd-1` sessionId — so a fixed filename would collide across the
+// concurrent Electron instances Playwright runs (and with orphaned agents that
+// outlive teardown on Windows), letting one test's write clobber the file another
+// test's tracker reads back. Scope the path to this process with a per-run token
+// so each instance owns its own file.
+const RUN_TOKEN = `${process.pid}-${crypto.randomBytes(4).toString('hex')}`
 const activeTurns = new Map() // sessionId -> { cancelled: boolean }
 
 function send(msg) {
@@ -54,18 +63,26 @@ async function runPrompt(id, params) {
   const turn = { cancelled: false }
   activeTurns.set(sessionId, turn)
 
+  // The prompt text drives which edit we emit, so a spec can trigger a *second*
+  // distinct change to the same file (to verify an already-open diff tab
+  // refreshes in place). Default is the first edit.
+  const promptText = extractPromptText(params)
+  const second = promptText.includes('again')
+
+  const filePath = path.join(os.tmpdir(), `universe-e2e-sessiondiff-${RUN_TOKEN}-${sessionId}.txt`)
   // 1. Write the post-edit file to disk (the tracker reads this as `current`).
-  const filePath = path.join(os.tmpdir(), `universe-e2e-sessiondiff-${sessionId}.txt`)
-  const current = 'line one\nline two MODIFIED'
+  const current = second ? 'line one\nline two MODIFIED AGAIN' : 'line one\nline two MODIFIED'
   fs.writeFileSync(filePath, current, 'utf8')
 
   // 2. Emit a completed Write tool_call carrying the structuredPatch. Reversing
-  //    the single hunk recovers baseline "line one\nline two" → status modified.
+  //    the hunk recovers baseline "line one\nline two" → status modified. The
+  //    second turn uses a distinct toolCallId + newer text so the tracker
+  //    recomputes to a different `current`.
   notify('session/update', {
     sessionId,
     update: {
       sessionUpdate: 'tool_call',
-      toolCallId: 'sd-write',
+      toolCallId: second ? 'sd-write-2' : 'sd-write',
       title: 'Write',
       kind: 'edit',
       status: 'completed',
@@ -75,13 +92,21 @@ async function runPrompt(id, params) {
           toolResponse: {
             filePath,
             structuredPatch: [
-              {
-                oldStart: 1,
-                oldLines: 2,
-                newStart: 1,
-                newLines: 2,
-                lines: [' line one', '-line two', '+line two MODIFIED'],
-              },
+              second
+                ? {
+                    oldStart: 1,
+                    oldLines: 2,
+                    newStart: 1,
+                    newLines: 2,
+                    lines: [' line one', '-line two', '+line two MODIFIED AGAIN'],
+                  }
+                : {
+                    oldStart: 1,
+                    oldLines: 2,
+                    newStart: 1,
+                    newLines: 2,
+                    lines: [' line one', '-line two', '+line two MODIFIED'],
+                  },
             ],
           },
         },
@@ -97,6 +122,12 @@ async function runPrompt(id, params) {
 
   activeTurns.delete(sessionId)
   reply(id, { stopReason: 'end_turn' })
+}
+
+/** Pull plain text out of an ACP prompt param (array of content blocks). */
+function extractPromptText(params) {
+  const blocks = Array.isArray(params.prompt) ? params.prompt : []
+  return blocks.map((b) => (b && typeof b.text === 'string' ? b.text : '')).join(' ')
 }
 
 function handle(msg) {

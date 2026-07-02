@@ -6,7 +6,6 @@
 
 import { EditorInput, Emitter, URI, type Event } from '@universe-editor/platform'
 import { basenameOfResource } from '../../workbench/files/resourceInfo.js'
-
 export class DiffEditorInput extends EditorInput {
   static readonly TYPE_ID = 'diff'
 
@@ -58,5 +57,13 @@ export class DiffEditorInput extends EditorInput {
     this._originalContent = originalContent
     this._modifiedContent = modifiedContent
     this._onDidChangeContent.fire()
+  }
+
+  /** Absorb newer content when the workbench reuses this tab for a re-opened
+   *  diff of the same file (the file changed again while the tab was open). */
+  override updateFrom(other: EditorInput): void {
+    if (other instanceof DiffEditorInput) {
+      this.update(other._originalContent, other._modifiedContent)
+    }
   }
 }

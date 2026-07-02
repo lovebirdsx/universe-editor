@@ -4,7 +4,7 @@
  *  ignored.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   Emitter,
   type EditorInput,
@@ -24,6 +24,16 @@ import {
   type UriComponents,
   type UserDataFile,
 } from '@universe-editor/platform'
+
+// Stub the model registry so a test can inject a live editor buffer for a URI.
+// Default: no live model (peek → undefined), so diff refresh reads disk as before.
+const liveModels = new Map<string, { getValue: () => string; isDisposed: () => boolean }>()
+vi.mock('../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
+  MonacoModelRegistry: {
+    peek: (uri: { toString: () => string }) => liveModels.get(uri.toString()),
+  },
+}))
+
 import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
@@ -310,6 +320,30 @@ describe('ExternalChangeWatcher', () => {
     // Discard reverts working tree to HEAD → modified side now equals original.
     expect(diff.modifiedContent).toBe('head')
     expect(diff.originalContent).toBe('head')
+  })
+
+  it('pushes the live editor buffer (not stale disk) into an open diff', async () => {
+    // The file is open with unsaved edits (live model = 'live-edit') AND diffed.
+    // A stale/late fs event must not overwrite the diff's modified side from disk
+    // — the live buffer, mirrored by DiffLiveContentSyncContribution, is truth.
+    const uri = URI.file('/ws/a.txt')
+    const diff = new DiffEditorInput(uri, 'head', 'live-edit')
+    const groups = makeGroups([diff])
+    liveModels.set(uri.toString(), { getValue: () => 'live-edit', isDisposed: () => false })
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [uri], contents: [[uri, 'disk-stale']] }),
+      makeLoggerService(),
+      new FakeUserData(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
+    await flush()
+    expect(diff.modifiedContent).toBe('live-edit')
+    liveModels.delete(uri.toString())
   })
 
   it('reloads an open editor when its user-data file changes', async () => {

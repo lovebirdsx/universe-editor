@@ -302,6 +302,15 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         layoutHeight: modified.getLayoutInfo().height,
       }
     },
+    getActiveDiffContent: () => {
+      const group = services.editorGroupsService.activeGroup
+      const active = group?.activeEditor
+      if (!(active instanceof DiffEditorInput)) return undefined
+      const ed = DiffEditorRegistry.get(active, group?.id)
+      const model = ed?.getModel()
+      if (!model) return undefined
+      return { original: model.original.getValue(), modified: model.modified.getValue() }
+    },
     openDirtyDiffPeekAtLine: (line: number): boolean =>
       DirtyDiffPeekRegistry.getHost()?.openAtLine(line) ?? false,
     getDirtyDiffPeekState: () => {

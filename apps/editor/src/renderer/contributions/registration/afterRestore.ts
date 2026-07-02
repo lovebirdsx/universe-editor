@@ -51,6 +51,8 @@ import { OutlineViewStateContribution } from '../OutlineViewStateContribution.js
 import { HistoryContribution } from '../HistoryContribution.js'
 import { StartupFileContribution } from '../StartupFileContribution.js'
 import { StartupSessionContribution } from '../StartupSessionContribution.js'
+import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
+import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
 
 // The single AI status-bar entry (sparkle + quick-settings popover). AfterRestore
 // so the status bar exists when the entry is added.
@@ -388,5 +390,25 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.startupSession',
   StartupSessionContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Keep already-open session diff tabs in sync with the change tracker: when the
+// agent edits a tracked file again, push the fresh baseline/current into the
+// open DiffEditorInput so it refreshes in place instead of showing a stale
+// snapshot. AfterRestore so the editor groups + ACP session service are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.sessionChangesDiffSync',
+  SessionChangesDiffSyncContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Keep an open diff tab's modified side in sync with live edits to its file:
+// subscribe the diff to its originalUri's shared Monaco model so editing the file
+// (after switching back, or side-by-side in a split group) refreshes the diff in
+// place — including unsaved edits. AfterRestore so the editor groups are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.diffLiveContentSync',
+  DiffLiveContentSyncContribution,
   WorkbenchPhase.AfterRestore,
 )

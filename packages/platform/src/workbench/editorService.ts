@@ -119,6 +119,16 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   getIconId?(): string | undefined
 
   /**
+   * Absorb newer state from a freshly-constructed input for the same resource.
+   * When `openEditor` is called with a duplicate (same `id`) of an already-open
+   * input, the existing instance wins and the duplicate is discarded. Inputs
+   * whose contents can change between opens (e.g. a diff view) implement this to
+   * refresh in place instead of showing stale content. Called before the
+   * duplicate is disposed.
+   */
+  updateFrom?(other: EditorInput): void
+
+  /**
    * Equality by stable identity. Two inputs match when they share the same
    * resource URI, or when their `id`s are equal. Subclasses can override
    * for richer semantics (e.g. side-by-side editors).

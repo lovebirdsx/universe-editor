@@ -220,6 +220,15 @@ export interface E2EProbe {
         layoutHeight: number
       }
     | undefined
+  /**
+   * Original/modified text as currently rendered by the active diff editor's live
+   * Monaco models (the on-screen truth, not the input's snapshot fields). Undefined
+   * when the active editor is not a diff editor or its Monaco instance is not yet
+   * mounted. Backs the session-diff live-refresh spec: after the agent edits the
+   * open file again, the mounted models must reflect the new content without
+   * reopening the tab.
+   */
+  getActiveDiffContent(): { original: string; modified: string } | undefined
   // -- Dirty-diff inline peek (quick diff widget) ---------------------------
   /**
    * Open the inline dirty-diff peek at the active editor's given line (the change
