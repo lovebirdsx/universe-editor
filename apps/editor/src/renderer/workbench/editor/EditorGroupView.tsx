@@ -55,6 +55,7 @@ import { cloneEditorInputForSplit } from '../../services/editor/cloneEditorInput
 import { focusEditorInput } from '../../services/editor/editorFocus.js'
 import { readDroppedResources } from '../../services/dnd/resourceDropTransfer.js'
 import { openDroppedResource } from '../../services/dnd/openDroppedResource.js'
+import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import {
   IScmDecorationsService,
   scmPathKey,
@@ -182,6 +183,30 @@ function zoneToDirection(zone: Exclude<BodyDropZone, 'center'>): GroupDirection 
     case 'right':
       return GroupDirection.Right
   }
+}
+
+/**
+ * Whether an external-resource drop should be left to Monaco's markdown
+ * drop-to-link provider instead of being opened as an editor by the body. True
+ * only when the user holds Shift AND the active editor is a markdown file AND the
+ * drop landed inside its Monaco text area (`.monaco-editor`).
+ *
+ * Shift gates insert-as-link (matching VSCode); a plain drag keeps the original
+ * behaviour of opening the dropped file. FileEditor mirrors the same Shift check
+ * to arm Monaco's own `dropIntoEditor`, so the two stay in lockstep. Monaco's
+ * drop listener does not stop propagation, so without deferring here a Shift-drop
+ * would both insert a link (Monaco) and open the file (body) — a double action.
+ */
+export function shouldDeferDropToMarkdownEditor(
+  target: EventTarget | null,
+  activeEditor: EditorInput | undefined,
+  shiftKey: boolean,
+): boolean {
+  if (!shiftKey) return false
+  if (!(activeEditor instanceof FileEditorInput) || activeEditor.language !== 'markdown') {
+    return false
+  }
+  return target instanceof HTMLElement && target.closest('.monaco-editor') !== null
 }
 
 /** Subscribes to a group's model + active changes and returns a snapshot string. */
@@ -447,6 +472,13 @@ export const EditorGroupView = memo(function EditorGroupView({
       | { editor: EditorInput; sourceGroupId: number }
       | undefined
     if (!payload) {
+      // Over the markdown text area Monaco owns the drop (insert link) and shows
+      // its own drop cursor — suppress our "open file" highlight so the two
+      // affordances don't compete.
+      if (shouldDeferDropToMarkdownEditor(e.target, group.activeEditor, e.shiftKey)) {
+        if (bodyZone !== null) setBodyZone(null)
+        return
+      }
       // OS-external / cross-region resource: a single "open" highlight, no split.
       if (dragContainsResources(e.dataTransfer)) {
         if (bodyZone !== 'center') setBodyZone('center')
@@ -472,6 +504,15 @@ export const EditorGroupView = memo(function EditorGroupView({
   }
 
   const handleBodyDrop = (e: ReactDragEvent<HTMLDivElement>) => {
+    // A file/image dropped onto the markdown text area is turned into a link by
+    // Monaco's drop-to-link provider (its native listener already fired earlier
+    // in the bubble phase). Don't also open the file. Non-markdown editors, or
+    // drops outside the text area (breadcrumbs / empty space), fall through.
+    if (shouldDeferDropToMarkdownEditor(e.target, group.activeEditor, e.shiftKey)) {
+      setBodyZone(null)
+      bodyDropPosRef.current = null
+      return
+    }
     bodyDropPosRef.current = { x: e.clientX, y: e.clientY }
     bodyDropProps.onDrop(e)
   }

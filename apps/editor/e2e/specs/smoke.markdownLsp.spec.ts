@@ -11,12 +11,13 @@
  *    7. hover (link destination preview)
  *    8. path completion (`](` → workspace files)
  *    9. paste-to-link enhancement (uri-list → image link; URL over selection)
+ *   10. drop-to-link enhancement (uri-list → image link; binary image → assets/)
  *
  *  Spawns a real subprocess, so each assertion polls — the server starts lazily
  *  on first markdown open and diagnostics arrive after a debounce.
  *--------------------------------------------------------------------------------------------*/
 
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
@@ -138,7 +139,7 @@ test.describe('@p1 markdown language server', () => {
         window.__E2E__!.getMarkdownPasteEdit(u, 'text/uri-list', `file:///${uriList}`),
       [cUri, picUri] as const,
     )
-    expect(imgPaste).toBe('![](pic.png)')
+    expect(imgPaste).toBe('![${1:alt text}](pic.png)')
 
     // 9b. Paste a URL over a selection → `[selected](url)`. The buffer is now
     // `[y](./other.md#` (from 8b); select the `y` at line 1, cols 2-3.
@@ -153,5 +154,75 @@ test.describe('@p1 markdown language server', () => {
       cUri,
     )
     expect(urlPaste).toBe('[y](https://example.com)')
+
+    // 10a. Drop a file uri-list → the same workspace-relative image link (the
+    // drag counterpart of 9a, through the documentDropEditProvider).
+    const imgDrop = await page.evaluate(
+      ([u, uriList]) =>
+        window.__E2E__!.getMarkdownDropEdit(u, [
+          { mime: 'text/uri-list', text: `file:///${uriList}` },
+        ]),
+      [cUri, picUri] as const,
+    )
+    expect(imgDrop).toBe('![${1:alt text}](pic.png)')
+
+    // 10b. Drop a binary image with no disk path (screenshot-style) → written to
+    // an `assets/` folder beside the markdown file and embedded. 1x1 png bytes.
+    const PNG_1X1_BASE64 =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+    const binDrop = await page.evaluate(
+      ([u, b64]) =>
+        window.__E2E__!.getMarkdownDropEdit(u, [
+          { mime: 'image/png', base64: b64, fileName: 'clip.png' },
+        ]),
+      [cUri, PNG_1X1_BASE64] as const,
+    )
+    expect(binDrop).toMatch(/^!\[\$\{1:alt text\}\]\(assets\/image-[\d-]+\.png\)$/)
+
+    // The asset must exist on disk under the markdown file's `assets/` folder.
+    await expect
+      .poll(() => (existsSync(join(dir, 'assets')) ? readdirSync(join(dir, 'assets')) : []))
+      .toEqual(expect.arrayContaining([expect.stringMatching(/^image-[\d-]+\.png$/)]))
+
+    // 10c. The snippet a drop/paste produces is executed as a snippet (VSCode
+    // gesture): inserting `[${1:text}](a.md)` expands the placeholder to `text`
+    // AND leaves it selected so the user can immediately type the link label.
+    const snippetState = await page.evaluate(() => {
+      window.__E2E__!.setActiveEditorText('')
+      return window.__E2E__!.insertMarkdownSnippet('[${1:text}](a.md)')
+    })
+    expect(snippetState?.text).toBe('[text](a.md)')
+    expect(snippetState?.selected).toBe('text')
+
+    // 10d. The FULL drop execution path (what a real drag-and-drop runs):
+    // provider → createCombinedWorkspaceEdit → IBulkEditService.apply(edit,
+    // { editor }) → SnippetController. This is the layer 10a-c don't cover, and
+    // where the auto-select regression lives. Dropping a file must both insert
+    // `[text](file.md)` AND leave `text` selected for immediate rename.
+    const otherUri = `${dir}/other.md`
+    const fileDrop = await page.evaluate(
+      ([u, list]) => {
+        window.__E2E__!.setActiveEditorText('')
+        return window.__E2E__!.applyMarkdownDropEdit(u, [
+          { mime: 'text/uri-list', text: `file:///${list}` },
+        ])
+      },
+      [cUri, otherUri] as const,
+    )
+    expect(fileDrop?.text).toBe('[text](other.md)')
+    expect(fileDrop?.selected).toBe('text')
+
+    // Dropping a binary image the same way embeds it and selects `alt text`.
+    const imageDrop = await page.evaluate(
+      ([u, b64]) => {
+        window.__E2E__!.setActiveEditorText('')
+        return window.__E2E__!.applyMarkdownDropEdit(u, [
+          { mime: 'image/png', base64: b64, fileName: 'clip.png' },
+        ])
+      },
+      [cUri, PNG_1X1_BASE64] as const,
+    )
+    expect(imageDrop?.text).toMatch(/^!\[alt text\]\(assets\/image-[\d-]+\.png\)$/)
+    expect(imageDrop?.selected).toBe('alt text')
   })
 })

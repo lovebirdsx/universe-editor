@@ -3,28 +3,36 @@
  *  Paste-to-link enhancement for markdown (VSCode's "Insert Markdown Link" paste
  *  behaviour). Registers a `documentPasteEditProvider` on monaco's internal
  *  ILanguageFeaturesService — there is no public `monaco.languages.*` drop/paste
- *  API. Two cases:
+ *  API. Cases:
  *    - paste a file (uri-list, e.g. dragged from Explorer/OS) → `![](relPath)`
  *      for images, `[](relPath)` otherwise, relative to the workspace folder.
+ *    - paste a binary image (screenshot / clipboard image with no disk path) →
+ *      written to an `assets/` folder beside the markdown file, then embedded.
  *    - paste an http(s) URL while text is selected → `[selectedText](url)`.
- *  The drag-into-editor path stays disabled project-wide (the editor body owns
- *  file drags); only the paste path is enhanced here. The markdown shaping itself
- *  lives in the pure ./markdownPasteLinks helpers.
+ *  The drag counterpart lives in MarkdownDropContribution; the markdown shaping
+ *  is shared via ./markdownLinkProviderShared + the pure ./markdownPasteLinks.
  *--------------------------------------------------------------------------------------------*/
 
 import {
   Disposable,
+  IFileService,
   IHostService,
   IWorkspaceService,
   type IDisposable,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../workbench/editor/monaco/MonacoLoader.js'
-import { markdownLinkFromUrl, markdownLinksFromUriList } from './markdownPasteLinks.js'
+import { markdownLinkFromUrl } from './markdownPasteLinks.js'
+import {
+  computeMarkdownLinkInsert,
+  LINK_TITLE,
+  TEXT_MIME,
+  URI_LIST_MIME,
+  type IVSDataTransfer,
+} from './markdownLinkProviderShared.js'
 
-const URI_LIST_MIME = 'text/uri-list'
-const TEXT_MIME = 'text/plain'
-const TITLE = 'Insert Markdown Link'
+const IMAGE_MIME = 'image/*'
+const FILES_MIME = 'files'
 
 interface PasteEdit {
   readonly insertText: string | { readonly snippet: string }
@@ -45,19 +53,13 @@ interface PasteProvider {
   ): Promise<{ edits: PasteEdit[]; dispose(): void } | undefined>
 }
 
-interface IVSDataTransferItem {
-  asString(): Promise<string>
-}
-interface IVSDataTransfer {
-  get(mime: string): IVSDataTransferItem | undefined
-}
-
 export class MarkdownPasteContribution extends Disposable implements IWorkbenchContribution {
   private _registration: IDisposable | undefined
 
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
     @IHostService private readonly _host: IHostService,
+    @IFileService private readonly _fileService: IFileService,
   ) {
     super()
     void this._registerProvider()
@@ -75,24 +77,27 @@ export class MarkdownPasteContribution extends Disposable implements IWorkbenchC
 
   private _createProvider(): PasteProvider {
     return {
-      pasteMimeTypes: [URI_LIST_MIME, TEXT_MIME],
+      pasteMimeTypes: [URI_LIST_MIME, IMAGE_MIME, FILES_MIME, TEXT_MIME],
       providedPasteEditKinds: [],
       copyMimeTypes: [],
       provideDocumentPasteEdits: async (model, ranges, dataTransfer, _context, token) => {
-        const fileEntry = dataTransfer.get(URI_LIST_MIME)
-        if (fileEntry) {
-          const raw = await fileEntry.asString()
-          if (token.isCancellationRequested) return undefined
-          const links = markdownLinksFromUriList(
-            raw,
-            this._workspace.current?.folder.fsPath,
-            this._host.platform,
-          )
-          if (links) {
-            return edit(links, URI_LIST_MIME)
-          }
+        // File uri-list or a binary image (→ written to assets/ and embedded).
+        // Returned as a snippet whose link text is a selected placeholder.
+        const linkSnippet = await computeMarkdownLinkInsert(
+          dataTransfer,
+          model.uri.toString(),
+          {
+            workspaceFolderFsPath: this._workspace.current?.folder.fsPath,
+            platform: this._host.platform,
+            fileService: this._fileService,
+          },
+          () => token.isCancellationRequested,
+        )
+        if (linkSnippet) {
+          return edit({ snippet: linkSnippet }, URI_LIST_MIME)
         }
 
+        // A bare URL pasted over a non-empty selection → `[selection](url)`.
         const textEntry = dataTransfer.get(TEXT_MIME)
         if (textEntry) {
           const text = (await textEntry.asString()).trim()
@@ -113,5 +118,5 @@ function edit(
   insertText: string | { snippet: string },
   handledMimeType: string,
 ): { edits: PasteEdit[]; dispose(): void } {
-  return { edits: [{ insertText, title: TITLE, handledMimeType }], dispose() {} }
+  return { edits: [{ insertText, title: LINK_TITLE, handledMimeType }], dispose() {} }
 }

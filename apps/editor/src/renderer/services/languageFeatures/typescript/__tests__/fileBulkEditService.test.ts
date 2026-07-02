@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { applyTextEditsToString } from '../fileBulkEditService.js'
+import { applyTextEditsToString, stripSnippet } from '../fileBulkEditService.js'
 
 const range = (sl: number, sc: number, el: number, ec: number) => ({
   startLineNumber: sl,
@@ -40,5 +40,27 @@ describe('applyTextEditsToString', () => {
 
   it('returns the original text when there are no edits', () => {
     expect(applyTextEditsToString('unchanged', [])).toBe('unchanged')
+  })
+})
+
+describe('stripSnippet', () => {
+  it('keeps the default text of a placeholder', () => {
+    expect(stripSnippet('![${1:alt text}](assets/x.png)')).toBe('![alt text](assets/x.png)')
+    expect(stripSnippet('[${1:text}](a.md)')).toBe('[text](a.md)')
+  })
+
+  it('drops empty tab stops ($0, ${2}, $1)', () => {
+    expect(stripSnippet('[${1:text}](a.md)$0')).toBe('[text](a.md)')
+    expect(stripSnippet('a${2}b$1c')).toBe('abc')
+  })
+
+  it('unescapes \\$ \\} \\\\ to their literal characters', () => {
+    expect(stripSnippet('price \\$5')).toBe('price $5')
+    expect(stripSnippet('a\\}b')).toBe('a}b')
+    expect(stripSnippet('a\\\\b')).toBe('a\\b')
+  })
+
+  it('leaves plain text untouched', () => {
+    expect(stripSnippet('just [text](a.md) here')).toBe('just [text](a.md) here')
   })
 })

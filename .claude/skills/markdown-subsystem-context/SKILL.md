@@ -20,7 +20,7 @@ markdown 已是**内置插件** `extensions/markdown`（按 `extend-language-plu
 | 诊断触发 | tsserver PUSH（server 主动推 `publishDiagnostics`） | **debounce-then-pull-then-push**：renderer 文档变 → 插件 200ms 防抖 → `server.$computeDiagnostics(uri)` 主动算 → `diagnosticCollection.set()` 推 |
 | wire 类型 | 直接复用 `vscode-languageserver-types`，verbatim 透传 | **同样直接复用 `vscode-languageserver-types`**：进程内 `createMdServer` 直接返回原生 LSP 类型，插件零转换透传给句柄路由（fs 回调端口 `IMdClient` 仍是自定义小接口） |
 | 崩溃恢复 | 子进程崩溃要 `_resyncAll` 重推所有 open doc | **不存在**（无子进程，进程内调用不会崩） |
-| 额外特性 | 无 | **预览**（VSCode 风 `Open Preview` / `to Side`）+ **粘贴/拖拽文件成链**（Monaco documentPasteEditProvider），TS 都没有 |
+| 额外特性 | 无 | **预览**（VSCode 风 `Open Preview` / `to Side`）+ **粘贴/拖拽文件成链 + 二进制图片落盘 assets/**（Monaco documentPasteEditProvider / documentDropEditProvider），TS 都没有 |
 | 打包 | 插件 dist + tsls node_modules（runtime-resources 带入） | 插件 **dist 自包含**（esbuild bundle 了 `vscode-markdown-languageservice`），无额外 node_modules |
 
 ## 线 ①：语言特性（LSP 能力）
@@ -81,21 +81,38 @@ input→组件 两处注册（套路见 apps/editor/CLAUDE.md 编辑器输入）
 
 ## 线 ③：粘贴/拖拽成链（renderer 编辑增强，不经插件/LSP）
 
-把文件拖进 / 粘贴进 markdown 编辑器时自动生成链接：图片→`![](相对路径)`、其它→`[](相对路径)`、URL→`[选中文本](url)`。这是 **Monaco 内置 `documentPasteEditProvider`** 的能力，VSCode 同款，**与 LSP/插件完全无关**，纯 renderer：
+**按住 `Shift` 拖进**（VSCode 同款门控，见下文冲突小节）或**粘贴进**（粘贴不需 Shift）markdown 编辑器时自动生成链接：文件→`[${1:text}](相对路径)`、图片→`![${1:alt text}](相对路径)`、URL→`[选中文本](url)`；**无磁盘路径的二进制图片**（截图工具/网页拖来）→落盘到当前 md 同目录 `assets/`（时间戳命名）再 `![${1:alt text}](assets/…)`。**产出的是 snippet**（链接文字是选中占位符 `${n:…}`，多文件序号递增；对齐 VSCode `copyFiles/shared.ts`），落地后方括号内文字自动选中可直接改名。这是 **Monaco 内置 `documentPasteEditProvider` / `documentDropEditProvider`** 两个对称 registry 的能力，VSCode 同款，**与 LSP/插件完全无关**，纯 renderer：
 
 ```
-contributions/markdownPasteLinks.ts        纯函数（可单测、无 Monaco 依赖）：
-                                            markdownLinksFromUriList(raw, rootFsPath, platform)
-                                              → text/uri-list 转 markdown 链接（图片 ! 前缀、
-                                                workspace 相对路径、含空格用 <...> 包裹）
-                                            markdownLinkFromUrl(selected, text) → [sel](url) snippet
-contributions/MarkdownPasteContribution.ts  在 markdown 上注册 documentPasteEditProvider，
-                                            注入 @IWorkspaceService/@IHostService，
-                                            pasteMimeTypes ['text/uri-list','text/plain']，
-                                            调上面的纯函数。AfterRestore 阶段注册
+contributions/markdownPasteLinks.ts        纯函数：markdownLinksFromUriList（text/uri-list→链接，
+                                            图片 ! 前缀 / workspace 相对路径 / 空格 <...> 包裹）、
+                                            markdownLinkFromUrl（URL→[sel](url) snippet）、
+                                            导出共享原语 isImagePath / encodeLinkTarget
+contributions/markdownAssetLinks.ts        纯函数：imageExtensionForMime（mime→ext）、
+                                            formatAssetStamp(Date)→yyyyMMdd-HHmmss、
+                                            assetFileName(ext,stamp,index)、markdownLinkForPath
+contributions/markdownAssetDropper.ts      saveDroppedImageAsset(fileService,mdUri,bytes,mime,stamp)：
+                                            dirname→assets/ createDirectory(recursive)+writeFile(Uint8Array)
+                                            +同秒 index 去重，返回相对 md 的 assets/xxx。注入 @IFileService
+contributions/markdownLinkProviderShared.ts computeMarkdownLinkInsert：drop/paste 共享内核——先 uri-list→链接，
+                                            否则找 image/* file 项→落盘成链。findImageFileEntry 迭代 VSDataTransfer
+                                            （守卫非可迭代 stub）。IVSDataTransfer 类型（get + 可选 Symbol.iterator）
+contributions/MarkdownPasteContribution.ts  注册 documentPasteEditProvider，pasteMimeTypes
+                                            ['text/uri-list','image/*','files','text/plain']，注入
+                                            @IWorkspaceService/@IHostService/@IFileService，调共享内核
+contributions/MarkdownDropContribution.ts   注册 documentDropEditProvider（drop 对称版），
+                                            dropMimeTypes ['text/uri-list','image/*','files']，同注入同内核
 ```
 
-注册两处：`contributions/registration/afterRestore.ts`（`workbench.contrib.markdownPaste`）+ `contributions/index.ts` 导出。
+注册两处：`contributions/registration/afterRestore.ts`（`workbench.contrib.markdownPaste` + `workbench.contrib.markdownDrop`）。
+
+**⚠️ drop 与「拖文件到编辑区打开」的双触发冲突 + Shift 门控（本功能核心）**：编辑区 body（`EditorGroupView`）的 drop 默认走 `openDroppedResources`＝**打开文件**（原逻辑）。为**不冲击原习惯**，成链改成 **VSCode 同款 `Shift` 门控**：不按 Shift＝拖入正文仍打开文件；**按住 Shift** 才在光标处插链接。`FileEditor` 各语言的 `dropIntoEditor` **静止基线一律 `{enabled:false}`**。四点联动，缺一即冲突或漏门控：
+1. `FileEditor.tsx`：基线 `DROP_INTO_EDITOR_OFF`（create 时设 + model-swap effect 复位，因编辑器实例跨 tab 复用）。在编辑器容器 `getContainerDomNode()` 上 **capture 阶段**挂 `dragover` 监听，按 `e.shiftKey && 当前 model 是 markdown` 实时 `updateOptions({dropIntoEditor: 开/关})`。
+2. 为何 capture + dragover 实时切：Monaco 的 `isDropIntoEnabled()`（`codeEditorWidget.js`）**只看 `readOnly + dropIntoEditor.enabled`，不看 shiftKey**，且其 `onDragOver`/`onDrop` 在**触发时实时读** enabled。`DragAndDropObserver` 用 **bubble** 阶段监听同一 `_domElement`（==`getContainerDomNode()`），故我在 capture 阶段先跑、先把 enabled 按 Shift 就位；HTML5 保证 drop 前必有 dragover，drop 时状态必正确。**切勿在 capture 的 drop 阶段复位 enabled**——会抢在 Monaco 的 bubble drop 前关掉，导致 Shift 拖放失效；靠下一次 dragover / model-swap 自然回基线即可。
+3. Monaco 的 drop 监听 `DragAndDropObserver` **既不 preventDefault 也不 stopPropagation**（`base/browser/dom.js`），drop 会先被 Monaco 处理（插链接）再**冒泡**到 body → 若不拦就双触发（既插链接又打开文件）。
+4. `EditorGroupView.tsx` `shouldDeferDropToMarkdownEditor(target, activeEditor, shiftKey)`（已导出可单测）：**`shiftKey` 为真** 且活动编辑器是 markdown `FileEditorInput` 且 drop 落点在 `.monaco-editor` 内 → `handleBodyDrop` return 不 openDroppedResources、`handleBodyDragOver` 抑制 overlay。**不按 Shift → 返回 false → 走原打开文件逻辑**。**拖到标签栏仍打开文件**（tab-bar drop 不受守卫影响）。粘贴（`documentPasteEditProvider`）**不受 Shift 门控**，一律成链。
+
+**⚠️ snippet 占位符必须靠自定义 bulkEdit 执行（否则 `$0` 字面显示、方括号内无选中）**：provider 的 edit 必须返回 `{ snippet }`（不是纯字符串 `insertText`）。Monaco `dropOrPasteInto/edit.js` 对**字符串** insertText 会包成 `escape(text)+'$0'`、对 `{snippet}` 直接用其值，二者都以 `insertAsSnippet:true` 走 `IBulkEditService.apply`。但本仓库**用 `services/languageFeatures/typescript/fileBulkEditService.ts` 覆盖了 `IBulkEditService`**（为跨文件 F2 rename），standalone 默认实现和它**都不解释 snippet** → `${1:text}`/`$0` 被当字面文本写入（用户就会看到 `[](x)$0`）。修复两层：① 纯函数产出带 `${n:占位}` 的 snippet（`markdownLinkSnippet` in `markdownPasteLinks.ts`，`markdownLinkForPath`/`markdownLinksFromUriList`/asset 落盘都用它；provider 返回 `{snippet}`）；② `FileBulkEditService.apply(edits, {editor})` 接住 monaco 传的第二参 `{editor}`，`insertAsSnippet===true` 且目标是该 editor 当前 model 时走 `SnippetController2.get(editor).insert(text)`（解析并选中占位符），否则维持原 `pushEditOperations`/读盘改写（**严格以 `insertAsSnippet` 门控，rename 零影响**）；无 editor 的兜底用 `stripSnippet()` 剥语法防字面落地。drop 前 monaco 已 `editor.setPosition(dropPosition)`，落点正确。
 
 > ⚠️ Monaco 的 `documentPasteEditProvider`/`linkProvider`/`hoverProvider`/`completionProvider`/`referenceProvider` 这些内部 registry **没有公开 `monaco.languages.*` API**，只能经 `StandaloneServices.get(ILanguageFeaturesService)` 拿——封装在 `MonacoLoader.getLanguageFeaturesService()`（类型 `MonacoLanguageFeaturesService`），shim 声明在 `renderer/monaco-shims.d.ts`。e2e 探针读这些 registry 也走它。
 
@@ -114,7 +131,7 @@ contributions/MarkdownPasteContribution.ts  在 markdown 上注册 documentPaste
 - **fs 行为**（扫描忽略目录、读取容错、新增 client 方法）：`mdFsBridge.ts`（+ `server/types.ts` 的 `IMdClient` + `server/lspWorkspace.ts` 调用方）。
 - **预览渲染/样式/同步滚动**：线 ② 对应文件，**完全不碰插件**。
 - **预览命令/键位/菜单**：`actions/markdownActions.ts`（对标 VSCode：`ctrl+shift+v` / `ctrl+k ctrl+v`）。
-- **粘贴/拖拽成链行为**（图片前缀、相对路径、URL 处理、支持的 mime）：线 ③ 的 `contributions/markdownPasteLinks.ts`（纯函数，优先在这里加单测）+ `MarkdownPasteContribution.ts`（注册/注入）。**不碰插件**。
+- **粘贴/拖拽成链行为**（图片前缀、相对路径、URL 处理、二进制图片落盘、支持的 mime、snippet 占位符）：线 ③ 纯函数在 `markdownPasteLinks.ts`（含 `markdownLinkSnippet` 产 snippet）/ `markdownAssetLinks.ts` / `markdownAssetDropper.ts`（优先在这里加单测），drop/paste 共享内核在 `markdownLinkProviderShared.ts`，注册/注入在 `MarkdownPasteContribution.ts`（粘贴）/ `MarkdownDropContribution.ts`（拖拽）。**snippet 的实际插入+占位符选中**在 `services/languageFeatures/typescript/fileBulkEditService.ts`（`insertAsSnippet` 分支走 `SnippetController2`；改成链渲染效果看这里）。改「拖入编辑器 vs 打开文件」的分流 + Shift 门控看 `FileEditor.tsx` 的 capture-dragover 监听（按 `e.shiftKey` 切 `dropIntoEditor.enabled`）+ `EditorGroupView.tsx` 的 `shouldDeferDropToMarkdownEditor(…, shiftKey)`。**不碰插件**。
 
 ## 易踩坑速记
 
@@ -141,9 +158,9 @@ cd apps/editor && pnpm exec playwright test specs/smoke.markdownLsp.spec.ts   # 
 pnpm check                                         # lint+typecheck+test，仅看错误（注：vendor 的 .js.map 缺失告警非失败）
 ```
 
-相关单测：`contributions/__tests__/markdownPasteLinks.test.ts`（粘贴纯函数）、`contributions/__tests__/EditorOpenerContribution.test.ts`（normalizeOpenRange）、`services/extensions/__tests__/PendingDocumentSync.test.ts`（flush 竞态）、`packages/extension-host/src/__tests__/stdoutProtection.test.ts`（stdout 保护）、`services/languageFeatures/typescript/__tests__/lspMonacoConvert.test.ts`（documentLink/highlight/selectionRange/codeAction 转换）。
+相关单测：`contributions/__tests__/markdownPasteLinks.test.ts`（粘贴纯函数 + snippet 占位符）、`markdownAssetLinks.test.ts`（mime→ext/命名/成链 snippet）、`markdownAssetDropper.test.ts`（stub fileService 验证建目录+写字节+相对路径 snippet）、`services/languageFeatures/typescript/__tests__/fileBulkEditService.test.ts`（`applyTextEditsToString` + `stripSnippet` 剥语法降级）、`workbench/editor/__tests__/shouldDeferDropToMarkdownEditor.test.tsx`（drop 双触发/Shift 守卫）、`contributions/__tests__/EditorOpenerContribution.test.ts`（normalizeOpenRange）、`services/extensions/__tests__/PendingDocumentSync.test.ts`（flush 竞态）、`packages/extension-host/src/__tests__/stdoutProtection.test.ts`（stdout 保护）、`services/languageFeatures/typescript/__tests__/lspMonacoConvert.test.ts`（documentLink/highlight/selectionRange/codeAction 转换）。
 
-e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryMarkdownWorkspaceSymbols` / `getMarkdownDefinition` / `getMarkdownMarkers(owner:'markdown')` / `getMarkdownDocumentLinks` / `getMarkdownHover` / `getMarkdownCompletions` / `getMarkdownReferences` / `getMarkdownPasteEdit`（后五个经 `MonacoLoader.getLanguageFeaturesService()` 读 Monaco 内部 registry）。
+e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryMarkdownWorkspaceSymbols` / `getMarkdownDefinition` / `getMarkdownMarkers(owner:'markdown')` / `getMarkdownDocumentLinks` / `getMarkdownHover` / `getMarkdownCompletions` / `getMarkdownReferences` / `getMarkdownPasteEdit` / `getMarkdownDropEdit`（后者接受 entries：uri-list/text 走 `text`、二进制图片走 `base64`，返回 provider 产出的 snippet 文本，验证落盘）/ `insertMarkdownSnippet`（经 `SnippetController2` 真插入，回读文本+选中文字，验证 `${1:text}` 展开且选中）（多数经 `MonacoLoader.getLanguageFeaturesService()` 读 Monaco 内部 registry）。
 
 ## 关键参考路径
 
@@ -159,7 +176,10 @@ e2e 探针（`renderer/e2e/probe.ts`）：`getMarkdownDocumentSymbols` / `queryM
 - `apps/editor/src/renderer/workbench/editor/MarkdownPreviewEditor.tsx` + `useMarkdownSyncScroll.ts` —— 预览组件 + 同步滚动
 - `apps/editor/src/renderer/services/editor/MarkdownPreviewInput.ts` —— 预览虚拟 input
 - `apps/editor/src/renderer/actions/markdownActions.ts` —— 预览命令/键位
-- `apps/editor/src/renderer/contributions/markdownPasteLinks.ts` + `MarkdownPasteContribution.ts` —— 线③ 粘贴/拖拽成链（纯函数 + documentPasteEditProvider 注册）
+- `apps/editor/src/renderer/contributions/markdownPasteLinks.ts` + `markdownAssetLinks.ts` + `markdownAssetDropper.ts` + `markdownLinkProviderShared.ts` —— 线③ 成链纯函数（snippet）+ 落盘 + drop/paste 共享内核
+- `apps/editor/src/renderer/services/languageFeatures/typescript/fileBulkEditService.ts` —— IBulkEditService override：跨文件 rename 写盘 + **snippet 插入（`insertAsSnippet`→SnippetController2，成链占位符选中）**
+- `apps/editor/src/renderer/contributions/MarkdownPasteContribution.ts` + `MarkdownDropContribution.ts` —— documentPasteEditProvider / documentDropEditProvider 注册（对称）
+- `apps/editor/src/renderer/workbench/editor/FileEditor.tsx`（capture-dragover 按 Shift 切 `dropIntoEditor`）+ `EditorGroupView.tsx`（`shouldDeferDropToMarkdownEditor(…, shiftKey)`）—— 线③「Shift 拖入插链接 vs 默认拖入/标签栏打开」的分流 + 防双触发
 - `apps/editor/src/renderer/workbench/editor/monaco/MonacoLoader.ts` —— `getLanguageFeaturesService()`：取 Monaco 内部 ILanguageFeaturesService（paste/link/hover/completion/reference registry 唯一入口）
 - `apps/editor/src/renderer/contributions/EditorOpenerContribution.ts` —— `normalizeOpenRange`（header-fragment 链接 setSelection 修复）
 - `apps/editor/src/renderer/services/extensions/PendingDocumentSync.ts` —— 即时 provider 的「补全前 flush 文档同步防抖」竞态修复

@@ -604,6 +604,157 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
       return null
     },
+    getMarkdownDropEdit: async (
+      uri: string,
+      entries: { mime: string; text?: string; base64?: string; fileName?: string }[],
+    ): Promise<string | null> => {
+      const monacoNs = MonacoLoader.get()
+      const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
+      if (!model) return null
+      const features = await MonacoLoader.getLanguageFeaturesService()
+
+      // A minimal VSDataTransfer stub supporting both `get(mime)` (uri-list /
+      // text) and iteration (image file entries), matching what the real drop
+      // controller hands the provider.
+      const items = entries.map((e) => {
+        const bytes = e.base64 ? Uint8Array.from(atob(e.base64), (c) => c.charCodeAt(0)) : undefined
+        return {
+          mime: e.mime,
+          item: {
+            asString: async () => e.text ?? '',
+            asFile: () =>
+              bytes ? { name: e.fileName ?? 'image', data: async () => bytes } : undefined,
+          },
+        }
+      })
+      const dataTransfer = {
+        get: (m: string) => items.find((it) => it.mime === m)?.item,
+        *[Symbol.iterator]() {
+          for (const it of items) yield [it.mime, it.item] as [string, unknown]
+        },
+      }
+      const position = { lineNumber: 1, column: 1 }
+      for (const provider of features.documentDropEditProvider.ordered(model)) {
+        const p = provider as {
+          provideDocumentDropEdits?: (
+            model: unknown,
+            position: unknown,
+            dt: unknown,
+            token: unknown,
+          ) => Promise<{ edits: { insertText: string | { snippet: string } }[] } | undefined>
+        }
+        const result = await p.provideDocumentDropEdits?.(model, position, dataTransfer, NONE_TOKEN)
+        const insert = result?.edits[0]?.insertText
+        if (insert != null) return typeof insert === 'string' ? insert : insert.snippet
+      }
+      return null
+    },
+    // Insert a snippet into the active editor via SnippetController2 (the same
+    // path FileBulkEditService uses for drop/paste-to-link) and report the
+    // resulting buffer text plus the text left selected — so an e2e can assert the
+    // `${1:text}` placeholder is both expanded and selected (the VSCode gesture).
+    insertMarkdownSnippet: (snippet: string): { text: string; selected: string } | undefined => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const editor = FileEditorRegistry.get(active)
+      const model = editor?.getModel()
+      if (!editor || !model) return undefined
+      const controller = editor.getContribution('snippetController2') as {
+        insert?: (template: string) => void
+      } | null
+      if (!controller?.insert) return undefined
+      controller.insert(snippet)
+      const selection = editor.getSelection()
+      const selected = selection ? model.getValueInRange(selection) : ''
+      return { text: model.getValue(), selected }
+    },
+    // End-to-end drop execution: run the markdown drop provider for `entries`,
+    // then apply its edit through the REAL bulk-edit path monaco's drop
+    // controller uses — `createCombinedWorkspaceEdit` + IBulkEditService.apply(
+    // edit, { editor }) — and report the resulting buffer text and the text left
+    // selected. Unlike getMarkdownDropEdit (provider only) / insertMarkdownSnippet
+    // (SnippetController only), this covers the FileBulkEditService glue that a
+    // real drag-and-drop flows through, so the auto-select regression is caught.
+    applyMarkdownDropEdit: async (
+      uri: string,
+      entries: { mime: string; text?: string; base64?: string; fileName?: string }[],
+      position?: { lineNumber: number; column: number },
+    ): Promise<{ text: string; selected: string } | null> => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return null
+      const editor = FileEditorRegistry.get(active)
+      const model = editor?.getModel()
+      if (!editor || !model) return null
+      // `uri` is accepted for call-site clarity; the drop always targets the
+      // active editor's own model (what a real drag-and-drop lands in).
+      void uri
+
+      const features = await MonacoLoader.getLanguageFeaturesService()
+      const bulkEditService = await MonacoLoader.getBulkEditService()
+
+      const items = entries.map((e) => {
+        const bytes = e.base64 ? Uint8Array.from(atob(e.base64), (c) => c.charCodeAt(0)) : undefined
+        return {
+          mime: e.mime,
+          item: {
+            asString: async () => e.text ?? '',
+            asFile: () =>
+              bytes ? { name: e.fileName ?? 'image', data: async () => bytes } : undefined,
+          },
+        }
+      })
+      const dataTransfer = {
+        get: (m: string) => items.find((it) => it.mime === m)?.item,
+        *[Symbol.iterator]() {
+          for (const it of items) yield [it.mime, it.item] as [string, unknown]
+        },
+      }
+
+      const pos = position ?? { lineNumber: 1, column: 1 }
+      let snippet: string | undefined
+      for (const provider of features.documentDropEditProvider.ordered(model)) {
+        const p = provider as {
+          provideDocumentDropEdits?: (
+            model: unknown,
+            position: unknown,
+            dt: unknown,
+            token: unknown,
+          ) => Promise<{ edits: { insertText: string | { snippet: string } }[] } | undefined>
+        }
+        const result = await p.provideDocumentDropEdits?.(model, pos, dataTransfer, NONE_TOKEN)
+        const insert = result?.edits[0]?.insertText
+        if (insert != null) {
+          snippet = typeof insert === 'string' ? insert : insert.snippet
+          break
+        }
+      }
+      if (snippet == null) return null
+
+      // Mirror monaco's createCombinedWorkspaceEdit: one ResourceTextEdit at the
+      // drop range carrying the snippet as `insertAsSnippet`.
+      const range = {
+        startLineNumber: pos.lineNumber,
+        startColumn: pos.column,
+        endLineNumber: pos.lineNumber,
+        endColumn: pos.column,
+      }
+      editor.focus()
+      editor.setPosition(pos)
+      await bulkEditService.apply(
+        {
+          edits: [
+            {
+              resource: model.uri,
+              textEdit: { range, text: snippet, insertAsSnippet: true },
+            },
+          ],
+        },
+        { editor },
+      )
+      const selection = editor.getSelection()
+      const selected = selection ? model.getValueInRange(selection) : ''
+      return { text: model.getValue(), selected }
+    },
     getOutlineSymbols: (): readonly string[] => {
       const roots = services.outlineService.outline.get()?.roots ?? []
       const names: string[] = []

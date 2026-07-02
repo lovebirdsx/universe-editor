@@ -55,6 +55,7 @@ export interface MonacoLanguageFeatureRegistry<T> {
  */
 export interface MonacoLanguageFeaturesService {
   readonly documentPasteEditProvider: MonacoLanguageFeatureRegistry<unknown>
+  readonly documentDropEditProvider: MonacoLanguageFeatureRegistry<unknown>
   readonly linkProvider: MonacoLanguageFeatureRegistry<monaco.languages.LinkProvider>
   readonly hoverProvider: MonacoLanguageFeatureRegistry<monaco.languages.HoverProvider>
   readonly completionProvider: MonacoLanguageFeatureRegistry<monaco.languages.CompletionItemProvider>
@@ -326,6 +327,32 @@ export const MonacoLoader = {
   },
 
   /**
+   * Resolve the effective `IBulkEditService` monaco resolves — our override
+   * (FileBulkEditService) once locked in. This is the exact instance monaco's
+   * drop/paste-to-link controller calls with `apply(edit, { editor })`, so the
+   * E2E probe can exercise the real drop execution path (snippet insert +
+   * placeholder selection) end to end. Resolves after monaco has initialized.
+   */
+  async getBulkEditService(): Promise<{
+    apply(
+      edit: unknown,
+      opts?: { editor?: monaco.editor.ICodeEditor },
+    ): Promise<{ isApplied: boolean }>
+  }> {
+    await loadMonaco()
+    const [{ StandaloneServices }, { IBulkEditService }] = await Promise.all([
+      import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js'),
+      import('monaco-editor/esm/vs/editor/browser/services/bulkEditService.js'),
+    ])
+    return StandaloneServices.get<{
+      apply(
+        edit: unknown,
+        opts?: { editor?: monaco.editor.ICodeEditor },
+      ): Promise<{ isApplied: boolean }>
+    }>(IBulkEditService)
+  },
+
+  /**
    * Resolve monaco's standalone ICommandService so the workbench can invoke
    * monaco-internal commands that have no public `monaco.*` API — notably the
    * references-peek `openReference` (PeekNavigationContribution drives keyboard
@@ -346,9 +373,10 @@ export const MonacoLoader = {
 
   /**
    * Resolve monaco's internal `ILanguageFeaturesService`. Needed for the
-   * `documentPasteEditProvider` registry (the paste-to-link enhancement has no
-   * public `monaco.languages.*` API), and read by the E2E probe to exercise
-   * link / hover / completion / reference providers through the same registries
+   * `documentPasteEditProvider` / `documentDropEditProvider` registries (the
+   * markdown paste-to-link and drop-to-link enhancements have no public
+   * `monaco.languages.*` API), and read by the E2E probe to exercise link /
+   * hover / completion / reference providers through the same registries
    * Monaco's own features use. Resolves after monaco has initialized.
    */
   async getLanguageFeaturesService(): Promise<MonacoLanguageFeaturesService> {

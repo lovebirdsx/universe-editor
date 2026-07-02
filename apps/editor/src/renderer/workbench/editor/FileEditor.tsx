@@ -106,6 +106,22 @@ function getEditorTheme(configService: IConfigurationService): 'output-light' | 
     : 'output-dark'
 }
 
+// Monaco's built-in drop-into-editor stays OFF at rest for every language: a
+// plain drag keeps the original behaviour (the editor-area body opens the
+// dropped file). It is armed on the fly — only while the user holds Shift over a
+// markdown model — by the capture-phase dragover listener installed in the create
+// effect, matching VSCode's "hold Shift to insert as link" gesture. Monaco reads
+// `dropIntoEditor.enabled` live on each dragover/drop, so toggling it just before
+// its own bubble-phase listener runs is enough. `showDropSelector: 'never'`
+// applies our provider's edit directly without the drop-kind chooser widget.
+const DROP_INTO_EDITOR_OFF: NonNullable<monaco.editor.IEditorOptions['dropIntoEditor']> = {
+  enabled: false,
+}
+const DROP_INTO_EDITOR_LINK: NonNullable<monaco.editor.IEditorOptions['dropIntoEditor']> = {
+  enabled: true,
+  showDropSelector: 'never',
+}
+
 export function FileEditor({ input }: { input: IEditorInput }) {
   const fileInput = input as FileEditorInput
   const groupsService = useService(IEditorGroupsService)
@@ -144,9 +160,10 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         theme: getEditorTheme(configService),
         automaticLayout: true,
         editContext: true,
-        // 拖放交由编辑区 body 处理(分屏 / 打开外部文件);关掉 Monaco 自带的
-        // dropIntoEditor,避免它把拖来的文件路径插进当前文档并抢焦点。
-        dropIntoEditor: { enabled: false },
+        // 拖放默认交由编辑区 body 处理(分屏 / 打开外部文件),各语言一律保持关闭。
+        // 仅当用户按住 Shift 拖到 markdown 文本区时,由下方 capture 阶段的 dragover
+        // 监听临时打开,让拖入的文件/图片成为链接(见 MarkdownDropContribution)。
+        dropIntoEditor: DROP_INTO_EDITOR_OFF,
         // All user-configured editor.* options (minimap, wordWrap, tabSize,
         // insertSpaces, cursor*, renderWhitespace, …). Spread first so the
         // bespoke typography options below win.
@@ -235,8 +252,25 @@ export function FileEditor({ input }: { input: IEditorInput }) {
     // arbitration, for the same editContext reason.
     const inlineEditSub = bridgeInlineEditState(ed, contextKeyService)
     const columnSelectionSub = bridgeEditorColumnSelection(ed, monacoNs, contextKeyService)
+    // Arm Monaco's drop-into-editor only while Shift is held over a markdown model,
+    // so a plain drag still opens the dropped file (handled by the editor body) and
+    // Shift+drag inserts a link instead — VSCode's gesture. Capture phase runs
+    // before Monaco's own bubble-phase dragover/drop listeners, which read
+    // `dropIntoEditor.enabled` live, so the flag is in place by the time they fire.
+    // dragover retriggers continuously, so the last one before a drop always sets
+    // the correct state; no reset is needed (a later dragover or model swap
+    // restores the OFF baseline).
+    const dropContainer = ed.getContainerDomNode()
+    const armDropIntoEditorOnShift = (e: DragEvent) => {
+      const isMarkdown = ed.getModel()?.getLanguageId() === 'markdown'
+      ed.updateOptions({
+        dropIntoEditor: e.shiftKey && isMarkdown ? DROP_INTO_EDITOR_LINK : DROP_INTO_EDITOR_OFF,
+      })
+    }
+    dropContainer.addEventListener('dragover', armDropIntoEditorOnShift, true)
     editorRef.current = ed
     return () => {
+      dropContainer.removeEventListener('dragover', armDropIntoEditorOnShift, true)
       focusSub.dispose()
       blurSub.dispose()
       textFocusSub.dispose()
@@ -348,6 +382,9 @@ export function FileEditor({ input }: { input: IEditorInput }) {
       // the current input (the create-effect only set it for the first input).
       editorRef.current?.updateOptions({
         readOnly: fileInput.isReadonly,
+        // Reset drop-into-editor to the OFF baseline on every model swap; the
+        // Shift-held dragover listener re-arms it per drag when appropriate.
+        dropIntoEditor: DROP_INTO_EDITOR_OFF,
         ...getEditorTypographyOptions(configService, fileInput.language),
       })
 

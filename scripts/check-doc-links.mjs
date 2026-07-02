@@ -36,12 +36,17 @@ function collectMd(dir) {
 
 /** Extract all relative link hrefs from markdown source (strips fragments). */
 function extractRelativeLinks(source) {
+  // Strip code first so link-like syntax shown as an example (e.g. `[](path)` in
+  // backticks or a fenced block) isn't mistaken for a real link to validate.
+  const withoutCode = source
+    .replace(/```[\s\S]*?```/g, '') // fenced code blocks
+    .replace(/`[^`\n]*`/g, '') // inline code spans
   // Match [label](href) — not ![]() images (those don't need to be checked here),
   // skip URLs with a scheme (http:, file:, universe:, etc.).
   const linkRe = /\[(?:[^\]]*)\]\(([^)]+)\)/g
   const hrefs = []
   let m
-  while ((m = linkRe.exec(source)) !== null) {
+  while ((m = linkRe.exec(withoutCode)) !== null) {
     const raw = m[1]?.trim() ?? ''
     if (!raw || /^[a-z][a-z0-9+.-]*:/i.test(raw)) continue // absolute URL — skip
     if (raw.startsWith('#')) continue // same-page anchor — skip

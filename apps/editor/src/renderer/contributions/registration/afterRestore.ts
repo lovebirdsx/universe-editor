@@ -40,6 +40,7 @@ import { MonacoKeybindingSyncContribution } from '../MonacoKeybindingSyncContrib
 import { MonacoDefaultKeybindingOverrideContribution } from '../MonacoDefaultKeybindingOverrideContribution.js'
 import { DocumentSyncContribution } from '../DocumentSyncContribution.js'
 import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
+import { MarkdownDropContribution } from '../MarkdownDropContribution.js'
 import { EditorOpenerContribution } from '../EditorOpenerContribution.js'
 import { PeekNavigationContribution } from '../PeekNavigationContribution.js'
 import {
@@ -317,11 +318,23 @@ ContributionsRegistry.registerContribution(
 )
 
 // Paste-to-link enhancement for markdown: pasting a file uri-list inserts a
-// markdown image/link, pasting a URL over a selection wraps it as `[sel](url)`.
+// markdown image/link, pasting a URL over a selection wraps it as `[sel](url)`,
+// pasting a binary image writes it to `assets/` beside the file and embeds it.
 // AfterRestore so monaco's language-features service is live.
 ContributionsRegistry.registerContribution(
   'workbench.contrib.markdownPaste',
   MarkdownPasteContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Drop-to-link enhancement for markdown (drag counterpart of the paste contrib):
+// dropping a file into a markdown editor inserts a markdown image/link; dropping
+// a binary image writes it to `assets/` beside the file and embeds it. Monaco's
+// per-model dropIntoEditor is enabled for markdown only (see FileEditor).
+// AfterRestore so monaco's language-features service is live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.markdownDrop',
+  MarkdownDropContribution,
   WorkbenchPhase.AfterRestore,
 )
 

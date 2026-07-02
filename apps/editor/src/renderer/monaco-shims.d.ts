@@ -42,3 +42,10 @@ declare module 'monaco-editor/esm/vs/platform/list/browser/listService.js' {
 declare module 'monaco-editor/esm/vs/editor/common/services/languageFeatures.js' {
   export const ILanguageFeaturesService: unknown
 }
+
+// IBulkEditService decorator + lookup key for StandaloneServices.get. We resolve
+// the effective service (our FileBulkEditService override) so the E2E probe can
+// drive the real drop/paste-to-link execution path end to end (see MonacoLoader).
+declare module 'monaco-editor/esm/vs/editor/browser/services/bulkEditService.js' {
+  export const IBulkEditService: unknown
+}

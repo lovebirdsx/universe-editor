@@ -9,34 +9,36 @@ import { markdownLinkFromUrl, markdownLinksFromUriList } from '../markdownPasteL
 const ROOT = 'C:/work/project'
 
 describe('markdownLinksFromUriList', () => {
-  it('makes a relative link for a file under the workspace root', () => {
+  it('makes a relative link snippet for a file under the workspace root', () => {
     const out = markdownLinksFromUriList('file:///C:/work/project/docs/a.md', ROOT, 'win32')
-    expect(out).toBe('[](docs/a.md)')
+    expect(out).toBe('[${1:text}](docs/a.md)')
   })
 
-  it('emits an image embed for image extensions', () => {
+  it('emits an image embed snippet for image extensions', () => {
     const out = markdownLinksFromUriList('file:///C:/work/project/img/p.PNG', ROOT, 'win32')
-    expect(out).toBe('![](img/p.PNG)')
+    expect(out).toBe('![${1:alt text}](img/p.PNG)')
   })
 
-  it('joins multiple uris with a space and skips blank / comment lines', () => {
+  it('joins multiple uris with a space, incrementing the placeholder index', () => {
     const raw = [
       '# comment',
       'file:///C:/work/project/a.md',
       '',
       'file:///C:/work/project/b.png',
     ].join('\r\n')
-    expect(markdownLinksFromUriList(raw, ROOT, 'win32')).toBe('[](a.md) ![](b.png)')
+    expect(markdownLinksFromUriList(raw, ROOT, 'win32')).toBe(
+      '[${1:text}](a.md) ![${2:alt text}](b.png)',
+    )
   })
 
   it('angle-wraps a target containing spaces', () => {
     const out = markdownLinksFromUriList('file:///C:/work/project/my%20doc.md', ROOT, 'win32')
-    expect(out).toBe('[](<my doc.md>)')
+    expect(out).toBe('[${1:text}](<my doc.md>)')
   })
 
   it('falls back to the absolute forward-slashed path when outside the root', () => {
     const out = markdownLinksFromUriList('file:///D:/other/a.md', ROOT, 'win32')
-    expect(out).toBe('[](D:/other/a.md)')
+    expect(out).toBe('[${1:text}](D:/other/a.md)')
   })
 
   it('ignores non-file uris and returns undefined when nothing parses', () => {
@@ -45,7 +47,7 @@ describe('markdownLinksFromUriList', () => {
 
   it('handles a posix root', () => {
     const out = markdownLinksFromUriList('file:///home/u/proj/a.md', '/home/u/proj', 'linux')
-    expect(out).toBe('[](a.md)')
+    expect(out).toBe('[${1:text}](a.md)')
   })
 })
 

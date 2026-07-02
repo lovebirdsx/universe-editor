@@ -386,6 +386,40 @@ export interface E2EProbe {
       endColumn: number
     },
   ): Promise<string | null>
+  /**
+   * Run the registered markdown `documentDropEditProvider` with a list of data
+   * transfer `entries` (uri-list / text via `text`, binary image via `base64`)
+   * dropped at 1:1 and return the first edit's insert text, or null when no
+   * provider produced an edit. Exercises the drop-to-link enhancement, including
+   * writing a pasted/dropped binary image into `assets/`.
+   */
+  getMarkdownDropEdit(
+    uri: string,
+    entries: { mime: string; text?: string; base64?: string; fileName?: string }[],
+  ): Promise<string | null>
+  /**
+   * Insert a snippet into the active editor via SnippetController2 (the drop/paste
+   * -to-link execution path) and return the resulting buffer text and the text
+   * left selected — so a spec can assert the `${1:text}` placeholder is expanded
+   * and selected.
+   */
+  insertMarkdownSnippet(snippet: string): { text: string; selected: string } | undefined
+  /**
+   * Run the markdown drop provider for `entries` and apply its edit through the
+   * REAL bulk-edit path a live drag-and-drop flows through (monaco's
+   * `createCombinedWorkspaceEdit` + `IBulkEditService.apply(edit, { editor })`,
+   * i.e. FileBulkEditService), returning the resulting buffer text and the text
+   * left selected. Unlike getMarkdownDropEdit (provider only) /
+   * insertMarkdownSnippet (SnippetController only), this covers the glue layer, so
+   * the "dropped link text not auto-selected" regression is caught end to end.
+   * Requires the target `uri` to be the active editor's model. Returns null when
+   * no drop edit was produced or the active editor doesn't match.
+   */
+  applyMarkdownDropEdit(
+    uri: string,
+    entries: { mime: string; text?: string; base64?: string; fileName?: string }[],
+    position?: { lineNumber: number; column: number },
+  ): Promise<{ text: string; selected: string } | null>
   // -- Outline probe --------------------------------------------------------
   /**
    * Flattened symbol names from `IOutlineService.outline` — the SAME observable the
