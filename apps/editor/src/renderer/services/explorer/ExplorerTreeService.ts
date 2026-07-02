@@ -55,6 +55,13 @@ export interface IExplorerResourceOperation {
   readonly isDirectory: boolean
 }
 
+/** A file/folder that was renamed or moved (rename and move share this shape). */
+export interface IFileRenameOperation {
+  readonly oldUri: URI
+  readonly newUri: URI
+  readonly isDirectory: boolean
+}
+
 interface NodeState {
   children: IExplorerEntry[] | null
   loading: boolean
@@ -139,6 +146,14 @@ export class ExplorerTreeService extends Disposable {
 
   private readonly _onReveal = this._register(new Emitter<URI>())
   readonly onReveal: Event<URI> = this._onReveal.event
+
+  // Fired after a rename/move completes on disk, so consumers (e.g. markdown
+  // link updating) can react. Batched: moveResources fires one event per call.
+  private readonly _onDidRunFileOperation = this._register(
+    new Emitter<readonly IFileRenameOperation[]>(),
+  )
+  readonly onDidRunFileOperation: Event<readonly IFileRenameOperation[]> =
+    this._onDidRunFileOperation.event
 
   constructor(
     @IWorkspaceService private readonly _workspace: IWorkspaceService,
@@ -425,12 +440,16 @@ export class ExplorerTreeService extends Disposable {
     const parent = parentOf(source)
     if (!parent) throw new Error('Cannot rename the workspace root.')
     const target = URI.joinPath(parent, newName)
+    const isDirectory = this.isDirectory(source)
     try {
       await this._fileService.rename(source, target, { overwrite: false })
       this._deleteNodeSubtree(source)
       if (this.isCut(source)) this.clearClipboard()
       await this.refresh(parent)
       this._logger.info(`rename ${source.toString()} -> ${target.toString()}`)
+      this._onDidRunFileOperation.fire([
+        { oldUri: normalizeUri(source), newUri: normalizeUri(target), isDirectory },
+      ])
       return target
     } catch (err) {
       this._logger.error(`rename failed ${source.toString()} -> ${target.toString()}`, err)
@@ -550,10 +569,11 @@ export class ExplorerTreeService extends Disposable {
     )
     const clearsCutState = sources.some((source) => this.isCut(source.resource))
     const targets: URI[] = []
+    const renames: IFileRenameOperation[] = []
     try {
       for (const source of sources) {
         this._assertCanPlace(source, destinationDir, 'move')
-        const target = targetInDirectory(destinationDir, source.resource)
+        const target = normalizeUri(targetInDirectory(destinationDir, source.resource))
         if (sameUri(source.resource, target)) continue
         if (!overwrite && (await this._fileService.exists(target))) {
           throw new Error(`A file or folder named "${basename(target)}" already exists.`)
@@ -561,6 +581,7 @@ export class ExplorerTreeService extends Disposable {
         await this._fileService.rename(source.resource, target, { overwrite })
         this._deleteNodeSubtree(source.resource)
         targets.push(target)
+        renames.push({ oldUri: source.resource, newUri: target, isDirectory: source.isDirectory })
       }
       await this._refreshParents([...sources.map((source) => source.resource), ...targets])
       if (clearsCutState) this.clearClipboard()
@@ -568,6 +589,7 @@ export class ExplorerTreeService extends Disposable {
         `move resources=${sources.length} destination=${destinationDir.toString()} overwrite=${overwrite}`,
       )
       this._selectOperationTargets(targets)
+      if (renames.length > 0) this._onDidRunFileOperation.fire(renames)
       return targets
     } catch (err) {
       this._logger.error(`move failed destination=${destinationDir.toString()}`, err)

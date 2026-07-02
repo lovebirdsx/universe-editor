@@ -41,6 +41,7 @@ import { MonacoDefaultKeybindingOverrideContribution } from '../MonacoDefaultKey
 import { DocumentSyncContribution } from '../DocumentSyncContribution.js'
 import { MarkdownPasteContribution } from '../MarkdownPasteContribution.js'
 import { MarkdownDropContribution } from '../MarkdownDropContribution.js'
+import { MarkdownUpdateLinksOnRenameContribution } from '../MarkdownUpdateLinksOnRenameContribution.js'
 import { EditorOpenerContribution } from '../EditorOpenerContribution.js'
 import { PeekNavigationContribution } from '../PeekNavigationContribution.js'
 import {
@@ -335,6 +336,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.markdownDrop',
   MarkdownDropContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Update markdown links when a file/folder is renamed or moved in the Explorer.
+// AfterRestore so the explorer tree service + extension host + Monaco are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.markdownUpdateLinksOnRename',
+  MarkdownUpdateLinksOnRenameContribution,
   WorkbenchPhase.AfterRestore,
 )
 

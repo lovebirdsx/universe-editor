@@ -40,6 +40,8 @@ export const MARKDOWN_COMMANDS = {
   formatTable: 'markdown.editing.formatTable',
   organizeLinkDefinitions: 'markdown.organizeLinkDefinitions',
   getFileReferences: 'markdown.getFileReferences',
+  getRenameFileEdits: 'markdown.getRenameFileEdits',
+  didChangeFiles: 'markdown.didChangeFiles',
 } as const
 
 function register(context: ExtensionContext, id: string, handler: () => Promise<void>): void {

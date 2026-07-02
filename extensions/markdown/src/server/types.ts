@@ -37,6 +37,12 @@ export interface MdTextDocumentDto {
   readonly text: string
 }
 
+/** A single file rename/move, URIs as strings (already applied on disk). */
+export interface MdFileRenameDto {
+  readonly oldUri: string
+  readonly newUri: string
+}
+
 /**
  * The language-feature surface, implemented by the server. The `$did*` methods
  * sync the renderer's open documents; the `$provide*` / `$computeDiagnostics`
@@ -49,6 +55,14 @@ export interface IMdServer {
   $didChange(doc: MdTextDocumentDto): Promise<void>
   /** Drop the editor overlay; subsequent reads fall back to disk. */
   $didClose(uri: string): Promise<void>
+  /**
+   * Notify the service that files changed on disk out-of-band (e.g. a bulk edit
+   * rewrote closed files' links). We have no filesystem watcher, so without this
+   * the language-service caches keep the stale text and report broken links for
+   * the pre-edit paths. URIs already open in an editor are ignored (their content
+   * syncs via `$didChange`).
+   */
+  $didChangeFiles(uris: readonly string[]): Promise<void>
   $provideDocumentSymbols(uri: string): Promise<DocumentSymbol[]>
   $provideDefinition(uri: string, position: Position): Promise<Location[]>
   $provideReferences(
@@ -81,6 +95,14 @@ export interface IMdServer {
   $organizeLinkDefinitions(uri: string): Promise<TextEdit[]>
   /** All links across the workspace that point at `uri` ("find references to this file"). */
   $getFileReferences(uri: string): Promise<Location[]>
+  /**
+   * Edits that update every link affected by moving files: links across the
+   * workspace pointing at the moved files, plus the moved markdown files' own
+   * relative links. Must be called *after* the filesystem rename has happened
+   * (the language service assumes the new paths already exist on disk). `null`
+   * when no link needs updating.
+   */
+  $getRenameFileEdits(renames: readonly MdFileRenameDto[]): Promise<WorkspaceEdit | null>
   $computeDiagnostics(uri: string): Promise<Diagnostic[]>
 }
 

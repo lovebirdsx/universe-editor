@@ -47,6 +47,21 @@ export class DocumentStore {
     this._docs.delete(uri)
   }
 
+  /**
+   * Signal that a file the editor does NOT have open changed on disk out-of-band
+   * (e.g. a bulk edit rewrote a closed file's links). We have no filesystem
+   * watcher, so the language-service caches would otherwise keep the stale text;
+   * firing change/delete here refreshes them. These do NOT touch the overlay —
+   * the file stays "closed".
+   */
+  notifyDiskChange(doc: ITextDocument): void {
+    this._onDidChange.fire(doc)
+  }
+
+  notifyDiskDelete(uri: URI): void {
+    this._onDidDelete.fire(uri)
+  }
+
   get(uri: string): ITextDocument | undefined {
     return this._docs.get(uri)
   }

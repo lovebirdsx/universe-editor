@@ -14,6 +14,7 @@ import {
   IEditorResolverService,
   IEditorService,
   IEditorGroupsService,
+  IFileService,
   IFocusableRegistry,
   IFocusStackService,
   IHistoryService,
@@ -622,6 +623,8 @@ async function bootstrapWorkbench(): Promise<void> {
     outlineService,
     aiDebugService: services.get(IAiDebugService) as IAiDebugService,
     timerService: instantiation.invokeFunction((a) => a.get(ITimerService)),
+    explorerTreeService,
+    fileService: services.get(IFileService) as IFileService,
     computeTeardownLeakReport: snapshotLeaks,
   })
   workbenchStore.add(d)

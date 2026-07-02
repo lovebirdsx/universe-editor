@@ -460,6 +460,16 @@ export interface E2EProbe {
    * the virtual-scroll path) without shipping fixtures of thousands of items.
    */
   updateConfigValue(key: string, value: unknown): void
+  /**
+   * Rename an explorer resource (file/folder) by base name, via
+   * ExplorerTreeService (the same path F2 uses). Returns the new URI string.
+   * Fires the rename event that drives markdown link updating.
+   */
+  renameExplorerResource(fsPath: string, newName: string): Promise<string>
+  /** Move an explorer resource into a destination directory. Returns the new URI string. */
+  moveExplorerResource(fsPath: string, destDirFsPath: string): Promise<string>
+  /** Read a workspace file's UTF-8 text from disk (post-edit assertion helper). */
+  readWorkspaceFileText(fsPath: string): Promise<string>
   // -- Views / view-container customization probe ---------------------------
   /** Id of the container a view currently lives in (custom location aware). */
   getViewContainerByViewId(viewId: string): string | undefined

@@ -22,7 +22,7 @@ import {
 } from 'vscode-markdown-languageservice'
 import type { CodeActionContext, Location, Range } from 'vscode-languageserver-types'
 import { type IMdClient, type IMdServer } from './types.js'
-import { DocumentStore } from './documentStore.js'
+import { DocumentStore, makeDoc } from './documentStore.js'
 import { LspWorkspace } from './lspWorkspace.js'
 
 export interface MdServerHandle {
@@ -98,6 +98,20 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
     $didClose: (uri) => {
       store.close(uri)
       return Promise.resolve()
+    },
+
+    $didChangeFiles: async (uris) => {
+      for (const uri of uris) {
+        // Open documents sync via $didChange; their overlay is the source of truth.
+        if (store.has(uri)) continue
+        const parsed = URI.parse(uri)
+        const text = await client.$readFile(uri)
+        if (text === undefined) {
+          store.notifyDiskDelete(parsed)
+        } else {
+          store.notifyDiskChange(makeDoc(uri, 0, text))
+        }
+      }
     },
 
     $provideDocumentSymbols: async (uri) => {
@@ -198,6 +212,15 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
     },
 
     $getFileReferences: async (uri) => ls.getFileReferences(URI.parse(uri), CancellationToken.None),
+
+    $getRenameFileEdits: async (renames) => {
+      if (renames.length === 0) return null
+      const result = await ls.getRenameFilesInWorkspaceEdit(
+        renames.map((r) => ({ oldUri: URI.parse(r.oldUri), newUri: URI.parse(r.newUri) })),
+        CancellationToken.None,
+      )
+      return result?.edit ?? null
+    },
 
     $computeDiagnostics: async (uri) => {
       const doc = await resolveDoc(uri)

@@ -40,7 +40,23 @@
       { "command": "markdown.editing.onEnter", "key": "enter", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" },
       { "command": "markdown.editing.onTab", "key": "tab", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" },
       { "command": "markdown.editing.onShiftTab", "key": "shift+tab", "when": "editorTextFocus && editorLangId == markdown && !suggestWidgetVisible" }
-    ]
+    ],
+    "configuration": {
+      "title": "Markdown",
+      "properties": {
+        "markdown.updateLinksOnFileMove.enabled": {
+          "type": "string",
+          "enum": ["never", "prompt", "always"],
+          "enumDescriptions": [
+            "Never update links automatically.",
+            "Prompt before updating links.",
+            "Always update links automatically."
+          ],
+          "default": "prompt",
+          "description": "Update links in Markdown files when a file or folder they reference is renamed or moved."
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node esbuild.config.mjs",

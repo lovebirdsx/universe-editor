@@ -25,6 +25,7 @@ import {
   type IEditorGroupsService,
   type IEditorResolverService,
   type IEditorService,
+  type IFileService,
   type ILayoutService,
   type ILifecycleService,
   type IOutputService,
@@ -60,6 +61,7 @@ import {
 } from '../../shared/e2e/contract.js'
 import type { IScmService } from '../services/extensions/ScmService.js'
 import type { IAiDebugService } from '../../shared/ipc/aiDebugService.js'
+import type { ExplorerTreeService } from '../services/explorer/ExplorerTreeService.js'
 
 export interface E2EProbeServices {
   readonly commandService: ICommandService
@@ -84,6 +86,8 @@ export interface E2EProbeServices {
   readonly outlineService: IOutlineService
   readonly aiDebugService: IAiDebugService
   readonly timerService: ITimerService
+  readonly explorerTreeService: ExplorerTreeService
+  readonly fileService: IFileService
   /** Tears down React + snapshots the Disposable tracker; see E2EProbe. */
   readonly computeTeardownLeakReport: () => E2EDisposableLeakReport | null
 }
@@ -784,6 +788,19 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     updateConfigValue: (key: string, value: unknown): void =>
       services.configurationService.update(key, value, ConfigurationTarget.Memory),
+    renameExplorerResource: async (fsPath: string, newName: string): Promise<string> => {
+      const target = await services.explorerTreeService.rename(URI.file(fsPath), newName)
+      return target.toString()
+    },
+    moveExplorerResource: async (fsPath: string, destDirFsPath: string): Promise<string> => {
+      const [target] = await services.explorerTreeService.moveResources(
+        [{ resource: URI.file(fsPath), isDirectory: false }],
+        URI.file(destDirFsPath),
+      )
+      return target?.toString() ?? ''
+    },
+    readWorkspaceFileText: (fsPath: string): Promise<string> =>
+      services.fileService.readFileText(URI.file(fsPath)),
     getViewContainerByViewId: (viewId: string) =>
       services.viewDescriptorService.getViewContainerByViewId(viewId)?.id,
     getViewIdsByContainer: (containerId: string) =>

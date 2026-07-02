@@ -18,7 +18,7 @@ import {
 } from '@universe-editor/extension-api'
 import { URI } from 'vscode-uri'
 import { createMdServer } from './server/mdServer.js'
-import type { IMdServer } from './server/types.js'
+import type { IMdServer, MdFileRenameDto } from './server/types.js'
 import { createMdFsBridge } from './mdFsBridge.js'
 import { registerEditingCommands, MARKDOWN_COMMANDS } from './edit/commands.js'
 
@@ -81,6 +81,17 @@ function registerServerCommands(context: ExtensionContext, server: IMdServer): v
     // hosts the references peek; here we only resolve the locations.
     commands.registerCommand(MARKDOWN_COMMANDS.getFileReferences, (uri: unknown) =>
       typeof uri === 'string' ? server.$getFileReferences(uri) : [],
+    ),
+    // Invoked by the renderer after a file rename/move: return the edits that
+    // update links pointing at the moved files (and the moved files' own links).
+    commands.registerCommand(MARKDOWN_COMMANDS.getRenameFileEdits, (renames: unknown) =>
+      Array.isArray(renames) ? server.$getRenameFileEdits(renames as MdFileRenameDto[]) : null,
+    ),
+    // Invoked by the renderer after a bulk edit rewrote closed files on disk:
+    // refresh the language-service caches so diagnostics stop reporting the
+    // pre-move link paths (we have no filesystem watcher to notice the change).
+    commands.registerCommand(MARKDOWN_COMMANDS.didChangeFiles, (uris: unknown) =>
+      Array.isArray(uris) ? server.$didChangeFiles(uris as string[]) : undefined,
     ),
   )
 }
