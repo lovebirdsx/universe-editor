@@ -9,7 +9,7 @@
 
 import { useState } from 'react'
 import { ICommandService, localize } from '@universe-editor/platform'
-import { ArrowLeftRight, Plus, RefreshCw, Search } from 'lucide-react'
+import { ArrowLeftRight, Filter, Plus, RefreshCw, Search } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
@@ -18,6 +18,7 @@ import { IAcpChatLocationService } from '../../services/acp/acpChatLocationServi
 import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { AgentIcon } from './agentIcon.js'
 import { SessionsPopover } from './SessionsPopover.js'
+import { SessionsFilterPopover } from './SessionsFilterPopover.js'
 import styles from './agents.module.css'
 
 export function AgentsViewToolbar() {
@@ -28,9 +29,11 @@ export function AgentsViewToolbar() {
   const filterService = useService(IAcpSessionFilterService)
   const loc = useObservable(location.location)
   const searchOpen = useObservable(filterService.searchOpen)
+  const filterDefault = useObservable(filterService.isFilterDefault)
   const defaultAgentId = useObservable(registry.defaultAgentIdObs)
   const [refreshing, setRefreshing] = useState(false)
   const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(false)
 
   const handleRefresh = () => {
     if (refreshing) return
@@ -87,6 +90,16 @@ export function AgentsViewToolbar() {
         <Search size={14} strokeWidth={1.75} />
       </IconButton>
       <IconButton
+        label={localize('acp.filter.menu', 'Filter sessions')}
+        active={filterOpen || !filterDefault}
+        onClick={() => setFilterOpen((v) => !v)}
+        aria-expanded={filterOpen}
+        aria-haspopup="menu"
+        data-testid="acp-session-filter"
+      >
+        <Filter size={14} strokeWidth={1.75} />
+      </IconButton>
+      <IconButton
         label={localize('acp.newSession', 'New session')}
         onClick={() => void service.createSession(registry.defaultAgentId())}
         data-testid="acp-new-session"
@@ -122,6 +135,7 @@ export function AgentsViewToolbar() {
       >
         <ArrowLeftRight size={14} strokeWidth={1.75} />
       </IconButton>
+      {filterOpen && <SessionsFilterPopover onDismiss={() => setFilterOpen(false)} />}
     </span>
   )
 }

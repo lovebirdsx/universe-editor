@@ -30,6 +30,8 @@ import {
   type SessionHistoryScope,
 } from '../../services/acp/acpSessionHistory.js'
 import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
+import { statusBucketFor } from '../../services/acp/acpSessionFilterService.js'
+import { computeSessionDisplayStatus } from '../../services/acp/acpSessionStatus.js'
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { AgentIcon } from './agentIcon.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
@@ -302,6 +304,9 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
 
   const searchOpen = useObservable(filterService.searchOpen)
   const query = useObservable(filterService.query)
+  const sortMode = useObservable(filterService.sortMode)
+  const excludedAgents = useObservable(filterService.excludedAgentIds)
+  const excludedStatuses = useObservable(filterService.excludedStatuses)
 
   // The config service exposes an Event, not an observable — mirror the scope
   // into local state so the list re-renders (and re-filters) when it changes.
@@ -327,12 +332,35 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
 
   const filtered = useMemo(() => filterSessions(scoped, query), [scoped, query])
 
+  // Apply the funnel-menu filters (agent + status) and the chosen sort. Status
+  // is derived from the live session when one exists; a non-live history row has
+  // no live status and counts as `completed`. When a search query is active the
+  // fuzzy-score order from `filterSessions` wins over the sort mode.
+  const visible = useMemo(() => {
+    const kept = filtered.filter((entry) => {
+      if (excludedAgents.has(entry.agentId)) return false
+      if (excludedStatuses.size > 0) {
+        const live = service.getById(entry.id)
+        const bucket =
+          live && !live.readOnly ? statusBucketFor(computeSessionDisplayStatus(live)) : 'completed'
+        if (excludedStatuses.has(bucket)) return false
+      }
+      return true
+    })
+    if (query.trim().length > 0) return kept
+    const sorted = [...kept]
+    sorted.sort((a, b) =>
+      sortMode === 'created' ? b.createdAt - a.createdAt : b.lastUsedAt - a.lastUsedAt,
+    )
+    return sorted
+  }, [filtered, excludedAgents, excludedStatuses, sortMode, query, service])
+
   const exchangeRate = useUsdToCnyRate()
   const rate = exchangeRate?.rate ?? FALLBACK_RATE
 
   // Foreign (other-worktree) rows lose their duration/cost in the hydrate merge;
   // backfill them from each owning worktree's own storage bucket.
-  const foreignStats = useForeignSessionStats(filtered, currentCwd)
+  const foreignStats = useForeignSessionStats(visible, currentCwd)
 
   // Reconcile authoritative foreign titles back into this bucket. A foreign
   // session's title in the current bucket is only a hydrate cache; if the owning
@@ -384,13 +412,13 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
           </IconButton>
         </div>
       ) : null}
-      {filtered.length === 0 ? (
+      {visible.length === 0 ? (
         <p className={styles['empty']}>
           {localize('acp.sessions.noMatch', 'No matching sessions.')}
         </p>
       ) : (
         <ul className={styles['sessionRows']}>
-          {filtered.map((entry) => {
+          {visible.map((entry) => {
             const live = service.getById(entry.id)
             // A read-only foreign preview is a live AcpSession instance but must
             // not light up the running indicator / timer / "active" styling — it

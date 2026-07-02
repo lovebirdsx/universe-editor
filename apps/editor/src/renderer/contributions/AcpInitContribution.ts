@@ -17,6 +17,7 @@ import { IAcpAgentDefaultsService } from '../services/acp/acpAgentDefaultsServic
 import { IAcpConfigOptionsCacheService } from '../services/acp/acpConfigOptionsCache.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { ISessionChangeTrackerService } from '../services/acp/sessionChangeTracker.js'
+import { IAcpSessionFilterService } from '../services/acp/acpSessionFilterService.js'
 
 export class AcpInitContribution extends Disposable implements IWorkbenchContribution {
   constructor(
@@ -25,6 +26,7 @@ export class AcpInitContribution extends Disposable implements IWorkbenchContrib
     @IAcpConfigOptionsCacheService configOptionsCache: IAcpConfigOptionsCacheService,
     @IAcpChatLocationService chatLocation: IAcpChatLocationService,
     @ISessionChangeTrackerService changeTracker: ISessionChangeTrackerService,
+    @IAcpSessionFilterService sessionFilter: IAcpSessionFilterService,
   ) {
     super()
     void history.initialize()
@@ -32,5 +34,6 @@ export class AcpInitContribution extends Disposable implements IWorkbenchContrib
     void configOptionsCache.initialize()
     void chatLocation.initialize()
     void changeTracker.initialize()
+    void sessionFilter.initialize()
   }
 }

@@ -7,12 +7,13 @@
 
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { localize } from '@universe-editor/platform'
-import { RefreshCw, Search } from 'lucide-react'
+import { Filter, RefreshCw, Search } from 'lucide-react'
 import { IconButton } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService } from '../../services/acp/acpSessionService.js'
 import { IAcpSessionFilterService } from '../../services/acp/acpSessionFilterService.js'
 import { SessionListBody } from './SessionListBody.js'
+import { SessionsFilterPopover } from './SessionsFilterPopover.js'
 import styles from './agents.module.css'
 
 export interface SessionsPopoverProps {
@@ -24,7 +25,9 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
   const service = useService(IAcpSessionService)
   const filterService = useService(IAcpSessionFilterService)
   const searchOpen = useObservable(filterService.searchOpen)
+  const filterDefault = useObservable(filterService.isFilterDefault)
   const [refreshing, setRefreshing] = useState(false)
+  const [filterOpen, setFilterOpen] = useState(false)
 
   const handleRefresh = (e: ReactMouseEvent) => {
     e.stopPropagation()
@@ -73,6 +76,19 @@ export function SessionsPopover({ onDismiss }: SessionsPopoverProps) {
         >
           <Search size={14} strokeWidth={1.75} />
         </IconButton>
+        <span className={styles['filterAnchor']}>
+          <IconButton
+            label={localize('acp.filter.menu', 'Filter sessions')}
+            active={filterOpen || !filterDefault}
+            onClick={() => setFilterOpen((v) => !v)}
+            aria-expanded={filterOpen}
+            aria-haspopup="menu"
+            data-testid="acp-session-filter-popover"
+          >
+            <Filter size={14} strokeWidth={1.75} />
+          </IconButton>
+          {filterOpen && <SessionsFilterPopover onDismiss={() => setFilterOpen(false)} />}
+        </span>
         <IconButton
           label={localize('acp.refreshSessions', 'Refresh session list')}
           onClick={handleRefresh}
