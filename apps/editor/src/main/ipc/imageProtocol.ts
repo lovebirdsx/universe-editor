@@ -20,22 +20,19 @@ import { IMAGE_PROTOCOL_SCHEME, imageRequestUrlToFileUrl } from '../../shared/im
 export { IMAGE_PROTOCOL_SCHEME }
 
 /**
- * Register the custom scheme as privileged. MUST run before `app.whenReady()`
- * (Electron requirement for `registerSchemesAsPrivileged`).
+ * Privileged-scheme descriptor for `ue-file:`. Electron only accepts
+ * `registerSchemesAsPrivileged` ONCE, so every scheme must be registered in that
+ * single call — see index.ts, which collects this alongside the app scheme.
  */
-export function registerImageScheme(): void {
-  protocol.registerSchemesAsPrivileged([
-    {
-      scheme: IMAGE_PROTOCOL_SCHEME,
-      privileges: {
-        standard: true,
-        secure: true,
-        supportFetchAPI: true,
-        stream: true,
-        bypassCSP: false,
-      },
-    },
-  ])
+export const IMAGE_SCHEME_PRIVILEGE: Electron.CustomScheme = {
+  scheme: IMAGE_PROTOCOL_SCHEME,
+  privileges: {
+    standard: true,
+    secure: true,
+    supportFetchAPI: true,
+    stream: true,
+    bypassCSP: false,
+  },
 }
 
 /**

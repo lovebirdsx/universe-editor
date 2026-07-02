@@ -41,6 +41,7 @@ export const ServiceChannels = {
   AiDebug: 'aiDebug',
   RemoteSchema: 'remoteSchema',
   ExchangeRate: 'exchangeRate',
+  ResourceAccess: 'resourceAccess',
 } as const
 
 export type ServiceChannelName = (typeof ServiceChannels)[keyof typeof ServiceChannels]

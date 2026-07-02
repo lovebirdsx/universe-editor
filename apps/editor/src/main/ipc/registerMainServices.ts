@@ -81,6 +81,10 @@ export function bootstrapWindowIpc(
   server.registerChannel(ServiceChannels.RemoteSchema, ProxyChannel.fromService(app.remoteSchema))
   server.registerChannel(ServiceChannels.ExchangeRate, ProxyChannel.fromService(app.exchangeRate))
   server.registerChannel(
+    ServiceChannels.ResourceAccess,
+    ProxyChannel.fromService(app.resourceAccess),
+  )
+  server.registerChannel(
     ServiceChannels.SessionSwitcher,
     ProxyChannel.fromService(app.sessionSwitcher),
   )

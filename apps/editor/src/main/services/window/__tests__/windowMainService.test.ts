@@ -114,13 +114,13 @@ function makeOpts() {
       aiDebug: {} as never,
       remoteSchema: {} as never,
       exchangeRate: {} as never,
+      resourceAccess: {} as never,
     },
     logService,
     e2eEnabled: false,
     rendererDebug: false,
     preloadPath: '/preload/index.cjs',
     rendererUrl: 'http://localhost:5173',
-    rendererHtml: '/renderer/index.html',
     getConfigDir: () => join(tmpdir(), 'ue-wintest'),
   }
 }

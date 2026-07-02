@@ -16,7 +16,8 @@ import {
   useRef,
   type ReactNode,
 } from 'react'
-import { IEditorResolverService, URI } from '@universe-editor/platform'
+import { IEditorResolverService, IWorkspaceService, URI } from '@universe-editor/platform'
+import { IResourceAccessService } from '../../../shared/ipc/resourceAccessService.js'
 import {
   isAnchorHref,
   parseMarkdown,
@@ -36,9 +37,10 @@ import {
 } from '../../services/acp/filePathLink.js'
 import { CodeBlock } from '../agents/CodeBlock.js'
 import { MermaidBlock } from './MermaidBlock.js'
-import { useService } from '../useService.js'
+import { useService, useOptionalService } from '../useService.js'
 import { useMarkdownFileLink, type OpenMarkdownLinkOptions } from './useMarkdownFileLink.js'
 import { findMarkdownAnchor } from './markdownAnchors.js'
+import { asPreviewResourceUri } from './resourceUri.js'
 import styles from './markdown.module.css'
 
 interface MarkdownViewProps {
@@ -86,6 +88,18 @@ export function MarkdownView({
 }: MarkdownViewProps) {
   const nodes = useMarkdownNodes(text, streaming ?? false)
   const openFileLink = useMarkdownFileLink(baseUri, previewLinks ?? false)
+  const resourceAccess = useOptionalService(IResourceAccessService)
+  const workspaceFolder = useOptionalService(IWorkspaceService)?.current?.folder
+  // Grant the universe-app protocol read access to the document's directory
+  // and the workspace root so relative/absolute image paths inside this markdown
+  // can be served. Mirrors VSCode's localResourceRoots.
+  useEffect(() => {
+    if (!resourceAccess) return
+    const roots = [baseUri?.fsPath, workspaceFolder?.fsPath].filter(
+      (p): p is string => p !== undefined,
+    )
+    if (roots.length > 0) void resourceAccess.allowRoots(roots)
+  }, [resourceAccess, baseUri, workspaceFolder])
   const rootRef = useRef<HTMLDivElement>(null)
   const scrollToAnchor = useMemo(
     () =>
@@ -109,17 +123,19 @@ export function MarkdownView({
   return (
     <FileLinkContext.Provider value={openFileLink}>
       <AnchorScrollContext.Provider value={scrollToAnchor}>
-        <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
-          <div
-            ref={rootRef}
-            className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
-            {...(testId !== undefined ? { 'data-testid': testId } : {})}
-          >
-            {nodes.map((node, i) => (
-              <Block key={i} node={node} />
-            ))}
-          </div>
-        </ImageRenderContext.Provider>
+        <BaseUriContext.Provider value={baseUri}>
+          <ImageRenderContext.Provider value={renderImage ?? defaultRenderImage}>
+            <div
+              ref={rootRef}
+              className={className ? `${styles['markdown']} ${className}` : styles['markdown']}
+              {...(testId !== undefined ? { 'data-testid': testId } : {})}
+            >
+              {nodes.map((node, i) => (
+                <Block key={i} node={node} />
+              ))}
+            </div>
+          </ImageRenderContext.Provider>
+        </BaseUriContext.Provider>
       </AnchorScrollContext.Provider>
     </FileLinkContext.Provider>
   )
@@ -152,6 +168,10 @@ const defaultRenderImage = (src: string, alt: string): ReactNode => (
 // plain <img> for docs/preview/help consumers.
 const ImageRenderContext =
   createContext<(src: string, alt: string) => ReactNode>(defaultRenderImage)
+
+// The markdown document's directory, used to resolve relative image paths to a
+// loadable universe-app URL. Undefined for consumers that pass no baseUri.
+const BaseUriContext = createContext<URI | undefined>(undefined)
 
 // Scrolls to the heading whose slug matches an in-document `#anchor` link. Scoped
 // per MarkdownView so an anchor only targets headings inside the same view.
@@ -319,7 +339,11 @@ function InlineNode({ node }: { node: MdInline }): ReactNode {
 
 function InlineImage({ src, alt }: { src: string; alt: string }) {
   const renderImage = useContext(ImageRenderContext)
-  return <>{renderImage(src, alt)}</>
+  const baseUri = useContext(BaseUriContext)
+  const workspaceRoot = useOptionalService(IWorkspaceService)?.current?.folder
+  const resolved = asPreviewResourceUri(src, baseUri, workspaceRoot)
+  if (resolved === undefined) return null
+  return <>{renderImage(resolved, alt)}</>
 }
 
 // Inline code that is exactly one file path becomes a clickable monospace link

@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, protocol } from 'electron'
 import { promises as fs } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, resolve } from 'node:path'
@@ -21,7 +21,8 @@ import {
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { PerfMarks } from '../shared/perf/marks.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
-import { installImageProtocol, registerImageScheme } from './ipc/imageProtocol.js'
+import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
+import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
@@ -30,6 +31,7 @@ import { IConfigLocationService } from '../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../shared/ipc/aiModelService.js'
 import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
+import { IResourceAccessService } from '../shared/ipc/resourceAccessService.js'
 import { IRecentWorkspacesService } from './services/workspace/recentWorkspacesMainService.js'
 import {
   IDisposableLeakService,
@@ -66,8 +68,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 mark(PerfMarks.mainDidStart)
 
 // Must run before app.whenReady(): Electron only accepts privileged-scheme
-// registration during this window. The handler is installed after ready below.
-registerImageScheme()
+// registration during this window, and ONLY ONCE — every custom scheme must be
+// registered in this single call, or a later call overwrites the earlier list.
+protocol.registerSchemesAsPrivileged([IMAGE_SCHEME_PRIVILEGE, APP_SCHEME_PRIVILEGE])
 
 // Single entry point for CLI args / env vars / deployment config. Must be built
 // before any app.getPath('userData') call (e.g. new LogMainService()). The file
@@ -270,6 +273,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       aiDebug: accessor.get(IAiDebugService),
       remoteSchema: accessor.get(IRemoteSchemaService),
       exchangeRate: accessor.get(IExchangeRateService),
+      resourceAccess: accessor.get(IResourceAccessService),
       sessionSwitcher: accessor.get(ISessionSwitcherService) as SessionSwitcherMainService,
       configLocation: accessor.get(IConfigLocationService) as ConfigLocationMainService,
     }))
@@ -283,7 +287,6 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       ...(appIconPath ? { appIconPath } : {}),
       preloadPath: join(__dirname, '../preload/index.cjs'),
       rendererUrl: environmentService.rendererUrl,
-      rendererHtml: join(__dirname, '../renderer/index.html'),
       getConfigDir: () => applicationServices!.configLocation.currentDir,
     })
   }
@@ -306,6 +309,7 @@ void app.whenReady().then(async () => {
   mark(PerfMarks.mainAppReady)
   mainLogger.info(`app ready locale=${app.getLocale()} e2e=${e2eEnabled}`)
   installImageProtocol()
+  installAppProtocolHandler(join(__dirname, '../renderer'))
   initializeMainNls(await loadMainSettingsText(), app.getLocale())
   const { windows } = getOrCreateServices()
   mark(PerfMarks.mainDidCreateServices)

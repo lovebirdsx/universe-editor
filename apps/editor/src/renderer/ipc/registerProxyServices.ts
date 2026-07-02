@@ -32,6 +32,7 @@ import {
   IUsageService,
   IExchangeRateService,
 } from '../../shared/ipc/services.js'
+import { IResourceAccessService } from '../../shared/ipc/resourceAccessService.js'
 import { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
@@ -86,6 +87,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: ISessionSwitcherService, channel: ServiceChannels.SessionSwitcher },
   { id: IUsageService, channel: ServiceChannels.Usage },
   { id: IExchangeRateService, channel: ServiceChannels.ExchangeRate },
+  { id: IResourceAccessService, channel: ServiceChannels.ResourceAccess },
 ]
 
 export function registerProxyChannelServices(

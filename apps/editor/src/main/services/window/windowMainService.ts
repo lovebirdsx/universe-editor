@@ -25,6 +25,7 @@ import {
 import { E2E_PROBE_ARGV_FLAG } from '../../../shared/e2e/contract.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 import { bootstrapWindowIpc } from '../../ipc/registerMainServices.js'
+import { APP_PROTOCOL_SCHEME, APP_SHELL_URL } from '../../ipc/resourceProtocol.js'
 import { type IRendererLifecycleService } from '../../../shared/ipc/lifecycleService.js'
 import { MainHostService } from '../host/hostMainService.js'
 import { MainWindowsService } from './windowsMainService.js'
@@ -103,8 +104,6 @@ export interface WindowMainServiceOptions {
   readonly preloadPath: string
   /** electron-vite dev server URL (undefined in production). */
   readonly rendererUrl: string | undefined
-  /** Absolute path to renderer/index.html (production). */
-  readonly rendererHtml: string
   /** Resolved directory for user settings/keybindings (EnvironmentMainService.configDir). */
   readonly getConfigDir: () => string
 }
@@ -135,7 +134,6 @@ export class WindowMainService implements IWindowMainService {
       appIconPath,
       preloadPath,
       rendererUrl,
-      rendererHtml,
       appServices,
       logService,
     } = this._opts
@@ -166,6 +164,12 @@ export class WindowMainService implements IWindowMainService {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        // Dev only: the shell is served from http://localhost, so a
+        // universe-app:// preview image is cross-origin and Chromium blocks it
+        // before it reaches our handler. Relax web security in dev to allow it.
+        // Prod serves the shell on universe-app:// itself, so images are
+        // same-origin and this stays on.
+        ...(rendererUrl ? { webSecurity: false } : {}),
         ...(e2eEnabled ? { backgroundThrottling: false } : {}),
         additionalArguments: [
           `--ue-home-dir=${homedir()}`,
@@ -184,7 +188,13 @@ export class WindowMainService implements IWindowMainService {
     })
 
     win.webContents.on('will-navigate', (event, url) => {
-      if (!url.startsWith('file:')) {
+      // Allow in-app navigation on the shell's own origins (file:// dev fallback,
+      // http:// dev server, and the prod universe-app:// scheme); block the rest.
+      if (
+        !url.startsWith('file:') &&
+        !url.startsWith('http:') &&
+        !url.startsWith(`${APP_PROTOCOL_SCHEME}:`)
+      ) {
         event.preventDefault()
       }
     })
@@ -322,9 +332,12 @@ export class WindowMainService implements IWindowMainService {
         logger.error(`loadURL failed id=${win.id}`, err)
       })
     } else {
-      logger.info(`loadFile id=${win.id} file=${rendererHtml}`)
-      void win.loadFile(rendererHtml).catch((err) => {
-        logger.error(`loadFile failed id=${win.id}`, err)
+      // Prod: serve the shell over the custom app scheme (not file://) so the page
+      // shares an origin with universe-app://resource/... — a file:// page cannot
+      // load a different custom scheme, which is what markdown-preview images need.
+      logger.info(`loadURL id=${win.id} url=${APP_SHELL_URL}`)
+      void win.loadURL(APP_SHELL_URL).catch((err) => {
+        logger.error(`loadURL(app shell) failed id=${win.id}`, err)
       })
     }
 

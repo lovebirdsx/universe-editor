@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   isAnchorHref,
   isImageDataUrl,
+  isImageSrc,
   isSafeHref,
   parseInline,
   parseMarkdown,
@@ -442,6 +443,50 @@ describe('parseInline — data:image embeds', () => {
   it('still rejects non-image data: links as text', () => {
     const r = parseInline('[x](data:text/html;base64,PHNjcmlwdD4=)')
     expect(r.some((n) => n.type === 'image' || n.type === 'link')).toBe(false)
+  })
+})
+
+describe('parseInline — local image paths', () => {
+  it('parses a relative image path into an image node', () => {
+    expect(parseInline('![a](./assets/a.png)')).toEqual<readonly MdInline[]>([
+      { type: 'image', src: './assets/a.png', alt: 'a' },
+    ])
+    expect(parseInline('![b](../docs/b.svg)')).toEqual<readonly MdInline[]>([
+      { type: 'image', src: '../docs/b.svg', alt: 'b' },
+    ])
+  })
+
+  it('parses absolute (posix and windows) image paths into image nodes', () => {
+    expect(parseInline('![p](/img/p.png)')).toEqual<readonly MdInline[]>([
+      { type: 'image', src: '/img/p.png', alt: 'p' },
+    ])
+    expect(parseInline('![w](C:\\pics\\w.png)')).toEqual<readonly MdInline[]>([
+      { type: 'image', src: 'C:\\pics\\w.png', alt: 'w' },
+    ])
+  })
+
+  it('rejects javascript:/vbscript: image srcs', () => {
+    expect(parseInline('![x](javascript:alert(1))').some((n) => n.type === 'image')).toBe(false)
+  })
+})
+
+describe('isImageSrc', () => {
+  it('accepts http(s), file, data:image, and local paths', () => {
+    expect(isImageSrc('https://x/a.png')).toBe(true)
+    expect(isImageSrc('file:///x/a.png')).toBe(true)
+    expect(isImageSrc('data:image/png;base64,AAAA')).toBe(true)
+    expect(isImageSrc('./a.png')).toBe(true)
+    expect(isImageSrc('../a.png')).toBe(true)
+    expect(isImageSrc('/abs/a.png')).toBe(true)
+    expect(isImageSrc('C:\\a.png')).toBe(true)
+    expect(isImageSrc('C:/a.png')).toBe(true)
+  })
+
+  it('rejects dangerous schemes and non-image data URLs', () => {
+    expect(isImageSrc('javascript:alert(1)')).toBe(false)
+    expect(isImageSrc('vbscript:msgbox(1)')).toBe(false)
+    expect(isImageSrc('data:text/html;base64,PHNjcmlwdD4=')).toBe(false)
+    expect(isImageSrc('')).toBe(false)
   })
 })
 

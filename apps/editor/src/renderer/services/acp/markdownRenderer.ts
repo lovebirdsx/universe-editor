@@ -296,7 +296,7 @@ export function parseInline(text: string): readonly MdInline[] {
         if (urlEnd !== -1) {
           const alt = text.slice(i + 2, labelEnd)
           const src = text.slice(labelEnd + 2, urlEnd).trim()
-          if (isSafeHref(src) || isImageDataUrl(src)) {
+          if (isImageSrc(src)) {
             flush()
             out.push({ type: 'image', src, alt })
             i = urlEnd + 1
@@ -517,6 +517,23 @@ export function isSafeHref(href: string): boolean {
  */
 export function isImageDataUrl(href: string): boolean {
   return /^data:image\/[a-z0-9.+-]+;base64,/i.test(href)
+}
+
+/**
+ * True for an image `src` we are willing to render. Allows http(s), file:,
+ * `data:image` and plain local paths (relative or absolute) — the latter are
+ * resolved to a loadable `universe-app://` URL at render time
+ * ({@link asPreviewResourceUri}). Rejects other schemes (`javascript:`,
+ * `vbscript:`, non-image `data:`) so untrusted markdown can't smuggle a script.
+ */
+export function isImageSrc(src: string): boolean {
+  if (isSafeHref(src) || isImageDataUrl(src)) return true
+  if (src.startsWith('data:')) return false
+  // A URI with some other scheme (e.g. `javascript:`) — refuse. A Windows drive
+  // path like `C:\a.png` is not a scheme (single-letter + backslash), so exclude
+  // that shape from the scheme test.
+  if (/^[a-z][a-z0-9.+-]*:/i.test(src) && !/^[a-z]:[\\/]/i.test(src)) return false
+  return src.length > 0
 }
 
 /** True for a same-document anchor link like `#section` (fragment only). */

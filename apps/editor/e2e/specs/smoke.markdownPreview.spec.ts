@@ -13,6 +13,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
 
+// A 1×1 red PNG — the smallest valid image to prove the universe-resource
+// protocol actually streamed real bytes (naturalWidth > 0), not just that an
+// <img> element exists.
+const RED_DOT_PNG_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+
+function writeMarkdownWithLocalImage(): { dir: string; filePath: string } {
+  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
+  const file = join(dir, 'with-image.md')
+  writeFileSync(join(dir, 'dot.png'), Buffer.from(RED_DOT_PNG_BASE64, 'base64'))
+  writeFileSync(file, '# Has image\n\n![a red dot](./dot.png)\n')
+  return { dir: dir.replace(/\\/g, '/'), filePath: file.replace(/\\/g, '/') }
+}
+
 function writeTempMarkdown(): string {
   const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
   const file = join(dir, 'note.md')
@@ -660,5 +674,40 @@ test.describe('@p1 markdown preview', () => {
     await expect
       .poll(() => workbench.getContextKey<boolean>('markdownPreviewFindVisible'), { timeout: 5000 })
       .toBe(true)
+  })
+
+  // Local images (relative path) must render: the src is rewritten to the
+  // universe-resource:// protocol and streamed from disk by the main process.
+  // A plain file:// <img> would be blocked by the renderer's origin + webSecurity.
+  test('renders a local relative-path image via the universe-app protocol', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const { dir, filePath } = writeMarkdownWithLocalImage()
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    const img = page.locator('[data-testid="markdown-preview"] img').first()
+    await expect(img).toBeVisible()
+
+    // The src must be rewritten to our protocol (not a raw file:// / relative path).
+    await expect(img).toHaveAttribute('src', /^universe-app:\/\/root\/_resource_\//)
+
+    // Proof the bytes actually loaded: a broken image has naturalWidth 0.
+    await expect
+      .poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 5000 })
+      .toBeGreaterThan(0)
   })
 })
