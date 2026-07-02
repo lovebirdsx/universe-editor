@@ -156,6 +156,20 @@ describe('looksLikeFilePath', () => {
     expect(looksLikeFilePath('@./foo.md#hello')).toBe(true)
   })
 
+  it('accepts absolute paths without an extension (directory targets)', () => {
+    // Drive-absolute and POSIX-absolute paths are filesystem paths even without a
+    // known extension — they may point at a directory (`[vscode](D:/…/vscode)`).
+    expect(looksLikeFilePath('D:/git_project/vscode')).toBe(true)
+    expect(looksLikeFilePath('D:\\git_project\\vscode')).toBe(true)
+    expect(looksLikeFilePath('C:/Users/foo')).toBe(true)
+    expect(looksLikeFilePath('/usr/local/lib')).toBe(true)
+  })
+
+  it('accepts drive-absolute file paths despite the `D:` looking like a scheme', () => {
+    expect(looksLikeFilePath('D:/a/b.md')).toBe(true)
+    expect(looksLikeFilePath('C:\\a\\b.ts')).toBe(true)
+  })
+
   it('rejects URL schemes', () => {
     expect(looksLikeFilePath('https://example.com')).toBe(false)
     expect(looksLikeFilePath('file:///a.ts')).toBe(false)

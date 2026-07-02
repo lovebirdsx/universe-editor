@@ -172,6 +172,9 @@ catalogs:
       specifier: ^3.25.0
       version: 3.25.76
 
+patchedDependencies:
+  vscode-markdown-languageservice@0.5.0-alpha.13: 352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c
+
 importers:
 
   .:
@@ -433,7 +436,7 @@ importers:
         version: 3.18.0
       vscode-markdown-languageservice:
         specifier: 'catalog:'
-        version: 0.5.0-alpha.13
+        version: 0.5.0-alpha.13(patch_hash=352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c)
       vscode-uri:
         specifier: 'catalog:'
         version: 3.1.0
@@ -8422,7 +8425,7 @@ snapshots:
 
   vscode-languageserver-types@3.18.0: {}
 
-  vscode-markdown-languageservice@0.5.0-alpha.13:
+  vscode-markdown-languageservice@0.5.0-alpha.13(patch_hash=352c1a4172115d38431c0aaaade5dd08833a22f2cde87684040e3a5fbd2b3b6c):
     dependencies:
       '@vscode/l10n': 0.0.18
       node-html-parser: 6.1.13

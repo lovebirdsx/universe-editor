@@ -23,9 +23,12 @@ import {
   IFileSearchService,
   IFileService,
   IInstantiationService,
+  ILifecycleService,
   INotificationService,
+  IWindowsService,
   IWorkspaceService,
   Severity,
+  ShutdownReason,
   URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
@@ -56,6 +59,12 @@ export interface OpenMarkdownLinkOptions {
   readonly toSide?: boolean
   /** Markdown heading fragment from a cross-file link (`foo.md#section`). */
   readonly fragment?: string
+  /**
+   * Ctrl+Alt was held (preview only — text mode can't observe Alt through
+   * Monaco). For a directory target this opens the folder in the *current*
+   * window instead of a new one.
+   */
+  readonly openFolderInCurrentWindow?: boolean
 }
 
 function isMarkdownResource(uri: URI): boolean {
@@ -81,6 +90,8 @@ export function useMarkdownFileLink(
   const groupsService = useOptionalService(IEditorGroupsService)
   const instantiation = useOptionalService(IInstantiationService)
   const notificationService = useOptionalService(INotificationService)
+  const windowsService = useOptionalService(IWindowsService)
+  const lifecycleService = useOptionalService(ILifecycleService)
   const excludeService = useOptionalService(IExcludeService)
   const quickAccess = useOptionalService(IQuickAccessController)
   const cache = useRef(new Map<string, CacheEntry>())
@@ -144,7 +155,7 @@ export function useMarkdownFileLink(
   return useCallback(
     (rawPath: string, line?: number, col?: number, opts?: OpenMarkdownLinkOptions) => {
       if (!editorService || !instantiation) return
-      void resolve(rawPath).then((resolution) => {
+      void resolve(rawPath).then(async (resolution) => {
         if (resolution.kind === 'missing') {
           notificationService?.notify({
             severity: Severity.Warning,
@@ -159,6 +170,18 @@ export function useMarkdownFileLink(
           return
         }
         const uri = resolution.uri
+        // A directory can't be shown as an editor: open it as a folder. Ctrl+Alt
+        // (preview only) opens it in the current window; otherwise a new window —
+        // mirroring how a dropped folder is handled (openDroppedResource).
+        if (await isDirectory(fileService, uri)) {
+          if (opts?.openFolderInCurrentWindow && workspaceService && lifecycleService) {
+            if (await lifecycleService.confirmBeforeShutdown(ShutdownReason.SwitchWorkspace)) return
+            await workspaceService.openFolder(uri)
+          } else {
+            await windowsService?.openWindow(uri)
+          }
+          return
+        }
         // A markdown→markdown link in the preview opens as another preview
         // (in place, or to a new tab on Ctrl/Cmd+click). A `:line` location
         // means the user wants the source at that line, so fall through.
@@ -184,14 +207,28 @@ export function useMarkdownFileLink(
     },
     [
       resolve,
+      fileService,
       editorService,
       groupsService,
       instantiation,
       notificationService,
+      windowsService,
+      workspaceService,
+      lifecycleService,
       quickAccess,
       previewLinks,
     ],
   )
+}
+
+/** Stat a resolved URI to route a directory target to the window/folder opener. */
+async function isDirectory(fileService: IFileService | undefined, uri: URI): Promise<boolean> {
+  if (!fileService) return false
+  try {
+    return (await fileService.stat(uri)).isDirectory
+  } catch {
+    return false
+  }
 }
 
 function cacheGet(map: Map<string, CacheEntry>, key: string, now: number): Resolution | undefined {

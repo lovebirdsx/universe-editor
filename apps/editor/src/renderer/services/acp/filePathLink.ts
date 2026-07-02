@@ -158,6 +158,11 @@ export function stripFilePathLinkPrefix(href: string): string {
   return href.startsWith('@') && href.length > 1 ? href.slice(1) : href
 }
 
+/** True for a Windows drive-absolute path like `C:\foo` or `D:/foo` (one letter + `:` + separator). */
+export function isWindowsDrivePath(p: string): boolean {
+  return /^[A-Za-z]:[/\\]/.test(p)
+}
+
 /**
  * Try to match a file path anchored at index {@link i} of {@link text}. Returns
  * `null` when no path starts there. Mirrors the inline parser's left-to-right
@@ -191,13 +196,24 @@ export function matchFullFilePath(text: string): FilePathMatch | null {
 /**
  * True when an explicit markdown-link href (`[x](href)`) looks like a filesystem
  * path rather than a URL. Used to let `[doc](../foo.md)` resolve as a file.
+ *
+ * Absolute paths (Windows drive `D:/…`/`D:\…` or POSIX-absolute `/…`) count even
+ * without a known extension, since the drive prefix / leading slash makes the
+ * filesystem intent unambiguous and the target may well be a directory
+ * (`[vscode](D:/git_project/vscode)`).
  */
 export function looksLikeFilePath(href: string): boolean {
   const atPrefixed = href.startsWith('@')
   const target = stripFilePathLinkPrefix(href)
+  // A Windows drive path (`D:\…`) superficially matches the URL-scheme test
+  // below (`D:` reads as a scheme), so short-circuit it as a path first.
+  if (isWindowsDrivePath(target)) return true
   if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return false // has a URL scheme
   const { pathWithLocation } = splitFilePathFragment(target)
   if (pathWithLocation.length === 0) return false
+  // POSIX-absolute paths (leading `/`) are filesystem paths even without an
+  // extension — they too may point at a directory.
+  if (pathWithLocation.startsWith('/')) return true
   const pathPattern = atPrefixed
     ? `(?:${WIN_ABS_NO_EXT}|${UNIX_ABS_NO_EXT}|${REL_NO_EXT}|${REL_SEG}+${EXT})`
     : `(?:${WIN_ABS}|${UNIX_ABS}|${REL}|${REL_SEG}+${EXT})`

@@ -395,6 +395,8 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
       const { path, line, col, fragment } = splitFilePathTarget(href)
       openFileLink(path, line, col, {
         toSide: e.ctrlKey || e.metaKey,
+        // Ctrl+Alt opens a directory target in the current window (preview only).
+        openFolderInCurrentWindow: (e.ctrlKey || e.metaKey) && e.altKey,
         ...(fragment !== undefined ? { fragment } : {}),
       })
       return

@@ -66,6 +66,69 @@ describe('createMdServer — diagnostics', () => {
 
     expect(await server.$computeDiagnostics(URI_A)).toEqual([])
   })
+
+  it('resolves a Windows drive-absolute link against the drive, not the doc dir', async () => {
+    // Regression for the patched resolveInternalDocumentLink: `D:/…` used to fall
+    // into the relative branch and get joined onto the document's directory
+    // (`f:/ws/D:/git_project/vscode`), so it never matched what's on disk. The
+    // stub reports the *real* drive path exists; a doc-dir-joined path would not.
+    const stat = (uri: string) =>
+      Promise.resolve(
+        uri === URI.file('D:/git_project/vscode').toString()
+          ? ({ type: 'dir', mtime: 0, size: 0 } as const)
+          : undefined,
+      )
+    const client: IMdClient = { ...stubClient, $stat: stat }
+    const server = createMdServer(client, URI.file('/ws')).server
+    await server.$didOpen({
+      uri: URI_A,
+      version: 1,
+      text: '[vscode](D:/git_project/vscode)\n',
+    })
+
+    const diagnostics = await server.$computeDiagnostics(URI_A)
+    expect(diagnostics.filter((d) => d.code === 'link.no-such-file')).toEqual([])
+  })
+
+  it('flags a drive-absolute link whose target does not exist', async () => {
+    const server = newServer() // stub $stat always returns undefined (missing)
+    await server.$didOpen({
+      uri: URI_A,
+      version: 1,
+      text: '[x](D:/nope/missing.md)\n',
+    })
+
+    const diagnostics = await server.$computeDiagnostics(URI_A)
+    const noSuchFile = diagnostics.filter((d) => d.code === 'link.no-such-file')
+    expect(noSuchFile.length).toBe(1)
+    // The reported path must be the drive path itself, not one joined to the doc
+    // dir (`/ws/D:/…`). URI.file lowercases the drive letter, so match loosely.
+    const message = String(noSuchFile[0]?.message)
+    expect(message.toLowerCase()).toContain('d:')
+    expect(message).not.toContain('ws')
+  })
+})
+
+describe('createMdServer — document links', () => {
+  it('rewrites a folder link from a revealInExplorer command to a plain file URI', async () => {
+    // The language service resolves a directory link to
+    // `command:revealInExplorer?<uri>`; we don't register that command, so the
+    // server must hand back a `file:` URI for Monaco's editor opener to follow.
+    const dirUri = URI.file('D:/git_project/vscode')
+    const stat = (uri: string) =>
+      Promise.resolve(
+        uri === dirUri.toString() ? ({ type: 'dir', mtime: 0, size: 0 } as const) : undefined,
+      )
+    const client: IMdClient = { ...stubClient, $stat: stat }
+    const server = createMdServer(client, URI.file('/ws')).server
+    await server.$didOpen({ uri: URI_A, version: 1, text: '[vscode](D:/git_project/vscode)\n' })
+
+    const links = await server.$provideDocumentLinks(URI_A)
+    expect(links.length).toBe(1)
+    const resolved = await server.$resolveDocumentLink(links[0]!)
+    expect(resolved?.target).toBe(dirUri.toString(true))
+    expect(resolved?.target?.startsWith('command:')).toBe(false)
+  })
 })
 
 describe('createMdServer — workspace symbols', () => {

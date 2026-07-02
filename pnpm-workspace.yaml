@@ -119,3 +119,6 @@ catalog:
   '@xterm/xterm': ^6.0.0
   '@xterm/addon-fit': ^0.11.0
   '@xterm/addon-web-links': ^0.12.0
+
+patchedDependencies:
+  vscode-markdown-languageservice@0.5.0-alpha.13: patches/vscode-markdown-languageservice@0.5.0-alpha.13.patch

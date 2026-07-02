@@ -18,8 +18,10 @@
 import {
   Disposable,
   IEditorGroupsService,
+  IFileService,
   IInstantiationService,
   IUriIdentityService,
+  IWindowsService,
   URI,
   type IWorkbenchContribution,
 } from '@universe-editor/platform'
@@ -36,6 +38,8 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     @IEditorGroupsService private readonly _groupsService: IEditorGroupsService,
     @IInstantiationService private readonly _instantiation: IInstantiationService,
     @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
+    @IFileService private readonly _fileService: IFileService,
+    @IWindowsService private readonly _windowsService: IWindowsService,
   ) {
     super()
     void MonacoLoader.registerCodeEditorOpenHandler((input, source) =>
@@ -57,6 +61,14 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     if (source && source.getModel()?.uri.toString() === resource.toString()) return null
 
     const target = URI.parse(resource.toString())
+    // A directory link target (e.g. a markdown `[dir](D:/foo)`) can't be shown as
+    // an editor — open it in a new window. Text mode can't observe Alt through
+    // monaco, so we always use a new window here (parity with a dropped folder).
+    if (await this._isDirectory(target)) {
+      await this._windowsService.openWindow(target)
+      return null
+    }
+
     const fileInput = this._revealExistingOrOpen(target)
     const editor = await waitForEditor(fileInput)
     if (!editor) return null
@@ -64,6 +76,14 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     applySelection(editor, input.options?.selection)
     editor.focus()
     return editor
+  }
+
+  private async _isDirectory(uri: URI): Promise<boolean> {
+    try {
+      return (await this._fileService.stat(uri)).isDirectory
+    } catch {
+      return false
+    }
   }
 
   /** Activate the file if it's already open in some group; otherwise open it. */

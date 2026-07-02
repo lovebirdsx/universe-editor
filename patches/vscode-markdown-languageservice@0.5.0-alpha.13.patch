@@ -1,0 +1,17 @@
+diff --git a/out/util/mdLinks.js b/out/util/mdLinks.js
+index 4e13b8348b8b3d08d722d5647303f7332bac61b4..842eedb8a47f4fc865f7068caa2677f02d39664c 100644
+--- a/out/util/mdLinks.js
++++ b/out/util/mdLinks.js
+@@ -85,6 +85,12 @@ export function resolveInternalDocumentLink(sourceDocUri, linkText, workspace) {
+         }
+         resourceUri = sourceDocUri;
+     }
++    else if (/^\/?[A-Za-z]:[/\\]/.test(tempUri.path)) {
++        // Windows absolute path (e.g. `D:/foo` or `D:\foo`). Upstream only treats
++        // a leading `/` as absolute, so a drive path fell into the relative branch
++        // and got joined onto the document's directory. Build the file URI directly.
++        resourceUri = URI.file(tempUri.path.replace(/^\//, ''));
++    }
+     else if (tempUri.path[0] === '/') {
+         const root = getWorkspaceFolder(workspace, docUri);
+         if (root) {

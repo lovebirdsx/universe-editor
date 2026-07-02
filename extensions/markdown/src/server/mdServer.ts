@@ -20,7 +20,7 @@ import {
   type MdPathCompletionOptions,
   type Token,
 } from 'vscode-markdown-languageservice'
-import type { CodeActionContext, Location, Range } from 'vscode-languageserver-types'
+import type { CodeActionContext, DocumentLink, Location, Range } from 'vscode-languageserver-types'
 import { type IMdClient, type IMdServer } from './types.js'
 import { DocumentStore, makeDoc } from './documentStore.js'
 import { LspWorkspace } from './lspWorkspace.js'
@@ -54,6 +54,30 @@ function rangesOverlap(a: Range, b: Range): boolean {
     x.end.line < y.start.line ||
     (x.end.line === y.start.line && x.end.character < y.start.character)
   return !beforeOther(a, b) && !beforeOther(b, a)
+}
+
+/**
+ * A folder link target comes back from the language service as a
+ * `command:revealInExplorer?<uri>` URI. We don't register that command (VSCode's
+ * explorer command); rewrite it to a plain `file:` URI so Monaco's editor opener
+ * takes it — the renderer's EditorOpenerContribution then opens the folder in a
+ * new window. Non-folder links pass through untouched.
+ */
+function rewriteFolderLinkTarget(link: DocumentLink): DocumentLink {
+  const target = link.target
+  if (typeof target !== 'string' || !target.startsWith('command:revealInExplorer?')) {
+    return link
+  }
+  try {
+    const args = JSON.parse(decodeURIComponent(target.slice(target.indexOf('?') + 1))) as unknown
+    const first = Array.isArray(args) ? args[0] : undefined
+    if (first) {
+      return { ...link, target: URI.from(first as Parameters<typeof URI.from>[0]).toString(true) }
+    }
+  } catch {
+    // Malformed command URI — leave the link as-is rather than crash resolution.
+  }
+  return link
 }
 
 export function createMdServer(client: IMdClient, root: URI | undefined): MdServerHandle {
@@ -172,8 +196,10 @@ export function createMdServer(client: IMdClient, root: URI | undefined): MdServ
       return ls.getDocumentLinks(doc, CancellationToken.None)
     },
 
-    $resolveDocumentLink: async (link) =>
-      (await ls.resolveDocumentLink(link, CancellationToken.None)) ?? null,
+    $resolveDocumentLink: async (link) => {
+      const resolved = await ls.resolveDocumentLink(link, CancellationToken.None)
+      return resolved ? rewriteFolderLinkTarget(resolved) : null
+    },
 
     $provideDocumentHighlights: async (uri, position) => {
       const doc = await resolveDoc(uri)
