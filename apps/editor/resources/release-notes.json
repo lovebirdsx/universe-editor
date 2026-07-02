@@ -1,5 +1,30 @@
 [
   {
+    "version": "0.1.28",
+    "date": "2026-07-02",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "shift+拖拽文件到markdown，支持自动生成链接",
+          "diff视图跟随修改自动更新",
+          "加入editor group锁定的支持",
+          "session支持插入图片",
+          "支持Markdown预览中锚点定位和@文件引用"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "预览内搜索框字符不被vim导航吞掉",
+          "移除编辑器滚动超出末行的限制"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.27",
     "date": "2026-07-01",
     "groups": [
