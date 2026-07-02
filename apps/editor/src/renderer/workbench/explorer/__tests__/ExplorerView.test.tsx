@@ -216,4 +216,42 @@ describe('ExplorerView', () => {
     await waitFor(() => expect(editor.opened).toHaveLength(1))
     expect(editor.opened[0]?.type ?? (editor.opened[0] as { typeId?: string }).typeId).toBe('file')
   })
+
+  it('dragging an internal file onto the root moves it (rename), not copies it', async () => {
+    const root = URI.file('/ws')
+    const sub = URI.joinPath(root, 'src')
+    const file = URI.joinPath(sub, 'a.ts')
+    const renames: { from: string; to: string }[] = []
+    const copies: { from: string; to: string }[] = []
+    const fs = makeFs({
+      [root.toString()]: [{ name: 'src', isFile: false, isDirectory: true }],
+      [sub.toString()]: [{ name: 'a.ts', isFile: true, isDirectory: false }],
+    })
+    fs.exists = async () => false
+    fs.rename = async (from: URI, to: URI) => {
+      renames.push({ from: from.toString(), to: to.toString() })
+    }
+    fs.copy = async (from: URI, to: URI) => {
+      copies.push({ from: from.toString(), to: to.toString() })
+    }
+
+    renderView({ folder: root, fs })
+
+    // Expand `src`, reveal `a.ts`
+    fireEvent.click(await screen.findByText('src'))
+    const fileLabel = await screen.findByText('a.ts')
+    const fileRow = fileLabel.closest('[role="treeitem"]')!
+
+    // Shared DataTransfer to carry the drag session across dragstart → drop.
+    const dt = new DataTransfer()
+    fireEvent.dragStart(fileRow, { dataTransfer: dt })
+
+    const treeRoot = document.querySelector('[role="tree"]')!
+    fireEvent.dragOver(treeRoot, { dataTransfer: dt })
+    fireEvent.drop(treeRoot, { dataTransfer: dt })
+
+    await waitFor(() => expect(renames).toHaveLength(1))
+    expect(renames[0]).toEqual({ from: file.toString(), to: URI.joinPath(root, 'a.ts').toString() })
+    expect(copies).toHaveLength(0)
+  })
 })

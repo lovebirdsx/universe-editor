@@ -37,6 +37,7 @@
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — markdownLsp/peekNavigation @p1 真回归：IFileService.realpath 返回的 URI 经 ProxyChannel 降级成普通对象 .fsPath 空，guard 误判 empty path 拒读未打开文件；消费端须 URI.revive；诊断前必先 pnpm build
 - [editorTextFocus 残留吞裸字符键](editor-text-focus-stuck-swallows-keys.md) — Monaco blur 订阅先于编辑器 dispose 致 editorTextFocus 卡 true，全局键盘守卫把裸 f 当打字吞掉；syncEditorFocusContext 焦点离开 Monaco 时清掉；测裸字符键须真键盘别用 runCommand 绕
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — session diff 文件二次改动后重开 tab 仍旧内容；根因 openEditor 去重时 dispose 新 input 复用旧快照；加 EditorInput.updateFrom 钩子，DiffEditorInput 实现之
+- [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — B 移动(A 关闭)后重开 A 仍警告旧 B 路径；根因 MdDocumentInfoCache 不听 create + LspWorkspace 缺 watchFile，bulk edit 改关闭文件无文档事件；修法新增 $didChangeFiles 主动通知语言服务磁盘变更
 
 ## 打包 / 构建
 

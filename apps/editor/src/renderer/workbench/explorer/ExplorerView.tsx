@@ -9,11 +9,13 @@
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useRef,
   useState,
   type DragEvent as ReactDragEvent,
   type MouseEvent as ReactMouseEvent,
+  type ReactNode,
 } from 'react'
 import { useService, useObservable, useOptionalService } from '../useService.js'
 import {
@@ -32,6 +34,7 @@ import {
   type URI,
 } from '@universe-editor/platform'
 import {
+  DragSessionContext,
   DragSessionProvider,
   Tree,
   dragContainsResources,
@@ -39,6 +42,7 @@ import {
 } from '@universe-editor/workbench-ui'
 import {
   IExplorerTreeService,
+  type ExplorerTreeService,
   type IExplorerEntry,
   type IExplorerResourceOperation,
 } from '../../services/explorer/ExplorerTreeService.js'
@@ -197,17 +201,11 @@ export function ExplorerView() {
 
   return (
     <DragSessionProvider>
-      <div
-        style={{ display: 'contents' }}
-        onDragOver={(e) => {
-          if (dragContainsResources(e.dataTransfer)) e.preventDefault()
-        }}
-        onDrop={(e) => {
-          // Skip when a row already handled the drop (e.g. import onto a folder).
-          if (e.defaultPrevented) return
-          e.preventDefault()
-          onDropResources(root, e)
-        }}
+      <RootDropZone
+        root={root}
+        tree={tree}
+        onDropResources={onDropResources}
+        onMoveResources={onMoveResources}
       >
         <Tree<IExplorerEntry>
           model={tree.model}
@@ -237,7 +235,7 @@ export function ExplorerView() {
           }}
           onContextMenu={(e) => onRowContextMenu(e, null)}
         />
-      </div>
+      </RootDropZone>
       {menu && (
         <ExplorerContextMenu
           state={menu}
@@ -249,5 +247,53 @@ export function ExplorerView() {
         />
       )}
     </DragSessionProvider>
+  )
+}
+
+/**
+ * Wraps the tree in a drop zone covering the whole Explorer body (including the
+ * empty area below the last row). Dropping here targets the workspace root and,
+ * crucially, distinguishes an Explorer-internal drag (a `DragSession` payload is
+ * present → move/rename) from an OS-external / cross-panel drag (no payload →
+ * copy-import), mirroring what row targets do in `ExplorerTreeNode`. Rendered
+ * inside `DragSessionProvider` so it can read that payload — the outer
+ * `ExplorerView` cannot, as the provider lives in its returned tree.
+ */
+function RootDropZone({
+  root,
+  tree,
+  onDropResources,
+  onMoveResources,
+  children,
+}: {
+  readonly root: URI
+  readonly tree: ExplorerTreeService
+  readonly onDropResources: (destDir: URI, e: ReactDragEvent) => void
+  readonly onMoveResources: (resources: readonly IExplorerResourceOperation[], destDir: URI) => void
+  readonly children: ReactNode
+}) {
+  const dragSession = useContext(DragSessionContext)
+  return (
+    <div
+      style={{ display: 'contents' }}
+      onDragOver={(e) => {
+        if (dragSession?.payload !== undefined || dragContainsResources(e.dataTransfer)) {
+          e.preventDefault()
+        }
+      }}
+      onDrop={(e) => {
+        // Skip when a row already handled the drop (e.g. move/import onto a folder).
+        if (e.defaultPrevented) return
+        e.preventDefault()
+        const payload = dragSession?.payload as { resource: URI } | undefined
+        if (payload) {
+          onMoveResources(tree.getContextResourceOperations(payload.resource), root)
+          return
+        }
+        onDropResources(root, e)
+      }}
+    >
+      {children}
+    </div>
   )
 }
