@@ -126,7 +126,8 @@ export function UpdateIndicator() {
   if (!view) return null
 
   const classNames = [styles['update-btn']]
-  if (view.prominent) classNames.push(styles['update-btn--prominent'])
+  if (view.glyph === 'available') classNames.push(styles['update-btn--available'])
+  else if (view.glyph === 'downloaded') classNames.push(styles['update-btn--downloaded'])
 
   return (
     <button

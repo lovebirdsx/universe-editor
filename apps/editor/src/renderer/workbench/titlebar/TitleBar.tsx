@@ -104,8 +104,8 @@ export function TitleBar() {
         <AppIcon />
       </div>
       <MenuBar />
-      <div className={styles['title']}>{title}</div>
       <UpdateIndicator />
+      <div className={styles['title']}>{title}</div>
       <LayoutControls />
       {!isMac && <WindowControls />}
     </header>
