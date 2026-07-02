@@ -6,7 +6,7 @@ import {
   type HTMLAttributes,
   type ReactNode,
 } from 'react'
-import { createPortal } from 'react-dom'
+import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
 
 interface HoverState {
   x: number
@@ -24,7 +24,8 @@ export interface UseHoverResult {
 
 /**
  * Returns event handlers and a portal-rendered `HoverPopup` component.
- * The popup appears after `delay` ms of continuous hover/focus.
+ * The popup appears after `delay` ms of continuous hover/focus. Positioning goes
+ * through AnchoredSurface so the tooltip flips/shifts instead of spilling off-screen.
  */
 export function useHover(delay = 500): UseHoverResult {
   const [state, setState] = useState<HoverState | null>(null)
@@ -69,27 +70,27 @@ export function useHover(delay = 500): UseHoverResult {
   const HoverPopup = useCallback(
     ({ children }: { children: ReactNode }): ReactNode => {
       if (!state) return null
-      return createPortal(
-        <div
-          role="tooltip"
-          style={{
-            position: 'fixed',
-            top: state.y,
-            left: state.x,
-            zIndex: 10000,
-            background: 'var(--color-tooltip-bg, #2f2f35)',
-            border: '1px solid var(--color-border, #3c3c3c)',
-            borderRadius: 4,
-            padding: '4px 8px',
-            fontSize: 12,
-            color: 'var(--color-tooltip-fg, #c8c8c8)',
-            pointerEvents: 'none',
-            boxShadow: 'var(--shadow-md, 0 2px 8px rgba(0, 0, 0, 0.28))',
+      return (
+        <AnchoredSurface
+          x={state.x}
+          y={state.y}
+          surfaceProps={{
+            role: 'tooltip',
+            style: {
+              zIndex: 10000,
+              background: 'var(--color-tooltip-bg, #2f2f35)',
+              border: '1px solid var(--color-border, #3c3c3c)',
+              borderRadius: 4,
+              padding: '4px 8px',
+              fontSize: 12,
+              color: 'var(--color-tooltip-fg, #c8c8c8)',
+              pointerEvents: 'none',
+              boxShadow: 'var(--shadow-md, 0 2px 8px rgba(0, 0, 0, 0.28))',
+            },
           }}
         >
           {children}
-        </div>,
-        document.body,
+        </AnchoredSurface>
       )
     },
     [state],

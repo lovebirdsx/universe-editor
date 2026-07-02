@@ -7,8 +7,7 @@
  *  this is a small bespoke menu whose items are plain callbacks.
  *--------------------------------------------------------------------------------------------*/
 
-import { useEffect, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { AnchoredSurface } from '@universe-editor/workbench-ui'
 import styles from './SearchResultsContextMenu.module.css'
 
 export interface SearchMenuItem {
@@ -29,42 +28,26 @@ export function SearchResultsContextMenu({
   state: SearchContextMenuState
   onClose: () => void
 }) {
-  const ref = useRef<HTMLUListElement>(null)
-
-  useEffect(() => {
-    const onDocMouseDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDocMouseDown)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocMouseDown)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose])
-
   if (state.items.length === 0) return null
 
-  return createPortal(
-    <ul ref={ref} role="menu" className={styles['menu']} style={{ top: state.y, left: state.x }}>
-      {state.items.map((item) => (
-        <li
-          key={item.label}
-          role="menuitem"
-          tabIndex={-1}
-          className={styles['item']}
-          onClick={() => {
-            onClose()
-            item.run()
-          }}
-        >
-          {item.label}
-        </li>
-      ))}
-    </ul>,
-    document.body,
+  return (
+    <AnchoredSurface x={state.x} y={state.y} onClose={onClose}>
+      <ul role="menu" className={styles['menu']}>
+        {state.items.map((item) => (
+          <li
+            key={item.label}
+            role="menuitem"
+            tabIndex={-1}
+            className={styles['item']}
+            onClick={() => {
+              onClose()
+              item.run()
+            }}
+          >
+            {item.label}
+          </li>
+        ))}
+      </ul>
+    </AnchoredSurface>
   )
 }

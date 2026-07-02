@@ -1,5 +1,4 @@
-import { useEffect, useMemo, useRef } from 'react'
-import { createPortal } from 'react-dom'
+import { useMemo } from 'react'
 import {
   CommandsRegistry,
   type ICommandService,
@@ -9,6 +8,7 @@ import {
   isSubmenuEntry,
 } from '@universe-editor/platform'
 import type { ContextViewAnchor } from '../contextView/IContextViewService.js'
+import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
 import styles from './ContextMenu.module.css'
 
 export interface ContextMenuProps {
@@ -50,23 +50,6 @@ export function ContextMenu({
   groupFilter,
   onClose,
 }: ContextMenuProps) {
-  const ref = useRef<HTMLUListElement>(null)
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) onClose()
-    }
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose()
-    }
-    document.addEventListener('mousedown', onDocClick)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onDocClick)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [onClose])
-
   const rows = useMemo<RowModel[]>(() => {
     const entries = MenuRegistry.getMenuItems(menuId, contextKeyService)
     const result: RowModel[] = []
@@ -101,24 +84,25 @@ export function ContextMenu({
 
   if (rows.length === 0) return null
 
-  return createPortal(
-    <ul ref={ref} role="menu" className={styles['menu']} style={{ top: anchor.y, left: anchor.x }}>
-      {rows.map((row) =>
-        row.kind === 'separator' ? (
-          <li key={row.id} role="separator" className={styles['separator']} />
-        ) : (
-          <li
-            key={row.id}
-            role="menuitem"
-            className={styles['item']}
-            tabIndex={-1}
-            onClick={row.run}
-          >
-            {row.label}
-          </li>
-        ),
-      )}
-    </ul>,
-    document.body,
+  return (
+    <AnchoredSurface x={anchor.x} y={anchor.y} onClose={onClose}>
+      <ul role="menu" className={styles['menu']}>
+        {rows.map((row) =>
+          row.kind === 'separator' ? (
+            <li key={row.id} role="separator" className={styles['separator']} />
+          ) : (
+            <li
+              key={row.id}
+              role="menuitem"
+              className={styles['item']}
+              tabIndex={-1}
+              onClick={row.run}
+            >
+              {row.label}
+            </li>
+          ),
+        )}
+      </ul>
+    </AnchoredSurface>
   )
 }

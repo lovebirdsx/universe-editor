@@ -1,13 +1,5 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useRef,
-  useState,
-  type ReactNode,
-} from 'react'
-import { createPortal } from 'react-dom'
+import { createContext, useCallback, useContext, useState, type ReactNode } from 'react'
+import { AnchoredSurface } from '../overlay/AnchoredSurface.js'
 import type { ContextViewAnchor, IContextViewService } from './IContextViewService.js'
 
 interface ContextViewState {
@@ -30,46 +22,6 @@ export function useContextViewService(): IContextViewService {
 /** Wraps the Workbench root — provides IContextViewService to the subtree. */
 export function ContextViewProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<ContextViewState | null>(null)
-  const containerRef = useRef<HTMLDivElement | null>(null)
-
-  // Lazy-create a portal container in document.body.
-  if (!containerRef.current && typeof document !== 'undefined') {
-    const el = document.createElement('div')
-    el.setAttribute('data-context-view', '')
-    document.body.appendChild(el)
-    containerRef.current = el
-  }
-
-  // Close on click-outside.
-  useEffect(() => {
-    if (!state) return
-    const onMousedown = (e: MouseEvent) => {
-      const container = containerRef.current
-      if (container && !container.contains(e.target as Node)) {
-        setState(null)
-      }
-    }
-    document.addEventListener('mousedown', onMousedown)
-    return () => document.removeEventListener('mousedown', onMousedown)
-  }, [state])
-
-  // Close on Escape.
-  useEffect(() => {
-    if (!state) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setState(null)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [state])
-
-  // Cleanup portal element on unmount.
-  useEffect(() => {
-    const el = containerRef.current
-    return () => {
-      if (el?.parentNode) el.parentNode.removeChild(el)
-    }
-  }, [])
 
   const service: IContextViewService = {
     show: useCallback((anchor: ContextViewAnchor, render: () => ReactNode) => {
@@ -80,27 +32,19 @@ export function ContextViewProvider({ children }: { children: ReactNode }) {
     }, []),
   }
 
-  const portal =
-    state && containerRef.current
-      ? createPortal(
-          <div
-            style={{
-              position: 'fixed',
-              top: state.anchor.y,
-              left: state.anchor.x,
-              zIndex: 9999,
-            }}
-          >
-            {state.render()}
-          </div>,
-          containerRef.current,
-        )
-      : null
-
   return (
     <ContextViewContext.Provider value={{ service }}>
       {children}
-      {portal}
+      {state && (
+        <AnchoredSurface
+          x={state.anchor.x}
+          y={state.anchor.y}
+          onClose={() => setState(null)}
+          surfaceProps={{ 'data-context-view': '' } as React.HTMLAttributes<HTMLDivElement>}
+        >
+          {state.render()}
+        </AnchoredSurface>
+      )}
     </ContextViewContext.Provider>
   )
 }
