@@ -27,6 +27,18 @@ export class ImageEditorInput extends EditorInput {
     return this._resource
   }
 
+  /**
+   * Distinct from FileEditorInput's identity (a bare `file:` URI) so the image
+   * preview and the text view of the same file can coexist as two tabs, and
+   * "Reopen With..." can switch between them. `resource` still returns the real
+   * `file:` URI — the tab icon, SCM decorations and `ue-file:` loading all need
+   * it — only the editor identity is namespaced. Mirrors how MarkdownPreviewInput
+   * / DiffEditorInput namespace their own ids.
+   */
+  override get id(): string {
+    return `image:${this._resource.toString()}`
+  }
+
   override getName(): string {
     return basenameOfResource(this._resource)
   }

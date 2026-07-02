@@ -80,6 +80,7 @@ interface TabMenuState {
   readonly x: number
   readonly y: number
   readonly groupId: number
+  readonly editorId: string
   readonly resource: URI | null
 }
 
@@ -726,6 +727,7 @@ export const EditorGroupView = memo(function EditorGroupView({
                     x: ev.clientX,
                     y: ev.clientY,
                     groupId: group.id,
+                    editorId: e.id,
                     resource: resourceLike instanceof URI ? resourceLike : null,
                   })
                 }}
@@ -788,7 +790,13 @@ export const EditorGroupView = memo(function EditorGroupView({
         <ContextMenu
           menuId={MenuId.EditorTabContext}
           anchor={{ x: tabMenu.x, y: tabMenu.y }}
-          args={[{ groupId: tabMenu.groupId, resource: tabMenu.resource?.toJSON() ?? undefined }]}
+          args={[
+            {
+              groupId: tabMenu.groupId,
+              editorId: tabMenu.editorId,
+              resource: tabMenu.resource?.toJSON() ?? undefined,
+            },
+          ]}
           commandService={commandService}
           onClose={() => setTabMenu(null)}
         />

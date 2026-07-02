@@ -67,9 +67,14 @@ export class ClosedEditorsService extends Disposable implements IClosedEditorsSe
   popMostRecent(): ClosedEditorEntry | undefined {
     while (this._stack.length > 0) {
       const entry = this._stack.pop()!
-      // Skip entries whose editor is already open somewhere (e.g. after detach/move).
+      // Skip entries whose editor is already open somewhere (e.g. after
+      // detach/move). Match on typeId too: an image preview and a text view can
+      // share one file's resource, so reopening the closed image tab must not be
+      // suppressed just because the file's text tab is still open.
       const alreadyOpen = this._groups.groups.some((g) =>
-        g.editors.some((e) => this._uriIdentity.isEqual(e.resource, entry.resource)),
+        g.editors.some(
+          (e) => e.typeId === entry.typeId && this._uriIdentity.isEqual(e.resource, entry.resource),
+        ),
       )
       if (!alreadyOpen) return entry
     }

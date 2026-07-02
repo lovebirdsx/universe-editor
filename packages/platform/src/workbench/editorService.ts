@@ -129,17 +129,14 @@ export abstract class EditorInput extends Disposable implements IEditorInput {
   updateFrom?(other: EditorInput): void
 
   /**
-   * Equality by stable identity. Two inputs match when they share the same
-   * resource URI, or when their `id`s are equal. Subclasses can override
-   * for richer semantics (e.g. side-by-side editors).
+   * Equality by stable identity. Two inputs match when their `id`s are equal.
+   * `id` defaults to `resource.toString()`, so file-backed inputs still match by
+   * URI — but an input that overrides `id` (e.g. a preview or an image viewer
+   * sharing a file's `resource`) keeps a distinct identity and its own tab.
+   * Subclasses can override for richer semantics (e.g. side-by-side editors).
    */
   matches(other: EditorInput | IEditorInput): boolean {
     if (this === other) return true
-    if (other instanceof EditorInput) {
-      if (this.resource && other.resource) {
-        return this.resource.toString() === other.resource.toString()
-      }
-    }
     return this.id === other.id
   }
 

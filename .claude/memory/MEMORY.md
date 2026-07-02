@@ -5,6 +5,7 @@
 ## 功能实现进展
 
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — 四套散乱手写机制→IUriIdentityService 单一入口(DI 绑一次 platform)+base 内核纯函数+ResourceMap；修 authority-only file URI 键碰撞；main 侧走内核+normalizePlatform；MonacoModelKey/SCM 键/acpPathPolicy 为刻意保留的独立身份域
+- [编辑器身份隔离约定](editor-input-identity-isolation.md) — 同一文件多视图 EditorInput 必须覆写 id 隔离(虚拟 scheme 派 vs 仅覆写 id 派),否则被 openEditor/matches 去重成一个 tab；修 ImageEditorInput 漏此约定的 bug + 收紧基类 matches 只比 id + ClosedEditors/resolveTargetEditor/ReopenWith 纳入 typeId/editorId
 - [AI 基础服务层实施进展](ai-service-foundation-progress.md) — 模型抽象/provider 注册/流式/取消/三层配置/safeStorage 密钥全部完成；platform 契约+main 实现+renderer 门面三层，加 vendor 套路 I，密钥红线
 - [插件系统实施进展](extension-system-progress.md) — VSCode 式外部插件系统 + Git 扩展，Phase 0–6 全部完成（双 host 信任级隔离 + fs 网关 + 真 diff + 崩溃/workspace 重启），关键设计决策与可选后续
 - [插件 manifest NLS 本地化](extension-manifest-nls.md) — 命令title/子菜单label/配置description 走 VSCode 式 %key% + package.nls.json，host 扫描时按 locale 替换；locale 经 env 传入；nls 文件须列进 files 数组否则打包丢失

@@ -62,6 +62,29 @@ class TestEditor extends EditorInput {
   }
 }
 
+// Shares another editor's resource but carries a namespaced id, mirroring an
+// image preview vs. the text view of the same file.
+class TestAliasEditor extends EditorInput {
+  constructor(
+    private readonly _name: string,
+    private readonly _id: string,
+  ) {
+    super()
+  }
+  get typeId() {
+    return 'test.alias'
+  }
+  get resource() {
+    return URI.file(`D:/${this._name}.txt`)
+  }
+  override get id() {
+    return this._id
+  }
+  getName() {
+    return this._name
+  }
+}
+
 class CloneableEditor extends EditorInput {
   static readonly TYPE_ID = 'cloneable-test'
 
@@ -312,6 +335,36 @@ describe('Built-in editor Action2s', () => {
     )
     expect(result?.editor).toBe(b)
     expect(result?.group).toBe(g2)
+  })
+
+  it('resolveTargetEditor picks the exact tab by editorId when two share a URI', () => {
+    const svc = new EditorGroupsService()
+    const text = new TestEditor('shared')
+    const alias = new TestAliasEditor('shared', 'alias:shared')
+    svc.activeGroup.openEditor(text)
+    svc.activeGroup.openEditor(alias)
+    // Both editors report the same resource; only editorId disambiguates them.
+    expect(text.resource.toString()).toBe(alias.resource.toString())
+    const inst = makeAccessor(svc)
+    const result = inst.invokeFunction((accessor) =>
+      resolveTargetEditor(accessor, {
+        groupId: svc.activeGroup.id,
+        editorId: alias.id,
+        resource: text.resource.toJSON(),
+      }),
+    )
+    expect(result?.editor).toBe(alias)
+  })
+
+  it('resolveTargetEditor falls back to resource when editorId is absent', () => {
+    const svc = new EditorGroupsService()
+    const a = new TestEditor('only')
+    svc.activeGroup.openEditor(a)
+    const inst = makeAccessor(svc)
+    const result = inst.invokeFunction((accessor) =>
+      resolveTargetEditor(accessor, { resource: a.resource.toJSON() }),
+    )
+    expect(result?.editor).toBe(a)
   })
 
   it('NextEditor wraps to first editor', () => {

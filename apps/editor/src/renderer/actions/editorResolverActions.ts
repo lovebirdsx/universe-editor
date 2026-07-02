@@ -30,7 +30,7 @@ export class ReopenWithAction extends Action2 {
 
   override async run(
     accessor: ServicesAccessor,
-    args?: { resource?: UriComponents },
+    args?: { resource?: UriComponents; editorId?: string; groupId?: number },
   ): Promise<void> {
     const resolver = accessor.get(IEditorResolverService)
     const quickInput = accessor.get(IQuickInputService)
@@ -50,8 +50,15 @@ export class ReopenWithAction extends Action2 {
     )
     if (!pick) return
 
-    const group = groups.activeGroup
-    const existing = group.editors.find((e) => uriIdentity.isEqual(e.resource, uri))
+    const group =
+      (args?.groupId !== undefined ? groups.getGroup(args.groupId) : undefined) ??
+      groups.activeGroup
+    // Prefer the exact tab (two editors can share one URI, e.g. image + text);
+    // fall back to the first editor with this resource for resource-only callers.
+    const existing =
+      (args?.editorId !== undefined
+        ? group.editors.find((e) => e.id === args.editorId)
+        : undefined) ?? group.editors.find((e) => uriIdentity.isEqual(e.resource, uri))
     if (existing) group.closeEditor(existing)
 
     await resolver.openEditor(uri, { preferredTypeId: pick.id, pinned: true })

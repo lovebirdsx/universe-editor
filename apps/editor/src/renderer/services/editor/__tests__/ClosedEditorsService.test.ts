@@ -77,6 +77,49 @@ class FakeNoSerializeInput extends EditorInput {
   }
 }
 
+// Two inputs that deliberately share one `resource` but differ in `typeId`,
+// mirroring an image preview and the text view of the same file.
+class FakeTextInput extends EditorInput {
+  static readonly TYPE_ID = 'fake.shared.text.closed.test'
+  constructor(private readonly _resource: URI) {
+    super()
+  }
+  override get typeId() {
+    return FakeTextInput.TYPE_ID
+  }
+  override get resource() {
+    return this._resource
+  }
+  override getName() {
+    return 'FakeText'
+  }
+}
+
+class FakeImageInput extends EditorInput {
+  static readonly TYPE_ID = 'fake.shared.image.closed.test'
+  constructor(private readonly _resource: URI) {
+    super()
+  }
+  override get typeId() {
+    return FakeImageInput.TYPE_ID
+  }
+  override get resource() {
+    return this._resource
+  }
+  override get id() {
+    return `fake-image:${this._resource.toString()}`
+  }
+  override getName() {
+    return 'FakeImage'
+  }
+  override serialize(): { uri: string } {
+    return { uri: this._resource.toString() }
+  }
+  static deserialize(data: unknown): FakeImageInput {
+    return new FakeImageInput(URI.parse((data as { uri: string }).uri))
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Fake IFocusStackService
 // ---------------------------------------------------------------------------
@@ -217,6 +260,26 @@ describe('ClosedEditorsService — stack behavior', () => {
     const entry = svc.popMostRecent()
     expect(entry!.typeId).toBe(FakeVirtualInput.TYPE_ID)
     expect(entry!.resource.toString()).toBe(a.resource.toString())
+    svc.dispose()
+    groups.dispose()
+  })
+
+  it('does not skip a closed editor when a different-typed editor of the same file stays open', () => {
+    const groups = new EditorGroupsService()
+    const svc = new ClosedEditorsService(groups, new UriIdentityService('linux'))
+    const uri = URI.file('/w/pics/logo.svg')
+    const text = new FakeTextInput(uri)
+    const image = new FakeImageInput(uri)
+    groups.activeGroup.openEditor(text)
+    groups.activeGroup.openEditor(image)
+    // Close the image tab; the text tab of the same file is still open.
+    groups.activeGroup.closeEditor(image)
+
+    // Resource matches the open text tab, but typeId differs — must still reopen.
+    const entry = svc.popMostRecent()
+    expect(entry).toBeDefined()
+    expect(entry!.typeId).toBe(FakeImageInput.TYPE_ID)
+    expect(entry!.resource.toString()).toBe(uri.toString())
     svc.dispose()
     groups.dispose()
   })

@@ -19,11 +19,15 @@ export interface ITabTarget {
 
 /**
  * Tab Action2 invocation argument. Right-click context menu passes
- * `{ groupId, resource }` to disambiguate when the same URI is open in
- * multiple split groups; absent arguments fall back to the active editor.
+ * `{ groupId, editorId, resource }`. `editorId` pins the exact tab even when two
+ * editors share one URI (e.g. an image preview and the text view of the same
+ * file); `resource` remains the fallback for callers that only know the URI
+ * (explorer, editor-title overflow). Absent arguments fall back to the active
+ * editor.
  */
 export interface ITabActionArg {
   readonly groupId?: number
+  readonly editorId?: string
   readonly resource?: UriComponents
 }
 
@@ -33,9 +37,9 @@ function isTabActionArg(value: unknown): value is ITabActionArg {
 
 /**
  * Resolve which `(group, editor)` an editor command should operate on:
- * 1. If the command argument carries `{ groupId, resource }`, look up that
- *    group and find the editor whose resource matches.
- * 2. If only `resource` is given, scan all groups for the first match.
+ * 1. If the argument carries `editorId`, find that exact editor (scoped to
+ *    `groupId` when given). Disambiguates two editors sharing one URI.
+ * 2. Else if `resource` is given, find the first editor with that URI.
  * 3. Otherwise, fall back to `activeGroup.activeEditor`.
  */
 export function resolveTargetEditor(
@@ -44,17 +48,27 @@ export function resolveTargetEditor(
 ): ITabTarget | undefined {
   const groups = accessor.get(IEditorGroupsService)
 
-  if (isTabActionArg(arg) && arg.resource) {
-    const uri = URI.revive(arg.resource)
-    if (uri) {
-      const targetKey = uri.toString()
-      const candidateGroups =
-        arg.groupId !== undefined
-          ? [groups.getGroup(arg.groupId)].filter((g): g is IEditorGroup => g !== undefined)
-          : groups.groups
+  if (isTabActionArg(arg) && (arg.editorId !== undefined || arg.resource)) {
+    const candidateGroups =
+      arg.groupId !== undefined
+        ? [groups.getGroup(arg.groupId)].filter((g): g is IEditorGroup => g !== undefined)
+        : groups.groups
+
+    if (arg.editorId !== undefined) {
       for (const g of candidateGroups) {
-        const found = g.editors.find((e) => e.resource?.toString() === targetKey)
+        const found = g.editors.find((e) => e.id === arg.editorId)
         if (found) return { group: g, editor: found }
+      }
+    }
+
+    if (arg.resource) {
+      const uri = URI.revive(arg.resource)
+      if (uri) {
+        const targetKey = uri.toString()
+        for (const g of candidateGroups) {
+          const found = g.editors.find((e) => e.resource?.toString() === targetKey)
+          if (found) return { group: g, editor: found }
+        }
       }
     }
   }

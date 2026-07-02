@@ -30,3 +30,5 @@ metadata:
 **ESLint 护栏**（`packages/config-eslint/index.js`，见 [[eslint-path-identity-guardrails]]）防回潮。
 
 已删除标识符：`canonicalResourceKey`（彻底删，import 会 TS 报错 + no-restricted-imports 拦）。`isEqualResource` 仍在但签名变了（现在必带 platform）。
+
+**同源异层的姊妹问题**：编辑器身份（`EditorInput.id`/`matches`）碰撞见 [[editor-input-identity-isolation]]——那个治"同一文件多视图被去重成一个 tab"，与这里治"文件系统身份键碰撞"是同一思路的不同层。
