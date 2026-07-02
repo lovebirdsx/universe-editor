@@ -29,6 +29,7 @@ import {
 } from 'react'
 import {
   IConfigurationService,
+  IFileDialogService,
   IFileSearchService,
   IFileService,
   IWorkspaceService,
@@ -67,8 +68,10 @@ import type { WidgetHandle } from './ChatBody.js'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
   applyMentionPick,
+  detectFilePickerTrigger,
   extractMentionQuery,
   type ActiveMentionQuery,
+  type FilePickerTriggerKind,
 } from '../../services/acp/promptMentions.js'
 import {
   filterMentionFiles,
@@ -158,6 +161,7 @@ export function PromptInput({
   const exclude = useService(IExcludeService)
   const config = useService(IConfigurationService)
   const dialogService = useService(IDialogService)
+  const fileDialog = useService(IFileDialogService)
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
   const historyService = useService(IAcpPromptHistoryService)
@@ -523,6 +527,72 @@ export function PromptInput({
     })
   }
 
+  // `@@` opens a file picker, `@#` a folder picker. Strip the two-char trigger
+  // out of `buffer` (the just-typed textarea value, not the committed `text`
+  // state), run the SimpleFileDialog, and on pick splice an `@<name>` mention in
+  // at the trigger position — reusing the same recorded-mention pipeline as the
+  // popover so it serializes to a resource_link on send.
+  const openFilePicker = useCallback(
+    async (buffer: string, kind: FilePickerTriggerKind, start: number): Promise<void> => {
+      // Remove the trigger chars immediately so the textarea doesn't keep `@@`/`@#`
+      // while the dialog is open, and remember where to splice the pick.
+      const before = buffer.slice(0, start)
+      const after = buffer.slice(start + 2)
+      const withoutTrigger = before + after
+      setText(withoutTrigger)
+      setCaret(start)
+
+      const picked = await fileDialog.showOpenDialog(
+        kind === 'file'
+          ? {
+              title: localize('acp.mention.pickFile.title', 'Select File to Mention'),
+              canSelectFiles: true,
+              canSelectFolders: false,
+              openLabel: localize('acp.mention.pickFile.open', 'Mention'),
+              ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
+            }
+          : {
+              title: localize('acp.mention.pickFolder.title', 'Select Folder to Mention'),
+              canSelectFiles: false,
+              canSelectFolders: true,
+              openLabel: localize('acp.mention.pickFolder.open', 'Mention'),
+              ...(workspaceRoot ? { defaultUri: workspaceRoot } : {}),
+            },
+      )
+      if (!picked) {
+        // Cancelled: leave the trigger-stripped buffer, restore focus/caret.
+        requestAnimationFrame(() => {
+          const el = textareaRef.current
+          if (el) {
+            el.focus()
+            el.setSelectionRange(start, start)
+          }
+        })
+        return
+      }
+
+      const mention = toMentionName(picked, workspaceRoot)
+      // Space the mention off the surrounding text so `@<name>` keeps its boundary.
+      const needsLeadingSpace = before.length > 0 && !/\s/.test(before[before.length - 1]!)
+      const needsTrailingSpace = after.length === 0 || !/\s/.test(after[0]!)
+      const insert = `${needsLeadingSpace ? ' ' : ''}@${mention.name}${needsTrailingSpace ? ' ' : ''}`
+      const nextText = before + insert + after
+      const nextCaret = before.length + insert.length
+      setText(nextText)
+      setCaret(nextCaret)
+      setMentions((prev) => mergeMention(prev, mention))
+      setMentionDismissed(true)
+      requestAnimationFrame(() => {
+        const el = textareaRef.current
+        if (el) {
+          el.focus()
+          el.setSelectionRange(nextCaret, nextCaret)
+        }
+      })
+    },
+    [fileDialog, workspaceRoot],
+  )
+
   const acceptHistory = useCallback((): void => {
     setHistoryOpen(false)
     requestAnimationFrame(() => {
@@ -804,6 +874,13 @@ export function PromptInput({
             if (historyOpen) setHistoryOpen(false)
             const v = e.target.value
             const c = e.target.selectionStart ?? v.length
+            // `@@` / `@#` just landed → open the file/folder picker instead of
+            // continuing as plain text (handles the trigger + rewrites the buffer).
+            const trigger = detectFilePickerTrigger(v, c)
+            if (trigger) {
+              void openFilePicker(v, trigger.kind, trigger.start)
+              return
+            }
             setText(v)
             setCaret(c)
             if (extractSlashQuery(v, c) === null) setSlashDismissed(false)

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyMentionPick,
   composePromptBlocks,
+  detectFilePickerTrigger,
   extractMentionQuery,
   type PromptMention,
 } from '../promptMentions.js'
@@ -66,6 +67,43 @@ describe('extractMentionQuery', () => {
   it('returns null for invalid caret positions', () => {
     expect(extractMentionQuery('hi', -1)).toBeNull()
     expect(extractMentionQuery('hi', 99)).toBeNull()
+  })
+})
+
+describe('detectFilePickerTrigger', () => {
+  it('detects @@ as a file trigger at the caret', () => {
+    expect(detectFilePickerTrigger('@@', 2)).toEqual({ kind: 'file', start: 0 })
+  })
+
+  it('detects @# as a folder trigger at the caret', () => {
+    expect(detectFilePickerTrigger('@#', 2)).toEqual({ kind: 'folder', start: 0 })
+  })
+
+  it('detects the trigger after whitespace mid-buffer', () => {
+    expect(detectFilePickerTrigger('review @@', 9)).toEqual({ kind: 'file', start: 7 })
+    expect(detectFilePickerTrigger('review @#', 9)).toEqual({ kind: 'folder', start: 7 })
+  })
+
+  it('rejects the trigger when not preceded by a boundary (mid-word)', () => {
+    expect(detectFilePickerTrigger('a@@', 3)).toBeNull()
+    expect(detectFilePickerTrigger('mail@#', 6)).toBeNull()
+  })
+
+  it('only fires when the caret sits right after the two trigger chars', () => {
+    // Caret before the second char — not yet a trigger.
+    expect(detectFilePickerTrigger('@@', 1)).toBeNull()
+    // Caret past the trigger — the user has typed further, don't re-open.
+    expect(detectFilePickerTrigger('@@x', 3)).toBeNull()
+  })
+
+  it('returns null for a lone @ or other second chars', () => {
+    expect(detectFilePickerTrigger('@', 1)).toBeNull()
+    expect(detectFilePickerTrigger('@a', 2)).toBeNull()
+  })
+
+  it('returns null for invalid caret positions', () => {
+    expect(detectFilePickerTrigger('@@', -1)).toBeNull()
+    expect(detectFilePickerTrigger('@@', 99)).toBeNull()
   })
 })
 

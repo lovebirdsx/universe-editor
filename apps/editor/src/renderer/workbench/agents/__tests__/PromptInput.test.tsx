@@ -10,6 +10,7 @@ import {
   Event,
   IConfigurationService,
   IDialogService,
+  IFileDialogService,
   IFileSearchService,
   IFileService,
   INotificationService,
@@ -22,6 +23,7 @@ import {
 import type {
   IConfigurationService as IConfigurationServiceType,
   IDialogService as IDialogServiceType,
+  IFileDialogService as IFileDialogServiceType,
   IFileSearchService as IFileSearchServiceType,
   IFileService as IFileServiceType,
   INotificationService as INotificationServiceType,
@@ -54,6 +56,8 @@ afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
   notifySpy.mockClear()
+  showOpenDialogSpy.mockClear()
+  nextPick = undefined
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
 })
@@ -120,6 +124,19 @@ const stubFileService: IFileServiceType = {
   _serviceBrand: undefined,
   readFile: async () => new Uint8Array([1, 2, 3, 4]),
 } as unknown as IFileServiceType
+
+// File dialog stub: `nextPick` is what showOpenDialog resolves with (set per
+// test); showOpenDialogSpy records the options it was called with.
+let nextPick: URI | undefined
+const showOpenDialogSpy = vi.fn()
+const stubFileDialogService: IFileDialogServiceType = {
+  _serviceBrand: undefined,
+  showOpenDialog: (opts: unknown) => {
+    showOpenDialogSpy(opts)
+    return Promise.resolve(nextPick)
+  },
+  showSaveDialog: () => Promise.resolve(undefined),
+} as unknown as IFileDialogServiceType
 
 function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   const ws: IWorkspace = { folder, name: 'test' }
@@ -205,6 +222,7 @@ function renderWithServices(
   services.set(IAcpPromptHistoryService, stubHistoryService)
   services.set(INotificationService, stubNotificationService)
   services.set(IFileService, stubFileService)
+  services.set(IFileDialogService, stubFileDialogService)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -677,6 +695,87 @@ describe('PromptInput — @-mention popover', () => {
     typeAt(ta, '/diff')
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
     expect(screen.queryByTestId('acp-mention-popover')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// File / folder picker triggers — `@@` opens a file picker, `@#` a folder
+// picker (SimpleFileDialog). On pick the chosen resource is spliced in as an
+// @-mention and recorded so it serializes to a resource_link on send.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — @@ / @# file picker triggers', () => {
+  it('opens the file picker on @@ and inserts the pick as a recorded mention', async () => {
+    nextPick = URI.file('/repo/src/main.ts')
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@@', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    // File picker was requested (files only, not folders).
+    expect(showOpenDialogSpy).toHaveBeenCalledTimes(1)
+    const opts = showOpenDialogSpy.mock.calls[0]![0]
+    expect(opts.canSelectFiles).toBe(true)
+    expect(opts.canSelectFolders).toBe(false)
+    // The `@@` trigger is gone; the workspace-relative mention is inserted.
+    expect(ta.value).toBe('@src/main.ts ')
+    // Submitting hands the recorded mention to sendPrompt.
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    const [, mentions] = session.sendPrompt.mock.calls[0]!
+    expect(mentions).toEqual([
+      { uri: URI.file('/repo/src/main.ts').toString(), name: 'src/main.ts' },
+    ])
+  })
+
+  it('opens the folder picker on @# with folders selectable', async () => {
+    nextPick = URI.file('/repo/levels')
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: '@#', selectionStart: 2 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    const opts = showOpenDialogSpy.mock.calls[0]![0]
+    expect(opts.canSelectFiles).toBe(false)
+    expect(opts.canSelectFolders).toBe(true)
+    expect(ta.value).toBe('@levels ')
+  })
+
+  it('strips the trigger and inserts nothing when the picker is cancelled', async () => {
+    nextPick = undefined // cancelled
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'look @@', selectionStart: 7 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(showOpenDialogSpy).toHaveBeenCalledTimes(1)
+    // Trigger removed, no mention added, surrounding text preserved.
+    expect(ta.value).toBe('look ')
+  })
+
+  it('splices the mention at the trigger position, keeping surrounding text', async () => {
+    nextPick = URI.file('/repo/a.ts')
+    const session = makeSession()
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+    })
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'see @@ please', selectionStart: 6 } })
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(ta.value).toBe('see @a.ts please')
   })
 })
 

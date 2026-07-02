@@ -65,6 +65,33 @@ export function extractMentionQuery(text: string, caret: number): ActiveMentionQ
   return null
 }
 
+export type FilePickerTriggerKind = 'file' | 'folder'
+
+export interface FilePickerTrigger {
+  readonly kind: FilePickerTriggerKind
+  /** Index of the leading `@` — the two-char trigger spans `[start, start + 2)`. */
+  readonly start: number
+}
+
+/**
+ * Detect a just-typed file/folder picker trigger sitting immediately before the
+ * caret: `@@` opens a file picker, `@#` a folder picker. The leading `@` must be
+ * at a mention boundary (start of text or after whitespace) — same rule as
+ * {@link extractMentionQuery} — so `email@@host` won't fire. The caret must be
+ * right after the two trigger chars, so this only matches the moment the second
+ * char lands. Returns null when there's no trigger.
+ */
+export function detectFilePickerTrigger(text: string, caret: number): FilePickerTrigger | null {
+  if (caret < 2 || caret > text.length) return null
+  const start = caret - 2
+  if (text[start] !== '@') return null
+  if (start > 0 && !/\s/.test(text[start - 1]!)) return null
+  const second = text[start + 1]
+  if (second === '@') return { kind: 'file', start }
+  if (second === '#') return { kind: 'folder', start }
+  return null
+}
+
 /**
  * Replace the active `@<query>` token (range `[startIndex, endIndex)`) with
  * `@<name> ` (trailing space so the user can keep typing). Returns the new
