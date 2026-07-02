@@ -186,6 +186,13 @@ describe('MarkdownView', () => {
     expect(screen.getAllByRole('listitem')).toHaveLength(5)
   })
 
+  it('renders ordered list continuation lines inside one list', () => {
+    const { container } = renderMarkdown('1. 子项1\n啊哈哈\n\n2. 子项2\n啊哈哈')
+    expect(container.querySelectorAll('ol')).toHaveLength(1)
+    expect(screen.getAllByRole('listitem')).toHaveLength(2)
+    expect(screen.getByText(/子项2/).closest('ol')).toBe(container.querySelector('ol'))
+  })
+
   it('renders a code fence with a language attribute', () => {
     const { container } = renderMarkdown('```ts\nconst x = 1\n```')
     const pre = container.querySelector('pre[data-lang="ts"]')

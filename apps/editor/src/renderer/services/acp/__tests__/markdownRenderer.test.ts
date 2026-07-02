@@ -120,6 +120,20 @@ describe('parseMarkdown — block layer', () => {
     ])
   })
 
+  it('keeps ordered list items with continuation lines in one list', () => {
+    expect(parseMarkdown('1. a\nplain\n\n2. b\nplain')).toEqual<readonly MdNode[]>([
+      {
+        type: 'list',
+        ordered: true,
+        items: [
+          { inline: [text('a'), { type: 'softbreak' }, text('plain')], checked: null },
+          { inline: [text('b'), { type: 'softbreak' }, text('plain')], checked: null },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
   it('ends a list when a blank line is not followed by another list item', () => {
     const md = '- a\n- b\n\nparagraph'
     const nodes = parseMarkdown(md)

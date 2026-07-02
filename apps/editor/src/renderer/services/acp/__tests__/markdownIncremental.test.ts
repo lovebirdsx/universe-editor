@@ -29,6 +29,7 @@ describe('parseMarkdownStreaming — equivalence with parseMarkdown', () => {
       'before\n\n```ts\nconst a = 1\n\nconst b = 2\n```\n\nafter',
     'tight list': '- one\n- two\n- three',
     'loose list': '- one\n\n- two\n\n- three',
+    'loose ordered list with continuation lines': '1. one\ncontinued\n\n2. two\ncontinued',
     table: '| a | b |\n| --- | --- |\n| 1 | 2 |\n\ntrailing',
     blockquote: '> quoted\n> more\n\nplain',
     'mixed blocks': '# H1\n\npara one\n\n```js\nx()\n```\n\n- a\n- b\n\n> note\n\nfinal para',

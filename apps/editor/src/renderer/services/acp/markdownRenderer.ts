@@ -153,7 +153,8 @@ export function parseMarkdown(input: string): readonly MdNode[] {
     }
 
     // Lists — homogeneous run of `- ` / `* ` / `+ ` (unordered) or `<n>. `
-    // (ordered) lines. Blank lines between same-kind items make a loose list.
+    // (ordered) lines. Plain continuation lines belong to the current item;
+    // blank lines between same-kind items make a loose list.
     const ul = /^\s*[-*+]\s+(.*)$/.exec(line)
     const ol = /^\s*\d+\.\s+(.*)$/.exec(line)
     if (ul || ol) {
@@ -174,17 +175,29 @@ export function parseMarkdown(input: string): readonly MdNode[] {
           }
           break
         }
-        const rawText = m[1] ?? ''
-        const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(rawText)
+        const firstLine = m[1] ?? ''
+        i++
+        const continuationLines: string[] = []
+        while (i < lines.length) {
+          const nextLine = lines[i] ?? ''
+          if (nextLine.trim() === '') break
+          if (isListItemStart(nextLine)) break
+          if (isTopLevelBlockStart(nextLine, lines[i + 1] ?? '')) break
+          continuationLines.push(nextLine)
+          i++
+        }
+        const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
+        const itemText = taskMatch
+          ? [taskMatch[2] ?? '', ...continuationLines].join('\n')
+          : [firstLine, ...continuationLines].join('\n')
         if (taskMatch) {
           items.push({
-            inline: [...parseInline(taskMatch[2] ?? '')],
+            inline: [...parseInline(itemText)],
             checked: taskMatch[1] !== ' ',
           })
         } else {
-          items.push({ inline: [...parseInline(rawText)], checked: null })
+          items.push({ inline: [...parseInline(itemText)], checked: null })
         }
-        i++
       }
       out.push({ type: 'list', ordered, items, line: blockStart })
       continue
@@ -229,6 +242,20 @@ export function parseMarkdown(input: string): readonly MdNode[] {
     out.push({ type: 'paragraph', children: parseInline(para.join('\n')), line: blockStart })
   }
   return out
+}
+
+function isListItemStart(line: string): boolean {
+  return /^\s*(?:[-*+]|\d+\.)\s+/.test(line)
+}
+
+function isTopLevelBlockStart(line: string, nextLine: string): boolean {
+  return (
+    /^```/.test(line) ||
+    /^#{1,6}\s/.test(line) ||
+    /^\s*>/.test(line) ||
+    /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
+    (line.includes('|') && isTableDelimiterRow(nextLine))
+  )
 }
 
 /**

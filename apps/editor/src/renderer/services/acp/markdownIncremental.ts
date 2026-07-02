@@ -92,8 +92,8 @@ function offsetLines(nodes: readonly MdNode[], delta: number): readonly MdNode[]
  * Return the character offset of the last *safe* split point in `text`, i.e. the
  * position just after a blank line at which `parse(head) ++ shift(parse(tail))`
  * equals `parse(text)`. A blank line is safe when it is outside any code fence
- * and is not the interior blank of a loose list (the only block that spans blank
- * lines). Returns 0 when no safe split exists.
+ * and is not the interior blank of a loose list, including list items that have
+ * plain continuation lines. Returns 0 when no safe split exists.
  *
  * Splitting just after a blank line is sound because `parseMarkdown` skips
  * leading/trailing blank lines between blocks; the only cross-blank merge is the
@@ -132,12 +132,13 @@ function lastSafeSplit(text: string): number {
   return 0
 }
 
-const LIST_ITEM_RE = /^\s*(?:[-*+]|\d+\.)\s+/
+type ListKind = 'ordered' | 'unordered'
 
 /**
  * A blank line is "inside a loose list" when the nearest non-blank line before
- * it and after it are both list items — `parseMarkdown` would merge them into a
- * single list across the blank, so cutting here would split one list into two.
+ * it belongs to an open list item and the nearest non-blank line after it starts
+ * the same kind of list — `parseMarkdown` would merge them into a single list
+ * across the blank, so cutting here would split one list into two.
  */
 function isLooseListBlank(lines: readonly string[], blankIdx: number): boolean {
   let prev = blankIdx - 1
@@ -145,5 +146,37 @@ function isLooseListBlank(lines: readonly string[], blankIdx: number): boolean {
   let next = blankIdx + 1
   while (next < lines.length && (lines[next] ?? '').trim() === '') next++
   if (prev < 0 || next >= lines.length) return false
-  return LIST_ITEM_RE.test(lines[prev] ?? '') && LIST_ITEM_RE.test(lines[next] ?? '')
+  const nextKind = listItemKind(lines[next] ?? '')
+  if (!nextKind) return false
+  for (let i = prev; i >= 0; i--) {
+    const line = lines[i] ?? ''
+    if (line.trim() === '') return false
+    const kind = listItemKind(line)
+    if (kind) return kind === nextKind
+    if (isTopLevelBlockStart(line, lines[i + 1] ?? '')) return false
+  }
+  return false
+}
+
+function listItemKind(line: string): ListKind | null {
+  if (/^\s*\d+\.\s+/.test(line)) return 'ordered'
+  if (/^\s*[-*+]\s+/.test(line)) return 'unordered'
+  return null
+}
+
+function isTopLevelBlockStart(line: string, nextLine: string): boolean {
+  return (
+    /^```/.test(line) ||
+    /^#{1,6}\s/.test(line) ||
+    /^\s*>/.test(line) ||
+    /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
+    isTableDelimiterRow(line) ||
+    (line.includes('|') && isTableDelimiterRow(nextLine))
+  )
+}
+
+const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
+
+function isTableDelimiterRow(line: string): boolean {
+  return line.includes('-') && TABLE_DELIMITER_RE.test(line)
 }
