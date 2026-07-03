@@ -105,19 +105,40 @@ export class AcpChatLocationService extends Disposable implements IAcpChatLocati
     // later swaps would silently no-op. We do NOT set `_migrating` here — the
     // lifecycle contribution already filters out the no-op "same input in
     // another group" case, and we want a user-driven session swap to count as
-    // a real close on the outgoing tab. `openEditor` is idempotent on
-    // identical inputs.
+    // a real close on the outgoing tab.
+    //
+    // `openEditor`'s dedup is scoped to the active group only, so it is NOT
+    // idempotent when the session already lives in a NON-active group (e.g. a
+    // split layout restored from disk: the session tab is in the left group
+    // while the right group is active). Opening then would duplicate the
+    // session into the active group. Guard against that one case; a session
+    // already in the active group still goes through `openEditor` so it gets
+    // re-activated when the user switches active session via a command.
     this._register(
       autorun((r) => {
         const location = this.location.read(r)
         const active = this._sessions.activeSession.read(r)
         if (location !== 'editor') return
         if (!active) return
+        if (this._isSessionOpenInInactiveGroup(active.id)) return
         this._editor.openEditor(
           this._inst.createInstance(AcpSessionEditorInput, active.id, active.agentId, undefined),
         )
       }),
     )
+  }
+
+  private _isSessionOpenInInactiveGroup(sessionId: string): boolean {
+    const activeGroup = this._editorGroups.activeGroup
+    for (const group of this._editorGroups.groups) {
+      if (group === activeGroup) continue
+      for (const editor of group.editors) {
+        if (editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId) {
+          return true
+        }
+      }
+    }
+    return false
   }
 
   initialize(): Promise<void> {

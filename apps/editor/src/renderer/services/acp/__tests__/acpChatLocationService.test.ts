@@ -84,16 +84,28 @@ class FakeGroup {
 class FakeEditorGroupsService {
   declare readonly _serviceBrand: undefined
   readonly groupList: FakeGroup[] = [new FakeGroup()]
+  activeGroupIndex = 0
   get groups(): readonly IEditorGroup[] {
     return this.groupList as unknown as readonly IEditorGroup[]
+  }
+  get activeGroup(): IEditorGroup {
+    return this.groupList[this.activeGroupIndex] as unknown as IEditorGroup
   }
 }
 
 class FakeEditorService {
   declare readonly _serviceBrand: undefined
   readonly opened: EditorInput[] = []
+  constructor(private readonly _groups?: FakeEditorGroupsService) {}
   openEditor(input: EditorInput): void {
     this.opened.push(input)
+    // Mirror EditorService.openEditor: dedup is scoped to the ACTIVE group only.
+    // A same-id editor living in a non-active group is invisible here, so the
+    // input lands as a fresh tab in the active group.
+    const active = this._groups?.activeGroup as unknown as FakeGroup | undefined
+    if (!active) return
+    const existing = active.editors.find((e) => e.id === input.id)
+    if (!existing) active.editors.push(input)
   }
   closeEditor(_id: string): void {}
 }
@@ -135,8 +147,8 @@ interface Harness {
 
 function makeHarness(storage: FakeStorage = new FakeStorage()): Harness {
   const ctx = new ContextKeyService()
-  const editor = new FakeEditorService()
   const groups = new FakeEditorGroupsService()
+  const editor = new FakeEditorService(groups)
   const sessions = new FakeSessionService()
   const history = {
     _serviceBrand: undefined,
@@ -346,6 +358,45 @@ describe('AcpChatLocationService — side effects', () => {
     h.sessions.setActiveSession(makeSession('s1', 'fake'))
     h.sessions.setActiveSession(makeSession('s2', 'fake'))
     expect(h.editor.opened).toHaveLength(0)
+
+    h.svc.dispose()
+  })
+
+  it('does NOT duplicate a restored session into the active group when it already lives in another group', async () => {
+    // Regression: restart with a split layout where the session editor was
+    // restored into a NON-active group (left) and a plain file editor sits in
+    // the active group (right). On restore the session resumes → activeSession
+    // is set → the location autorun fires openEditor. Because EditorService's
+    // dedup is scoped to the active group, it could not see the session already
+    // living in the left group and duplicated it into the right (active) group.
+    const h = makeHarness()
+    await h.svc.initialize()
+    expect(h.svc.location.get()).toBe('editor')
+
+    // Left group (index 0): the restored session tab.
+    const leftGroup = h.groups.groupList[0]!
+    const restored = h.inst.createInstance(AcpSessionEditorInput, 's1', 'fake', undefined)
+    leftGroup.editors.push(restored)
+
+    // Right group (index 1) is active and holds only a plain file editor.
+    const rightGroup = new FakeGroup()
+    ;(rightGroup as { id: number }).id = 1
+    const fileInput = { id: 'file:foo' } as unknown as EditorInput
+    rightGroup.editors.push(fileInput)
+    h.groups.groupList.push(rightGroup)
+    h.groups.activeGroupIndex = 1
+
+    // Resume sets the active session (id === durable sessionId 's1').
+    h.sessions.setActiveSession(makeSession('s1', 'fake'))
+
+    // The session must NOT be copied into the active (right) group.
+    expect(rightGroup.editors.map((e) => e.id)).toEqual(['file:foo'])
+    // And it must still exist exactly once, in the left group.
+    const total = h.groups.groupList
+      .flatMap((g) => g.editors)
+      .filter((e) => e instanceof AcpSessionEditorInput)
+    expect(total).toHaveLength(1)
+    expect(leftGroup.editors).toContain(restored)
 
     h.svc.dispose()
   })
