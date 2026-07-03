@@ -88,6 +88,7 @@ import { SendButton } from './SendButton.js'
 import { StopButton } from './StopButton.js'
 import { AcpPromptDraftCache } from '../../services/acp/acpPromptDraftCache.js'
 import { AcpPromptContextInbox } from '../../services/acp/acpPromptContextInbox.js'
+import { AcpPromptTextInbox } from '../../services/acp/acpPromptTextInbox.js'
 import { IAcpPromptHistoryService } from '../../services/acp/acpPromptHistoryService.js'
 import { useSessionTimer, formatRunningTime } from './useSessionTimer.js'
 import { UsageIndicator } from './UsageIndicator.js'
@@ -298,6 +299,34 @@ export function PromptInput({
     }
     pull()
     const sub = AcpPromptContextInbox.onDidDeposit((id) => {
+      if (id === session.id) pull()
+    })
+    return () => sub.dispose()
+  }, [session.id])
+
+  // Drain any plain-text snippets a command (e.g. Git Graph's "Send to Agent
+  // Chat") deposited for this session, appending them to the textarea and moving
+  // the caret to the end. Mirrors the SelectionContext drain above.
+  useEffect(() => {
+    const pull = (): void => {
+      const incoming = AcpPromptTextInbox.drain(session.id)
+      if (incoming.length === 0) return
+      setText((prev) => {
+        const joined = incoming.join('\n')
+        const next = prev ? `${prev}\n${joined}` : joined
+        setCaret(next.length)
+        const el = textareaRef.current
+        if (el) {
+          requestAnimationFrame(() => {
+            el.focus()
+            el.setSelectionRange(next.length, next.length)
+          })
+        }
+        return next
+      })
+    }
+    pull()
+    const sub = AcpPromptTextInbox.onDidDeposit((id) => {
       if (id === session.id) pull()
     })
     return () => sub.dispose()

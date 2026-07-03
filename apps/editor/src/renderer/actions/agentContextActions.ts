@@ -17,6 +17,7 @@
 import {
   Action2,
   IEditorService,
+  IEditorGroupsService,
   IInstantiationService,
   IViewsService,
   IWorkspaceService,
@@ -33,6 +34,7 @@ import { IAcpSessionService, type SelectionContext } from '../services/acp/acpSe
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { AcpPromptContextInbox } from '../services/acp/acpPromptContextInbox.js'
+import { AcpPromptTextInbox } from '../services/acp/acpPromptTextInbox.js'
 import { toMentionName } from '../services/dnd/resourceDropTransfer.js'
 import { CATEGORY } from './_agentShared.js'
 
@@ -52,19 +54,89 @@ export class AddSelectionToAgentChatAction extends Action2 {
   override async run(accessor: ServicesAccessor): Promise<void> {
     const contexts = collectSelectionContexts(accessor)
     if (contexts.length === 0) return
-    const sessions = accessor.get(IAcpSessionService)
-    const registry = accessor.get(IAcpAgentRegistry)
-
-    // Resolve the target session up front: the active one, else create a fresh
-    // session so the contexts always have a home even from a cold start.
-    let target = sessions.activeSession.get()
-    if (!target) target = await sessions.createSession(registry.defaultAgentId())
+    // Resolve every service synchronously up front: the accessor is only valid
+    // during run's synchronous scope, so nothing below the first await may touch it.
+    const reveal = captureRevealServices(accessor)
+    const target = await resolveTargetSession(reveal)
 
     // Deposit before revealing so a freshly-mounting PromptInput drains it, and a
     // already-mounted one gets the onDidDeposit event — either way it lands.
     AcpPromptContextInbox.deposit(target.id, contexts)
-    await revealChat(accessor, target.id)
+    await revealChat(reveal, target.id)
   }
+}
+
+/** Payload for {@link SendCommitToAgentChatAction}: the Git Graph passes the
+ *  clicked commit's hash and subject so the action can compose the context text. */
+export interface SendCommitToAgentChatArg {
+  readonly hash: string
+  readonly message: string
+}
+
+/**
+ * Send a commit's hash + subject to the agent chat input as plain text, so the
+ * user can ask the agent about that commit. Invoked from the Git Graph commit
+ * context menu with a {@link SendCommitToAgentChatArg}; not exposed in the
+ * command palette (it needs the commit argument).
+ */
+export class SendCommitToAgentChatAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.sendCommitToChat'
+  constructor() {
+    super({
+      id: SendCommitToAgentChatAction.ID,
+      title: localize2('action.agent.sendCommitToChat', 'Send to Agent Chat'),
+      category: CATEGORY,
+      f1: false,
+    })
+  }
+
+  override async run(accessor: ServicesAccessor, arg?: SendCommitToAgentChatArg): Promise<void> {
+    if (!arg || !arg.hash) return
+    const subject = arg.message.trim()
+    const text = subject ? `Commit ${arg.hash}: ${subject}` : `Commit ${arg.hash}`
+    // Capture services before the first await — the accessor dies past it.
+    const reveal = captureRevealServices(accessor)
+    const target = await resolveTargetSession(reveal)
+
+    // Deposit before revealing so a freshly-mounting PromptInput drains it, and an
+    // already-mounted one gets the onDidDeposit event — either way it lands.
+    AcpPromptTextInbox.deposit(target.id, text)
+    await revealChat(reveal, target.id)
+  }
+}
+
+// Services revealChat / resolveTargetSession need, snapshotted while the accessor
+// is still valid (i.e. before run's first await).
+interface RevealServices {
+  readonly sessions: IAcpSessionService
+  readonly registry: IAcpAgentRegistry
+  readonly location: IAcpChatLocationService
+  readonly widgets: IAcpChatWidgetService
+  readonly groups: IEditorGroupsService
+  readonly inst: IInstantiationService
+  readonly layout: ILayoutService
+  readonly views: IViewsService
+}
+
+function captureRevealServices(accessor: ServicesAccessor): RevealServices {
+  return {
+    sessions: accessor.get(IAcpSessionService),
+    registry: accessor.get(IAcpAgentRegistry),
+    location: accessor.get(IAcpChatLocationService),
+    widgets: accessor.get(IAcpChatWidgetService),
+    groups: accessor.get(IEditorGroupsService),
+    inst: accessor.get(IInstantiationService),
+    layout: accessor.get(ILayoutService),
+    views: accessor.get(IViewsService),
+  }
+}
+
+// Resolve the target session up front: the active one, else create a fresh
+// session so the context always has a home even from a cold start.
+async function resolveTargetSession(services: RevealServices) {
+  const active = services.sessions.activeSession.get()
+  if (active) return active
+  return services.sessions.createSession(services.registry.defaultAgentId())
 }
 
 function collectSelectionContexts(accessor: ServicesAccessor): readonly SelectionContext[] {
@@ -98,27 +170,47 @@ function collectSelectionContexts(accessor: ServicesAccessor): readonly Selectio
 // the freshly-attached chips and can keep typing. Editor mode → open the session
 // as a tab; sidebar mode → surface the Agents view. Focus is best-effort (the
 // widget may still be mounting; the inbox drain covers that case).
-async function revealChat(accessor: ServicesAccessor, sessionId: string): Promise<void> {
-  const location = accessor.get(IAcpChatLocationService)
-  const widgets = accessor.get(IAcpChatWidgetService)
+async function revealChat(services: RevealServices, sessionId: string): Promise<void> {
+  const { location, widgets, groups, inst, layout, views, sessions } = services
   if (location.location.get() === 'editor') {
-    const editor = accessor.get(IEditorService)
-    const inst = accessor.get(IInstantiationService)
-    const already = editor.activeEditor.get()
-    if (!(already instanceof AcpSessionEditorInput) || already.sessionId !== sessionId) {
-      const session = accessor.get(IAcpSessionService).getById(sessionId)
+    // The session editor may already live in another group (e.g. Git Graph on the
+    // left, session on the right). Reveal that existing tab instead of opening a
+    // duplicate in the active group.
+    const found = findSessionEditor(groups, sessionId)
+    if (found) {
+      groups.activateGroup(found.group)
+      found.group.setActive(found.editor)
+    } else {
+      const session = sessions.getById(sessionId)
       if (session) {
-        editor.openEditor(
+        const target = groups.activeGroupForOpen
+        target.openEditor(
           inst.createInstance(AcpSessionEditorInput, session.id, session.agentId, undefined),
+          { activate: true, pinned: true },
         )
+        if (target !== groups.activeGroup) groups.activateGroup(target)
       }
     }
   } else {
-    const layout = accessor.get(ILayoutService)
     if (!layout.getVisible(PartId.SecondarySideBar)) layout.toggleVisible(PartId.SecondarySideBar)
-    await accessor.get(IViewsService).openViewContainer('workbench.view.agents')
+    await views.openViewContainer('workbench.view.agents')
   }
   widgets.focusSessionInput(sessionId)
 }
 
-export const agentContextActions: readonly (new () => Action2)[] = [AddSelectionToAgentChatAction]
+/** Locate an already-open session editor (and its group) across all groups. */
+function findSessionEditor(groups: IEditorGroupsService, sessionId: string) {
+  for (const group of groups.groups) {
+    for (const editor of group.editors) {
+      if (editor instanceof AcpSessionEditorInput && editor.sessionId === sessionId) {
+        return { group, editor }
+      }
+    }
+  }
+  return undefined
+}
+
+export const agentContextActions: readonly (new () => Action2)[] = [
+  AddSelectionToAgentChatAction,
+  SendCommitToAgentChatAction,
+]

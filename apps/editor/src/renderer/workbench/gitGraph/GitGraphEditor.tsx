@@ -72,6 +72,7 @@ import {
   GitGraphWorktreePickerDialog,
   type GitGraphWorktreePickerState,
 } from './GitGraphWorktreePickerDialog.js'
+import { SendCommitToAgentChatAction } from '../../actions/agentContextActions.js'
 import styles from './GitGraphEditor.module.css'
 
 const ROW_HEIGHT = 24
@@ -1052,10 +1053,20 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           label: localize('gitGraph.copyMessage', 'Copy commit message'),
           run: () => void navigator.clipboard?.writeText(commit.message),
         },
+        { kind: 'sep' },
+        {
+          kind: 'item',
+          label: localize('gitGraph.sendToAgentChat', 'Send to Agent Chat'),
+          run: () =>
+            void commands.executeCommand(SendCommitToAgentChatAction.ID, {
+              hash,
+              message: commit.message,
+            }),
+        },
       ]
       setMenu({ x: e.clientX, y: e.clientY, items })
     },
-    [dialog, runOp],
+    [commands, dialog, runOp],
   )
 
   const openBranchMenu = useCallback(
