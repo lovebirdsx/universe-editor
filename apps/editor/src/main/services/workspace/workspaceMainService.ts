@@ -140,8 +140,15 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
     }
     // Flush + swap storage scope BEFORE firing onDidChangeWorkspace so
     // subscribers (renderer-side restore contributions) read the new
-    // workspace's data, not the previous one's.
-    await this._storage.flush()
+    // workspace's data, not the previous one's. Best-effort, mirroring
+    // switchWorkspace's own flush: a failed final persist of the OUTGOING
+    // workspace (e.g. its atomic write raced an external delete) must not
+    // abort opening the new folder.
+    try {
+      await this._storage.flush()
+    } catch {
+      // proceed with swap regardless
+    }
     await this._storage.switchWorkspace(workspaceId)
     this._current = workspace
     this._onDidChangeWorkspace.fire(workspace)
@@ -152,7 +159,11 @@ export class WorkspaceMainService implements IWorkspaceServiceWire, IDisposable 
   async closeFolder(): Promise<void> {
     if (this._current === null) return
     const previous = this._current.folder.toString()
-    await this._storage.flush()
+    try {
+      await this._storage.flush()
+    } catch {
+      // best-effort flush; proceed with the swap regardless
+    }
     await this._storage.switchWorkspace(null)
     this._current = null
     this._onDidChangeWorkspace.fire(null)

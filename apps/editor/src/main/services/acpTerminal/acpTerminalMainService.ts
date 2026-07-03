@@ -132,9 +132,12 @@ export class AcpTerminalMainService extends Disposable implements IAcpTerminalSe
     const id = randomUUID()
     let proc: ManagedChildProcess
     try {
+      // Windows spawns through cmd.exe (for `.cmd` shims); tree-kill on stop so
+      // the real grandchild dies instead of orphaning under the shell wrapper.
       proc = new ManagedChildProcess(this._spawn(spec.command, spec.args ?? [], options), {
         logger: this._logger,
         label: id,
+        treeKill: process.platform === 'win32',
       })
     } catch (err) {
       this._logger.warn(`spawn failed command=${spec.command}: ${(err as Error).message}`)

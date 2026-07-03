@@ -252,4 +252,35 @@ describe('WorkspaceMainService', () => {
     expect(scopeAtFire.at(-1)).toBeNull()
     svc.dispose()
   })
+
+  it('openFolder proceeds when the outgoing workspace flush rejects', async () => {
+    // Regression: the outgoing workspace's atomic write can reject (e.g. its
+    // .tmp was deleted out from under it). A bare `await flush()` used to bubble
+    // that rejection out of openFolder; it must be best-effort so the swap still
+    // happens (mirrors switchWorkspace's own try/catch flush).
+    const storage = makeStorage()
+    storage.flush = () => Promise.reject(new Error('ENOENT: rename tmp'))
+    const svc = new WorkspaceMainService(storage, makeRecents(), makeDialog())
+    let fired = false
+    svc.onDidChangeWorkspace(() => (fired = true))
+    await expect(svc.openFolder(URI.file('/tmp/foo'))).resolves.toBeUndefined()
+    expect(storage.switchCalls.at(-1)).toBeTypeOf('string')
+    expect(fired).toBe(true)
+    svc.dispose()
+  })
+
+  it('closeFolder proceeds when the outgoing workspace flush rejects', async () => {
+    const storage = makeStorage()
+    const svc = new WorkspaceMainService(storage, makeRecents(), makeDialog())
+    await svc.openFolder(URI.file('/tmp/foo'))
+    storage.flush = () => Promise.reject(new Error('ENOENT: rename tmp'))
+    storage.switchCalls.length = 0
+    let scopeAtFire: (string | null)[] = []
+    svc.onDidChangeWorkspace(() => {
+      scopeAtFire = [...storage.switchCalls]
+    })
+    await expect(svc.closeFolder()).resolves.toBeUndefined()
+    expect(scopeAtFire.at(-1)).toBeNull()
+    svc.dispose()
+  })
 })

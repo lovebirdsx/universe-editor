@@ -158,4 +158,73 @@ describe('ManagedChildProcess', () => {
     managed.dispose()
     expect(child.killSignals).toEqual([])
   })
+
+  describe('treeKill (Windows shell-wrapped children)', () => {
+    const realPlatform = process.platform
+    const setPlatform = (value: NodeJS.Platform): void => {
+      Object.defineProperty(process, 'platform', { value, configurable: true })
+    }
+    afterEach(() => setPlatform(realPlatform))
+
+    it('kill() force-kills the PID tree in one shot instead of SIGTERM (win32)', () => {
+      setPlatform('win32')
+      const killed: number[] = []
+      const managed = new ManagedChildProcess(child.asChild(), {
+        treeKill: true,
+        killTree: (pid) => killed.push(pid),
+      })
+      let exit: ManagedExit | undefined
+      managed.onDidExit((e) => (exit = e))
+
+      managed.kill()
+      // No SIGTERM/SIGKILL to the wrapper — the whole tree is reaped directly.
+      expect(child.killSignals).toEqual([])
+      expect(killed).toEqual([child.pid])
+
+      // No escalation timer is armed; advancing time is a no-op.
+      vi.advanceTimersByTime(DEFAULT_KILL_TIMEOUT_MS * 2)
+      expect(killed).toEqual([child.pid])
+
+      child.emit('exit', null, 'SIGKILL')
+      expect(exit).toEqual({ code: null, signal: 'SIGKILL', forced: true })
+    })
+
+    it('dispose() force-kills the PID tree (win32)', () => {
+      setPlatform('win32')
+      const killed: number[] = []
+      const managed = new ManagedChildProcess(child.asChild(), {
+        treeKill: true,
+        killTree: (pid) => killed.push(pid),
+      })
+      managed.dispose()
+      expect(child.killSignals).toEqual([])
+      expect(killed).toEqual([child.pid])
+    })
+
+    it('falls back to SIGTERM off Windows even when treeKill is set', () => {
+      setPlatform('linux')
+      const killed: number[] = []
+      const managed = new ManagedChildProcess(child.asChild(), {
+        treeKill: true,
+        killTree: (pid) => killed.push(pid),
+      })
+      managed.kill()
+      expect(killed).toEqual([])
+      expect(child.killSignals).toEqual(['SIGTERM'])
+      managed.dispose()
+    })
+
+    it('kill() is idempotent under treeKill', () => {
+      setPlatform('win32')
+      const killed: number[] = []
+      const managed = new ManagedChildProcess(child.asChild(), {
+        treeKill: true,
+        killTree: (pid) => killed.push(pid),
+      })
+      managed.kill()
+      managed.kill()
+      managed.kill()
+      expect(killed).toEqual([child.pid])
+    })
+  })
 })

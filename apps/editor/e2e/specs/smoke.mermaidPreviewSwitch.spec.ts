@@ -74,10 +74,13 @@ test.describe('@p1 mermaid preview — survives editor tab switch', () => {
     }
     await expect.poll(allRendered, { timeout: 12000 }).toBe(true)
 
-    // 滚到中部（让滚动位置成为可观测量）。
+    // 滚到中部（让滚动位置成为可观测量）。用真实 wheel 事件表达"用户接管滚动"，
+    // 与真实用户用滚轮/拖动条滚动一致——裸 dispatch('scroll') 不带 wheel，无法让
+    // 预览的 restore 循环识别为用户操作而退出。
     const target = await page.evaluate((sel) => {
       const el = document.querySelector(sel) as HTMLElement
       const t = Math.floor((el.scrollHeight - el.clientHeight) / 2)
+      el.dispatchEvent(new WheelEvent('wheel', { deltaY: t, bubbles: true }))
       el.scrollTop = t
       el.dispatchEvent(new Event('scroll'))
       return el.scrollTop

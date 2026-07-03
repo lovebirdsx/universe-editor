@@ -13,10 +13,26 @@
  *  helpers those call sites use.
  *--------------------------------------------------------------------------------------------*/
 
-import type { ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
 
 export const DEFAULT_KILL_TIMEOUT_MS = 2000
+
+/**
+ * Tear down a whole process tree by PID. On Windows a `shell: true` spawn wraps
+ * the real command in `cmd.exe`; `child.kill()` (TerminateProcess) then only
+ * reaps the wrapper, leaving the grandchild (node/npx agent, shell command)
+ * orphaned with a dangling stdin pipe. `taskkill /T` recurses the parent-PID
+ * tree so the real process dies too. Injectable so unit tests don't shell out.
+ */
+export type TreeKiller = (pid: number) => void
+
+const defaultTreeKiller: TreeKiller = (pid) => {
+  execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {
+    // Best-effort: already exited, partial tree, or taskkill unavailable —
+    // nothing actionable during teardown.
+  })
+}
 
 export interface ManagedExit {
   readonly code: number | null
@@ -33,6 +49,15 @@ export interface ManagedChildOptions {
   readonly logger?: ILogger
   /** Identifier used in log lines (e.g. a handle / session id). */
   readonly label?: string
+  /**
+   * When the child was spawned with `shell: true` on Windows, `kill()` only
+   * reaps the `cmd.exe` wrapper and orphans the real grandchild process. Set
+   * this so termination recurses the PID tree (`taskkill /T`) instead. No-op
+   * off Windows, where a parent SIGKILL already reaps the group.
+   */
+  readonly treeKill?: boolean
+  /** Injectable tree-killer for tests. Defaults to `taskkill /T /F`. */
+  readonly killTree?: TreeKiller
 }
 
 /**
@@ -53,9 +78,12 @@ export class ManagedChildProcess extends Disposable {
   private readonly _killTimeoutMs: number
   private readonly _logger: ILogger | undefined
   private readonly _label: string
+  private readonly _treeKill: boolean
+  private readonly _killTree: TreeKiller
 
   private _exited = false
   private _forced = false
+  private _treeKilled = false
   private _killTimer: ReturnType<typeof setTimeout> | undefined
 
   constructor(
@@ -66,6 +94,8 @@ export class ManagedChildProcess extends Disposable {
     this._killTimeoutMs = options.killTimeoutMs ?? DEFAULT_KILL_TIMEOUT_MS
     this._logger = options.logger
     this._label = options.label ?? String(_child.pid ?? 'unknown')
+    this._treeKill = options.treeKill ?? false
+    this._killTree = options.killTree ?? defaultTreeKiller
 
     _child.stdout.on('data', (data: Buffer) => this._onStdout.fire(data))
     _child.stderr.on('data', (data: Buffer) => this._onStderr.fire(data))
@@ -102,9 +132,19 @@ export class ManagedChildProcess extends Disposable {
   /**
    * Request termination. Sends `signal` (default SIGTERM); if the process has
    * not exited within `killTimeoutMs`, escalates to SIGKILL. Idempotent.
+   *
+   * When {@link ManagedChildOptions.treeKill} is set on Windows, this instead
+   * force-kills the whole PID tree in one shot (`taskkill /T /F`): the graceful
+   * SIGTERM would only reap the `cmd.exe` shell wrapper and orphan the real
+   * grandchild, so there is nothing to escalate.
    */
   kill(signal: NodeJS.Signals = 'SIGTERM'): void {
     if (this._exited || this._killTimer) return
+    if (this._shouldTreeKill()) {
+      this._forced = true
+      this._killTreeNow()
+      return
+    }
     this._send(signal)
     this._killTimer = setTimeout(() => {
       this._killTimer = undefined
@@ -115,6 +155,24 @@ export class ManagedChildProcess extends Disposable {
       )
       this._send('SIGKILL')
     }, this._killTimeoutMs)
+  }
+
+  private _shouldTreeKill(): boolean {
+    return this._treeKill && process.platform === 'win32' && this._child.pid !== undefined
+  }
+
+  private _killTreeNow(): void {
+    if (this._treeKilled) return
+    const pid = this._child.pid
+    if (pid === undefined) return
+    this._treeKilled = true
+    try {
+      this._killTree(pid)
+    } catch (err) {
+      this._logger?.warn(
+        `ManagedChildProcess(${this._label}): tree-kill failed: ${(err as Error).message}`,
+      )
+    }
   }
 
   private _send(signal: NodeJS.Signals): void {
@@ -150,7 +208,8 @@ export class ManagedChildProcess extends Disposable {
       this._killTimer = undefined
     }
     if (!this._exited) {
-      this._send('SIGKILL')
+      if (this._shouldTreeKill()) this._killTreeNow()
+      else this._send('SIGKILL')
     }
     super.dispose()
   }

@@ -165,9 +165,14 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
 
     let proc: ManagedChildProcess
     try {
+      // A shell-wrapped spawn (Windows default, for `.cmd` shims) needs tree-kill
+      // on stop: `kill()` would only reap the `cmd.exe` wrapper and orphan the
+      // real agent grandchild, whose dangling stdin then EOFs it out-of-band.
+      const usesShell = options.shell ?? process.platform === 'win32'
       proc = new ManagedChildProcess(this._spawn(command, args, options), {
         logger: this._logger,
         label: handle,
+        treeKill: usesShell,
       })
     } catch (err) {
       this._logger.warn(
