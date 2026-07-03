@@ -18,9 +18,11 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
+import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
+import { openDocInGroup } from '../services/editor/openDoc.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 import { openMarkdownPreviewInGroup } from '../services/editor/openMarkdownPreview.js'
 
@@ -57,6 +59,10 @@ async function navigateTo(accessor: ServicesAccessor, entry: IHistoryEntry): Pro
       // tab (matching link-click navigation) so Alt+←/→ walks the trail in one
       // tab instead of piling up a fresh preview each time.
       openMarkdownPreviewInGroup(groups.activeGroup, input, false)
+    } else if (input instanceof DocEditorInput) {
+      // Same for the built-in guide: reuse the current doc tab so H/L (and
+      // Alt+←/→) walk the trail in place instead of opening a new tab.
+      openDocInGroup(groups.activeGroup, input, false)
     } else {
       openInLockAwareGroup(groups, input, { activate: true, pinned: false })
     }

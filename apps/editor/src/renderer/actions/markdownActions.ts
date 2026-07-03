@@ -27,6 +27,7 @@ import {
   type ServicesAccessor,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
+import { DocEditorInput } from '../services/editor/DocEditorInput.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
@@ -40,6 +41,11 @@ const MARKDOWN_PREVIEW_PRECONDITION = `activeEditorTypeId == '${MarkdownPreviewI
 // `activeEditorTypeId` here would hide the preview's title buttons whenever
 // another group became active — they must follow the group, not global focus.
 const MARKDOWN_PREVIEW_MENU_WHEN = `activeEditorType == '${MarkdownPreviewInput.TYPE_ID}'`
+// The find / help buttons work on any markdown *reading* surface — the file
+// preview and the built-in doc center both share useMarkdownReaderNav — so their
+// title-bar buttons appear on both. (Open Source is preview-only; docs have no
+// backing file, so it keeps MARKDOWN_PREVIEW_MENU_WHEN.)
+const MARKDOWN_READER_MENU_WHEN = `activeEditorType == '${MarkdownPreviewInput.TYPE_ID}' || activeEditorType == '${DocEditorInput.TYPE_ID}'`
 
 function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   const groups = accessor.get(IEditorGroupsService)
@@ -187,6 +193,7 @@ function activePreviewController(
   if (active) return active
   const editor = accessor.get(IEditorGroupsService).activeGroup.activeEditor
   if (editor instanceof MarkdownPreviewInput) return MarkdownPreviewRegistry.get(editor.sourceUri)
+  if (editor instanceof DocEditorInput) return MarkdownPreviewRegistry.get(editor.resource)
   return undefined
 }
 
@@ -205,7 +212,7 @@ export class MarkdownPreviewFindAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           group: 'navigation',
-          when: MARKDOWN_PREVIEW_MENU_WHEN,
+          when: MARKDOWN_READER_MENU_WHEN,
         },
       ],
       f1: true,
@@ -324,7 +331,7 @@ export class MarkdownPreviewHelpAction extends Action2 {
         {
           id: MenuId.EditorTitle,
           group: 'navigation',
-          when: MARKDOWN_PREVIEW_MENU_WHEN,
+          when: MARKDOWN_READER_MENU_WHEN,
         },
       ],
       f1: true,

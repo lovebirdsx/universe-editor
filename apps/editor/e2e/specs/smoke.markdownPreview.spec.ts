@@ -879,4 +879,70 @@ test.describe('@p1 markdown preview', () => {
       .poll(() => workbench.getContextKey<number>('groupEditorsCount'), { timeout: 5000 })
       .toBe(before)
   })
+
+  // After walking a doc→doc link in place, Go Back must return to the previous
+  // doc in the SAME tab, not open a new one (the reported Shift+H regression).
+  test('doc center go-back returns in place without opening a new tab', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+    await expect(page.locator('[data-testid="doc-editor"] a').first()).toBeVisible()
+    await page.bringToFront()
+
+    const before = await workbench.getContextKey<number>('groupEditorsCount')
+
+    // Walk a relative .md link in place, then go back.
+    await page
+      .locator(
+        '[data-testid="doc-editor"] a[href$=".md"], [data-testid="doc-editor"] a[href*=".md#"]',
+      )
+      .first()
+      .click()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+
+    await workbench.runCommand('workbench.action.goBack')
+
+    // Still a doc, and the tab count never grew — go-back reused the tab.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+    await expect
+      .poll(() => workbench.getContextKey<number>('groupEditorsCount'), { timeout: 5000 })
+      .toBe(before)
+  })
+
+  // The find / help title-bar buttons belong to every markdown reading surface,
+  // so the built-in doc center shows them too (not just the file preview).
+  test('doc center shows the Find and Help title-bar buttons', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+    await expect(page.locator('[data-testid="doc-editor"] h1').first()).toBeVisible()
+    await page.bringToFront()
+
+    const findButton = page.locator(
+      '[data-testid="view-title-action-workbench.action.markdownPreview.find"]',
+    )
+    const helpButton = page.locator(
+      '[data-testid="view-title-action-workbench.action.markdownPreview.help"]',
+    )
+    await expect(findButton).toBeVisible()
+    await expect(helpButton).toBeVisible()
+
+    await helpButton.click()
+    await expect(page.locator('[data-testid="md-preview-help"]')).toBeVisible()
+  })
 })

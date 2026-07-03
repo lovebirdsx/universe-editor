@@ -18,6 +18,7 @@ import {
 } from '@universe-editor/platform'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
 import { resolveDoc, isDocId } from '../../services/editor/docRegistry.js'
+import { openDocInGroup } from '../../services/editor/openDoc.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 import { useService } from '../useService.js'
 import { DocLinkContext, MarkdownView } from '../markdown/MarkdownView.js'
@@ -84,14 +85,12 @@ export function DocEditor({ input }: { input: IEditorInput }) {
       if (!isDocId(targetDocId)) return
       const target = new DocEditorInput(targetDocId, anchor)
       // Default: navigate in place — the new doc takes the current tab's slot and
-      // the old one closes, so a single tab walks the trail and Alt+←/→ steps
-      // through history (mirrors the markdown preview). Ctrl/Cmd+click opens an
-      // additional tab instead. `group` is null only if this editor isn't mounted
-      // in a group (shouldn't happen for a click), so fall back to a plain open.
+      // the old one closes, so a single tab walks the trail and H/L (or Alt+←/→)
+      // steps through history (mirrors the markdown preview). Ctrl/Cmd+click opens
+      // an additional tab instead. `group` is null only if this editor isn't
+      // mounted in a group (shouldn't happen for a click), so fall back to a plain open.
       if (!opts?.toSide && group && input instanceof DocEditorInput && target.id !== input.id) {
-        const index = group.indexOf(input)
-        group.openEditor(target, { activate: true, pinned: true, index })
-        group.closeEditor(input)
+        openDocInGroup(group, target, false)
         return
       }
       void editorService.openEditor(target, { activate: true, pinned: true })
