@@ -25,6 +25,7 @@ import type { AsyncSubscription, BackendType, Event as ParcelEvent } from '@parc
 import {
   createNamedLogger,
   Emitter,
+  mark,
   normalizePlatform,
   relativePathUnder,
   type Event,
@@ -37,6 +38,7 @@ import {
   type ILogger,
   type UriComponents,
 } from '@universe-editor/platform'
+import { PerfMarks } from '../../../shared/perf/marks.js'
 
 const DEBOUNCE_MS = 50
 
@@ -117,6 +119,9 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
   private _currentIgnore: string[] = []
   private _pending = new Map<string, FileChangeType>()
   private _flushTimer: NodeJS.Timeout | null = null
+  // Perf: mark only the first recursive subscribe (cold startup) so re-subscribes
+  // (setExcludes / workspace swap) don't pollute the startup timeline.
+  private _didMarkFirstWatch = false
 
   // Extra (out-of-workspace) file watches: dirPath → { watcher, files }
   private _extraDirWatchers = new Map<string, { watcher: FSWatcher; files: Set<string> }>()
@@ -226,6 +231,11 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
 
   private async _subscribe(target: string, ignore: string[]): Promise<void> {
     await this._teardown()
+    const isFirstWatch = !this._didMarkFirstWatch
+    if (isFirstWatch) {
+      this._didMarkFirstWatch = true
+      mark(PerfMarks.mainWillWatchWorkspace)
+    }
     try {
       const opts = PARCEL_BACKEND ? { ignore, backend: PARCEL_BACKEND } : { ignore }
       const sub = await watcher.subscribe(target, this._onParcel, opts)
@@ -241,6 +251,8 @@ export class FileWatcherMainService implements IFileWatcherService, IDisposable 
         `watch failed ${target}`,
         err instanceof Error ? (err.stack ?? err.message) : String(err),
       )
+    } finally {
+      if (isFirstWatch) mark(PerfMarks.mainDidWatchWorkspace)
     }
   }
 

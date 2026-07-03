@@ -616,6 +616,12 @@ async function bootstrapWorkbench(): Promise<void> {
   // Advance to Ready before mounting React (triggers BlockRestore contributions)
   mark(PerfMarks.rendererWillRestore)
   lifecycle.setPhase(LifecyclePhase.Ready)
+  // BlockRestore contributions (incl. WorkspaceRestoreContribution rebuilding
+  // editor groups) are scheduled as when(Ready).then(...) microtasks. Await the
+  // barrier so those callbacks have run before we mark, isolating their cost
+  // (willRestore → didBlockRestore) from the parallel load() group below.
+  await lifecycle.when(LifecyclePhase.Ready)
+  mark(PerfMarks.rendererDidBlockRestore)
 
   // E2E probe: only attaches when the app was launched with UNIVERSE_E2E=1.
   const d = installE2EProbeIfEnabled({
@@ -651,12 +657,17 @@ async function bootstrapWorkbench(): Promise<void> {
   // correct preferredSize. Allotment 1.20.5 only reads preferredSize on mount
   // (or pane-show); changing it after mount is silently ignored.
   // Also restore panel terminals for the current workspace.
+  //
+  // These four run concurrently; each stamps its own completion mark so a heavy
+  // workspace's dominant restore is visible by comparing offsets (adjacent
+  // milestone deltas would be misleading — the loads overlap in wall-clock).
   const terminalManagerService = instantiation.invokeFunction((a) => a.get(ITerminalManagerService))
+  mark(PerfMarks.rendererWillLoadServices)
   await Promise.all([
-    layoutService.load(),
-    viewDescriptorService.load(),
-    viewsService.load(),
-    terminalManagerService.load(),
+    layoutService.load().then(() => mark(PerfMarks.rendererDidLoadLayout)),
+    viewDescriptorService.load().then(() => mark(PerfMarks.rendererDidLoadViewDescriptor)),
+    viewsService.load().then(() => mark(PerfMarks.rendererDidLoadViews)),
+    terminalManagerService.load().then(() => mark(PerfMarks.rendererDidLoadTerminals)),
   ])
   rootLogger.info('bootstrap services restored')
   mark(PerfMarks.rendererDidRestoreServices)

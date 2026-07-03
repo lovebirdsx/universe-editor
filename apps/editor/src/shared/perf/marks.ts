@@ -19,9 +19,32 @@ export const PerfMarks = {
   /** Main: first extension-host child process spawned (lazy, may fire after window shown). */
   extHostDidSpawn: 'code/main/extHostDidSpawn',
 
+  /** Main: parcel recursive watch() on the workspace root started / resolved. */
+  mainWillWatchWorkspace: 'code/main/willWatchWorkspace',
+  mainDidWatchWorkspace: 'code/main/didWatchWorkspace',
+
   rendererWillStartBootstrap: 'code/renderer/willStartBootstrap',
   rendererDidCreateIpc: 'code/renderer/didCreateIpc',
   rendererWillRestore: 'code/renderer/willRestore',
+
+  /**
+   * Renderer: BlockRestore contributions finished (synchronous part of
+   * setPhase(Ready), incl. WorkspaceRestoreContribution rebuilding editor
+   * groups). willRestore → here isolates the contribution cost.
+   */
+  rendererDidBlockRestore: 'code/renderer/didBlockRestore',
+  /** Renderer: about to await the parallel state-restore load() group. */
+  rendererWillLoadServices: 'code/renderer/willLoadServices',
+  /**
+   * Renderer: per-service completion of the parallel restore group. These run
+   * concurrently, so compare each one's offset (not adjacent-milestone deltas)
+   * to find which restore dominates on a heavy workspace.
+   */
+  rendererDidLoadLayout: 'code/renderer/didLoadLayout',
+  rendererDidLoadViewDescriptor: 'code/renderer/didLoadViewDescriptor',
+  rendererDidLoadViews: 'code/renderer/didLoadViews',
+  rendererDidLoadTerminals: 'code/renderer/didLoadTerminals',
+
   rendererDidRestoreServices: 'code/renderer/didRestoreServices',
   /** Renderer: about to createRoot()/render the Workbench React tree. */
   rendererWillMountReact: 'code/renderer/willMountReact',
