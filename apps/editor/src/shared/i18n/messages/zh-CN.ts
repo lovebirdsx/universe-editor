@@ -692,6 +692,10 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'gitGraph.noCommitDetails': '没有提交详情。',
   'gitGraph.noFileChanges': '没有文件更改。',
   'gitGraph.openFile': '打开文件',
+  'gitGraph.openFile.failed': '无法打开 {path}：{error}',
+  'gitGraph.openFile.noRepository': '无法打开 {path}：当前未选中 Git 仓库。',
+  'gitGraph.openFile.notFound':
+    '无法打开 {path}：该文件不在当前工作树中，可能已被删除、重命名，或只存在于所选提交里。',
   'gitGraph.noUncommittedChanges': '没有未提交的更改。',
   'gitGraph.onBranch': ' · 位于 {branch}',
   'gitGraph.onlyFirstParent': '仅跟随第一父提交',

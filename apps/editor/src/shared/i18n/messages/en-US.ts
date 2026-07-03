@@ -233,6 +233,10 @@ export const EN_US_MESSAGES: MessageMap = {
   'diffEditor.openFile': 'Open File ({key})',
   'diffEditor.previousChange': 'Previous Change ({key})',
   'diffEditor.nextChange': 'Next Change ({key})',
+  'gitGraph.openFile.failed': 'Unable to open {path}: {error}',
+  'gitGraph.openFile.noRepository': 'Unable to open {path}: no Git repository is selected.',
+  'gitGraph.openFile.notFound':
+    'Unable to open {path}: the file does not exist in the current working tree. It may have been deleted, renamed, or only exist in the selected commit.',
   'command.category.mergeConflict': 'Merge Conflict',
   'mergeConflict.next.title': 'Go to Next Merge Conflict',
   'mergeConflict.previous.title': 'Go to Previous Merge Conflict',

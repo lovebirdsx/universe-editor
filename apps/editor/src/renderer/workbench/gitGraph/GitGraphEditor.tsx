@@ -31,7 +31,10 @@ import {
   ICommandService,
   IDialogService,
   IEditorResolverService,
+  IFileService,
+  INotificationService,
   IStorageService,
+  Severity,
   StorageScope,
   URI,
   localize,
@@ -135,6 +138,10 @@ function statusClass(status: string): string | undefined {
     default:
       return undefined
   }
+}
+
+function toErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** A thin draggable divider on a column's left edge; reports the horizontal drag
@@ -415,6 +422,8 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
   const commands = useService(ICommandService)
   const dialog = useService(IDialogService)
   const editorResolverService = useService(IEditorResolverService)
+  const fileService = useService(IFileService)
+  const notification = useService(INotificationService)
   const scm = useService(IScmService)
   const storage = useService(IStorageService)
   const [result, setResult] = useState<GitGraphLoadResult | null>(() => gitGraphViewState.result)
@@ -839,14 +848,54 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [commands],
   )
 
+  const effectiveRepoRoot = useMemo(() => {
+    if (repos.length === 0) return selectedRepo
+    if (selectedRepo && repos.some((repo) => repo.root === selectedRepo)) return selectedRepo
+    return repos[0]?.root ?? null
+  }, [repos, selectedRepo])
+
   const openSourceFile = useCallback(
     (file: GitGraphFileChangeDto) => {
-      if (!selectedRepo) return
-      void editorResolverService.openEditor(URI.joinPath(URI.file(selectedRepo), file.path), {
-        pinned: true,
-      })
+      void (async () => {
+        if (!effectiveRepoRoot) {
+          notification.notify({
+            severity: Severity.Warning,
+            message: localize(
+              'gitGraph.openFile.noRepository',
+              'Unable to open {path}: no Git repository is selected.',
+              { path: file.path },
+            ),
+          })
+          return
+        }
+
+        const resource = URI.joinPath(URI.file(effectiveRepoRoot), file.path)
+        try {
+          if (!(await fileService.exists(resource))) {
+            notification.notify({
+              severity: Severity.Warning,
+              message: localize(
+                'gitGraph.openFile.notFound',
+                'Unable to open {path}: the file does not exist in the current working tree. It may have been deleted, renamed, or only exist in the selected commit.',
+                { path: resource.fsPath },
+              ),
+            })
+            return
+          }
+
+          await editorResolverService.openEditor(resource, { pinned: true })
+        } catch (error) {
+          notification.notify({
+            severity: Severity.Error,
+            message: localize('gitGraph.openFile.failed', 'Unable to open {path}: {error}', {
+              path: resource.fsPath,
+              error: toErrorMessage(error),
+            }),
+          })
+        }
+      })()
     },
-    [editorResolverService, selectedRepo],
+    [editorResolverService, effectiveRepoRoot, fileService, notification],
   )
 
   // Run a mutating op, then revalidate in place so the scroll position and
@@ -1411,7 +1460,6 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     () => (compareFiles ? buildFileTree(compareFiles) : []),
     [compareFiles],
   )
-
   const renderDetail = () => {
     if (panelLoading)
       return <div className={styles['detailEmpty']}>{localize('common.loading', 'Loading…')}</div>
