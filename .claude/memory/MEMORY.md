@@ -46,6 +46,7 @@
 ## 工程约定 / 护栏
 
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — no-restricted-syntax 禁手写 fsPath 大小写折叠/路径身份键(精准不误伤 slug/模型 id)；flat config 同名规则替换非合并的坑；测试+SCM 域豁免
+- [Action2 async run 的 accessor 失效坑](action2-async-accessor-invalidation.md) — ServicesAccessor 遇第一个 await 即失效；async run 须在 await 前同步取完所有 service(快照传后续 helper)；持久 accessor 的测试会假绿抓不到
 
 ## 测试 flaky / 环境问题(非回归)
 
