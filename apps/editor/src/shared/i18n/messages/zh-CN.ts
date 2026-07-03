@@ -371,6 +371,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'dialog.file.prompt.newFolder': '新建文件夹',
   'dialog.file.prompt.rename': '重命名',
   'dialog.file.rename.error': '重命名失败',
+  'doc.localeFallback': '此页面暂无你所用显示语言的版本，当前显示中文版。',
   'fileDialog.move.openLabel': '移动',
   'fileDialog.move.title': '选择目标文件夹',
   'dialog.largeFile.detail': '大文件可能导致编辑器无响应。',

@@ -430,7 +430,7 @@ describe('DocLinkContext', () => {
     const link = screen.getByRole('link', { name: '提交改动' })
     expect(link.getAttribute('target')).toBeNull()
     link.click()
-    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md')
+    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md', { toSide: false })
     expect(windowOpen).not.toHaveBeenCalled()
     windowOpen.mockRestore()
   })
@@ -449,7 +449,7 @@ describe('DocLinkContext', () => {
       </ServicesContext.Provider>,
     )
     screen.getByRole('link', { name: '查看 amend' }).click()
-    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md#amend-section')
+    expect(openDocLink).toHaveBeenCalledWith('../git/commit.md#amend-section', { toSide: false })
   })
 
   it('falls through to window.open when DocLinkContext is absent', () => {

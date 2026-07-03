@@ -710,4 +710,173 @@ test.describe('@p1 markdown preview', () => {
       .poll(() => img.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 5000 })
       .toBeGreaterThan(0)
   })
+
+  // The built-in doc center (DocEditor) is another markdown reading surface and
+  // shares the preview's vimium-style keyboard navigation via useMarkdownReaderNav.
+  // Opening it and pressing `f` must overlay link hints just like the file preview.
+  test('doc center shares vimium link hints', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+
+    // The doc index renders many links; wait for the first before driving keys.
+    await expect(page.locator('[data-testid="doc-editor"] a').first()).toBeVisible()
+    await page.bringToFront()
+
+    // The doc surface auto-focuses on open, so the shared `markdownPreviewFocused`
+    // key (the navigation Action2s gate on it) is true without a manual click.
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    await showLinkHints(page, workbench)
+    await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
+  })
+
+  // Regression: pressing Escape to dismiss the hints must keep the doc surface
+  // focused so `f` works again. The doc center is a plain div with no Monaco
+  // registration, so unless DocEditorInput.focus() routes focus back into the
+  // scroll container, the group body grabs it, fires focusout, drops
+  // markdownPreviewFocused → a second `f` is silently ignored.
+  test('doc center Escape keeps focus so link hints keep working', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+
+    await expect(page.locator('[data-testid="doc-editor"] a').first()).toBeVisible()
+    await page.bringToFront()
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    // First `f` summons hints.
+    await showLinkHints(page, workbench)
+    await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
+
+    // Escape dismisses the hints; focus must stay in the doc surface.
+    await page.keyboard.press('Escape')
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewLinkHintsVisible'), {
+        timeout: 5000,
+      })
+      .toBe(false)
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    // Proof the focus is real: a second `f` summons hints again, no click.
+    await showLinkHints(page, workbench)
+    await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
+  })
+
+  test('doc center shows the keyboard help overlay', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+
+    await expect(page.locator('[data-testid="doc-editor"] h1').first()).toBeVisible()
+    await page.bringToFront()
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    const help = page.locator('[data-testid="md-preview-help"]')
+    // Re-press while still hidden so a dropped synthetic key self-heals.
+    await expect
+      .poll(
+        async () => {
+          if (!(await help.isVisible())) await page.keyboard.press('?')
+          return help.isVisible()
+        },
+        { timeout: 8000 },
+      )
+      .toBe(true)
+  })
+
+  // Regression: switching to a Monaco file editor and back left editorTextFocus
+  // stuck true (its blur can lag), so the global keybinding guard swallowed the
+  // bare `f`. focusEditorInput's non-Monaco branch must sync the focus context
+  // keys after DocEditorInput.focus() so `f` keeps working after a round-trip.
+  test('doc center keeps link hints working after switching editors and back', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+    await expect(page.locator('[data-testid="doc-editor"] a').first()).toBeVisible()
+
+    // Open a Monaco markdown file in the same group, then switch back to the doc.
+    const mdFsPath = writeTempMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .toBe('markdown')
+
+    // Return to the doc tab by clicking it.
+    await page.locator('[role="tab"]', { hasText: '文档中心' }).first().click()
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+
+    await page.bringToFront()
+    await expect
+      .poll(() => workbench.getContextKey<boolean>('markdownPreviewFocused'), { timeout: 5000 })
+      .toBe(true)
+
+    // `f` must still summon link hints after the round-trip.
+    await showLinkHints(page, workbench)
+    await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
+  })
+
+  // A plain click on a doc-to-doc link navigates in place (reusing the tab)
+  // rather than piling up a new tab each time — mirrors the markdown preview.
+  test('doc center link navigates in place without opening a new tab', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    await workbench.runCommand('workbench.action.openDocs')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+    await expect(page.locator('[data-testid="doc-editor"] a').first()).toBeVisible()
+    await page.bringToFront()
+
+    const before = await workbench.getContextKey<number>('groupEditorsCount')
+
+    // Click the first relative .md link in the doc index.
+    await page
+      .locator(
+        '[data-testid="doc-editor"] a[href$=".md"], [data-testid="doc-editor"] a[href*=".md#"]',
+      )
+      .first()
+      .click()
+
+    // Still a doc, and the tab count did not grow — the link replaced in place.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('doc')
+    await expect
+      .poll(() => workbench.getContextKey<number>('groupEditorsCount'), { timeout: 5000 })
+      .toBe(before)
+  })
 })

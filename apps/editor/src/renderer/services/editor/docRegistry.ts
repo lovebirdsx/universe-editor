@@ -9,6 +9,11 @@
 import type { SupportedLocale } from '../../../shared/i18n/availableLocales.js'
 import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
 
+// The locale whose docs are the source of truth: any doc missing in the active
+// locale falls back to this one so the guide is never a dead end while other
+// locales are still being translated.
+const FALLBACK_LOCALE: SupportedLocale = 'zh-CN'
+
 // Eager glob: bundled at build time. Paths are relative to this module's location.
 // This file is at apps/editor/src/renderer/services/editor/, so 6 levels up reaches
 // the repository root (universe-editor/), then into docs/user/.
@@ -38,13 +43,36 @@ function buildRegistry(raw: Record<string, string>, locale: SupportedLocale): Ma
   return map
 }
 
-const ZH_REGISTRY = buildRegistry(zhRaw, 'zh-CN')
-const EN_REGISTRY = buildRegistry(enRaw, 'en-US')
+const REGISTRIES: Record<SupportedLocale, Map<string, string>> = {
+  'zh-CN': buildRegistry(zhRaw, 'zh-CN'),
+  'en-US': buildRegistry(enRaw, 'en-US'),
+}
+
+/**
+ * A resolved document: its markdown content plus the locale it actually came
+ * from. When `locale` differs from the active display language, the content is
+ * a fallback (that locale's version isn't translated yet).
+ */
+export interface IResolvedDoc {
+  readonly content: string
+  readonly locale: SupportedLocale
+}
+
+/** Resolve a docId to its content and source locale, falling back when needed. */
+export function resolveDoc(docId: string): IResolvedDoc | undefined {
+  const locale = getCurrentLocale()
+  const own = REGISTRIES[locale].get(docId)
+  if (own !== undefined) return { content: own, locale }
+  if (locale !== FALLBACK_LOCALE) {
+    const fallback = REGISTRIES[FALLBACK_LOCALE].get(docId)
+    if (fallback !== undefined) return { content: fallback, locale: FALLBACK_LOCALE }
+  }
+  return undefined
+}
 
 /** Get the raw markdown content for a docId in the current locale (fallback: zh-CN). */
 export function getDocContent(docId: string): string | undefined {
-  const locale = getCurrentLocale()
-  return (locale === 'zh-CN' ? ZH_REGISTRY : EN_REGISTRY).get(docId) ?? ZH_REGISTRY.get(docId)
+  return resolveDoc(docId)?.content
 }
 
 /** Extract the first H1 heading from a markdown string. */

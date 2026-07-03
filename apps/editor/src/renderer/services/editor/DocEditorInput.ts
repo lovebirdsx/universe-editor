@@ -8,6 +8,7 @@
 
 import { EditorInput, URI } from '@universe-editor/platform'
 import { getDocTitle, isDocId } from './docRegistry.js'
+import { MarkdownPreviewRegistry } from './MarkdownPreviewRegistry.js'
 
 interface ISerializedDoc {
   readonly docId: string
@@ -38,6 +39,22 @@ export class DocEditorInput extends EditorInput {
 
   override getName(): string {
     return getDocTitle(this._docId)
+  }
+
+  /**
+   * Move keyboard focus back into the live doc's scroll container (not the
+   * editor-group body). The doc center is a plain div with no Monaco
+   * registration, so `focusEditorInput` would otherwise fall back to focusing
+   * the group body — which sits *outside* the doc container and fires its
+   * `focusout`, dropping the `markdownPreviewFocused` context key and silently
+   * disabling f / Ctrl+F / link hints. Mirrors MarkdownPreviewInput.focus(); the
+   * shared useMarkdownReaderNav registers the controller keyed on `resource`.
+   */
+  override focus(): boolean {
+    const controller = MarkdownPreviewRegistry.get(this.resource)
+    if (!controller) return false
+    controller.focus()
+    return true
   }
 
   override serialize(): ISerializedDoc {

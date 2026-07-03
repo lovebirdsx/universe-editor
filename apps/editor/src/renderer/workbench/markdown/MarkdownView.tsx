@@ -182,8 +182,12 @@ const AnchorScrollContext = createContext<(id: string) => void>(() => {})
  * When provided by a parent (e.g. DocEditor), relative `.md` links are routed
  * to the handler instead of the file-system resolver. The raw href is passed
  * (e.g. `"../git/commit.md#amend"`) and the handler resolves it to a DocId.
+ * `toSide` is true when Ctrl/Cmd was held, so the target opens in a new tab
+ * instead of replacing the current document in place.
  */
-export const DocLinkContext = createContext<((href: string) => void) | undefined>(undefined)
+export const DocLinkContext = createContext<
+  ((href: string, opts?: { toSide?: boolean }) => void) | undefined
+>(undefined)
 
 function Block({ node }: { node: MdNode }): ReactNode {
   const lineAttr = node.line !== undefined ? { 'data-line': node.line } : {}
@@ -388,7 +392,7 @@ function SafeLink({ href, children }: { href: string; children: ReactNode }) {
     }
     // Doc-to-doc relative link: intercept before file-path resolution.
     if (isRelativeDocLink && openDocLink) {
-      openDocLink(href)
+      openDocLink(href, { toSide: e.ctrlKey || e.metaKey })
       return
     }
     if (isFilePath) {

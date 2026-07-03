@@ -204,7 +204,17 @@ export function focusEditorInput(
     return true
   }
   // Non-Monaco editors (e.g. React-based) may implement focus() directly.
-  if (input.focus?.()) return true
+  // Sync the focus context keys afterwards: switching away to a Monaco editor
+  // left `editorTextFocus` stuck true (its blur can lag), and without clearing
+  // it here the global keybinding handler treats this non-Monaco surface as a
+  // text input and swallows printable single-key bindings like `f` (see the
+  // markdown preview / doc center link hints). queueMicrotask mirrors the Monaco
+  // path so the DOM focus move settles first.
+  if (input.focus?.()) {
+    syncEditorFocusContext(contextKeyService)
+    queueMicrotask(() => syncEditorFocusContext(contextKeyService))
+    return true
+  }
   // Otherwise pull DOM focus into the group's editor body so keyboard input
   // leaves wherever it was (often the terminal — which leaves terminalFocus
   // stuck true and blocks Ctrl+W). Covers every non-text editor that doesn't

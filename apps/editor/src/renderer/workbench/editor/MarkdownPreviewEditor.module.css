@@ -21,6 +21,18 @@
   gap: 8px;
 }
 
+/* Shown at the top of a guide document when its content is a fallback from
+   another locale (the active display language isn't translated yet). */
+.fallbackNotice {
+  flex: 0 0 auto;
+  padding: 8px 32px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--color-editor-fg, #d4d4d4);
+  background: var(--color-notification-info-bg, rgba(56, 128, 214, 0.15));
+  border-bottom: 1px solid var(--color-border, #333);
+}
+
 /* In-preview find bar. Sticky so it stays pinned to the top-right of the scroll
    viewport while the document scrolls beneath it (mirrors Monaco's find widget).
    Mirrors the chat find bar; ChatFindWidget replaces its container class with

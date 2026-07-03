@@ -174,6 +174,8 @@ export const EN_US_MESSAGES: MessageMap = {
   'dialog.file.prompt.newFile': 'New File',
   'dialog.file.prompt.newFolder': 'New Folder',
   'dialog.file.prompt.rename': 'Rename',
+  'doc.localeFallback':
+    'This page is not yet available in your display language. Showing the 中文 version.',
   'fileDialog.move.openLabel': 'Move',
   'fileDialog.move.title': 'Select Destination Folder',
   'dialog.largeFile.detail': 'Large files may cause the editor to become unresponsive.',
