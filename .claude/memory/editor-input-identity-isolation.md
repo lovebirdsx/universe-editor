@@ -30,3 +30,10 @@ metadata:
 测试：`MarkdownView.test.tsx`(图片链接经 resolver + @ 链接改断言 resolver)。注意 `[x](./a.png)` 这类**相对**图片路径在预览里根本不解析成链接——`filePathLink.ts` 的 `EXTS` 白名单不含图片扩展名，只有绝对路径（`/…`、`D:/…`）才 `looksLikeFilePath`；源码编辑器则靠 markdown LSP 的 documentLink 认到图片。
 
 与路径身份收敛（[[path-comparison-convergence]]）同源异层：那个治"文件系统身份键碰撞"，这个治"编辑器身份键碰撞"。测试：`imageEditor.test.ts`、`ClosedEditorsService.test.ts`、`editorActions.test.ts`；e2e `smoke.imageEditor`(含 Reopen With image→file)。
+
+**2026-07 追加（非 Monaco 编辑器 EditorInput 必须覆写 `focus()`，否则 context-key 掉）**：`DocEditor`（内置文档中心，走共享 `useMarkdownReaderNav`）复用 markdown 预览的 vimium 键盘导航后，「按 f 弹 hints → Esc 关闭 → 再按 f 无反应」。根因同 [[markdown-preview-link-hints]] 焦点链：焦点回归路径（`FocusActiveEditorGroup`→`focusEditorInput`）调 `input.focus()`，基类默认 `focus()` 把焦点落到**编辑器组 body**（在滚动容器*外*）→ 触发容器 `focusout` → `markdownPreviewFocused` 变 false → `LINK_HINTS_WHEN` 门控不满足 → 裸 f 键 NO-MATCH。`MarkdownPreviewInput.focus()`（67-81 行注释详述）早已覆写此坑，但对称的 `DocEditorInput` 漏了。修法：`DocEditorInput` 覆写 `focus()`，经 `MarkdownPreviewRegistry.get(this.resource).focus()` 把焦点路由回滚动容器（registry key 用 `this.resource`=`universe:/doc/…`，即 DocEditor 注册时的 URI）。**通则**：任何「plain div 无 Monaco 注册 + 裸字符键绑定」的 EditorInput（预览/文档/图片…）都要覆写 `focus()` 把焦点保持在自己的容器内。e2e 回归 `smoke.markdownPreview.spec.ts` 的 `doc center Escape keeps focus so link hints keep working`（复现 f→Esc→f）。关联 [[editor-text-focus-stuck-swallows-keys]]。
+
+**同批修的另两处 DocEditor 行为**（都对齐 markdown 预览）：
+1. **doc-to-doc 链接默认原地导航**（此前每点一个链接就无条件 `openEditor(new DocEditorInput)` 堆一个新 tab——DocEditorInput 按 docId 各有不同 id 不去重）。修法照 `openMarkdownPreviewInGroup`：`DocLinkContext` 回调签名加 `opts?: {toSide}`（`MarkdownView.SafeLink` 传 `e.ctrlKey||e.metaKey`），`DocEditor.openDocLink` 默认取当前 tab 的 index → `group.openEditor(target,{index})` + `closeEditor(old)` 原地替换（单 tab 走 trail，Alt+←/→ 可用），Ctrl/Cmd+click 才新开。
+2. **`EditorGroupView.renderContent` 的按-id remount 分支**从只认 `'markdown.preview'` 扩到 `|| 'doc'`：原地替换 A→B 时若复用组件实例会残留 A 的滚动位置 / useMarkdownReaderNav 注册，key 成 `active.id` 强制重挂载。
+测试：`MarkdownView.test.tsx`（DocLinkContext 断言加第二参 `{toSide:false}`）；e2e `doc center link navigates in place without opening a new tab`。

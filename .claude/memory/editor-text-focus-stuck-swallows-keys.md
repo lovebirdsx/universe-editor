@@ -19,3 +19,5 @@ markdown 预览 link hints 的裸 `f` 键退化(按 f 无反应)真因:context k
 
 **Why**:隐蔽,对今后任何"非 Monaco 编辑器 + 裸字母/Delete/Backspace 键绑定"都适用(如预览滚动 j/k、前进后退)。
 **How to apply**:给非 Monaco 编辑器加裸字符键绑定时,确认 `editorTextFocus` 在焦点进入该编辑器时为 false;e2e 必用真实 `page.keyboard.press`,辅以 bringToFront + 仅在未生效时重按的自愈轮询。关联 [[markdown-preview-link-hints]]。
+
+**2026-07 追加(切走再切回同类失效 + `focusEditorInput` 非 Monaco 分支漏 sync)**:文档中心(DocEditor,复用 `useMarkdownReaderNav`)「切到 Monaco 文件编辑器→再切回 doc→按 f 无反应」,同一 `editorTextFocus` 残留链的另一触发路径。根因:切到 Monaco 时 `onDidFocusEditorText` 置 true;切回 doc 走 `focusEditorInput()`(`editorFocus.ts`)的 `input.focus?.()` 非 Monaco 分支——该分支**当时只 return true,没调 `syncEditorFocusContext`**(Monaco / diff 分支都调了,唯独它漏了)→ 残留的 true 没被清 → 裸 f 被守卫吞。修法:`input.focus()` 成功后补 `syncEditorFocusContext` + `queueMicrotask(...)`(对齐 Monaco/diff 分支写法)。前置条件是 EditorInput 覆写了 `focus()`(见 [[editor-input-identity-isolation]] 的 DocEditorInput 补 focus)。e2e 回归 `smoke.markdownPreview.spec.ts` 的 `doc center keeps link hints working after switching editors and back`。**通则**:任何非 Monaco 编辑器的 `focus()` 落地后都要 sync 焦点 context key,否则从 Monaco 切过来会带着 stale 的 `editorTextFocus`/`editorFocus`。
