@@ -1,5 +1,29 @@
 [
   {
+    "version": "0.1.30",
+    "date": "2026-07-03",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "git graph中的提交可以发送到session输入框",
+          "文档支持vimum按键，修复与焦点和打开相关的bug",
+          "commit --amend可以自动处理非stage的文件"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "git graph打开文件时检查文件是否存在并提示错误",
+          "修复有序列表渲染不正确的情况",
+          "修复软换行时误触发历史记录的问题"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.29",
     "date": "2026-07-02",
     "groups": [
