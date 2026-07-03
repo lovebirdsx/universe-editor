@@ -45,10 +45,7 @@ export type MdNode =
   | {
       readonly type: 'list'
       readonly ordered: boolean
-      readonly items: readonly {
-        readonly inline: readonly MdInline[]
-        readonly checked: boolean | null
-      }[]
+      readonly items: readonly MdListItem[]
       readonly line?: number
     }
   | { readonly type: 'blockquote'; readonly children: readonly MdInline[]; readonly line?: number }
@@ -62,6 +59,19 @@ export type MdNode =
   | { readonly type: 'hr'; readonly line?: number }
 
 export type TableAlign = 'left' | 'center' | 'right'
+
+/**
+ * One item of a list. `inline` is the item's own leading text (first line plus
+ * any lazy top-level continuation lines), rendered directly inside the `<li>`.
+ * `children` holds indented block content (nested lists, code fences, extra
+ * paragraphs, blockquotes …) and is omitted entirely when the item has none, so
+ * plain items keep their simple shape.
+ */
+export type MdListItem = {
+  readonly inline: readonly MdInline[]
+  readonly checked: boolean | null
+  readonly children?: readonly MdNode[]
+}
 
 export type MdInline =
   | { readonly type: 'text'; readonly text: string }
@@ -153,51 +163,83 @@ export function parseMarkdown(input: string): readonly MdNode[] {
     }
 
     // Lists — homogeneous run of `- ` / `* ` / `+ ` (unordered) or `<n>. `
-    // (ordered) lines. Plain continuation lines belong to the current item;
-    // blank lines between same-kind items make a loose list.
-    const ul = /^\s*[-*+]\s+(.*)$/.exec(line)
-    const ol = /^\s*\d+\.\s+(.*)$/.exec(line)
+    // (ordered) lines. A sibling item sits at the list's base indent; a plain
+    // top-level line before any child is lazy continuation of the item's text;
+    // lines indented past the marker are the item's child blocks (nested lists,
+    // code fences, extra paragraphs …), dedented and parsed recursively. Blank
+    // lines between same-kind items make a loose list.
+    const ul = /^\s*[-*+]\s+/.test(line)
+    const ol = /^\s*\d+\.\s+/.test(line)
     if (ul || ol) {
-      const ordered = !!ol
-      const itemPattern = ordered ? /^\s*\d+\.\s+(.*)$/ : /^\s*[-*+]\s+(.*)$/
-      const items: { inline: MdInline[]; checked: boolean | null }[] = []
+      const ordered = ol
+      const markerRe = ordered ? /^(\d+\.\s+)/ : /^([-*+]\s+)/
+      const baseIndent = indentOf(line)
+      const isSibling = (l: string): boolean =>
+        indentOf(l) === baseIndent && markerRe.test(l.slice(baseIndent))
+      const items: MdListItem[] = []
       while (i < lines.length) {
         const cur = lines[i] ?? ''
-        const m = itemPattern.exec(cur)
-        if (!m) {
-          if (cur.trim() === '') {
-            let next = i + 1
-            while (next < lines.length && (lines[next] ?? '').trim() === '') next++
-            if (next < lines.length && itemPattern.test(lines[next] ?? '')) {
-              i = next
-              continue
-            }
+        if (cur.trim() === '') {
+          // Loose list: a blank between two same-kind siblings stays one list.
+          let next = i + 1
+          while (next < lines.length && (lines[next] ?? '').trim() === '') next++
+          if (next < lines.length && isSibling(lines[next] ?? '')) {
+            i = next
+            continue
           }
           break
         }
-        const firstLine = m[1] ?? ''
+        if (!isSibling(cur)) break
+        const rest = cur.slice(baseIndent)
+        const marker = markerRe.exec(rest)![1] ?? ''
+        // Content column = marker prefix width; child blocks indent to here.
+        const markerWidth = baseIndent + marker.length
+        const firstLine = rest.slice(marker.length)
         i++
         const continuationLines: string[] = []
+        const childLines: string[] = []
+        let sawChild = false
         while (i < lines.length) {
           const nextLine = lines[i] ?? ''
-          if (nextLine.trim() === '') break
+          if (nextLine.trim() === '') {
+            // A blank belongs to this item only when more-indented child content
+            // follows it; otherwise it ends the item (the outer loop decides
+            // whether a sibling continues the list).
+            let j = i + 1
+            while (j < lines.length && (lines[j] ?? '').trim() === '') j++
+            if (j < lines.length && indentOf(lines[j] ?? '') >= markerWidth) {
+              for (; i < j; i++) childLines.push('')
+              sawChild = true
+              continue
+            }
+            break
+          }
+          if (indentOf(nextLine) >= markerWidth) {
+            childLines.push(nextLine.slice(markerWidth))
+            sawChild = true
+            i++
+            continue
+          }
+          // Dedented line: a sibling item or an outer block ends this item.
+          if (isSibling(nextLine)) break
           if (isListItemStart(nextLine)) break
           if (isTopLevelBlockStart(nextLine, lines[i + 1] ?? '')) break
+          // Lazy continuation of the leading text — only before any child block.
+          if (sawChild) break
           continuationLines.push(nextLine)
           i++
         }
+        const children = childLines.some((l) => l.trim() !== '')
+          ? parseMarkdown(childLines.join('\n'))
+          : undefined
         const taskMatch = /^\[([ xX])\]\s+(.*)$/.exec(firstLine)
-        const itemText = taskMatch
-          ? [taskMatch[2] ?? '', ...continuationLines].join('\n')
-          : [firstLine, ...continuationLines].join('\n')
-        if (taskMatch) {
-          items.push({
-            inline: [...parseInline(itemText)],
-            checked: taskMatch[1] !== ' ',
-          })
-        } else {
-          items.push({ inline: [...parseInline(itemText)], checked: null })
-        }
+        const leadingText = taskMatch ? (taskMatch[2] ?? '') : firstLine
+        const itemText = [leadingText, ...continuationLines].join('\n')
+        items.push({
+          inline: [...parseInline(itemText)],
+          checked: taskMatch ? taskMatch[1] !== ' ' : null,
+          ...(children !== undefined ? { children } : {}),
+        })
       }
       out.push({ type: 'list', ordered, items, line: blockStart })
       continue
@@ -246,6 +288,13 @@ export function parseMarkdown(input: string): readonly MdNode[] {
 
 function isListItemStart(line: string): boolean {
   return /^\s*(?:[-*+]|\d+\.)\s+/.test(line)
+}
+
+/** Number of leading space characters (tabs count as one; agents emit spaces). */
+function indentOf(line: string): number {
+  let n = 0
+  while (n < line.length && (line[n] === ' ' || line[n] === '\t')) n++
+  return n
 }
 
 function isTopLevelBlockStart(line: string, nextLine: string): boolean {

@@ -97,6 +97,21 @@
   word-break: break-word;
 }
 
+/* Nested lists hug the parent item's text; extra child paragraphs get a small gap. */
+.markdown li > ul,
+.markdown li > ol {
+  margin: 2px 0 0;
+}
+
+.markdown li > p {
+  margin: 0;
+}
+
+.markdown li > p + p,
+.markdown li > * + p {
+  margin-top: 4px;
+}
+
 .markdown blockquote {
   margin: 0.2em 0;
   padding: 0.3em 0.8em;

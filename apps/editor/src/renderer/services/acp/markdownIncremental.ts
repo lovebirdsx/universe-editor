@@ -135,48 +135,64 @@ function lastSafeSplit(text: string): number {
 type ListKind = 'ordered' | 'unordered'
 
 /**
- * A blank line is "inside a loose list" when the nearest non-blank line before
- * it belongs to an open list item and the nearest non-blank line after it starts
- * the same kind of list — `parseMarkdown` would merge them into a single list
- * across the blank, so cutting here would split one list into two.
+ * A blank line is "inside a loose list" when `parseMarkdown` would merge the
+ * content across it into a single list — cutting there would wrongly split one
+ * list into two. Two merge routes, scanning upward past the blank for an
+ * enclosing list item:
+ *   - child continuation: the line after the blank is indented into some
+ *     (possibly ancestor) item's content column, so it's that item's child block.
+ *   - loose sibling: the line after the blank is a same-indent, same-kind list
+ *     item — the next sibling of the item above.
+ *
+ * Returning `true` too eagerly only costs a missed incremental split (never a
+ * wrong render); the equivalence tests guard against the opposite — a real merge
+ * point that slips through as `false`.
  */
 function isLooseListBlank(lines: readonly string[], blankIdx: number): boolean {
-  let prev = blankIdx - 1
-  while (prev >= 0 && (lines[prev] ?? '').trim() === '') prev--
   let next = blankIdx + 1
   while (next < lines.length && (lines[next] ?? '').trim() === '') next++
-  if (prev < 0 || next >= lines.length) return false
-  const nextKind = listItemKind(lines[next] ?? '')
-  if (!nextKind) return false
-  for (let i = prev; i >= 0; i--) {
+  if (next >= lines.length) return false
+  const nextLine = lines[next] ?? ''
+  const nextIndent = indentOf(nextLine)
+  const nextKind = listItemKind(nextLine.slice(nextIndent))
+
+  for (let i = blankIdx - 1; i >= 0; i--) {
     const line = lines[i] ?? ''
-    if (line.trim() === '') return false
-    const kind = listItemKind(line)
-    if (kind) return kind === nextKind
-    if (isTopLevelBlockStart(line, lines[i + 1] ?? '')) return false
+    if (line.trim() === '') continue
+    const lineIndent = indentOf(line)
+    const afterIndent = line.slice(lineIndent)
+    const kind = listItemKind(afterIndent)
+    if (kind) {
+      const contentCol = lineIndent + markerWidth(afterIndent)
+      if (nextIndent >= contentCol) return true
+      if (nextKind && nextIndent === lineIndent && kind === nextKind) return true
+      if (nextIndent < lineIndent) continue
+      return false
+    }
+    // Non-list line (a paragraph or a deeper child block): keep scanning upward
+    // for the list item that owns this region.
   }
   return false
 }
 
-function listItemKind(line: string): ListKind | null {
-  if (/^\s*\d+\.\s+/.test(line)) return 'ordered'
-  if (/^\s*[-*+]\s+/.test(line)) return 'unordered'
+function listItemKind(afterIndent: string): ListKind | null {
+  if (/^\d+\.\s+/.test(afterIndent)) return 'ordered'
+  if (/^[-*+]\s+/.test(afterIndent)) return 'unordered'
   return null
 }
 
-function isTopLevelBlockStart(line: string, nextLine: string): boolean {
-  return (
-    /^```/.test(line) ||
-    /^#{1,6}\s/.test(line) ||
-    /^\s*>/.test(line) ||
-    /^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line) ||
-    isTableDelimiterRow(line) ||
-    (line.includes('|') && isTableDelimiterRow(nextLine))
-  )
+/** Width of the list marker prefix (`1. ` → 3, `- ` → 2) on an already-dedented line. */
+function markerWidth(afterIndent: string): number {
+  const ol = /^(\d+\.\s+)/.exec(afterIndent)
+  if (ol) return (ol[1] ?? '').length
+  const ul = /^([-*+]\s+)/.exec(afterIndent)
+  if (ul) return (ul[1] ?? '').length
+  return 0
 }
 
-const TABLE_DELIMITER_RE = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/
-
-function isTableDelimiterRow(line: string): boolean {
-  return line.includes('-') && TABLE_DELIMITER_RE.test(line)
+/** Number of leading space/tab characters. Mirrors the parser's `indentOf`. */
+function indentOf(line: string): number {
+  let n = 0
+  while (n < line.length && (line[n] === ' ' || line[n] === '\t')) n++
+  return n
 }

@@ -134,6 +134,83 @@ describe('parseMarkdown — block layer', () => {
     ])
   })
 
+  it('nests an indented sublist under its parent item (blank-separated)', () => {
+    expect(parseMarkdown('1. 子项1\n   - a\n   - b\n\n2. 子项2')).toEqual<readonly MdNode[]>([
+      {
+        type: 'list',
+        ordered: true,
+        items: [
+          {
+            inline: [text('子项1')],
+            checked: null,
+            children: [
+              {
+                type: 'list',
+                ordered: false,
+                items: [
+                  { inline: [text('a')], checked: null },
+                  { inline: [text('b')], checked: null },
+                ],
+                line: 0,
+              },
+            ],
+          },
+          { inline: [text('子项2')], checked: null },
+        ],
+        line: 0,
+      },
+    ])
+  })
+
+  it('nests a tight (blank-free) sublist under its parent item', () => {
+    const nodes = parseMarkdown('1. 子项1\n   - a\n   - b\n2. 子项2')
+    expect(nodes).toHaveLength(1)
+    const list = nodes[0]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.items).toHaveLength(2)
+    expect(list.items[0]?.children?.[0]).toMatchObject({ type: 'list', ordered: false })
+    expect(list.items[1]?.children).toBeUndefined()
+  })
+
+  it('nests an ordered sublist inside an unordered item', () => {
+    const nodes = parseMarkdown('- top\n  1. x\n  2. y\n- top2')
+    const list = nodes[0]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.ordered).toBe(false)
+    expect(list.items).toHaveLength(2)
+    expect(list.items[0]?.children?.[0]).toMatchObject({ type: 'list', ordered: true })
+  })
+
+  it('nests three levels deep by indentation', () => {
+    const nodes = parseMarkdown('- a\n  - b\n    - c')
+    const top = nodes[0]!
+    if (top.type !== 'list') throw new Error('expected list')
+    const b = top.items[0]?.children?.[0]
+    expect(b).toMatchObject({ type: 'list' })
+    if (b?.type !== 'list') throw new Error('expected nested list')
+    expect(b.items[0]?.children?.[0]).toMatchObject({ type: 'list' })
+  })
+
+  it('keeps an indented code fence as a child block of the item', () => {
+    const nodes = parseMarkdown('- item\n  ```ts\n  const x = 1\n  ```\n- next')
+    const list = nodes[0]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.items).toHaveLength(2)
+    expect(list.items[0]?.children).toEqual<readonly MdNode[]>([
+      { type: 'code_fence', lang: 'ts', code: 'const x = 1', line: 0 },
+    ])
+  })
+
+  it('keeps a second paragraph as a child block of the item', () => {
+    const nodes = parseMarkdown('- p1\n\n  p2\n- next')
+    const list = nodes[0]!
+    if (list.type !== 'list') throw new Error('expected list')
+    expect(list.items[0]?.inline).toEqual([text('p1')])
+    expect(list.items[0]?.children).toEqual<readonly MdNode[]>([
+      { type: 'paragraph', children: [text('p2')], line: 1 },
+    ])
+  })
+
   it('ends a list when a blank line is not followed by another list item', () => {
     const md = '- a\n- b\n\nparagraph'
     const nodes = parseMarkdown(md)

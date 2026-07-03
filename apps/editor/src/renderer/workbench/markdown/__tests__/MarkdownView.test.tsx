@@ -195,6 +195,18 @@ describe('MarkdownView', () => {
     expect(screen.getByText(/子项2/).closest('ol')).toBe(container.querySelector('ol'))
   })
 
+  it('renders an indented sublist nested inside its parent list item', () => {
+    const { container } = renderMarkdown('1. 子项1\n   - a\n   - b\n\n2. 子项2')
+    // Exactly one top-level ordered list with two items; no stray sibling lists.
+    expect(container.querySelectorAll('ol')).toHaveLength(1)
+    const topItems = container.querySelectorAll('ol > li')
+    expect(topItems).toHaveLength(2)
+    // The sublist lives inside the first <li>, not as a sibling of the <ol>.
+    const sublist = topItems[0]!.querySelector('ul')
+    expect(sublist).toBeTruthy()
+    expect(sublist!.querySelectorAll('li')).toHaveLength(2)
+  })
+
   it('renders a code fence with a language attribute', () => {
     const { container } = renderMarkdown('```ts\nconst x = 1\n```')
     const pre = container.querySelector('pre[data-lang="ts"]')

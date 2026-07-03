@@ -23,6 +23,7 @@ import {
   parseMarkdown,
   slugifyHeading,
   type MdInline,
+  type MdListItem,
   type MdNode,
   type TableAlign,
 } from '../../services/acp/markdownRenderer.js'
@@ -212,17 +213,7 @@ function Block({ node }: { node: MdNode }): ReactNode {
       return node.ordered ? (
         <ol {...lineAttr}>
           {node.items.map((item, i) => (
-            <li key={i}>
-              {item.checked !== null && (
-                <input
-                  type="checkbox"
-                  readOnly
-                  checked={item.checked}
-                  className={styles['taskCheckbox']}
-                />
-              )}
-              {renderInline(item.inline)}
-            </li>
+            <ListItem key={i} item={item} />
           ))}
         </ol>
       ) : (
@@ -231,17 +222,7 @@ function Block({ node }: { node: MdNode }): ReactNode {
           className={node.items.some((it) => it.checked !== null) ? styles['taskList'] : undefined}
         >
           {node.items.map((item, i) => (
-            <li key={i}>
-              {item.checked !== null && (
-                <input
-                  type="checkbox"
-                  readOnly
-                  checked={item.checked}
-                  className={styles['taskCheckbox']}
-                />
-              )}
-              {renderInline(item.inline)}
-            </li>
+            <ListItem key={i} item={item} />
           ))}
         </ul>
       )
@@ -279,6 +260,25 @@ function Block({ node }: { node: MdNode }): ReactNode {
 
 function alignStyle(align: TableAlign | null | undefined): React.CSSProperties | undefined {
   return align ? { textAlign: align } : undefined
+}
+
+/**
+ * One list item: its own inline text (with an optional task-list checkbox)
+ * followed by any indented child blocks (nested lists, code fences, extra
+ * paragraphs …), rendered recursively via {@link Block}.
+ */
+function ListItem({ item }: { item: MdListItem }): ReactNode {
+  return (
+    <li>
+      {item.checked !== null && (
+        <input type="checkbox" readOnly checked={item.checked} className={styles['taskCheckbox']} />
+      )}
+      {renderInline(item.inline)}
+      {item.children?.map((child, i) => (
+        <Block key={i} node={child} />
+      ))}
+    </li>
+  )
 }
 
 function renderInline(nodes: readonly MdInline[]): ReactNode {
