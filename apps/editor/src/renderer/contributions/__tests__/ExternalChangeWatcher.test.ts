@@ -21,13 +21,17 @@ import {
   LogLevel,
   NullLogger,
   URI,
+  UriIdentityService,
   type UriComponents,
   type UserDataFile,
 } from '@universe-editor/platform'
 
 // Stub the model registry so a test can inject a live editor buffer for a URI.
 // Default: no live model (peek → undefined), so diff refresh reads disk as before.
-const liveModels = new Map<string, { getValue: () => string; isDisposed: () => boolean }>()
+const liveModels = new Map<
+  string,
+  { getValue: () => string; setValue?: (v: string) => void; isDisposed: () => boolean }
+>()
 vi.mock('../../workbench/editor/monaco/MonacoModelRegistry.js', () => ({
   MonacoModelRegistry: {
     peek: (uri: { toString: () => string }) => liveModels.get(uri.toString()),
@@ -38,6 +42,7 @@ import { ExternalChangeWatcher } from '../ExternalChangeWatcher.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../../services/editor/DiffEditorInput.js'
 import { UntitledEditorInput } from '../../services/editor/UntitledEditorInput.js'
+import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 
 class FakeWatcher implements IFileWatcherServiceType {
   declare readonly _serviceBrand: undefined
@@ -150,6 +155,13 @@ function makeLoggerService(): ILoggerServiceType {
   }
 }
 
+// Real identity service on a case-sensitive platform so the existing `/ws/...`
+// test URIs compare exactly. A dedicated test below exercises win32 drive-letter
+// folding, which is the bug this service fixed in the watcher.
+function makeUriIdentity(platform: 'linux' | 'win32' = 'linux'): UriIdentityService {
+  return new UriIdentityService(platform)
+}
+
 /**
  * Fake file service. `existing` lists URIs whose `stat` succeeds (file present);
  * any other path throws (file gone). `contents` backs `readFileText`.
@@ -210,6 +222,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'modified', resource: uriA.toJSON() }])
@@ -231,6 +244,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'modified', resource: URI.file('/ws/other.txt').toJSON() }])
@@ -250,6 +264,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
@@ -271,6 +286,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService({ existing: [uri] }),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'deleted', resource: uri.toJSON() }])
@@ -293,6 +309,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'deleted', resource: URI.file('/ws/folder').toJSON() }])
@@ -313,6 +330,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService({ existing: [uri], contents: [[uri, 'head']] }),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
@@ -338,6 +356,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService({ existing: [uri], contents: [[uri, 'disk-stale']] }),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     watcher.fire([{ type: 'modified', resource: uri.toJSON() }])
@@ -363,6 +382,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService({ existing: [uri] }),
       makeLoggerService(),
       userData,
+      makeUriIdentity(),
     )
 
     userData.fire(aiSettings)
@@ -384,6 +404,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService({ existing: [uri] }),
       makeLoggerService(),
       userData,
+      makeUriIdentity(),
     )
 
     userData.fire(settings, 'self')
@@ -403,6 +424,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     await flush()
@@ -424,6 +446,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     const uri = URI.file('/ws/new.txt')
@@ -450,6 +473,7 @@ describe('ExternalChangeWatcher', () => {
       makeFileService(),
       makeLoggerService(),
       new FakeUserData(),
+      makeUriIdentity(),
     )
 
     groups.closeEditorInGroup(input)
@@ -460,5 +484,113 @@ describe('ExternalChangeWatcher', () => {
       URI.revive(u as Parameters<typeof URI.revive>[0])?.toString(),
     )
     expect(uriStrings).not.toContain(uri.toString())
+  })
+
+  // Regression: on win32 the parcel watcher reports a lower-cased drive letter
+  // (file:///c:/…) while the open editor's URI keeps the upper-cased one
+  // (file:///C:/…). A raw `.toString()` compare misses the match; the identity
+  // service folds the drive so the editor still reloads.
+  it('matches a FileEditorInput despite a win32 drive-letter case mismatch', async () => {
+    const editorUri = URI.file('C:/ws/a.txt')
+    const eventUri = URI.file('c:/ws/a.txt')
+    const input = makeFileInput(editorUri) as FileEditorInput & { checks: number[] }
+    const groups = makeGroups([input])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity('win32'),
+    )
+
+    watcher.fire([{ type: 'modified', resource: eventUri.toJSON() }])
+    await flush()
+    expect(input.checks).toHaveLength(1)
+  })
+
+  // A link-reached preview (no source FileEditorInput) renders a model it
+  // acquired itself; nothing else pulls external disk edits in. The watcher must
+  // reconcile that model directly so its onDidChangeContent fires and the preview
+  // re-renders. Drive-letter folding also applies here.
+  it('reconciles a link-reached preview model from disk on external change', async () => {
+    const sourceUri = URI.file('C:/ws/note.md')
+    const eventUri = URI.file('c:/ws/note.md')
+    let modelValue = '# old'
+    liveModels.set(sourceUri.toString(), {
+      getValue: () => modelValue,
+      setValue: (v: string) => {
+        modelValue = v
+      },
+      isDisposed: () => false,
+    })
+    const preview = new MarkdownPreviewInput(sourceUri)
+    const groups = makeGroups([preview])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [sourceUri], contents: [[sourceUri, '# new']] }),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity('win32'),
+    )
+
+    watcher.fire([{ type: 'modified', resource: eventUri.toJSON() }])
+    await flush()
+    expect(modelValue).toBe('# new')
+    liveModels.delete(sourceUri.toString())
+  })
+
+  // A toggle-mode preview holds the detached source FileEditorInput (its model is
+  // shared with the preview). The watcher must delegate to that source's
+  // dirty-aware checkExternalChange rather than blindly overwrite the model.
+  it('delegates a toggle-mode preview to its held source input', async () => {
+    const sourceUri = URI.file('/ws/note.md')
+    const source = makeFileInput(sourceUri) as FileEditorInput & { checks: number[] }
+    const preview = new MarkdownPreviewInput(source)
+    const groups = makeGroups([preview])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService({ existing: [sourceUri], contents: [[sourceUri, '# new']] }),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    watcher.fire([{ type: 'modified', resource: sourceUri.toJSON() }])
+    await flush()
+    expect(source.checks).toHaveLength(1)
+  })
+
+  // The preview's source must join the out-of-workspace watch set, or an
+  // out-of-workspace pure preview never receives change events at all.
+  it('watches a pure preview source out of workspace', async () => {
+    const sourceUri = URI.file('/outside/note.md')
+    const preview = new MarkdownPreviewInput(sourceUri)
+    const groups = makeGroups([preview])
+    const watcher = new FakeWatcher()
+    new ExternalChangeWatcher(
+      watcher,
+      groups,
+      makeDialog(),
+      makeFileService(),
+      makeLoggerService(),
+      new FakeUserData(),
+      makeUriIdentity(),
+    )
+
+    await flush()
+    const lastCall = watcher.outOfWorkspaceCalls.at(-1)!
+    const uriStrings = lastCall.map((u) =>
+      URI.revive(u as Parameters<typeof URI.revive>[0])?.toString(),
+    )
+    expect(uriStrings).toContain(sourceUri.toString())
   })
 })

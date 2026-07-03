@@ -9,6 +9,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { mkdtempSync, writeFileSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test, expect } from '../fixtures/electronApp.js'
@@ -58,6 +59,20 @@ function writeLongMarkdown(): string {
   const body = Array.from({ length: 200 }, (_, i) => `paragraph ${i} lorem ipsum dolor sit amet`)
   writeFileSync(file, `# Long\n\n${body.join('\n\n')}\n`)
   return file.replace(/\\/g, '/')
+}
+
+// A markdown file inside a real workspace folder so the parcel watcher fires on
+// external edits. `realPath` keeps the native (back-slash on win32) path for
+// writing to disk directly; the other two are forward-slashed for the E2E probe.
+function writeWorkspaceMarkdown(body: string): {
+  dir: string
+  filePath: string
+  realPath: string
+} {
+  const dir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-md-'))
+  const file = join(dir, 'watch.md')
+  writeFileSync(file, body)
+  return { dir: dir.replace(/\\/g, '/'), filePath: file.replace(/\\/g, '/'), realPath: file }
 }
 
 /**
@@ -1119,5 +1134,93 @@ test.describe('@p1 markdown preview', () => {
 
     await helpButton.click()
     await expect(page.locator('[data-testid="md-preview-help"]')).toBeVisible()
+  })
+
+  // Regression: a preview reached WITHOUT its source open in the group (pure
+  // preview mode — Ctrl+Shift+V toggle detaches the source tab) must still track
+  // external edits to the file on disk. Before the fix the ExternalChangeWatcher
+  // only reconciled FileEditorInputs, so the preview's own acquired model was
+  // never updated and the rendered text stayed frozen at first read.
+  test('pure preview (toggle) tracks external edits to the file on disk', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const { dir, filePath, realPath } = writeWorkspaceMarkdown('# Original heading\n\nfirst body\n')
+    // Open the folder so the parcel watcher covers the file, then open it.
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    // Toggle into pure preview mode: the source tab is detached, so no
+    // FileEditorInput backs this file in the group anymore.
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+    await expect(page.locator('[data-testid="markdown-preview"]')).toContainText('Original heading')
+
+    // Edit the file on disk out-of-band.
+    await writeFile(realPath, '# Updated heading\n\nsecond body\n')
+
+    // The preview must reflect the new content without any user action.
+    await expect(page.locator('[data-testid="markdown-preview"]')).toContainText(
+      'Updated heading',
+      {
+        timeout: 8000,
+      },
+    )
+    await expect(page.locator('[data-testid="markdown-preview"]')).toContainText('second body')
+  })
+
+  // Same bug, second entry path: a preview reached by clicking a markdown→markdown
+  // link (the source was never opened as a FileEditorInput at all) must also track
+  // external disk edits.
+  test('pure preview (via link) tracks external edits to the file on disk', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const { dir, filePath } = writeLinkedMarkdown()
+    const targetReal = `${dir}/target.md`
+    await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    await page.bringToFront()
+    await expect(page.locator('[data-testid="markdown-preview"] a').first()).toBeVisible()
+    await showLinkHints(page, workbench)
+    await expect
+      .poll(
+        async () => {
+          if (await workbench.getContextKey<boolean>('markdownPreviewLinkHintsVisible')) {
+            await page.keyboard.press('a')
+          }
+          return page.evaluate(() => window.__E2E__!.getActiveEditorUri())
+        },
+        { timeout: 5000 },
+      )
+      .toEqual(expect.stringContaining('target.md'))
+    await expect(page.locator('[data-testid="markdown-preview"]')).toContainText('Target')
+
+    // The target file's source was never opened; edit it on disk.
+    await writeFile(targetReal, '# Target updated\n\nnew body\n')
+
+    await expect(page.locator('[data-testid="markdown-preview"]')).toContainText('Target updated', {
+      timeout: 8000,
+    })
   })
 })

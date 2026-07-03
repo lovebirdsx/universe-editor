@@ -14,6 +14,7 @@ import {
   IFileService,
   IFileWatcherService,
   ILoggerService,
+  IUriIdentityService,
   IUserDataFilesService,
   NullLogger,
   URI,
@@ -28,7 +29,9 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
+import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
+import { applyMinimalTextEdit } from '../services/editor/minimalModelEdit.js'
 import { isDescendant } from '../services/explorer/explorerTreeUtils.js'
 
 export class ExternalChangeWatcher extends Disposable implements IWorkbenchContribution {
@@ -43,6 +46,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     @IFileService private readonly _fileService: IFileService,
     @ILoggerService loggerService: ILoggerServiceType,
     @IUserDataFilesService private readonly _userData: IUserDataFilesService,
+    @IUriIdentityService private readonly _uriIdentity: IUriIdentityService,
   ) {
     super()
     this._logger =
@@ -124,6 +128,11 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       for (const editor of group.editors) {
         if (editor instanceof FileEditorInput) {
           uris.push(editor.resource.toJSON())
+        } else if (editor instanceof MarkdownPreviewInput) {
+          // A pure-preview (toggle or link-reached) has no FileEditorInput to
+          // pull the source into the watch set, so watch its source directly —
+          // otherwise an out-of-workspace preview never sees external edits.
+          uris.push(editor.sourceUri.toJSON())
         }
       }
     }
@@ -137,7 +146,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     if (!uri) return
     // force: a same-content atomic rewrite can leave mtime unchanged at coarse
     // filesystem granularity, so reconcile against disk content directly.
-    await this._reloadChangedFileEditors(new Set([uri.toString()]), true)
+    await this._reloadChangedFileEditors(new Set([this._uriIdentity.getComparisonKey(uri)]), true)
   }
 
   private async _handle(events: readonly IFileChangeEvent[]): Promise<void> {
@@ -151,7 +160,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       if (ev.type === 'deleted') {
         deletedResources.push(u)
       } else {
-        changedKeys.add(u.toString())
+        changedKeys.add(this._uriIdentity.getComparisonKey(u))
       }
     }
 
@@ -163,7 +172,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       const trulyDeleted: URI[] = []
       for (const u of deletedResources) {
         if (await this._exists(u)) {
-          changedKeys.add(u.toString())
+          changedKeys.add(this._uriIdentity.getComparisonKey(u))
         } else {
           trulyDeleted.push(u)
         }
@@ -173,7 +182,8 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
 
     if (changedKeys.size === 0) return
 
-    await this._reloadChangedFileEditors(changedKeys)
+    const handled = await this._reloadChangedFileEditors(changedKeys)
+    await this._reconcilePreviewModels(changedKeys, handled)
     await this._refreshChangedDiffEditors(changedKeys)
   }
 
@@ -186,23 +196,31 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     }
   }
 
-  private async _reloadChangedFileEditors(changedKeys: Set<string>, force = false): Promise<void> {
+  private async _reloadChangedFileEditors(
+    changedKeys: Set<string>,
+    force = false,
+  ): Promise<Set<string>> {
     const matches: FileEditorInput[] = []
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && changedKeys.has(editor.resource.toString())) {
+        if (
+          editor instanceof FileEditorInput &&
+          changedKeys.has(this._uriIdentity.getComparisonKey(editor.resource))
+        ) {
           matches.push(editor)
         }
       }
     }
-    if (matches.length === 0) return
+    const handled = new Set<string>()
+    if (matches.length === 0) return handled
     this._logger.info(`externalChanges matchedEditors=${matches.length}`)
 
     // De-dup by URI: a file can be open in multiple groups, but we only want
     // to prompt once per resource.
     const seen = new Set<string>()
     for (const input of matches) {
-      const key = input.resource.toString()
+      const key = this._uriIdentity.getComparisonKey(input.resource)
+      handled.add(key)
       if (seen.has(key)) continue
       seen.add(key)
       try {
@@ -210,6 +228,64 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
       } catch (err) {
         // Best-effort: a failure on one input must not stall the others.
         this._logger.warn(`externalChange check failed ${key}`, err)
+      }
+    }
+    return handled
+  }
+
+  /**
+   * Reconcile the markdown previews reached WITHOUT their source open as a
+   * FileEditorInput in a group — so nothing else pulls external disk edits into
+   * the model they render:
+   *   - toggle mode (Ctrl+Shift+V): the preview holds the detached source
+   *     FileEditorInput. Delegate to its dirty-aware `checkExternalChange` (its
+   *     model is shared with the preview, so the reload fires onDidChangeContent).
+   *   - link-reached: no source input at all; the preview acquired a clean disk
+   *     model. Reconcile it directly with a minimal edit (never dirty — the
+   *     preview is read-only), which fires the onDidChangeContent it subscribes to.
+   * Keys already handled by `_reloadChangedFileEditors` (source open in a group,
+   * model shared) are skipped.
+   */
+  private async _reconcilePreviewModels(
+    changedKeys: Set<string>,
+    handled: Set<string>,
+  ): Promise<void> {
+    const heldSources: FileEditorInput[] = []
+    const orphanUris = new Map<string, URI>()
+    for (const group of this._groups.groups) {
+      for (const editor of group.editors) {
+        if (!(editor instanceof MarkdownPreviewInput)) continue
+        const key = this._uriIdentity.getComparisonKey(editor.sourceUri)
+        if (!changedKeys.has(key) || handled.has(key)) continue
+        const source = editor.sourceInput
+        if (source) {
+          heldSources.push(source)
+        } else {
+          orphanUris.set(key, editor.sourceUri)
+        }
+      }
+    }
+
+    const seen = new Set<string>()
+    for (const source of heldSources) {
+      const key = this._uriIdentity.getComparisonKey(source.resource)
+      if (seen.has(key)) continue
+      seen.add(key)
+      try {
+        await source.checkExternalChange(this._dialog)
+      } catch (err) {
+        this._logger.warn(`preview source reconcile failed ${key}`, err)
+      }
+    }
+
+    for (const [key, uri] of orphanUris) {
+      const model = MonacoModelRegistry.peek(uri)
+      if (!model || model.isDisposed()) continue
+      try {
+        const text = await this._fileService.readFileText(uri)
+        applyMinimalTextEdit(model, text)
+      } catch (err) {
+        this._logger.warn(`preview reconcile failed ${key}`, err)
       }
     }
   }
@@ -233,7 +309,7 @@ export class ExternalChangeWatcher extends Disposable implements IWorkbenchContr
     for (const group of this._groups.groups) {
       for (const editor of group.editors) {
         if (!(editor instanceof DiffEditorInput)) continue
-        const key = editor.originalUri.toString()
+        const key = this._uriIdentity.getComparisonKey(editor.originalUri)
         if (!changedKeys.has(key)) continue
         const list = byUri.get(key) ?? []
         list.push(editor)
