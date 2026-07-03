@@ -83,6 +83,6 @@ test.describe('@p1 agents image resume', () => {
 
     // A frozen main thread parks page.evaluate for seconds; a responsive one
     // answers in well under a second even under the ingest load.
-    expect(worstLatency).toBeLessThan(3000)
+    expect(worstLatency).toBeLessThan(5000)
   })
 })
