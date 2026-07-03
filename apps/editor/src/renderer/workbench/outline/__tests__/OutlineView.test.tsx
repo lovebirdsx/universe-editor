@@ -17,8 +17,33 @@ import {
 import type { monaco } from '../../editor/monaco/MonacoLoader.js'
 import {
   IOutlineService,
+  OutlineService,
   type OutlineModel,
 } from '../../../services/languageFeatures/OutlineService.js'
+import {
+  Emitter,
+  IEditorService,
+  type IEditorService as IEditorServiceType,
+} from '@universe-editor/platform'
+import { AcpSessionEditorInput } from '../../../services/acp/acpSessionEditorInput.js'
+import {
+  IAcpSessionService,
+  type IAcpSessionService as IAcpSessionServiceType,
+} from '../../../services/acp/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
+} from '../../../services/acp/acpSessionHistory.js'
+import {
+  IAcpChatWidgetService,
+  type IAcpChatWidgetService as IAcpChatWidgetServiceType,
+} from '../../../services/acp/acpChatWidgetService.js'
+import {
+  AcpSessionOutlineRegistry,
+  type IAcpSessionOutlineController,
+} from '../../../services/acp/acpSessionOutlineRegistry.js'
+import type { ILanguageFeaturesService } from '../../../services/languageFeatures/LanguageFeaturesService.js'
+import type { TimelineItem } from '../../../services/acp/acpSessionModel.js'
 import { ServicesContext } from '../../useService.js'
 import { OutlineView } from '../OutlineView.js'
 import { outlineViewState } from '../outlineViewState.js'
@@ -295,5 +320,120 @@ describe('OutlineView', () => {
     })
     expect(rowLabels()).toEqual(['Beta', 'Gamma'])
     expect(screen.queryByText('Alpha')).toBeNull()
+  })
+})
+
+// End-to-end repro: drive the REAL OutlineService for an agent session behind the
+// view and reproduce the user-reported bug — moving the session's keyboard
+// selection (Alt+Up/Down/Home/End) must move the outline highlight, exactly like
+// follow-cursor does for a code editor. The three unit layers (service / pure
+// timelineToOutline / ChatBody controller) each pass in isolation, so this wires
+// them together the way the running app does.
+describe('OutlineView — agent session active-slot sync (end-to-end)', () => {
+  const flush = () => act(async () => await Promise.resolve())
+
+  function makeSessionInput(sessionId: string): AcpSessionEditorInput {
+    const sessions = {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly unknown[]>('t.sessions', []),
+      getById: () => undefined,
+    } as unknown as IAcpSessionServiceType
+    const history = {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly unknown[]>('t.history', []),
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryServiceType
+    const chatWidget = {
+      _serviceBrand: undefined,
+      focusSessionInput: () => false,
+    } as unknown as IAcpChatWidgetServiceType
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, sessions)
+    services.set(IAcpSessionHistoryService, history)
+    services.set(IAcpChatWidgetService, chatWidget)
+    const inst = new InstantiationService(services)
+    return inst.createInstance(AcpSessionEditorInput, sessionId, 'fake', undefined)
+  }
+
+  function tlMessage(id: string, role: 'user' | 'agent' | 'thought', text: string): TimelineItem {
+    return { kind: 'message', id, message: { id, role, text, blocks: [], streaming: false } }
+  }
+
+  function setupRealService() {
+    const activeEditor = observableValue<AcpSessionEditorInput | undefined>('t.active', undefined)
+    const editorService = { activeEditor } as unknown as IEditorServiceType
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: () => [],
+    } as unknown as ILanguageFeaturesService
+    const svc = new OutlineService(editorService, facade)
+    const services = new ServiceCollection()
+    services.set(IEditorService, editorService as never)
+    services.set(IOutlineService, svc as never)
+    const instantiation = new InstantiationService(services)
+    return { svc, activeEditor, instantiation }
+  }
+
+  function makeController(items: readonly TimelineItem[]) {
+    const timeline = observableValue<readonly TimelineItem[]>('tl', items)
+    const onDidChangeActive = new Emitter<void>()
+    let activeKey: string | undefined
+    const controller: IAcpSessionOutlineController = {
+      timeline,
+      scrollToKey: () => {},
+      getActiveKey: () => activeKey,
+      focus: () => {},
+      onDidChangeActive: onDidChangeActive.event,
+    }
+    return {
+      controller,
+      setActiveKey: (k: string | undefined) => {
+        activeKey = k
+      },
+      fire: () => onDidChangeActive.fire(),
+    }
+  }
+
+  const selectedLabels = () =>
+    Array.from(document.querySelectorAll('[role="treeitem"]'))
+      .filter((r) => r.getAttribute('aria-selected') === 'true')
+      .map((r) => r.querySelector('span:last-child')?.textContent ?? '')
+
+  afterEach(() => {
+    AcpSessionOutlineRegistry._resetForTests()
+  })
+
+  it('moves the outline highlight when the session keyboard selection changes', async () => {
+    outlineViewState.setFollowCursor(true)
+    const { svc, activeEditor, instantiation } = setupRealService()
+    const input = makeSessionInput('s1')
+
+    // Real mount order: the session editor activates BEFORE ChatBody mounts, so
+    // the first attach finds no controller. Then ChatBody registers late.
+    act(() => activeEditor.set(input, undefined))
+    await flush()
+
+    const { controller, setActiveKey, fire } = makeController([
+      tlMessage('m1', 'user', 'First'),
+      tlMessage('m2', 'agent', 'Second'),
+    ])
+    setActiveKey('m:m1')
+    act(() => AcpSessionOutlineRegistry.register('s1', controller))
+    await flush()
+
+    render(
+      <ServicesContext.Provider value={instantiation}>
+        <OutlineView />
+      </ServicesContext.Provider>,
+    )
+    expect(rowLabels()).toEqual(['First', 'Second'])
+    expect(selectedLabels()).toEqual(['First'])
+
+    // User presses Alt+Down in the chat: selection moves to the second item.
+    setActiveKey('m:m2')
+    act(() => fire())
+    expect(selectedLabels()).toEqual(['Second'])
+
+    svc.dispose()
   })
 })

@@ -5,6 +5,11 @@
 import { describe, expect, it } from 'vitest'
 import { render } from '@testing-library/react'
 import {
+  timelineToOutline,
+  ACP_OUTLINE_LANGUAGE_ID,
+} from '../../../services/acp/acpTimelineOutline.js'
+import type { TimelineItem } from '../../../services/acp/acpSessionModel.js'
+import {
   SYMBOL_HEADING_ICON_ID,
   SymbolIcon,
   renderSymbolIconById,
@@ -59,5 +64,30 @@ describe('SymbolIcon', () => {
   it('renders a non-markdown String as a codicon', () => {
     const { container } = render(<SymbolIcon kind={14} languageId="typescript" />)
     expect(container.querySelector('.codicon-symbol-string')).not.toBeNull()
+  })
+
+  it('tints agent-session rows by category for at-a-glance scanning', () => {
+    const msg = (id: string, role: 'user' | 'agent' | 'thought'): TimelineItem => ({
+      kind: 'message',
+      id,
+      message: { id, role, text: id, blocks: [], streaming: false },
+    })
+    const tool = (id: string, kind: string): TimelineItem => ({
+      kind: 'toolCall',
+      id,
+      call: { id, title: id, kind, status: 'completed', text: '', blocks: [], diffs: [] },
+    })
+    const strokeOf = (kind: number): string | null => {
+      const { container } = render(<SymbolIcon kind={kind} languageId={ACP_OUTLINE_LANGUAGE_ID} />)
+      return container.querySelector('svg')?.getAttribute('stroke') ?? null
+    }
+    // Each category's kind, read off a single-item outline (conversation grouping
+    // would otherwise nest agent/tool rows under the user turn).
+    const kindOf = (item: TimelineItem): number => timelineToOutline([item]).roots[0]!.kind
+    // A lucide glyph (svg) tinted via the color prop, never a codicon span.
+    expect(strokeOf(kindOf(msg('m1', 'user')))).toBe('var(--color-symbol-variable)') // user
+    expect(strokeOf(kindOf(msg('m2', 'agent')))).toBe('var(--color-symbol-callable)') // agent
+    expect(strokeOf(kindOf(tool('t1', 'delete')))).toBe('var(--color-error-fg)') // delete
+    expect(strokeOf(kindOf(tool('t2', 'execute')))).toBe('var(--color-badge-success)') // execute
   })
 })

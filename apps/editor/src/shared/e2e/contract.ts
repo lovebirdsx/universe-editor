@@ -430,6 +430,12 @@ export interface E2EProbe {
   getOutlineSymbols(): readonly string[]
   /** The URI the current outline was computed for, or undefined when empty. */
   getOutlineUri(): string | undefined
+  /**
+   * Name of the outline's active (highlighted) symbol — `IOutlineService.activeSymbol`,
+   * the one the view marks selected under follow-cursor. Backs the "session
+   * selection change moves the outline highlight" spec.
+   */
+  getOutlineActiveSymbol(): string | undefined
   // -- Keybindings probe ----------------------------------------------------
   /**
    * Resolve a single keystroke against KeybindingsRegistry (no when-clause

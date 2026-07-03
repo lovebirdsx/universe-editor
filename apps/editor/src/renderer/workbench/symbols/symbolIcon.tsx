@@ -10,12 +10,35 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ReactNode } from 'react'
-import { Hash } from 'lucide-react'
+import {
+  Bot,
+  Brain,
+  CircleHelp,
+  FilePen,
+  FileText,
+  FolderInput,
+  Globe,
+  Hash,
+  Repeat,
+  Search,
+  Terminal,
+  Trash2,
+  User,
+  Wrench,
+} from 'lucide-react'
+import {
+  ACP_OUTLINE_LANGUAGE_ID,
+  decodeAcpOutlineKind,
+} from '../../services/acp/acpTimelineOutline.js'
 
 const CALLABLE = 'var(--color-symbol-callable)'
 const VARIABLE = 'var(--color-symbol-variable)'
 const TYPE = 'var(--color-symbol-type)'
 const DEFAULT = 'var(--color-symbol-default)'
+// Extra hues for agent-session rows, reusing existing dual-theme tokens so the
+// timeline glyphs stay legible in light and dark: destructive = red, run = green.
+const DANGER = 'var(--color-error-fg)'
+const SUCCESS = 'var(--color-badge-success)'
 
 interface SymbolIconSpec {
   readonly codicon: string
@@ -64,6 +87,47 @@ function HashIcon({ size }: { size: number }): ReactNode {
   return <Hash size={size} color={DEFAULT} />
 }
 
+// Agent-session outline rows encode a message role / tool-call kind in their
+// SymbolKind (see acpTimelineOutline). Render the matching timeline glyph, tinted
+// by category so the outline is scannable at a glance.
+function AcpOutlineIcon({ kind, size }: { kind: number; size: number }): ReactNode {
+  const decoded = decodeAcpOutlineKind(kind)
+  if (decoded.type === 'message') {
+    switch (decoded.role) {
+      case 'user':
+        return <User size={size} color={VARIABLE} />
+      case 'agent':
+        return <Bot size={size} color={CALLABLE} />
+      case 'thought':
+        return <Brain size={size} color={DEFAULT} />
+    }
+  }
+  switch (decoded.kind) {
+    case 'read':
+      return <FileText size={size} color={VARIABLE} />
+    case 'edit':
+      return <FilePen size={size} color={TYPE} />
+    case 'delete':
+      return <Trash2 size={size} color={DANGER} />
+    case 'move':
+      return <FolderInput size={size} color={TYPE} />
+    case 'search':
+      return <Search size={size} color={CALLABLE} />
+    case 'execute':
+      return <Terminal size={size} color={SUCCESS} />
+    case 'think':
+      return <Brain size={size} color={DEFAULT} />
+    case 'fetch':
+      return <Globe size={size} color={VARIABLE} />
+    case 'switch_mode':
+      return <Repeat size={size} color={CALLABLE} />
+    case 'other':
+      return <Wrench size={size} color={DEFAULT} />
+    default:
+      return <CircleHelp size={size} color={DEFAULT} />
+  }
+}
+
 function CodiconIcon({ spec, size }: { spec: SymbolIconSpec; size: number }): ReactNode {
   return (
     <span
@@ -83,6 +147,7 @@ export function SymbolIcon({
   languageId?: string | undefined
   size?: number
 }): ReactNode {
+  if (languageId === ACP_OUTLINE_LANGUAGE_ID) return <AcpOutlineIcon kind={kind} size={size} />
   if (isMarkdownHeading(kind, languageId)) return <HashIcon size={size} />
   return <CodiconIcon spec={SYMBOL_ICONS[kind] ?? FALLBACK} size={size} />
 }

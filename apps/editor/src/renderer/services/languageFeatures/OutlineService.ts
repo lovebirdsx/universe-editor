@@ -23,6 +23,13 @@ import { FileEditorInput } from '../editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 import { MarkdownPreviewInput } from '../editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../editor/MarkdownPreviewRegistry.js'
+import { AcpSessionEditorInput } from '../acp/acpSessionEditorInput.js'
+import { AcpSessionOutlineRegistry } from '../acp/acpSessionOutlineRegistry.js'
+import {
+  ACP_OUTLINE_LANGUAGE_ID,
+  timelineToOutline,
+  type TimelineOutline,
+} from '../acp/acpTimelineOutline.js'
 import { ILanguageFeaturesService } from './LanguageFeaturesService.js'
 import { findSymbolAtLine } from './symbolTree.js'
 
@@ -98,6 +105,10 @@ export class OutlineService extends Disposable implements IOutlineService {
   private _currentInput: FileEditorInput | undefined
   /** Set instead of `_currentInput` when the active editor is a markdown preview. */
   private _currentPreview: MarkdownPreviewInput | undefined
+  /** Set instead of `_currentInput` when the active editor is an agent session. */
+  private _currentSession: AcpSessionEditorInput | undefined
+  /** Key↔pseudo-line maps for the current session outline, bridging slot keys to lines. */
+  private _sessionOutline: TimelineOutline | undefined
   private _currentModel: monaco.editor.ITextModel | undefined
   private _version = 0
   private _debounceTimer: ReturnType<typeof setTimeout> | undefined
@@ -150,6 +161,17 @@ export class OutlineService extends Disposable implements IOutlineService {
       }),
     )
 
+    // The agent-session ChatBody mounts asynchronously after its editor input
+    // becomes active (and re-mounts on chat-location swaps); its outline
+    // controller registers once the DOM is ready, so re-attach when it appears.
+    this._register(
+      AcpSessionOutlineRegistry.onDidChange((sessionId) => {
+        if (this._currentSession && sessionId === this._currentSession.sessionId) {
+          this._attachActiveEditor()
+        }
+      }),
+    )
+
     // Providers register at AfterRestore — possibly after the first editor is
     // already active — and a freshly-registered server still needs a moment to
     // analyse the file, so its first pull may be empty. Recompute WITH retries.
@@ -168,6 +190,7 @@ export class OutlineService extends Disposable implements IOutlineService {
     const input = this._editorService.activeEditor.get()
     const fileInput = input instanceof FileEditorInput ? input : undefined
     const previewInput = input instanceof MarkdownPreviewInput ? input : undefined
+    const sessionInput = input instanceof AcpSessionEditorInput ? input : undefined
     const sameInput = fileInput !== undefined && fileInput === this._currentInput
 
     this._attachListeners.clear()
@@ -183,13 +206,24 @@ export class OutlineService extends Disposable implements IOutlineService {
       previewInput !== undefined &&
       this._currentPreview !== undefined &&
       previewInput.sourceUri.toString() === this._currentPreview.sourceUri.toString()
-    if (!sameInput && !samePreview) {
+    const sameSession =
+      sessionInput !== undefined &&
+      this._currentSession !== undefined &&
+      sessionInput.sessionId === this._currentSession.sessionId
+    if (!sameInput && !samePreview && !sameSession) {
       this._clearRetry()
       this._attachGeneration++
     }
     const generation = this._attachGeneration
     this._currentInput = fileInput
     this._currentPreview = previewInput
+    this._currentSession = sessionInput
+    if (!sessionInput) this._sessionOutline = undefined
+
+    if (sessionInput) {
+      this._attachSession(sessionInput)
+      return
+    }
 
     if (previewInput) {
       this._attachPreview(previewInput, samePreview, generation)
@@ -291,6 +325,49 @@ export class OutlineService extends Disposable implements IOutlineService {
     }
   }
 
+  /**
+   * Attach to a full-screen agent session: synthesize the outline from the
+   * session's timeline (message / tool-call slots, sub-agents nested) rather than
+   * a language provider. Tracks the active item from the chat's top-visible slot,
+   * mirroring the preview's top-visible-line tracking. No Monaco model is involved,
+   * so there is no retry chain — the timeline observable drives recomputes.
+   */
+  private _attachSession(session: AcpSessionEditorInput): void {
+    this._currentModel = undefined
+    this._clearRetry()
+
+    const controller = AcpSessionOutlineRegistry.get(session.sessionId)
+    if (!controller) {
+      // ChatBody not mounted yet; AcpSessionOutlineRegistry.onDidChange re-attaches.
+      this._sessionOutline = undefined
+      this._publish(undefined, undefined)
+      return
+    }
+
+    // Rebuild the outline whenever the timeline changes, and retrack the active
+    // item as the user scrolls the chat or moves the keyboard selection.
+    this._attachListeners.add(
+      autorun((r) => {
+        controller.timeline.read(r)
+        this._recomputeSessionOutline(session)
+      }),
+    )
+    this._attachListeners.add(controller.onDidChangeActive(() => this._recomputeActiveSymbol()))
+  }
+
+  private _recomputeSessionOutline(session: AcpSessionEditorInput): void {
+    const controller = AcpSessionOutlineRegistry.get(session.sessionId)
+    if (!controller || this._currentSession !== session) return
+    const built = timelineToOutline(controller.timeline.get())
+    this._sessionOutline = built
+    const uri = session.resource.toString()
+    this._outline.set(
+      { uri, roots: built.roots, languageId: ACP_OUTLINE_LANGUAGE_ID, version: ++this._version },
+      undefined,
+    )
+    this._recomputeActiveSymbol()
+  }
+
   private _scheduleRecompute(): void {
     this._clearDebounce()
     this._debounceTimer = setTimeout(() => {
@@ -357,8 +434,27 @@ export class OutlineService extends Disposable implements IOutlineService {
   }
 
   private _recomputeActiveSymbol(): void {
-    const model = this._currentModel
     const roots = this._outline.get()?.roots
+
+    // Agent session: the "cursor" is the session's active slot — the
+    // keyboard-selected item, or the top-visible slot when nothing is selected.
+    // Map its slot key back to a pseudo-line, then to the deepest symbol there.
+    if (this._currentSession) {
+      const built = this._sessionOutline
+      if (!roots || !built) {
+        this._activeSymbol.set(undefined, undefined)
+        return
+      }
+      const key = AcpSessionOutlineRegistry.get(this._currentSession.sessionId)?.getActiveKey()
+      const line = key !== undefined ? built.lineByKey.get(key) : undefined
+      this._activeSymbol.set(
+        line !== undefined ? findSymbolAtLine(roots, line) : undefined,
+        undefined,
+      )
+      return
+    }
+
+    const model = this._currentModel
     if (!model || !roots) {
       this._activeSymbol.set(undefined, undefined)
       return
@@ -392,6 +488,17 @@ export class OutlineService extends Disposable implements IOutlineService {
   }
 
   revealSymbol(symbol: monaco.languages.DocumentSymbol): void {
+    if (this._currentSession) {
+      // Map the symbol's pseudo-line back to its slot key, then scroll+focus the
+      // chat — the session equivalent of the preview's scrollToLine + focus.
+      const built = this._sessionOutline
+      const key = built?.keyByLine.get(symbol.selectionRange.startLineNumber)
+      if (key === undefined) return
+      const controller = AcpSessionOutlineRegistry.get(this._currentSession.sessionId)
+      controller?.scrollToKey(key)
+      controller?.focus()
+      return
+    }
     if (this._currentPreview) {
       const controller = MarkdownPreviewRegistry.get(this._currentPreview.sourceUri)
       controller?.scrollToLine(symbol.selectionRange.startLineNumber)

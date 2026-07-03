@@ -772,6 +772,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return names
     },
     getOutlineUri: (): string | undefined => services.outlineService.outline.get()?.uri,
+    getOutlineActiveSymbol: (): string | undefined =>
+      services.outlineService.activeSymbol.get()?.name,
     resolveKeybinding: (key: string): { kind: string; command?: string } => {
       const r = KeybindingsRegistry.resolveKeystroke(key)
       return r.kind === 'execute' ? { kind: r.kind, command: r.command } : { kind: r.kind }

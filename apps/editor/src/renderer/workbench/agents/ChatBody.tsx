@@ -30,6 +30,7 @@ import {
 import { useVirtualizer, type Virtualizer, type VirtualItem } from '@tanstack/react-virtual'
 import { Bot, History, Loader2, Plus } from 'lucide-react'
 import {
+  Emitter,
   IConfigurationService,
   ICommandService,
   IContextKeyService,
@@ -69,6 +70,10 @@ import { UserMessageItem } from './UserMessageItem.js'
 import { AgentChatContextMenu, type AgentChatContextMenuState } from './AgentChatContextMenu.js'
 import { StickyScrollOverlay } from './StickyScrollOverlay.js'
 import { findByStickyKey, itemSlotKey } from './stickyScroll.js'
+import {
+  AcpSessionOutlineRegistry,
+  type IAcpSessionOutlineController,
+} from '../../services/acp/acpSessionOutlineRegistry.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
@@ -332,6 +337,19 @@ function ChatScroll({
   const contextKeyService = useService(IContextKeyService)
   const widgetService = useService(IAcpChatWidgetService)
 
+  // Signals the Outline view that the active slot may have changed — fired from
+  // handleScroll (viewport moved) and from the focusedKey effect below (keyboard
+  // selection moved), so the outline highlight tracks whichever the user drives.
+  //
+  // The emitter is lazily (re)created and NOT disposed in an effect cleanup: React
+  // StrictMode's dev mount→cleanup→mount dry-run would otherwise dispose it, and
+  // the re-mount keeps the same ref — so every later fire() lands on a dead emitter
+  // and the outline highlight never moves (works in a prod build, dead under
+  // `pnpm dev`). It holds no OS resource; GC reclaims it, and OutlineService
+  // disposes its own subscription on detach.
+  const activeSlotRef = useRef<Emitter<void> | null>(null)
+  if (activeSlotRef.current === null) activeSlotRef.current = new Emitter<void>()
+
   const mode = useObservable(session.collapseMode)
   const [overrides, setOverrides] = useState<ReadonlyMap<string, boolean>>(
     () => new Map(saved?.collapse?.overrides ?? []),
@@ -523,6 +541,8 @@ function ChatScroll({
     const distance = el.scrollHeight - el.clientHeight - el.scrollTop
     stickRef.current = distance <= STICK_THRESHOLD_PX
     persist()
+    // Let the Outline view retrack the active slot as the viewport moves.
+    activeSlotRef.current?.fire()
   }
 
   const handleClick = (e: ReactMouseEvent) => {
@@ -792,6 +812,42 @@ function ChatScroll({
     const idx = timelineRef.current.findIndex((it) => slotKey(it) === topKey)
     if (idx >= 0) virtualizerRef.current?.scrollToIndex(idx, { align: 'start' })
   }, [])
+
+  // Expose this timeline to the Outline view (full-screen session editor only):
+  // it reads `timeline` to build the symbol tree and calls back to scroll/focus.
+  // Mirrors MarkdownPreviewRegistry — OutlineService reaches a non-Monaco host
+  // through a controller handle rather than injecting an ACP service.
+  useEffect(() => {
+    const activeEmitter = (activeSlotRef.current ??= new Emitter<void>())
+    const controller: IAcpSessionOutlineController = {
+      timeline: session.timeline,
+      // Clicking an outline row selects the matching session item (so its
+      // highlight and the outline's stay in lockstep), then scrolls it in.
+      scrollToKey: (key) => {
+        setFocusedKey(key)
+        focusedKeyRef.current = key
+        persist()
+        handleStickyJump(key)
+      },
+      // The keyboard-selected slot is the active one; fall back to the slot at the
+      // top of the viewport when nothing is selected (VSCode follow-cursor style).
+      getActiveKey: () => {
+        if (focusedKeyRef.current !== null) return focusedKeyRef.current
+        const el = containerRef.current
+        return el ? captureAnchor(el)?.key : undefined
+      },
+      focus: () => containerRef.current?.focus({ preventScroll: true }),
+      onDidChangeActive: activeEmitter.event,
+    }
+    AcpSessionOutlineRegistry.register(session.id, controller)
+    return () => AcpSessionOutlineRegistry.unregister(session.id, controller)
+  }, [session.id, session.timeline, handleStickyJump, persist])
+
+  // Retrack the outline's active symbol when the keyboard selection moves
+  // (Alt+Up/Down/Home/End), the other half of getActiveKey's signal.
+  useEffect(() => {
+    activeSlotRef.current?.fire()
+  }, [focusedKey])
 
   useEffect(() => {
     const handle = handleRef.current

@@ -26,6 +26,7 @@
 - [dirty-diff 内联 peek](dirty-diff-inline-peek-feature.md) — 点击修改色条弹内联 diff(内嵌真 Monaco diff editor:双侧行号+语法高亮+内部滚动;Esc关闭/拖动调高/出视口才滚入;导航+Revert+Stage+打开完整diff);overlay-widget+空view-zone占位(手写DOM diff已删勿回退);Stage 走 git diff -U0→selectHunkPatch→apply --cached(stdin);套路见 skill dirty-diff-inline-peek
 - [markdown 预览本地图片](markdown-preview-local-images-app-scheme.md) — prod renderer 页面从 file:// 改为自定义 universe-app scheme(shell+资源同源,_resource_ 路径前缀);对齐 VSCode asWebviewUri+localResourceRoots(工作区根+文档目录边界,renderer 经 IResourceAccessService 声明);根因=自定义 secure scheme 从 file:// 页跨源被 Chromium 拦在 handler 前
 - [ACP 输入框图片支持](acp-prompt-image-feature.md) — 粘贴/拖拽/附件三入口+能力降级+限额可配;88×88 共享 ChatImage 控件(缩略图+锚定预览弹窗 portal+fixed 视口定位防遮挡);恢复卡死**真因=filePathLink.ts 正则灾难回溯**(SEG 含/退化成(a+)+,遇 data:URL >35s),非 tracer;codex 恢复图片**在渲染层解析文本 image**(markdownRenderer.isImageDataUrl+MarkdownView.renderImage 注入,不改 vendor);tracer O(m²)+超大行丢弃是独立修复
+- [链接打开机制 IOpenerService + 深链接](opener-service-deeplink-feature.md) — 对等 VSCode 发地址即开文件定位/执行白名单命令;platform 契约(fragment #L行,列 1-based)+renderer 三档 opener(External/Command 白名单/File)+revealEditorPosition 收敛 3 处重复定位;OS 级 universe-editor://file|command 深链(shared/deepLink.ts+setAsDefaultProtocolClient+ue:open-uri);坑=built-in opener disposable 须 this._register 否则 e2e 泄漏全红
 
 ## 性能 / 疑难根因
 
@@ -38,6 +39,7 @@
 - [editorTextFocus 残留吞裸字符键](editor-text-focus-stuck-swallows-keys.md) — Monaco blur 订阅先于编辑器 dispose 致 editorTextFocus 卡 true，全局键盘守卫把裸 f 当打字吞掉；syncEditorFocusContext 焦点离开 Monaco 时清掉；测裸字符键须真键盘别用 runCommand 绕
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — session diff 文件二次改动后重开 tab 仍旧内容；根因 openEditor 去重时 dispose 新 input 复用旧快照；加 EditorInput.updateFrom 钩子，DiffEditorInput 实现之
 - [markdown 移动后残留旧路径诊断](markdown-move-stale-diagnostic-fix.md) — B 移动(A 关闭)后重开 A 仍警告旧 B 路径；根因 MdDocumentInfoCache 不听 create + LspWorkspace 缺 watchFile，bulk edit 改关闭文件无文档事件；修法新增 $didChangeFiles 主动通知语言服务磁盘变更
+- [StrictMode 空跑 dispose useRef 持有的 Emitter](strictmode-useref-emitter-dispose-dev-only.md) — session outline 高亮 dev-only 不跟随键盘移动；根因=effect cleanup 里 dispose useRef 持有的 Emitter，StrictMode 空跑把它 dispose 而 ref 不重建→.fire() 落死对象；修法惰性创建+不 dispose；教训:useRef 持有的 disposable 绝不在 cleanup dispose
 
 ## 打包 / 构建
 

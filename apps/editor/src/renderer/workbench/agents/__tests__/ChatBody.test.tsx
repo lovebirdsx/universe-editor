@@ -5,6 +5,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { StrictMode } from 'react'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import {
   Event,
@@ -39,6 +40,7 @@ import {
   type AcpChatWidget,
 } from '../../../services/acp/acpChatWidgetService.js'
 import { AcpChatViewStateCache } from '../../../services/acp/acpChatViewStateCache.js'
+import { AcpSessionOutlineRegistry } from '../../../services/acp/acpSessionOutlineRegistry.js'
 import type { SessionConfigOption } from '@agentclientprotocol/sdk'
 import { ChatBody } from '../ChatBody.js'
 import { ServicesContext } from '../../useService.js'
@@ -63,6 +65,7 @@ vi.mock('@tanstack/react-virtual', () => ({
 afterEach(() => {
   cleanup()
   AcpChatViewStateCache._resetForTests()
+  AcpSessionOutlineRegistry._resetForTests()
 })
 
 const focusedClass = styles['timelineSlotFocused'] as string
@@ -616,5 +619,107 @@ describe('ChatBody — collapse', () => {
     const second = renderChat(makeSession('s1', items))
     expect(ariaExpanded(second.container, 'm:b')).toBe('false')
     expect(ariaExpanded(second.container, 'm:a')).toBe('true')
+  })
+})
+
+describe('ChatBody — outline controller active-slot sync', () => {
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    { kind: 'message', id: 'b', message: makeMessage('b', 'second') },
+    { kind: 'message', id: 'c', message: makeMessage('c', 'third') },
+  ]
+
+  it('fires onDidChangeActive and reports the new key when the keyboard selection moves', () => {
+    const { widgetRef } = renderChatWithWidget(makeSession('s1', items))
+    const controller = AcpSessionOutlineRegistry.get('s1')
+    expect(controller).toBeDefined()
+
+    let fires = 0
+    const sub = controller!.onDidChangeActive(() => {
+      fires += 1
+    })
+
+    // Alt+Down / Alt+Up equivalent: moving the session selection must surface to
+    // the outline both as an event AND as an updated getActiveKey().
+    act(() => {
+      widgetRef.current!.moveTimeline('first')
+    })
+    expect(controller!.getActiveKey()).toBe('m:a')
+    expect(fires).toBeGreaterThan(0)
+
+    const before = fires
+    act(() => {
+      widgetRef.current!.moveTimeline('next')
+    })
+    expect(controller!.getActiveKey()).toBe('m:b')
+    expect(fires).toBeGreaterThan(before)
+
+    sub.dispose()
+  })
+
+  it('reports the clicked slot as the active key', () => {
+    const { container } = renderChat(makeSession('s1', items))
+    const controller = AcpSessionOutlineRegistry.get('s1')!
+    act(() => {
+      fireEvent.click(slotEl(container, 'm:c'))
+    })
+    expect(controller.getActiveKey()).toBe('m:c')
+  })
+
+  // Repro for the reported bug: with the AGENTS side panel AND the full-screen
+  // session editor both mounted for the SAME active session, two ChatBody
+  // instances register a controller under the same id. The outline reads
+  // registry.get() (the last registered) — moving the selection in the OTHER
+  // instance must still surface, or the outline highlight goes stale.
+  it('keeps the active key in sync when two ChatBody instances share a session', () => {
+    const session = makeSession('s1', items)
+    const panel = renderChatWithWidget(session)
+    const editor = renderChatWithWidget(session)
+
+    const controller = AcpSessionOutlineRegistry.get('s1')!
+    act(() => {
+      panel.widgetRef.current!.moveTimeline('last')
+    })
+    expect(controller.getActiveKey()).toBe('m:c')
+
+    act(() => {
+      editor.widgetRef.current!.moveTimeline('first')
+    })
+    expect(controller.getActiveKey()).toBe('m:a')
+  })
+
+  // Repro for "works in a production build (e2e) but the outline highlight never
+  // moves under `pnpm dev`". The only behavioural difference is React StrictMode
+  // (main.tsx wraps the app in it; dev double-invokes effects mount→cleanup→mount
+  // to surface unsafe effects, a no-op in production). If the active-slot emitter
+  // is created with `useRef(new Emitter())` and disposed in an effect cleanup, the
+  // StrictMode dry-run disposes it and the re-mount keeps firing on the dead
+  // emitter — so onDidChangeActive never notifies and the outline stays stale.
+  it('still fires onDidChangeActive under StrictMode (dev double-invoke)', () => {
+    const widgetRef: { current?: AcpChatWidget } = {}
+    const inst = makeInstantiation((w) => {
+      widgetRef.current = w
+    })
+    render(
+      <StrictMode>
+        <ServicesContext.Provider value={inst}>
+          <ChatBody session={makeSession('s1', items)} />
+        </ServicesContext.Provider>
+      </StrictMode>,
+    )
+
+    const controller = AcpSessionOutlineRegistry.get('s1')
+    expect(controller).toBeDefined()
+
+    let fires = 0
+    const sub = controller!.onDidChangeActive(() => {
+      fires += 1
+    })
+    act(() => {
+      widgetRef.current!.moveTimeline('first')
+    })
+    expect(controller!.getActiveKey()).toBe('m:a')
+    expect(fires).toBeGreaterThan(0)
+    sub.dispose()
   })
 })

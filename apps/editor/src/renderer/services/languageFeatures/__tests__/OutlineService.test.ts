@@ -21,6 +21,25 @@ import {
   MarkdownPreviewRegistry,
   type IMarkdownPreviewController,
 } from '../../editor/MarkdownPreviewRegistry.js'
+import { AcpSessionEditorInput } from '../../acp/acpSessionEditorInput.js'
+import {
+  IAcpSessionService,
+  type IAcpSessionService as IAcpSessionServiceType,
+} from '../../acp/acpSessionService.js'
+import {
+  IAcpSessionHistoryService,
+  type IAcpSessionHistoryService as IAcpSessionHistoryServiceType,
+} from '../../acp/acpSessionHistory.js'
+import {
+  IAcpChatWidgetService,
+  type IAcpChatWidgetService as IAcpChatWidgetServiceType,
+} from '../../acp/acpChatWidgetService.js'
+import {
+  AcpSessionOutlineRegistry,
+  type IAcpSessionOutlineController,
+} from '../../acp/acpSessionOutlineRegistry.js'
+import { ACP_OUTLINE_LANGUAGE_ID } from '../../acp/acpTimelineOutline.js'
+import type { TimelineItem } from '../../acp/acpSessionModel.js'
 import type { ILanguageFeaturesService } from '../LanguageFeaturesService.js'
 import { OutlineService } from '../OutlineService.js'
 
@@ -166,6 +185,7 @@ describe('OutlineService', () => {
   beforeEach(() => {
     FileEditorRegistry._resetForTests()
     MarkdownPreviewRegistry._resetForTests()
+    AcpSessionOutlineRegistry._resetForTests()
     previewModels.clear()
     markerListeners.length = 0
     modelAddListeners.length = 0
@@ -731,6 +751,200 @@ describe('OutlineService', () => {
     addModel(sourceUri.toString(), model)
     await flush()
     expect(svc.outline.get()?.roots).toEqual(symbols)
+    svc.dispose()
+  })
+
+  // ---- agent session --------------------------------------------------------
+
+  function makeSessionInput(sessionId: string): AcpSessionEditorInput {
+    // A real instance is required so OutlineService's `instanceof` branch matches.
+    const sessions = {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly unknown[]>('t.sessions', []),
+      getById: () => undefined,
+    } as unknown as IAcpSessionServiceType
+    const history = {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly unknown[]>('t.history', []),
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryServiceType
+    const chatWidget = {
+      _serviceBrand: undefined,
+      focusSessionInput: () => false,
+    } as unknown as IAcpChatWidgetServiceType
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, sessions)
+    services.set(IAcpSessionHistoryService, history)
+    services.set(IAcpChatWidgetService, chatWidget)
+    const inst = new InstantiationService(services)
+    return inst.createInstance(AcpSessionEditorInput, sessionId, 'fake', undefined)
+  }
+
+  function setupSession() {
+    const activeEditor = observableValue<AcpSessionEditorInput | undefined>('t', undefined)
+    const editorService = { activeEditor } as unknown as IEditorService
+    const facade = {
+      onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+      getDocumentSymbolProviders: () => [],
+    } as unknown as ILanguageFeaturesService
+    const svc = new OutlineService(editorService, facade)
+    const input = makeSessionInput('s1')
+    return { svc, input, activeEditor }
+  }
+
+  function makeSessionController(timelineItems: readonly TimelineItem[]) {
+    const timeline = observableValue<readonly TimelineItem[]>('tl', timelineItems)
+    const onDidChangeActive = new Emitter<void>()
+    const scrolled: string[] = []
+    let focusCount = 0
+    let activeKey: string | undefined
+    const controller: IAcpSessionOutlineController = {
+      timeline,
+      scrollToKey: (key) => scrolled.push(key),
+      getActiveKey: () => activeKey,
+      focus: () => {
+        focusCount += 1
+      },
+      onDidChangeActive: onDidChangeActive.event,
+    }
+    return {
+      controller,
+      timeline,
+      onDidChangeActive,
+      scrolled,
+      focusCount: () => focusCount,
+      setActiveKey: (k: string | undefined) => {
+        activeKey = k
+      },
+    }
+  }
+
+  function tlMessage(id: string, role: 'user' | 'agent' | 'thought', text: string): TimelineItem {
+    return { kind: 'message', id, message: { id, role, text, blocks: [], streaming: false } }
+  }
+
+  it('publishes an outline synthesized from the session timeline', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    const { controller } = makeSessionController([
+      tlMessage('m1', 'user', 'Question one'),
+      tlMessage('m2', 'agent', 'Answer'),
+    ])
+    AcpSessionOutlineRegistry.register('s1', controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()?.languageId).toBe(ACP_OUTLINE_LANGUAGE_ID)
+    // The agent reply nests under the user turn (conversation grouping).
+    const roots = svc.outline.get()?.roots ?? []
+    expect(roots.map((r) => r.name)).toEqual(['Question one'])
+    expect((roots[0]!.children ?? []).map((c) => c.name)).toEqual(['Answer'])
+    svc.dispose()
+  })
+
+  it('attaches once the ChatBody controller registers after activation', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    // Session editor active but ChatBody not mounted yet: outline empty.
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()).toBeUndefined()
+
+    const { controller } = makeSessionController([tlMessage('m1', 'user', 'Late mount')])
+    AcpSessionOutlineRegistry.register('s1', controller)
+    await flush()
+    expect(svc.outline.get()?.roots.map((r) => r.name)).toEqual(['Late mount'])
+    svc.dispose()
+  })
+
+  it('rebuilds the outline when the timeline changes', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    const { controller, timeline } = makeSessionController([tlMessage('m1', 'user', 'First')])
+    AcpSessionOutlineRegistry.register('s1', controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()?.roots).toHaveLength(1)
+
+    timeline.set([tlMessage('m1', 'user', 'First'), tlMessage('m2', 'agent', 'Second')], undefined)
+    await flush()
+    // 'Second' (agent) nests under 'First' (user), so there is still one root.
+    const roots = svc.outline.get()?.roots ?? []
+    expect(roots.map((r) => r.name)).toEqual(['First'])
+    expect((roots[0]!.children ?? []).map((c) => c.name)).toEqual(['Second'])
+    svc.dispose()
+  })
+
+  it('tracks the active item from the session active slot on change', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    const { controller, onDidChangeActive, setActiveKey } = makeSessionController([
+      tlMessage('m1', 'user', 'First'),
+      tlMessage('m2', 'agent', 'Second'),
+    ])
+    setActiveKey('m:m1')
+    AcpSessionOutlineRegistry.register('s1', controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.activeSymbol.get()?.name).toBe('First')
+    // A keyboard move (Alt+Down) or a scroll both surface as an active-key change.
+    setActiveKey('m:m2')
+    onDidChangeActive.fire()
+    expect(svc.activeSymbol.get()?.name).toBe('Second')
+    svc.dispose()
+  })
+
+  it('revealSymbol scrolls the chat to the slot key and refocuses it', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    const { controller, scrolled, focusCount } = makeSessionController([
+      tlMessage('m1', 'user', 'First'),
+      tlMessage('m2', 'agent', 'Second'),
+    ])
+    AcpSessionOutlineRegistry.register('s1', controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    // 'Second' nests under 'First'; reach it through the grouped tree.
+    const second = svc.outline.get()!.roots[0]!.children![0]!
+    svc.revealSymbol(second)
+    expect(scrolled).toEqual(['m:m2'])
+    expect(focusCount()).toBe(1)
+    svc.dispose()
+  })
+
+  // Repro for the reported bug in the REAL mount order: the editor activates
+  // BEFORE the ChatBody mounts, so the first attach finds no controller and
+  // bails. The controller then registers late (onDidChange → re-attach). Moving
+  // the session's keyboard selection must retrack the active symbol — i.e. the
+  // late re-attach has to (re)subscribe onDidChangeActive, not just build the
+  // tree once.
+  it('tracks the active slot after the controller registers late (editor active first)', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    // Editor active, ChatBody not mounted yet.
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()).toBeUndefined()
+
+    const { controller, onDidChangeActive, setActiveKey } = makeSessionController([
+      tlMessage('m1', 'user', 'First'),
+      tlMessage('m2', 'agent', 'Second'),
+    ])
+    setActiveKey('m:m1')
+    AcpSessionOutlineRegistry.register('s1', controller)
+    await flush()
+    expect(svc.activeSymbol.get()?.name).toBe('First')
+
+    // The user moves the selection in the chat (Alt+Down). The outline highlight
+    // must follow — this is the path that was silently broken.
+    setActiveKey('m:m2')
+    onDidChangeActive.fire()
+    expect(svc.activeSymbol.get()?.name).toBe('Second')
+    svc.dispose()
+  })
+
+  it('clears the outline when leaving the session editor', async () => {
+    const { svc, input, activeEditor } = setupSession()
+    const { controller } = makeSessionController([tlMessage('m1', 'user', 'First')])
+    AcpSessionOutlineRegistry.register('s1', controller)
+    activeEditor.set(input, undefined)
+    await flush()
+    expect(svc.outline.get()).toBeDefined()
+    activeEditor.set(undefined, undefined)
+    expect(svc.outline.get()).toBeUndefined()
     svc.dispose()
   })
 })
