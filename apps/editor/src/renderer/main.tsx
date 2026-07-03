@@ -136,6 +136,8 @@ import {
 import './services/acp/acpSessionFilterService.js'
 // Side-effect import: registers IQuickAccessController for the same snapshot.
 import './services/quickInput/QuickAccessController.js'
+// Side-effect import: registers IOpenerService for the same snapshot.
+import './services/opener/OpenerService.js'
 import { AcpChatWidgetService, IAcpChatWidgetService } from './services/acp/acpChatWidgetService.js'
 import {
   ExtensionHostClientService,

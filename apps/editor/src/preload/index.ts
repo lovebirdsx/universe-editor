@@ -15,6 +15,10 @@ const OPEN_SESSION_FLAG = '--ue-open-session='
 const openSessionArg = process.argv.find((a) => a.startsWith(OPEN_SESSION_FLAG))
 const openSessionId = openSessionArg ? openSessionArg.slice(OPEN_SESSION_FLAG.length) : undefined
 
+const OPEN_URI_FLAG = '--ue-open-uri='
+const openUriArg = process.argv.find((a) => a.startsWith(OPEN_URI_FLAG))
+const openUriTarget = openUriArg ? openUriArg.slice(OPEN_URI_FLAG.length) : undefined
+
 const bridge = {
   send(data: Uint8Array): void {
     ipcRenderer.send(IPC_PROTOCOL_CHANNEL, Buffer.from(data))
@@ -57,6 +61,16 @@ const bridge = {
     }
     ipcRenderer.on('ue:open-session', listener)
     return () => ipcRenderer.removeListener('ue:open-session', listener)
+  },
+  /** Opener target (`path:line:col` or `command:…`) from a deep link that cold-launched this window. */
+  openUriTarget,
+  /** Listen for a deep-link opener target pushed by the main process to a live window. */
+  onOpenUri(cb: (target: string) => void): () => void {
+    const listener = (_event: IpcRendererEvent, target: unknown): void => {
+      if (typeof target === 'string') cb(target)
+    }
+    ipcRenderer.on('ue:open-uri', listener)
+    return () => ipcRenderer.removeListener('ue:open-uri', listener)
   },
 }
 

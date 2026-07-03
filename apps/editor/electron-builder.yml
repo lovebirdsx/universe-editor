@@ -1,5 +1,12 @@
 appId: io.universe.editor
 productName: Universe Editor
+# OS-level deep-link protocol. On macOS this becomes a CFBundleURLTypes entry in
+# Info.plist; on Windows NSIS registers the scheme. The main process also calls
+# app.setAsDefaultProtocolClient('universe-editor') at runtime as a fallback.
+protocols:
+  - name: Universe Editor
+    schemes:
+      - universe-editor
 directories:
   output: release
 artifactName: '${productName}-${version}-${os}-${arch}.${ext}'

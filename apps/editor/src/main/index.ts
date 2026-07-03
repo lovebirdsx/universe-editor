@@ -20,6 +20,14 @@ import {
 } from '@universe-editor/platform'
 import { initializeMainNls } from '../shared/i18n/bootstrap.js'
 import { PerfMarks } from '../shared/perf/marks.js'
+import {
+  DEEP_LINK_PROTOCOL,
+  deepLinkFilePath,
+  deepLinkToOpenerTarget,
+  isDeepLink,
+  parseDeepLink,
+  type DeepLinkTarget,
+} from '../shared/deepLink.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
@@ -87,9 +95,21 @@ const environmentService = new EnvironmentMainService({
 // Packaged: argv[0]=exe, argv[1+]=user args
 // Dev:      argv[0]=electron, argv[1]=main script, argv[2+]=user args
 function parseFileToOpen(argv: readonly string[], isPackaged: boolean): string | undefined {
-  return argv.slice(isPackaged ? 1 : 2).find((a) => !a.startsWith('-') && a.length > 0)
+  return argv
+    .slice(isPackaged ? 1 : 2)
+    .find((a) => !a.startsWith('-') && a.length > 0 && !isDeepLink(a))
 }
+
+// A `universe-editor://` deep link is passed just like a file path (as a plain
+// argv entry on Windows / Linux). Pick it out separately so it routes through
+// the opener rather than being treated as a file to open.
+function parseDeepLinkArg(argv: readonly string[]): DeepLinkTarget | undefined {
+  const raw = argv.find((a) => isDeepLink(a))
+  return raw ? parseDeepLink(raw) : undefined
+}
+
 const startupPath = parseFileToOpen(process.argv, app.isPackaged)
+const startupDeepLink = parseDeepLinkArg(process.argv)
 
 // Resolve product identity once (pure): reused for the --version/--help banner
 // and for applyProductIdentity below.
@@ -120,6 +140,23 @@ if (environmentService.shouldPrintVersion) {
 // Switch productName / userData / AppUserModelId based on dev vs release vs E2E.
 // Must run before any `app.getPath('userData')` call (e.g. new LogMainService()).
 applyProductIdentity(app, productIdentity)
+
+// Register as the OS handler for `universe-editor://` deep links. On Windows the
+// packaged exe path + args must be passed explicitly so a protocol launch
+// re-enters this binary; on macOS the association is declared in the plist and
+// links arrive via the `open-url` event. E2E opts out (isolated instances must
+// not fight over the OS-wide association).
+if (!environmentService.isE2E) {
+  if (process.platform === 'win32' && !app.isPackaged) {
+    // Dev: argv[0]=electron, argv[1]=main script. Register electron.exe with the
+    // script path so `electron main.js universe-editor://…` round-trips.
+    app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL, process.execPath, [
+      resolve(process.argv[1] ?? ''),
+    ])
+  } else {
+    app.setAsDefaultProtocolClient(DEEP_LINK_PROTOCOL)
+  }
+}
 
 // Dev-only: track Disposable leaks. Report on process exit.
 if (import.meta.env.DEV) {
@@ -173,6 +210,11 @@ if (!hasSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', (_event, argv, workingDirectory) => {
+    const deepLink = parseDeepLinkArg(argv)
+    if (deepLink) {
+      routeDeepLink(deepLink)
+      return
+    }
     const argPath = parseFileToOpen(argv, app.isPackaged)
     const services = getOrCreateServices()
 
@@ -216,6 +258,48 @@ if (!hasSingleInstanceLock) {
       }
     })()
   })
+}
+
+// macOS delivers `universe-editor://` links through this event rather than argv.
+// May fire before app.whenReady() (cold launch from a link), so routeDeepLink
+// tolerates a not-yet-created window by opening one.
+app.on('open-url', (event, url) => {
+  if (!isDeepLink(url)) return
+  event.preventDefault()
+  const target = parseDeepLink(url)
+  if (target) routeDeepLink(target)
+})
+
+/**
+ * Route a parsed deep link to a window and forward it to that window's renderer,
+ * which turns it back into an IOpenerService.open call. A file link prefers the
+ * window whose workspace contains the file; a command link goes to the focused
+ * (or first) window. With no window open yet, one is created.
+ */
+function routeDeepLink(target: DeepLinkTarget): void {
+  const services = getOrCreateServices()
+  const filePath = deepLinkFilePath(target)
+
+  let targetWin: BrowserWindow | undefined
+  if (filePath) {
+    const fileUri = URI.file(filePath)
+    for (const info of services.windows.getOpenWindowInfos()) {
+      const folder = info.folder ? URI.revive(info.folder) : undefined
+      if (folder && isEqualOrParentResource(fileUri, folder, normalizePlatform(process.platform))) {
+        targetWin = services.windows.getWindowById(info.id)
+        break
+      }
+    }
+  }
+  if (!targetWin) targetWin = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
+
+  if (targetWin) {
+    if (targetWin.isMinimized()) targetWin.restore()
+    targetWin.focus()
+    targetWin.webContents.send('ue:open-uri', deepLinkToOpenerTarget(target))
+  } else {
+    void services.windows.createWindow({ deepLink: deepLinkToOpenerTarget(target) })
+  }
 }
 
 // Application-singleton services — shared across all windows, owned by the root
@@ -334,6 +418,10 @@ void app.whenReady().then(async () => {
   } else {
     await windows.restoreSession(sessionList, startupFilePath)
   }
+
+  // A `universe-editor://` link that cold-launched the app: the session is now
+  // restored (windows exist), so route it to the best-matching one.
+  if (startupDeepLink) routeDeepLink(startupDeepLink)
 
   setTimeout(() => {
     void logMainService.cleanupOldLogs(20).catch((err) => {

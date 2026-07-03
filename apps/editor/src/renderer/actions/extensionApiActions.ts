@@ -21,7 +21,10 @@ import {
 } from '@universe-editor/platform'
 import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import {
+  findExistingFileEditor,
+  revealSelectionInInput,
+} from '../services/editor/revealEditorPosition.js'
 import { openInLockAwareGroup } from '../services/editor/openInLockAwareGroup.js'
 
 /** Backs `workspace.getConfiguration(section).get(key, default)` for extensions. */
@@ -82,35 +85,15 @@ function revealExistingOrOpen(
   groups: IEditorGroupsService,
   uri: URI,
 ): FileEditorInput {
-  const uriIdentity = accessor.get(IUriIdentityService)
-  for (const group of groups.groups) {
-    for (const editor of group.editors) {
-      if (editor instanceof FileEditorInput && uriIdentity.isEqual(editor.resource, uri)) {
-        groups.activateGroup(group)
-        group.setActive(editor)
-        return editor
-      }
-    }
+  const existing = findExistingFileEditor(groups, accessor.get(IUriIdentityService), uri)
+  if (existing) {
+    groups.activateGroup(existing.group)
+    existing.group.setActive(existing.editor)
+    return existing.editor
   }
   const input = accessor.get(IInstantiationService).createInstance(FileEditorInput, uri)
   openInLockAwareGroup(groups, input, { activate: true, pinned: true })
   return input
-}
-
-/** Monaco may not have mounted the editor yet; retry briefly before giving up. */
-async function revealPosition(input: FileEditorInput, line: number, column: number): Promise<void> {
-  const delays = [0, 50, 100, 200]
-  for (const delay of delays) {
-    if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay))
-    const editor = FileEditorRegistry.get(input)
-    if (editor) {
-      const position = { lineNumber: line, column }
-      editor.setPosition(position)
-      editor.revealLineInCenterIfOutsideViewport(line)
-      editor.focus()
-      return
-    }
-  }
 }
 
 /**
@@ -130,7 +113,7 @@ export class OpenFileAtAction extends Action2 {
     const groups = accessor.get(IEditorGroupsService)
     const uri = URI.file(fsPath)
     const input = revealExistingOrOpen(accessor, groups, uri)
-    void revealPosition(input, line + 1, column + 1)
+    void revealSelectionInInput(input, { startLineNumber: line + 1, startColumn: column + 1 })
   }
 }
 

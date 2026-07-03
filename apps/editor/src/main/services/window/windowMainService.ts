@@ -68,6 +68,8 @@ export interface ICreateWindowOptions {
   readonly fileToOpen?: string
   /** ACP session id the renderer should resume once it is up (cross-worktree follow). */
   readonly sessionToOpen?: string
+  /** A `universe-editor://` deep link (as an opener-target string) to open at startup. */
+  readonly deepLink?: string
 }
 
 export interface IWindowMainService {
@@ -175,6 +177,7 @@ export class WindowMainService implements IWindowMainService {
           `--ue-home-dir=${homedir()}`,
           ...(opts?.fileToOpen ? [`--ue-open-file=${opts.fileToOpen}`] : []),
           ...(opts?.sessionToOpen ? [`--ue-open-session=${opts.sessionToOpen}`] : []),
+          ...(opts?.deepLink ? [`--ue-open-uri=${opts.deepLink}`] : []),
           ...(e2eEnabled ? [E2E_PROBE_ARGV_FLAG] : []),
         ],
       },

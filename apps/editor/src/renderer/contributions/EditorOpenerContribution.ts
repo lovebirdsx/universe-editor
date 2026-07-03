@@ -32,7 +32,11 @@ import {
   type monaco,
 } from '../workbench/editor/monaco/MonacoLoader.js'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import {
+  findExistingFileEditor,
+  toRevealRange,
+  waitForFileEditor,
+} from '../services/editor/revealEditorPosition.js'
 import { isImageResource } from '../services/editor/imageFileTypes.js'
 
 export class EditorOpenerContribution extends Disposable implements IWorkbenchContribution {
@@ -82,7 +86,7 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
     }
 
     const fileInput = this._revealExistingOrOpen(target)
-    const editor = await waitForEditor(fileInput)
+    const editor = await waitForFileEditor(fileInput)
     if (!editor) return null
 
     applySelection(editor, input.options?.selection)
@@ -100,14 +104,11 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
 
   /** Activate the file if it's already open in some group; otherwise open it. */
   private _revealExistingOrOpen(uri: URI): FileEditorInput {
-    for (const group of this._groupsService.groups) {
-      for (const editor of group.editors) {
-        if (editor instanceof FileEditorInput && this._uriIdentity.isEqual(editor.resource, uri)) {
-          this._groupsService.activateGroup(group)
-          group.setActive(editor)
-          return editor
-        }
-      }
+    const existing = findExistingFileEditor(this._groupsService, this._uriIdentity, uri)
+    if (existing) {
+      this._groupsService.activateGroup(existing.group)
+      existing.group.setActive(existing.editor)
+      return existing.editor
     }
     const input = this._instantiation.createInstance(FileEditorInput, uri)
     const target = this._groupsService.activeGroupForOpen
@@ -117,45 +118,13 @@ export class EditorOpenerContribution extends Disposable implements IWorkbenchCo
   }
 }
 
-/** Monaco may not have mounted the editor yet; retry briefly (cf. gotoSymbolActions). */
-async function waitForEditor(
-  input: FileEditorInput,
-): Promise<monaco.editor.IStandaloneCodeEditor | undefined> {
-  let editor = FileEditorRegistry.get(input)
-  if (editor) return editor
-  await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
-  editor = FileEditorRegistry.get(input)
-  if (editor) return editor
-  await new Promise<void>((resolve) => setTimeout(resolve, 50))
-  editor = FileEditorRegistry.get(input)
-  if (editor) return editor
-  await new Promise<void>((resolve) => setTimeout(resolve, 100))
-  return FileEditorRegistry.get(input)
-}
-
-/**
- * Monaco's `extractSelection` encodes a single-position fragment (e.g. a markdown
- * header link `#hello` → `file.md#L5,1`) as a range whose end fields are
- * `undefined`. That shape is neither a valid IRange nor ISelection and makes
- * `setSelection` throw "Invalid arguments", so collapse it into a full cursor
- * range by filling the end from the start. Exported for testing.
- */
-export function normalizeOpenRange(selection: monaco.IRange): monaco.IRange {
-  return {
-    startLineNumber: selection.startLineNumber,
-    startColumn: selection.startColumn,
-    endLineNumber: selection.endLineNumber ?? selection.startLineNumber,
-    endColumn: selection.endColumn ?? selection.startColumn,
-  }
-}
-
 function applySelection(
   editor: monaco.editor.IStandaloneCodeEditor,
   selection: monaco.IRange | monaco.IPosition | undefined,
 ): void {
   if (!selection) return
   if ('startLineNumber' in selection) {
-    const range = normalizeOpenRange(selection)
+    const range = toRevealRange(selection)
     editor.setSelection(range)
     editor.revealRangeInCenterIfOutsideViewport(range)
   } else {

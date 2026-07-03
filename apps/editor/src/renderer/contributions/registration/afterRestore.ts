@@ -52,6 +52,7 @@ import { ActiveRepoSyncContribution } from '../ActiveRepoSyncContribution.js'
 import { OutlineViewStateContribution } from '../OutlineViewStateContribution.js'
 import { HistoryContribution } from '../HistoryContribution.js'
 import { StartupFileContribution } from '../StartupFileContribution.js'
+import { DeepLinkContribution } from '../DeepLinkContribution.js'
 import { StartupSessionContribution } from '../StartupSessionContribution.js'
 import { SessionChangesDiffSyncContribution } from '../SessionChangesDiffSyncContribution.js'
 import { DiffLiveContentSyncContribution } from '../DiffLiveContentSyncContribution.js'
@@ -403,6 +404,14 @@ ContributionsRegistry.registerContribution(
 ContributionsRegistry.registerContribution(
   'workbench.contrib.startupFile',
   StartupFileContribution,
+  WorkbenchPhase.AfterRestore,
+)
+
+// Open a `universe-editor://` deep link (file-at-position, or a whitelisted
+// configuration command). AfterRestore so editor groups + services are live.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.deepLink',
+  DeepLinkContribution,
   WorkbenchPhase.AfterRestore,
 )
 

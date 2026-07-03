@@ -33,7 +33,7 @@ import {
   URI,
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
+import { revealSelectionInInput } from '../../services/editor/revealEditorPosition.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../../services/editor/MarkdownPreviewRegistry.js'
 import { openMarkdownPreviewInGroup } from '../../services/editor/openMarkdownPreview.js'
@@ -205,14 +205,7 @@ export function useMarkdownFileLink(
         const input = instantiation.createInstance(FileEditorInput, uri)
         editorService.openEditor(input, { pinned: true })
         if (line !== undefined) {
-          setTimeout(() => {
-            const editor = FileEditorRegistry.get(input)
-            if (editor) {
-              editor.setPosition({ lineNumber: line, column: col ?? 1 })
-              editor.revealLineInCenter(line)
-              editor.focus()
-            }
-          }, 50)
+          void revealSelectionInInput(input, { startLineNumber: line, startColumn: col ?? 1 })
         }
       })
     },
