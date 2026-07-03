@@ -145,6 +145,15 @@ function toErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
+function resolveEffectiveRepoRoot(
+  repos: readonly GitGraphRepoDto[],
+  selectedRepo: string | null,
+): string | null {
+  if (repos.length === 0) return selectedRepo
+  if (selectedRepo && repos.some((repo) => repo.root === selectedRepo)) return selectedRepo
+  return repos[0]?.root ?? null
+}
+
 /** A thin draggable divider on a column's left edge; reports the horizontal drag
  *  delta so the caller can resize the column. */
 function ColumnResizer({ onResize }: { onResize: (deltaX: number) => void }) {
@@ -849,16 +858,23 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
     [commands],
   )
 
-  const effectiveRepoRoot = useMemo(() => {
-    if (repos.length === 0) return selectedRepo
-    if (selectedRepo && repos.some((repo) => repo.root === selectedRepo)) return selectedRepo
-    return repos[0]?.root ?? null
-  }, [repos, selectedRepo])
+  const discoverEffectiveRepoRoot = useCallback(async (): Promise<string | null> => {
+    const current = resolveEffectiveRepoRoot(repos, selectedRepo)
+    if (current) return current
+
+    const discovered = await commands.executeCommand<GitGraphRepoDto[]>(GitGraphCommands.getRepos)
+    if (!discovered || discovered.length === 0) return null
+
+    setRepos(discovered)
+    gitGraphViewState.repos = discovered
+    return resolveEffectiveRepoRoot(discovered, selectedRepo)
+  }, [commands, repos, selectedRepo])
 
   const openSourceFile = useCallback(
     (file: GitGraphFileChangeDto) => {
       void (async () => {
-        if (!effectiveRepoRoot) {
+        const repoRoot = await discoverEffectiveRepoRoot()
+        if (!repoRoot) {
           notification.notify({
             severity: Severity.Warning,
             message: localize(
@@ -870,7 +886,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           return
         }
 
-        const resource = URI.joinPath(URI.file(effectiveRepoRoot), file.path)
+        const resource = URI.joinPath(URI.file(repoRoot), file.path)
         try {
           if (!(await fileService.exists(resource))) {
             notification.notify({
@@ -896,7 +912,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
         }
       })()
     },
-    [editorResolverService, effectiveRepoRoot, fileService, notification],
+    [discoverEffectiveRepoRoot, editorResolverService, fileService, notification],
   )
 
   // Run a mutating op, then revalidate in place so the scroll position and

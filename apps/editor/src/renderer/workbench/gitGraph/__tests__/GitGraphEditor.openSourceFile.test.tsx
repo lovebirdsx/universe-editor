@@ -82,15 +82,21 @@ function makeDetails(): GitGraphCommitDetailsDto {
   }
 }
 
-function makeCommandService(): ICommandService {
+function makeCommandService(options: { stallInitialGetRepos?: boolean } = {}): ICommandService {
+  let getReposCalls = 0
   return {
     _serviceBrand: undefined,
     executeCommand: vi.fn(async (id: string) => {
       switch (id) {
         case GitGraphCommands.getCommits:
           return makeResult()
-        case GitGraphCommands.getRepos:
+        case GitGraphCommands.getRepos: {
+          getReposCalls += 1
+          if (options.stallInitialGetRepos && getReposCalls === 1) {
+            return new Promise<GitGraphRepoDto[]>(() => {})
+          }
           return [REPO]
+        }
         case GitGraphCommands.getCommitDetails:
           return makeDetails()
         default:
@@ -170,7 +176,11 @@ function makeNotificationService(): INotificationServiceType {
   } as unknown as INotificationServiceType
 }
 
-function renderEditor(options: { fileExists: boolean; openError?: Error }) {
+function renderEditor(options: {
+  fileExists: boolean
+  openError?: Error
+  stallInitialGetRepos?: boolean
+}) {
   const resolver: IEditorResolverServiceType = {
     _serviceBrand: undefined,
     registerEditor: vi.fn(),
@@ -183,7 +193,7 @@ function renderEditor(options: { fileExists: boolean; openError?: Error }) {
   const notification = makeNotificationService()
 
   const services = new ServiceCollection()
-  services.set(ICommandService, makeCommandService())
+  services.set(ICommandService, makeCommandService(options))
   services.set(IScmService, makeScmService())
   services.set(IDialogService, makeDialog())
   services.set(IStorageService, makeStorage())
@@ -236,6 +246,19 @@ describe('GitGraphEditor open source file', () => {
 
     const expected = URI.joinPath(URI.file(REPO.root), FILE_PATH)
     expect(resolver.openEditor).toHaveBeenCalledWith(expected, { pinned: true })
+  })
+
+  it('lazily discovers the default repo when a restored graph is clicked before repos hydrate', async () => {
+    gitGraphViewState.repos = []
+
+    const { resolver } = renderEditor({ fileExists: true, stallInitialGetRepos: true })
+
+    fireEvent.click(screen.getByTitle('Open File'))
+    await flush()
+
+    const expected = URI.joinPath(URI.file(REPO.root), FILE_PATH)
+    expect(resolver.openEditor).toHaveBeenCalledWith(expected, { pinned: true })
+    expect(gitGraphViewState.repos).toEqual([REPO])
   })
 
   it('notifies instead of silently failing when the working-tree file is missing', async () => {
