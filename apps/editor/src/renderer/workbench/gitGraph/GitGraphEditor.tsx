@@ -1388,9 +1388,11 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
 
   const layout = useMemo(() => {
     if (!result) return null
+    const isFiltering = deferredQuery.trim() !== ''
+    const filteredHashSet = isFiltering ? new Set(filteredCommits.map((c) => c.hash)) : null
     const commits = filteredCommits.map((c) => ({
       hash: c.hash,
-      parents: c.parents,
+      parents: filteredHashSet ? c.parents.filter((p) => filteredHashSet.has(p)) : c.parents,
       isStash: c.stash !== null,
       isUncommitted: c.hash === UNCOMMITTED_HASH,
     }))
@@ -1399,9 +1401,10 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
       onlyFollowFirstParent: settings.onlyFollowFirstParent,
       ...(anchorIndex >= 0 ? { expand: { afterIndex: anchorIndex, height: DETAIL_HEIGHT } } : {}),
     })
-  }, [result, filteredCommits, anchorIndex, settings.onlyFollowFirstParent])
+  }, [result, filteredCommits, anchorIndex, settings.onlyFollowFirstParent, deferredQuery])
 
   const graphWidth = layout?.width ?? GRID.offsetX * 2
+  const isCompact = (layout?.laneCount ?? 0) > 6
   const selected = useMemo(() => new Set(selection), [selection])
   const detailTree = useMemo(() => (details ? buildFileTree(details.files) : []), [details])
   const compareTree = useMemo(
@@ -1677,27 +1680,29 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
           <div className={styles['canvas']} style={{ height: layout.height }}>
             <svg
               className={styles['graphSvg']}
-              width={layout.width}
+              width={isCompact ? GRID.offsetX * 2 : graphWidth}
               height={layout.height}
               aria-hidden="true"
             >
-              {layout.paths.map((p, i) => (
-                <path
-                  key={i}
-                  d={p.d}
-                  fill="none"
-                  stroke={p.isCommitted ? colourOf(p.colour) : '#808080'}
-                  strokeWidth={2}
-                  {...(p.isCommitted ? {} : { strokeDasharray: '2' })}
-                />
-              ))}
+              {!isCompact &&
+                layout.paths.map((p, i) => (
+                  <path
+                    key={i}
+                    d={p.d}
+                    fill="none"
+                    stroke={p.isCommitted ? colourOf(p.colour) : '#808080'}
+                    strokeWidth={2}
+                    {...(p.isCommitted ? {} : { strokeDasharray: '2' })}
+                  />
+                ))}
               {layout.vertices.map((v) => {
+                const cx = isCompact ? GRID.offsetX : v.cx
                 const colour = colourOf(v.colour)
                 if (v.isUncommitted) {
                   return (
                     <circle
                       key={v.id}
-                      cx={v.cx}
+                      cx={cx}
                       cy={v.cy}
                       r={4}
                       fill="none"
@@ -1710,15 +1715,15 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                 if (v.isStash) {
                   return (
                     <g key={v.id}>
-                      <circle cx={v.cx} cy={v.cy} r={4.5} fill={colour} />
-                      <circle cx={v.cx} cy={v.cy} r={2} className={styles['stashInner']} />
+                      <circle cx={cx} cy={v.cy} r={4.5} fill={colour} />
+                      <circle cx={cx} cy={v.cy} r={2} className={styles['stashInner']} />
                     </g>
                   )
                 }
                 return v.isCurrent ? (
                   <circle
                     key={v.id}
-                    cx={v.cx}
+                    cx={cx}
                     cy={v.cy}
                     r={4}
                     className={styles['nodeCurrent']}
@@ -1726,7 +1731,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
                     strokeWidth={2}
                   />
                 ) : (
-                  <circle key={v.id} cx={v.cx} cy={v.cy} r={4} fill={colour} />
+                  <circle key={v.id} cx={cx} cy={v.cy} r={4} fill={colour} />
                 )
               })}
             </svg>
@@ -1735,7 +1740,7 @@ export function GitGraphEditor(_props: { input: IEditorInput }) {
               className={styles['rows']}
               style={
                 {
-                  '--graph-width': `${graphWidth}px`,
+                  '--graph-width': `${isCompact ? GRID.offsetX * 2 : graphWidth}px`,
                   '--col-author': `${columnWidths.author}px`,
                   '--col-date': `${columnWidths.date}px`,
                 } as CSSProperties
