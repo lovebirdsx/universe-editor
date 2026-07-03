@@ -11,9 +11,9 @@
 import { commands, workspace, window, type ExtensionContext } from '@universe-editor/extension-api'
 import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { Repository } from './repository.js'
 import { RepositoryManager } from './repositoryManager.js'
 import { GitStatusBarController } from './gitStatusBar.js'
+import { commitAmendSmart, commitSmart } from './commitOperations.js'
 import { discoverRepos, type DiscoverOptions, type DiscoveredRepo } from './repoDiscovery.js'
 import { norm } from './pathUtil.js'
 import {
@@ -119,51 +119,6 @@ export async function activate(context: ExtensionContext): Promise<void> {
     const ok = res.exitCode === 0
     if (!ok) await notifyGitFailure(`Graph: ${label}`, res)
     await mgr.resolveRepo({ rootUri: gitGraphRoot })?.refresh()
-    return ok
-  }
-
-  // Smart commit: with nothing staged, stage every change first (mirrors VSCode).
-  const commitSmart = async (repo: Repository | undefined): Promise<boolean> => {
-    if (!repo) return false
-    const message = repo.commitMessage.trim()
-    if (!message) {
-      await window.showWarningMessage(
-        localize('git.commit.noMessage', 'Type a commit message first.'),
-      )
-      return false
-    }
-    if (!repo.hasStagedChanges) {
-      if (!repo.hasChanges) {
-        await window.showWarningMessage(
-          localize('git.commit.noChanges', 'There are no changes to commit.'),
-        )
-        return false
-      }
-      await repo.stageAll()
-    }
-    const ok = await repo.commit(message)
-    if (ok) repo.commitMessage = ''
-    return ok
-  }
-
-  // Amend the last commit. If the message box is empty, loads the last commit
-  // message into the box so the user can review/edit before confirming.
-  const commitAmendSmart = async (repo: Repository | undefined): Promise<boolean> => {
-    if (!repo) return false
-    const message = repo.commitMessage.trim()
-    if (!message) {
-      const lastMsg = await repo.getLastCommitMessage()
-      if (!lastMsg) {
-        await window.showWarningMessage(
-          localize('git.commit.noCommitsToAmend', 'No commits to amend.'),
-        )
-        return false
-      }
-      repo.commitMessage = lastMsg
-      return false
-    }
-    const ok = await repo.commitAmend(message)
-    if (ok) repo.commitMessage = ''
     return ok
   }
 

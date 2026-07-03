@@ -46,6 +46,7 @@ const ZH_CN: Readonly<Record<string, string>> = {
   // extension.ts
   'git.commit.noMessage': '请先输入提交消息。',
   'git.commit.noChanges': '没有可提交的更改。',
+  'git.commit.noChangesToAmend': '没有可用于修正提交的更改。',
   'git.commit.noCommitsToAmend': '没有可修正的提交。',
   'git.btn.discardChanges': '放弃更改',
   'git.discard.fileConfirm': '放弃"{0}"中的更改？此操作无法撤销。',

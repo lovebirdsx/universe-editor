@@ -248,8 +248,8 @@ export class Repository {
     return true
   }
 
-  async stageAll(): Promise<void> {
-    await this._run(['add', '-A'], 'stage all')
+  async stageAll(): Promise<boolean> {
+    return this._run(['add', '-A'], 'stage all')
   }
 
   async unstage(paths: readonly string[]): Promise<void> {
