@@ -20,6 +20,13 @@ export interface IMarkdownPreviewController {
   scrollToAnchor(anchor: string): void
   /** Source line (1-based) currently at the top of the preview viewport, if measurable. */
   getTopVisibleLine(): number | undefined
+  /**
+   * Whether the preview is scrolled to (or within a hair of) the very bottom.
+   * Lets a toggle-back land the source at its last line even though the preview
+   * renders denser than the source (so the top-visible line alone would undershoot
+   * the end).
+   */
+  isScrolledToBottom(): boolean
   /** Move keyboard focus to the preview container (so it can be scrolled/navigated). */
   focus(): void
   /** Fires (debounced by the component) when the user scrolls the preview. */

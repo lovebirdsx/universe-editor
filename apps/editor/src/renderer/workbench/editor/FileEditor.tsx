@@ -33,6 +33,7 @@ import {
 } from './monaco/editorOptionsFromConfig.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { Breadcrumbs } from './Breadcrumbs.js'
+import { clampRevealScrollTop } from './previewScrollMap.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { FileEditorInput } from '../../services/editor/FileEditorInput.js'
 import { FileEditorRegistry } from '../../services/editor/FileEditorRegistry.js'
@@ -398,6 +399,22 @@ export function FileEditor({ input }: { input: IEditorInput }) {
         const saved = EditorViewStateCache.load(groupId, resourceUri)
         if (saved) {
           ed.restoreViewState(saved as monaco.editor.ICodeEditorViewState)
+        }
+        // A one-shot reveal request (e.g. toggling back from a markdown preview
+        // that had been scrolled, or entering the preview aligned to the cursor)
+        // wins over the saved scroll: put that source line at the top, but clamp so
+        // a near-the-end line lands the last line flush at the viewport bottom
+        // instead of overshooting into scroll-beyond-last-line padding.
+        const revealLine = EditorViewStateCache.takeRevealLine(groupId, resourceUri)
+        if (revealLine !== undefined) {
+          const lineTop = ed.getTopForLineNumber(revealLine)
+          const lastLine = ed.getModel()?.getLineCount() ?? revealLine
+          const contentBottom = ed.getBottomForLineNumber(lastLine)
+          const viewportHeight = ed.getLayoutInfo().height
+          ed.setScrollTop(
+            clampRevealScrollTop({ lineTop, contentBottom, viewportHeight }),
+            1 /* ScrollType.Immediate */,
+          )
         }
         // A more recent cursor written by the diff editor for the same file wins
         // over our own (possibly stale) viewState, so switching diff -> file

@@ -258,6 +258,19 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       if (!position) return undefined
       return { lineNumber: position.lineNumber, column: position.column }
     },
+    getActiveEditorFirstVisibleLine: () => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const monaco = FileEditorRegistry.get(active)
+      return monaco?.getVisibleRanges()[0]?.startLineNumber
+    },
+    getActiveEditorLastVisibleLine: () => {
+      const active = services.editorGroupsService.activeGroup?.activeEditor
+      if (!(active instanceof FileEditorInput)) return undefined
+      const monaco = FileEditorRegistry.get(active)
+      const ranges = monaco?.getVisibleRanges()
+      return ranges && ranges.length > 0 ? ranges[ranges.length - 1]?.endLineNumber : undefined
+    },
     getActiveEditorText: () => {
       const active = services.editorGroupsService.activeGroup?.activeEditor
       if (!(active instanceof FileEditorInput)) return undefined

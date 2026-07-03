@@ -197,6 +197,7 @@ describe('focusEditorInput — markdown preview', () => {
       scrollToLine: () => {},
       scrollToAnchor: () => {},
       getTopVisibleLine: () => 1,
+      isScrolledToBottom: () => false,
       focus: () => {
         calls.focus += 1
       },

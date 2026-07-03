@@ -5,7 +5,12 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { describe, expect, it } from 'vitest'
-import { lineForPreviewTop, previewTopForLine, type LineEntry } from '../previewScrollMap.js'
+import {
+  clampRevealScrollTop,
+  lineForPreviewTop,
+  previewTopForLine,
+  type LineEntry,
+} from '../previewScrollMap.js'
 
 const entries: LineEntry[] = [
   { line: 1, top: 0 },
@@ -37,5 +42,25 @@ describe('lineForPreviewTop', () => {
   it('clamps outside the mapped pixel range', () => {
     expect(lineForPreviewTop(entries, -10)).toBe(1)
     expect(lineForPreviewTop(entries, 9999)).toBe(11)
+  })
+})
+
+describe('clampRevealScrollTop', () => {
+  it('returns the line top when it fits above the last useful scroll', () => {
+    expect(clampRevealScrollTop({ lineTop: 200, contentBottom: 1000, viewportHeight: 400 })).toBe(
+      200,
+    )
+  })
+
+  it('clamps a near-the-end line so the last line sits flush at the bottom', () => {
+    // maxUseful = 1000 - 400 = 600; a lineTop past that would leave blank padding
+    // (scroll-beyond-last-line) below the last line.
+    expect(clampRevealScrollTop({ lineTop: 950, contentBottom: 1000, viewportHeight: 400 })).toBe(
+      600,
+    )
+  })
+
+  it('never returns a negative scrollTop (content shorter than the viewport)', () => {
+    expect(clampRevealScrollTop({ lineTop: 0, contentBottom: 200, viewportHeight: 400 })).toBe(0)
   })
 })

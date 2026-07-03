@@ -24,6 +24,7 @@ import { GoBackAction } from '../historyActions.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
 import { HistoryService } from '../../services/history/HistoryService.js'
 import { DocEditorInput } from '../../services/editor/DocEditorInput.js'
+import { initDocRegistry } from '../../services/editor/docRegistry.js'
 
 function setup() {
   const groups = new EditorGroupsService()
@@ -49,9 +50,17 @@ describe('GoBack — built-in guide doc no longer open', () => {
   const disposables: IDisposable[] = []
   afterEach(() => {
     while (disposables.length > 0) disposables.pop()?.dispose()
+    initDocRegistry({})
   })
 
   it('re-creates the doc in place of the current doc tab (no new tab)', async () => {
+    initDocRegistry({
+      'zh-CN': {
+        index: '# 用户指南',
+        'getting-started/interface-tour': '# 界面导览',
+      },
+      'en-US': {},
+    })
     disposables.push(registerAction2(GoBackAction))
     // navigateTo rebuilds a closed doc via EditorRegistry.deserialize(typeId).
     disposables.push(

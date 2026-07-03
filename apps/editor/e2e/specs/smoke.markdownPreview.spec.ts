@@ -138,6 +138,181 @@ test.describe('@p1 markdown preview', () => {
       .toBe(1)
   })
 
+  // Regression: scrolling the preview (Ctrl+Shift+V toggle mode) then switching
+  // back to the source must land the source editor near the line the preview was
+  // showing — not reset to the top. In toggle mode the source editor is detached,
+  // so its own preview↔source scroll sync never runs; OpenMarkdownSourceAction
+  // carries the preview's top-visible source line back as a one-shot reveal.
+  test('Open Source restores the scrolled preview position onto the source', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const mdFsPath = writeLongMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+
+    await expect(page.locator('[data-testid="markdown-preview"] h1').first()).toBeVisible()
+    await page.bringToFront()
+
+    // Scroll the preview well past the top.
+    const previewScrollTop = () =>
+      page.evaluate(
+        () => document.querySelector('[data-testid="markdown-preview"]')?.scrollTop ?? 0,
+      )
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="markdown-preview"]')
+      if (el) el.scrollTop = 4000
+    })
+    await expect.poll(previewScrollTop).toBeGreaterThan(1000)
+
+    // The source line at the top of the preview now — the fix must land the source
+    // editor near it (not at line 1).
+    const previewTopLine = await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="markdown-preview"]')
+      if (!el) return 0
+      const blocks = Array.from(el.querySelectorAll<HTMLElement>('[data-line]'))
+      const rootTop = el.getBoundingClientRect().top
+      let best = 0
+      for (const b of blocks) {
+        if (b.getBoundingClientRect().top - rootTop <= 1) best = Number(b.dataset['line']) + 1
+      }
+      return best
+    })
+    expect(previewTopLine).toBeGreaterThan(1)
+
+    await workbench.runCommand('workbench.action.markdown.showSource')
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .toBe('markdown')
+
+    // The source editor's first visible line must be near the preview's top line,
+    // not reset to the top. Allow tolerance for scroll↔line interpolation and the
+    // reveal's viewport padding.
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorFirstVisibleLine()), {
+        timeout: 5000,
+      })
+      .toBeGreaterThan(previewTopLine - 30)
+    const sourceFirstLine = await page.evaluate(() =>
+      window.__E2E__!.getActiveEditorFirstVisibleLine(),
+    )
+    expect(sourceFirstLine).toBeLessThan(previewTopLine + 10)
+  })
+
+  // Regression: scrolling the preview to the very bottom then toggling back must
+  // land the source with its LAST line flush at the viewport bottom — not
+  // overshoot into Monaco's scroll-beyond-last-line padding (~10+ blank lines).
+  test('Open Source from the preview bottom clamps the source to the last line', async ({
+    page,
+    workbench,
+  }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const mdFsPath = writeLongMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+    await expect(page.locator('[data-testid="markdown-preview"] h1').first()).toBeVisible()
+    await page.bringToFront()
+
+    // Scroll the preview to the very bottom.
+    await page.evaluate(() => {
+      const el = document.querySelector('[data-testid="markdown-preview"]')
+      if (el) el.scrollTop = el.scrollHeight
+    })
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const el = document.querySelector('[data-testid="markdown-preview"]')
+          if (!el) return 0
+          return el.scrollHeight - el.clientHeight - el.scrollTop
+        }),
+      )
+      .toBeLessThan(5)
+
+    await workbench.runCommand('workbench.action.markdown.showSource')
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 5000 })
+      .toBe('markdown')
+
+    // The source document has ~405 lines (200 paragraphs × 2 + heading). Toggling
+    // back from the bottom must scroll it so the last line is at/near the bottom of
+    // the viewport, i.e. the LAST line is visible — not padded far below it.
+    const lastLine = await page.evaluate(
+      () => window.__E2E__!.getActiveEditorText()?.split('\n').length ?? 0,
+    )
+    expect(lastLine).toBeGreaterThan(100)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorLastVisibleLine()), {
+        timeout: 5000,
+      })
+      .toBeGreaterThan(lastLine - 3)
+  })
+
+  // Entering the preview must open aligned to the source file's cursor line, not
+  // at the preview's own saved scroll (which defaults to the top).
+  test('Open Preview aligns the preview to the source cursor line', async ({ page, workbench }) => {
+    test.slow()
+    await workbench.waitForRestored()
+
+    const mdFsPath = writeLongMarkdown()
+    await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), mdFsPath)
+    await expect
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .toBe('markdown')
+
+    // Move the source cursor deep into the document. The Monaco instance may
+    // still be mounting right after open, so re-issue until the cursor lands.
+    await expect
+      .poll(
+        async () => {
+          await page.evaluate(() => window.__E2E__!.setActiveEditorCursor(200, 1))
+          return page.evaluate(() => window.__E2E__!.getActiveEditorCursor()?.lineNumber)
+        },
+        { timeout: 5000 },
+      )
+      .toBe(200)
+
+    await workbench.runCommand('workbench.action.markdown.openPreview')
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
+      .toBe('markdown.preview')
+    await expect(page.locator('[data-testid="markdown-preview"] h1').first()).toBeVisible()
+
+    // The preview must be scrolled so the cursor line (≈200) is near the top —
+    // not sitting at the very top of the document.
+    const previewTopLine = () =>
+      page.evaluate(() => {
+        const el = document.querySelector('[data-testid="markdown-preview"]')
+        if (!el) return 0
+        const blocks = Array.from(el.querySelectorAll<HTMLElement>('[data-line]'))
+        const rootTop = el.getBoundingClientRect().top
+        let best = 0
+        for (const b of blocks) {
+          if (b.getBoundingClientRect().top - rootTop <= 1) best = Number(b.dataset['line']) + 1
+        }
+        return best
+      })
+    await expect.poll(previewTopLine, { timeout: 5000 }).toBeGreaterThan(150)
+  })
+
   test('Open Preview to the Side splits into a new group', async ({ page, workbench }) => {
     await workbench.waitForRestored()
 

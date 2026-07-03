@@ -135,6 +135,7 @@ export function useMarkdownReaderNav<T extends HTMLElement>({
         const entries = collectEntries(el)
         return entries.length === 0 ? undefined : lineForPreviewTop(entries, el.scrollTop)
       },
+      isScrolledToBottom: () => el.scrollHeight - el.clientHeight - el.scrollTop <= 2,
       focus: () => el.focus(),
       onDidScroll: onDidScroll.event,
       openFind: () => findRef.current.open(),

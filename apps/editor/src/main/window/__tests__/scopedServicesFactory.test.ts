@@ -34,7 +34,7 @@ describe('ApplicationServices type', () => {
       exchangeRate: {} as ApplicationServices['exchangeRate'],
       resourceAccess: {} as ApplicationServices['resourceAccess'],
     }
-    expect(Object.keys(svc)).toHaveLength(24)
+    expect(Object.keys(svc)).toHaveLength(25)
   })
 })
 

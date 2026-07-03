@@ -148,6 +148,7 @@ function makePreviewController(
     scrollToLine: () => {},
     scrollToAnchor: () => {},
     getTopVisibleLine: () => 1,
+    isScrolledToBottom: () => false,
     focus: () => {},
     onDidScroll: onDidScroll.event,
     openFind: () => {},

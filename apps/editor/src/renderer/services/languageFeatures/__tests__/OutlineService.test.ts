@@ -664,6 +664,7 @@ describe('OutlineService', () => {
       scrollToLine: (line: number) => scrolled.push(line),
       scrollToAnchor: () => {},
       getTopVisibleLine: () => 1,
+      isScrolledToBottom: () => false,
       focus: () => {
         focusCount += 1
       },

@@ -71,3 +71,21 @@ export function lineForPreviewTop(entries: readonly LineEntry[], scrollTop: numb
     ),
   )
 }
+
+/**
+ * Pixel scrollTop that brings a source line to the *top* of a Monaco editor,
+ * clamped so it never scrolls past the useful content. `lineTop` is the line's
+ * pixel offset; `contentBottom` is the bottom of the last line (content height
+ * *excluding* Monaco's scroll-beyond-last-line padding); `viewportHeight` is the
+ * editor's layout height. Clamping to `contentBottom - viewportHeight` makes a
+ * near-the-end reveal land the last line flush at the bottom rather than leaving
+ * a viewport of blank padding below it.
+ */
+export function clampRevealScrollTop(params: {
+  lineTop: number
+  contentBottom: number
+  viewportHeight: number
+}): number {
+  const maxUseful = Math.max(0, params.contentBottom - params.viewportHeight)
+  return Math.max(0, Math.min(params.lineTop, maxUseful))
+}

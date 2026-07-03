@@ -21,6 +21,10 @@ class EditorViewStateCacheImpl {
     return `${groupId}:cursor:${uri}`
   }
 
+  private _revealKey(groupId: number, uri: string): string {
+    return `${groupId}:reveal:${uri}`
+  }
+
   save(groupId: number, uri: string, state: unknown): void {
     this._map.set(this._key(groupId, uri), state)
   }
@@ -44,6 +48,25 @@ class EditorViewStateCacheImpl {
     return this._map.get(this._cursorKey(groupId, uri)) as
       | { lineNumber: number; column: number }
       | undefined
+  }
+
+  /**
+   * A one-shot request to scroll a file editor so `line` sits near the top on its
+   * next mount, overriding the saved viewState's scroll. Consumed (and cleared) by
+   * FileEditor when it restores. Used to carry the markdown preview's scroll
+   * position back onto the source editor when toggling from preview to source
+   * (Ctrl+Shift+V), where the source editor was detached and its own scroll sync
+   * never ran.
+   */
+  saveRevealLine(groupId: number, uri: string, line: number): void {
+    this._map.set(this._revealKey(groupId, uri), line)
+  }
+
+  takeRevealLine(groupId: number, uri: string): number | undefined {
+    const key = this._revealKey(groupId, uri)
+    const line = this._map.get(key) as number | undefined
+    if (line !== undefined) this._map.delete(key)
+    return line
   }
 
   /** Bulk-load states for one group from persisted data (restore phase). */

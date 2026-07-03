@@ -28,8 +28,12 @@ import {
 } from '@universe-editor/platform'
 import { FileEditorInput } from '../services/editor/FileEditorInput.js'
 import { DocEditorInput } from '../services/editor/DocEditorInput.js'
+import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
+import { EditorViewStateCache } from '../services/editor/EditorViewStateCache.js'
 import { MarkdownPreviewInput } from '../services/editor/MarkdownPreviewInput.js'
 import { MarkdownPreviewRegistry } from '../services/editor/MarkdownPreviewRegistry.js'
+import { MarkdownPreviewViewStateCache } from '../services/editor/MarkdownPreviewViewStateCache.js'
+import { MonacoModelRegistry } from '../workbench/editor/monaco/MonacoModelRegistry.js'
 import type { IMarkdownPreviewController } from '../services/editor/MarkdownPreviewRegistry.js'
 
 const MARKDOWN_PRECONDITION = 'activeEditorLanguageId == markdown'
@@ -52,6 +56,15 @@ function openPreview(accessor: ServicesAccessor, toSide: boolean): void {
   const source = groups.activeGroup
   const active = source.activeEditor
   if (!(active instanceof FileEditorInput)) return
+
+  // Open the preview aligned to the source file's cursor line, so it lands where
+  // the user was editing rather than at the preview's own (possibly stale) saved
+  // scroll. Stash a one-shot reveal request the MarkdownPreviewEditor consumes on
+  // mount (it maps the source line to a pixel offset as the content lays out).
+  const cursorLine = FileEditorRegistry.get(active)?.getPosition()?.lineNumber
+  if (cursorLine !== undefined) {
+    MarkdownPreviewViewStateCache.saveRevealLine(active.resource.toString(), cursorLine)
+  }
 
   let target: IEditorGroup = source
   if (toSide) {
@@ -142,12 +155,31 @@ export class OpenMarkdownSourceAction extends Action2 {
     if (!(active instanceof MarkdownPreviewInput)) return
 
     const previewIndex = group.indexOf(active)
+    const sourceUri = active.sourceUri
+    // The source line to bring to the top of the (re)mounted source editor, to
+    // carry the preview's scroll position back. In toggle mode the source editor
+    // was detached, so its own scroll sync never ran and its saved scroll is
+    // stale — stash a one-shot reveal request the FileEditor consumes on mount.
+    // Only meaningful for the branches that remount the source.
+    const controller = MarkdownPreviewRegistry.get(sourceUri)
+    // The preview renders denser than the source, so at the very bottom the
+    // top-visible line still maps above the source's end — reveal the LAST line so
+    // the FileEditor clamps it flush at the viewport bottom (matches VSCode).
+    const revealLine = controller?.isScrolledToBottom()
+      ? (MonacoModelRegistry.peek(sourceUri)?.getLineCount() ?? controller.getTopVisibleLine())
+      : controller?.getTopVisibleLine()
+    const stashRevealLine = (): void => {
+      if (revealLine !== undefined && group.id !== undefined) {
+        EditorViewStateCache.saveRevealLine(group.id, sourceUri.toString(), revealLine)
+      }
+    }
     const sourceInput = active.releaseSource()
 
     if (sourceInput) {
       // Toggle mode: re-attach the held FileEditorInput at the preview's position,
       // then close the preview. The preview's dispose() is a no-op for the source
       // since releaseSource() cleared _sourceInput.
+      stashRevealLine()
       group.openEditor(sourceInput, { activate: true, pinned: true, index: previewIndex })
       group.closeEditor(active)
       return
@@ -156,10 +188,11 @@ export class OpenMarkdownSourceAction extends Action2 {
     // Side-by-side mode, or a preview opened from a link (no held source):
     // activate an already-open source tab if there is one, else open the source
     // file in place of the preview tab (matching the toggle-back UX).
-    const sourceUri = active.sourceUri
     for (const g of groups.getGroups()) {
       const found = g.editors.find((e) => e.resource?.toString() === sourceUri.toString())
       if (found) {
+        // An already-mounted source (side-by-side) kept its scroll synced live; no
+        // reveal request — activating the existing tab must not jump it.
         groups.activateGroup(g)
         g.setActive(found)
         return
@@ -168,6 +201,7 @@ export class OpenMarkdownSourceAction extends Action2 {
 
     const inst = accessor.get(IInstantiationService)
     const source = inst.createInstance(FileEditorInput, sourceUri)
+    stashRevealLine()
     group.openEditor(source, { activate: true, pinned: true, index: previewIndex })
     group.closeEditor(active)
   }

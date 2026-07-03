@@ -182,6 +182,22 @@ export interface E2EProbe {
    */
   getActiveEditorCursor(): { lineNumber: number; column: number } | undefined
   /**
+   * The 1-based line currently at the top of the active file editor's viewport
+   * (its first visible line), or undefined when the active editor isn't a file
+   * editor (or its Monaco instance isn't mounted). Backs the markdown preview
+   * scroll-restore spec: toggling preview→source must land the source near the
+   * line the preview was showing.
+   */
+  getActiveEditorFirstVisibleLine(): number | undefined
+  /**
+   * The 1-based line currently at the bottom of the active file editor's viewport
+   * (its last visible line), or undefined when the active editor isn't a file
+   * editor. Backs the preview→source bottom-clamp spec: toggling back from a
+   * preview scrolled to the end must land the last line at the viewport bottom,
+   * not overshoot into scroll-beyond-last-line padding.
+   */
+  getActiveEditorLastVisibleLine(): number | undefined
+  /**
    * Full text of the active Monaco editor's model, or undefined when the active
    * editor isn't a file editor (or its Monaco instance isn't mounted). Used by
    * the markdown-editing spec to assert the result of each editing command.
