@@ -1,5 +1,29 @@
 [
   {
+    "version": "0.1.31",
+    "date": "2026-07-03",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "支持universe-editor://深度链接协议",
+          "Session支持outline",
+          "文档页面支持搜索和帮助，修复回退页面bug"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "markdown源文件和预览，光标位置能够对应上",
+          "session中的diff窗口锚定首个变更行",
+          "避免在非活跃组中重复打开会话"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.30",
     "date": "2026-07-03",
     "groups": [
