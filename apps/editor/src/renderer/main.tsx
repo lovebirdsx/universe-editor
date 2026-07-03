@@ -64,6 +64,7 @@ import { IAiDebugService } from '../shared/ipc/aiDebugService.js'
 import { ITimerService } from './services/performance/TimerService.js'
 import { IRemoteSchemaService } from '../shared/ipc/remoteSchemaService.js'
 import { IClaudeConfigService } from '../shared/ipc/claudeConfigService.js'
+import { IDocsService } from '../shared/ipc/docsService.js'
 import { AiModelClientService } from './services/ai/aiModelClientService.js'
 import { initializeRendererNls } from '../shared/i18n/bootstrap.js'
 import { DISPOSABLE_LEAK_REPORT_KEY, E2E_PROBE_ENABLED_KEY } from '../shared/e2e/contract.js'
@@ -112,6 +113,7 @@ import {
   ClosedEditorsService,
 } from './services/editor/ClosedEditorsService.js'
 import { EditorResolverService } from './services/editor/EditorResolverService.js'
+import { initDocRegistry } from './services/editor/docRegistry.js'
 import {
   ILanguageFeaturesService,
   LanguageFeaturesService,
@@ -580,6 +582,20 @@ async function bootstrapWorkbench(): Promise<void> {
   // UsageIndicator in PromptInput subscribes to its observable.
   const apiUsageService = workbenchStore.add(instantiation.createInstance(ApiUsageService))
   services.set(IApiUsageService, apiUsageService)
+
+  // Warm the built-in guide-doc cache from disk before contributions run:
+  // WorkspaceRestoreContribution deserializes DocEditorInput tabs synchronously
+  // during restore, and DocEditorInput.getName()/isDocId read this cache. A
+  // failure degrades to "no docs" (tabs drop, Help opens an empty doc) rather
+  // than blocking startup.
+  try {
+    const docsService = ProxyChannel.toService<IDocsService>(
+      ipcService.getChannel(ServiceChannels.Docs),
+    )
+    initDocRegistry(await docsService.getDocs())
+  } catch (err) {
+    rootLogger.warn(`doc registry warm-up failed: ${(err as Error).message}`)
+  }
 
   // Register all built-in contributions + actions (side-effect import) so the
   // ContributionService below can instantiate them by phase. UserSettingsSync +

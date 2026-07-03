@@ -23,6 +23,7 @@ describe('ApplicationServices type', () => {
       disposableLeak: {} as ApplicationServices['disposableLeak'],
       update: {} as ApplicationServices['update'],
       releaseNotes: {} as ApplicationServices['releaseNotes'],
+      docs: {} as ApplicationServices['docs'],
       performance: {} as ApplicationServices['performance'],
       usage: {} as ApplicationServices['usage'],
       sessionSwitcher: {} as ApplicationServices['sessionSwitcher'],

@@ -32,6 +32,7 @@ extraResources:
   # - typescript-language-server/node_modules (tsls CLI + tsserver)
   # - built-in extensions from extensions/* (markdown bundles its language server)
   # - release-notes.json
+  # - user guide docs (docs/user/) as plain files, read at runtime via IDocsService
   - from: .runtime-resources
     to: .
 extraFiles:

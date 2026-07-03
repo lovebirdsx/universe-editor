@@ -103,6 +103,7 @@ function makeOpts() {
       disposableLeak: {} as never,
       update: {} as never,
       releaseNotes: {} as never,
+      docs: {} as never,
       performance: {} as never,
       usage: {} as never,
       sessionSwitcher: { registerWindow: () => {}, unregisterWindow: () => {} } as never,

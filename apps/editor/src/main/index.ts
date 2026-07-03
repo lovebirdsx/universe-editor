@@ -49,6 +49,7 @@ import { ICodexBinaryService } from '../shared/ipc/codexBinaryService.js'
 import { ICodexConfigService } from '../shared/ipc/codexConfigService.js'
 import { IUpdateService } from '../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../shared/ipc/releaseNotesService.js'
+import { IDocsService } from '../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../shared/ipc/sessionSwitcher.js'
 import { ITextSearchMainService } from '../shared/ipc/textSearchService.js'
 import { installMainErrorHandlers } from './errors.js'
@@ -267,6 +268,7 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       disposableLeak: accessor.get(IDisposableLeakService),
       update: accessor.get(IUpdateService),
       releaseNotes: accessor.get(IReleaseNotesService),
+      docs: accessor.get(IDocsService),
       performance: accessor.get(IPerformanceMarksService),
       usage: accessor.get(IUsageService),
       aiModel: accessor.get(IAiModelMainService),

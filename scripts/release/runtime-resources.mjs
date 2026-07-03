@@ -72,6 +72,11 @@ const REQUIRED_SOURCE_FILES = [
     source: join(editorRoot, 'resources/release-notes.json'),
     packaged: 'release-notes.json',
   },
+  {
+    label: 'user guide docs',
+    source: join(repoRoot, 'docs/user/zh-CN/index.md'),
+    packaged: 'docs/user/zh-CN/index.md',
+  },
 ]
 
 function readJson(path) {
@@ -187,6 +192,12 @@ export function stageRuntimeResources(stageDir = runtimeResourcesDir) {
     join(stageDir, 'typescript-language-server/node_modules'),
   )
   copyPath(join(editorRoot, 'resources/release-notes.json'), join(stageDir, 'release-notes.json'))
+
+  // User guide docs (docs/user/<locale>/**/*.md) ship as plain files beside
+  // app.asar so agents can read them off disk; the renderer loads them via
+  // IDocsService at startup. The `_template.md` at the docs/user root stays out
+  // of any locale dir, so copying the whole tree is fine — it's never a docId.
+  copyPath(join(repoRoot, 'docs/user'), join(stageDir, 'docs/user'))
 
   for (const extension of discoverBuiltinExtensions()) {
     const destinationRoot = join(stageDir, 'extensions', extension.id)

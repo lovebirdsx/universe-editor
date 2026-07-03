@@ -26,6 +26,7 @@ import type {
 import type { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import type { IUpdateService } from '../../shared/ipc/updateService.js'
 import type { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
+import type { IDocsService } from '../../shared/ipc/docsService.js'
 import type { IAcpHostService } from '../../shared/ipc/acpHostService.js'
 import type { IExtensionHostService } from '../../shared/ipc/extensionHostService.js'
 import type { IAcpTerminalService } from '../../shared/ipc/acpTerminalService.js'
@@ -60,6 +61,7 @@ export interface ApplicationServices {
   readonly disposableLeak: IDisposableLeakService
   readonly update: IUpdateService
   readonly releaseNotes: IReleaseNotesService
+  readonly docs: IDocsService
   readonly performance: IPerformanceMarksService
   readonly usage: IUsageService
   readonly aiModel: IAiModelMainService

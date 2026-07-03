@@ -42,6 +42,7 @@ import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
+import { IDocsService } from '../../shared/ipc/docsService.js'
 import { ITextSearchMainService } from '../../shared/ipc/textSearchService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
@@ -82,6 +83,7 @@ export const PROXY_SERVICE_BINDINGS: readonly ProxyServiceBinding[] = [
   { id: ICodexConfigService, channel: ServiceChannels.CodexConfig },
   { id: IUpdateService, channel: ServiceChannels.Update },
   { id: IReleaseNotesService, channel: ServiceChannels.ReleaseNotes },
+  { id: IDocsService, channel: ServiceChannels.Docs },
   { id: IWindowsService, channel: ServiceChannels.Window },
   { id: IPerformanceMarksService, channel: ServiceChannels.Performance },
   { id: ISessionSwitcherService, channel: ServiceChannels.SessionSwitcher },

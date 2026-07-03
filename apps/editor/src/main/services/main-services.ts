@@ -40,6 +40,7 @@ import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 import { ICodexConfigService } from '../../shared/ipc/codexConfigService.js'
 import { IUpdateService } from '../../shared/ipc/updateService.js'
 import { IReleaseNotesService } from '../../shared/ipc/releaseNotesService.js'
+import { IDocsService } from '../../shared/ipc/docsService.js'
 import { ISessionSwitcherService } from '../../shared/ipc/sessionSwitcher.js'
 import { IConfigLocationService } from '../../shared/ipc/configLocationService.js'
 import { IAiModelMainService } from '../../shared/ipc/aiModelService.js'
@@ -64,6 +65,7 @@ import { CodexConfigMainService } from './codexConfig/codexConfigMainService.js'
 import { DisposableLeakMainService } from './disposableLeak/disposableLeakMainService.js'
 import { UpdateMainService } from './update/updateMainService.js'
 import { ReleaseNotesMainService } from './releaseNotes/releaseNotesMainService.js'
+import { DocsMainService } from './docs/docsMainService.js'
 import { PerformanceMainService } from './performance/performanceMainService.js'
 import { SessionSwitcherMainService } from './sessionSwitcher/sessionSwitcherMainService.js'
 import { ConfigLocationMainService } from './configLocation/configLocationMainService.js'
@@ -143,6 +145,10 @@ registerSingleton(IUpdateService, new SyncDescriptor<IUpdateService>(UpdateMainS
 registerSingletonFactory(
   IReleaseNotesService,
   (acc) => new ReleaseNotesMainService(undefined, acc.get(ILoggerService)),
+)
+registerSingletonFactory(
+  IDocsService,
+  (acc) => new DocsMainService(undefined, acc.get(ILoggerService)),
 )
 registerSingleton(
   IPerformanceMarksService,

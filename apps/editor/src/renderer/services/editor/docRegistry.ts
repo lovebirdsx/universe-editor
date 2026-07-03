@@ -1,51 +1,44 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  docRegistry — loads the user-facing guide documents from docs/user/<locale>/ via
- *  Vite's import.meta.glob (eager, ?raw). No runtime disk read; all content is
- *  bundled at build time. DocId is the locale-relative path without the .md suffix
- *  (e.g. "getting-started/interface-tour", "index").
+ *  docRegistry — an in-memory cache of the user-facing guide documents from
+ *  docs/user/<locale>/. The markdown lives on disk beside the app (shipped as
+ *  plain files, not inlined into the bundle); the renderer reads the whole set
+ *  once via IDocsService during bootstrap and calls initDocRegistry() to populate
+ *  this cache. All lookups below are synchronous reads of that cache, so the
+ *  EditorInput contracts (getName / deserialize) stay synchronous. DocId is the
+ *  locale-relative path without the .md suffix (e.g. "getting-started/interface-tour",
+ *  "index").
  *--------------------------------------------------------------------------------------------*/
 
 import type { SupportedLocale } from '../../../shared/i18n/availableLocales.js'
-import { getCurrentLocale } from '../../../shared/i18n/availableLocales.js'
+import { getCurrentLocale, SUPPORTED_LOCALES } from '../../../shared/i18n/availableLocales.js'
+import type { DocsByLocale } from '../../../shared/ipc/docsService.js'
 
 // The locale whose docs are the source of truth: any doc missing in the active
 // locale falls back to this one so the guide is never a dead end while other
 // locales are still being translated.
 const FALLBACK_LOCALE: SupportedLocale = 'zh-CN'
 
-// Eager glob: bundled at build time. Paths are relative to this module's location.
-// This file is at apps/editor/src/renderer/services/editor/, so 6 levels up reaches
-// the repository root (universe-editor/), then into docs/user/.
-// The _template.md at docs/user/ root is NOT inside zh-CN/ or en-US/, so it's
-// never picked up by either glob.
-const zhRaw = import.meta.glob('../../../../../../docs/user/zh-CN/**/*.md', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>
-
-const enRaw = import.meta.glob('../../../../../../docs/user/en-US/**/*.md', {
-  query: '?raw',
-  import: 'default',
-  eager: true,
-}) as Record<string, string>
-
-function buildRegistry(raw: Record<string, string>, locale: SupportedLocale): Map<string, string> {
-  const marker = `/docs/user/${locale}/`
-  const map = new Map<string, string>()
-  for (const [key, content] of Object.entries(raw)) {
-    const idx = key.indexOf(marker)
-    if (idx === -1) continue
-    const docId = key.slice(idx + marker.length).replace(/\.md$/, '')
-    map.set(docId, content)
-  }
-  return map
+const REGISTRIES: Record<SupportedLocale, Map<string, string>> = {
+  'zh-CN': new Map(),
+  'en-US': new Map(),
 }
 
-const REGISTRIES: Record<SupportedLocale, Map<string, string>> = {
-  'zh-CN': buildRegistry(zhRaw, 'zh-CN'),
-  'en-US': buildRegistry(enRaw, 'en-US'),
+/**
+ * Populate the cache from the disk-loaded document set (fetched via IDocsService
+ * at bootstrap). Called once before React mounts, so every synchronous lookup
+ * below — including tab deserialization — sees the docs.
+ */
+export function initDocRegistry(docs: DocsByLocale): void {
+  for (const locale of SUPPORTED_LOCALES) {
+    const map = REGISTRIES[locale]
+    map.clear()
+    const entries = docs[locale]
+    if (!entries) continue
+    for (const [docId, content] of Object.entries(entries)) {
+      map.set(docId, content)
+    }
+  }
 }
 
 /**
