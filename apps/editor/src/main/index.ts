@@ -33,6 +33,7 @@ import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtoco
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
 import { WindowMainService } from './services/window/windowMainService.js'
+import { UpdateMainService } from './services/update/updateMainService.js'
 import type { SessionSwitcherMainService } from './services/sessionSwitcher/sessionSwitcherMainService.js'
 import type { ConfigLocationMainService } from './services/configLocation/configLocationMainService.js'
 import { IConfigLocationService } from '../shared/ipc/configLocationService.js'
@@ -375,6 +376,11 @@ function getOrCreateServices(): { app: ApplicationServices; windows: WindowMainS
       rendererUrl: environmentService.rendererUrl,
       getConfigDir: () => applicationServices!.configLocation.currentDir,
     })
+    // Gate quitAndInstall behind the same running-session veto a normal quit runs.
+    // Without this, electron-updater spawns the installer before before-quit can
+    // veto, so a cancelled confirm still installs. confirmQuit polls every window.
+    const windows = windowMainService
+    ;(applicationServices.update as UpdateMainService).setQuitConfirmer(() => windows.confirmQuit())
   }
   return { app: applicationServices, windows: windowMainService }
 }
