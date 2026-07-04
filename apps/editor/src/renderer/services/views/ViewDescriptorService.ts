@@ -330,6 +330,28 @@ export class ViewDescriptorService extends Disposable implements IViewDescriptor
   }
 
   async load(): Promise<void> {
+    this.loadDefaults()
+    await this.reconcileFromStorage()
+  }
+
+  /**
+   * Synchronous default state (no WORKSPACE storage read) so the workbench can
+   * mount without waiting for main-side hydration. The static registries already
+   * declare the default view↔container mapping; there are no user customizations
+   * to apply until reconcileFromStorage() runs.
+   */
+  loadDefaults(): void {
+    // No-op: the default mapping is served directly from the registries; the
+    // customization maps start empty. Present for symmetry with the other
+    // restore services and to document the two-phase contract.
+  }
+
+  /**
+   * Read persisted view/container customizations from WORKSPACE scope and apply
+   * them. Waits for the cold-start workspace-scope event so the read hits the
+   * hydrated backend; runs off the first-paint critical path (see main.tsx).
+   */
+  async reconcileFromStorage(): Promise<void> {
     if (!this._workspace.current) {
       await new Promise<void>((resolve) => {
         let resolved = false

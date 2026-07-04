@@ -92,7 +92,11 @@ export interface ITerminalManagerService {
   readonly onFocusRequestById: Event<string>
   /** Trigger xterm focus on the terminal with the given id. */
   focusTerminal(id: string): void
+  /** Synchronous default state (no persisted terminals). Present for symmetry. */
+  loadDefaults(): void
   /** Load persisted panel terminals for the current workspace. */
+  reconcileFromStorage(): Promise<void>
+  /** loadDefaults() + reconcileFromStorage(); kept for tests / direct callers. */
   load(): Promise<void>
 }
 
@@ -127,6 +131,7 @@ interface IPersistedTerminalState {
 
 const STORAGE_KEY = 'terminal.panelState'
 const SAVE_DEBOUNCE_MS = 200
+const INITIAL_LOAD_TIMEOUT_MS = 500
 const DEFAULT_SCROLLBACK = 5000
 // Extra headroom kept before compacting the retained buffer, so we don't
 // re-join on every newline once at the limit.
@@ -183,6 +188,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
+  private _initialLoadDone = false
 
   constructor(
     @ITerminalService private readonly _terminal: ITerminalService,
@@ -195,8 +201,11 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     this._logger = createNamedLogger(loggerService, { id: 'terminal', name: 'Terminal' })
     this._register(this._terminal.onData(({ id, data }) => this._dispatch(id, data)))
     this._register(this._terminal.onExit(({ id, exitCode }) => this._onExit(id, exitCode)))
+    // The cold-start scope event is consumed by reconcileFromStorage()'s settle;
+    // only genuine runtime workspace switches (after initial load) reload here.
     this._register(
       this._storage.onDidChangeWorkspaceScope(() => {
+        if (!this._initialLoadDone) return
         void this._reload()
       }),
     )
@@ -325,6 +334,39 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
   }
 
   async load(): Promise<void> {
+    this.loadDefaults()
+    await this.reconcileFromStorage()
+  }
+
+  loadDefaults(): void {
+    // No-op: a fresh workspace starts with no panel terminals. Present for
+    // symmetry with the other restore services and the two-phase contract.
+  }
+
+  async reconcileFromStorage(): Promise<void> {
+    // Wait for the cold-start workspace-scope event (or a short timeout for the
+    // empty-window case) so the read hits the hydrated backend. The gated scope
+    // handler skips _reload until _initialLoadDone, so this settle owns the
+    // first event; runtime switches after this reload normally.
+    if (!this._workspace.current) {
+      await new Promise<void>((resolve) => {
+        let resolved = false
+        const settle = () => {
+          if (resolved) return
+          resolved = true
+          subscription.dispose()
+          clearTimeout(timer)
+          resolve()
+        }
+        const subscription = this._register(this._storage.onDidChangeWorkspaceScope(settle))
+        const timer = setTimeout(settle, INITIAL_LOAD_TIMEOUT_MS)
+      })
+    }
+    await this._loadFromStorage()
+    this._initialLoadDone = true
+  }
+
+  private async _loadFromStorage(): Promise<void> {
     let data: IPersistedTerminalState | undefined
     try {
       data = await this._storage.get<IPersistedTerminalState>(STORAGE_KEY, StorageScope.WORKSPACE)
@@ -509,7 +551,7 @@ export class TerminalManagerService extends Disposable implements ITerminalManag
     } finally {
       this._suspendPersist = false
     }
-    await this.load()
+    await this._loadFromStorage()
   }
 }
 

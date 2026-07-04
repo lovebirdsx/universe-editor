@@ -8,6 +8,7 @@ import {
   InstantiationService,
   IStorageService,
   IViewsService,
+  IWorkspaceService,
   PartId,
   ServiceCollection,
 } from '@universe-editor/platform'
@@ -68,6 +69,10 @@ function makeContainer() {
     set: vi.fn(),
     get: vi.fn(),
   } as unknown as IContextKeyService)
+  services.set(IWorkspaceService, {
+    _serviceBrand: undefined,
+    current: {},
+  } as unknown as IWorkspaceService)
   const instantiation = new InstantiationService(services, true)
   const layoutService = instantiation.createInstance(LayoutService)
   services.set(ILayoutService, layoutService)

@@ -100,6 +100,26 @@ export class ViewsService extends Disposable implements IViewsService {
   }
 
   async load(): Promise<void> {
+    this.loadDefaults()
+    await this.reconcileFromStorage()
+  }
+
+  /**
+   * Synchronous, WORKSPACE-storage-free default state so the workbench can mount
+   * immediately without waiting for main-side workspace hydration. Seeds each
+   * location's first registered container as active (already done in the
+   * constructor's autorun; re-run here to be explicit and idempotent).
+   */
+  loadDefaults(): void {
+    this._seedDefaults()
+  }
+
+  /**
+   * Read the persisted active-container selection from WORKSPACE scope and apply
+   * it. Waits for the cold-start workspace-scope event so the read hits the
+   * hydrated backend; runs off the first-paint critical path (see main.tsx).
+   */
+  async reconcileFromStorage(): Promise<void> {
     // RendererWorkspaceService.current is null at construction and hydrated
     // asynchronously; the storage layer fires onDidChangeWorkspaceScope once
     // hydration lands. Wait for that first event (or a short timeout for the

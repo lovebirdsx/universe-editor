@@ -54,9 +54,16 @@ test.describe('@p1 markdown move: no stale broken-link diagnostic', () => {
     // (empty authority + leading `//`) which URI.parse rejects — Windows paths (`C:/…`) don't.
     const aUri = (await page.evaluate(() => window.__E2E__!.getActiveEditorUri())) as string
     await expect
-      .poll(() => page.evaluate((uri) => window.__E2E__!.getMarkdownMarkers(uri).length, aUri), {
-        timeout: 15000,
-      })
+      .poll(
+        () =>
+          page.evaluate(
+            async (uri) => (await window.__E2E__!.getMarkdownMarkers(uri)).length,
+            aUri,
+          ),
+        {
+          timeout: 15000,
+        },
+      )
       .toBe(0)
     await page.evaluate(() => window.__E2E__!.runCommand('workbench.action.closeAllEditors'))
 

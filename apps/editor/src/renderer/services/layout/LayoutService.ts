@@ -11,6 +11,7 @@ import {
   IFocusableRegistry,
   IStorageService,
   IViewsService,
+  IWorkspaceService,
   StorageScope,
   ViewContainerLocation,
   ViewContainerRegistry,
@@ -32,6 +33,7 @@ import { focusEditorInput } from '../editor/editorFocus.js'
 
 const STORAGE_KEY = 'workbench.layout'
 const SAVE_DEBOUNCE_MS = 200
+const INITIAL_LOAD_TIMEOUT_MS = 500
 
 const INITIAL_VISIBLE: Readonly<Record<PartId, boolean>> = {
   [PartId.ActivityBar]: true,
@@ -66,6 +68,7 @@ export class LayoutService extends Disposable implements ILayoutService {
 
   private _suspendPersist = false
   private _saveTimer: ReturnType<typeof setTimeout> | undefined
+  private _initialLoadDone = false
 
   private readonly _parts = new Map<PartId, IPart>()
   private readonly _onDidRegisterPart = this._register(new Emitter<IPart>())
@@ -79,11 +82,17 @@ export class LayoutService extends Disposable implements ILayoutService {
     private readonly _viewContainerMemory: IViewContainerMemoryService,
     @IEditorGroupsService private readonly _editorGroups: IEditorGroupsService,
     @IContextKeyService private readonly _contextKeyService: IContextKeyService,
+    @IWorkspaceService private readonly _workspace: IWorkspaceService,
   ) {
     super()
     // Reload from the new workspace's storage whenever the WORKSPACE scope swaps.
+    // The cold-start event is consumed by reconcileFromStorage()'s settle; only
+    // genuine runtime workspace switches (after initial load) reload here — same
+    // discipline as ViewsService, so the first hydration doesn't clobber a
+    // default layout that hasn't been reconciled yet.
     this._register(
       this._storage.onDidChangeWorkspaceScope(() => {
+        if (!this._initialLoadDone) return
         void this._reload()
       }),
     )
@@ -141,6 +150,48 @@ export class LayoutService extends Disposable implements ILayoutService {
   }
 
   async load(): Promise<void> {
+    this.loadDefaults()
+    await this.reconcileFromStorage()
+  }
+
+  /**
+   * Synchronous default state (INITIAL_VISIBLE / INITIAL_SIZES are already the
+   * observables' initial values) so the workbench mounts with a valid layout
+   * without waiting for main-side hydration. Present for symmetry with the other
+   * restore services and to document the two-phase contract.
+   */
+  loadDefaults(): void {
+    // No-op: the observables are constructed with INITIAL_VISIBLE / INITIAL_SIZES.
+  }
+
+  /**
+   * Read persisted layout (visible + sizes + panelMaximized) from WORKSPACE
+   * scope and apply it via the observables. WorkbenchLayout's effects imperatively
+   * re-`resize()` the Allotment when `sizes` changes after mount, so applying
+   * here — off the first-paint critical path — restores pane sizes without a
+   * remount. Waits for the cold-start workspace-scope event so the read hits the
+   * hydrated backend.
+   */
+  async reconcileFromStorage(): Promise<void> {
+    if (!this._workspace.current) {
+      await new Promise<void>((resolve) => {
+        let resolved = false
+        const settle = () => {
+          if (resolved) return
+          resolved = true
+          subscription.dispose()
+          clearTimeout(timer)
+          resolve()
+        }
+        const subscription = this._register(this._storage.onDidChangeWorkspaceScope(settle))
+        const timer = setTimeout(settle, INITIAL_LOAD_TIMEOUT_MS)
+      })
+    }
+    await this._loadFromStorage()
+    this._initialLoadDone = true
+  }
+
+  private async _loadFromStorage(): Promise<void> {
     let data: PersistedLayout | undefined
     try {
       data = await this._storage.get<PersistedLayout>(STORAGE_KEY, StorageScope.WORKSPACE)
@@ -210,7 +261,7 @@ export class LayoutService extends Disposable implements ILayoutService {
     } finally {
       this._suspendPersist = false
     }
-    await this.load()
+    await this._loadFromStorage()
   }
 
   private _schedulePersist(): void {

@@ -375,7 +375,7 @@ export interface E2EProbe {
    */
   getMarkdownFoldingRanges(uri: string): Promise<ReadonlyArray<readonly [number, number]>>
   /** Markdown diagnostics currently set as Monaco markers (owner `markdown`). */
-  getMarkdownMarkers(uri: string): readonly E2EMarker[]
+  getMarkdownMarkers(uri: string): Promise<readonly E2EMarker[]>
   /**
    * Resolved document-link target URIs for an open markdown file (the link
    * provider that powers Ctrl+Click navigation), each `resolveLink`-ed.

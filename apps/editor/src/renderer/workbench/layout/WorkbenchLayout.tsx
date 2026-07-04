@@ -62,7 +62,16 @@ export function WorkbenchLayout({
   // We override that layout the moment we see the first onChange with a
   // non-zero total (= container is sized, initial distribution just happened).
   const isInitializedRef = useRef(false)
+  // The sizes to apply on the first real Allotment layout pass. Kept current on
+  // every render (not frozen at mount) so a post-mount reconcile — the startup
+  // plan restores the persisted workspace layout AFTER React mounts, flipping
+  // `sizes.sidebar` from the 240 default to the saved value — is honoured even
+  // when the reconcile lands BEFORE the first onChange. Freezing this at mount
+  // would let the initial layout pass pin the pane to the stale default, after
+  // which the `sizes`-change effect (guarded on `isInitialized`) never re-fires
+  // because `sizes` has already settled.
   const initialSizesRef = useRef(sizes)
+  initialSizesRef.current = sizes
 
   // Track live [sidebar, editor, secondary] sizes reported by Allotment.
   const currentSizesRef = useRef<[number, number, number]>([sizes.sidebar, 0, 0])

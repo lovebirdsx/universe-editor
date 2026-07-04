@@ -435,7 +435,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getScmInputBoxValue: (): string | undefined =>
       services.scmService.sourceControls.get()[0]?.inputValue.get(),
     getMarkdownDocumentSymbols: async (uri: string): Promise<readonly string[]> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
       const provider = services.languageFeaturesService.getDocumentSymbolProviders('markdown')[0]
@@ -465,7 +465,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       lineNumber: number,
       column: number,
     ): Promise<readonly string[]> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
       const provider = services.languageFeaturesService.getDefinitionProviders('markdown')[0]
@@ -482,7 +482,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     getMarkdownFoldingRanges: async (
       uri: string,
     ): Promise<ReadonlyArray<readonly [number, number]>> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
       const provider = services.languageFeaturesService.getFoldingRangeProviders('markdown')[0]
@@ -490,10 +490,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const ranges = (await provider.provideFoldingRanges(model, {}, NONE_TOKEN)) ?? []
       return ranges.map((r) => [r.start, r.end] as const)
     },
-    getMarkdownMarkers: (uri: string) => {
-      const markers = MonacoLoader.get().editor.getModelMarkers({
+    getMarkdownMarkers: async (uri: string) => {
+      const monacoNs = await MonacoLoader.ensureInitialized()
+      const markers = monacoNs.editor.getModelMarkers({
         owner: 'markdown',
-        resource: MonacoLoader.get().Uri.parse(uri),
+        resource: monacoNs.Uri.parse(uri),
       })
       return markers.map((m) => ({
         message: m.message,
@@ -502,7 +503,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }))
     },
     getMarkdownDocumentLinks: async (uri: string): Promise<readonly string[]> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
       const features = await MonacoLoader.getLanguageFeaturesService()
@@ -520,7 +521,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       return targets
     },
     getMarkdownHover: async (uri: string, lineNumber: number, column: number): Promise<string> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return ''
       const features = await MonacoLoader.getLanguageFeaturesService()
@@ -537,7 +538,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       lineNumber: number,
       column: number,
     ): Promise<readonly string[]> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
       const features = await MonacoLoader.getLanguageFeaturesService()
@@ -561,7 +562,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       lineNumber: number,
       column: number,
     ): Promise<readonly string[]> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return []
       const features = await MonacoLoader.getLanguageFeaturesService()
@@ -590,7 +591,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
         endColumn: number
       },
     ): Promise<string | null> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return null
       const features = await MonacoLoader.getLanguageFeaturesService()
@@ -626,7 +627,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       uri: string,
       entries: { mime: string; text?: string; base64?: string; fileName?: string }[],
     ): Promise<string | null> => {
-      const monacoNs = MonacoLoader.get()
+      const monacoNs = await MonacoLoader.ensureInitialized()
       const model = monacoNs.editor.getModel(monacoNs.Uri.parse(uri))
       if (!model) return null
       const features = await MonacoLoader.getLanguageFeaturesService()

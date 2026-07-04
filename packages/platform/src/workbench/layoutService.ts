@@ -53,6 +53,10 @@ export interface ILayoutService {
 
   /** Load persisted layout (visible + sizes) from storage. Safe to call when storage is unavailable. */
   load(): Promise<void>
+  /** Synchronous default state so the workbench can mount before hydration. */
+  loadDefaults(): void
+  /** Read persisted layout from WORKSPACE scope (waits for hydration) and apply it. */
+  reconcileFromStorage(): Promise<void>
   /** Force-flush any pending persist. */
   save(): Promise<void>
 

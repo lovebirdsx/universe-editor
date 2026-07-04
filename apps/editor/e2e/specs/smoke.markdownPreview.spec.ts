@@ -269,11 +269,19 @@ test.describe('@p1 markdown preview', () => {
 
     // The source document has ~405 lines (200 paragraphs × 2 + heading). Toggling
     // back from the bottom must scroll it so the last line is at/near the bottom of
-    // the viewport, i.e. the LAST line is visible — not padded far below it.
+    // the viewport, i.e. the LAST line is visible — not padded far below it. Poll
+    // for the text: the language-id context key flips as soon as the source input
+    // is active, but the FileEditor's Monaco instance registers a beat later (more
+    // visibly so now the workbench mounts before Monaco finishes loading).
+    await expect
+      .poll(
+        () => page.evaluate(() => window.__E2E__!.getActiveEditorText()?.split('\n').length ?? 0),
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(100)
     const lastLine = await page.evaluate(
       () => window.__E2E__!.getActiveEditorText()?.split('\n').length ?? 0,
     )
-    expect(lastLine).toBeGreaterThan(100)
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorLastVisibleLine()), {
         timeout: 5000,
@@ -389,6 +397,11 @@ test.describe('@p1 markdown preview', () => {
     await expect
       .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()), { timeout: 5000 })
       .toBe('markdown.preview')
+
+    // Wait for the rendered body before reading computed styles: content now
+    // appears after MonacoLoader.ensureInitialized() resolves, which lands after
+    // the type-id flips (the workbench mounts before Monaco finishes loading).
+    await expect(page.locator('[data-testid="markdown-preview"] h1').first()).toBeVisible()
 
     const styles = await page.evaluate(() => {
       const preview = document.querySelector('[data-testid="markdown-preview"]')

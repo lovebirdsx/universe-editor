@@ -198,20 +198,28 @@ async function loadMonaco(): Promise<typeof monaco> {
           return new EditorWorker.default()
         },
       }
-      _monaco = monacoMod
       // Lock our override services (FileTextModelService / FileBulkEditService)
-      // in *before* anything resolves a standalone service. Monaco's
-      // StandaloneServices applies overrides only on first init, and the very
-      // first `StandaloneServices.get()` (which setTheme/createModel below would
-      // trigger) silently inits with an empty override set — permanently
-      // wedging Monaco's defaults. Without this, the references peek tree calls
-      // the standalone ITextModelService and throws "Model not found" for files
-      // the user hasn't opened. editor.create()'s own initialize(overrides) is
-      // then a no-op since init already happened, so we must do it here.
+      // in *before* we publish `_monaco`. Monaco applies overrides only while each
+      // target service is still an unresolved SyncDescriptor (the IBulkEditService /
+      // ITextModelService defaults are Eager singletons), and the very first
+      // `StandaloneServices.get()` silently inits with an empty override set —
+      // permanently wedging Monaco's defaults (the references peek then throws
+      // "Model not found" for unopened files; drop/paste-to-link loses its snippet
+      // bulk-edit service). The startup plan mounts the workbench before Monaco
+      // finishes loading, so consumers already sit on `MonacoLoader.get()`. If we
+      // published `_monaco` before this `await import` resolved, one of them could
+      // touch a monaco API in the await window and trigger that first empty-override
+      // init, dropping our overrides. Keep `_monaco` undefined (so `get()` throws
+      // and no consumer can touch Monaco) until initialize() has locked the
+      // overrides in — `initialize()` must run after the barrel is evaluated, so
+      // this `await import` + initialize + publish sequence, with no consumer-
+      // reachable API touched in between, is the tightest correct ordering.
+      // editor.create()'s own initialize(overrides) is then a no-op.
       const { StandaloneServices } =
         await import('monaco-editor/esm/vs/editor/standalone/browser/standaloneServices.js')
       StandaloneServices.initialize(_overrideServices)
-      registerLogLanguage(_monaco)
+      _monaco = monacoMod
+      registerLogLanguage(monacoMod)
       // colorize() (markdown code blocks) and any render before the first
       // FileEditor rely on Monaco's global active theme. Align it with the
       // workbench theme the moment Monaco loads — ThemeContribution's startup

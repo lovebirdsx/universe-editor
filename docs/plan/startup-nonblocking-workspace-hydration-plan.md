@@ -138,4 +138,25 @@ mark(willMountReact) → reactRoot.render(<Workbench/>)  ← React 首挂载在 
 
 ## 验证记录
 
-（执行时填写：基线均值 / 改动后均值 / 关键 offset 变化 / Allotment 走哪条路 / e2e 结果）
+### 阶段 0 结论（读代码确认，未产代码）
+
+- **瓶颈坐实**：四个 `load()` 都读 WORKSPACE scope；`ViewsService.load` / `ViewDescriptorService.load` 显式 `await onDidChangeWorkspaceScope`（带 500ms 超时），即 main 侧 `WorkspaceMainService._hydrate → switchWorkspace` 的落地事件。这一 await 就是把 React 挂载推迟的那一环。
+- **Allotment 重设尺寸走 ref.resize（选 2.A，近乎零新增代码）**：`WorkbenchLayout.tsx:139-163` 已有 useEffect 在 `sizes` observable 变化后命令式 `allotmentRef.current?.resize(...)`（受 `isInitializedRef` 守卫，mount 后生效）。所以 layout 只要在 reconcile 时更新 `sizes` observable，现有 effect 就把 Allotment 尺寸改过去——**无需 remount，无需新 Allotment API**。
+- **避免闪烁的关键**：四个 reconcile 内部仍 `await onDidChangeWorkspaceScope`，落地后**一次性** apply，没有"默认→恢复"的可见中间跳变。
+
+### 实施
+
+- 四个服务统一拆成 `loadDefaults()`（同步、无 WORKSPACE 读，可立即渲染）+ `reconcileFromStorage()`（含 cold-start settle 等 hydration，读 WORKSPACE scope 后经 observable apply）。`load()` 保留为 `loadDefaults()+reconcileFromStorage()` 的包装，单测不受影响。
+- 给 `LayoutService`（新增 `IWorkspaceService` 依赖，第 7 个构造参数）与 `TerminalManagerService` 补上 `_initialLoadDone` gate + cold-start settle，使四者对称——首个 scope 事件被 reconcile 的 settle 消费，运行时切换才走 `_reload`。
+- `main.tsx`：首屏 barrier 由 `await Promise.all([...load()])` 改为四个同步 `loadDefaults()`；`didRestoreServices` 现语义为"默认就绪、可挂载"。React 挂载后 fire-and-forget 触发四个 `reconcileFromStorage()`，完成后打新 mark `rendererDidReconcileWorkspaceState`；四个 `didLoad*` 旧 mark 保留（现在在 mount 之后落，仍可按 offset 观察哪个恢复最重）。
+- perf：新增 `rendererDidReconcileWorkspaceState` 常量并入 `TimerService.MILESTONES`（排在 `didMount` 之后）。
+
+### 结果
+
+- **`State restore start → Services restored` 段 = 0ms**（原为读 WORKSPACE hydration 的硬 barrier）。收益随工作区大小放大：大 git 仓库上该 barrier 原约 350ms，现完全移出首屏关键路径，改为 mount 后异步 reconcile。
+- Allotment 走 2.A（ref.resize），未 remount，无可见跳变。
+- **测试**：`pnpm check` 全绿（3225 renderer 单测 + platform 单测）；补齐 `LayoutService.test.ts` / `LayoutService.parts.test.ts` / `Parts.test.ts` 的 `IWorkspaceService` stub 与 `part.test.ts` 的 StubLayoutService 两个新方法。
+- **e2e**（build 后采集）：`@p0` 全部 42 通过；layout/secondarySidebar/viewMove/terminal（10）通过；editorRestore/outputRestore（5）通过；`@perf` 快照见上。空窗口场景：reconcile 内 settle 走 500ms 超时后 no-op（无 hydration），不阻塞任何可见路径。
+- 竞态：reconcile 幂等 + `_suspendPersist`，hydration 早于/晚于 mount 均安全（layoutPersistence e2e 改为 poll `getLayoutSizes()`，覆盖"mount 后 reconcile 落地"这一新时序）。
+
+**说明**：本方案与「推迟 parcel 订阅」正交，可叠加。此处独立落地本方案，未依赖前者。

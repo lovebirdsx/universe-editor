@@ -8,6 +8,7 @@ import {
   type IFocusableRegistry,
   type IStorageService,
   type IViewsService,
+  type IWorkspaceService,
 } from '@universe-editor/platform'
 import { LayoutService } from '../LayoutService.js'
 import {
@@ -67,6 +68,11 @@ function makeContextKeyService(): IContextKeyService {
   } as unknown as IContextKeyService
 }
 
+// current non-null keeps reconcileFromStorage() from waiting on the scope event.
+function makeWorkspace(): IWorkspaceService {
+  return { current: {} } as unknown as IWorkspaceService
+}
+
 function newSvc(storage: IStorageService = makeStorage()): LayoutService {
   return new LayoutService(
     storage,
@@ -75,6 +81,7 @@ function newSvc(storage: IStorageService = makeStorage()): LayoutService {
     makeViewContainerMemory(),
     makeEditorGroups(),
     makeContextKeyService(),
+    makeWorkspace(),
   )
 }
 

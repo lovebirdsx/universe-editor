@@ -653,23 +653,19 @@ async function bootstrapWorkbench(): Promise<void> {
   })
   workbenchStore.add(d)
 
-  // Load persisted layout and view state before mounting React so Allotment starts with the
-  // correct preferredSize. Allotment 1.20.5 only reads preferredSize on mount
-  // (or pane-show); changing it after mount is silently ignored.
-  // Also restore panel terminals for the current workspace.
-  //
-  // These four run concurrently; each stamps its own completion mark so a heavy
-  // workspace's dominant restore is visible by comparing offsets (adjacent
-  // milestone deltas would be misleading — the loads overlap in wall-clock).
+  // Seed default layout / view / terminal state so the workbench can mount
+  // immediately — WITHOUT blocking on main-side workspace-storage hydration.
+  // The persisted per-workspace state is applied afterwards by the non-blocking
+  // reconcile below; the observables driving the React tree update in place
+  // (and WorkbenchLayout re-`resize()`s the Allotment when `sizes` changes), so
+  // there is no first-paint barrier waiting on a heavy git workspace.
   const terminalManagerService = instantiation.invokeFunction((a) => a.get(ITerminalManagerService))
   mark(PerfMarks.rendererWillLoadServices)
-  await Promise.all([
-    layoutService.load().then(() => mark(PerfMarks.rendererDidLoadLayout)),
-    viewDescriptorService.load().then(() => mark(PerfMarks.rendererDidLoadViewDescriptor)),
-    viewsService.load().then(() => mark(PerfMarks.rendererDidLoadViews)),
-    terminalManagerService.load().then(() => mark(PerfMarks.rendererDidLoadTerminals)),
-  ])
-  rootLogger.info('bootstrap services restored')
+  layoutService.loadDefaults()
+  viewDescriptorService.loadDefaults()
+  viewsService.loadDefaults()
+  terminalManagerService.loadDefaults()
+  rootLogger.info('bootstrap defaults ready')
   mark(PerfMarks.rendererDidRestoreServices)
 
   // Surface any Disposable leak report left by the previous session. We always
@@ -733,6 +729,32 @@ async function bootstrapWorkbench(): Promise<void> {
   )
   rootLogger.info('bootstrap mounted')
   mark(PerfMarks.rendererDidMount)
+
+  // Reconcile persisted per-workspace state AFTER mount, off the first-paint
+  // critical path. Each reconcile waits internally for the main-side workspace
+  // hydration (onDidChangeWorkspaceScope) and then applies via observables:
+  //   - layout: sizes/visible observables → WorkbenchLayout re-`resize()`s Allotment
+  //   - views/viewDescriptor/terminal: observable-driven, update in place
+  // Fire-and-forget: a slow or absent hydration (empty window) must not hold up
+  // anything user-visible. Each per-service completion still stamps its original
+  // mark so a heavy workspace's dominant restore stays observable by offset.
+  void Promise.all([
+    layoutService.reconcileFromStorage().then(() => mark(PerfMarks.rendererDidLoadLayout)),
+    viewDescriptorService
+      .reconcileFromStorage()
+      .then(() => mark(PerfMarks.rendererDidLoadViewDescriptor)),
+    viewsService.reconcileFromStorage().then(() => mark(PerfMarks.rendererDidLoadViews)),
+    terminalManagerService
+      .reconcileFromStorage()
+      .then(() => mark(PerfMarks.rendererDidLoadTerminals)),
+  ])
+    .then(() => {
+      rootLogger.info('bootstrap workspace state reconciled')
+      mark(PerfMarks.rendererDidReconcileWorkspaceState)
+    })
+    .catch((err: unknown) => {
+      rootLogger.warn(`workspace state reconcile failed: ${(err as Error).message}`)
+    })
 }
 
 void bootstrapWorkbench()

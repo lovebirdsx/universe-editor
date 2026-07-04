@@ -15,6 +15,7 @@ import { IEditorGroupsService, IEditorInput, IFileService, URI } from '@universe
 import { EditorGroupContext } from './EditorGroupContext.js'
 import { MarkdownPreviewInput } from '../../services/editor/MarkdownPreviewInput.js'
 import { MonacoModelRegistry } from './monaco/MonacoModelRegistry.js'
+import { MonacoLoader } from './monaco/MonacoLoader.js'
 import { MarkdownView } from '../markdown/MarkdownView.js'
 import { useMarkdownSyncScroll } from './useMarkdownSyncScroll.js'
 import { useMarkdownReaderNav } from './useMarkdownReaderNav.js'
@@ -66,9 +67,14 @@ export function MarkdownPreviewEditor({ input }: { input: IEditorInput }) {
     if (existing) {
       bind(existing)
     } else {
-      void fileService
-        .readFileText(sourceUri)
-        .then((text) => {
+      // Read the file and acquire a shared Monaco model for the preview's
+      // lifetime. `acquire` needs Monaco loaded (it calls MonacoLoader.get()),
+      // which no longer holds by mount time: the workbench now mounts before
+      // Monaco finishes loading (workspace-storage hydration was moved off the
+      // first-paint path), so gate on ensureInitialized() first — mirroring
+      // FileEditor — instead of assuming an earlier editor already forced it.
+      void Promise.all([MonacoLoader.ensureInitialized(), fileService.readFileText(sourceUri)])
+        .then(([, text]) => {
           if (released) return
           // Another consumer may have opened the source meanwhile; acquire dedups.
           acquired = true

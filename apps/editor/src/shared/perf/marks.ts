@@ -49,6 +49,13 @@ export const PerfMarks = {
   /** Renderer: about to createRoot()/render the Workbench React tree. */
   rendererWillMountReact: 'code/renderer/willMountReact',
   rendererDidMount: 'code/renderer/didMount',
+  /**
+   * Renderer: the post-mount WORKSPACE-state reconcile (layout / views /
+   * viewDescriptor / terminal) finished. Fires after didMount because the
+   * reconcile is no longer a first-paint barrier — it waits for the main-side
+   * workspace hydration off the critical path and applies via observables.
+   */
+  rendererDidReconcileWorkspaceState: 'code/renderer/didReconcileWorkspaceState',
   rendererDidRestoreEditors: 'code/renderer/didRestoreEditors',
   /** Renderer: monaco-editor finished lazy initialization (lazy, may fire after mount). */
   rendererDidInitializeMonaco: 'code/renderer/didInitializeMonaco',

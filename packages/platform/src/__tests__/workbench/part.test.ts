@@ -58,6 +58,8 @@ class StubLayoutService implements ILayoutService {
     this.setPanelMaximized(!this.panelMaximized.get())
   }
   async load() {}
+  loadDefaults() {}
+  async reconcileFromStorage() {}
   async save() {}
 
   registerPart(part: IPart): IDisposable {

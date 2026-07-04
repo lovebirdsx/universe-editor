@@ -67,6 +67,7 @@ const MILESTONES: readonly IMilestone[] = [
   { mark: PerfMarks.rendererDidRestoreServices, label: 'Services restored' },
   { mark: PerfMarks.rendererWillMountReact, label: 'Mounting workbench' },
   { mark: PerfMarks.rendererDidMount, label: 'Workbench mounted' },
+  { mark: PerfMarks.rendererDidReconcileWorkspaceState, label: 'Workspace state reconciled' },
   { mark: PerfMarks.rendererDidRestoreEditors, label: 'Editors restored' },
   { mark: PerfMarks.rendererDidInitializeMonaco, label: 'Monaco initialized' },
 ]

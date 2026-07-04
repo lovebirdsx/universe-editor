@@ -5,11 +5,12 @@
  *  通过预写 state.json（userData 目录）绕开保存步骤，直接测试 restore 路径。
  *
  *  测试边界
- *  - 修复前：layoutService.load() 在 useEffect (React 挂载后) 调用。
- *    whenReady() resolve 时 React 已挂载但 useEffect 未来得及触发；
- *    getLayoutSizes() 立刻返回默认值 240 → 测试失败。
- *  - 修复后：main.tsx 在 createRoot().render() 之前 await layoutService.load()，
- *    React 挂载时 sizes.sidebar 已为 400 → 测试通过。
+ *  - 布局状态是 workspace-scoped，需要等 main 侧 workspace hydration 落地后
+ *    才能读到。为了不阻塞首屏，reconcileFromStorage() 在 React 挂载后异步执行
+ *    （见 main.tsx）。因此 whenReady() 之后 sizes 可能仍是默认值 240，需要 poll
+ *    等待 reconcile 落地。
+ *  - reconcile 落地后 sizes.sidebar 变为 400，且 WorkbenchLayout 的 effect 会
+ *    命令式 resize Allotment，DOM 侧栏宽度收敛到 400。
  *--------------------------------------------------------------------------------------------*/
 
 import { test, expect, _electron as electron } from '@playwright/test'
@@ -94,11 +95,14 @@ test.describe('@p1 layout persistence', () => {
       const { app, page } = await launchWithState(userDataDir)
       try {
         // ── Service level ──────────────────────────────────────────────────────
-        // Checked immediately after whenReady(), before any useEffect fires.
-        // With the fix, load() ran before React mounted, so sizes are 400.
-        // Without the fix, sizes would still be 240 (default) at this point.
-        const sizes = await page.evaluate(() => window.__E2E__!.getLayoutSizes())
-        expect(sizes.sidebar).toBe(SAVED_SIDEBAR_PX)
+        // reconcileFromStorage() runs AFTER mount and waits for workspace
+        // hydration, so poll until the persisted sidebar width lands (not an
+        // immediate read — that would still be the default 240 right after mount).
+        await expect
+          .poll(async () => (await page.evaluate(() => window.__E2E__!.getLayoutSizes())).sidebar, {
+            timeout: 5000,
+          })
+          .toBe(SAVED_SIDEBAR_PX)
 
         // ── DOM level ──────────────────────────────────────────────────────────
         // Allotment's distributeEmptySpace greedily fills the first pane to its
