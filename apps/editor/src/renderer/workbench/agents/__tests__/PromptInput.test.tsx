@@ -17,6 +17,7 @@ import {
   IFileDialogService,
   IFileSearchService,
   IFileService,
+  IHostService,
   INotificationService,
   InstantiationService,
   IUriIdentityService,
@@ -33,6 +34,7 @@ import type {
   IFileDialogService as IFileDialogServiceType,
   IFileSearchService as IFileSearchServiceType,
   IFileService as IFileServiceType,
+  IHostService as IHostServiceType,
   INotificationService as INotificationServiceType,
   ISettableObservable,
   IUriIdentityService as IUriIdentityServiceType,
@@ -79,6 +81,8 @@ afterEach(() => {
   vi.restoreAllMocks()
   notifySpy.mockClear()
   showOpenDialogSpy.mockClear()
+  readClipboardImageSpy.mockClear()
+  nextClipboardImage = null
   nextPick = undefined
   invalidateMentionFileCache()
   AcpPromptDraftCache._resetForTests()
@@ -148,6 +152,16 @@ const stubFileService: IFileServiceType = {
   _serviceBrand: undefined,
   readFile: async () => new Uint8Array([1, 2, 3, 4]),
 } as unknown as IFileServiceType
+
+// Host stub: readClipboardImage backs the EditContext paste fallback (the
+// renderer's sync ClipboardEvent hides image bytes, so the image is read from
+// the main process). `nextClipboardImage` is what it resolves with, set per test.
+let nextClipboardImage: { dataBase64: string; mimeType: string; byteSize: number } | null = null
+const readClipboardImageSpy = vi.fn(() => Promise.resolve(nextClipboardImage))
+const stubHostService: IHostServiceType = {
+  _serviceBrand: undefined,
+  readClipboardImage: readClipboardImageSpy,
+} as unknown as IHostServiceType
 
 // File dialog stub: `nextPick` is what showOpenDialog resolves with (set per
 // test); showOpenDialogSpy records the options it was called with.
@@ -312,6 +326,7 @@ function renderWithServices(
   services.set(IAcpPromptHistoryService, stubHistoryService)
   services.set(INotificationService, stubNotificationService)
   services.set(IFileService, stubFileService)
+  services.set(IHostService, stubHostService)
   services.set(IFileDialogService, stubFileDialogService)
   services.set(ILanguageFeaturesService, stubLanguageFeatures)
   services.set(IUriIdentityService, stubUriIdentity)
@@ -1221,6 +1236,34 @@ describe('PromptInput — draft persistence', () => {
       pasteImage(ta, makeImageFile())
       await waitFor(() => expect(notifySpy).toHaveBeenCalledTimes(1))
       expect(screen.queryByTestId('acp-prompt-image-chips')).toBeNull()
+    })
+
+    // Monaco's editContext:true host hides image bytes from the sync
+    // ClipboardEvent (files/items come back empty), and navigator.clipboard is
+    // blocked by an unset Electron permission — so the image is read from the
+    // main process via IHostService. Regression guard for the migration bug.
+    it('attaches a pasted image via the host clipboard when the sync event is empty', async () => {
+      nextClipboardImage = {
+        dataBase64: btoa('fake-png-bytes'),
+        mimeType: 'image/png',
+        byteSize: 64,
+      }
+      const session = makeSession({ imageSupported: true })
+      renderWithServices(<PromptInput session={session} />)
+      const ta = getTextarea()
+      // Empty sync clipboard — mirrors the EditContext ClipboardEvent.
+      fireEvent.paste(ta, { clipboardData: { items: [], files: [] } })
+      expect(await screen.findByTestId('acp-prompt-image-chips')).toBeTruthy()
+      expect(readClipboardImageSpy).toHaveBeenCalledTimes(1)
+      expect(notifySpy).not.toHaveBeenCalled()
+    })
+
+    it('does not read the host clipboard when the agent lacks image support', async () => {
+      const session = makeSession({ imageSupported: false })
+      renderWithServices(<PromptInput session={session} />)
+      const ta = getTextarea()
+      fireEvent.paste(ta, { clipboardData: { items: [], files: [] } })
+      expect(readClipboardImageSpy).not.toHaveBeenCalled()
     })
 
     it('dragging an in-app image (URI only, no File) attaches it', async () => {

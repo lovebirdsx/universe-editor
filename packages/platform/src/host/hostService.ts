@@ -103,8 +103,28 @@ export interface IHostService {
   /** Bring the window to the foreground (restoring it from minimized if needed). */
   focusWindow(): Promise<void>
 
+  /**
+   * Read an image off the OS clipboard via the main-process `clipboard` module.
+   * Returns `null` when the clipboard holds no image. Used by the agent prompt's
+   * paste-image path: with Monaco's `editContext: true` the renderer's
+   * ClipboardEvent carries no image bytes and `navigator.clipboard.read()` is
+   * gated behind an Electron permission the app doesn't grant, so the reliable
+   * source is the main process.
+   */
+  readClipboardImage(): Promise<IClipboardImage | null>
+
   /** Application and runtime version info, for the About dialog. */
   getVersionInfo(): Promise<IVersionInfo>
+}
+
+/** A PNG image lifted off the OS clipboard by the main process. */
+export interface IClipboardImage {
+  /** Raw PNG bytes as a base64 string (no `data:` prefix). */
+  readonly dataBase64: string
+  /** Always `image/png` — Electron normalizes clipboard images to PNG. */
+  readonly mimeType: string
+  /** Decoded byte size of the PNG. */
+  readonly byteSize: number
 }
 
 export interface IVersionInfo {

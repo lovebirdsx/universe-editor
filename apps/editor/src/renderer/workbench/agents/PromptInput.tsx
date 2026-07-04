@@ -33,6 +33,7 @@ import {
   IFileDialogService,
   IFileSearchService,
   IFileService,
+  IHostService,
   IWorkspaceService,
   IDialogService,
   IEditorService,
@@ -212,6 +213,7 @@ export function PromptInput({
   const notification = useService(INotificationService)
   const fileService = useService(IFileService)
   const contextKeyService = useService(IContextKeyService)
+  const hostService = useService(IHostService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
@@ -980,22 +982,88 @@ export function PromptInput({
     requestAnimationFrame(() => el.focus())
   }
 
+  // Attach an image lifted off the OS clipboard by the main process (base64
+  // PNG). Mirrors acceptImageFiles' gating + validation + one-shot rejection.
+  const acceptClipboardImage = useCallback(
+    (image: { dataBase64: string; mimeType: string; byteSize: number }): void => {
+      if (!imageSupported) {
+        notification.notify({
+          severity: Severity.Info,
+          message: localize(
+            'acp.image.unsupported',
+            'The current agent does not support image input.',
+          ),
+        })
+        return
+      }
+      const reason = validateImage(
+        { mimeType: image.mimeType, byteSize: image.byteSize },
+        images.length,
+        imageLimits,
+      )
+      if (reason !== null) {
+        notification.notify({
+          severity: Severity.Warning,
+          message: imageRejectMessage(reason, imageLimits),
+        })
+        return
+      }
+      setImages((prev) => [
+        ...prev,
+        {
+          id: generateUuid(),
+          mimeType: image.mimeType,
+          dataBase64: image.dataBase64,
+          byteSize: image.byteSize,
+        },
+      ])
+      editorHandleRef.current?.focus()
+    },
+    [imageSupported, images.length, imageLimits, notification],
+  )
+
   // Ctrl+V of a screenshot / copied image: pull image files out of the
   // clipboard and attach them. Non-image pastes fall through to the editor.
+  //
+  // With Monaco's `editContext: true` the input host is a `native-edit-context`
+  // div, which Chromium treats as a non-editable context — so the synchronous
+  // ClipboardEvent carries no image File (`items`/`files` come back empty even
+  // though the paste event still fires), and `navigator.clipboard.read()` is
+  // gated behind an Electron permission the app doesn't grant. When the sync
+  // path finds nothing we ask the main process to read the OS clipboard image.
   const onPromptPaste = (e: ClipboardEvent): void => {
     const items = e.clipboardData?.items
-    if (!items) return
     const files: File[] = []
-    for (const item of Array.from(items)) {
-      if (item.kind === 'file' && item.type.startsWith('image/')) {
-        const file = item.getAsFile()
-        if (file) files.push(file)
+    if (items) {
+      for (const item of Array.from(items)) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const file = item.getAsFile()
+          if (file) files.push(file)
+        }
       }
     }
-    if (files.length === 0) return
-    e.preventDefault()
-    void acceptImageFiles(files)
+    if (files.length > 0) {
+      e.preventDefault()
+      void acceptImageFiles(files)
+      return
+    }
+    // Nothing in the sync event. If the agent takes images, ask the main
+    // process whether the OS clipboard holds one (EditContext hid it here).
+    // Don't preventDefault — a plain-text paste must still reach the editor.
+    if (imageSupported) void readClipboardImageFromHost()
   }
+
+  // EditContext fallback: read the clipboard image via the main-process
+  // `clipboard` module (the reliable source — see onPromptPaste). Silent when
+  // the clipboard holds no image so a plain-text paste isn't disturbed.
+  const readClipboardImageFromHost = useCallback(async (): Promise<void> => {
+    try {
+      const image = await hostService.readClipboardImage()
+      if (image) acceptClipboardImage(image)
+    } catch (err) {
+      console.debug('[acp-prompt] host clipboard image read failed', err)
+    }
+  }, [hostService, acceptClipboardImage])
 
   return (
     <form className={styles['promptForm']} onSubmit={submit}>

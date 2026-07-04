@@ -5,7 +5,15 @@
 
 import path from 'node:path'
 import { spawn } from 'node:child_process'
-import { app, dialog, shell, nativeImage, Notification, type BrowserWindow } from 'electron'
+import {
+  app,
+  clipboard,
+  dialog,
+  shell,
+  nativeImage,
+  Notification,
+  type BrowserWindow,
+} from 'electron'
 import {
   Emitter,
   NullLogger,
@@ -13,6 +21,7 @@ import {
   URI,
   type Event,
   type ExternalTerminalKind,
+  type IClipboardImage,
   type ILogger,
   type IDisposable,
   type IHostServiceWire,
@@ -290,6 +299,25 @@ export class MainHostService implements IHostServiceWire, IDisposable {
     }
     this._logger.debug(`focusWindow id=${this._win.id}`)
     return Promise.resolve()
+  }
+
+  readClipboardImage(): Promise<IClipboardImage | null> {
+    const image = clipboard.readImage()
+    if (image.isEmpty()) {
+      this._logger.debug('readClipboardImage: clipboard holds no image')
+      return Promise.resolve(null)
+    }
+    const png = image.toPNG()
+    if (png.length === 0) {
+      this._logger.debug('readClipboardImage: PNG encode produced no bytes')
+      return Promise.resolve(null)
+    }
+    this._logger.debug(`readClipboardImage: ${png.length} bytes`)
+    return Promise.resolve({
+      dataBase64: png.toString('base64'),
+      mimeType: 'image/png',
+      byteSize: png.length,
+    })
   }
 
   getVersionInfo(): Promise<IVersionInfo> {

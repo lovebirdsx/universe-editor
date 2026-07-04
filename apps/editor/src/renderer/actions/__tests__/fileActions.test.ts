@@ -304,6 +304,9 @@ class FakeHostService implements IHostServiceType {
     return this.saveResult
   }
   async showItemInFolder(_fsPath: string) {}
+  async readClipboardImage() {
+    return null
+  }
   async openWithDefaultApp(_path: string) {
     return ''
   }
