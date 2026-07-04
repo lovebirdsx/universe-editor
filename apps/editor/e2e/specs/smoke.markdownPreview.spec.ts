@@ -1165,8 +1165,13 @@ test.describe('@p1 markdown preview', () => {
     // Open the folder so the parcel watcher covers the file, then open it.
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+    // Opening the folder first kicks off the parcel watcher + workspace-storage
+    // hydration (now reconciled after mount, off the first-paint path), which
+    // contends with the file open on a cold 2-core CI box. The language-id key
+    // only flips once the FileEditorInput is active, so give it the same headroom
+    // the outline specs use rather than the default 10s expect window.
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
 
     // Toggle into pure preview mode: the source tab is detached, so no
@@ -1204,8 +1209,10 @@ test.describe('@p1 markdown preview', () => {
     const targetReal = `${dir}/target.md`
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), filePath)
+    // Same cold-start contention as the toggle case above: opening the folder
+    // first delays the file editor becoming active on a loaded CI box.
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
 
     await workbench.runCommand('workbench.action.markdown.openPreview')

@@ -10,11 +10,14 @@
 import {
   autorun,
   createDecorator,
+  createNamedLogger,
   Disposable,
   DisposableStore,
   IEditorService,
+  ILoggerService,
   observableValue,
   transaction,
+  type ILogger,
   type IObservable,
 } from '@universe-editor/platform'
 import { MonacoLoader, type monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
@@ -118,11 +121,16 @@ export class OutlineService extends Disposable implements IOutlineService {
   /** Active live-preview highlight, owned by whichever editor it was set on. */
   private _previewDecorations: monaco.editor.IEditorDecorationsCollection | undefined
 
+  private readonly _logger: ILogger
+
   constructor(
     @IEditorService private readonly _editorService: IEditorService,
     @ILanguageFeaturesService private readonly _languageFeatures: ILanguageFeaturesService,
+    @ILoggerService loggerService: ILoggerService,
   ) {
     super()
+
+    this._logger = createNamedLogger(loggerService, { id: 'outline', name: 'Outline' })
 
     // Re-attach whenever the active editor changes.
     this._register(
@@ -395,17 +403,32 @@ export class OutlineService extends Disposable implements IOutlineService {
       return
     }
 
-    void Promise.resolve(provider.provideDocumentSymbols(model, NONE_TOKEN)).then((result) => {
-      // Discard if the model was swapped or disposed while we awaited.
-      if (this._currentModel !== model || model.isDisposed()) return
-      const roots = result ?? []
-      this._outline.set(
-        { uri: model.uri.toString(), roots, languageId, version: ++this._version },
-        undefined,
-      )
-      this._recomputeActiveSymbol()
-      this._maybeRetry(roots, retry)
-    })
+    void Promise.resolve(provider.provideDocumentSymbols(model, NONE_TOKEN))
+      .then((result) => {
+        // Discard if the model was swapped or disposed while we awaited.
+        if (this._currentModel !== model || model.isDisposed()) return
+        const roots = result ?? []
+        this._outline.set(
+          { uri: model.uri.toString(), roots, languageId, version: ++this._version },
+          undefined,
+        )
+        this._recomputeActiveSymbol()
+        this._maybeRetry(roots, retry)
+      })
+      .catch((err: unknown) => {
+        // A provider can reject during a cold start — e.g. the JSON symbol
+        // provider delegates to Monaco's JSON worker, which may not be warm yet
+        // (the workbench now mounts before Monaco finishes loading). Without this
+        // catch the retry chain would die silently here and the outline would
+        // stay stuck at the empty tree published before the provider appeared.
+        if (this._currentModel !== model || model.isDisposed()) return
+        this._logger.debug(
+          `document-symbol pull failed for ${languageId} (${model.uri.toString()}); retrying: ${
+            (err as Error).message
+          }`,
+        )
+        this._maybeRetry([], retry)
+      })
   }
 
   /** Schedule another pull (with exponential backoff) while the outline is still empty and the time budget remains. */

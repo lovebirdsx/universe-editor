@@ -468,7 +468,7 @@ describe('OutlineView — agent session active-slot sync (end-to-end)', () => {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
     const services = new ServiceCollection()
     services.set(IEditorService, editorService as never)
     services.set(IOutlineService, svc as never)

@@ -210,7 +210,7 @@ describe('OutlineService', () => {
     } as unknown as ILanguageFeaturesService
 
     const fake = makeFakeEditor(languageId)
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
     return { svc, input, activeEditor, fake }
   }
 
@@ -280,7 +280,7 @@ describe('OutlineService', () => {
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
     const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
 
     FileEditorRegistry.register(inputA, makeFakeEditorFor(uriA.toString()).editor)
     FileEditorRegistry.register(inputB, makeFakeEditorFor(uriB.toString()).editor)
@@ -320,7 +320,7 @@ describe('OutlineService', () => {
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
     const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
 
     FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
     activeEditor.set(input, undefined)
@@ -356,7 +356,7 @@ describe('OutlineService', () => {
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
     const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
 
     FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
     activeEditor.set(input, undefined)
@@ -390,7 +390,7 @@ describe('OutlineService', () => {
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
     const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
 
     FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
     activeEditor.set(input, undefined)
@@ -427,7 +427,7 @@ describe('OutlineService', () => {
 
     const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
     const editorService = { activeEditor } as unknown as IEditorService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
 
     FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
     activeEditor.set(input, undefined)
@@ -464,7 +464,7 @@ describe('OutlineService', () => {
 
       const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
       const editorService = { activeEditor } as unknown as IEditorService
-      const svc = new OutlineService(editorService, facade)
+      const svc = new OutlineService(editorService, facade, undefined as never)
 
       FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
       activeEditor.set(input, undefined)
@@ -505,7 +505,7 @@ describe('OutlineService', () => {
 
       const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
       const editorService = { activeEditor } as unknown as IEditorService
-      const svc = new OutlineService(editorService, facade)
+      const svc = new OutlineService(editorService, facade, undefined as never)
 
       FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
       activeEditor.set(input, undefined)
@@ -519,6 +519,50 @@ describe('OutlineService', () => {
       // It finally warms up at ~45s; the outline must still fill in on its own.
       ready = true
       await vi.advanceTimersByTimeAsync(45000)
+      expect(svc.outline.get()?.roots).toEqual(symbols)
+      svc.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps retrying when the provider REJECTS during a cold start (worker not warm)', async () => {
+    vi.useFakeTimers()
+    try {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const input = inst.createInstance(FileEditorInput, URI.file('/ws/x.md'))
+
+      // The JSON symbol provider delegates to Monaco's JSON worker, which can
+      // reject while it's still spinning up (the workbench now mounts before
+      // Monaco finishes loading). A rejected pull must NOT kill the retry chain:
+      // before the fix the `.then()` had no `.catch()`, so a reject left the
+      // outline stuck at the empty tree published before the provider appeared.
+      const symbols = [makeSymbol('Warm', 1, 5)]
+      let calls = 0
+      const provider = {
+        provideDocumentSymbols: () =>
+          calls++ >= 5 ? symbols : Promise.reject(new Error('worker not ready')),
+      } as unknown as monaco.languages.DocumentSymbolProvider
+      const facade = {
+        onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+        getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+      } as unknown as ILanguageFeaturesService
+
+      const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
+      const editorService = { activeEditor } as unknown as IEditorService
+      const svc = new OutlineService(editorService, facade, undefined as never)
+
+      FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+      activeEditor.set(input, undefined)
+      await vi.advanceTimersByTimeAsync(0)
+      // The first pull rejected, so no tree is published yet — the key point is
+      // the retry chain survives the rejection rather than dying here.
+      expect(svc.outline.get()?.roots ?? []).toEqual([])
+
+      // Drive the backoff retries; once the worker warms up the outline fills in.
+      await vi.advanceTimersByTimeAsync(20000)
       expect(svc.outline.get()?.roots).toEqual(symbols)
       svc.dispose()
     } finally {
@@ -651,7 +695,7 @@ describe('OutlineService', () => {
       getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
     } as unknown as ILanguageFeaturesService
 
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
     const preview = new MarkdownPreviewInput(sourceUri)
     return { svc, preview, sourceUri, activeEditor }
   }
@@ -788,7 +832,7 @@ describe('OutlineService', () => {
       onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
       getDocumentSymbolProviders: () => [],
     } as unknown as ILanguageFeaturesService
-    const svc = new OutlineService(editorService, facade)
+    const svc = new OutlineService(editorService, facade, undefined as never)
     const input = makeSessionInput('s1')
     return { svc, input, activeEditor }
   }
