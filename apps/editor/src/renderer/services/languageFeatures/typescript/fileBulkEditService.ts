@@ -41,6 +41,18 @@ interface WorkspaceEdit {
 /** Monaco passes `{ editor }` as the second arg to IBulkEditService.apply. */
 interface BulkEditOptions {
   readonly editor?: monaco.editor.ICodeEditor
+  /**
+   * Force every edit to land on disk (not just in an open model). Used by the
+   * "update links on file move" flow, which rewrites the *referrer* files —
+   * conceptually closed files whose new content must survive on disk. Closing an
+   * editor disposes its model asynchronously (React unmount), so right after
+   * `closeAllEditors` a just-closed file can still have a lingering model in the
+   * registry; the plain in-memory branch would then push the edit into that
+   * orphan model and lose it on dispose, never touching disk. With this set we
+   * always write disk (and also sync a live model so a genuinely-open view stays
+   * consistent), making the outcome independent of the model-dispose race.
+   */
+  readonly persistToDisk?: boolean
 }
 
 interface SnippetInsertController {
@@ -167,18 +179,13 @@ export class FileBulkEditService {
     let totalFiles = 0
     for (const { resource, edits } of byResource.values()) {
       const model = MonacoModelRegistry.peek(resource)
-      if (model && !model.isDisposed()) {
-        const operations = edits.map((e) => ({
-          range: monacoNs.Range.lift(e.textEdit.range),
-          // A stray snippet edit that didn't take the SnippetController path
-          // (no editor / model mismatch) must not land `${1:…}`/`$0` literally.
-          text: e.textEdit.insertAsSnippet ? stripSnippet(e.textEdit.text) : e.textEdit.text,
-          forceMoveMarkers: true,
-        }))
-        model.pushStackElement()
-        model.pushEditOperations([], operations, () => null)
-        model.pushStackElement()
+      const liveModel = model && !model.isDisposed() ? model : undefined
+      if (liveModel && !opts?.persistToDisk) {
+        this._applyToModel(liveModel, edits, monacoNs)
       } else {
+        // Disk is the source of truth here. Also mirror into a lingering model so
+        // a genuinely-open view (or an orphan awaiting dispose) doesn't overwrite
+        // what we just wrote when it flushes/disposes.
         const current = await this._fileService.readFileText(resource)
         const next = applyTextEditsToString(
           current,
@@ -188,6 +195,7 @@ export class FileBulkEditService {
           })),
         )
         if (next !== current) await this._fileService.writeFile(resource, next)
+        if (liveModel && liveModel.getValue() !== next) liveModel.setValue(next)
       }
       totalFiles += 1
       totalEdits += edits.length
@@ -197,6 +205,24 @@ export class FileBulkEditService {
       ariaSummary: `Made ${totalEdits} edits in ${totalFiles} files`,
       isApplied: totalEdits > 0,
     }
+  }
+
+  /** Apply edits to a live model in-place (undoable, visible in the editor). */
+  private _applyToModel(
+    model: monaco.editor.ITextModel,
+    edits: readonly WorkspaceTextEdit[],
+    monacoNs: typeof monaco,
+  ): void {
+    const operations = edits.map((e) => ({
+      range: monacoNs.Range.lift(e.textEdit.range),
+      // A stray snippet edit that didn't take the SnippetController path
+      // (no editor / model mismatch) must not land `${1:…}`/`$0` literally.
+      text: e.textEdit.insertAsSnippet ? stripSnippet(e.textEdit.text) : e.textEdit.text,
+      forceMoveMarkers: true,
+    }))
+    model.pushStackElement()
+    model.pushEditOperations([], operations, () => null)
+    model.pushStackElement()
   }
 
   /**

@@ -201,6 +201,7 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       }
     },
     openWorkspace: (fsPath) => services.workspaceService.openFolder(URI.file(fsPath)),
+    closeWorkspace: () => services.workspaceService.closeFolder(),
     getCurrentWorkspacePath: () => services.workspaceService.current?.folder.fsPath,
     getOpenWindows: async () =>
       (await services.windowsService.getWindows()).map((w) => {

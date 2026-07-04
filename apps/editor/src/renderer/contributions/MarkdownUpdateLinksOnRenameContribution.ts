@@ -193,7 +193,7 @@ export class MarkdownUpdateLinksOnRenameContribution
 
     try {
       const monacoEdit = workspaceEditToMonaco(edit, MonacoLoader.get())
-      const result = await this._bulkEdit.apply(monacoEdit.edits)
+      const result = await this._bulkEdit.apply(monacoEdit.edits, { persistToDisk: true })
       this._logger.info(`applied link updates: ${result.ariaSummary}`)
       await this._notifyServiceOfDiskChanges(renames, files)
     } catch (err) {

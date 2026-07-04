@@ -88,6 +88,14 @@ async function resetWindow(page: Page, userDataDir: string): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await page.evaluate(() => window.__E2E__!.whenRestored())
+      // A window reload does NOT tear down main-process workspace state, so a
+      // prior test that opened a folder leaves it open — the reload then restores
+      // that workspace's editor groups (a ghost pinned tab from e.g.
+      // smoke.editorTabDnD leaks into this test's active group). seedUserData's
+      // disk wipe of workspaces/ races the main-process debounced session write
+      // and cannot be relied on. Deterministically close the folder here: it
+      // swaps to the no-workspace scope and tears down the restored groups.
+      await page.evaluate(() => window.__E2E__!.closeWorkspace())
       // Navigation back/forward stack lives in the main-process HistoryService,
       // which a reload does NOT clear. Wipe it so a prior test's navigation
       // entries can't leak into this test's GoBack behaviour.

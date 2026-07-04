@@ -111,6 +111,12 @@ export interface E2EProbe {
    * Use this in E2E tests instead of triggering the real dialog.
    */
   openWorkspace(fsPath: string): Promise<void>
+  /**
+   * Closes the current workspace folder (swaps to the no-workspace scope),
+   * tearing down its restored editor groups. Idempotent when none is open.
+   * Used by the shared-app fixture reset to purge a prior test's ghost editors.
+   */
+  closeWorkspace(): Promise<void>
   /** Returns the current workspace folder's fsPath, or undefined if none is open. */
   getCurrentWorkspacePath(): string | undefined
   /**
