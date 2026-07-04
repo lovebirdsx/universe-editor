@@ -296,6 +296,10 @@ export function PromptMonacoEditor({
           glyphMargin: false,
           folding: false,
           minimap: { enabled: false },
+          // A prose prompt input has no scopes to pin; sticky scroll here only
+          // races model swaps/dispose and crashes in StickyScrollController
+          // (modelPositionIsVisible → undefined line projection).
+          stickyScroll: { enabled: false },
           lineDecorationsWidth: 0,
           lineNumbersMinChars: 0,
           overviewRulerLanes: 0,
