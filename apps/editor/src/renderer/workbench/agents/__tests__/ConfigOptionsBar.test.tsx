@@ -105,6 +105,7 @@ function makeSession(initial: readonly SessionConfigOption[] = []): FakeSession 
     cancelTurn: vi.fn().mockResolvedValue(undefined) as never,
     close: () => Promise.resolve(),
     setConfigOption: setConfigOption as never,
+    renameTitle: () => {},
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
     configObs,

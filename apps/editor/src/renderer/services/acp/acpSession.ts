@@ -111,6 +111,9 @@ export {
   toolCallToText,
 } from './acpSessionContent.js'
 
+/** Provenance of a session title — see {@link AcpSession._pendingTitleKind}. */
+type TitleKind = 'ai' | 'manual' | undefined
+
 export class AcpSession extends Disposable implements IAcpSession {
   readonly sessionIdOnAgent: ISettableObservable<string | undefined>
   readonly messages: ISettableObservable<readonly AcpMessage[]>
@@ -183,17 +186,25 @@ export class AcpSession extends Disposable implements IAcpSession {
   private _titleGenerated = false
 
   /**
+   * Latched once the user manually renames the session. Blocks both the
+   * first-prompt-derived title and the AI title from overwriting the user's
+   * choice on subsequent prompts.
+   */
+  private _titleLocked = false
+
+  /**
    * Latest title derived/generated before the agent id existed. Re-applied to
    * the history row from {@link attachConnection} once the row is in place.
    */
   private _pendingTitle: string | undefined
 
   /**
-   * Whether {@link _pendingTitle} came from the AI title model (vs. the
-   * first-prompt fallback). AI titles are flagged on the history row and pushed
-   * back to the agent so they survive `/compact` + the next `session/list`.
+   * Provenance of {@link _pendingTitle}: `'ai'` (session-title model),
+   * `'manual'` (user rename), or `undefined` (first-prompt fallback). AI and
+   * manual titles are flagged on the history row and pushed back to the agent so
+   * they survive `/compact` + the next `session/list`; the fallback is not.
    */
-  private _pendingTitleIsAi = false
+  private _pendingTitleKind: TitleKind = undefined
 
   /**
    * Live connection, set by {@link attachConnection} once the agent handshake
@@ -352,7 +363,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     if (this.status.get() === 'connecting') this.status.set('idle', undefined)
     // Re-apply any title derived while connecting now that the history row exists.
     if (this._pendingTitle !== undefined) {
-      this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleIsAi)
+      this._applyHistoryTitle(sessionIdOnAgent, this._pendingTitle, this._pendingTitleKind)
     }
     this._flushQueuedPrompts(drained)
     // Now that the connection + sessionId exist, push any configOption values
@@ -641,39 +652,61 @@ export class AcpSession extends Disposable implements IAcpSession {
   }
 
   /**
+   * User-initiated rename. Ranks above the AI title: it flags the history row
+   * `manualTitle` (protecting it from hydrate) and latches `_titleGenerated` so
+   * a pending/future AI title generation can no longer overwrite it. Buffered +
+   * re-applied on attach like any other title. No-op for read-only previews and
+   * blank input.
+   */
+  renameTitle(title: string): void {
+    if (this.readOnly) return
+    const trimmed = title.trim().replace(/\s+/g, ' ')
+    if (trimmed.length === 0) return
+    // Stop any (in-flight or future) auto title from clobbering the user's choice.
+    this._titleGenerated = true
+    this._titleLocked = true
+    this._setHistoryTitle(trimmed, 'manual')
+  }
+
+  /**
    * Mirror a title onto the durable history entry, keyed by the agent-issued id.
    * While the session is still connecting that id is undefined and the row does
    * not exist yet, so we buffer the title and re-apply it from
    * {@link attachConnection} once the entry is in place.
    *
-   * `isAi` marks an AI-model-generated title: it is flagged on the history row
-   * (so the hydrate sweep won't clobber it with the agent's first-prompt
-   * `summary`) and pushed back to the agent via `renameSession`, so the title
-   * survives `/compact` and the next `session/list`.
+   * `kind` marks a non-fallback title (`'ai'` model-generated, `'manual'` user
+   * rename): it is flagged on the history row (so the hydrate sweep won't clobber
+   * it with the agent's first-prompt `summary`) and pushed back to the agent via
+   * the set-title ext-method, so the title survives `/compact` and the next
+   * `session/list`.
    */
-  private _setHistoryTitle(title: string, isAi: boolean): void {
+  private _setHistoryTitle(title: string, kind: TitleKind): void {
     this._pendingTitle = title
-    this._pendingTitleIsAi = isAi
+    this._pendingTitleKind = kind
     const sid = this.sessionIdOnAgent.get()
-    if (sid !== undefined) this._applyHistoryTitle(sid, title, isAi)
+    if (sid !== undefined) this._applyHistoryTitle(sid, title, kind)
   }
 
-  /** Write the title to the history row and, for AI titles, push it to the agent. */
-  private _applyHistoryTitle(sessionIdOnAgent: string, title: string, isAi: boolean): void {
+  /** Write the title to the history row and, for AI/manual titles, push it to the agent. */
+  private _applyHistoryTitle(sessionIdOnAgent: string, title: string, kind: TitleKind): void {
     this._history?.updateInfo(sessionIdOnAgent, { title })
-    if (isAi) {
+    if (kind === 'ai') {
       this._history?.setHistoryAiTitle(sessionIdOnAgent)
+      this._pushTitleToAgent(sessionIdOnAgent, title)
+    } else if (kind === 'manual') {
+      this._history?.setHistoryManualTitle(sessionIdOnAgent)
       this._pushTitleToAgent(sessionIdOnAgent, title)
     }
   }
 
   /**
-   * Persist an AI title onto the agent's durable store so it survives `/compact`
-   * and is reported by `session/list` from other workspaces. Both the Claude and
-   * Codex forks back this ext-method (Claude via `renameSession`, Codex via
-   * `thread/name/set`). Best-effort + fire-and-forget: an agent that doesn't
-   * implement it rejects with methodNotFound and we keep the local-only title,
-   * which the `aiTitle` history flag still protects from hydrate overwrites.
+   * Persist an AI / manual title onto the agent's durable store so it survives
+   * `/compact` and is reported by `session/list` from other workspaces. Both the
+   * Claude and Codex forks back this ext-method (Claude via `renameSession`,
+   * Codex via `thread/name/set`). Best-effort + fire-and-forget: an agent that
+   * doesn't implement it rejects with methodNotFound and we keep the local-only
+   * title, which the `aiTitle`/`manualTitle` history flag still protects from
+   * hydrate overwrites.
    */
   private _pushTitleToAgent(sessionIdOnAgent: string, title: string): void {
     const conn = this._conn
@@ -687,10 +720,11 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _maybeDeriveTitleFromPrompt(text: string): void {
     if (!this._history) return
+    if (this._titleLocked) return
     if (this._messages.length > 0) return
     const derived = text.trim().replace(/\s+/g, ' ').slice(0, 30)
     if (derived.length === 0) return
-    this._setHistoryTitle(derived, false)
+    this._setHistoryTitle(derived, undefined)
   }
 
   /**
@@ -705,7 +739,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     const agentText = this._messages.find((m) => m.role === 'agent')?.text ?? ''
     const title = await this._titleService.generateTitle(userText, agentText)
     if (title === undefined || this.status.get() === 'closed') return
-    this._setHistoryTitle(title, true)
+    this._setHistoryTitle(title, 'ai')
   }
 
   async close(): Promise<void> {

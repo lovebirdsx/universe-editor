@@ -19,8 +19,9 @@ import {
   IEditorService,
   IInstantiationService,
   IUriIdentityService,
+  ICommandService,
 } from '@universe-editor/platform'
-import { X, Trash2, GitBranch } from 'lucide-react'
+import { X, Trash2, GitBranch, Pencil } from 'lucide-react'
 import { IconButton, Input, fuzzyMatchField, scoreFuzzyMatch } from '@universe-editor/workbench-ui'
 import { useObservable, useService } from '../useService.js'
 import { IAcpSessionService, type IAcpSession } from '../../services/acp/acpSessionService.js'
@@ -179,6 +180,7 @@ function SessionRow({
   isActive,
   onActivate,
   onRemove,
+  onRename,
   rate,
   scope,
   isForeign,
@@ -189,6 +191,7 @@ function SessionRow({
   isActive: boolean
   onActivate: () => void
   onRemove: () => void
+  onRename: (() => void) | undefined
   rate: number
   scope: SessionHistoryScope
   isForeign: boolean
@@ -272,6 +275,19 @@ function SessionRow({
           ) : null}
         </span>
       </div>
+      {onRename ? (
+        <button
+          type="button"
+          className={styles['sessionRename']}
+          onClick={(e) => {
+            e.stopPropagation()
+            onRename()
+          }}
+          aria-label={localize('acp.sessions.rename', 'Rename session')}
+        >
+          <Pencil size={13} strokeWidth={1.75} />
+        </button>
+      ) : null}
       <button
         type="button"
         className={styles['sessionDelete']}
@@ -297,6 +313,7 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
   const dialogService = useService(IDialogService)
   const editorService = useService(IEditorService)
   const instantiation = useService(IInstantiationService)
+  const commandService = useService(ICommandService)
   const entries = useObservable(history.entries)
   // Subscribe to sessions so the running indicator re-renders.
   useObservable(service.sessions)
@@ -440,6 +457,15 @@ export function SessionListBody({ hideEmptyState, onPick }: SessionListBodyProps
                 scope={scope}
                 isForeign={isForeign}
                 foreignStat={foreignStats.get(entry.id)}
+                onRename={
+                  isForeign
+                    ? undefined
+                    : () => {
+                        void commandService.executeCommand('workbench.action.agent.renameSession', {
+                          sessionId: entry.id,
+                        })
+                      }
+                }
                 onActivate={() => {
                   const fresh = service.getById(entry.id)
                   // Exclude read-only previews: a live read-only session must not

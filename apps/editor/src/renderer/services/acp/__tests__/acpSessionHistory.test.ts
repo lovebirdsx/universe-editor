@@ -734,6 +734,31 @@ describe('AcpSessionHistoryService — bulkMergeFromAgent', () => {
     expect(svc.get(e.id)?.aiTitle).toBe(true)
   })
 
+  it('keeps a manually-renamed local title over the protocol summary', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'My Name' })
+    svc.setHistoryManualTitle(e.id)
+    svc.bulkMergeFromAgent(
+      'fake',
+      [{ sessionId: 's-1', cwd: '/work', title: 'first user prompt', updatedAt: null }],
+      '/work',
+      'workspace',
+    )
+    expect(svc.get(e.id)?.title).toBe('My Name')
+    expect(svc.get(e.id)?.manualTitle).toBe(true)
+  })
+
+  it('preserves a manual title + flag across re-add (resume)', async () => {
+    await svc.initialize()
+    const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'My Name' })
+    svc.setHistoryManualTitle(e.id)
+    // Re-adding the same (agentId, sessionIdOnAgent) with the placeholder title
+    // (as resume does) must not blow away the manual title.
+    svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 'fake 09:00' })
+    expect(svc.get(e.id)?.title).toBe('My Name')
+    expect(svc.get(e.id)?.manualTitle).toBe(true)
+  })
+
   it('lastUsedAt = max(protocol updatedAt, local lastUsedAt)', async () => {
     await svc.initialize()
     const e = svc.add({ agentId: 'fake', sessionIdOnAgent: 's-1', title: 't' })

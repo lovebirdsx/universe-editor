@@ -118,6 +118,13 @@ export interface AcpSessionHistoryEntry {
    * It also protects agents that can't persist titles at all (e.g. codex).
    */
   readonly aiTitle?: boolean
+  /**
+   * True once the user manually renamed this session. Like {@link aiTitle} it
+   * blocks the `session/list` `summary` from clobbering the title on hydrate,
+   * but it ranks *above* an AI title: once set, {@link AcpSession} also stops
+   * regenerating an AI title so a user-chosen name is never overwritten.
+   */
+  readonly manualTitle?: boolean
 }
 
 export interface IAcpSessionHistoryService {
@@ -172,6 +179,13 @@ export interface IAcpSessionHistoryService {
    * `summary`.
    */
   setHistoryAiTitle(sessionId: string): void
+  /**
+   * Mark a session's title as manually renamed by the user. Idempotent; no-op
+   * if the id is unknown. Ranks above {@link setHistoryAiTitle}: it protects the
+   * title from hydrate overwrites AND signals the session to stop regenerating
+   * an AI title.
+   */
+  setHistoryManualTitle(sessionId: string): void
   /**
    * Bulk-merge protocol-reported sessions for one agent. Used by the hydrate
    * sweep that polls each agent's `session/list`. Rows are upserted by
@@ -320,10 +334,15 @@ export class AcpSessionHistoryService
       if (existing === true) return true
       return entry.hasMessages
     })()
-    // Preserve a prior AI-title flag + its title across re-add (the construct-
-    // time `entry.title` is the default placeholder, not the AI title).
+    // Preserve a prior AI-title / manual-title flag + its title across re-add
+    // (the construct-time `entry.title` is the default placeholder, not the
+    // user-chosen / AI title). Manual title ranks above AI title.
     const existingAiTitle = existingIdx >= 0 ? this._state[existingIdx]!.aiTitle : undefined
-    const title = existingAiTitle === true ? this._state[existingIdx]!.title : entry.title
+    const existingManualTitle = existingIdx >= 0 ? this._state[existingIdx]!.manualTitle : undefined
+    const title =
+      existingManualTitle === true || existingAiTitle === true
+        ? this._state[existingIdx]!.title
+        : entry.title
     const next: AcpSessionHistoryEntry = {
       id,
       agentId: entry.agentId,
@@ -341,6 +360,7 @@ export class AcpSessionHistoryService
         : {}),
       ...(carriedHasMessages !== undefined ? { hasMessages: carriedHasMessages } : {}),
       ...(existingAiTitle === true ? { aiTitle: true } : {}),
+      ...(existingManualTitle === true ? { manualTitle: true } : {}),
     }
     if (existingIdx >= 0) {
       this._state = [next, ...this._state.filter((_, i) => i !== existingIdx)]
@@ -457,6 +477,17 @@ export class AcpSessionHistoryService
     this._scheduleWrite()
   }
 
+  setHistoryManualTitle(sessionId: string): void {
+    const idx = this._state.findIndex((e) => e.id === sessionId)
+    if (idx === -1) return
+    const cur = this._state[idx]!
+    if (cur.manualTitle === true) return
+    const next: AcpSessionHistoryEntry = { ...cur, manualTitle: true }
+    this._state = this._state.map((e, i) => (i === idx ? next : e))
+    this._publish()
+    this._scheduleWrite()
+  }
+
   bulkMergeFromAgent(
     agentId: string,
     sessions: readonly BulkMergeSessionInfo[],
@@ -519,12 +550,15 @@ export class AcpSessionHistoryService
         typeof info.title === 'string' && info.title.length > 0
           ? info.title
           : (existing?.title ?? info.sessionId)
-      // An AI-generated local title wins over the agent's reported `summary`:
-      // after `/compact` the SDK summary reverts to the first prompt, which
-      // would otherwise clobber our title here. Once our `renameSession` push
-      // lands the agent reports the same value, so this only blocks the
-      // divergent (compact-reset / unsupported-agent) case.
-      const title = existing?.aiTitle === true ? existing.title : reportedTitle
+      // An AI-generated or user-renamed local title wins over the agent's
+      // reported `summary`: after `/compact` the SDK summary reverts to the
+      // first prompt, which would otherwise clobber our title here. Once our
+      // `renameSession` push lands the agent reports the same value, so this
+      // only blocks the divergent (compact-reset / unsupported-agent) case.
+      const title =
+        existing?.manualTitle === true || existing?.aiTitle === true
+          ? existing.title
+          : reportedTitle
       const cwd = typeof info.cwd === 'string' && info.cwd.length > 0 ? info.cwd : existing?.cwd
       const branch =
         typeof info.branch === 'string' && info.branch.length > 0 ? info.branch : existing?.branch
@@ -680,7 +714,8 @@ function isValidEntry(v: unknown): v is AcpSessionHistoryEntry {
     (o['configLabels'] === undefined || isStringRecord(o['configLabels'])) &&
     (o['usage'] === undefined || isValidUsage(o['usage'])) &&
     (o['hasMessages'] === undefined || typeof o['hasMessages'] === 'boolean') &&
-    (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean')
+    (o['aiTitle'] === undefined || typeof o['aiTitle'] === 'boolean') &&
+    (o['manualTitle'] === undefined || typeof o['manualTitle'] === 'boolean')
   )
 }
 

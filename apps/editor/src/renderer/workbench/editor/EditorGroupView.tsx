@@ -217,13 +217,16 @@ function useGroupVersion(group: IEditorGroup): string {
       const a = group.onDidChangeModel(() => onChange())
       const b = group.onDidActiveEditorChange(() => onChange())
       const dirtyUnsubs = group.editors.map((e) => e.onDidChangeDirty(() => onChange()))
+      // Rename (e.g. an ACP session retitle) fires onDidChangeLabel without any
+      // model/active/dirty change; subscribe so the tab label re-renders.
+      const labelUnsubs = group.editors.map((e) => e.onDidChangeLabel(() => onChange()))
       // React owns lifecycle via useSyncExternalStore; mark singleton so
       // beforeunload (fires before React teardown on reload) doesn't report leaks.
-      const combined = markAsSingleton(combinedDisposable(a, b, ...dirtyUnsubs))
+      const combined = markAsSingleton(combinedDisposable(a, b, ...dirtyUnsubs, ...labelUnsubs))
       return () => combined.dispose()
     },
     () =>
-      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.isLocked ? 'L' : ''}`,
+      `${group.editors.map((e) => e.id).join(',')}:${group.activeEditor?.id ?? ''}:${group.previewEditor?.id ?? ''}:${group.editors.map((e) => (e.isDirty ? '1' : '0')).join('')}:${group.editors.map((e) => e.label).join('|')}:${group.isLocked ? 'L' : ''}`,
   )
 }
 

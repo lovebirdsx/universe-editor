@@ -292,6 +292,7 @@ function makeSession(opts: FakeSessionOptions = {}): FakeSession {
     cancelTurn: cancelTurn as never,
     close: () => Promise.resolve(),
     setConfigOption: () => Promise.resolve(),
+    renameTitle: () => {},
     cycleCollapseMode: () => {},
     whenConnected: () => Promise.resolve(),
     statusObs,

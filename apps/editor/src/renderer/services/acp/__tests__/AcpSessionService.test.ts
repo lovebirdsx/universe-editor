@@ -1253,6 +1253,48 @@ describe('AcpSessionService — AI session title push-back', () => {
       svc.dispose()
     }
   })
+
+  it('renameSession pushes the manual title, flags the row, and blocks AI regeneration', async () => {
+    const client = new FakeAcpClientService()
+    const { svc, history } = makeServiceWithTitle(client, new FixedTitleService('AI Generated'))
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      const sid = session.sessionIdOnAgent.get()!
+
+      const applied = svc.renameSession(session.id, '  My Custom  Name  ')
+      expect(applied).toBe(true)
+      // _pushTitleToAgent is fire-and-forget over the in-memory pair; drain it.
+      await new Promise((r) => setTimeout(r, 0))
+
+      const agent = client.connected[0]!.agent
+      expect(agent.extMethodCalls).toContainEqual({
+        method: 'universe-editor/set_session_title',
+        params: { sessionId: sid, title: 'My Custom Name' },
+      })
+      expect(history.get(sid)?.title).toBe('My Custom Name')
+      expect(history.get(sid)?.manualTitle).toBe(true)
+
+      // A first prompt afterwards must NOT let the AI title overwrite the manual one.
+      await session.sendPrompt('do the thing')
+      await new Promise((r) => setTimeout(r, 0))
+      expect(history.get(sid)?.title).toBe('My Custom Name')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('renameSession rejects blank titles', async () => {
+    const client = new FakeAcpClientService()
+    const { svc } = makeServiceWithTitle(client, new StubSessionTitleService())
+    try {
+      const session = await svc.createSession()
+      await session.whenConnected()
+      expect(svc.renameSession(session.id, '   ')).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
 })
 
 describe('AcpSessionService — configOptions history snapshot', () => {

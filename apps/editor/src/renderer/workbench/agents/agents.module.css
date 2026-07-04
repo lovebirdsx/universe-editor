@@ -1300,13 +1300,23 @@
   flex-shrink: 0;
 }
 
+.sessionRename {
+  composes: sessionDelete;
+}
+
 .sessionRow:hover .sessionDelete,
-.sessionRow[data-active='true'] .sessionDelete {
+.sessionRow[data-active='true'] .sessionDelete,
+.sessionRow:hover .sessionRename,
+.sessionRow[data-active='true'] .sessionRename {
   visibility: visible;
 }
 
 .sessionDelete:hover {
   color: var(--color-fg-error, #f85149);
+}
+
+.sessionRename:hover {
+  color: var(--color-fg-accent, #4493f8);
 }
 
 .empty,

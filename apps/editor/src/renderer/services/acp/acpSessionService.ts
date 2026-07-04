@@ -181,6 +181,16 @@ export interface IAcpSessionService {
    * RPC / spawn failure (caller is expected to still remove the local row).
    */
   deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'>
+  /**
+   * Manually rename a session by its local or agent-issued id. A live (non
+   * read-only) session is renamed through the view-model so the title is pushed
+   * to the agent and protected from hydrate; a history-only row is renamed
+   * locally with the `manualTitle` guard. Foreign (other-worktree) sessions are
+   * rejected — their title in this bucket is only a hydrate cache and would be
+   * overwritten by the owning worktree on the next reconcile. Returns `true` if
+   * the rename was applied.
+   */
+  renameSession(sessionId: string, title: string): boolean
 }
 
 export const IAcpSessionService = createDecorator<IAcpSessionService>('acpSessionService')
@@ -833,6 +843,36 @@ export class AcpSessionService
 
   deleteOnAgent(sessionId: string): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
     return this._coordinator.deleteOnAgent(sessionId)
+  }
+
+  renameSession(sessionId: string, title: string): boolean {
+    const trimmed = title.trim().replace(/\s+/g, ' ')
+    if (trimmed.length === 0) return false
+    const live = this._findSession(sessionId)
+    if (live && live.status.get() !== 'closed' && !live.readOnly) {
+      live.renameTitle(trimmed)
+      this._telemetry.publicLog('acp.session_renamed', { live: true })
+      return true
+    }
+    // History-only row (not live, or a closed/foreign-preview instance). Rename
+    // it locally with the manualTitle guard so hydrate can't clobber it. The
+    // agent-side push happens on the next live resume (its history row already
+    // carries the title). Foreign rows are rejected: their title here is only a
+    // hydrate cache the owning worktree reconciles back.
+    const entry = this._history.get(sessionId)
+    if (!entry) return false
+    const currentCwd = this._workspace.current?.folder.fsPath
+    if (
+      entry.cwd !== undefined &&
+      currentCwd !== undefined &&
+      !this._uriIdentity.arePathsEqual(entry.cwd, currentCwd)
+    ) {
+      return false
+    }
+    this._history.updateInfo(entry.id, { title: trimmed })
+    this._history.setHistoryManualTitle(entry.id)
+    this._telemetry.publicLog('acp.session_renamed', { live: false })
+    return true
   }
 
   /**

@@ -29,6 +29,7 @@ import { IAcpAgentRegistry, agentIconId } from '../services/acp/acpAgentRegistry
 import { IAcpSessionHistoryService } from '../services/acp/acpSessionHistory.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
+import { resolveLiveSessionTitle } from '../services/acp/acpSessionTitle.js'
 import { ISessionSwitcherService, type SessionSummary } from '../../shared/ipc/sessionSwitcher.js'
 import { basenameOfPath } from '../workbench/files/resourceInfo.js'
 import { CATEGORY, resolveNavWidget } from './_agentShared.js'
@@ -430,4 +431,85 @@ export class SwitchSessionAction extends Action2 {
     if (!pick) return
     await switcher.reveal(pick.windowId, pick.sessionId)
   }
+}
+
+/**
+ * Rename the current (or a specified) session. Target resolution order:
+ *  1. explicit `{ sessionId }` arg (session list button),
+ *  2. the `{ resource }` arg from the editor tab context menu,
+ *  3. the active AcpSessionEditorInput (editor focused),
+ *  4. the active session (command palette / sidebar chat).
+ * Renders a QuickInput box prefilled with the current title.
+ */
+export class RenameAgentSessionAction extends Action2 {
+  static readonly ID = 'workbench.action.agent.renameSession'
+  constructor() {
+    super({
+      id: RenameAgentSessionAction.ID,
+      title: localize2('action.agent.renameSession', 'Rename Agent Session…'),
+      category: CATEGORY,
+      menu: [
+        { id: MenuId.AcpChatContext, group: '2_session', order: 3 },
+        {
+          id: MenuId.EditorTabContext,
+          when: `activeEditorType == '${AcpSessionEditorInput.TYPE_ID}'`,
+          group: '1_session',
+          order: 1,
+        },
+      ],
+      f1: true,
+    })
+  }
+  override async run(
+    accessor: ServicesAccessor,
+    arg?: { sessionId?: unknown; resource?: unknown },
+  ): Promise<void> {
+    // Snapshot every service synchronously — the accessor is invalid after the
+    // first await (the input box below).
+    const sessions = accessor.get(IAcpSessionService)
+    const history = accessor.get(IAcpSessionHistoryService)
+    const quickInput = accessor.get(IQuickInputService)
+    const editor = accessor.get(IEditorService)
+
+    const sessionId = resolveRenameTargetId(arg, editor, sessions)
+    if (sessionId === undefined) return
+
+    const current = resolveLiveSessionTitle(history, sessions, sessionId)
+    const next = await quickInput.input({
+      value: current ?? '',
+      prompt: localize('agent.rename.prompt', 'Enter a new title for this session'),
+      validateInput: (v) =>
+        v.trim().length === 0 ? localize('agent.rename.empty', 'Title cannot be empty') : undefined,
+    })
+    if (next === undefined) return
+    const trimmed = next.trim()
+    if (trimmed.length === 0 || trimmed === current) return
+    sessions.renameSession(sessionId, trimmed)
+  }
+}
+
+/** Extract the session id from an AcpSessionEditorInput resource: `universe:/acp/session/<id>`. */
+function sessionIdFromResource(resource: unknown): string | undefined {
+  const path =
+    typeof resource === 'object' && resource !== null
+      ? (resource as { path?: unknown }).path
+      : undefined
+  if (typeof path !== 'string') return undefined
+  const m = /^\/acp\/session\/(.+)$/.exec(path)
+  return m ? m[1] : undefined
+}
+
+function resolveRenameTargetId(
+  arg: { sessionId?: unknown; resource?: unknown } | undefined,
+  editor: IEditorService,
+  sessions: IAcpSessionService,
+): string | undefined {
+  if (arg && typeof arg.sessionId === 'string' && arg.sessionId.length > 0) {
+    return arg.sessionId
+  }
+  const fromResource = sessionIdFromResource(arg?.resource)
+  if (fromResource !== undefined) return fromResource
+  const active = editor.activeEditor.get()
+  if (active instanceof AcpSessionEditorInput) return active.sessionId
+  return sessions.activeSession.get()?.id
 }

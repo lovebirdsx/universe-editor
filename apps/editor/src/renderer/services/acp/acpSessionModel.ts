@@ -371,6 +371,13 @@ export interface IAcpSession {
   close(): Promise<void>
   /** Change one configuration option via `session/set_config_option`. */
   setConfigOption(configId: string, value: string): Promise<void>
+  /**
+   * Manually rename the session. Ranks above the auto-generated (first-prompt /
+   * AI) title: it is persisted with a `manualTitle` flag that protects it from
+   * hydrate overwrites and stops any AI title regeneration, and is pushed to the
+   * agent so it survives `/compact`. No-op for read-only previews / blank input.
+   */
+  renameTitle(title: string): void
 }
 
 /**

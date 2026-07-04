@@ -96,6 +96,9 @@ function makeService(
     async deleteOnAgent(): Promise<'ok' | 'unsupported' | 'unknown' | 'error'> {
       return 'unsupported'
     },
+    renameSession(): boolean {
+      return false
+    },
   } satisfies FakeAcpSessionService
 }
 
