@@ -289,6 +289,55 @@ export class TreeModel<T> extends Disposable {
     this._onReveal.fire({ id: targetId })
   }
 
+  /**
+   * Keyboard navigation semantics shared by the Tree view and view-level
+   * commands (e.g. Outline's emacs bindings): up/down move the selection,
+   * right expands then steps into the first child, left collapses then steps
+   * out to the parent — matching the Explorer tree. `extend` (Shift) grows the
+   * selection range instead of replacing it and applies only to up/down.
+   */
+  navigate(direction: 'up' | 'down' | 'left' | 'right', extend = false): void {
+    const vis = this.getVisibleNodes()
+    if (vis.length === 0) return
+    const currentIndex = this._focused ? vis.findIndex((n) => n.id === this._focused) : -1
+    const current = currentIndex >= 0 ? vis[currentIndex] : undefined
+
+    const moveTo = (index: number) => {
+      const clamped = Math.max(0, Math.min(vis.length - 1, index))
+      const target = vis[clamped]
+      if (!target) return
+      if (extend && this._focused) this.selectRange(this._focused, target.id)
+      else this.setSelection([target.id], target.id)
+    }
+
+    switch (direction) {
+      case 'down':
+        moveTo(currentIndex < 0 ? 0 : currentIndex + 1)
+        return
+      case 'up':
+        moveTo(currentIndex < 0 ? 0 : currentIndex - 1)
+        return
+      case 'right':
+        if (!current || !current.hasChildren) return
+        if (current.expanded) {
+          const next = vis[currentIndex + 1]
+          if (next) this.setSelection([next.id], next.id)
+        } else {
+          void this.expand(current.element)
+        }
+        return
+      case 'left':
+        if (!current) return
+        if (current.hasChildren && current.expanded) {
+          this.collapse(current.element)
+        } else {
+          const parent = this.getParentNode(current.id)
+          if (parent) this.setSelection([parent.id], parent.id)
+        }
+        return
+    }
+  }
+
   // --- reveal --------------------------------------------------------------
 
   /**

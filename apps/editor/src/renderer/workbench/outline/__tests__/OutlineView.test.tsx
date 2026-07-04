@@ -6,7 +6,7 @@
  *  already mounted with an empty (or absent) outline — without needing a remount.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import {
   InstantiationService,
@@ -47,6 +47,7 @@ import type { TimelineItem } from '../../../services/acp/acpSessionModel.js'
 import { ServicesContext } from '../../useService.js'
 import { OutlineView } from '../OutlineView.js'
 import { outlineViewState } from '../outlineViewState.js'
+import { OutlineNavigatorRegistry } from '../outlineNavigatorRegistry.js'
 
 function makeSymbol(
   name: string,
@@ -74,11 +75,12 @@ function setup(initial: OutlineModel | undefined) {
     'test.activeSymbol',
     undefined,
   )
+  const revealSymbol = vi.fn()
   const outlineService = {
     _serviceBrand: undefined,
     outline: outline as IObservable<OutlineModel | undefined>,
     activeSymbol,
-    revealSymbol: () => {},
+    revealSymbol,
     captureViewState: () => undefined,
     previewSymbol: () => {},
     restoreViewState: () => {},
@@ -86,7 +88,7 @@ function setup(initial: OutlineModel | undefined) {
   const services = new ServiceCollection()
   services.set(IOutlineService, outlineService as never)
   const instantiation = new InstantiationService(services)
-  return { outline, activeSymbol, instantiation }
+  return { outline, activeSymbol, revealSymbol, instantiation }
 }
 
 afterEach(() => cleanup())
@@ -320,6 +322,106 @@ describe('OutlineView', () => {
     })
     expect(rowLabels()).toEqual(['Beta', 'Gamma'])
     expect(screen.queryByText('Alpha')).toBeNull()
+  })
+})
+
+// Keyboard navigation parity with Explorer: Enter jumps to the symbol (does NOT
+// toggle non-leaf rows); expand/collapse is driven by Left/Right arrows. The
+// emacs Ctrl+P/N/B/F aliases are real commands (see outlineActions) routed
+// through OutlineNavigatorRegistry — exercised here via the registry the way the
+// global keybinding handler drives it in the running app.
+describe('OutlineView — keyboard navigation', () => {
+  function makeTree() {
+    const child = makeSymbol('Child', { line: 2 })
+    const parent = makeSymbol('Parent', { line: 1, children: [child] })
+    const tail = makeSymbol('Tail', { line: 4 })
+    const { revealSymbol, instantiation } = setup({
+      uri: 'file:///a.ts',
+      roots: [parent, tail],
+      languageId: 'typescript',
+      version: 1,
+    })
+    outlineViewState.setFollowCursor(false)
+    renderView(instantiation)
+    return { revealSymbol, parent, child, tail }
+  }
+
+  const treeEl = () => document.querySelector('[role="tree"]') as HTMLElement
+  const rowByLabel = (label: string): HTMLElement => {
+    const el = Array.from(document.querySelectorAll('[role="treeitem"]')).find(
+      (r) => r.lastElementChild?.textContent === label,
+    )
+    if (!el) throw new Error(`row not found: ${label}`)
+    return el as HTMLElement
+  }
+  const selectedLabels = () =>
+    Array.from(document.querySelectorAll('[role="treeitem"]'))
+      .filter((r) => r.getAttribute('aria-selected') === 'true')
+      .map((r) => r.lastElementChild?.textContent ?? '')
+
+  it('Enter on a non-leaf row jumps to the symbol instead of toggling', () => {
+    const { revealSymbol, parent } = makeTree()
+    // Parent is default-expanded, so Child is visible.
+    expect(screen.getByText('Child')).toBeTruthy()
+
+    const view = treeEl()
+    act(() => {
+      view.focus()
+      fireEvent.keyDown(view, { key: 'Enter' })
+    })
+
+    // The first focused row is Parent — Enter must reveal it, and NOT collapse it.
+    expect(revealSymbol).toHaveBeenCalledWith(parent)
+    expect(screen.getByText('Child')).toBeTruthy()
+    expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('ArrowRight/ArrowLeft expand and collapse the focused non-leaf row', () => {
+    makeTree()
+    const view = treeEl()
+    act(() => view.focus())
+    // Focus starts on Parent (first row).
+    expect(selectedLabels()).toEqual(['Parent'])
+
+    act(() => fireEvent.keyDown(view, { key: 'ArrowLeft' }))
+    expect(screen.queryByText('Child')).toBeNull()
+    expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('false')
+
+    act(() => fireEvent.keyDown(view, { key: 'ArrowRight' }))
+    expect(screen.getByText('Child')).toBeTruthy()
+    expect(rowByLabel('Parent').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('emacs Ctrl+N/P (via the navigator) move the selection down/up', () => {
+    makeTree()
+    const view = treeEl()
+    act(() => view.focus())
+    expect(selectedLabels()).toEqual(['Parent'])
+
+    const nav = () => OutlineNavigatorRegistry.current
+    act(() => nav()!.navigate('down')) // Ctrl+N
+    expect(selectedLabels()).toEqual(['Child'])
+    act(() => nav()!.navigate('down'))
+    expect(selectedLabels()).toEqual(['Tail'])
+    act(() => nav()!.navigate('up')) // Ctrl+P
+    expect(selectedLabels()).toEqual(['Child'])
+  })
+
+  it('emacs Ctrl+B/F (via the navigator) collapse/expand and traverse', () => {
+    makeTree()
+    const view = treeEl()
+    act(() => view.focus())
+    expect(selectedLabels()).toEqual(['Parent'])
+
+    const nav = () => OutlineNavigatorRegistry.current
+    act(() => nav()!.navigate('left')) // Ctrl+B → collapse Parent
+    expect(screen.queryByText('Child')).toBeNull()
+    act(() => nav()!.navigate('right')) // Ctrl+F → expand Parent
+    expect(screen.getByText('Child')).toBeTruthy()
+    act(() => nav()!.navigate('right')) // Ctrl+F → into first child
+    expect(selectedLabels()).toEqual(['Child'])
+    act(() => nav()!.navigate('left')) // Ctrl+B → back to parent
+    expect(selectedLabels()).toEqual(['Parent'])
   })
 })
 

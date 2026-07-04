@@ -137,4 +137,59 @@ describe('TreeModel', () => {
     expect(model.selection).toEqual(['a1b1'])
     expect(onReveal).toHaveBeenCalledWith({ id: 'a1b1' })
   })
+
+  describe('navigate', () => {
+    function tree(): TreeModel<N> {
+      const model = new TreeModel({
+        dataSource: eagerSource([{ id: 'a', children: [{ id: 'a1' }, { id: 'a2' }] }, { id: 'b' }]),
+        defaultExpanded: () => true,
+      })
+      // Materialise the default-expanded state.
+      expect(ids(model)).toEqual(['a', 'a1', 'a2', 'b'])
+      return model
+    }
+
+    it('down/up move the selection through visible rows', () => {
+      const model = tree()
+      model.setSelection(['a'], 'a')
+      model.navigate('down')
+      expect(model.selection).toEqual(['a1'])
+      model.navigate('down')
+      expect(model.selection).toEqual(['a2'])
+      model.navigate('up')
+      expect(model.selection).toEqual(['a1'])
+    })
+
+    it('right collapsed → expands; expanded → steps into first child', () => {
+      const model = tree()
+      model.collapse({ id: 'a' } as N)
+      model.setSelection(['a'], 'a')
+      model.navigate('right')
+      expect(model.isExpanded('a')).toBe(true)
+      model.navigate('right')
+      expect(model.selection).toEqual(['a1'])
+    })
+
+    it('left expanded → collapses; leaf/collapsed → steps to parent', () => {
+      const model = tree()
+      model.setSelection(['a2'], 'a2')
+      model.navigate('left')
+      expect(model.selection).toEqual(['a'])
+      model.navigate('left')
+      expect(model.isExpanded('a')).toBe(false)
+    })
+
+    it('down with extend grows the selection range', () => {
+      const model = tree()
+      model.setSelection(['a'], 'a')
+      model.navigate('down', true)
+      expect(model.selection).toEqual(['a', 'a1'])
+    })
+
+    it('is a no-op on an empty tree', () => {
+      const model = new TreeModel({ dataSource: eagerSource([]) })
+      model.navigate('down')
+      expect(model.selection).toEqual([])
+    })
+  })
 })

@@ -278,6 +278,12 @@ import {
   ChatFindCloseAction,
 } from './agentActions.js'
 import { agentContextActions } from './agentContextActions.js'
+import {
+  OutlineNavigateUpAction,
+  OutlineNavigateDownAction,
+  OutlineNavigateLeftAction,
+  OutlineNavigateRightAction,
+} from './outlineActions.js'
 
 // Layout
 registerAction2(ToggleActivityBarVisibilityAction)
@@ -584,3 +590,11 @@ registerAction2(ChatFindNextAction)
 registerAction2(ChatFindPreviousAction)
 registerAction2(ChatFindCloseAction)
 for (const action of agentContextActions) registerAction2(action)
+
+// Outline — emacs-style navigation (Ctrl+P/N/B/F). Registered last so the
+// newest-wins tie-break lets them beat the global Ctrl+P / Ctrl+N / Ctrl+B / …
+// bindings whenever `focusedView == 'workbench.view.outline.main'`.
+registerAction2(OutlineNavigateUpAction)
+registerAction2(OutlineNavigateDownAction)
+registerAction2(OutlineNavigateLeftAction)
+registerAction2(OutlineNavigateRightAction)

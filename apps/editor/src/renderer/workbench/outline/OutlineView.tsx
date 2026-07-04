@@ -37,6 +37,7 @@ import { type monaco } from '../editor/monaco/MonacoLoader.js'
 import { IOutlineService } from '../../services/languageFeatures/OutlineService.js'
 import { SymbolIcon } from '../symbols/symbolIcon.js'
 import { outlineViewState, type OutlineSortOrder } from './outlineViewState.js'
+import { OutlineNavigatorRegistry } from './outlineNavigatorRegistry.js'
 import styles from './OutlineView.module.css'
 
 interface OutlineNode {
@@ -108,6 +109,18 @@ function collectExpandableIds(nodes: readonly OutlineNode[], acc: string[] = [])
   return acc
 }
 
+/** Flatten the tree into an id → node map (for the parent-link lookup). */
+function indexById(
+  nodes: readonly OutlineNode[],
+  acc: Map<string, OutlineNode> = new Map(),
+): Map<string, OutlineNode> {
+  for (const n of nodes) {
+    acc.set(n.id, n)
+    indexById(n.children, acc)
+  }
+  return acc
+}
+
 /** Prune the tree to nodes that match `q` or have a matching descendant. */
 function pruneTree(nodes: readonly OutlineNode[], q: string): OutlineNode[] {
   const out: OutlineNode[] = []
@@ -150,6 +163,7 @@ export function OutlineView() {
   const containerRef = useRef<HTMLDivElement>(null)
   const findInputRef = useRef<HTMLInputElement>(null)
   const rootsRef = useRef<OutlineNode[]>([])
+  const nodeByIdRef = useRef<Map<string, OutlineNode>>(new Map())
   const idBySymbolRef = useRef<Map<monaco.languages.DocumentSymbol, string>>(new Map())
   const activeIdRef = useRef<string | undefined>(undefined)
 
@@ -159,6 +173,13 @@ export function OutlineView() {
       hasChildren: (n) => n.children.length > 0,
       getChildren: (n) => n.children,
       getRoots: () => rootsRef.current,
+      // Node ids encode the path ("0/1/2"); the parent id drops the last segment.
+      // Enables ArrowLeft "go to parent" from a leaf, matching the Explorer tree.
+      getParent: (n) => {
+        const slash = n.id.lastIndexOf('/')
+        if (slash < 0) return null
+        return nodeByIdRef.current.get(n.id.slice(0, slash)) ?? null
+      },
     }
     return new TreeModel<OutlineNode>({ dataSource, defaultExpanded: () => true })
   })
@@ -167,6 +188,15 @@ export function OutlineView() {
     'workbench.view.outline.main',
     useCallback(() => containerRef.current, []),
   )
+
+  // Expose the tree's arrow-navigation to the emacs Ctrl+P/N/B/F commands, which
+  // the global keybinding handler claims before the keys can reach the tree.
+  useEffect(() => {
+    const d = OutlineNavigatorRegistry.register({
+      navigate: (direction) => model.navigate(direction),
+    })
+    return () => d.dispose()
+  }, [model])
 
   // Build the display tree: sort, then (when filtering) prune to matches +
   // ancestors or collect the matches to highlight in place.
@@ -204,6 +234,7 @@ export function OutlineView() {
   // Apply the freshly built tree to the model, then force any required expansion.
   useEffect(() => {
     rootsRef.current = display.roots
+    nodeByIdRef.current = indexById(display.roots)
     idBySymbolRef.current = display.idBySymbol
     model.refresh()
     if (display.expandToIds.length > 0) {
@@ -386,6 +417,7 @@ export function OutlineView() {
           }}
           onActivate={(node) => outlineService.revealSymbol(node.element.symbol)}
           onFocus={onTreeFocus}
+          activateNonLeafOnEnter
         />
       ) : (
         <div className={styles['empty']}>

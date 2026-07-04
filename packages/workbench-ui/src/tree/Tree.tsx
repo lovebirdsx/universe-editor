@@ -69,6 +69,13 @@ export interface ITreeProps<T> {
   readonly rootRef?: Ref<HTMLDivElement>
   /** Activate a leaf (Enter / Space / plain click on a node without children). */
   readonly onActivate?: (node: IVisibleNode<T>, opts: ITreeActivateOptions) => void
+  /**
+   * Treat every row as activatable on Enter — including non-leaf rows, which
+   * would otherwise toggle. Expand/collapse then lives entirely on Left/Right.
+   * Used by Outline, where each symbol is a jump target (Explorer keeps the
+   * default: Enter toggles a folder). Space still previews leaves either way.
+   */
+  readonly activateNonLeafOnEnter?: boolean
   /** Keys not handled by built-in navigation (e.g. F2 / Delete) reach the view here. */
   readonly onRowKeyDown?: (e: ReactKeyboardEvent, node: IVisibleNode<T>) => void
   /** Shift+Tab inside the tree — lets the view hand focus back to a prior region. */
@@ -96,6 +103,7 @@ export function Tree<T>(props: ITreeProps<T>) {
     onShiftTab,
     onContextMenu,
     onFocus,
+    activateNonLeafOnEnter = false,
   } = props
 
   const { selectionVersion, visibleNodes } = useTreeModel(model)
@@ -191,11 +199,11 @@ export function Tree<T>(props: ITreeProps<T>) {
       switch (e.key) {
         case 'ArrowDown':
           handled()
-          moveTo(currentIndex < 0 ? 0 : currentIndex + 1)
+          model.navigate('down', e.shiftKey)
           return
         case 'ArrowUp':
           handled()
-          moveTo(currentIndex < 0 ? 0 : currentIndex - 1)
+          model.navigate('up', e.shiftKey)
           return
         case 'Home':
           handled()
@@ -216,29 +224,17 @@ export function Tree<T>(props: ITreeProps<T>) {
         case 'ArrowRight':
           if (!current) return
           handled()
-          if (current.hasChildren) {
-            if (current.expanded) {
-              const next = vis[currentIndex + 1]
-              if (next) model.setSelection([next.id], next.id)
-            } else {
-              void model.expand(current.element)
-            }
-          }
+          model.navigate('right')
           return
         case 'ArrowLeft':
           if (!current) return
           handled()
-          if (current.hasChildren && current.expanded) {
-            model.collapse(current.element)
-          } else {
-            const parent = model.getParentNode(current.id)
-            if (parent) model.setSelection([parent.id], parent.id)
-          }
+          model.navigate('left')
           return
         case 'Enter':
           if (!current) return
           handled()
-          if (current.hasChildren) void model.toggle(current.element)
+          if (current.hasChildren && !activateNonLeafOnEnter) void model.toggle(current.element)
           else onActivate?.(current, { preview: false })
           return
         case ' ':
@@ -252,7 +248,7 @@ export function Tree<T>(props: ITreeProps<T>) {
           return
       }
     },
-    [model, onActivate, onRowKeyDown, onShiftTab],
+    [model, onActivate, onRowKeyDown, onShiftTab, activateNonLeafOnEnter],
   )
 
   const renderNode = (node: IVisibleNode<T>, style?: CSSProperties): ReactNode =>
