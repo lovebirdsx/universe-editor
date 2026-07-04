@@ -281,6 +281,112 @@ function scrollEl(container: HTMLElement): HTMLElement {
   return container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!.parentElement!
 }
 
+// Drives the content-growth ResizeObserver: happy-dom's built-in RO never emits,
+// so a test captures each live observer's callback + observed node and fires it
+// on demand. Restored after each case.
+class FakeResizeObserver {
+  static instances: Array<{ cb: () => void; nodes: Element[] }> = []
+  private readonly rec: { cb: () => void; nodes: Element[] }
+  constructor(cb: () => void) {
+    this.rec = { cb, nodes: [] }
+    FakeResizeObserver.instances.push(this.rec)
+  }
+  observe(node: Element): void {
+    this.rec.nodes.push(node)
+  }
+  unobserve(): void {}
+  disconnect(): void {
+    const i = FakeResizeObserver.instances.indexOf(this.rec)
+    if (i !== -1) FakeResizeObserver.instances.splice(i, 1)
+  }
+}
+
+function stubRectHeight(el: Element, height: number): void {
+  ;(el as HTMLElement).getBoundingClientRect = (() =>
+    ({
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: height,
+      width: 0,
+      height,
+      x: 0,
+      y: 0,
+      toJSON() {},
+    }) as DOMRect) as never
+}
+
+describe('ChatBody — re-pin on async content growth', () => {
+  const RealRO = globalThis.ResizeObserver
+
+  afterEach(() => {
+    globalThis.ResizeObserver = RealRO
+    FakeResizeObserver.instances = []
+  })
+
+  // Regression for "Edit card only shows half": a card can grow AFTER its
+  // timeline mutation — an inline diff streams in, an image decodes, Monaco
+  // colorizes — leaving the model (and tailContentSignature) unchanged. Without a
+  // content-size observer the view would not re-pin and the tail would sit half
+  // below the fold until the next slot bumps timeline.length. Growing the content
+  // element's box while stuck must pull the container back to the bottom.
+  it('scrolls back to the bottom when the content box grows while pinned', () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    ]
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    const content = container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!
+
+    // Fresh session with no saved state → stuck (bottom-pinned) by default.
+    Object.defineProperty(scroll, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 0
+
+    // Content grows (e.g. an edit card's inline diff streamed in) with no timeline
+    // mutation. Fire the content observer that observed the timeline element.
+    stubRectHeight(content, 5000)
+    act(() => {
+      for (const o of FakeResizeObserver.instances) {
+        if (o.nodes.includes(content)) o.cb()
+      }
+    })
+
+    // scrollToBottomStable pins synchronously on its first frame.
+    expect(scroll.scrollTop).toBe(2000)
+  })
+
+  it('does not scroll when the content box grows while the user has scrolled up', () => {
+    globalThis.ResizeObserver = FakeResizeObserver as unknown as typeof ResizeObserver
+    const items: readonly TimelineItem[] = [
+      { kind: 'message', id: 'a', message: makeMessage('a', 'first') },
+    ]
+    const { container } = renderChat(makeSession('s1', items))
+    const scroll = scrollEl(container)
+    const content = container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')!
+
+    // User scrolls up → not stuck.
+    Object.defineProperty(scroll, 'scrollHeight', { value: 2000, configurable: true })
+    Object.defineProperty(scroll, 'clientHeight', { value: 300, configurable: true })
+    scroll.scrollTop = 200
+    act(() => {
+      fireEvent.scroll(scroll)
+    })
+    expect(AcpChatViewStateCache.load('s1')?.stuck).toBe(false)
+
+    stubRectHeight(content, 5000)
+    act(() => {
+      for (const o of FakeResizeObserver.instances) {
+        if (o.nodes.includes(content)) o.cb()
+      }
+    })
+
+    // Position held — growth must not yank a user who scrolled away.
+    expect(scroll.scrollTop).toBe(200)
+  })
+})
+
 describe('ChatBody — timeline keyboard handle', () => {
   const items: readonly TimelineItem[] = [
     { kind: 'message', id: 'a', message: makeMessage('a', 'first') },

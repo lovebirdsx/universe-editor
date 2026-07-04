@@ -779,6 +779,34 @@ function ChatScroll({
     return () => observer.disconnect()
   }, [scrollToBottomStable])
 
+  // Re-pin when the scroll CONTENT grows asynchronously without a corresponding
+  // timeline mutation — the tailContentSignature effect above only catches growth
+  // it can predict from the model (text/diff length), but a card can grow after
+  // the fact when its body settles: an image / resource decodes, Monaco colorizes,
+  // an inline diff streams in, a sub-agent card expands. Those leave the model —
+  // and the signature — unchanged, so the last card would sit half below the fold
+  // until the next slot bumps timeline.length. Observing the content element's box
+  // catches all of them regardless of which field grew (the class of bug the Edit
+  // card's diff first surfaced). Re-bound when the content element is replaced
+  // (virtualization toggle) or first appears.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container) return
+    const content = container.querySelector<HTMLElement>('[data-testid="acp-timeline"]')
+    if (!content) return
+    let prevHeight = content.getBoundingClientRect().height
+    const observer = new ResizeObserver(() => {
+      const h = content.getBoundingClientRect().height
+      // Only chase growth, and only while pinned — a shrink or an out-of-view
+      // change must not yank a user who has scrolled up. restoringRef guards the
+      // restore window, which drives scrollTop by hand.
+      if (h > prevHeight && stickRef.current && !restoringRef.current) scrollToBottomStable()
+      prevHeight = h
+    })
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [virtualize, hasTimelineContent, scrollToBottomStable])
+
   // Stable across renders (reads refs only) so passing it to the memoized
   // TimelineSlot does not bust memo. Toggles the per-item collapse override.
   const handleToggleCollapse = useCallback((key: string) => {
@@ -1382,7 +1410,7 @@ function estimateRow(item: TimelineItem | undefined, collapsed: boolean): number
   }
 }
 
-function tailContentSignature(timeline: readonly TimelineItem[]): number {
+export function tailContentSignature(timeline: readonly TimelineItem[]): number {
   const last = timeline[timeline.length - 1]
   if (!last) return 0
   switch (last.kind) {
@@ -1392,6 +1420,12 @@ function tailContentSignature(timeline: readonly TimelineItem[]): number {
       return (
         last.call.text.length +
         last.call.status.length +
+        // Diffs carry the edit card's bulk (the InlineDiffPreview body) and are
+        // deliberately NOT part of call.text — so an edit whose diff streams in
+        // via a tool_call_update that leaves text/status unchanged would keep the
+        // same signature, and the bottom-pin effect would not re-fire, leaving the
+        // freshly-grown diff below the fold ("only half the Edit card shows").
+        last.call.diffs.reduce((n, d) => n + d.oldText.length + d.newText.length, 0) +
         (last.call.children?.reduce(
           (n, c) => n + (c.kind === 'message' ? c.message.text.length : c.call.text.length),
           0,
