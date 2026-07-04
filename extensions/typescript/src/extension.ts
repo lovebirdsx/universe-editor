@@ -10,6 +10,7 @@
 import {
   languages,
   workspace,
+  FileType,
   type CompletionContext,
   type ExtensionContext,
   type SignatureHelpContext,
@@ -20,6 +21,23 @@ import { URI } from 'vscode-uri'
 import { LspClient } from './lspClient.js'
 
 const TS_JS_LANGUAGES = ['typescript', 'javascript', 'typescriptreact', 'javascriptreact']
+
+/** File extension → LSP languageId for the seed document that pins the project. */
+const LANGUAGE_BY_EXT: Record<string, string> = {
+  '.ts': 'typescript',
+  '.cts': 'typescript',
+  '.mts': 'typescript',
+  '.tsx': 'typescriptreact',
+  '.js': 'javascript',
+  '.cjs': 'javascript',
+  '.mjs': 'javascript',
+  '.jsx': 'javascriptreact',
+}
+
+/** Directories never worth descending into when hunting for a seed file. */
+const PREWARM_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next'])
+/** Bound the seed-file search so a huge tree can't stall prewarm. */
+const PREWARM_MAX_DIRS = 200
 
 /** tsserver completion trigger characters (mirrors the core TS provider). */
 const COMPLETION_TRIGGER_CHARACTERS = ['.', '"', "'", '`', '/', '@', '<', '#', ' ']
@@ -64,6 +82,69 @@ export function activate(context: ExtensionContext): void {
 
   registerProviders(context, client)
   registerDocumentSync(context, client)
+
+  // Prewarm: spawn tsserver now (every provider needs it) and pin a seed file
+  // open so the workspace project actually loads — without an open TS/JS file
+  // tsserver has no project and workspace/symbol throws "No Project". This makes
+  // symbols searchable before the user opens any editor.
+  void prewarm(client)
+}
+
+/**
+ * Eager-start tsserver and, if the workspace has a TS/JS file, pin it open to
+ * force the project to load. Best-effort: any failure leaves the plugin working
+ * lazily (first real request still spawns the server).
+ */
+async function prewarm(client: LspClient): Promise<void> {
+  await client.ensureReady()
+  const root = workspace.rootPath
+  if (!root) return
+  const seed = await findSeedFile(root)
+  if (!seed) return
+  try {
+    const bytes = await workspace.fs.readFile(seed.path)
+    const text = new TextDecoder().decode(bytes)
+    await client.pinProject(URI.file(seed.path).toString(), seed.languageId, text)
+  } catch (err) {
+    console.error(`[typescript] prewarm pin failed: ${(err as Error).message}`)
+  }
+}
+
+/** Breadth-first hunt for the first TS/JS file under `root`, skipping heavy dirs
+ *  and bounded by PREWARM_MAX_DIRS so a large tree can't stall startup. */
+async function findSeedFile(
+  root: string,
+): Promise<{ path: string; languageId: string } | undefined> {
+  const queue: string[] = [root]
+  let visited = 0
+  while (queue.length > 0 && visited < PREWARM_MAX_DIRS) {
+    const dir = queue.shift() as string
+    visited++
+    let entries: [string, FileType][]
+    try {
+      entries = await workspace.fs.readDirectory(dir)
+    } catch {
+      continue
+    }
+    const subdirs: string[] = []
+    for (const [name, type] of entries) {
+      const full = `${dir}/${name}`
+      if (type === FileType.File) {
+        const languageId = LANGUAGE_BY_EXT[extname(name)]
+        if (languageId) return { path: full, languageId }
+      } else if (type === FileType.Directory && !PREWARM_SKIP_DIRS.has(name)) {
+        subdirs.push(full)
+      }
+    }
+    queue.push(...subdirs)
+  }
+  return undefined
+}
+
+/** Lowercased extension incl. the dot, or '' when none. */
+function extname(name: string): string {
+  const dot = name.lastIndexOf('.')
+  return dot > 0 ? name.slice(dot).toLowerCase() : ''
 }
 
 function registerProviders(context: ExtensionContext, client: LspClient): void {

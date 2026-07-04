@@ -117,6 +117,9 @@ export class LspClient {
   private readonly _restartTimestamps: number[] = []
   /** Open documents we've forwarded, replayed on crash restart. */
   private readonly _open = new Map<string, OpenDoc>()
+  /** Seed document pinned open to keep the workspace project loaded (prewarm).
+   *  A user `didClose` of this uri is ignored so the project stays resident. */
+  private _pinnedUri: string | undefined
 
   private readonly _onDiagnostics: (e: PublishDiagnosticsEvent) => void
 
@@ -127,6 +130,30 @@ export class LspClient {
     onDiagnostics: (e: PublishDiagnosticsEvent) => void,
   ) {
     this._onDiagnostics = onDiagnostics
+  }
+
+  // --- prewarm -------------------------------------------------------------
+
+  /** Spawn tsserver and complete the `initialize` handshake ahead of the first
+   *  language request. Idempotent (shares `_ready`), so a later real request
+   *  reuses the already-warm connection instead of paying the cold start. */
+  async ensureReady(): Promise<void> {
+    await this._ready()
+  }
+
+  /**
+   * Pin a seed document open to force tsserver to load the workspace project.
+   * tsserver creates projects lazily — until at least one TS/JS file is open it
+   * throws "No Project" for navto (workspace/symbol), so prewarming the process
+   * alone isn't enough to make workspace symbols available before the user opens
+   * a file. The pinned document stays open for the client's lifetime (a user
+   * `didClose` of the same uri is ignored, see `didClose`) and is replayed on
+   * crash restart via `_open`, keeping the project resident. Idempotent.
+   */
+  async pinProject(uri: string, languageId: string, text: string): Promise<void> {
+    if (this._pinnedUri) return
+    this._pinnedUri = uri
+    await this.didOpen(uri, languageId, 1, text)
   }
 
   // --- document sync -------------------------------------------------------
@@ -153,6 +180,9 @@ export class LspClient {
   }
 
   async didClose(uri: string): Promise<void> {
+    // Keep the prewarm pin open: closing it would unload the project (tsserver
+    // drops a project the moment its last file closes), undoing the prewarm.
+    if (uri === this._pinnedUri) return
     this._open.delete(uri)
     const conn = await this._ready()
     this._notify(conn, 'textDocument/didClose', { textDocument: { uri } })
@@ -239,9 +269,14 @@ export class LspClient {
     try {
       return await conn.sendRequest('workspace/symbol', { query })
     } catch (err) {
-      // tsserver throws "No Project" for navto until a TS/JS file has been opened
-      // (projects are created lazily). Degrade to no results instead of surfacing.
-      console.error(`[typescript] workspace/symbol failed: ${(err as Error).message}`)
+      const message = (err as Error).message
+      // "No Project" is expected, not a failure: tsserver creates projects
+      // lazily, so navto has nothing to search until a TS/JS file has been
+      // opened (or a tsconfig/jsconfig exists). Degrade silently to no results;
+      // only surface genuinely unexpected failures.
+      if (!/No Project/i.test(message)) {
+        console.error(`[typescript] workspace/symbol failed: ${message}`)
+      }
       return null
     }
   }
