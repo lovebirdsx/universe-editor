@@ -88,13 +88,7 @@ import {
   type MentionFileEntry,
 } from '../../services/acp/mentionFileSearch.js'
 import { MentionPopover } from './MentionPopover.js'
-import {
-  ContextPopover,
-  buildContextPopoverRows,
-  type ContextPopoverEntry,
-  type ContextPopoverGroup,
-  type ContextPopoverRow,
-} from './ContextPopover.js'
+import { ContextPopover, type ContextPopoverEntry } from './ContextPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
 import { PromptImageChips } from './PromptImageChips.js'
 import {
@@ -126,7 +120,7 @@ interface PopoverHandleState {
   historyOpen: boolean
   slashMatches: readonly AvailableCommand[]
   mentionMatches: readonly MentionFileEntry[]
-  hashMatches: readonly ContextPopoverRow[]
+  hashMatches: readonly ContextPopoverEntry[]
   slashIndex: number
   mentionIndex: number
   hashIndex: number
@@ -302,7 +296,7 @@ export function PromptInput({
       }
       if (s.hashOpen && s.hashQuery !== null && s.hashMatches.length > 0) {
         const target = s.hashMatches[s.hashIndex] ?? s.hashMatches[0]
-        if (target) s.acceptContextRef(target.entry, s.hashQuery)
+        if (target) s.acceptContextRef(target, s.hashQuery)
       } else if (s.mentionOpen && s.mentionQuery !== null && s.mentionMatches.length > 0) {
         const target = s.mentionMatches[s.mentionIndex] ?? s.mentionMatches[0]
         if (target) s.acceptMention(target, s.mentionQuery)
@@ -618,42 +612,27 @@ export function PromptInput({
     return all.filter((ctx) => formatSelectionLabel(ctx).toLowerCase().includes(q))
   }, [hashQuery, editorService, workspace])
 
-  // Selection and open-editor entries share one group (plan §5.2) — both
-  // answer "what am I looking at right now".
-  const hashGroups = useMemo<readonly ContextPopoverGroup[]>(() => {
-    const groups: ContextPopoverGroup[] = []
-    if (hashSuggestions.symbol.length > 0) {
-      groups.push({
-        label: localize('acp.contextRef.group.symbol', 'Workspace Symbols'),
-        entries: hashSuggestions.symbol.map((item) => ({ kind: 'suggestion', item }) as const),
-      })
-    }
-    if (hashSuggestions.scmChange.length > 0) {
-      groups.push({
-        label: localize('acp.contextRef.group.change', 'Local Changes'),
-        entries: hashSuggestions.scmChange.map((item) => ({ kind: 'suggestion', item }) as const),
-      })
-    }
-    const selectionAndEditorEntries: ContextPopoverEntry[] = [
-      ...hashSelectionEntries.map((selection) => ({ kind: 'selection', selection }) as const),
-      ...hashSuggestions.openEditor.map((item) => ({ kind: 'suggestion', item }) as const),
+  // One flat suggestion list (no group headers). Each context source is a group;
+  // groups are ordered by how many items they contribute, fewest first — so a
+  // narrow, high-signal source (e.g. the single "docs" entry) surfaces at the
+  // top and a large source (e.g. workspace symbols) sinks to the bottom. Ties
+  // keep the source-priority order below (stable sort). Selection and open-editor
+  // entries share one group — both answer "what am I looking at right now".
+  const hashEntries = useMemo<readonly ContextPopoverEntry[]>(() => {
+    const groups: readonly ContextPopoverEntry[][] = [
+      hashSuggestions.symbol.map((item) => ({ kind: 'suggestion', item }) as const),
+      hashSuggestions.scmChange.map((item) => ({ kind: 'suggestion', item }) as const),
+      [
+        ...hashSelectionEntries.map((selection) => ({ kind: 'selection', selection }) as const),
+        ...hashSuggestions.openEditor.map((item) => ({ kind: 'suggestion', item }) as const),
+      ],
+      hashSuggestions.docs.map((item) => ({ kind: 'suggestion', item }) as const),
     ]
-    if (selectionAndEditorEntries.length > 0) {
-      groups.push({
-        label: localize('acp.contextRef.group.editor', 'Selection / Open Editors'),
-        entries: selectionAndEditorEntries,
-      })
-    }
-    if (hashSuggestions.docs.length > 0) {
-      groups.push({
-        label: localize('acp.contextRef.group.docs', 'Documentation'),
-        entries: hashSuggestions.docs.map((item) => ({ kind: 'suggestion', item }) as const),
-      })
-    }
     return groups
+      .filter((g) => g.length > 0)
+      .sort((a, b) => a.length - b.length)
+      .flat()
   }, [hashSuggestions, hashSelectionEntries])
-
-  const hashRows = useMemo(() => buildContextPopoverRows(hashGroups), [hashGroups])
 
   // Report popover open/closed up to the widget service, which flips
   // `acpPromptPopupVisible` for the focused widget. The suggestion commands
@@ -801,7 +780,7 @@ export function PromptInput({
     historyOpen,
     slashMatches,
     mentionMatches,
-    hashMatches: hashRows,
+    hashMatches: hashEntries,
     slashIndex,
     mentionIndex,
     hashIndex,
@@ -1049,8 +1028,8 @@ export function PromptInput({
           />
         ) : hashOpen && hashQuery !== null ? (
           <ContextPopover
-            rows={hashRows}
-            activeIndex={Math.min(hashIndex, Math.max(hashRows.length - 1, 0))}
+            entries={hashEntries}
+            activeIndex={Math.min(hashIndex, Math.max(hashEntries.length - 1, 0))}
             loading={hashLoading}
             onSelect={(entry) => acceptContextRef(entry, hashQuery)}
             onHover={setHashIndex}

@@ -12,6 +12,7 @@ import type { ISourceControlResourceStateDto } from '@universe-editor/extensions
 import { URI } from '@universe-editor/platform'
 import { describe, expect, it, vi } from 'vitest'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { resourceIconId } from '../../quickInput/quickPickResourceIcon.js'
 import type { WorkspaceSymbolEntry } from '../../languageFeatures/typescript/lspMonacoConvert.js'
 
 vi.mock('../../../workbench/editor/monaco/MonacoLoader.js', () => ({
@@ -39,6 +40,16 @@ function entry(name: string, uri: string, line = 1): WorkspaceSymbolEntry {
     containerName: '',
     uri: uri as unknown as WorkspaceSymbolEntry['uri'],
     range: { startLineNumber: line, startColumn: 1, endLineNumber: line, endColumn: 1 },
+  }
+}
+
+function entryOfKind(name: string, uri: string, kind: number): WorkspaceSymbolEntry {
+  return {
+    name,
+    kind,
+    containerName: '',
+    uri: uri as unknown as WorkspaceSymbolEntry['uri'],
+    range: { startLineNumber: 1, startColumn: 1, endLineNumber: 1, endColumn: 1 },
   }
 }
 
@@ -96,6 +107,30 @@ describe('WorkspaceSymbolContextProvider', () => {
     const provider = makeProvider(async () => [entry('foo', 'file:///workspace/f.ts')])
     const items = await provider.query('zzz')
     expect(items).toEqual([])
+  })
+
+  it('drops fine-grained symbol kinds (variables/constants/fields/properties), keeping navigable ones', async () => {
+    const provider = makeProvider(async () => [
+      entryOfKind('MyClass', 'file:///workspace/a.ts', 4), // Class → kept
+      entryOfKind('myFn', 'file:///workspace/a.ts', 11), // Function → kept
+      entryOfKind('localVar', 'file:///workspace/a.ts', 12), // Variable → dropped
+      entryOfKind('MY_CONST', 'file:///workspace/a.ts', 13), // Constant → dropped
+      entryOfKind('field', 'file:///workspace/a.ts', 7), // Field → dropped
+      entryOfKind('prop', 'file:///workspace/a.ts', 6), // Property → dropped
+    ])
+    const items = await provider.query('')
+    expect(items.map((i) => i.label)).toEqual(['MyClass', 'myFn'])
+  })
+
+  it('keeps short markdown headings but ignores overly long ones', async () => {
+    const longHeading = 'x'.repeat(61)
+    const provider = makeProvider(async () => [
+      entryOfKind('Getting Started', 'file:///workspace/guide.md', 14), // md heading → kept
+      entryOfKind(longHeading, 'file:///workspace/guide.md', 14), // too long → dropped
+      entryOfKind('someString', 'file:///workspace/a.ts', 14), // String in non-md → dropped
+    ])
+    const items = await provider.query('')
+    expect(items.map((i) => i.label)).toEqual(['Getting Started'])
   })
 
   it('serves the cached empty-query result instantly, then revalidates in the background', async () => {
@@ -170,7 +205,7 @@ describe('ScmChangeContextProvider', () => {
         label: 'src/a.ts',
         uri: URI.file('/workspace/src/a.ts').toString(),
         description: 'M',
-        iconId: 'scm-status-M',
+        iconId: resourceIconId(URI.file('/workspace/src/a.ts')),
         meta: { scmStatus: 'M' },
       },
     ])

@@ -897,6 +897,22 @@ describe('PromptInput — # context popover', () => {
     })
   })
 
+  it('orders sources by item count, fewest first (docs above local changes)', async () => {
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      // 2 local-change rows vs the single docs row — the smaller "docs" group
+      // must sort ahead of the larger "local changes" group.
+      scm: makeScmService(['/repo/src/a.ts', '/repo/src/b.ts']),
+      docs: makeDocsService('/repo/docs'),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    const options = screen.getAllByRole('option')
+    expect(options).toHaveLength(3)
+    expect(options[0]?.textContent).toContain('Editor User Guide')
+  })
+
   it('popoverHide dismisses the # popover without clearing the text', async () => {
     const handleRef = makeHandleRef()
     renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />, {

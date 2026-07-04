@@ -45,6 +45,32 @@ export interface ContextSuggestionItem {
 
 const MAX_RESULTS = 50
 
+// Only surface symbols worth navigating to — the container-level declarations a
+// user references with `#`. Local variables/constants/fields/properties/enum
+// members and other fine-grained kinds are dropped as noise, matching VSCode
+// Copilot's `#` symbol picker. Values are Monaco 0-based SymbolKind (see
+// symbolIcon.ts): Module/Namespace/Package/Class/Method/Constructor/Enum/
+// Interface/Function/Struct/Event.
+const NAVIGABLE_SYMBOL_KINDS = new Set<number>([1, 2, 3, 4, 5, 8, 9, 10, 11, 22, 23])
+// Markdown headings ride in as SymbolKind.String (14) with a markdown uri.
+const STRING_SYMBOL_KIND = 14
+// Headings longer than this are skipped — a long prose heading is a poor pill
+// and clutters the list (VSCode omits them too).
+const MAX_MARKDOWN_HEADING_LENGTH = 60
+
+function isMarkdownUri(uri: URI): boolean {
+  return uri.path.endsWith('.md')
+}
+
+/** Whether a workspace symbol is worth offering as a `#` reference. */
+function isNavigableSymbol(entry: WorkspaceSymbolEntry): boolean {
+  const uri = URI.parse(entry.uri.toString())
+  if (entry.kind === STRING_SYMBOL_KIND && isMarkdownUri(uri)) {
+    return entry.name.length <= MAX_MARKDOWN_HEADING_LENGTH
+  }
+  return NAVIGABLE_SYMBOL_KINDS.has(entry.kind)
+}
+
 function relativePath(root: URI | undefined, uri: URI, uriIdentity: IUriIdentityService): string {
   if (!root) return uri.fsPath
   return uriIdentity.relativePathUnder(root.fsPath, uri.fsPath) ?? uri.fsPath
@@ -127,13 +153,14 @@ export class WorkspaceSymbolContextProvider {
     query: string,
     root: URI | undefined,
   ): readonly ContextSuggestionItem[] {
+    const navigable = entries.filter(isNavigableSymbol)
     if (!query) {
-      const sorted = [...entries].sort(
+      const sorted = [...navigable].sort(
         (a, b) => a.name.localeCompare(b.name) || a.uri.toString().localeCompare(b.uri.toString()),
       )
       return sorted.slice(0, MAX_RESULTS).map((e) => toItem(e, root, this._uriIdentity))
     }
-    return entries
+    return navigable
       .map((entry) => {
         const res = fuzzyScore(entry.name, query)
         return res ? { entry, score: res.score } : undefined
@@ -157,7 +184,9 @@ function toScmItem(
     label: relativePath(root, uri, uriIdentity),
     uri: uri.toString(),
     description: letter,
-    iconId: `scm-status-${letter}`,
+    // File-type icon (matching VSCode Copilot's `#` picker); the status letter
+    // rides along in `description`/`meta` for the row's trailing column.
+    iconId: resourceIconId(uri),
     meta: { scmStatus: letter },
   }
 }

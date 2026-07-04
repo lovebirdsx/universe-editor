@@ -2189,29 +2189,39 @@
   text-overflow: ellipsis;
 }
 
-/* ContextPopover row wrapper — PopoverList's `.item` is `display:flex` on the
-   baseline axis, so a group header needs its own block-level column wrapper
-   to stack above the label/description row rather than lay out inline. */
-.contextItemBody {
-  display: flex;
-  flex-direction: column;
-  gap: var(--spacing-1);
-  flex: 1;
-  min-width: 0;
+/* ContextPopover row: `[icon] name … source`. PopoverList's `.item` is a
+   baseline flex row; the icon column overrides to center-align, the name takes
+   the free space and truncates, and the source is pushed to the right edge and
+   truncated independently — mirroring VSCode Copilot's `#` picker. */
+.contextIcon {
+  flex: 0 0 auto;
+  align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  color: var(--color-message-role-fg, #aaa);
 }
 
-.contextItemRow {
-  display: flex;
-  align-items: baseline;
-  gap: var(--spacing-4);
+.contextName {
+  flex: 0 1 auto;
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: var(--font-ui);
+  color: var(--color-foreground, #ddd);
 }
 
-.contextGroupLabel {
-  font-size: calc(var(--agent-font-size, 12px) * 0.714);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+.contextSource {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--color-message-role-fg, #888);
+  font-size: calc(var(--agent-font-size, 12px) * 0.857);
 }
 
 @keyframes acpSpin {
