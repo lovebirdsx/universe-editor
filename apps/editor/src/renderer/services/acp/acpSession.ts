@@ -793,6 +793,7 @@ export class AcpSession extends Disposable implements IAcpSession {
             blocks,
             diffs,
             text: terminalText ?? blocksToText(blocks),
+            ...(update.rawInput !== undefined ? { rawInput: update.rawInput } : {}),
             ...(mcpServer !== undefined ? { mcpServer } : {}),
           },
           effectiveParent,
@@ -814,6 +815,7 @@ export class AcpSession extends Disposable implements IAcpSession {
         const diffs = split?.diffs ?? existing?.diffs ?? []
         const mcpServer = readMcpServer(update) ?? existing?.mcpServer
         const terminalText = this._accumulateTerminalOutput(update.toolCallId, update)
+        const rawInput = update.rawInput !== undefined ? update.rawInput : existing?.rawInput
         const next: AcpToolCall = {
           id: update.toolCallId,
           title: update.title != null ? update.title : (existing?.title ?? update.toolCallId),
@@ -822,6 +824,7 @@ export class AcpSession extends Disposable implements IAcpSession {
           blocks,
           diffs,
           text: terminalText ?? blocksToText(blocks),
+          ...(rawInput !== undefined ? { rawInput } : {}),
           ...(mcpServer !== undefined ? { mcpServer } : {}),
         }
         this._upsertToolCall(next, effectiveParent)

@@ -517,6 +517,26 @@
 .toolCallTitle {
   flex: 1;
   font-weight: 600;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.toolCallCommand {
+  margin: 4px 0;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: var(--color-input-bg, rgba(127, 127, 127, 0.1));
+  overflow-x: auto;
+}
+
+.toolCallCommand code {
+  font-family: var(--font-family-mono, monospace);
+  font-size: 0.9em;
+  color: var(--color-message-role-fg, #888);
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .toolCallStatusIcon {

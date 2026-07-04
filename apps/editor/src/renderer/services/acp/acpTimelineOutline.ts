@@ -39,6 +39,7 @@ import type { monaco } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { blocksToText } from './acpSessionContent.js'
 import type { AcpChildItem, AcpMessageRole, TimelineItem } from './acpSessionModel.js'
 import { buildStickyKey, itemSlotKey } from '../../workbench/agents/stickyScroll.js'
+import { deriveToolCallDisplay } from '../../workbench/agents/toolCallDisplay.js'
 
 /** Language id published on the OutlineModel so symbolIcon can special-case agent-session rows. */
 export const ACP_OUTLINE_LANGUAGE_ID = 'acp.session'
@@ -98,7 +99,8 @@ function itemLabel(item: TimelineItem | AcpChildItem): string {
     const summary = summarize(item.message.text || blocksToText(item.message.blocks))
     return summary.length > 0 ? summary : item.message.role
   }
-  return item.call.title.length > 0 ? item.call.title : item.call.kind
+  const title = deriveToolCallDisplay(item.call).title
+  return title.length > 0 ? title : item.call.kind
 }
 
 function itemKind(item: TimelineItem | AcpChildItem): number {

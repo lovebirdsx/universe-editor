@@ -85,6 +85,27 @@ describe('ToolCallCard', () => {
     expect(out.textContent).toBe('ok')
   })
 
+  it('shows a Bash description as the title and moves the command into the body', () => {
+    renderCard(
+      makeCall({
+        kind: 'execute',
+        title: 'git status',
+        rawInput: { command: 'git status', description: '查看工作区状态' },
+      }),
+    )
+    // Title shows only the friendly description, not the raw command.
+    const title = screen.getByText('查看工作区状态')
+    expect(title.querySelector('code')).toBeNull()
+    // The raw command is demoted into the (expanded) card body.
+    expect(screen.getByText('git status')).toBeTruthy()
+  })
+
+  it('falls back to the command as title when execute has no description', () => {
+    renderCard(makeCall({ kind: 'execute', title: 'ls -la', rawInput: { command: 'ls -la' } }))
+    const title = screen.getByText('ls -la')
+    expect(title.querySelector('code')).toBeNull()
+  })
+
   it('renders non-read/execute bodies eagerly (no collapse)', () => {
     renderCard(makeCall({ kind: 'fetch', blocks: [{ type: 'text', text: 'visible' }] }))
     expect(screen.getByTestId('acp-markdown')).toBeTruthy()

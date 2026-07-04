@@ -100,6 +100,21 @@ describe('acpTimelineOutline', () => {
     expect(roots[0]!.name).toBe('execute')
   })
 
+  it('prefers a friendly execute description over the raw command as the label', () => {
+    const call: AcpToolCall = {
+      id: 't1',
+      title: 'git status',
+      kind: 'execute',
+      status: 'completed',
+      text: '',
+      blocks: [],
+      diffs: [],
+      rawInput: { command: 'git status', description: '查看工作区状态' },
+    }
+    const { roots } = timelineToOutline([{ kind: 'toolCall', id: 't1', call }])
+    expect(roots[0]!.name).toBe('查看工作区状态')
+  })
+
   it('nests sub-agent children under their parent tool call', () => {
     const { roots } = timelineToOutline([
       tool('t1', 'Task', 'other', [msg('c1', 'agent', 'sub work'), tool('c2', 'grep', 'search')]),

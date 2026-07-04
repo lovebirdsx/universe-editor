@@ -42,6 +42,13 @@ export interface AcpToolCall {
   readonly title: string
   readonly kind: string
   readonly status: AcpToolCallStatus
+  /**
+   * Raw tool input parameters as reported by the agent (`ToolCall.rawInput`).
+   * Kept so the UI can surface a friendly title (e.g. a Bash tool's
+   * `description`) and demote the raw command line to a secondary detail.
+   * `unknown` because the shape varies per tool; consumers narrow defensively.
+   */
+  readonly rawInput?: unknown
   /** Plain-text view of `blocks`. */
   readonly text: string
   /**

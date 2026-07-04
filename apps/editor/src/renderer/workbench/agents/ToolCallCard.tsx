@@ -24,6 +24,7 @@ import { InlineDiffPreview } from './InlineDiffPreview.js'
 import { MessageContent } from './MessageContent.js'
 import { TerminalOutput, ToolCallStatusIcon } from './ToolCallOutput.js'
 import { toolKindIcon } from './timelineIcons.js'
+import { deriveToolCallDisplay } from './toolCallDisplay.js'
 import { buildStickyKey } from './stickyScroll.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
 import styles from './agents.module.css'
@@ -96,6 +97,7 @@ export const ToolCallCard = memo(function ToolCallCard({
 
   const hasDiffs = call.diffs.length > 0
   const isExecute = call.kind === 'execute'
+  const display = deriveToolCallDisplay(call)
 
   const diffs = hasDiffs && (
     <div className={styles['toolCallDiffs']}>
@@ -111,9 +113,16 @@ export const ToolCallCard = memo(function ToolCallCard({
     </div>
   )
 
+  const commandDetail = display.subtitle !== undefined && (
+    <div className={styles['toolCallCommand']}>
+      <code>{display.subtitle}</code>
+    </div>
+  )
+
   const body = isExecute ? (
     <>
       {diffs}
+      {commandDetail}
       {call.text.length > 0 && (
         <div className={styles['toolCallBody']}>
           <TerminalOutput text={call.text} />
@@ -123,6 +132,7 @@ export const ToolCallCard = memo(function ToolCallCard({
   ) : (
     <>
       {diffs}
+      {commandDetail}
       {call.blocks.length > 0 && (
         <div className={styles['toolCallBody']}>
           <MessageContent blocks={call.blocks} />
@@ -164,7 +174,7 @@ export const ToolCallCard = memo(function ToolCallCard({
 
   const titleNode = (
     <span className={styles['toolCallTitle']}>
-      {call.title}
+      {display.title}
       {call.mcpServer !== undefined && (
         <span className={styles['mcpBadge']} title={`MCP server: ${call.mcpServer}`}>
           MCP · {call.mcpServer}

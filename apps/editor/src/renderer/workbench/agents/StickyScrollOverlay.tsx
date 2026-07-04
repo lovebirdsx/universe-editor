@@ -15,6 +15,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import type { AcpChildItem, TimelineItem } from '../../services/acp/acpSession.js'
 import { ToolCallStatusIcon } from './ToolCallOutput.js'
 import { roleIcon, toolKindIcon } from './timelineIcons.js'
+import { deriveToolCallDisplay } from './toolCallDisplay.js'
 import {
   computeStickyStack,
   findByStickyKey,
@@ -209,7 +210,7 @@ function headerContent(item: TimelineItem | AcpChildItem): HeaderContent {
   }
   return {
     icon: toolKindIcon(item.call.kind),
-    text: item.call.title,
+    text: deriveToolCallDisplay(item.call).title,
     status: <ToolCallStatusIcon status={item.call.status} />,
     label: item.call.kind,
   }
