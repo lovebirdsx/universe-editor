@@ -4,6 +4,8 @@
 
 ## 功能实现进展
 
+- [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸(对标 VSCode Copilot);M0–M4 全完成全绿;坑=programmatic vs user 变更源(非受控 Monaco 每次 setValue 都 fire onChange,须计数器区分)/ArrowUp 用 getTopForPosition 判视觉首行/e2e 无 input 改探针 getAcpPromptText+drop 宿主 testid acp-prompt-drop-host
+- [# 结构化上下文引用](prompt-hash-context-references-feature.md) — ACP 输入框重构为**内嵌 Monaco + by-range 药丸**：@/# 统一成 decoration 追踪的引用，含空格 label 安全，提交读 range 列表不分词；旧 by-name 管线全删；模型 promptRef.ts + 追踪 promptRefTracker.ts + 句柄 PromptMonacoEditor.tsx（实施坑见 [[prompt-monaco-input-migration]]）
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — 四套散乱手写机制→IUriIdentityService 单一入口(DI 绑一次 platform)+base 内核纯函数+ResourceMap；修 authority-only file URI 键碰撞；main 侧走内核+normalizePlatform；MonacoModelKey/SCM 键/acpPathPolicy 为刻意保留的独立身份域
 - [编辑器身份隔离约定](editor-input-identity-isolation.md) — 同一文件多视图 EditorInput 必须覆写 id 隔离(虚拟 scheme 派 vs 仅覆写 id 派),否则被 openEditor/matches 去重成一个 tab；修 ImageEditorInput 漏此约定的 bug + 收紧基类 matches 只比 id + ClosedEditors/resolveTargetEditor/ReopenWith 纳入 typeId/editorId；追加:markdown 点开图片显乱码=两条打开路径绕过 IEditorResolverService 直建 FileEditorInput,改走 resolver(useMarkdownFileLink 无:line 时 + EditorOpenerContribution isImageResource 分支)
 - [AI 基础服务层实施进展](ai-service-foundation-progress.md) — 模型抽象/provider 注册/流式/取消/三层配置/safeStorage 密钥全部完成；platform 契约+main 实现+renderer 门面三层，加 vendor 套路 I，密钥红线

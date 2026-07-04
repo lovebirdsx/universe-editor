@@ -67,6 +67,10 @@ export class DocsMainService implements IDocsService {
     return docs
   }
 
+  async getDocsRoot(): Promise<string> {
+    return this._resolveRoot()
+  }
+
   private _readLocale(root: string, locale: SupportedLocale): Record<string, string> {
     const localeRoot = path.join(root, locale)
     const map: Record<string, string> = {}

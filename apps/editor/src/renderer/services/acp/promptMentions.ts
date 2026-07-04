@@ -1,31 +1,14 @@
 /*---------------------------------------------------------------------------------------------
  *  Copyright (c) Universe Editor Authors. All rights reserved.
- *  Pure helpers for the @-mention pipeline in the agent prompt input.
+ *  Pure helpers for detecting the active `@`-mention token in the agent prompt
+ *  input. `extractMentionQuery(text, caret)` reports the `@<query>` token under
+ *  the caret so the popover knows what to filter; `detectFilePickerTrigger`
+ *  spots the `@@`/`@#` file/folder picker shortcuts.
  *
- *  Two-stage flow:
- *    1) While the user types, `extractMentionQuery(text, caret)` reports the
- *       active `@<query>` token (if any) so the popover knows what to filter.
- *       Caret-aware: only fires when the cursor is inside the token.
- *    2) On submit, `composePromptBlocks(text, mentions)` walks the final text
- *       and turns any `@<name>` whose `<name>` matches a recorded mention into
- *       a `resource_link` ContentBlock. Unrecorded names stay as text — so
- *       the user can still type literal `@username` without it being treated
- *       as a file reference.
- *
- *  Range tracking is deliberately omitted: we identify mentions by name (the
- *  string the user picked) rather than by character ranges. If the user
- *  rewrites the mention text the link silently disappears, which matches
- *  intuition — and avoids the diff-bookkeeping rabbit hole.
+ *  Reference serialization no longer lives here: once picked, a mention becomes
+ *  a range-tracked pill (see promptRefTracker.ts) and is serialized on submit by
+ *  composePromptBlocksFromRefs (promptRef.ts) — never re-tokenized by name.
  *--------------------------------------------------------------------------------------------*/
-
-import type { ContentBlock } from '@agentclientprotocol/sdk'
-
-export interface PromptMention {
-  /** Absolute URI of the resource (typically `file:///...`). */
-  readonly uri: string
-  /** Display token, inserted verbatim after `@` into the text. */
-  readonly name: string
-}
 
 export interface ActiveMentionQuery {
   readonly query: string
@@ -90,67 +73,4 @@ export function detectFilePickerTrigger(text: string, caret: number): FilePicker
   if (second === '@') return { kind: 'file', start }
   if (second === '#') return { kind: 'folder', start }
   return null
-}
-
-/**
- * Replace the active `@<query>` token (range `[startIndex, endIndex)`) with
- * `@<name> ` (trailing space so the user can keep typing). Returns the new
- * text plus the new caret position. Pure — does not touch React state.
- */
-export function applyMentionPick(
-  text: string,
-  range: { readonly startIndex: number; readonly endIndex: number },
-  name: string,
-): { text: string; caret: number } {
-  const before = text.slice(0, range.startIndex)
-  const after = text.slice(range.endIndex)
-  // Insert a trailing space only if the next char isn't already whitespace.
-  const needsTrailingSpace = after.length === 0 || !/\s/.test(after[0]!)
-  const insert = `@${name}${needsTrailingSpace ? ' ' : ''}`
-  const newText = before + insert + after
-  return { text: newText, caret: before.length + insert.length }
-}
-
-/**
- * Tokenize `text` into ContentBlocks, expanding every `@<name>` whose
- * `<name>` matches a recorded mention into a `resource_link` block. Adjacent
- * text is merged. Pure / synchronous; does NOT contact the network.
- *
- * Boundary rules: the `@` must be at start-of-text or preceded by whitespace
- * (same as {@link extractMentionQuery}), and the token ends at the next
- * whitespace or end-of-text.
- */
-export function composePromptBlocks(
-  text: string,
-  mentions: readonly PromptMention[],
-): readonly ContentBlock[] {
-  if (text.length === 0) return []
-  if (mentions.length === 0) return [{ type: 'text', text }]
-  const byName = new Map<string, PromptMention>()
-  for (const m of mentions) byName.set(m.name, m)
-
-  const blocks: ContentBlock[] = []
-  let bufStart = 0
-  let i = 0
-  while (i < text.length) {
-    if (text[i] === '@') {
-      const okBoundary = i === 0 || /\s/.test(text[i - 1]!)
-      if (okBoundary) {
-        let end = i + 1
-        while (end < text.length && !/\s/.test(text[end]!)) end++
-        const name = text.slice(i + 1, end)
-        const mention = byName.get(name)
-        if (mention) {
-          if (i > bufStart) blocks.push({ type: 'text', text: text.slice(bufStart, i) })
-          blocks.push({ type: 'resource_link', uri: mention.uri, name: mention.name })
-          i = end
-          bufStart = end
-          continue
-        }
-      }
-    }
-    i++
-  }
-  if (bufStart < text.length) blocks.push({ type: 'text', text: text.slice(bufStart) })
-  return blocks
 }

@@ -17,6 +17,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { ContentBlock } from '@agentclientprotocol/sdk'
+import type { IEditorService, IWorkspaceService } from '@universe-editor/platform'
+import { toMentionName } from '../dnd/resourceDropTransfer.js'
+import { FileEditorInput } from '../editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../editor/FileEditorRegistry.js'
 
 export interface SelectionContext {
   /** Absolute URI of the source file (typically `file:///...`). */
@@ -42,6 +46,42 @@ export function formatSelectionLabel(ctx: {
   const range =
     ctx.startLine === ctx.endLine ? `${ctx.startLine}` : `${ctx.startLine}-${ctx.endLine}`
   return `${ctx.relPath}:${range}`
+}
+
+/**
+ * Every non-empty selection in the currently active file editor, snapshotted
+ * into SelectionContexts. Shared by "Add Selection to Agent Chat" (agentContextActions.ts)
+ * and the `#` panel's "当前选区" entry — both just need the two services, not an
+ * Action2 ServicesAccessor, so this stays reusable outside a command's run().
+ */
+export function collectActiveSelectionContexts(
+  editorService: IEditorService,
+  workspaceService: IWorkspaceService,
+): readonly SelectionContext[] {
+  const active = editorService.activeEditor.get()
+  if (!(active instanceof FileEditorInput)) return []
+  const editor = FileEditorRegistry.get(active)
+  const model = editor?.getModel()
+  if (!editor || !model) return []
+  const workspaceRoot = workspaceService.current?.folder
+  const { name: relPath } = toMentionName(active.resource, workspaceRoot)
+  const languageId = model.getLanguageId()
+
+  const out: SelectionContext[] = []
+  for (const sel of editor.getSelections() ?? []) {
+    if (sel.isEmpty()) continue
+    const text = model.getValueInRange(sel)
+    if (text.trim().length === 0) continue
+    out.push({
+      uri: active.resource.toString(),
+      relPath,
+      text,
+      startLine: sel.startLineNumber,
+      endLine: sel.endLineNumber,
+      ...(languageId ? { languageId } : {}),
+    })
+  }
+  return out
 }
 
 /**

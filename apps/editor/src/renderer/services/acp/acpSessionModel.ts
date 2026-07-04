@@ -11,9 +11,9 @@ import type { AvailableCommand, ContentBlock, SessionConfigOption } from '@agent
 import type { Event, IObservable } from '@universe-editor/platform'
 import type { McpTransport } from './acpMcpServers.js'
 import type { CollapseMode } from './acpChatViewStateCache.js'
-import type { PromptMention } from './promptMentions.js'
 import type { SelectionContext } from './promptContext.js'
 import type { PromptImage } from './promptImage.js'
+import type { PlacedRef } from './promptRef.js'
 
 export type AcpMessageRole = 'user' | 'agent' | 'thought'
 
@@ -348,9 +348,10 @@ export interface IAcpSession {
   /** Internal — call site is the AskUserQuestion sink. */
   presentQuestion(q: AcpPendingQuestion): void
   /**
-   * Send a prompt. If `mentions` are provided, any `@<name>` in the text
-   * whose `<name>` matches a recorded mention is rewritten into a
-   * `resource_link` ContentBlock. Unmatched `@`-tokens stay as text.
+   * Send a prompt. `refs` are the range-tracked `@`/`#` references embedded in
+   * `text` (from the prompt editor's PromptRefTracker); each is serialized to its
+   * wire ContentBlock by slicing the text at its tracked range — no re-tokenizing,
+   * so labels with spaces round-trip. See composePromptBlocksFromRefs.
    *
    * `contexts` are editor selections the user explicitly attached; each leads
    * the prompt as a context block (an EmbeddedResource when the agent supports
@@ -363,7 +364,7 @@ export interface IAcpSession {
    */
   sendPrompt(
     text: string,
-    mentions?: readonly PromptMention[],
+    refs?: readonly PlacedRef[],
     contexts?: readonly SelectionContext[],
     images?: readonly PromptImage[],
   ): Promise<void>

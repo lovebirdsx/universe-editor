@@ -16,6 +16,8 @@ export interface IDocsService {
   readonly _serviceBrand: undefined
   /** Load every guide document grouped by locale. Missing files degrade to an empty map. */
   getDocs(): Promise<DocsByLocale>
+  /** Absolute path to the docs root (dev tree or packaged resources), for the `#docs` context ref. */
+  getDocsRoot(): Promise<string>
 }
 
 export const IDocsService = createDecorator<IDocsService>('docsService')

@@ -2,8 +2,12 @@
  *  Copyright (c) Universe Editor Authors. All rights reserved.
  *--------------------------------------------------------------------------------------------*/
 
-import { describe, expect, it } from 'vitest'
+import { URI } from '@universe-editor/platform'
+import { afterEach, describe, expect, it } from 'vitest'
+import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { FileEditorRegistry } from '../../editor/FileEditorRegistry.js'
 import {
+  collectActiveSelectionContexts,
   composeContextBlocks,
   formatSelectionFallback,
   formatSelectionLabel,
@@ -78,5 +82,83 @@ describe('formatSelectionFallback', () => {
   it('drops the language prefix when absent', () => {
     const { languageId: _drop, ...noLang } = CTX
     expect(formatSelectionFallback(noLang)).toBe('```src/a.ts:12-40\nconst x = 1\n```')
+  })
+})
+
+function fakeSelection(startLineNumber: number, endLineNumber: number, isEmpty = false) {
+  return { startLineNumber, endLineNumber, isEmpty: () => isEmpty }
+}
+
+function fakeEditor(
+  selections: readonly ReturnType<typeof fakeSelection>[],
+  valuesByLine: Record<number, string>,
+  languageId?: string,
+) {
+  return {
+    getSelections: () => selections,
+    getModel: () => ({
+      getValueInRange: (sel: { startLineNumber: number }) =>
+        valuesByLine[sel.startLineNumber] ?? '',
+      getLanguageId: () => languageId,
+    }),
+  }
+}
+
+describe('collectActiveSelectionContexts', () => {
+  afterEach(() => {
+    FileEditorRegistry._resetForTests()
+  })
+
+  it('returns [] when the active editor is not a FileEditorInput', () => {
+    const editorService = { activeEditor: { get: () => undefined } }
+    const workspaceService = { current: undefined }
+    const out = collectActiveSelectionContexts(editorService as never, workspaceService as never)
+    expect(out).toEqual([])
+  })
+
+  it('returns [] when the active input has no mounted editor', () => {
+    const input = new FileEditorInput(URI.file('/workspace/src/a.ts'), {} as never)
+    const editorService = { activeEditor: { get: () => input } }
+    const workspaceService = { current: { folder: URI.file('/workspace') } }
+    const out = collectActiveSelectionContexts(editorService as never, workspaceService as never)
+    expect(out).toEqual([])
+  })
+
+  it('collects non-empty selections, dropping empty ones and whitespace-only text', () => {
+    const input = new FileEditorInput(URI.file('/workspace/src/a.ts'), {} as never)
+    FileEditorRegistry.register(
+      input,
+      fakeEditor(
+        [fakeSelection(1, 1, true), fakeSelection(3, 5), fakeSelection(8, 8)],
+        { 3: 'const x = 1', 8: '   ' },
+        'typescript',
+      ) as never,
+    )
+    const editorService = { activeEditor: { get: () => input } }
+    const workspaceService = { current: { folder: URI.file('/workspace') } }
+    const out = collectActiveSelectionContexts(editorService as never, workspaceService as never)
+    expect(out).toEqual([
+      {
+        uri: URI.file('/workspace/src/a.ts').toString(),
+        relPath: 'src/a.ts',
+        text: 'const x = 1',
+        startLine: 3,
+        endLine: 5,
+        languageId: 'typescript',
+      },
+    ])
+  })
+
+  it('omits languageId when the model reports none', () => {
+    const input = new FileEditorInput(URI.file('/workspace/b.ts'), {} as never)
+    FileEditorRegistry.register(
+      input,
+      fakeEditor([fakeSelection(1, 1)], { 1: 'x' }, undefined) as never,
+    )
+    const editorService = { activeEditor: { get: () => input } }
+    const workspaceService = { current: undefined }
+    const out = collectActiveSelectionContexts(editorService as never, workspaceService as never)
+    expect(out).toHaveLength(1)
+    expect('languageId' in out[0]!).toBe(false)
   })
 })

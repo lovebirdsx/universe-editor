@@ -34,9 +34,9 @@ import type { CollapseMode } from './acpChatViewStateCache.js'
 import { ConfigOptionStateMachine } from './acpSessionConfigOptions.js'
 import { AcpSessionConnection, type QueuedPrompt } from './acpSessionConnection.js'
 import { isAuthRequiredError } from './acpAuthError.js'
-import { composePromptBlocks, type PromptMention } from './promptMentions.js'
 import { composeContextBlocks, type SelectionContext } from './promptContext.js'
 import { composeImageBlocks, type PromptImage } from './promptImage.js'
+import { composePromptBlocksFromRefs, type PlacedRef } from './promptRef.js'
 import { extractCodexModelUsage, extractCodexTurnUsage } from '../../../shared/ai/codexPricing.js'
 import { estimateCodexCost } from './acpSessionCost.js'
 import {
@@ -399,7 +399,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   private _flushQueuedPrompts(queued: readonly QueuedPrompt[]): void {
     for (const q of queued) {
-      this._dispatchPrompt(q.text, q.mentions, q.contexts, q.images).then(q.resolve, q.reject)
+      this._dispatchPrompt(q.text, q.refs, q.contexts, q.images).then(q.resolve, q.reject)
     }
   }
 
@@ -504,7 +504,7 @@ export class AcpSession extends Disposable implements IAcpSession {
 
   async sendPrompt(
     text: string,
-    mentions?: readonly PromptMention[],
+    refs?: readonly PlacedRef[],
     contexts?: readonly SelectionContext[],
     images?: readonly PromptImage[],
   ): Promise<void> {
@@ -521,7 +521,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // is eventually dispatched (on connect) or rejected (on connection failure).
     if (!this._connection.isSettled) {
       try {
-        await this._connection.enqueue(text, mentions ?? [], contexts ?? [], images ?? [])
+        await this._connection.enqueue(text, refs ?? [], contexts ?? [], images ?? [])
       } catch {
         // Connection failed before this queued prompt could be dispatched. The
         // failure is already surfaced as an [error] timeline message by
@@ -532,7 +532,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     }
     // Connection failed during startup — nothing to dispatch onto.
     if (this._conn === undefined) return
-    await this._dispatchPrompt(text, mentions ?? [], contexts ?? [], images ?? [])
+    await this._dispatchPrompt(text, refs ?? [], contexts ?? [], images ?? [])
   }
 
   /**
@@ -544,7 +544,7 @@ export class AcpSession extends Disposable implements IAcpSession {
    */
   private async _dispatchPrompt(
     text: string,
-    mentions: readonly PromptMention[],
+    refs: readonly PlacedRef[],
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
   ): Promise<void> {
@@ -554,7 +554,7 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Bump the history entry's lastUsedAt so the LRU order tracks user activity.
     this._history?.touch(sid)
     this._history?.setHistoryHasMessages(sid)
-    const prompt = composePromptBlocks(text, mentions)
+    const prompt = composePromptBlocksFromRefs(text, refs)
     // Attached selections lead the prompt as context blocks (EmbeddedResource
     // when the agent supports it, else a fenced-code text block).
     const contextBlocks = composeContextBlocks(contexts, this._embeddedContextSupported)
@@ -568,6 +568,14 @@ export class AcpSession extends Disposable implements IAcpSession {
       // keep the wire shape stable even for trivial cases.
       prompt: [...contextBlocks, ...imageBlocks, ...body],
     }
+    // Debug the exact block shapes sent to the agent — references (esp. symbols)
+    // are lossy across the ACP boundary, so this makes context bugs diagnosable.
+    console.debug(
+      '[acp-prompt] dispatch',
+      params.prompt.map((b) =>
+        b.type === 'text' ? { type: 'text', text: b.text } : { type: b.type },
+      ),
+    )
     const abort = new AbortController()
     this._inFlight.add(abort)
     // Status is derived from the in-flight set — never set directly per prompt,

@@ -67,4 +67,9 @@ describe('DocsMainService', () => {
     expect(second).toBe(first)
     expect(second['zh-CN']?.['late']).toBeUndefined()
   })
+
+  it('getDocsRoot returns the resolved root path', async () => {
+    const svc = new DocsMainService(() => root)
+    expect(await svc.getDocsRoot()).toBe(root)
+  })
 })

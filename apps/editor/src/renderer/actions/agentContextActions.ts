@@ -26,16 +26,14 @@ import {
   localize2,
   type ServicesAccessor,
 } from '@universe-editor/platform'
-import { FileEditorInput } from '../services/editor/FileEditorInput.js'
-import { FileEditorRegistry } from '../services/editor/FileEditorRegistry.js'
 import { IAcpChatWidgetService } from '../services/acp/acpChatWidgetService.js'
 import { IAcpChatLocationService } from '../services/acp/acpChatLocationService.js'
-import { IAcpSessionService, type SelectionContext } from '../services/acp/acpSessionService.js'
+import { IAcpSessionService } from '../services/acp/acpSessionService.js'
 import { IAcpAgentRegistry } from '../services/acp/acpAgentRegistry.js'
 import { AcpSessionEditorInput } from '../services/acp/acpSessionEditorInput.js'
 import { AcpPromptContextInbox } from '../services/acp/acpPromptContextInbox.js'
 import { AcpPromptTextInbox } from '../services/acp/acpPromptTextInbox.js'
-import { toMentionName } from '../services/dnd/resourceDropTransfer.js'
+import { collectActiveSelectionContexts } from '../services/acp/promptContext.js'
 import { CATEGORY } from './_agentShared.js'
 
 export class AddSelectionToAgentChatAction extends Action2 {
@@ -52,7 +50,10 @@ export class AddSelectionToAgentChatAction extends Action2 {
   }
 
   override async run(accessor: ServicesAccessor): Promise<void> {
-    const contexts = collectSelectionContexts(accessor)
+    const contexts = collectActiveSelectionContexts(
+      accessor.get(IEditorService),
+      accessor.get(IWorkspaceService),
+    )
     if (contexts.length === 0) return
     // Resolve every service synchronously up front: the accessor is only valid
     // during run's synchronous scope, so nothing below the first await may touch it.
@@ -137,33 +138,6 @@ async function resolveTargetSession(services: RevealServices) {
   const active = services.sessions.activeSession.get()
   if (active) return active
   return services.sessions.createSession(services.registry.defaultAgentId())
-}
-
-function collectSelectionContexts(accessor: ServicesAccessor): readonly SelectionContext[] {
-  const active = accessor.get(IEditorService).activeEditor.get()
-  if (!(active instanceof FileEditorInput)) return []
-  const editor = FileEditorRegistry.get(active)
-  const model = editor?.getModel()
-  if (!editor || !model) return []
-  const workspaceRoot = accessor.get(IWorkspaceService).current?.folder
-  const { name: relPath } = toMentionName(active.resource, workspaceRoot)
-  const languageId = model.getLanguageId()
-
-  const out: SelectionContext[] = []
-  for (const sel of editor.getSelections() ?? []) {
-    if (sel.isEmpty()) continue
-    const text = model.getValueInRange(sel)
-    if (text.trim().length === 0) continue
-    out.push({
-      uri: active.resource.toString(),
-      relPath,
-      text,
-      startLine: sel.startLineNumber,
-      endLine: sel.endLineNumber,
-      ...(languageId ? { languageId } : {}),
-    })
-  }
-  return out
 }
 
 // Make the target session's chat visible and focus its input so the user sees

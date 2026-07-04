@@ -46,7 +46,7 @@ async function openSessionWithPrompt(
   await expect
     .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
     .toBe(1)
-  const prompt = page.getByTestId('acp-prompt-input')
+  const prompt = page.getByTestId('acp-prompt-drop-host')
   await expect(prompt).toBeVisible({ timeout: 10000 })
   return prompt
 }
@@ -66,7 +66,7 @@ test.describe('@p1 multi-file drag → prompt', () => {
       }),
     )
 
-    const prompt = await openSessionWithPrompt(page, workbench, tmpDir)
+    await openSessionWithPrompt(page, workbench, tmpDir)
 
     await page.evaluate(() => {
       const input = document.createElement('input')
@@ -80,7 +80,7 @@ test.describe('@p1 multi-file drag → prompt', () => {
 
     await page.evaluate(() => {
       const input = document.querySelector<HTMLInputElement>('#__diag_file_input__')!
-      const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-input"]')!
+      const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
       const dt = new DataTransfer()
       for (const f of Array.from(input.files ?? [])) dt.items.add(f)
       const fire = (type: string): void => {
@@ -103,7 +103,7 @@ test.describe('@p1 multi-file drag → prompt', () => {
     })
 
     await page.waitForTimeout(400)
-    const value = await prompt.inputValue()
+    const value = await page.evaluate(() => window.__E2E__!.getAcpPromptText())
     expect((value.match(/@/g) ?? []).length).toBe(3)
     expect(value).not.toContain('file:///')
 
@@ -115,11 +115,11 @@ test.describe('@p1 multi-file drag → prompt', () => {
     workbench,
   }) => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-mfpcr-'))
-    const prompt = await openSessionWithPrompt(page, workbench, tmpDir)
+    await openSessionWithPrompt(page, workbench, tmpDir)
 
     const root = tmpDir.replace(/\\/g, '/')
     await page.evaluate((rootDir) => {
-      const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-input"]')!
+      const target = document.querySelector<HTMLElement>('[data-testid="acp-prompt-drop-host"]')!
       const dt = new DataTransfer()
       // Bare CR between entries — the shape that collapsed into one bad mention.
       const uriList = ['package.json', 'test.ent', 'World负载均衡设计方案.md']
@@ -145,7 +145,7 @@ test.describe('@p1 multi-file drag → prompt', () => {
     }, root)
 
     await page.waitForTimeout(400)
-    const value = await prompt.inputValue()
+    const value = await page.evaluate(() => window.__E2E__!.getAcpPromptText())
     expect((value.match(/@/g) ?? []).length).toBe(3)
     expect(value).not.toContain('file:///')
 

@@ -66,7 +66,7 @@ const LETTER_WEIGHT: Record<string, number> = {
 }
 
 /** The badge letter shown to the user; untracked reads as "U" like VSCode. */
-function badgeLetter(contextValue: string): string {
+export function badgeLetter(contextValue: string): string {
   return contextValue === '?' ? 'U' : contextValue
 }
 

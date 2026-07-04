@@ -804,6 +804,70 @@
   outline-offset: -2px;
 }
 
+/* Monaco-backed prompt editor. The host div is the drop target + input chrome
+   (bg/border); the inner div hosts the Monaco instance and auto-grows between a
+   3- and 16-line band (height driven from onDidContentSizeChange). The editor
+   paints its own text. */
+.promptEditorHost {
+  width: 100%;
+  padding: 0 6px;
+  background: var(--color-input-bg, #3c3c3c);
+  border: 1px solid var(--color-input-border, #555);
+  border-radius: 3px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.promptEditorInner {
+  width: 100%;
+  min-height: calc(1.5em * 3 + 8px);
+  max-height: calc(1.5em * 16 + 8px);
+}
+
+/* Monaco paints its background on inner layers (margin / lines-content /
+   .monaco-editor-background) via theme CSS variables, not on the .monaco-editor
+   root. The shared output theme's editor.background (#1e1e1e) is darker than the
+   host (#3c3c3c); with the host's 6px horizontal padding the darker fill is
+   inset, revealing two lighter vertical strips of host bg — the "two bars".
+   Override the theme variables in this scope so Monaco shows the host bg through. */
+.promptEditorInner :global(.monaco-editor) {
+  --vscode-editor-background: transparent;
+  --vscode-editorGutter-background: transparent;
+}
+
+/* Monaco paints a 1px focus outline (outline-offset:-1px) on its focused
+   edit-context element, filling the editor box. Inside our 6px-padded host that
+   shows as two vertical bars flanking the text (top/bottom edges hide behind the
+   host's own focus border). The host already renders the focus chrome, so drop
+   Monaco's inner outline. */
+.promptEditorInner :global(.monaco-editor) :global([tabindex]):focus,
+.promptEditorInner :global(.monaco-editor) :global(.synthetic-focus),
+.promptEditorInner :global(.monaco-editor) :global(.native-edit-context),
+.promptEditorInner :global(.monaco-editor) textarea:focus {
+  outline: none !important;
+}
+
+.promptEditorHost.focused,
+.promptEditorHost:focus-within {
+  border-color: var(--color-focus-border, #0070e0);
+}
+
+.promptEditorHost.dropActive {
+  border-color: var(--color-list-active-bar, #007acc);
+  outline: 1px solid var(--color-list-active-bar, #007acc);
+  outline-offset: -2px;
+}
+
+/* `@`/`#` reference pill: an inline decoration painted over the reference token
+   so it reads as a chip while staying editable text underneath (VSCode Copilot
+   parity). Tracked by range — see promptRefTracker.ts. Monaco renders decoration
+   spans outside the CSS-module scope, so the class is `:global`. */
+:global(.acp-prompt-ref-pill) {
+  background: var(--color-badge-bg, #4d4d4d);
+  color: var(--color-badge-fg, #fff);
+  border-radius: 3px;
+}
+
 .promptActions {
   --acp-act-base: var(--agent-font-size, 12px);
   --acp-act-btn: calc(var(--acp-act-base) * 2.33);
@@ -2123,6 +2187,31 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* ContextPopover row wrapper — PopoverList's `.item` is `display:flex` on the
+   baseline axis, so a group header needs its own block-level column wrapper
+   to stack above the label/description row rather than lay out inline. */
+.contextItemBody {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+  flex: 1;
+  min-width: 0;
+}
+
+.contextItemRow {
+  display: flex;
+  align-items: baseline;
+  gap: var(--spacing-4);
+  min-width: 0;
+}
+
+.contextGroupLabel {
+  font-size: calc(var(--agent-font-size, 12px) * 0.714);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-message-role-fg, #888);
 }
 
 @keyframes acpSpin {

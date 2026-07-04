@@ -25,9 +25,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IAcpClientConnection } from './acpClientService.js'
-import type { PromptMention } from './promptMentions.js'
 import type { SelectionContext } from './promptContext.js'
 import type { PromptImage } from './promptImage.js'
+import type { PlacedRef } from './promptRef.js'
 import { AcpConnectionError } from './acpErrors.js'
 
 export type AcpConnectionPhase = 'connecting' | 'connected' | 'failed' | 'closed'
@@ -39,7 +39,7 @@ export type AcpConnectionPhase = 'connecting' | 'connected' | 'failed' | 'closed
  */
 export interface QueuedPrompt {
   readonly text: string
-  readonly mentions: readonly PromptMention[]
+  readonly refs: readonly PlacedRef[]
   readonly contexts: readonly SelectionContext[]
   readonly images: readonly PromptImage[]
   readonly resolve: () => void
@@ -88,12 +88,12 @@ export class AcpSessionConnection {
    */
   enqueue(
     text: string,
-    mentions: readonly PromptMention[],
+    refs: readonly PlacedRef[],
     contexts: readonly SelectionContext[],
     images: readonly PromptImage[],
   ): Promise<void> {
     return new Promise<void>((resolve, reject) => {
-      this._queued.push({ text, mentions, contexts, images, resolve, reject })
+      this._queued.push({ text, refs, contexts, images, resolve, reject })
     })
   }
 

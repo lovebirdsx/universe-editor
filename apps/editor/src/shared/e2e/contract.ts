@@ -290,6 +290,12 @@ export interface E2EProbe {
    * turn). Specs that don't want to wait should not await this call.
    */
   sendAcpPrompt(text: string): Promise<void>
+  /**
+   * Current text in the active session's prompt editor. The input is a Monaco
+   * editor (no DOM `<input>`), so specs read it through this probe instead of
+   * `locator.inputValue()`.
+   */
+  getAcpPromptText(): string
   /** Snapshot of the active session's messages (role + text). */
   getAcpMessages(): ReadonlyArray<{ role: string; text: string }>
   /** Snapshot of the active session's tool calls (id, title, status, text). */

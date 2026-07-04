@@ -47,11 +47,7 @@ import { AlignJustify, FoldVertical, UnfoldVertical, type LucideIcon } from 'luc
 import type { CollapseMode } from '../../services/acp/acpChatViewStateCache.js'
 import { IExcludeService } from '../../services/exclude/ExcludeService.js'
 import { useObservable, useService } from '../useService.js'
-import type {
-  IAcpSession,
-  PromptMention,
-  SelectionContext,
-} from '../../services/acp/acpSessionService.js'
+import type { IAcpSession, SelectionContext } from '../../services/acp/acpSessionService.js'
 import {
   blobToPromptImage,
   bytesToPromptImage,
@@ -67,20 +63,44 @@ import { URI } from '@universe-editor/platform'
 import type { WidgetHandle } from './ChatBody.js'
 import type { AvailableCommand } from '@agentclientprotocol/sdk'
 import {
-  applyMentionPick,
   detectFilePickerTrigger,
   extractMentionQuery,
   type ActiveMentionQuery,
   type FilePickerTriggerKind,
 } from '../../services/acp/promptMentions.js'
+import { extractHashQuery, type ActiveHashQuery } from '../../services/acp/promptContextRef.js'
+import {
+  ScmChangeContextProvider,
+  WorkspaceSymbolContextProvider,
+  OpenEditorContextProvider,
+  DocsContextProvider,
+  type ContextSuggestionItem,
+} from '../../services/acp/contextSuggestions.js'
+import { mentionEntryToRef, suggestionItemToRef } from '../../services/acp/promptRef.js'
+import {
+  collectActiveSelectionContexts,
+  formatSelectionLabel,
+} from '../../services/acp/promptContext.js'
 import {
   filterMentionFiles,
   loadWorkspaceFiles,
   type MentionFileEntry,
 } from '../../services/acp/mentionFileSearch.js'
 import { MentionPopover } from './MentionPopover.js'
+import {
+  ContextPopover,
+  buildContextPopoverRows,
+  type ContextPopoverEntry,
+  type ContextPopoverGroup,
+  type ContextPopoverRow,
+} from './ContextPopover.js'
 import { SelectionContextChips } from './SelectionContextChips.js'
 import { PromptImageChips } from './PromptImageChips.js'
+import {
+  PromptMonacoEditor,
+  type PromptEditorHandle,
+  type PromptChangeSource,
+} from './PromptMonacoEditor.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { PromptHistoryPopover } from './PromptHistoryPopover.js'
 import { ConfigOptionsBar } from './ConfigOptionsBar.js'
@@ -101,16 +121,21 @@ import styles from './agents.module.css'
 interface PopoverHandleState {
   slashOpen: boolean
   mentionOpen: boolean
+  hashOpen: boolean
   historyOpen: boolean
   slashMatches: readonly AvailableCommand[]
   mentionMatches: readonly MentionFileEntry[]
+  hashMatches: readonly ContextPopoverRow[]
   slashIndex: number
   mentionIndex: number
+  hashIndex: number
   historyIndex: number
   historyEntries: readonly string[]
   mentionQuery: ActiveMentionQuery | null
+  hashQuery: ActiveHashQuery | null
   acceptSlash: (cmd: AvailableCommand) => void
   acceptMention: (entry: MentionFileEntry, q: ActiveMentionQuery) => void
+  acceptContextRef: (entry: ContextPopoverEntry, q: ActiveHashQuery) => void
   acceptHistory: () => void
   restoreHistoryDraft: () => void
 }
@@ -128,9 +153,18 @@ export function PromptInput({
 }) {
   const [text, setText] = useState(() => AcpPromptDraftCache.load(session.id)?.text ?? '')
   const [caret, setCaret] = useState(() => AcpPromptDraftCache.load(session.id)?.caret ?? 0)
+  // Seed the (uncontrolled) Monaco editor with the restored draft on mount.
+  // Captured once so a remount of the same session restores its draft text +
+  // reference pills.
+  const initialDraftRef = useRef({
+    text,
+    caret,
+    refs: AcpPromptDraftCache.load(session.id)?.refs ?? [],
+  })
   const [dropActive, setDropActive] = useState(false)
   const [slashIndex, setSlashIndex] = useState(0)
   const [mentionIndex, setMentionIndex] = useState(0)
+  const [hashIndex, setHashIndex] = useState(0)
   const [historyOpen, setHistoryOpen] = useState(false)
   const [historyIndex, setHistoryIndex] = useState(0)
   // User-driven dismissal of the popover for the current token. Reset
@@ -138,9 +172,7 @@ export function PromptInput({
   // user starts a fresh command/mention.
   const [slashDismissed, setSlashDismissed] = useState(false)
   const [mentionDismissed, setMentionDismissed] = useState(false)
-  const [mentions, setMentions] = useState<readonly PromptMention[]>(
-    () => AcpPromptDraftCache.load(session.id)?.mentions ?? [],
-  )
+  const [hashDismissed, setHashDismissed] = useState(false)
   const [contexts, setContexts] = useState<readonly SelectionContext[]>(
     () => AcpPromptDraftCache.load(session.id)?.contexts ?? [],
   )
@@ -149,13 +181,29 @@ export function PromptInput({
   )
   const [files, setFiles] = useState<readonly MentionFileEntry[]>([])
   const [filesLoading, setFilesLoading] = useState(false)
-  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const [hashSuggestions, setHashSuggestions] = useState<{
+    readonly symbol: readonly ContextSuggestionItem[]
+    readonly scmChange: readonly ContextSuggestionItem[]
+    readonly openEditor: readonly ContextSuggestionItem[]
+    readonly docs: readonly ContextSuggestionItem[]
+  }>({ symbol: [], scmChange: [], openEditor: [], docs: [] })
+  const [hashLoading, setHashLoading] = useState(false)
+  const editorHandleRef = useRef<PromptEditorHandle | null>(null)
   // Saves the in-progress draft text when the user enters history navigation mode,
   // so Escape / Down-past-end restores it.
   const historyDraftRef = useRef('')
   // Latest popover state + accept callbacks, read by the WidgetHandle methods
   // (bound once) when a suggestion command fires. Refreshed every render.
   const popoverStateRef = useRef<PopoverHandleState | null>(null)
+  // Guards the hash-suggestions fetch effect against out-of-order async
+  // resolution (a slow symbol query landing after a newer one started).
+  const hashSeqRef = useRef(0)
+  const contextProvidersRef = useRef<{
+    readonly symbol: WorkspaceSymbolContextProvider
+    readonly scmChange: ScmChangeContextProvider
+    readonly openEditor: OpenEditorContextProvider
+    readonly docs: DocsContextProvider
+  } | null>(null)
 
   const fileSearch = useService(IFileSearchService)
   const workspace = useService(IWorkspaceService)
@@ -182,6 +230,18 @@ export function PromptInput({
   const collapseMode = useObservable(session.collapseMode)
   const totalRunningMs = useSessionTimer(session)
 
+  // Lazily instantiate the four `#`-context data sources on first use so
+  // sessions that never type `#` pay no DI/construction cost.
+  const ensureContextProviders = useCallback(() => {
+    contextProvidersRef.current ??= {
+      symbol: instantiation.createInstance(WorkspaceSymbolContextProvider),
+      scmChange: instantiation.createInstance(ScmChangeContextProvider),
+      openEditor: instantiation.createInstance(OpenEditorContextProvider),
+      docs: instantiation.createInstance(DocsContextProvider),
+    }
+    return contextProvidersRef.current
+  }, [instantiation])
+
   // Expose `focus()` plus the popover navigation methods to the AcpChatWidget
   // handle. The widget service routes the suggestion commands (Select Next/Prev,
   // Accept, Hide — gated on `acpPromptPopupVisible`) and Ctrl+Alt+I here without
@@ -191,10 +251,9 @@ export function PromptInput({
     if (!handleRef) return
     const ref = handleRef
     ref.current.focus = () => {
-      const el = textareaRef.current
+      const el = editorHandleRef.current
       if (!el) return false
-      el.focus()
-      return true
+      return el.focus()
     }
     ref.current.popoverSelectNext = () => {
       const s = popoverStateRef.current
@@ -205,7 +264,9 @@ export function PromptInput({
         }
         return
       }
-      if (s.mentionOpen && s.mentionMatches.length > 0) {
+      if (s.hashOpen && s.hashMatches.length > 0) {
+        setHashIndex((i) => (i + 1) % s.hashMatches.length)
+      } else if (s.mentionOpen && s.mentionMatches.length > 0) {
         setMentionIndex((i) => (i + 1) % s.mentionMatches.length)
       } else if (s.slashOpen && s.slashMatches.length > 0) {
         setSlashIndex((i) => (i + 1) % s.slashMatches.length)
@@ -222,7 +283,9 @@ export function PromptInput({
         }
         return
       }
-      if (s.mentionOpen && s.mentionMatches.length > 0) {
+      if (s.hashOpen && s.hashMatches.length > 0) {
+        setHashIndex((i) => (i - 1 + s.hashMatches.length) % s.hashMatches.length)
+      } else if (s.mentionOpen && s.mentionMatches.length > 0) {
         setMentionIndex((i) => (i - 1 + s.mentionMatches.length) % s.mentionMatches.length)
       } else if (s.slashOpen && s.slashMatches.length > 0) {
         setSlashIndex((i) => (i - 1 + s.slashMatches.length) % s.slashMatches.length)
@@ -235,7 +298,10 @@ export function PromptInput({
         s.acceptHistory()
         return
       }
-      if (s.mentionOpen && s.mentionQuery !== null && s.mentionMatches.length > 0) {
+      if (s.hashOpen && s.hashQuery !== null && s.hashMatches.length > 0) {
+        const target = s.hashMatches[s.hashIndex] ?? s.hashMatches[0]
+        if (target) s.acceptContextRef(target.entry, s.hashQuery)
+      } else if (s.mentionOpen && s.mentionQuery !== null && s.mentionMatches.length > 0) {
         const target = s.mentionMatches[s.mentionIndex] ?? s.mentionMatches[0]
         if (target) s.acceptMention(target, s.mentionQuery)
       } else if (s.slashOpen && s.slashMatches.length > 0) {
@@ -250,7 +316,8 @@ export function PromptInput({
         s.restoreHistoryDraft()
         return
       }
-      if (s.mentionOpen) setMentionDismissed(true)
+      if (s.hashOpen) setHashDismissed(true)
+      else if (s.mentionOpen) setMentionDismissed(true)
       else if (s.slashOpen) setSlashDismissed(true)
     }
     return () => {
@@ -270,7 +337,7 @@ export function PromptInput({
     const prev = prevSessionIdRef.current
     prevSessionIdRef.current = session.id
     if (prev !== undefined && prev !== session.id) {
-      textareaRef.current?.focus()
+      editorHandleRef.current?.focus()
     }
   }, [session.id])
 
@@ -283,7 +350,7 @@ export function PromptInput({
   // Sidebar leaves this false so opening the ChatPanel doesn't yank focus
   // from whatever the user just clicked.
   useEffect(() => {
-    if (autoFocus) textareaRef.current?.focus()
+    if (autoFocus) editorHandleRef.current?.focus()
   }, [autoFocus])
 
   // Drain any SelectionContexts the "Add Selection to Agent Chat" command
@@ -295,7 +362,7 @@ export function PromptInput({
       const incoming = AcpPromptContextInbox.drain(session.id)
       if (incoming.length === 0) return
       setContexts((prev) => mergeContexts(prev, incoming))
-      textareaRef.current?.focus()
+      editorHandleRef.current?.focus()
     }
     pull()
     const sub = AcpPromptContextInbox.onDidDeposit((id) => {
@@ -311,19 +378,12 @@ export function PromptInput({
     const pull = (): void => {
       const incoming = AcpPromptTextInbox.drain(session.id)
       if (incoming.length === 0) return
-      setText((prev) => {
-        const joined = incoming.join('\n')
-        const next = prev ? `${prev}\n${joined}` : joined
-        setCaret(next.length)
-        const el = textareaRef.current
-        if (el) {
-          requestAnimationFrame(() => {
-            el.focus()
-            el.setSelectionRange(next.length, next.length)
-          })
-        }
-        return next
-      })
+      const el = editorHandleRef.current
+      const prev = el?.getText() ?? ''
+      const joined = incoming.join('\n')
+      const next = prev ? `${prev}\n${joined}` : joined
+      el?.setText(next, next.length)
+      requestAnimationFrame(() => el?.focus())
     }
     pull()
     const sub = AcpPromptTextInbox.onDidDeposit((id) => {
@@ -337,24 +397,26 @@ export function PromptInput({
   // editor tabs.
   useEffect(() => {
     const savedCaret = AcpPromptDraftCache.load(session.id)?.caret
-    if (savedCaret != null && savedCaret > 0 && textareaRef.current) {
-      textareaRef.current.setSelectionRange(savedCaret, savedCaret)
+    if (savedCaret != null && savedCaret > 0) {
+      editorHandleRef.current?.setSelectionRange(savedCaret, savedCaret)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []) // mount only — session.id is stable for this component instance
 
-  // Persist the unsent draft (text + recorded mentions + attached contexts +
+  // Persist the unsent draft (text + range-tracked refs + attached contexts +
   // attached images) per session so switching tabs / sessions and coming back
-  // restores it (see AcpPromptDraftCache). Kept alive while any of the four is
-  // non-empty so a draft with only attachments (no text yet) survives a tab
-  // switch.
+  // restores it (see AcpPromptDraftCache). Kept alive while any is non-empty so a
+  // draft with only attachments (no text yet) survives a tab switch. Refs are
+  // read live from the tracker (they change on every edit, which also bumps
+  // `text`/`caret`, so this effect re-runs in step).
   useEffect(() => {
-    if (text || contexts.length > 0 || images.length > 0) {
-      AcpPromptDraftCache.save(session.id, { text, mentions, contexts, images, caret })
+    const refs = editorHandleRef.current?.listRefs() ?? []
+    if (text || contexts.length > 0 || images.length > 0 || refs.length > 0) {
+      AcpPromptDraftCache.save(session.id, { text, refs, contexts, images, caret })
     } else {
       AcpPromptDraftCache.clear(session.id)
     }
-  }, [text, mentions, contexts, images, caret, session.id])
+  }, [text, contexts, images, caret, session.id])
 
   const slashQuery = useMemo(() => extractSlashQuery(text, caret), [text, caret])
   const slashMatches = useMemo<readonly AvailableCommand[]>(
@@ -409,7 +471,7 @@ export function PromptInput({
       }
       if (accepted.length > 0) {
         setImages((prev) => [...prev, ...accepted])
-        textareaRef.current?.focus()
+        editorHandleRef.current?.focus()
       }
       if (rejection !== null) {
         notification.notify({
@@ -462,7 +524,7 @@ export function PromptInput({
       }
       if (accepted.length > 0) {
         setImages((prev) => [...prev, ...accepted])
-        textareaRef.current?.focus()
+        editorHandleRef.current?.focus()
       }
       if (rejection !== null) {
         notification.notify({
@@ -479,9 +541,18 @@ export function PromptInput({
   // caret-aware so it only fires when the user is actively typing `@…`.
   const slashOpen = slashQuery !== null && !slashDismissed && commands.length > 0
 
-  const mentionQuery: ActiveMentionQuery | null = useMemo(
-    () => (slashOpen ? null : extractMentionQuery(text, caret)),
+  // `#` context popover: same slash-precedence rule, checked ahead of `@`
+  // mentions (a `#`/`@` token in the same buffer can't both be active, but
+  // the guard keeps the priority chain slash > hash > mention explicit).
+  const hashQuery: ActiveHashQuery | null = useMemo(
+    () => (slashOpen ? null : extractHashQuery(text, caret)),
     [text, caret, slashOpen],
+  )
+  const hashOpen = hashQuery !== null && !hashDismissed && workspaceRoot !== undefined
+
+  const mentionQuery: ActiveMentionQuery | null = useMemo(
+    () => (slashOpen || hashOpen ? null : extractMentionQuery(text, caret)),
+    [text, caret, slashOpen, hashOpen],
   )
 
   // Lazily kick off the workspace file scan the first time `@` is typed.
@@ -507,10 +578,85 @@ export function PromptInput({
   // and "No matching files" states) would be pure noise.
   const mentionOpen = mentionQuery !== null && !mentionDismissed && workspaceRoot !== undefined
 
+  // Fetch the three cheap `#` sources (Git changes / open editors / docs)
+  // immediately; the symbol search is comparatively expensive (may hit
+  // tsserver) so it gets its own 150ms debounce. hashSeqRef discards a slow
+  // response that's since been superseded by a newer query.
+  useEffect(() => {
+    if (hashQuery === null) return
+    const seq = ++hashSeqRef.current
+    const providers = ensureContextProviders()
+    const query = hashQuery.query
+    setHashLoading(true)
+    void Promise.all([
+      providers.scmChange.query(query),
+      providers.openEditor.query(query),
+      providers.docs.query(query),
+    ]).then(([scmChange, openEditor, docs]) => {
+      if (seq !== hashSeqRef.current) return
+      setHashSuggestions((prev) => ({ ...prev, scmChange, openEditor, docs }))
+      setHashLoading(false)
+    })
+    const timer = setTimeout(() => {
+      void providers.symbol.query(query).then((symbol) => {
+        if (seq !== hashSeqRef.current) return
+        setHashSuggestions((prev) => ({ ...prev, symbol }))
+      })
+    }, 150)
+    return () => clearTimeout(timer)
+  }, [hashQuery, ensureContextProviders])
+
+  // Selections are computed live (not queried) — same source used by "Add
+  // Selection to Agent Chat" — and filtered client-side against the query.
+  const hashSelectionEntries = useMemo<readonly SelectionContext[]>(() => {
+    if (hashQuery === null) return []
+    const all = collectActiveSelectionContexts(editorService, workspace)
+    const q = hashQuery.query.trim().toLowerCase()
+    if (!q) return all
+    return all.filter((ctx) => formatSelectionLabel(ctx).toLowerCase().includes(q))
+  }, [hashQuery, editorService, workspace])
+
+  // Selection and open-editor entries share one group (plan §5.2) — both
+  // answer "what am I looking at right now".
+  const hashGroups = useMemo<readonly ContextPopoverGroup[]>(() => {
+    const groups: ContextPopoverGroup[] = []
+    if (hashSuggestions.symbol.length > 0) {
+      groups.push({
+        label: localize('acp.contextRef.group.symbol', 'Workspace Symbols'),
+        entries: hashSuggestions.symbol.map((item) => ({ kind: 'suggestion', item }) as const),
+      })
+    }
+    if (hashSuggestions.scmChange.length > 0) {
+      groups.push({
+        label: localize('acp.contextRef.group.change', 'Local Changes'),
+        entries: hashSuggestions.scmChange.map((item) => ({ kind: 'suggestion', item }) as const),
+      })
+    }
+    const selectionAndEditorEntries: ContextPopoverEntry[] = [
+      ...hashSelectionEntries.map((selection) => ({ kind: 'selection', selection }) as const),
+      ...hashSuggestions.openEditor.map((item) => ({ kind: 'suggestion', item }) as const),
+    ]
+    if (selectionAndEditorEntries.length > 0) {
+      groups.push({
+        label: localize('acp.contextRef.group.editor', 'Selection / Open Editors'),
+        entries: selectionAndEditorEntries,
+      })
+    }
+    if (hashSuggestions.docs.length > 0) {
+      groups.push({
+        label: localize('acp.contextRef.group.docs', 'Documentation'),
+        entries: hashSuggestions.docs.map((item) => ({ kind: 'suggestion', item }) as const),
+      })
+    }
+    return groups
+  }, [hashSuggestions, hashSelectionEntries])
+
+  const hashRows = useMemo(() => buildContextPopoverRows(hashGroups), [hashGroups])
+
   // Report popover open/closed up to the widget service, which flips
   // `acpPromptPopupVisible` for the focused widget. The suggestion commands
   // (Select Next/Prev, Accept, Hide) gate their keybindings on that contextKey.
-  const popoverOpen = slashOpen || mentionOpen || historyOpen
+  const popoverOpen = slashOpen || hashOpen || mentionOpen || historyOpen
   useEffect(() => {
     onPopoverOpenChange?.(popoverOpen)
   }, [onPopoverOpenChange, popoverOpen])
@@ -525,35 +671,42 @@ export function PromptInput({
     const after = text.slice(end)
     const needsSpace = after.length === 0 || !/\s/.test(after[0]!)
     const insert = `${name}${needsSpace ? ' ' : ''}`
-    setText(insert + after)
-    setCaret(insert.length)
+    editorHandleRef.current?.setText(insert + after, insert.length)
     setSlashDismissed(true)
     setSlashIndex(0)
-    requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el) {
-        el.focus()
-        el.setSelectionRange(insert.length, insert.length)
-      }
-    })
+    requestAnimationFrame(() => editorHandleRef.current?.focus())
   }
 
   const acceptMention = (entry: MentionFileEntry, q: ActiveMentionQuery): void => {
-    const r = applyMentionPick(text, q, entry.relPath)
-    setText(r.text)
-    setCaret(r.caret)
-    setMentions((prev) => mergeMention(prev, { uri: entry.uri, name: entry.relPath }))
+    editorHandleRef.current?.insertRef(mentionEntryToRef(entry, 'file'), q.startIndex, q.endIndex)
     setMentionDismissed(true)
     setMentionIndex(0)
-    // Restore caret on the next tick — React will rerender the textarea
-    // before the imperative selection update lands.
-    requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el) {
-        el.focus()
-        el.setSelectionRange(r.caret, r.caret)
-      }
-    })
+    requestAnimationFrame(() => editorHandleRef.current?.focus())
+  }
+
+  // `selection` entries route to the existing chip mechanism (setContexts) —
+  // the `#<query>` token is simply removed from the text, no inline pill is
+  // recorded for it. `suggestion` entries insert an inline reference pill
+  // tracked by range, mirroring acceptMention's `@` flow.
+  const acceptContextRef = (entry: ContextPopoverEntry, q: ActiveHashQuery): void => {
+    if (entry.kind === 'selection') {
+      const before = text.slice(0, q.startIndex)
+      const after = text.slice(q.endIndex)
+      const needsTrailingSpace = after.length === 0 || !/\s/.test(after[0]!)
+      const insert = needsTrailingSpace ? ' ' : ''
+      const nextText = before + insert + after
+      const nextCaret = before.length + insert.length
+      editorHandleRef.current?.setText(nextText, nextCaret)
+      setContexts((prev) => mergeContexts(prev, [entry.selection]))
+      setHashDismissed(true)
+      setHashIndex(0)
+      requestAnimationFrame(() => editorHandleRef.current?.focus())
+      return
+    }
+    editorHandleRef.current?.insertRef(suggestionItemToRef(entry.item), q.startIndex, q.endIndex)
+    setHashDismissed(true)
+    setHashIndex(0)
+    requestAnimationFrame(() => editorHandleRef.current?.focus())
   }
 
   // `@@` opens a file picker, `@#` a folder picker. Strip the two-char trigger
@@ -568,8 +721,7 @@ export function PromptInput({
       const before = buffer.slice(0, start)
       const after = buffer.slice(start + 2)
       const withoutTrigger = before + after
-      setText(withoutTrigger)
-      setCaret(start)
+      editorHandleRef.current?.setText(withoutTrigger, start)
 
       const picked = await fileDialog.showOpenDialog(
         kind === 'file'
@@ -591,7 +743,7 @@ export function PromptInput({
       if (!picked) {
         // Cancelled: leave the trigger-stripped buffer, restore focus/caret.
         requestAnimationFrame(() => {
-          const el = textareaRef.current
+          const el = editorHandleRef.current
           if (el) {
             el.focus()
             el.setSelectionRange(start, start)
@@ -601,23 +753,20 @@ export function PromptInput({
       }
 
       const mention = toMentionName(picked, workspaceRoot)
-      // Space the mention off the surrounding text so `@<name>` keeps its boundary.
+      // Space the pill off the preceding text so `@<name>` keeps its boundary.
       const needsLeadingSpace = before.length > 0 && !/\s/.test(before[before.length - 1]!)
-      const needsTrailingSpace = after.length === 0 || !/\s/.test(after[0]!)
-      const insert = `${needsLeadingSpace ? ' ' : ''}@${mention.name}${needsTrailingSpace ? ' ' : ''}`
-      const nextText = before + insert + after
-      const nextCaret = before.length + insert.length
-      setText(nextText)
-      setCaret(nextCaret)
-      setMentions((prev) => mergeMention(prev, mention))
+      const lead = needsLeadingSpace ? ' ' : ''
+      const insertStart = before.length + lead.length
+      // Rebuild the buffer with the (optional) leading space, then drop the pill
+      // in at the trigger position via the range-tracked insert.
+      editorHandleRef.current?.setText(before + lead + after, insertStart)
+      editorHandleRef.current?.insertRef(
+        mentionEntryToRef({ uri: mention.uri, relPath: mention.name }, kind),
+        insertStart,
+        insertStart,
+      )
       setMentionDismissed(true)
-      requestAnimationFrame(() => {
-        const el = textareaRef.current
-        if (el) {
-          el.focus()
-          el.setSelectionRange(nextCaret, nextCaret)
-        }
-      })
+      requestAnimationFrame(() => editorHandleRef.current?.focus())
     },
     [fileDialog, workspaceRoot],
   )
@@ -625,43 +774,42 @@ export function PromptInput({
   const acceptHistory = useCallback((): void => {
     setHistoryOpen(false)
     requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el) el.setSelectionRange(el.value.length, el.value.length)
+      const el = editorHandleRef.current
+      if (el) el.setSelectionRange(el.getText().length, el.getText().length)
     })
   }, [])
 
   const restoreHistoryDraft = useCallback((): void => {
     const draft = historyDraftRef.current
     setHistoryOpen(false)
-    setText(draft)
-    setCaret(draft.length)
-    requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el) el.setSelectionRange(draft.length, draft.length)
-    })
+    editorHandleRef.current?.setText(draft, draft.length)
   }, [])
 
-  // Sync textarea text when the user navigates through history entries.
+  // Push the selected history entry into the editor as the user navigates.
   useEffect(() => {
     if (!historyOpen) return
     const entry = historyEntries[historyIndex] ?? ''
-    setText(entry)
-    setCaret(entry.length)
+    editorHandleRef.current?.setText(entry, entry.length)
   }, [historyOpen, historyIndex, historyEntries])
 
   popoverStateRef.current = {
     slashOpen,
     mentionOpen,
+    hashOpen,
     historyOpen,
     slashMatches,
     mentionMatches,
+    hashMatches: hashRows,
     slashIndex,
     mentionIndex,
+    hashIndex,
     historyIndex,
     historyEntries,
     mentionQuery,
+    hashQuery,
     acceptSlash,
     acceptMention,
+    acceptContextRef,
     acceptHistory,
     restoreHistoryDraft,
   }
@@ -687,21 +835,24 @@ export function PromptInput({
     }
 
     const value = text
-    const recorded = mentions
+    const refs = editorHandleRef.current?.listRefs() ?? []
     const attached = contexts
     const attachedImages = images
+    editorHandleRef.current?.clearRefs()
+    editorHandleRef.current?.setText('', 0)
     setText('')
     AcpPromptDraftCache.clear(session.id)
-    setMentions([])
     setContexts([])
     setImages([])
     setHistoryOpen(false)
     setSlashDismissed(false)
     setMentionDismissed(false)
+    setHashDismissed(false)
     setSlashIndex(0)
     setMentionIndex(0)
+    setHashIndex(0)
     historyService.push(value)
-    void session.sendPrompt(value, recorded, attached, attachedImages)
+    void session.sendPrompt(value, refs, attached, attachedImages)
   }
 
   const revealContext = (ctx: SelectionContext): void => {
@@ -734,43 +885,60 @@ export function PromptInput({
     setTimeout(reveal, 50)
   }
 
-  const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
-    // Open history popover when ↑ is pressed on the first line and no other
-    // popover is active. Once open, navigation is routed through the global
-    // WidgetHandle commands gated on `acpPromptPopupVisible`.
-    if (!popoverOpen && e.key === 'ArrowUp') {
-      const ta = textareaRef.current
-      if (ta && isOnFirstLine(ta) && historyEntries.length > 0) {
-        e.preventDefault()
-        historyDraftRef.current = text
-        setHistoryIndex(0)
-        setHistoryOpen(true)
-        return
-      }
+  // Editor content/caret changed. For programmatic writes (history nav, accept-
+  // pick, draft restore) we only mirror text/caret into state; the "user typing"
+  // side effects — history close, `@@`/`@#` picker, popover dismissal resets —
+  // must run only for real keystrokes, matching the old controlled textarea.
+  const onEditorChange = (v: string, c: number, source: PromptChangeSource): void => {
+    if (source === 'program') {
+      setText(v)
+      setCaret(c)
+      return
     }
-    // Popover navigation / accept / hide is handled by global commands gated on
-    // `acpPromptPopupVisible` (see agentActions). When a popover is open the
-    // global handler consumes those keys before they reach here. We only own the
-    // plain-Enter submit while no popover is open.
-    if (popoverOpen) return
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      void submit(e)
+    if (historyOpen) setHistoryOpen(false)
+    const trigger = detectFilePickerTrigger(v, c)
+    if (trigger) {
+      void openFilePicker(v, trigger.kind, trigger.start)
+      return
     }
+    setText(v)
+    setCaret(c)
+    if (extractSlashQuery(v, c) === null) setSlashDismissed(false)
+    if (extractHashQuery(v, c) === null) setHashDismissed(false)
+    if (extractMentionQuery(v, c) === null) setMentionDismissed(false)
+    setSlashIndex(0)
+    setHashIndex(0)
+    setMentionIndex(0)
   }
 
-  const syncCaretFromEvent = (
-    e:
-      | React.ChangeEvent<HTMLTextAreaElement>
-      | React.KeyboardEvent<HTMLTextAreaElement>
-      | React.MouseEvent<HTMLTextAreaElement>
-      | React.FocusEvent<HTMLTextAreaElement>,
-  ): void => {
-    const t = e.currentTarget
-    setCaret(t.selectionStart ?? t.value.length)
+  // Enter with no open popover submits (popover Enter is claimed by the global
+  // command gated on `acpPromptPopupVisible`, which fires before the editor's
+  // command). Returns true when consumed so the editor doesn't insert a newline.
+  const onEditorEnter = (): boolean => {
+    if (popoverOpen) return false
+    void submit()
+    return true
   }
 
-  const onPromptDragOver = (e: React.DragEvent<HTMLTextAreaElement>): void => {
+  // The editor mounted: rebuild any restored draft's reference pills over the
+  // already-seeded display text (initialText carried the raw text; the pills need
+  // the tracker, which only exists once Monaco is up).
+  const onEditorReady = (): void => {
+    const refs = initialDraftRef.current.refs
+    if (refs.length > 0) editorHandleRef.current?.restoreRefs(refs)
+  }
+
+  // ArrowUp on the first line opens history when nothing else is open. Returns
+  // true when consumed so Monaco doesn't also move the cursor.
+  const onEditorArrowUp = (): boolean => {
+    if (popoverOpen || historyEntries.length === 0) return false
+    historyDraftRef.current = text
+    setHistoryIndex(0)
+    setHistoryOpen(true)
+    return true
+  }
+
+  const onPromptDragOver = (e: React.DragEvent<HTMLDivElement>): void => {
     if (!dragContainsResources(e.dataTransfer)) return
     e.preventDefault()
     // Stop the editor group body from also reacting when the chat input is
@@ -784,7 +952,7 @@ export function PromptInput({
     if (dropActive) setDropActive(false)
   }
 
-  const onPromptDrop = (e: React.DragEvent<HTMLTextAreaElement>): void => {
+  const onPromptDrop = (e: React.DragEvent<HTMLDivElement>): void => {
     setDropActive(false)
     if (!dragContainsResources(e.dataTransfer)) return
     // A resource drop is ours to handle: preventDefault + stopPropagation up
@@ -818,29 +986,22 @@ export function PromptInput({
 
     if (mentionUris.length === 0) return
     const picks = mentionUris.map((uri) => toMentionName(uri, workspaceRoot))
-    let next = text
-    let pos = textareaRef.current?.selectionStart ?? caret
+    const el = editorHandleRef.current
+    if (!el) return
+    // Insert each dropped file as a range-tracked pill at the caret; insertRef
+    // advances the caret past the pill (+ trailing space) so the next one lands
+    // right after it.
     for (const p of picks) {
-      const insert = `@${p.name} `
-      next = next.slice(0, pos) + insert + next.slice(pos)
-      pos += insert.length
+      const at = el.getCaret()
+      el.insertRef(mentionEntryToRef({ uri: p.uri, relPath: p.name }, 'file'), at, at)
     }
-    setText(next)
-    setCaret(pos)
-    setMentions((prev) => picks.reduce((acc, p) => mergeMention(acc, p), prev))
     setMentionDismissed(true)
-    requestAnimationFrame(() => {
-      const el = textareaRef.current
-      if (el) {
-        el.focus()
-        el.setSelectionRange(pos, pos)
-      }
-    })
+    requestAnimationFrame(() => el.focus())
   }
 
   // Ctrl+V of a screenshot / copied image: pull image files out of the
-  // clipboard and attach them. Non-image pastes fall through to the textarea.
-  const onPromptPaste = (e: React.ClipboardEvent<HTMLTextAreaElement>): void => {
+  // clipboard and attach them. Non-image pastes fall through to the editor.
+  const onPromptPaste = (e: ClipboardEvent): void => {
     const items = e.clipboardData?.items
     if (!items) return
     const files: File[] = []
@@ -872,7 +1033,7 @@ export function PromptInput({
             entries={historyEntries}
             activeIndex={Math.min(historyIndex, Math.max(historyEntries.length - 1, 0))}
             onSelect={(entry) => {
-              setText(entry)
+              editorHandleRef.current?.setText(entry, entry.length)
               acceptHistory()
             }}
             onHover={setHistoryIndex}
@@ -884,6 +1045,14 @@ export function PromptInput({
             onSelect={acceptSlash}
             onHover={setSlashIndex}
           />
+        ) : hashOpen && hashQuery !== null ? (
+          <ContextPopover
+            rows={hashRows}
+            activeIndex={Math.min(hashIndex, Math.max(hashRows.length - 1, 0))}
+            loading={hashLoading}
+            onSelect={(entry) => acceptContextRef(entry, hashQuery)}
+            onHover={setHashIndex}
+          />
         ) : mentionOpen && mentionQuery !== null ? (
           <MentionPopover
             entries={mentionMatches}
@@ -893,45 +1062,29 @@ export function PromptInput({
             onHover={setMentionIndex}
           />
         ) : null}
-        <textarea
-          ref={textareaRef}
-          className={[styles['promptTextarea'], dropActive && styles['dropActive']]
+        <div
+          className={[styles['promptEditorHost'], dropActive && styles['dropActive']]
             .filter(Boolean)
             .join(' ')}
-          value={text}
-          onChange={(e) => {
-            if (historyOpen) setHistoryOpen(false)
-            const v = e.target.value
-            const c = e.target.selectionStart ?? v.length
-            // `@@` / `@#` just landed → open the file/folder picker instead of
-            // continuing as plain text (handles the trigger + rewrites the buffer).
-            const trigger = detectFilePickerTrigger(v, c)
-            if (trigger) {
-              void openFilePicker(v, trigger.kind, trigger.start)
-              return
-            }
-            setText(v)
-            setCaret(c)
-            if (extractSlashQuery(v, c) === null) setSlashDismissed(false)
-            // Reset mention dismissal as soon as the `@` token disappears.
-            const next = extractMentionQuery(v, c)
-            if (next === null) setMentionDismissed(false)
-            setSlashIndex(0)
-            setMentionIndex(0)
-          }}
-          onKeyUp={syncCaretFromEvent}
-          onClick={syncCaretFromEvent}
-          onFocus={syncCaretFromEvent}
+          data-testid="acp-prompt-drop-host"
           onDragOver={onPromptDragOver}
           onDragLeave={onPromptDragLeave}
           onDrop={onPromptDrop}
-          onPaste={onPromptPaste}
-          placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
-          rows={3}
-          spellCheck={false}
-          onKeyDown={onKeyDown}
-          data-testid="acp-prompt-input"
-        />
+        >
+          <PromptMonacoEditor
+            handleRef={editorHandleRef}
+            configService={config}
+            placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
+            autoFocus={autoFocus}
+            initialText={initialDraftRef.current.text}
+            initialCaret={initialDraftRef.current.caret}
+            onChange={onEditorChange}
+            onEnter={onEditorEnter}
+            onArrowUp={onEditorArrowUp}
+            onPaste={onPromptPaste}
+            onEditorReady={onEditorReady}
+          />
+        </div>
       </div>
       <div className={styles['promptActions']}>
         <ConfigOptionsBar session={session} />
@@ -981,76 +1134,6 @@ export function extractSlashQuery(text: string, caret: number): string | null {
   return text.slice(1, end)
 }
 
-/** Returns true when the textarea cursor sits on the first visual line. */
-function isOnFirstLine(ta: HTMLTextAreaElement): boolean {
-  const caret = ta.selectionStart ?? 0
-  const beforeCaret = ta.value.slice(0, caret)
-  if (beforeCaret.includes('\n')) return false
-  if (caret === 0) return true
-
-  const doc = ta.ownerDocument
-  const win = doc.defaultView
-  if (!win || !doc.body || ta.clientWidth <= 0) return true
-
-  const computed = win.getComputedStyle(ta)
-  const mirror = doc.createElement('div')
-  mirror.setAttribute('aria-hidden', 'true')
-  mirror.style.position = 'absolute'
-  mirror.style.visibility = 'hidden'
-  mirror.style.pointerEvents = 'none'
-  mirror.style.left = '-10000px'
-  mirror.style.top = '0'
-  mirror.style.width = `${ta.clientWidth}px`
-  mirror.style.height = 'auto'
-  mirror.style.minHeight = '0'
-  mirror.style.maxHeight = 'none'
-  mirror.style.overflow = 'visible'
-  mirror.style.boxSizing = 'border-box'
-  mirror.style.whiteSpace = 'pre-wrap'
-  mirror.style.overflowWrap = 'break-word'
-
-  const copiedProperties = [
-    'direction',
-    'font-family',
-    'font-size',
-    'font-style',
-    'font-variant',
-    'font-weight',
-    'letter-spacing',
-    'line-height',
-    'padding-bottom',
-    'padding-left',
-    'padding-right',
-    'padding-top',
-    'tab-size',
-    'text-indent',
-    'text-rendering',
-    'text-transform',
-    'word-break',
-    'word-spacing',
-  ]
-  for (const property of copiedProperties) {
-    mirror.style.setProperty(property, computed.getPropertyValue(property))
-  }
-
-  const firstLineProbe = doc.createElement('span')
-  firstLineProbe.setAttribute('data-acp-prompt-line-probe', 'start')
-  firstLineProbe.textContent = '\u200b'
-  const caretProbe = doc.createElement('span')
-  caretProbe.setAttribute('data-acp-prompt-line-probe', 'caret')
-  caretProbe.textContent = '\u200b'
-  mirror.append(firstLineProbe, doc.createTextNode(beforeCaret), caretProbe)
-
-  try {
-    doc.body.appendChild(mirror)
-    const firstTop = firstLineProbe.getBoundingClientRect().top
-    const caretTop = caretProbe.getBoundingClientRect().top
-    return Math.abs(caretTop - firstTop) <= 1
-  } finally {
-    mirror.remove()
-  }
-}
-
 function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): string {
   switch (reason) {
     case 'unsupported-type':
@@ -1067,20 +1150,6 @@ function imageRejectMessage(reason: ImageRejectReason, limits: ImageLimits): str
         n: limits.maxCount,
       })
   }
-}
-
-/**
- * Merge a new mention into the existing list, deduplicating by name. We key
- * by display name because that's what the wire-format serializer matches
- * against in {@link composePromptBlocks}.
- */
-function mergeMention(
-  prev: readonly PromptMention[],
-  next: PromptMention,
-): readonly PromptMention[] {
-  const out = prev.filter((m) => m.name !== next.name)
-  out.push(next)
-  return out
 }
 
 /**

@@ -4,17 +4,20 @@
  *  instances so useObservable inside the component reacts to changes.
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
 import {
   Event,
   IConfigurationService,
   IDialogService,
+  IEditorGroupsService,
+  IEditorService,
   IFileDialogService,
   IFileSearchService,
   IFileService,
   INotificationService,
   InstantiationService,
+  IUriIdentityService,
   IWorkspaceService,
   observableValue,
   ServiceCollection,
@@ -23,14 +26,23 @@ import {
 import type {
   IConfigurationService as IConfigurationServiceType,
   IDialogService as IDialogServiceType,
+  IEditorGroupsService as IEditorGroupsServiceType,
+  IEditorService as IEditorServiceType,
   IFileDialogService as IFileDialogServiceType,
   IFileSearchService as IFileSearchServiceType,
   IFileService as IFileServiceType,
   INotificationService as INotificationServiceType,
   ISettableObservable,
+  IUriIdentityService as IUriIdentityServiceType,
   IWorkspace,
   IWorkspaceService as IWorkspaceServiceType,
 } from '@universe-editor/platform'
+import { IDocsService } from '../../../../shared/ipc/docsService.js'
+import type { IDocsService as IDocsServiceType } from '../../../../shared/ipc/docsService.js'
+import { ILanguageFeaturesService } from '../../../services/languageFeatures/LanguageFeaturesService.js'
+import type { ILanguageFeaturesService as ILanguageFeaturesServiceType } from '../../../services/languageFeatures/LanguageFeaturesService.js'
+import { IScmService } from '../../../services/extensions/ScmService.js'
+import type { IScmService as IScmServiceType } from '../../../services/extensions/ScmService.js'
 import type {
   AcpMessage,
   AcpPendingPermission,
@@ -51,6 +63,14 @@ import { ServicesContext } from '../../useService.js'
 import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
+import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
+
+// Preload Monaco once so <PromptMonacoEditor> mounts its (stubbed) editor
+// synchronously — the wrapper mounts sync when MonacoLoader.peek() is warm, so
+// tests can query `acp-prompt-input` right after render like the old textarea.
+beforeAll(async () => {
+  await MonacoLoader.ensureInitialized()
+})
 
 afterEach(() => {
   cleanup()
@@ -140,6 +160,68 @@ const stubFileDialogService: IFileDialogServiceType = {
   showSaveDialog: () => Promise.resolve(undefined),
 } as unknown as IFileDialogServiceType
 
+// --- # context-popover DI stubs -------------------------------------------
+// Minimal shapes for the four ContextSuggestionItem providers' constructor
+// dependencies (see contextSuggestions.ts). Correctness of the providers
+// themselves is covered by contextSuggestions.test.ts; here we only need
+// non-throwing stand-ins so the popover's data-fetching effect can run.
+
+const stubLanguageFeatures: ILanguageFeaturesServiceType = {
+  _serviceBrand: undefined,
+  getWorkspaceSymbolProviders: () => [],
+} as unknown as ILanguageFeaturesServiceType
+
+const stubUriIdentity: IUriIdentityServiceType = {
+  _serviceBrand: undefined,
+  platform: 'linux',
+  isEqual: (a?: URI, b?: URI) => a?.toString() === b?.toString(),
+  isEqualOrParent: () => false,
+  getComparisonKey: (uri: URI) => uri.toString(),
+  arePathsEqual: (a?: string, b?: string) => a === b,
+  getPathComparisonKey: (p: string) => p,
+  relativePathUnder: (root: string, child: string) => {
+    const normRoot = root.replace(/\\/g, '/').replace(/\/$/, '')
+    const normChild = child.replace(/\\/g, '/')
+    if (normChild === normRoot) return ''
+    return normChild.startsWith(normRoot + '/') ? normChild.slice(normRoot.length + 1) : null
+  },
+  createResourceMap: () => new Map() as never,
+  createResourceSet: () => new Set() as never,
+} as unknown as IUriIdentityServiceType
+
+const stubEditorGroupsService: IEditorGroupsServiceType = {
+  _serviceBrand: undefined,
+  groups: [],
+} as unknown as IEditorGroupsServiceType
+
+function makeEditorService(): IEditorServiceType {
+  return {
+    _serviceBrand: undefined,
+    openEditor: () => {},
+    openEditors: observableValue('test.openEditors', []),
+    activeEditorId: observableValue('test.activeEditorId', undefined),
+    activeEditor: observableValue('test.activeEditor', undefined),
+  } as unknown as IEditorServiceType
+}
+
+function makeScmService(paths: readonly string[]): IScmServiceType {
+  const resources = paths.map((p) => ({ resourceUri: p, contextValue: 'M' }))
+  const group = { resources: { get: () => resources } }
+  const sourceControl = { rootUri: '/repo', groups: { get: () => [group] } }
+  return {
+    _serviceBrand: undefined,
+    sourceControls: { get: () => [sourceControl] },
+  } as unknown as IScmServiceType
+}
+
+function makeDocsService(root = '/repo/docs'): IDocsServiceType {
+  return {
+    _serviceBrand: undefined,
+    getDocs: async () => ({}),
+    getDocsRoot: async () => root,
+  } as unknown as IDocsServiceType
+}
+
 function makeWorkspaceService(folder: URI): IWorkspaceServiceType {
   const ws: IWorkspace = { folder, name: 'test' }
   return {
@@ -213,6 +295,9 @@ function renderWithServices(
   opts: {
     fileSearch?: IFileSearchServiceType
     workspace?: IWorkspaceServiceType
+    scm?: IScmServiceType
+    docs?: IDocsServiceType
+    editorService?: IEditorServiceType
   } = {},
 ) {
   const services = new ServiceCollection()
@@ -225,6 +310,12 @@ function renderWithServices(
   services.set(INotificationService, stubNotificationService)
   services.set(IFileService, stubFileService)
   services.set(IFileDialogService, stubFileDialogService)
+  services.set(ILanguageFeaturesService, stubLanguageFeatures)
+  services.set(IUriIdentityService, stubUriIdentity)
+  services.set(IEditorGroupsService, stubEditorGroupsService)
+  services.set(IScmService, opts.scm ?? makeScmService([]))
+  services.set(IDocsService, opts.docs ?? makeDocsService())
+  services.set(IEditorService, opts.editorService ?? makeEditorService())
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -314,20 +405,6 @@ function setPromptHistory(entries: readonly string[]): void {
   act(() => {
     stubHistoryEntries.set(entries, undefined)
   })
-}
-
-function makeDomRect(top: number): DOMRect {
-  return {
-    x: 0,
-    y: top,
-    top,
-    bottom: top,
-    left: 0,
-    right: 0,
-    width: 0,
-    height: 0,
-    toJSON: () => ({}),
-  } as DOMRect
 }
 
 describe('extractSlashQuery', () => {
@@ -588,49 +665,34 @@ describe('PromptInput — submit and cancel', () => {
 })
 
 describe('PromptInput — history navigation', () => {
-  it('does not open history when ArrowUp should move within a soft-wrapped line', () => {
+  it('opens history when ArrowUp is pressed on the first visual row', () => {
     setPromptHistory(['previous prompt'])
-    const originalGetBoundingClientRect = HTMLElement.prototype.getBoundingClientRect
-    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (
-      this: HTMLElement,
-    ) {
-      const probe = this.getAttribute('data-acp-prompt-line-probe')
-      if (probe === 'start') return makeDomRect(10)
-      if (probe === 'caret') return makeDomRect(34)
-      return originalGetBoundingClientRect.call(this)
-    })
-
     renderWithServices(<PromptInput session={makeSession()} />)
     const ta = getTextarea()
-    Object.defineProperty(ta, 'clientWidth', { value: 120, configurable: true })
-    const longLine = 'this is a long prompt line that wraps visually before the caret'
-    fireEvent.change(ta, { target: { value: longLine } })
-    ta.setSelectionRange(longLine.length, longLine.length)
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+
+    expect(screen.getByTestId('acp-history-popover')).toBeTruthy()
+  })
+
+  it('does not open history when ArrowUp moves up within the buffer (caret below row 1)', () => {
+    setPromptHistory(['previous prompt'])
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const ta = getTextarea()
+    // Two logical lines: with the caret on line 2 the editor's top-of-caret sits
+    // below the first visual row, so ArrowUp is a cursor move, not history open.
+    const text = 'first line\nsecond line'
+    fireEvent.change(ta, { target: { value: text } })
+    ta.setSelectionRange(text.length, text.length)
 
     fireEvent.keyDown(ta, { key: 'ArrowUp' })
 
     expect(screen.queryByTestId('acp-history-popover')).toBeNull()
-    expect(ta.value).toBe(longLine)
-  })
-})
-
-describe('PromptInput — textarea sizing and browser checks', () => {
-  it('disables browser spellcheck underlines', () => {
-    renderWithServices(<PromptInput session={makeSession()} />)
-    expect(getTextarea().getAttribute('spellcheck')).toBe('false')
-  })
-
-  it('relies on native field-sizing for auto-grow instead of JS height writes', () => {
-    renderWithServices(<PromptInput session={makeSession()} />)
-    const ta = getTextarea()
-
-    fireEvent.change(ta, {
-      target: { value: Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n') },
-    })
-
-    // No inline height is written: sizing is delegated to CSS `field-sizing: content`
-    // with min/max-height bounds, so the box can never get stuck at a stale pixel value.
-    expect(ta.style.height).toBe('')
+    expect(ta.value).toBe(text)
   })
 })
 
@@ -646,9 +708,9 @@ function typeAt(ta: HTMLTextAreaElement, value: string, caret = value.length): v
   fireEvent.keyUp(ta, { key: 'a' })
 }
 
-describe('PromptInput — @-mention popover', () => {
-  const FILES = ['/repo/src/main.ts', '/repo/src/index.ts', '/repo/README.md']
+const FILES = ['/repo/src/main.ts', '/repo/src/index.ts', '/repo/README.md']
 
+describe('PromptInput — @-mention popover', () => {
   it('does not open the popover when there is no workspace', async () => {
     renderWithServices(<PromptInput session={makeSession()} />)
     typeAt(getTextarea(), '@')
@@ -702,18 +764,20 @@ describe('PromptInput — @-mention popover', () => {
     })
     typeAt(ta, '@main')
     act(() => handleRef.current.popoverAccept())
-    // PromptInput inserts the relative path with a trailing space.
+    // The accepted mention is inserted as a tracked pill (display text + space).
     expect(ta.value).toContain('@src/main.ts')
     // The popover collapses (we dismissed it on accept).
     expect(screen.queryByTestId('acp-mention-popover')).toBeNull()
-    // Submitting should hand the recorded mention to sendPrompt.
-    fireEvent.change(ta, { target: { value: '@src/main.ts please review' } })
+    // Submitting hands the range-tracked ref to sendPrompt as the 2nd arg.
     fireEvent.keyDown(ta, { key: 'Enter' })
     expect(session.sendPrompt).toHaveBeenCalledTimes(1)
-    const [, mentions] = session.sendPrompt.mock.calls[0]!
-    expect(mentions).toEqual([
-      { uri: URI.file('/repo/src/main.ts').toString(), name: 'src/main.ts' },
-    ])
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'file',
+      label: 'src/main.ts',
+      uri: URI.file('/repo/src/main.ts').toString(),
+    })
   })
 
   it('popoverHide dismisses the mention popover without clearing the text', async () => {
@@ -749,6 +813,140 @@ describe('PromptInput — @-mention popover', () => {
 })
 
 // ---------------------------------------------------------------------------
+// #-context popover — structural twin of the @-mention block above. Provider
+// correctness (fuzzy ranking, normalization, dedup) is already covered by
+// contextSuggestions.test.ts; here we only exercise the popover's keyboard
+// wiring. makeScmService gives a couple of "local change" rows and the
+// default docs stub always yields one "文档" row, which together are enough
+// suggestions to drive navigation without touching every provider.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — # context popover', () => {
+  async function flush(): Promise<void> {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  it('does not open the popover when there is no workspace', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    typeAt(getTextarea(), '#')
+    expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+  })
+
+  it('opens the popover and lists context suggestions when the user types #', async () => {
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService(['/repo/src/a.ts', '/repo/src/b.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    expect(screen.getByTestId('acp-context-popover')).toBeTruthy()
+    // 2 local-change rows + 1 docs row.
+    expect(screen.getAllByRole('option')).toHaveLength(3)
+  })
+
+  it('popoverSelectNext/Prev move the active row across groups', async () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService(['/repo/src/a.ts', '/repo/src/b.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
+    act(() => handleRef.current.popoverSelectNext())
+    expect(screen.getAllByRole('option')[1]?.getAttribute('aria-selected')).toBe('true')
+    act(() => handleRef.current.popoverSelectPrev())
+    expect(screen.getAllByRole('option')[0]?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('accepting a suggestion inserts a #label pill and records a ref for send', async () => {
+    const session = makeSession()
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={session} handleRef={handleRef} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService([]),
+      docs: makeDocsService('/repo/docs'),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    expect(screen.getByTestId('acp-context-popover')).toBeTruthy()
+    act(() => handleRef.current.popoverAccept())
+    // DocsContextProvider's fixed label — a label WITH SPACES, the whole reason
+    // for by-range tracking. Inserted as a pill (display text + trailing space).
+    expect(ta.value).toContain('#Editor User Guide')
+    expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledTimes(1)
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'docs',
+      label: 'Editor User Guide',
+      uri: URI.file('/repo/docs').toString(),
+      meta: { description: expect.any(String) },
+    })
+  })
+
+  it('popoverHide dismisses the # popover without clearing the text', async () => {
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService(['/repo/src/a.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    expect(screen.getByTestId('acp-context-popover')).toBeTruthy()
+    act(() => handleRef.current.popoverHide())
+    expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+    expect(ta.value).toBe('#')
+  })
+
+  it('does not also open the @-mention popover while # is active', async () => {
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: makeFileSearch(FILES),
+      scm: makeScmService(['/repo/src/a.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    expect(screen.getByTestId('acp-context-popover')).toBeTruthy()
+    expect(screen.queryByTestId('acp-mention-popover')).toBeNull()
+  })
+
+  it('does not also open the # popover while @ is active', async () => {
+    renderWithServices(<PromptInput session={makeSession()} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      fileSearch: makeFileSearch(FILES),
+      scm: makeScmService(['/repo/src/a.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '@')
+    await flush()
+    expect(screen.getByTestId('acp-mention-popover')).toBeTruthy()
+    expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+  })
+
+  it('slash popover takes precedence over the # popover while composing a slash command', () => {
+    renderWithServices(<PromptInput session={makeSession({ commands: COMMANDS })} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService(['/repo/src/a.ts']),
+    })
+    const ta = getTextarea()
+    typeAt(ta, '/diff')
+    expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
+    expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
 // File / folder picker triggers — `@@` opens a file picker, `@#` a folder
 // picker (SimpleFileDialog). On pick the chosen resource is spliced in as an
 // @-mention and recorded so it serializes to a resource_link on send.
@@ -771,14 +969,17 @@ describe('PromptInput — @@ / @# file picker triggers', () => {
     const opts = showOpenDialogSpy.mock.calls[0]![0]
     expect(opts.canSelectFiles).toBe(true)
     expect(opts.canSelectFolders).toBe(false)
-    // The `@@` trigger is gone; the workspace-relative mention is inserted.
+    // The `@@` trigger is gone; the workspace-relative mention pill is inserted.
     expect(ta.value).toBe('@src/main.ts ')
-    // Submitting hands the recorded mention to sendPrompt.
+    // Submitting hands the range-tracked ref to sendPrompt.
     fireEvent.keyDown(ta, { key: 'Enter' })
-    const [, mentions] = session.sendPrompt.mock.calls[0]!
-    expect(mentions).toEqual([
-      { uri: URI.file('/repo/src/main.ts').toString(), name: 'src/main.ts' },
-    ])
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'file',
+      label: 'src/main.ts',
+      uri: URI.file('/repo/src/main.ts').toString(),
+    })
   })
 
   it('opens the folder picker on @# with folders selectable', async () => {
@@ -822,10 +1023,8 @@ describe('PromptInput — @@ / @# file picker triggers', () => {
     })
     const ta = getTextarea()
     fireEvent.change(ta, { target: { value: 'see @@ please', selectionStart: 6 } })
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 0))
-    })
-    expect(ta.value).toBe('see @a.ts please')
+
+    await waitFor(() => expect(ta.value).toBe('see @a.ts please'))
   })
 })
 
@@ -891,7 +1090,7 @@ describe('PromptInput — draft persistence', () => {
     expect(getTextarea().value).toBe('unfinished thought')
   })
 
-  it('restores recorded mentions so a remounted draft still sends resource_links', async () => {
+  it('restores tracked refs so a remounted draft still sends its references', async () => {
     const session = makeSession({ id: 's1' })
     const opts = {
       workspace: makeWorkspaceService(URI.file('/repo')),
@@ -905,19 +1104,22 @@ describe('PromptInput — draft persistence', () => {
       await new Promise((r) => setTimeout(r, 0))
     })
     typeAt(ta, '@main')
-    act(() => handleRef.current.popoverAccept()) // accept mention → records it
+    act(() => handleRef.current.popoverAccept()) // accept mention → tracked pill
     expect(ta.value).toContain('@src/main.ts')
 
-    cleanup() // switch away: PromptInput unmounts, draft + mention cached
+    cleanup() // switch away: PromptInput unmounts, draft + ref cached
     renderWithServices(<PromptInput session={session} />, opts)
     const restored = getTextarea()
     expect(restored.value).toContain('@src/main.ts')
     fireEvent.keyDown(restored, { key: 'Enter' }) // submit the restored draft
     expect(session.sendPrompt).toHaveBeenCalledTimes(1)
-    const [, mentions] = session.sendPrompt.mock.calls[0]!
-    expect(mentions).toEqual([
-      { uri: URI.file('/repo/src/main.ts').toString(), name: 'src/main.ts' },
-    ])
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'file',
+      label: 'src/main.ts',
+      uri: URI.file('/repo/src/main.ts').toString(),
+    })
   })
 
   it('clears the draft after the prompt is sent', () => {

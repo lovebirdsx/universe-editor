@@ -47,6 +47,7 @@ import { DiffEditorInput } from '../services/editor/DiffEditorInput.js'
 import { DiffEditorRegistry } from '../services/editor/DiffEditorRegistry.js'
 import { MonacoLoader } from '../workbench/editor/monaco/MonacoLoader.js'
 import { DirtyDiffPeekRegistry } from '../workbench/scm/dirtyDiff/DirtyDiffPeekRegistry.js'
+import { AcpPromptDraftCache } from '../services/acp/acpPromptDraftCache.js'
 import { applyViewDrop } from '../workbench/dnd/applyViewDrop.js'
 import {
   E2E_PROBE_ENABLED_KEY,
@@ -366,6 +367,11 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')
       await s.sendPrompt(text)
+    },
+    getAcpPromptText: () => {
+      const id = services.acpSessionService.activeSessionId.get()
+      if (!id) return ''
+      return AcpPromptDraftCache.load(id)?.text ?? ''
     },
     getAcpMessages: () => {
       const s = services.acpSessionService.activeSession.get()
