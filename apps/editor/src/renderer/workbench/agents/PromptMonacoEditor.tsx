@@ -26,6 +26,48 @@ import styles from './agents.module.css'
 /** Global CSS class Monaco paints on the inline reference-pill decoration. */
 const PILL_CLASS_NAME = 'acp-prompt-ref-pill'
 
+// unicodeHighlight matching FileEditor: never flag CJK. Without this Monaco's
+// default ambiguous-character highlight paints a yellow box around full-width
+// punctuation (，。！…), which is wrong for a prose prompt input.
+const PROMPT_UNICODE_HIGHLIGHT: NonNullable<monaco.editor.IEditorOptions['unicodeHighlight']> = {
+  nonBasicASCII: false,
+  allowedLocales: { _os: true, _vscode: true, 'zh-hans': true, 'zh-hant': true },
+}
+
+// Minimal shape of Monaco's inline-completions controller, just enough to read
+// whether ghost text is currently on screen at the cursor.
+interface GhostTextLike {
+  isEmpty(): boolean
+}
+interface InlineStateLike {
+  readonly primaryGhostText?: GhostTextLike
+}
+interface ObservableLike<T> {
+  get(): T
+}
+interface InlineModelLike {
+  readonly inlineCompletionState: ObservableLike<InlineStateLike | undefined>
+}
+interface InlineControllerLike {
+  readonly model: ObservableLike<InlineModelLike | undefined>
+  dispose(): void
+}
+
+/**
+ * Whether an inline suggestion (ghost text) is visible at the cursor. Read
+ * synchronously off the controller so a Tab keydown can decide, in the same
+ * tick, whether to accept it (like a normal editor) or fall through to indent.
+ * Mirrors the observable bridgeInlineSuggestionVisible follows in editorFocus.ts.
+ */
+function isInlineSuggestionVisible(ed: monaco.editor.IStandaloneCodeEditor): boolean {
+  if (typeof ed.getContribution !== 'function') return false
+  const controller = ed.getContribution<InlineControllerLike>(
+    'editor.contrib.inlineCompletionsController',
+  )
+  const ghost = controller?.model.get()?.inlineCompletionState.get()?.primaryGhostText
+  return !!ghost && !ghost.isEmpty()
+}
+
 /** Imperative surface <PromptInput> uses in place of a textarea DOM node. */
 export interface PromptEditorHandle {
   focus(): boolean
@@ -270,6 +312,7 @@ export function PromptMonacoEditor({
           occurrencesHighlight: 'off',
           selectionHighlight: false,
           matchBrackets: 'never',
+          unicodeHighlight: PROMPT_UNICODE_HIGHLIGHT,
           padding: { top: 4, bottom: 4 },
           placeholder,
         },
@@ -321,6 +364,23 @@ export function PromptMonacoEditor({
       // and lets Monaco move the cursor up within a soft-wrapped line elsewhere.
       const dom = ed.getContainerDomNode()
       const keydownHandler = (e: KeyboardEvent): void => {
+        // Tab accepts an inline completion when ghost text is showing, matching a
+        // normal editor. With editContext: true Monaco's own Tab dispatch can't be
+        // relied on to commit (see inlineCompletionActions.ts), so we drive the
+        // commit command here. No ghost text → let Tab fall through to indent.
+        if (e.key === 'Tab' && !e.shiftKey && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          if (isInlineSuggestionVisible(ed)) {
+            // stopPropagation (not just preventDefault) is essential: this runs
+            // in the capture phase, but Monaco's keybinding dispatch listens on
+            // the same node in the bubble phase and ignores defaultPrevented, so
+            // without stopping propagation Tab would also indent (a stray tab
+            // after the accepted completion).
+            e.preventDefault()
+            e.stopPropagation()
+            ed.trigger('keyboard', 'editor.action.inlineSuggest.commit', undefined)
+          }
+          return
+        }
         if (e.key !== 'ArrowUp' || e.shiftKey || e.altKey || e.ctrlKey || e.metaKey) return
         const pos = ed.getPosition()
         if (!pos) return
