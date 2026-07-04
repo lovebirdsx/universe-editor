@@ -29,6 +29,7 @@ import {
   type DeepLinkTarget,
 } from '../shared/deepLink.js'
 import { installMainProtocolDispatcher } from './ipc/electronProtocol.js'
+import { parseFileToOpen } from './cliArgs.js'
 import { installImageProtocol, IMAGE_SCHEME_PRIVILEGE } from './ipc/imageProtocol.js'
 import { APP_SCHEME_PRIVILEGE, installAppProtocolHandler } from './ipc/resourceProtocol.js'
 import { LogMainService, ILogMainService } from './services/log/logMainService.js'
@@ -90,16 +91,6 @@ const environmentService = new EnvironmentMainService({
   env: process.env,
   isDev: import.meta.env.DEV,
 })
-
-// Extract the first positional argument (file or directory) to open at startup.
-// Windows file associations pass the file path as a plain argument.
-// Packaged: argv[0]=exe, argv[1+]=user args
-// Dev:      argv[0]=electron, argv[1]=main script, argv[2+]=user args
-function parseFileToOpen(argv: readonly string[], isPackaged: boolean): string | undefined {
-  return argv
-    .slice(isPackaged ? 1 : 2)
-    .find((a) => !a.startsWith('-') && a.length > 0 && !isDeepLink(a))
-}
 
 // A `universe-editor://` deep link is passed just like a file path (as a plain
 // argv entry on Windows / Linux). Pick it out separately so it routes through
