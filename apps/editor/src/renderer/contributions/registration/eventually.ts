@@ -8,6 +8,7 @@
 import { ContributionsRegistry, WorkbenchPhase } from '@universe-editor/platform'
 import { AgentBinaryPrefetchContribution } from '../AgentBinaryPrefetchContribution.js'
 import { ExtensionsContribution } from '../ExtensionsContribution.js'
+import { WorkspaceWatchContribution } from '../WorkspaceWatchContribution.js'
 
 // Idle-time background prefetch of the Claude / codex-acp binaries so upgrading
 // is instant. Eventually so it never competes with startup work; the fetch only
@@ -30,3 +31,11 @@ ContributionsRegistry.registerContribution(
 // TS/JS language features (providers / document sync / diagnostics) now live in
 // the built-in `extensions/typescript` plugin, which self-spawns the
 // typescript-language-server and registers through the languages API.
+
+// Cold-start Explorer watcher: arms the parcel recursive subscribe once the
+// workbench is idle, well after first mount. See WorkspaceWatchContribution.
+ContributionsRegistry.registerContribution(
+  'workbench.contrib.workspaceWatch',
+  WorkspaceWatchContribution,
+  WorkbenchPhase.Eventually,
+)

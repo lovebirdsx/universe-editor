@@ -106,6 +106,9 @@ describe('Explorer external file creation through IPC (integration)', () => {
     ws.hydrate(URI.file(rootDir))
 
     await waitFor(() => tree.isExpanded(tree.root!) && tree.getChildren(tree.root!) !== null)
+    // Cold start (even via the async hydrate above) defers the watch to
+    // WorkspaceWatchContribution (Eventually phase); simulate it explicitly.
+    tree.startWatching()
   })
 
   afterEach(async () => {

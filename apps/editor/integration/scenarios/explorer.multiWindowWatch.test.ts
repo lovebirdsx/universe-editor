@@ -93,9 +93,13 @@ describe('FileWatcher is per-window across two windows', () => {
     // Each window has its own watcher instance, mirroring the per-window scope in main.
     treeA = makeTree(watcherA, dirA)
     await waitFor(() => treeA.isExpanded(treeA.root!) && treeA.getChildren(treeA.root!) !== null)
+    // Cold start defers the watch to WorkspaceWatchContribution (Eventually
+    // phase); simulate it explicitly since this test builds the tree standalone.
+    treeA.startWatching()
 
     treeB = makeTree(watcherB, dirB)
     await waitFor(() => treeB.isExpanded(treeB.root!) && treeB.getChildren(treeB.root!) !== null)
+    treeB.startWatching()
     // Let both subscriptions settle.
     await new Promise((r) => setTimeout(r, 200))
 

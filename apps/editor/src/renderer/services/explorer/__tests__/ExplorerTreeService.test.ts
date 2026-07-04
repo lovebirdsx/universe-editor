@@ -543,8 +543,11 @@ describe('ExplorerTreeService', () => {
   })
 
   it('switching workspace re-arms the watcher on the new root', async () => {
-    inst.createInstance(ExplorerTreeService)
+    const tree = inst.createInstance(ExplorerTreeService)
     await flush()
+    // Cold start defers the watch to WorkspaceWatchContribution (Eventually
+    // phase); simulate it explicitly rather than relying on idle timing.
+    tree.startWatching()
     expect(watcher.watched.map((u) => URI.revive(u)?.toString())).toContain(root.toString())
     const other = URI.file('/other')
     fs.dirs.set(other.toString(), [])

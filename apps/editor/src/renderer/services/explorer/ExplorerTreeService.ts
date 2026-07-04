@@ -94,6 +94,16 @@ export class ExplorerTreeService extends Disposable {
   private _clipboardResources: readonly IExplorerResourceOperation[] = []
   private _clipboardIsCut = false
   private readonly _logger: ILogger
+  // Cold start defers arming the recursive watcher until startWatching() is
+  // called (WorkbenchPhase.Eventually). IWorkspaceService.current is hydrated
+  // asynchronously over IPC, so the very first onDidChangeWorkspace firing
+  // (not just the constructor's synchronous read) is still "cold start" and
+  // must be deferred too — but only up until IWorkspaceService.whenReady
+  // resolves. A user opening a folder into an empty window (or any workspace
+  // switch) after that point is a genuine runtime action, not cold start, and
+  // must sync immediately even if startWatching() hasn't fired yet.
+  private _watchStarted = false
+  private _coldStartSettled = false
 
   private readonly _dataSource: ITreeDataSource<IExplorerEntry> = {
     getId: (e) => e.resource.toString(),
@@ -179,6 +189,9 @@ export class ExplorerTreeService extends Disposable {
     this._register(this._model.onReveal(({ id }) => this._onReveal.fire(URI.parse(id))))
     this._setRoot(this._workspace.current?.folder ?? null)
     this._register(this._workspace.onDidChangeWorkspace((w) => this._setRoot(w?.folder ?? null)))
+    void this._workspace.whenReady.then(() => {
+      this._coldStartSettled = true
+    })
     this._register(this._watcher.onDidChangeFiles((events) => this._onWatcherEvents(events)))
     this._register(this._exclude.onDidChange(() => this._onExcludeChange()))
   }
@@ -607,14 +620,60 @@ export class ExplorerTreeService extends Disposable {
     this._model.reset()
     if (normalized) {
       void this._model.expand(this._rootEntry(normalized))
+    }
+    // Before the watcher has ever armed, a root assignment during cold start
+    // (including the first onDidChangeWorkspace firing while
+    // IWorkspaceService is still hydrating over IPC) skips the parcel
+    // recursive subscribe here; it only feeds later refresh, not the first
+    // paint (root expansion above already covers that). WorkspaceWatchContribution
+    // calls startWatching() once the workbench reaches WorkbenchPhase.Eventually,
+    // well after mount, so it never competes with the renderer restore window
+    // for main-process CPU. Once armed, or once cold start has settled (a
+    // genuine runtime workspace switch, e.g. opening a folder into an empty
+    // window), root changes sync immediately below.
+    if (this._watchStarted || this._coldStartSettled) {
+      this._syncWatch(normalized)
+    }
+  }
+
+  /**
+   * (Re-)arm the watcher for the current root. Called by WorkspaceWatchContribution
+   * once the workbench reaches its idle phase, to arm the cold-start watch that
+   * `_setRoot` skips until this fires. Idempotent — safe to call more than once.
+   * The parcel watcher only reports changes from the moment it subscribes, so
+   * anything created/removed externally during the deferral window would
+   * otherwise be invisible forever — rescan already-loaded directories once to
+   * catch up.
+   */
+  startWatching(): void {
+    if (this._watchStarted) return
+    this._watchStarted = true
+    this._syncWatch(this._root)
+    this._refreshLoadedNodes()
+  }
+
+  /** (Re-)arm or tear down the recursive file watcher for `root`. Idempotent — the main-process watcher dedupes same-root re-subscribes. */
+  private _syncWatch(root: URI | null): void {
+    if (root) {
       void this._watcher
-        .watch(normalized.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
+        .watch(root.toJSON(), { excludes: this._exclude.currentWatcherGlobs })
         .catch(() => {
-          this._logger.warn(`watch failed ${normalized.toString()}`)
+          this._logger.warn(`watch failed ${root.toString()}`)
         })
     } else {
       void this._watcher.unwatch().catch(() => {})
     }
+  }
+
+  /** Re-read every already-loaded directory (expansion state preserved) and refresh the model. */
+  private _refreshLoadedNodes(): void {
+    const loaded: URI[] = []
+    for (const [key, node] of this._nodes) {
+      if (node.children !== null) loaded.push(URI.parse(key))
+    }
+    void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u)))).then(() =>
+      this._model.refresh(),
+    )
   }
 
   /**
@@ -626,13 +685,7 @@ export class ExplorerTreeService extends Disposable {
     if (this._root) {
       void this._watcher.setExcludes(this._exclude.currentWatcherGlobs).catch(() => {})
     }
-    const loaded: URI[] = []
-    for (const [key, node] of this._nodes) {
-      if (node.children !== null) loaded.push(URI.parse(key))
-    }
-    void Promise.all(loaded.map((u) => this._loadChildren(u, this._ensureNode(u)))).then(() =>
-      this._model.refresh(),
-    )
+    this._refreshLoadedNodes()
   }
 
   private _onWatcherEvents(events: readonly IFileChangeEvent[]): void {
