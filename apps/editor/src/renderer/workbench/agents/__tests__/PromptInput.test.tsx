@@ -9,6 +9,8 @@ import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-libra
 import {
   Event,
   IConfigurationService,
+  IContextKeyService,
+  ContextKeyService,
   IDialogService,
   IEditorGroupsService,
   IEditorService,
@@ -298,6 +300,7 @@ function renderWithServices(
     scm?: IScmServiceType
     docs?: IDocsServiceType
     editorService?: IEditorServiceType
+    contextKeyService?: IContextKeyService
   } = {},
 ) {
   const services = new ServiceCollection()
@@ -316,6 +319,7 @@ function renderWithServices(
   services.set(IScmService, opts.scm ?? makeScmService([]))
   services.set(IDocsService, opts.docs ?? makeDocsService())
   services.set(IEditorService, opts.editorService ?? makeEditorService())
+  services.set(IContextKeyService, opts.contextKeyService ?? new ContextKeyService())
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -1064,6 +1068,23 @@ describe('PromptInput — focus handoff', () => {
     expect(document.activeElement).not.toBe(ta)
     rerender(<PromptInput session={session} />)
     expect(document.activeElement).not.toBe(ta)
+  })
+
+  // Regression: the prompt editor (editContext: true, no DOM-editable focus host)
+  // must mirror focus onto `editorTextFocus`, or the global keybinding handler
+  // treats it as a non-text surface and a global `delete` binding (delete-file)
+  // swallows the Delete key — Delete does nothing in the input. See
+  // editor-text-focus-stuck-swallows-keys for the mirror-image bug.
+  it('sets editorTextFocus while the prompt editor holds focus, clears on blur', () => {
+    const contextKeyService = new ContextKeyService()
+    renderWithServices(<PromptInput session={makeSession()} />, { contextKeyService })
+    const ta = getTextarea()
+
+    expect(contextKeyService.get('editorTextFocus')).not.toBe(true)
+    act(() => ta.focus())
+    expect(contextKeyService.get('editorTextFocus')).toBe(true)
+    act(() => ta.blur())
+    expect(contextKeyService.get('editorTextFocus')).toBe(false)
   })
 })
 

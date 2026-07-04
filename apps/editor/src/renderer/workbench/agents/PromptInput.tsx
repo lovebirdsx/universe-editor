@@ -29,6 +29,7 @@ import {
 } from 'react'
 import {
   IConfigurationService,
+  IContextKeyService,
   IFileDialogService,
   IFileSearchService,
   IFileService,
@@ -216,6 +217,7 @@ export function PromptInput({
   const historyService = useService(IAcpPromptHistoryService)
   const notification = useService(INotificationService)
   const fileService = useService(IFileService)
+  const contextKeyService = useService(IContextKeyService)
   const workspaceRoot = workspace.current?.folder
 
   const status = useObservable(session.status)
@@ -1074,6 +1076,7 @@ export function PromptInput({
           <PromptMonacoEditor
             handleRef={editorHandleRef}
             configService={config}
+            contextKeyService={contextKeyService}
             placeholder={localize('acp.prompt.placeholder', 'Ask the agent…')}
             autoFocus={autoFocus}
             initialText={initialDraftRef.current.text}

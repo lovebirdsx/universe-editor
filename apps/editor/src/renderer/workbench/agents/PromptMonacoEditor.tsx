@@ -16,9 +16,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { useEffect, useImperativeHandle, useRef, type Ref } from 'react'
-import type { IConfigurationService } from '@universe-editor/platform'
+import type { IConfigurationService, IContextKeyService } from '@universe-editor/platform'
 import type { monaco } from '../editor/monaco/MonacoLoader.js'
 import { MonacoLoader } from '../editor/monaco/MonacoLoader.js'
+import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { PromptRefTracker } from '../../services/acp/promptRefTracker.js'
 import type { PlacedRef, PromptRef } from '../../services/acp/promptRef.js'
 import styles from './agents.module.css'
@@ -110,6 +111,7 @@ export type PromptChangeSource = 'user' | 'program'
 export interface PromptMonacoEditorProps {
   readonly handleRef: Ref<PromptEditorHandle>
   readonly configService: IConfigurationService
+  readonly contextKeyService: IContextKeyService
   readonly placeholder: string
   readonly autoFocus?: boolean
   /** Seed text (restored draft), applied once on mount. */
@@ -129,6 +131,7 @@ export interface PromptMonacoEditorProps {
 export function PromptMonacoEditor({
   handleRef,
   configService,
+  contextKeyService,
   placeholder,
   autoFocus,
   initialText,
@@ -337,6 +340,21 @@ export function PromptMonacoEditor({
       )
       disposables.push(ed.onDidChangeCursorPosition(() => emitChange()))
 
+      // Bridge Monaco text focus → the global `editorTextFocus` contextKey, the
+      // same split FileEditor maintains. With editContext: true the editor's
+      // focus host is not a DOM-editable element, so isEditableTarget() can't see
+      // it; the global keybinding handler relies on `editorTextFocus` to reserve
+      // native editing keys (Delete/Backspace) for the editor. Without this a
+      // global `delete` binding (delete-file) steals the key and Delete does
+      // nothing in the prompt. Clear on blur; also re-sync on unmount so a
+      // lingering true (blur can lag dispose) doesn't leak.
+      disposables.push(
+        ed.onDidFocusEditorText(() => contextKeyService.set('editorTextFocus', true)),
+      )
+      disposables.push(
+        ed.onDidBlurEditorText(() => contextKeyService.set('editorTextFocus', false)),
+      )
+
       // Auto-grow: size the container to the content between a 3-line floor and
       // a 16-line ceiling (past which Monaco's own scrollbar takes over). Mirrors
       // the old textarea's field-sizing min/max.
@@ -424,6 +442,10 @@ export function PromptMonacoEditor({
       editorRef.current = null
       modelRef.current = null
       monacoRef.current = null
+      // onDidBlurEditorText may not fire before dispose, leaving editorTextFocus
+      // stuck true (see editor-text-focus-stuck-swallows-keys). Reconcile it
+      // against actual DOM focus so it never lingers past unmount.
+      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     }
     // Create once; theme/font live-updates handled by the effect below.
     // eslint-disable-next-line react-hooks/exhaustive-deps

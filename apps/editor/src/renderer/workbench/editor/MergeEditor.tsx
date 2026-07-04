@@ -13,6 +13,7 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import {
   IConfigurationService,
+  IContextKeyService,
   IEditorGroupsService,
   localize,
   type IEditorInput,
@@ -24,6 +25,7 @@ import { languageForResource } from '../files/resourceLanguage.js'
 import { MergeEditorInput } from '../../services/editor/MergeEditorInput.js'
 import { MergeEditorRegistry } from '../../services/editor/MergeEditorRegistry.js'
 import { InlineConflictController } from '../scm/mergeConflict/inlineConflictController.js'
+import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
 import styles from './MergeEditor.module.css'
 
@@ -39,6 +41,7 @@ function fontSize(config: IConfigurationService): number {
 export function MergeEditor({ input }: { input: IEditorInput }) {
   const mergeInput = input as MergeEditorInput
   const configService = useService(IConfigurationService)
+  const contextKeyService = useService(IContextKeyService)
   const groupsService = useService(IEditorGroupsService)
   const group = useContext(EditorGroupContext)
 
@@ -122,6 +125,19 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
       mergeInput.setResult(resultModel.getValue())
     })
 
+    // Bridge the editable Result pane's text focus → global `editorTextFocus`,
+    // like FileEditor. With editContext: true (Monaco 0.55 default) the focus
+    // host is not DOM-editable, so the global keybinding handler relies on this
+    // key to reserve native editing keys (Delete/Backspace) for the editor —
+    // without it a global `delete` binding (delete-file) swallows Delete in the
+    // Result pane. See editor-text-focus-stuck-swallows-keys.
+    const textFocusSub = resultEditor.onDidFocusEditorText(() =>
+      contextKeyService.set('editorTextFocus', true),
+    )
+    const textBlurSub = resultEditor.onDidBlurEditorText(() =>
+      contextKeyService.set('editorTextFocus', false),
+    )
+
     MergeEditorRegistry.register(mergeInput, resultEditor, group?.id)
 
     const activeGroup = groupsService.activeGroup
@@ -132,14 +148,19 @@ export function MergeEditor({ input }: { input: IEditorInput }) {
     return () => {
       countSub.dispose()
       contentSub.dispose()
+      textFocusSub.dispose()
+      textBlurSub.dispose()
       controller.dispose()
       MergeEditorRegistry.unregister(mergeInput, resultEditor)
       currentDiff.dispose()
       incomingDiff.dispose()
       resultEditor.dispose()
       for (const m of models) m.dispose()
+      // Blur may not fire before dispose; reconcile editorTextFocus against
+      // actual DOM focus so it never lingers true past unmount.
+      queueMicrotask(() => syncEditorFocusContext(contextKeyService))
     }
-  }, [monacoNs, mergeInput, group, configService, groupsService])
+  }, [monacoNs, mergeInput, group, configService, groupsService, contextKeyService])
 
   const complete = () => {
     void (async () => {

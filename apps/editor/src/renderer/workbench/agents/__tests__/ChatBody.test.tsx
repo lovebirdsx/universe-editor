@@ -11,6 +11,8 @@ import {
   Event,
   IConfigurationService,
   ICommandService,
+  IContextKeyService,
+  ContextKeyService,
   IFileSearchService,
   IFileService,
   InstantiationService,
@@ -151,6 +153,7 @@ function makeInstantiation(
   onCommand?: (id: string) => void,
 ) {
   const services = new ServiceCollection()
+  services.set(IContextKeyService, new ContextKeyService())
   services.set(IAcpSessionService, {
     _serviceBrand: undefined,
     activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),

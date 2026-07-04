@@ -11,6 +11,8 @@ import { render, cleanup, act } from '@testing-library/react'
 import {
   Event,
   IConfigurationService,
+  IContextKeyService,
+  ContextKeyService,
   IFileSearchService,
   IFileService,
   InstantiationService,
@@ -143,6 +145,7 @@ const stubWorkspaceService = {
 
 function makeInstantiation(threshold?: number) {
   const services = new ServiceCollection()
+  services.set(IContextKeyService, new ContextKeyService())
   services.set(IAcpSessionService, {
     _serviceBrand: undefined,
     activeSession: observableValue<IAcpSession | undefined>('t.active', undefined),

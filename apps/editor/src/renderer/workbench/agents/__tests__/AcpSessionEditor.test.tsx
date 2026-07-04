@@ -11,6 +11,8 @@ import {
   InstantiationService,
   ServiceCollection,
   UriIdentityService,
+  ContextKeyService,
+  IContextKeyService,
   observableValue,
   Emitter,
   IEditorService,
@@ -156,6 +158,7 @@ function makeCollection(
 ) {
   const services = new ServiceCollection()
   services.set(IAcpSessionService, service)
+  services.set(IContextKeyService, new ContextKeyService())
   services.set(IAcpSessionHistoryService, history ?? makeHistory())
   services.set(IEditorService, editor)
   services.set(IWorkspaceService, workspace)
