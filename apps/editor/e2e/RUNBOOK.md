@@ -13,13 +13,15 @@
 |---|---|---|---|
 | 核心冒烟（必过） | `@p0` | 并行趟，shard×2 | **是** |
 | 一般冒烟 | `@p1` | 并行趟，shard×2 | 是 |
+| 回归守护（bug guard） | `@regression` | 单独并行趟，shard×2；本地 `pnpm e2e` 默认排除 | 是 |
 | 跨进程 native 竞态隔离 | `@serial` | 单独串行趟 `--workers=1`，仅 shard 1 | 是 |
 | 已知不稳定（headless 偶发） | `@flaky` | 单独趟、`continue-on-error`，仅产报告 | **否** |
 | 启动性能观测 | `@perf` | 单独趟、`continue-on-error`，写 startup-metrics 工件 | 否 |
 | 视觉回归 | `@visual` | 默认排除 | 否 |
 
-- 并行趟统一 `--grep-invert "@visual|@serial|@flaky|@perf"`，把视觉/串行/不稳定/性能用例从主门禁里剥离。
+- 并行趟统一 `--grep-invert "@visual|@serial|@flaky|@perf|@regression"`，把视觉/串行/不稳定/性能/回归守护用例从主门禁里剥离。
 - `@flaky` 趟保留覆盖（仍然跑、仍上传 trace），但不让环境抖动卡住 PR。修好根因后应摘掉 `@flaky` 让它回归门禁。
+- `@regression` 是**单用例级** tag（打在 `test('... @regression')` 标题末尾，而非 `describe`）：一个 spec 文件里核心主路径冒烟留主趟，只为守护某个已修复 bug 的用例打 `@regression`。目的是让本地 `pnpm e2e` 只跑核心冒烟保持轻快，CI 仍全量覆盖回归。何时打：**该用例只为守护已修复 bug、不是命令主路径/协议/导航入口的冒烟**（先例见 `smoke.markdownPreview.spec.ts`）。本地手动全跑回归：`pnpm --filter @universe-editor/editor e2e:regression`。
 
 ---
 

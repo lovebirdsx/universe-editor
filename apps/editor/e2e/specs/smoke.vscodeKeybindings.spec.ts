@@ -35,7 +35,7 @@ const COMMAND = 'editor.action.copyLinesDownAction'
 const WHEN = 'editorTextFocus && !editorReadonly'
 
 test.describe('@p1 vscode keybindings', () => {
-  test('binds a VSCode keybinding to a lazily-registered monaco command', async () => {
+  test('binds a VSCode keybinding to a lazily-registered monaco command @regression', async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-e2e-vscodekb-'))
     writeFileSync(
       join(userDataDir, 'settings.json'),
@@ -115,7 +115,7 @@ test.describe('@p1 vscode keybindings', () => {
   // for the same command (their custom key plus the kept default). Each must
   // survive — an earlier design keyed registrations by command id, so a later
   // entry clobbered the earlier one and the custom key silently stopped working.
-  test('keeps every key when one monaco command has multiple VSCode entries', async () => {
+  test('keeps every key when one monaco command has multiple VSCode entries @regression', async () => {
     // Canonical modifier order (alphabetical) — KeybindingsRegistry stores keys
     // normalized this way, and the probe compares the stored form verbatim.
     const SECOND_KEY = 'alt+shift+down'

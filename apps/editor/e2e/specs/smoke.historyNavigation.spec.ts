@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p0 history navigation', () => {
-  test('GoBack after preview-replacing the previous file reuses the slot (no duplicate tab)', async ({
+  test('GoBack after preview-replacing the previous file reuses the slot (no duplicate tab) @regression', async ({
     page,
     workbench,
   }) => {

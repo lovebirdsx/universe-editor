@@ -158,7 +158,7 @@ test.describe('@p1 markdown preview', () => {
   // showing — not reset to the top. In toggle mode the source editor is detached,
   // so its own preview↔source scroll sync never runs; OpenMarkdownSourceAction
   // carries the preview's top-visible source line back as a one-shot reveal.
-  test('Open Source restores the scrolled preview position onto the source', async ({
+  test('Open Source restores the scrolled preview position onto the source @regression', async ({
     page,
     workbench,
   }) => {
@@ -227,7 +227,7 @@ test.describe('@p1 markdown preview', () => {
   // Regression: scrolling the preview to the very bottom then toggling back must
   // land the source with its LAST line flush at the viewport bottom — not
   // overshoot into Monaco's scroll-beyond-last-line padding (~10+ blank lines).
-  test('Open Source from the preview bottom clamps the source to the last line', async ({
+  test('Open Source from the preview bottom clamps the source to the last line @regression', async ({
     page,
     workbench,
   }) => {
@@ -291,7 +291,10 @@ test.describe('@p1 markdown preview', () => {
 
   // Entering the preview must open aligned to the source file's cursor line, not
   // at the preview's own saved scroll (which defaults to the top).
-  test('Open Preview aligns the preview to the source cursor line', async ({ page, workbench }) => {
+  test('Open Preview aligns the preview to the source cursor line @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -374,7 +377,7 @@ test.describe('@p1 markdown preview', () => {
     await expect(helpButton).toBeVisible()
   })
 
-  test('Light theme keeps headings and ordered lists readable in preview', async ({
+  test('Light theme keeps headings and ordered lists readable in preview @regression', async ({
     page,
     workbench,
   }) => {
@@ -425,7 +428,10 @@ test.describe('@p1 markdown preview', () => {
     expect(styles.listStyleTypes).toEqual(['decimal', 'decimal', 'decimal'])
   })
 
-  test('Outline stays populated after switching to preview', async ({ page, workbench }) => {
+  test('Outline stays populated after switching to preview @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -525,7 +531,7 @@ test.describe('@p1 markdown preview', () => {
       .toBe(false)
   })
 
-  test('Link hints dismiss on Escape', async ({ page, workbench }) => {
+  test('Link hints dismiss on Escape @regression', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -573,7 +579,10 @@ test.describe('@p1 markdown preview', () => {
   // preview, firing focusout → markdownPreviewFocused=false. Every preview
   // keybinding (f / Ctrl+F / link hints) then NO-MATCHed forever. The focus()
   // hook must keep focus inside the preview so the key stays true.
-  test('Escape keeps the preview focused so keys keep working', async ({ page, workbench }) => {
+  test('Escape keeps the preview focused so keys keep working @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -614,7 +623,7 @@ test.describe('@p1 markdown preview', () => {
   // left on the (now-removed) find input's slot and markdownPreviewFocused went
   // false — a second Esc was needed before f / Ctrl+F worked again. closeFind()
   // must restore focus to the scroll container in one step (mirrors ChatBody).
-  test('Closing find with Escape returns focus to the preview in one step', async ({
+  test('Closing find with Escape returns focus to the preview in one step @regression', async ({
     page,
     workbench,
   }) => {
@@ -671,7 +680,7 @@ test.describe('@p1 markdown preview', () => {
     await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
   })
 
-  test('Vim keys scroll the preview (j / gg)', async ({ page, workbench }) => {
+  test('Vim keys scroll the preview (j / gg) @regression', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -724,7 +733,10 @@ test.describe('@p1 markdown preview', () => {
       .toBe(0)
   })
 
-  test('Vim history keys (H) go back through preview navigation', async ({ page, workbench }) => {
+  test('Vim history keys (H) go back through preview navigation @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -777,7 +789,7 @@ test.describe('@p1 markdown preview', () => {
       .toEqual(expect.stringContaining('index.md'))
   })
 
-  test('? toggles the keyboard help overlay', async ({ page, workbench }) => {
+  test('? toggles the keyboard help overlay @regression', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -818,7 +830,10 @@ test.describe('@p1 markdown preview', () => {
   // (firing focusout → clearActive), so the command must resolve the active
   // preview via the editor group rather than the now-empty focus handle.
   // Before the fix the buttons silently did nothing while the shortcut worked.
-  test('clicking the Help title-bar button opens the help overlay', async ({ page, workbench }) => {
+  test('clicking the Help title-bar button opens the help overlay @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -848,7 +863,10 @@ test.describe('@p1 markdown preview', () => {
     await expect(help).toBeVisible()
   })
 
-  test('clicking the Find title-bar button opens the find widget', async ({ page, workbench }) => {
+  test('clicking the Find title-bar button opens the find widget @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -945,7 +963,10 @@ test.describe('@p1 markdown preview', () => {
   // registration, so unless DocEditorInput.focus() routes focus back into the
   // scroll container, the group body grabs it, fires focusout, drops
   // markdownPreviewFocused → a second `f` is silently ignored.
-  test('doc center Escape keeps focus so link hints keep working', async ({ page, workbench }) => {
+  test('doc center Escape keeps focus so link hints keep working @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -980,7 +1001,7 @@ test.describe('@p1 markdown preview', () => {
     await expect(page.locator('[data-testid="md-link-hint"]').first()).toBeVisible()
   })
 
-  test('doc center shows the keyboard help overlay', async ({ page, workbench }) => {
+  test('doc center shows the keyboard help overlay @regression', async ({ page, workbench }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -1012,7 +1033,7 @@ test.describe('@p1 markdown preview', () => {
   // stuck true (its blur can lag), so the global keybinding guard swallowed the
   // bare `f`. focusEditorInput's non-Monaco branch must sync the focus context
   // keys after DocEditorInput.focus() so `f` keeps working after a round-trip.
-  test('doc center keeps link hints working after switching editors and back', async ({
+  test('doc center keeps link hints working after switching editors and back @regression', async ({
     page,
     workbench,
   }) => {
@@ -1050,7 +1071,7 @@ test.describe('@p1 markdown preview', () => {
 
   // A plain click on a doc-to-doc link navigates in place (reusing the tab)
   // rather than piling up a new tab each time — mirrors the markdown preview.
-  test('doc center link navigates in place without opening a new tab', async ({
+  test('doc center link navigates in place without opening a new tab @regression', async ({
     page,
     workbench,
   }) => {
@@ -1085,7 +1106,7 @@ test.describe('@p1 markdown preview', () => {
 
   // After walking a doc→doc link in place, Go Back must return to the previous
   // doc in the SAME tab, not open a new one (the reported Shift+H regression).
-  test('doc center go-back returns in place without opening a new tab', async ({
+  test('doc center go-back returns in place without opening a new tab @regression', async ({
     page,
     workbench,
   }) => {
@@ -1125,7 +1146,10 @@ test.describe('@p1 markdown preview', () => {
 
   // The find / help title-bar buttons belong to every markdown reading surface,
   // so the built-in doc center shows them too (not just the file preview).
-  test('doc center shows the Find and Help title-bar buttons', async ({ page, workbench }) => {
+  test('doc center shows the Find and Help title-bar buttons @regression', async ({
+    page,
+    workbench,
+  }) => {
     test.slow()
     await workbench.waitForRestored()
 
@@ -1154,7 +1178,7 @@ test.describe('@p1 markdown preview', () => {
   // external edits to the file on disk. Before the fix the ExternalChangeWatcher
   // only reconciled FileEditorInputs, so the preview's own acquired model was
   // never updated and the rendered text stayed frozen at first read.
-  test('pure preview (toggle) tracks external edits to the file on disk', async ({
+  test('pure preview (toggle) tracks external edits to the file on disk @regression', async ({
     page,
     workbench,
   }) => {
@@ -1198,7 +1222,7 @@ test.describe('@p1 markdown preview', () => {
   // Same bug, second entry path: a preview reached by clicking a markdown→markdown
   // link (the source was never opened as a FileEditorInput at all) must also track
   // external disk edits.
-  test('pure preview (via link) tracks external edits to the file on disk', async ({
+  test('pure preview (via link) tracks external edits to the file on disk @regression', async ({
     page,
     workbench,
   }) => {

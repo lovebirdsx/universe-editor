@@ -18,7 +18,9 @@ const ROW_HEIGHT = 22
 const FILE_COUNT = 120
 
 test.describe('@p1 explorer row height', () => {
-  test('rows keep their height when the list overflows the viewport', async ({ workbench }) => {
+  test('rows keep their height when the list overflows the viewport @regression', async ({
+    workbench,
+  }) => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-rowh-'))
     await Promise.all(
       Array.from({ length: FILE_COUNT }, (_, i) =>

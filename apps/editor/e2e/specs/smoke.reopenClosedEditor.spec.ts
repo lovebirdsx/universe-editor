@@ -8,7 +8,7 @@
 import { test, expect } from '../fixtures/sharedApp.js'
 
 test.describe('@p1 reopen closed editor (Ctrl+Shift+T)', () => {
-  test('reopens a Settings editor with the correct type', async ({ workbench }) => {
+  test('reopens a Settings editor with the correct type @regression', async ({ workbench }) => {
     await workbench.waitForRestored()
 
     // Open the Settings editor

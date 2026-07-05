@@ -38,7 +38,7 @@ const PREVIEW = '[data-testid="markdown-preview"]'
 const DIAGRAM = '[data-testid="mermaid-diagram"]'
 
 test.describe('@p1 mermaid preview — survives editor tab switch', () => {
-  test('diagrams stay rendered and scroll position is kept after switching away and back', async ({
+  test('diagrams stay rendered and scroll position is kept after switching away and back @regression', async ({
     page,
     workbench,
   }) => {

@@ -13,7 +13,9 @@ import { test, expect } from '../fixtures/electronApp.js'
 const TOGGLE_CMD = 'workbench.action.toggleSecondarySidebarVisibility'
 
 test.describe('@p1 secondary sidebar layout', () => {
-  test('sidebar width is unchanged after show → hide secondary sidebar', async ({ workbench }) => {
+  test('sidebar width is unchanged after show → hide secondary sidebar @regression', async ({
+    workbench,
+  }) => {
     const { page } = workbench
 
     await workbench.waitForRestored()
@@ -46,7 +48,9 @@ test.describe('@p1 secondary sidebar layout', () => {
       .toBe(before.sidebar)
   })
 
-  test('secondary sidebar restores its size after hide → show', async ({ workbench }) => {
+  test('secondary sidebar restores its size after hide → show @regression', async ({
+    workbench,
+  }) => {
     const { page } = workbench
 
     await workbench.waitForRestored()
@@ -87,7 +91,9 @@ test.describe('@p1 secondary sidebar layout', () => {
       .toBe(sizeAfterShow)
   })
 
-  test('editor area recovers its width after hide secondary sidebar', async ({ workbench }) => {
+  test('editor area recovers its width after hide secondary sidebar @regression', async ({
+    workbench,
+  }) => {
     const { page } = workbench
 
     await workbench.waitForRestored()

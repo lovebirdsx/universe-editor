@@ -18,7 +18,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', 'echoAgent.cjs')
 
 test.describe('@p1 outline ↔ agent session selection sync', () => {
-  test('moving the session selection moves the outline highlight', async ({ page, workbench }) => {
+  test('moving the session selection moves the outline highlight @regression', async ({
+    page,
+    workbench,
+  }) => {
     await workbench.waitForRestored()
 
     await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [

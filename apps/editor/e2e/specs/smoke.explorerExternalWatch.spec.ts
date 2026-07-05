@@ -23,7 +23,9 @@ async function waitForProbe(page: Page): Promise<void> {
 }
 
 test.describe('@p1 explorer external file detection', () => {
-  test('a file created externally appears in the tree automatically', async ({ workbench }) => {
+  test('a file created externally appears in the tree automatically @regression', async ({
+    workbench,
+  }) => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-extwatch-'))
     await fs.writeFile(path.join(tmpDir, 'existing.txt'), 'seed')
 
@@ -51,7 +53,7 @@ test.describe('@p1 explorer external file detection', () => {
     await fs.rm(tmpDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
   })
 
-  test('both windows keep detecting their own external files', async ({
+  test('both windows keep detecting their own external files @regression', async ({
     electronApp,
     workbench,
   }) => {

@@ -34,7 +34,7 @@ function writeWorkspace(): { dir: string; aPath: string; bPath: string; subDir: 
 }
 
 test.describe('@p1 markdown move: no stale broken-link diagnostic', () => {
-  test('reopening the referrer after moving its target shows no missing-file warning', async ({
+  test('reopening the referrer after moving its target shows no missing-file warning @regression', async ({
     page,
     workbench,
   }) => {

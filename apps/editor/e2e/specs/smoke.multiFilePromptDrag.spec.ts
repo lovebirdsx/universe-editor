@@ -52,7 +52,7 @@ async function openSessionWithPrompt(
 }
 
 test.describe('@p1 multi-file drag → prompt', () => {
-  test('OS file drag inserts one @mention per file (incl. non-ASCII names)', async ({
+  test('OS file drag inserts one @mention per file (incl. non-ASCII names) @regression', async ({
     page,
     workbench,
   }) => {
@@ -110,7 +110,7 @@ test.describe('@p1 multi-file drag → prompt', () => {
     await tryCleanup(tmpDir)
   })
 
-  test('a CR-separated text/uri-list inserts one @mention per file', async ({
+  test('a CR-separated text/uri-list inserts one @mention per file @regression', async ({
     page,
     workbench,
   }) => {

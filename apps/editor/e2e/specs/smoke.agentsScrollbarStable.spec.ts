@@ -23,7 +23,7 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 const TIMELINE = '[data-testid="acp-timeline"]'
 
 test.describe('@p1 agents — virtualized timeline scrollbar stability', () => {
-  test('scrollHeight does not swing wildly while scrolling top to bottom', async ({
+  test('scrollHeight does not swing wildly while scrolling top to bottom @regression', async ({
     page,
     workbench,
   }) => {

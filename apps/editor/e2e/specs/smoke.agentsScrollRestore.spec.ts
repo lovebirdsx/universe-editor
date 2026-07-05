@@ -21,7 +21,7 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 const TIMELINE = '[data-testid="acp-timeline"]'
 
 test.describe('@p1 agents — scroll position survives editor tab switch', () => {
-  test('restores the chat scroll position after switching away and back', async ({
+  test('restores the chat scroll position after switching away and back @regression', async ({
     page,
     workbench,
   }) => {

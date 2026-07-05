@@ -137,7 +137,15 @@ jobs:
 
       - name: Run E2E smoke (Linux, xvfb)
         if: runner.os == 'Linux'
-        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf" --shard=${{ matrix.shard }}/2
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf|@regression" --shard=${{ matrix.shard }}/2
+
+      # @regression cases guard specific fixed bugs (not core-path smoke). They are
+      # excluded from the local `pnpm e2e` main pass to keep the day-to-day loop
+      # fast, but still block CI here — same parallel shard×2 mechanism as the main
+      # pass. See apps/editor/e2e/RUNBOOK.md.
+      - name: Run E2E regression (Linux, xvfb)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum --server-args="-screen 0 1280x1024x24" pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @regression --shard=${{ matrix.shard }}/2
 
       # @serial cases switch the workspace twice and trip a cross-process race in
       # @parcel/watcher's windows backend under parallel workers; pin to one
@@ -174,7 +182,14 @@ jobs:
       - name: Run E2E smoke (Windows)
         if: runner.os == 'Windows'
         shell: bash
-        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf" --shard=${{ matrix.shard }}/2
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep-invert "@visual|@serial|@flaky|@perf|@regression" --shard=${{ matrix.shard }}/2
+
+      # @regression: bug-guard cases excluded from the local main pass; still block
+      # CI here via the same parallel shard×2 mechanism. See e2e/RUNBOOK.md.
+      - name: Run E2E regression (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: pnpm --filter @universe-editor/editor exec playwright test -c e2e/playwright.config.ts --grep @regression --shard=${{ matrix.shard }}/2
 
       - name: Run E2E smoke serial (Windows)
         if: runner.os == 'Windows' && matrix.shard == 1

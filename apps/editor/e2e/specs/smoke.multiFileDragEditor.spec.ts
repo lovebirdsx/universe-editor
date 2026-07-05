@@ -19,7 +19,7 @@ async function tryCleanup(dir: string): Promise<void> {
 }
 
 test.describe('@p1 multi-file drag → editor', () => {
-  test('OS file drag opens one editor per file', async ({ page, workbench }) => {
+  test('OS file drag opens one editor per file @regression', async ({ page, workbench }) => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-mfe-'))
     const names = ['aaa.txt', 'bbb.txt', 'ccc.txt']
     const files = await Promise.all(
@@ -76,7 +76,10 @@ test.describe('@p1 multi-file drag → editor', () => {
     await tryCleanup(tmpDir)
   })
 
-  test('a CR-separated text/uri-list opens one editor per file', async ({ page, workbench }) => {
+  test('a CR-separated text/uri-list opens one editor per file @regression', async ({
+    page,
+    workbench,
+  }) => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'ue2-mfecr-'))
     const names = ['aaa.txt', 'bbb.txt', 'ccc.txt']
     await Promise.all(names.map((n) => fs.writeFile(path.join(tmpDir, n), 'x')))
@@ -122,7 +125,7 @@ test.describe('@p1 multi-file drag → editor', () => {
   // The exact in-app Explorer → editor bug: on a real drag the OS round-trips a
   // multi-entry text/uri-list into a single glued line, but our private mirror
   // (application/vnd.universe-editor.uri-list) survives and must be preferred.
-  test('a glued text/uri-list still opens every file via the private mirror', async ({
+  test('a glued text/uri-list still opens every file via the private mirror @regression', async ({
     page,
     workbench,
   }) => {

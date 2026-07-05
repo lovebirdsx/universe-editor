@@ -244,7 +244,7 @@ test.describe('@p1 markdown editing commands', () => {
       .toEqual({ lineNumber: 3, column: 7 })
   })
 
-  test('operates on non-final lines and CRLF documents (regression)', async ({
+  test('operates on non-final lines and CRLF documents (regression) @regression', async ({
     page,
     workbench,
   }) => {

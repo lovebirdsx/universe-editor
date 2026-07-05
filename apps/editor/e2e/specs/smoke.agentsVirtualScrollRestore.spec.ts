@@ -24,7 +24,7 @@ const ECHO_AGENT_PATH = resolve(__dirname, '..', '..', 'src', 'test-fixtures', '
 const TIMELINE = '[data-testid="acp-timeline"]'
 
 test.describe('@p1 agents — virtualized timeline scroll restore', () => {
-  test('stays bottom-pinned and restores mid position after a tab switch when virtualized', async ({
+  test('stays bottom-pinned and restores mid position after a tab switch when virtualized @regression', async ({
     page,
     workbench,
   }) => {

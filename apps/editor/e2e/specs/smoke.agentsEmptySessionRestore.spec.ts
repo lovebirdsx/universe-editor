@@ -144,7 +144,7 @@ async function launchWithState(userDataDir: string) {
 }
 
 test.describe('@p1 empty agent session restore', () => {
-  test('discards an unresumable empty session silently — no error tab, no ghost row', async () => {
+  test('discards an unresumable empty session silently — no error tab, no ghost row @regression', async () => {
     const userDataDir = mkdtempSync(join(tmpdir(), 'universe-editor-empty-acp-'))
     try {
       const workspaceFolder = mkdtempSync(join(tmpdir(), 'universe-editor-ws-'))

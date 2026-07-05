@@ -30,7 +30,7 @@ const IMAGE_COUNT = 24
 const IMAGE_KB = 3072
 
 test.describe('@p1 agents image resume', () => {
-  test('receiving many multi-MB image chunks does not freeze the renderer', async ({
+  test('receiving many multi-MB image chunks does not freeze the renderer @regression', async ({
     page,
     workbench,
   }) => {
