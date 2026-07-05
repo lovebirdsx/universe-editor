@@ -68,6 +68,20 @@ export function getDocContent(docId: string): string | undefined {
   return resolveDoc(docId)?.content
 }
 
+/**
+ * The locale whose guide files an external consumer (e.g. the agent behind a
+ * `#docs` reference) should actually read: the active display language if it has
+ * docs, else the fallback locale, else any locale that has docs. undefined when
+ * no docs are loaded at all. This mirrors resolveDoc's precedence so a `#docs`
+ * ref never points an agent at an untranslated (empty) locale directory.
+ */
+export function resolveDocsLocale(): SupportedLocale | undefined {
+  const current = getCurrentLocale()
+  if (REGISTRIES[current].size > 0) return current
+  if (REGISTRIES[FALLBACK_LOCALE].size > 0) return FALLBACK_LOCALE
+  return SUPPORTED_LOCALES.find((locale) => REGISTRIES[locale].size > 0)
+}
+
 /** Extract the first H1 heading from a markdown string. */
 export function extractH1(content: string): string | undefined {
   const m = /^#[ \t]+(.+)$/m.exec(content)

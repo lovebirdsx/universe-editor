@@ -10,8 +10,10 @@
 
 import type { ISourceControlResourceStateDto } from '@universe-editor/extensions-common'
 import { URI } from '@universe-editor/platform'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileEditorInput } from '../../editor/FileEditorInput.js'
+import { initDocRegistry } from '../../editor/docRegistry.js'
+import { setCurrentLocale } from '../../../../shared/i18n/availableLocales.js'
 import { resourceIconId } from '../../quickInput/quickPickResourceIcon.js'
 import type { WorkspaceSymbolEntry } from '../../languageFeatures/typescript/lspMonacoConvert.js'
 
@@ -372,16 +374,37 @@ function makeDocsProvider(root: string) {
 }
 
 describe('DocsContextProvider', () => {
-  it('returns a single entry pointing at the docs root for an empty query', async () => {
+  afterEach(() => initDocRegistry({ 'zh-CN': {}, 'en-US': {} }))
+
+  it('points at the current locale subdirectory when it has docs', async () => {
+    setCurrentLocale('en-US')
+    initDocRegistry({ 'en-US': { index: '# Guide' }, 'zh-CN': { index: '# 指南' } })
+    const provider = makeDocsProvider('/repo/docs/user')
+    const items = await provider.query('')
+    const expected = URI.joinPath(URI.file('/repo/docs/user'), 'en-US')
+    expect(items[0]).toMatchObject({ kind: 'docs', uri: expected.toString(), iconId: 'docs' })
+    expect(items[0]?.description).toContain(expected.fsPath)
+  })
+
+  it('falls back to the translated locale when the active locale has no docs', async () => {
+    setCurrentLocale('en-US')
+    // Only zh-CN is translated (mirrors the current repo state): an English UI
+    // must still be pointed at docs/user/zh-CN, not docs/user/en-US.
+    initDocRegistry({ 'en-US': {}, 'zh-CN': { index: '# 指南' } })
+    const provider = makeDocsProvider('/repo/docs/user')
+    const items = await provider.query('')
+    const expected = URI.joinPath(URI.file('/repo/docs/user'), 'zh-CN')
+    expect(items[0]?.uri).toBe(expected.toString())
+    expect(items[0]?.description).toContain(expected.fsPath)
+  })
+
+  it('returns a single entry pointing at the docs locale dir for an empty query', async () => {
+    setCurrentLocale('zh-CN')
+    initDocRegistry({ 'zh-CN': { index: '# 指南' }, 'en-US': {} })
     const provider = makeDocsProvider('/repo/docs/user')
     const items = await provider.query('')
     expect(items).toHaveLength(1)
-    expect(items[0]).toMatchObject({
-      kind: 'docs',
-      uri: URI.file('/repo/docs/user').toString(),
-      iconId: 'docs',
-    })
-    expect(items[0]?.description).toContain('/repo/docs/user')
+    expect(items[0]).toMatchObject({ kind: 'docs', iconId: 'docs' })
   })
 
   it('matches docs/help-related keywords', async () => {

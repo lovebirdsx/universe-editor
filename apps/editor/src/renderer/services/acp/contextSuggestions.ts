@@ -14,9 +14,10 @@ import {
   localize,
 } from '@universe-editor/platform'
 import { fuzzyScore } from '@universe-editor/workbench-ui'
-import { getCurrentLocale, SUPPORTED_LOCALES } from '../../../shared/i18n/availableLocales.js'
+import type { SupportedLocale } from '../../../shared/i18n/availableLocales.js'
 import { IDocsService } from '../../../shared/ipc/docsService.js'
 import { FileEditorInput } from '../editor/FileEditorInput.js'
+import { resolveDocsLocale } from '../editor/docRegistry.js'
 import { MonacoLoader } from '../../workbench/editor/monaco/MonacoLoader.js'
 import { symbolIconId } from '../../workbench/symbols/symbolIcon.js'
 import { IScmService } from '../extensions/ScmService.js'
@@ -299,17 +300,24 @@ function matchesDocsQuery(query: string): boolean {
   return DOCS_MATCH_KEYWORDS.some((k) => k.toLowerCase().includes(q))
 }
 
-function toDocsItem(root: string): ContextSuggestionItem {
+/** Absolute fsPath of a locale subdirectory under the docs root (platform-native separators). */
+function joinLocale(root: string, locale: SupportedLocale): string {
+  return URI.joinPath(URI.file(root), locale).fsPath
+}
+
+function toDocsItem(root: string, localeDir: string | undefined): ContextSuggestionItem {
   const label = localize('acp.contextRef.docs.label', 'Editor User Guide')
-  const description = localize(
-    'acp.contextRef.docs.description',
-    'Located at {path} (locale subdirectories: {locales}; current: {locale})',
-    { path: root, locales: SUPPORTED_LOCALES.join(', '), locale: getCurrentLocale() },
-  )
+  // Point at the locale subdirectory that actually holds translated docs (never
+  // the parent root, whose sibling locale dirs may be empty) so the agent reads
+  // the guide in one hop instead of probing an untranslated locale first.
+  const target = localeDir ?? root
+  const description = localize('acp.contextRef.docs.description', 'Located at {path}', {
+    path: target,
+  })
   return {
     kind: 'docs',
     label,
-    uri: URI.file(root).toString(),
+    uri: URI.file(target).toString(),
     description,
     iconId: 'docs',
   }
@@ -328,7 +336,9 @@ export class DocsContextProvider {
     const trimmed = query.trim()
     if (trimmed && !matchesDocsQuery(trimmed)) return []
     const root = await this._docs.getDocsRoot()
-    return [toDocsItem(root)]
+    const locale = resolveDocsLocale()
+    const localeDir = locale ? joinLocale(root, locale) : undefined
+    return [toDocsItem(root, localeDir)]
   }
 }
 

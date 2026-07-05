@@ -1089,7 +1089,7 @@ export const ZH_CN_MESSAGES: MessageMap = {
   'acp.contextRef.commit.loadFailed': '加载 {repo} 的提交历史失败。',
   'acp.contextRef.commit.noRepo': '没有打开的 Git 仓库，无法选择提交。',
   'acp.contextRef.commit.placeholder': '从 {repo} 中选择一个提交',
-  'acp.contextRef.docs.description': '位于 {path}（包含语言子目录：{locales}；当前语言：{locale}）',
+  'acp.contextRef.docs.description': '位于 {path}',
   'acp.contextRef.docs.fallback': '文档位于 {uri}',
   'acp.contextRef.docs.label': '编辑器使用文档',
   'acp.contextRef.empty': '没有匹配的上下文',
