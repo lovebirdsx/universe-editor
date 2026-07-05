@@ -279,7 +279,11 @@ class StubAgent implements Agent {
 
 class FakeAcpClientService implements IAcpClientService {
   declare readonly _serviceBrand: undefined
-  readonly connectCalls: { agentId: string; cwd: string | undefined }[] = []
+  readonly connectCalls: {
+    agentId: string
+    cwd: string | undefined
+    silent: boolean | undefined
+  }[] = []
   /** disposed-ness per agent connection — index matches connectCalls. */
   readonly disposed: boolean[] = []
   readonly agents: StubAgent[] = []
@@ -297,14 +301,14 @@ class FakeAcpClientService implements IAcpClientService {
 
   async connect(
     agentId: string,
-    options?: { cwd?: string; leaseFor?: string },
+    options?: { cwd?: string; leaseFor?: string; silent?: boolean },
   ): Promise<IAcpClientConnection> {
     const sink: IAcpClientNotificationSink = this._sink ?? {
       onSessionUpdate: () => {},
       onRequestPermission: async () => ({ outcome: { outcome: 'cancelled' } }) as never,
       onAskUserQuestion: async () => ({ cancelled: true }),
     }
-    this.connectCalls.push({ agentId, cwd: options?.cwd })
+    this.connectCalls.push({ agentId, cwd: options?.cwd, silent: options?.silent })
     if (this.rejectAgents.has(agentId)) {
       throw new Error(`spawn failed for ${agentId}`)
     }
@@ -621,6 +625,18 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     expect(built.history.list()).toEqual([])
   })
 
+  it('connects with silent:true so a spawn failure never surfaces a notification', async () => {
+    const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
+    built.client.rejectAgents.add('fake')
+    await built.history.initialize()
+    coordinator = built.coordinator
+    coordinator.start()
+    coordinator.requestHydrate()
+    await new Promise<void>((r) => setTimeout(r, 20))
+    expect(built.client.connectCalls).toEqual([{ agentId: 'fake', cwd: 'C:/ws', silent: true }])
+    expect(built.notifications.captured).toEqual([])
+  })
+
   it('does not auto-fire on start() — hydrate must be requested explicitly', async () => {
     const built = build({ agentIds: ['fake'], cwd: 'C:/ws' })
     built.client.agentOptions.set('fake', {
@@ -729,15 +745,15 @@ describe('AcpSessionRestoreCoordinator — hydrate sweep', () => {
     coordinator.start()
     coordinator.requestHydrate()
     await new Promise<void>((r) => setTimeout(r, 30))
-    expect(client.connectCalls).toEqual([{ agentId: 'fake', cwd: 'C:/ws-A' }])
+    expect(client.connectCalls).toEqual([{ agentId: 'fake', cwd: 'C:/ws-A', silent: true }])
 
     currentCwd = 'C:/ws-B'
     await coordinator.onWorkspaceSwap()
     coordinator.requestHydrate()
     await new Promise<void>((r) => setTimeout(r, 30))
     expect(client.connectCalls).toEqual([
-      { agentId: 'fake', cwd: 'C:/ws-A' },
-      { agentId: 'fake', cwd: 'C:/ws-B' },
+      { agentId: 'fake', cwd: 'C:/ws-A', silent: true },
+      { agentId: 'fake', cwd: 'C:/ws-B', silent: true },
     ])
   })
 
@@ -870,6 +886,8 @@ describe('AcpSessionRestoreCoordinator — deleteOnAgent', () => {
     expect(result).toBe('ok')
     // The second connect is the delete call; the first was hydrate.
     expect(built.client.connectCalls.length).toBeGreaterThanOrEqual(2)
+    // Best-effort background calls must never surface a spawn-failure toast.
+    expect(built.client.connectCalls.every((c) => c.silent === true)).toBe(true)
     const deleteAgent = built.client.agents[built.client.agents.length - 1]
     expect(deleteAgent?.deleteCalls).toEqual([{ sessionId: 'agent-x' }])
     // Both connections disposed.

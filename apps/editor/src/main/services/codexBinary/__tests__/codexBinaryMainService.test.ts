@@ -104,4 +104,18 @@ describe('CodexBinaryMainService.resolve', () => {
       svc.dispose()
     }
   })
+
+  it('fails fast on a download cache miss when allowDownload is false, without touching the network', async () => {
+    const svc = new CodexBinaryMainService()
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    try {
+      await expect(svc.resolve({ source: 'download', allowDownload: false })).rejects.toThrow(
+        /not downloaded yet/,
+      )
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      svc.dispose()
+    }
+  })
 })

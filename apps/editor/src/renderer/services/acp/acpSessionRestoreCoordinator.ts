@@ -247,7 +247,10 @@ export class AcpSessionRestoreCoordinator extends Disposable {
     const cwd = entry.cwd
     let conn: IAcpClientConnection | undefined
     try {
-      conn = await this._client.connect(entry.agentId, cwd !== undefined ? { cwd } : {})
+      conn = await this._client.connect(
+        entry.agentId,
+        cwd !== undefined ? { cwd, silent: true } : { silent: true },
+      )
       await withTimeout(conn.initializeResult, HYDRATE_TIMEOUT_MS, 'ACP delete initialize')
       const params: DeleteSessionRequest = { sessionId: entry.sessionIdOnAgent }
       await withTimeout(
@@ -327,7 +330,10 @@ export class AcpSessionRestoreCoordinator extends Disposable {
   ): Promise<void> {
     let conn: IAcpClientConnection | undefined
     try {
-      conn = await this._client.connect(agentId, cwd !== undefined ? { cwd } : {})
+      conn = await this._client.connect(
+        agentId,
+        cwd !== undefined ? { cwd, silent: true } : { silent: true },
+      )
       if (myGen !== this._hydrateGen) return
       const init = await withTimeout(
         conn.initializeResult,

@@ -6,7 +6,9 @@
  *       to the next launch when its lock is gone. Always runs.
  *    2. Background-prefetches the latest binary so a later upgrade activates
  *       instantly instead of waiting on a ~80MB download. Runs only in download
- *       mode and only when `acp.prefetchBinaries` is enabled.
+ *       mode, only when `acp.prefetchBinaries` is enabled, and never under the
+ *       e2e probe (fresh profile + no cache on every launch would otherwise
+ *       race worker teardown with a multi-hundred-MB fetch).
  *  All failures are swallowed (best-effort, never disrupts the user).
  *--------------------------------------------------------------------------------------------*/
 
@@ -19,6 +21,7 @@ import {
   createNamedLogger,
   runWhenIdle,
 } from '@universe-editor/platform'
+import { E2E_PROBE_ENABLED_KEY } from '../../shared/e2e/contract.js'
 import { IClaudeBinaryService } from '../../shared/ipc/claudeBinaryService.js'
 import { ICodexBinaryService } from '../../shared/ipc/codexBinaryService.js'
 
@@ -42,6 +45,11 @@ export class AgentBinaryPrefetchContribution extends Disposable implements IWork
 
   private async _run(): Promise<void> {
     await this._cleanup()
+    // Every e2e worker launches a fresh profile with no cached binary — a real
+    // background download here would race Playwright's worker teardown, which
+    // isn't sized for a multi-hundred-MB fetch. Local cleanup above is safe
+    // (no network); only the download itself is e2e-gated.
+    if (typeof window !== 'undefined' && window[E2E_PROBE_ENABLED_KEY] === true) return
     if (this._config.get<boolean>('acp.prefetchBinaries') === false) return
     await this._prefetch()
   }

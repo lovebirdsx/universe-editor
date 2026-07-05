@@ -41,6 +41,16 @@ import type {
 const REGISTRY = 'https://registry.npmjs.org'
 
 /**
+ * Bounds "can we even reach the registry" for the metadata/connect phase of a
+ * download. A DNS/TCP failure otherwise hangs on the OS-level connect timeout
+ * (20s+ on Windows) with no upper bound of its own — fatal for a background
+ * hydrate probe that must fail fast. Once the tarball response headers arrive,
+ * streaming the body itself is intentionally left unbounded (a real multi-
+ * hundred-MB download on a slow connection can legitimately take minutes).
+ */
+const NETWORK_TIMEOUT_MS = 10_000
+
+/**
  * Pinned `@openai/codex` version to download. Kept in sync with the codex-acp
  * fork's lockfile (`vendor/codex-acp`); bumped by hand when following upstream.
  */
@@ -101,7 +111,10 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
   }
 
   resolve(opts: ICodexBinaryResolveOptions): Promise<ICodexBinaryResult> {
-    const key = `${opts.source}:${opts.customPath ?? ''}`
+    // `allowDownload:false` gets its own key so a background probe that hits a
+    // cache miss (fails fast, never cached — see below) can never hand its
+    // fast-fail promise to a concurrent caller that actually wants to download.
+    const key = `${opts.source}:${opts.customPath ?? ''}${opts.allowDownload === false ? ':noDownload' : ''}`
     let pending = this._inflight.get(key)
     if (!pending) {
       pending = this._resolve(opts).catch((err) => {
@@ -122,7 +135,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
         return { path: await this._resolveSystem() }
       case 'download':
       default:
-        return { path: await this._resolveDownload() }
+        return { path: await this._resolveDownload(opts.allowDownload ?? true) }
     }
   }
 
@@ -213,13 +226,19 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     await this._cleanupStaleVersions(active)
   }
 
-  private async _resolveDownload(): Promise<string> {
+  private async _resolveDownload(allowDownload: boolean): Promise<string> {
     const { suffix, triple, binName } = detectPlatformBinary()
     const active = (await this._readActiveVersion()) ?? CODEX_VERSION
     const cached = this._binaryIn(this._versionDir(active), binName)
     if (await pathExists(cached)) {
       this._logger.info(`codex binary cache hit ${cached}`)
       return cached
+    }
+    if (!allowDownload) {
+      throw new Error(
+        'codex binary is not downloaded yet — background probes never trigger a download; ' +
+          'start a Codex session or download it explicitly to fetch it.',
+      )
     }
     const versionDir = this._versionDir(CODEX_VERSION)
     const binaryPath = await this._download(CODEX_VERSION, suffix, triple, binName, versionDir)
@@ -244,7 +263,9 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
 
     let latestVersion: string | null = null
     try {
-      const res = await fetch(`${REGISTRY}/@openai/codex/latest`)
+      const res = await fetch(`${REGISTRY}/@openai/codex/latest`, {
+        signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+      })
       if (res.ok) {
         const body = (await res.json()) as { version?: string }
         latestVersion = body.version ?? null
@@ -286,7 +307,9 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     // registry is unreachable.
     let target = bundledVersion
     try {
-      const res = await fetch(`${REGISTRY}/@openai/codex/latest`)
+      const res = await fetch(`${REGISTRY}/@openai/codex/latest`, {
+        signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+      })
       if (res.ok) {
         const body = (await res.json()) as { version?: string }
         if (body.version) target = body.version
@@ -325,6 +348,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
 
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
+    this._inflight.delete('download::noDownload')
 
     // Already the active, on-disk version — nothing to do. Re-downloading it would
     // target its own (possibly running, hence locked) tree.
@@ -405,7 +429,7 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
 
   private async _fetchDist(pkg: string, version: string): Promise<RegistryDist> {
     const url = `${REGISTRY}/${pkg}/${version}`
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
     if (!res.ok) {
       throw new Error(`Failed to fetch ${pkg}@${version} metadata: HTTP ${res.status}`)
     }
@@ -422,7 +446,19 @@ export class CodexBinaryMainService extends Disposable implements ICodexBinarySe
     triple: string,
     silent = false,
   ): Promise<void> {
-    const res = await fetch(dist.tarball)
+    // Bound only the connect/headers phase — once the response arrives, the
+    // (potentially large, potentially slow) body stream is read unbounded below.
+    const controller = new AbortController()
+    const connectTimer = setTimeout(
+      () => controller.abort(new Error(`Timed out connecting to ${dist.tarball}`)),
+      NETWORK_TIMEOUT_MS,
+    )
+    let res: Response
+    try {
+      res = await fetch(dist.tarball, { signal: controller.signal })
+    } finally {
+      clearTimeout(connectTimer)
+    }
     if (!res.ok || !res.body) {
       throw new Error(`Failed to download ${dist.tarball}: HTTP ${res.status}`)
     }

@@ -142,10 +142,19 @@ export interface IAcpClientService {
    * for, when known up-front (e.g. `resumeSession`). For paths that learn the
    * sessionId only after `newSession()` returns, omit it here and call
    * `lease.attachSession(sessionId)` once it's known.
+   *
+   * `options.silent` suppresses the user-facing error notification on spawn
+   * failure — for background/best-effort callers (hydrate sweeps, opportunistic
+   * `deleteOnAgent`) that already treat failure as non-fatal and don't want a
+   * spurious "Failed to start agent" toast for an agent the user never
+   * explicitly asked to start. The failure still throws and is still logged to
+   * telemetry; only the notification is skipped. Only takes effect when this
+   * call spawns a brand-new pool entry — a concurrent call sharing an in-flight
+   * spawn defers to whichever caller triggered the spawn first.
    */
   connect(
     agentId: string,
-    options?: { cwd?: string; leaseFor?: string },
+    options?: { cwd?: string; leaseFor?: string; silent?: boolean },
   ): Promise<IAcpClientConnection>
   /** Synchronously stop every pooled process and clear the pool. */
   drainAll(): void
@@ -300,7 +309,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
 
   async connect(
     agentId: string,
-    options?: { cwd?: string; leaseFor?: string },
+    options?: { cwd?: string; leaseFor?: string; silent?: boolean },
   ): Promise<IAcpClientConnection> {
     if (!this._sink) {
       throw new Error('AcpClientService.connect: notification sink not installed')
@@ -309,7 +318,7 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     const key = this._poolKey(agentId, cwd)
     let entryPromise = this._pool.get(key)
     if (!entryPromise) {
-      entryPromise = this._createEntry(agentId, key, cwd)
+      entryPromise = this._createEntry(agentId, key, cwd, options?.silent ?? false)
       this._pool.set(key, entryPromise)
       // If spawn fails, drop the entry so the next caller retries.
       entryPromise.catch(() => {
@@ -375,13 +384,19 @@ export class AcpClientService extends Disposable implements IAcpClientService {
    * notification while a download is in flight. Non-runAsNode agents pass
    * through untouched.
    */
-  private async _ensureClaudeBinary(spec: AcpLaunchSpec): Promise<AcpLaunchSpec> {
-    if (!spec.runAsNode) return spec
+  private async _ensureClaudeBinary(
+    spec: AcpLaunchSpec,
+    agentId: string,
+    silent: boolean,
+  ): Promise<AcpLaunchSpec> {
+    if (agentId !== 'claude-code') return spec
     const source = (this._config.get<string>('acp.claude.source') ??
       'download') as ClaudeBinarySource
     const customPath = this._config.get<string>('acp.claude.executablePath') ?? ''
     const opts: IClaudeBinaryResolveOptions =
-      source === 'custom' ? { source, customPath } : { source }
+      source === 'custom'
+        ? { source, customPath, allowDownload: !silent }
+        : { source, allowDownload: !silent }
 
     const result = await this._progress.withProgress(
       { location: ProgressLocation.Notification, title: 'Preparing Claude…', source: 'acp' },
@@ -423,13 +438,19 @@ export class AcpClientService extends Disposable implements IAcpClientService {
    * OPENAI_API_KEY / CODEX_API_KEY from the environment. Non-codex agents pass
    * through untouched.
    */
-  private async _ensureCodexBinary(spec: AcpLaunchSpec, agentId: string): Promise<AcpLaunchSpec> {
+  private async _ensureCodexBinary(
+    spec: AcpLaunchSpec,
+    agentId: string,
+    silent: boolean,
+  ): Promise<AcpLaunchSpec> {
     if (agentId !== 'codex') return spec
 
     const source = (this._config.get<string>('acp.codex.source') ?? 'download') as CodexBinarySource
     const customPath = this._config.get<string>('acp.codex.executablePath') ?? ''
     const opts: ICodexBinaryResolveOptions =
-      source === 'custom' ? { source, customPath } : { source }
+      source === 'custom'
+        ? { source, customPath, allowDownload: !silent }
+        : { source, allowDownload: !silent }
 
     const result = await this._progress.withProgress(
       { location: ProgressLocation.Notification, title: 'Preparing Codex…', source: 'acp' },
@@ -470,23 +491,30 @@ export class AcpClientService extends Disposable implements IAcpClientService {
     }
   }
 
-  private async _createEntry(agentId: string, key: string, cwd: string): Promise<PoolEntry> {
+  private async _createEntry(
+    agentId: string,
+    key: string,
+    cwd: string,
+    silent: boolean,
+  ): Promise<PoolEntry> {
     const sink = this._sink!
     let spec = this._registry.resolve(agentId, cwd || undefined)
     let handle: string
     try {
-      spec = await this._ensureClaudeBinary(spec)
-      spec = await this._ensureCodexBinary(spec, agentId)
+      spec = await this._ensureClaudeBinary(spec, agentId, silent)
+      spec = await this._ensureCodexBinary(spec, agentId, silent)
       handle = (await this._host.start(spec)).handle
     } catch (err) {
       this._telemetry.publicLogError('acp.spawn_failed', {
         agentId,
         error: (err as Error).message,
       })
-      this._notification.notify({
-        severity: Severity.Error,
-        message: `Failed to start agent "${agentId}": ${(err as Error).message}`,
-      })
+      if (!silent) {
+        this._notification.notify({
+          severity: Severity.Error,
+          message: `Failed to start agent "${agentId}": ${(err as Error).message}`,
+        })
+      }
       throw err
     }
     this._logger.info(`spawned agent=${agentId} handle=${handle} cwd=${cwd || '<none>'}`)

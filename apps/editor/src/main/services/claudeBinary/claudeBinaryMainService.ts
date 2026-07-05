@@ -36,6 +36,16 @@ import type {
 
 const REGISTRY = 'https://registry.npmjs.org'
 
+/**
+ * Bounds "can we even reach the registry" for the metadata/connect phase of a
+ * download. A DNS/TCP failure otherwise hangs on the OS-level connect timeout
+ * (20s+ on Windows) with no upper bound of its own — fatal for a background
+ * hydrate probe that must fail fast. Once the tarball response headers arrive,
+ * streaming the body itself is intentionally left unbounded (a real ~226MB
+ * download on a slow connection can legitimately take minutes).
+ */
+const NETWORK_TIMEOUT_MS = 10_000
+
 interface PlatformBinary {
   /** Package suffix, e.g. `win32-x64`, `darwin-arm64`, `linux-x64-musl`. */
   readonly suffix: string
@@ -119,7 +129,10 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
   }
 
   resolve(opts: IClaudeBinaryResolveOptions): Promise<IClaudeBinaryResult> {
-    const key = `${opts.source}:${opts.customPath ?? ''}`
+    // `allowDownload:false` gets its own key so a background probe that hits a
+    // cache miss (fails fast, never cached — see below) can never hand its
+    // fast-fail promise to a concurrent caller that actually wants to download.
+    const key = `${opts.source}:${opts.customPath ?? ''}${opts.allowDownload === false ? ':noDownload' : ''}`
     let pending = this._inflight.get(key)
     if (!pending) {
       pending = this._resolve(opts).catch((err) => {
@@ -140,7 +153,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         return { path: await this._resolveSystem() }
       case 'download':
       default:
-        return { path: await this._resolveDownload() }
+        return { path: await this._resolveDownload(opts.allowDownload ?? true) }
     }
   }
 
@@ -232,7 +245,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     await this._cleanupStaleVersions(active)
   }
 
-  private async _resolveDownload(): Promise<string> {
+  private async _resolveDownload(allowDownload: boolean): Promise<string> {
     const version = await this._readSdkVersion()
     const { suffix, binName } = detectPlatformBinary()
     const active = (await this._readActiveVersion()) ?? version
@@ -255,6 +268,13 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
         this._logger.info(`dev reuse of vendored claude binary ${vendor}`)
         return vendor
       }
+    }
+
+    if (!allowDownload) {
+      throw new Error(
+        'Claude binary is not downloaded yet — background probes never trigger a download; ' +
+          'start a Claude session or download it explicitly to fetch it.',
+      )
     }
 
     const binaryPath = await this._download(
@@ -310,7 +330,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
 
   private async _fetchDist(pkg: string, version: string): Promise<RegistryDist> {
     const url = `${REGISTRY}/${pkg}/${version}`
-    const res = await fetch(url)
+    const res = await fetch(url, { signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS) })
     if (!res.ok) {
       throw new Error(`Failed to fetch ${pkg}@${version} metadata: HTTP ${res.status}`)
     }
@@ -327,7 +347,19 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     binName: string,
     silent = false,
   ): Promise<void> {
-    const res = await fetch(dist.tarball)
+    // Bound only the connect/headers phase — once the response arrives, the
+    // (potentially large, potentially slow) body stream is read unbounded below.
+    const controller = new AbortController()
+    const connectTimer = setTimeout(
+      () => controller.abort(new Error(`Timed out connecting to ${dist.tarball}`)),
+      NETWORK_TIMEOUT_MS,
+    )
+    let res: Response
+    try {
+      res = await fetch(dist.tarball, { signal: controller.signal })
+    } finally {
+      clearTimeout(connectTimer)
+    }
     if (!res.ok || !res.body) {
       throw new Error(`Failed to download ${dist.tarball}: HTTP ${res.status}`)
     }
@@ -427,7 +459,9 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
 
     let latestVersion: string | null = null
     try {
-      const res = await fetch(`${REGISTRY}/@anthropic-ai/claude-agent-sdk/latest`)
+      const res = await fetch(`${REGISTRY}/@anthropic-ai/claude-agent-sdk/latest`, {
+        signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+      })
       if (res.ok) {
         const body = (await res.json()) as { version?: string }
         latestVersion = body.version ?? null
@@ -469,7 +503,9 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
     // registry is unreachable.
     let target = bundledVersion
     try {
-      const res = await fetch(`${REGISTRY}/@anthropic-ai/claude-agent-sdk/latest`)
+      const res = await fetch(`${REGISTRY}/@anthropic-ai/claude-agent-sdk/latest`, {
+        signal: AbortSignal.timeout(NETWORK_TIMEOUT_MS),
+      })
       if (res.ok) {
         const body = (await res.json()) as { version?: string }
         if (body.version) target = body.version
@@ -518,6 +554,7 @@ export class ClaudeBinaryMainService extends Disposable implements IClaudeBinary
 
     // Clear inflight cache so the next resolve() call doesn't return the stale result.
     this._inflight.delete('download:')
+    this._inflight.delete('download::noDownload')
 
     // Already the active, on-disk version — nothing to do. Re-downloading it would
     // target its own (possibly running, hence locked) dir.

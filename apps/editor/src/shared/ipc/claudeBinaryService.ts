@@ -17,6 +17,14 @@ export interface IClaudeBinaryResolveOptions {
   readonly source: ClaudeBinarySource
   /** Absolute path to a user-provided binary; required when source is 'custom'. */
   readonly customPath?: string
+  /**
+   * When `source` is 'download' and the binary isn't cached on disk yet, controls
+   * whether a real network download may be triggered. Defaults to true. Set to
+   * false for background/speculative callers (e.g. ACP session hydrate) that must
+   * never cause a multi-hundred-MB download as a side effect of a passive probe —
+   * a cache miss then fails fast instead of downloading.
+   */
+  readonly allowDownload?: boolean
 }
 
 export interface IClaudeBinaryProgress {
