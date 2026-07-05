@@ -52,6 +52,7 @@
 ## 工程约定 / 护栏
 
 - [ESLint 路径身份护栏](eslint-path-identity-guardrails.md) — no-restricted-syntax 禁手写 fsPath 大小写折叠/路径身份键(精准不误伤 slug/模型 id)；flat config 同名规则替换非合并的坑；测试+SCM 域豁免
+- [e2e @regression 分级 tag](e2e-regression-tag.md) — 用例级 @regression 把 bug 守护用例从本地 pnpm e2e 主趟剥离、CI 仍全量并行覆盖；tag 打 test 标题末尾(非 describe)靠 grep 匹配；4 处落点(package.json/ci.yml/spec/RUNBOOK);判定=只守护已修复 bug 非主路径冒烟；首落 markdown preview 25→6
 - [Action2 async run 的 accessor 失效坑](action2-async-accessor-invalidation.md) — ServicesAccessor 遇第一个 await 即失效；async run 须在 await 前同步取完所有 service(快照传后续 helper)；持久 accessor 的测试会假绿抓不到
 
 ## 测试 flaky / 环境问题(非回归)
