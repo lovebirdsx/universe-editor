@@ -5,7 +5,15 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
-import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
+import {
+  render,
+  screen,
+  cleanup,
+  fireEvent,
+  createEvent,
+  act,
+  waitFor,
+} from '@testing-library/react'
 import type { GitGraphCommitDto, GitGraphLoadResult } from '@universe-editor/extensions-common'
 import { GitGraphCommands } from '@universe-editor/extensions-common'
 import {
@@ -76,6 +84,7 @@ import { IExcludeService } from '../../../services/exclude/ExcludeService.js'
 import { FakeExcludeService } from '../../../services/exclude/testing/fakeExcludeService.js'
 import { IAcpPromptHistoryService } from '../../../services/acp/acpPromptHistoryService.js'
 import { MonacoLoader } from '../../editor/monaco/MonacoLoader.js'
+import styles from '../agents.module.css'
 
 // Preload Monaco once so <PromptMonacoEditor> mounts its (stubbed) editor
 // synchronously — the wrapper mounts sync when MonacoLoader.peek() is warm, so
@@ -1576,5 +1585,87 @@ describe('PromptInput — draft persistence', () => {
       // The image is read via IFileService and attached as a chip.
       expect(await screen.findByTestId('acp-prompt-image-chips')).toBeTruthy()
     })
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Drop-highlight lifecycle — the blue `.dropActive` outline painted while a
+// resource is dragged over the input must always clear once the gesture ends,
+// even when the drop/leave lands on Monaco's inner DOM (editContext host) or
+// outside the host, or when the drag is cancelled (Esc) with no final event
+// on the host. The host is nested Monaco; a naive React onDrop/onDragLeave on
+// the host alone leaves the box stuck. Regression for drag-and-drop-context.
+// ---------------------------------------------------------------------------
+
+describe('PromptInput — drop highlight lifecycle', () => {
+  const dropHost = (): HTMLElement => screen.getByTestId('acp-prompt-drop-host')
+
+  function dragOverHost(): void {
+    fireEvent.dragEnter(dropHost(), {
+      dataTransfer: { files: [], types: ['text/uri-list'], getData: () => '' },
+    })
+    fireEvent.dragOver(dropHost(), {
+      dataTransfer: { files: [], types: ['text/uri-list'], getData: () => '' },
+    })
+  }
+
+  // happy-dom drops `relatedTarget` from the fireEvent init dict, so build the
+  // DragEvent via createEvent and pin relatedTarget on it before dispatch.
+  function dragLeaveHost(relatedTarget: Node | null): void {
+    const host = dropHost()
+    const ev = createEvent.dragLeave(host)
+    Object.defineProperty(ev, 'relatedTarget', { value: relatedTarget, configurable: true })
+    act(() => {
+      fireEvent(host, ev)
+    })
+  }
+
+  it('shows the drop outline while a resource is dragged over the input', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    expect(dropHost().className).not.toContain(styles['dropActive'] as string)
+    dragOverHost()
+    expect(dropHost().className).toContain(styles['dropActive'] as string)
+  })
+
+  it('clears the outline when the drop lands on Monaco inner DOM (not the host)', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    dragOverHost()
+    expect(dropHost().className).toContain(styles['dropActive'] as string)
+    // Real drops land inside Monaco's editContext DOM; the event bubbles up to
+    // the host, whose onDrop must clear the highlight.
+    const inner = getTextarea()
+    fireEvent.drop(inner, {
+      dataTransfer: { files: [], types: ['text/uri-list'], getData: () => '' },
+    })
+    expect(dropHost().className).not.toContain(styles['dropActive'] as string)
+  })
+
+  it('clears the outline when the drag leaves the host to an outside element', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    dragOverHost()
+    expect(dropHost().className).toContain(styles['dropActive'] as string)
+    // Pointer leaves the host entirely (relatedTarget is outside) → clear.
+    dragLeaveHost(document.body)
+    expect(dropHost().className).not.toContain(styles['dropActive'] as string)
+  })
+
+  it('keeps the outline when the pointer moves from the host onto its own Monaco child', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    dragOverHost()
+    expect(dropHost().className).toContain(styles['dropActive'] as string)
+    // A dragleave whose relatedTarget is still inside the host (moving onto the
+    // nested Monaco editor) must NOT clear — otherwise the box flickers.
+    dragLeaveHost(getTextarea())
+    expect(dropHost().className).toContain(styles['dropActive'] as string)
+  })
+
+  it('clears the outline when the drag is cancelled with no drop on the host (Esc)', () => {
+    renderWithServices(<PromptInput session={makeSession()} />)
+    dragOverHost()
+    expect(dropHost().className).toContain(styles['dropActive'] as string)
+    // Esc-cancel / drop-elsewhere fires a window-level dragend but no host
+    // drop/leave; the highlight must still reset.
+    fireEvent.dragEnd(window)
+    expect(dropHost().className).not.toContain(styles['dropActive'] as string)
   })
 })

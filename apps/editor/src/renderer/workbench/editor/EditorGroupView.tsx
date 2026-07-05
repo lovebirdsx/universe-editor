@@ -210,6 +210,18 @@ export function shouldDeferDropToMarkdownEditor(
   return target instanceof HTMLElement && target.closest('.monaco-editor') !== null
 }
 
+/**
+ * Whether a drag event's target sits inside the agent prompt input's own drop
+ * host (a full-screen session embeds the prompt input in the editor body). That
+ * host owns resource drops itself, so the surrounding editor group must not also
+ * paint its body overlay while the pointer is over it.
+ */
+function isWithinPromptDropHost(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement && target.closest('[data-testid="acp-prompt-drop-host"]') !== null
+  )
+}
+
 /** Subscribes to a group's model + active changes and returns a snapshot string. */
 function useGroupVersion(group: IEditorGroup): string {
   return useSyncExternalStore(
@@ -470,6 +482,15 @@ export const EditorGroupView = memo(function EditorGroupView({
     const rect = bodyRef.current?.getBoundingClientRect()
     if (!rect) return
     bodyDropPosRef.current = { x: e.clientX, y: e.clientY }
+    // A full-screen session hosts its own drop target (the prompt input) inside
+    // the body. When the pointer is over that host, the input owns the drop —
+    // the body must not also paint its "open here" overlay (they'd both glow).
+    // The input's onDragOver deliberately does NOT stopPropagation, so this
+    // handler still runs for dragovers over the input and can clear the zone here.
+    if (isWithinPromptDropHost(e.target)) {
+      if (bodyZone !== null) setBodyZone(null)
+      return
+    }
     // Suppress overlay when the source is *this* group and it owns only the
     // dragged editor — dropping would be a no-op anywhere on the body.
     const payload = dragSession?.payload as
@@ -520,6 +541,29 @@ export const EditorGroupView = memo(function EditorGroupView({
     bodyDropPosRef.current = { x: e.clientX, y: e.clientY }
     bodyDropProps.onDrop(e)
   }
+
+  // Safety net for the body/tab drop affordances (overlay + tab insertion bar):
+  // the gesture can end without the body ever receiving a `drop`/`dragleave`.
+  // A full-screen session hosts the prompt input inside the body, and its
+  // onDrop/onDragOver call stopPropagation() so a drop on the input never
+  // bubbles here; likewise an Esc-cancel or a drop released elsewhere fires only
+  // a window-level `dragend`. Either way `bodyZone`/`dropIndex` would stay set
+  // and the blue overlay/insertion bar would linger until the next drag. Clear
+  // them on the window-level terminal events so the affordance can never stick.
+  useEffect(() => {
+    if (bodyZone === null && dropIndex === null) return
+    const clear = (): void => {
+      setBodyZone(null)
+      setDropIndex(null)
+      bodyDropPosRef.current = null
+    }
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => {
+      window.removeEventListener('dragend', clear)
+      window.removeEventListener('drop', clear)
+    }
+  }, [bodyZone, dropIndex])
 
   function calcInsertIndex(clientX: number): number {
     const tabBar = tabBarRef.current

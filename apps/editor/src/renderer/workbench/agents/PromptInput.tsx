@@ -191,7 +191,7 @@ export function PromptInput({
   const editorHandleRef = useRef<PromptEditorHandle | null>(null)
   // The React-owned host div wrapping the Monaco editor. Paste listens here
   // (outside Monaco's editContext DOM — see onPromptPaste).
-  const dropHostRef = useRef<HTMLDivElement>(null)
+  const dropHostRef = useRef<HTMLDivElement | null>(null)
   // Saves the in-progress draft text when the user enters history navigation mode,
   // so Escape / Down-past-end restores it.
   const historyDraftRef = useRef('')
@@ -972,14 +972,23 @@ export function PromptInput({
   const onPromptDragOver = (e: React.DragEvent<HTMLDivElement>): void => {
     if (!dragContainsResources(e.dataTransfer)) return
     e.preventDefault()
-    // Stop the editor group body from also reacting when the chat input is
-    // hosted inside an editor group (full-screen session).
-    e.stopPropagation()
+    // NB: do NOT stopPropagation here. When hosted inside an editor group
+    // (full-screen session) the body's own dragover handler must still run so it
+    // can detect the pointer is over this input (isWithinPromptDropHost) and
+    // clear its "open here" overlay — otherwise both glow at once. The drop
+    // handler below DOES stopPropagation so the body never re-opens the file.
     e.dataTransfer.dropEffect = 'copy'
     if (!dropActive) setDropActive(true)
   }
 
-  const onPromptDragLeave = (): void => {
+  const onPromptDragLeave = (e: React.DragEvent<HTMLDivElement>): void => {
+    // Only clear when the pointer actually left the host. The host nests a
+    // Monaco editor, so moving from the host padding onto the editor fires a
+    // `dragleave` whose relatedTarget is still inside the host — clearing there
+    // would make the outline flicker (mirrors EditorGroupView.handleBodyDragLeave).
+    const host = dropHostRef.current
+    const next = e.relatedTarget as Node | null
+    if (host && next && host.contains(next)) return
     if (dropActive) setDropActive(false)
   }
 
@@ -1029,6 +1038,23 @@ export function PromptInput({
     setMentionDismissed(true)
     requestAnimationFrame(() => el.focus())
   }
+
+  // Safety net for the drop-highlight: a drag can end without ever firing a
+  // `drop`/`dragleave` on our host — the user presses Esc, or releases over a
+  // different element (the drop lands elsewhere). Both surface as a window-level
+  // `dragend`, and any completed drop anywhere fires a window `drop`. Clear the
+  // outline on either so it can never stay stuck (VSCode's chat input clears on
+  // every drop/leave for the same reason).
+  useEffect(() => {
+    if (!dropActive) return
+    const clear = (): void => setDropActive(false)
+    window.addEventListener('dragend', clear)
+    window.addEventListener('drop', clear)
+    return () => {
+      window.removeEventListener('dragend', clear)
+      window.removeEventListener('drop', clear)
+    }
+  }, [dropActive])
 
   // Attach an image lifted off the OS clipboard by the main process (base64
   // PNG). Mirrors acceptImageFiles' gating + validation + one-shot rejection.

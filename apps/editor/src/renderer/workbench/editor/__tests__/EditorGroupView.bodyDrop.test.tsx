@@ -308,4 +308,67 @@ describe('EditorGroupView body drop', () => {
     expect(screen.queryByTestId('editor-group-drop-overlay')).toBeNull()
     svc.dispose()
   })
+
+  // Regression (drag-and-drop-context): a full-screen session hosts the prompt
+  // input inside the body. Dragging a resource over that input must NOT leave the
+  // body's "open here" overlay glowing — the input owns the drop there.
+  it('suppresses the body overlay while a resource drag is over the prompt input host', () => {
+    const svc = new EditorGroupsService()
+    const a = new BodyDropInput('A', URI.file('/a.txt'))
+    const groupA = svc.activeGroup
+    groupA.openEditor(a)
+
+    renderTwoGroups(svc)
+    const bodyA = stubBodyRect(groupA, { left: 0, top: 0, width: 100, height: 100 } as DOMRect)
+
+    // Plant a prompt-input drop host inside the body (as AcpSessionEditor would).
+    const promptHost = document.createElement('div')
+    promptHost.setAttribute('data-testid', 'acp-prompt-drop-host')
+    bodyA.appendChild(promptHost)
+
+    // A resource drag over the chat area lights the "center" overlay…
+    const dt = new DataTransfer()
+    dt.setData('text/uri-list', 'file:///x/a.txt')
+    const over = createEvent.dragOver(bodyA, { dataTransfer: dt })
+    Object.defineProperty(over, 'clientX', { value: 50 })
+    Object.defineProperty(over, 'clientY', { value: 50 })
+    fireEvent(bodyA, over)
+    expect(screen.getByTestId('editor-group-drop-overlay').getAttribute('data-zone')).toBe('center')
+
+    // …then the pointer moves onto the prompt host. The dragover bubbles to the
+    // body handler, which must recognise the host target and drop the overlay.
+    const overHost = createEvent.dragOver(promptHost, { dataTransfer: dt })
+    Object.defineProperty(overHost, 'clientX', { value: 50 })
+    Object.defineProperty(overHost, 'clientY', { value: 90 })
+    fireEvent(promptHost, overHost)
+    expect(screen.queryByTestId('editor-group-drop-overlay')).toBeNull()
+    svc.dispose()
+  })
+
+  // Regression (drag-and-drop-context): if the gesture ends without a drop/leave
+  // on the body (drop consumed by the nested prompt input which stopPropagation()s
+  // it, or an Esc-cancel), only a window-level `dragend` fires. The overlay must
+  // still clear rather than lingering until the next drag.
+  it('clears a stuck body overlay on a window-level dragend', () => {
+    const svc = new EditorGroupsService()
+    const a = new BodyDropInput('A', URI.file('/a.txt'))
+    const b = new BodyDropInput('B', URI.file('/b.txt'))
+    const groupA = svc.activeGroup
+    groupA.openEditor(a)
+    const groupB = svc.addGroup(groupA, GroupDirection.Right)
+    groupB.openEditor(b)
+
+    renderTwoGroups(svc)
+    const bodyB = stubBodyRect(groupB, { left: 200, top: 0, width: 100, height: 100 } as DOMRect)
+
+    const tabA = within(screen.getByTestId(`group-wrapper-${groupA.id}`)).getByRole('tab')
+    fireEvent.dragStart(tabA)
+    fireDragWithCoords('dragOver', bodyB, { clientX: 290, clientY: 50 }) // right edge → overlay
+    expect(screen.getByTestId('editor-group-drop-overlay')).toBeTruthy()
+
+    // No drop/leave reaches the body; the browser fires a window `dragend`.
+    fireEvent(window, createEvent.dragEnd(window))
+    expect(screen.queryByTestId('editor-group-drop-overlay')).toBeNull()
+    svc.dispose()
+  })
 })

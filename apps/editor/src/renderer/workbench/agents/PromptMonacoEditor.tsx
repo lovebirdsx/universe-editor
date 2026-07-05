@@ -333,6 +333,12 @@ export function PromptMonacoEditor({
           selectionHighlight: false,
           matchBrackets: 'never',
           unicodeHighlight: PROMPT_UNICODE_HIGHLIGHT,
+          // The host <div> owns resource drops (insert @-mention / attach image).
+          // Leaving Monaco's own drop-into-editor on would let its default text
+          // provider paste the raw `file:///…` uri-list into the buffer too, so a
+          // dropped file lands twice. Turn both editor-level DnD behaviours off.
+          dropIntoEditor: { enabled: false },
+          dragAndDrop: false,
           padding: { top: 4, bottom: 4 },
           placeholder,
         },
