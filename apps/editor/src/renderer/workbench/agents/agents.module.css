@@ -2122,10 +2122,21 @@
   background: var(--color-toolbar-hover-bg, rgba(0, 0, 0, 0.85));
 }
 
-/* Anchored image preview popover (like SessionCostPopover) with wheel-zoom +
-   drag-to-pan. Portaled to <body> and positioned in viewport coordinates (JS
-   sets left/top) so it is never clipped by a scroll container and can flip
-   above/below + clamp near a window edge. */
+/* Dimmed backdrop shown behind the popover only when the image was clamped to
+   the max display size (centered lightbox mode) — sits behind .imagePreviewPopover
+   in paint order and lets click-outside-to-dismiss keep working unchanged. */
+.imagePreviewBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 999;
+  background: var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
+}
+
+/* Image preview popover (like SessionCostPopover) with wheel-zoom + drag-to-pan.
+   Portaled to <body> and positioned in viewport coordinates (JS sets left/top,
+   width/height come from the computed display size) so it is never clipped by a
+   scroll container; small/medium images anchor near the thumbnail (flip
+   above/below + clamp near a window edge), large images center in the viewport. */
 .imagePreviewPopover {
   position: fixed;
   z-index: 1000;
@@ -2136,12 +2147,32 @@
   box-shadow: 0 4px 16px var(--color-shadow-popover, rgba(0, 0, 0, 0.5));
 }
 
+.imagePreviewClose {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px;
+  border: none;
+  border-radius: 3px;
+  background: var(--color-badge-bg, rgba(0, 0, 0, 0.6));
+  color: var(--color-input-fg, #d4d4d4);
+  opacity: 0.85;
+  cursor: pointer;
+}
+
+.imagePreviewClose:hover {
+  opacity: 1;
+  background: var(--color-toolbar-hover-bg, rgba(0, 0, 0, 0.85));
+}
+
 .imagePreviewStage {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: min(420px, 60vw);
-  height: min(420px, 60vh);
   overflow: hidden;
   cursor: grab;
   touch-action: none;
