@@ -485,6 +485,9 @@ importers:
       typescript:
         specifier: 'catalog:'
         version: 5.9.3
+      vitest:
+        specifier: 'catalog:'
+        version: 3.2.6(@types/debug@4.1.13)(@types/node@22.19.17)(happy-dom@17.6.3)
       vscode-jsonrpc:
         specifier: 'catalog:'
         version: 8.2.0

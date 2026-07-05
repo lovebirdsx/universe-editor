@@ -49,6 +49,27 @@
 
 <!-- 截图：Ctrl+T 工作区符号搜索，结果带文件路径 -->
 
+### TypeScript：让工作区符号提前就绪
+
+Markdown 的工作区符号打开项目后立即可用。TypeScript 不一样——它要先加载对应的 TS 项目（`tsconfig.json`）才能列出符号，所以行为分两种情况：
+
+- **单个 `tsconfig.json` 的项目**：打开文件夹后会自动在后台预热，稍等片刻 `Ctrl+T` 就能搜到全仓库的 TS 符号，无需任何配置。
+- **含多个 `tsconfig.json` 的项目（如 monorepo）**：默认**不会**预热——因为逐个加载多个 TS 项目开销较大。此时如果还没打开任何 `.ts` 文件，`Ctrl+T` 可能搜不到 TS 符号（`Ctrl+T` 只覆盖已加载项目的符号）。有两种办法让它就绪：
+  - 打开该项目里的任意一个 `.ts` 文件，编辑器会自动加载它所属的 TS 项目；
+  - 或在[设置](../customization/settings.md)里指定要提前预热哪些 TS 项目，见下。
+
+**指定要预热的 TS 项目**：在工作区设置的 `settings.json` 里加上 `typescript.prewarm.projects`，值是这些 `tsconfig.json` 的工作区相对路径列表：
+
+```json
+{
+  'typescript.prewarm.projects': ['packages/core/tsconfig.json', 'apps/web/tsconfig.json']
+}
+```
+
+打开文件夹后，列出的每个 TS 项目都会在后台预热，`Ctrl+T` 随后即可搜到它们的符号。在 JSON 里编辑这一项时会**自动补全**当前工作区里真实存在的 `tsconfig.json` 路径，照着选就不会填错。
+
+> 提示：这只影响"打开文件前"工作区符号是否就绪；无论是否预热，打开某个 `.ts` 文件后，它所属项目的符号都会正常可搜。
+
 ## 转到定义、引用与速览
 
 在 TypeScript 文件里，可以从一处用法直接跳到它的定义，或查看它在哪些地方被引用。下面这组命令由编辑器提供，全部也能在命令面板里搜到运行：

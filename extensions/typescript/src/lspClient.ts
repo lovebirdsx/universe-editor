@@ -117,9 +117,11 @@ export class LspClient {
   private readonly _restartTimestamps: number[] = []
   /** Open documents we've forwarded, replayed on crash restart. */
   private readonly _open = new Map<string, OpenDoc>()
-  /** Seed document pinned open to keep the workspace project loaded (prewarm).
-   *  A user `didClose` of this uri is ignored so the project stays resident. */
-  private _pinnedUri: string | undefined
+  /** Seed documents pinned open to keep workspace projects loaded (prewarm).
+   *  A monorepo needs one seed per tsconfig, since tsserver's navto only searches
+   *  the project owning an open file. A user `didClose` of a pinned uri is ignored
+   *  so its project stays resident. */
+  private readonly _pinnedUris = new Set<string>()
 
   private readonly _onDiagnostics: (e: PublishDiagnosticsEvent) => void
 
@@ -142,17 +144,18 @@ export class LspClient {
   }
 
   /**
-   * Pin a seed document open to force tsserver to load the workspace project.
+   * Pin a seed document open to force tsserver to load a workspace project.
    * tsserver creates projects lazily — until at least one TS/JS file is open it
    * throws "No Project" for navto (workspace/symbol), so prewarming the process
    * alone isn't enough to make workspace symbols available before the user opens
-   * a file. The pinned document stays open for the client's lifetime (a user
-   * `didClose` of the same uri is ignored, see `didClose`) and is replayed on
-   * crash restart via `_open`, keeping the project resident. Idempotent.
+   * a file. In a monorepo navto only searches the project owning an open file, so
+   * one seed is pinned per tsconfig we want covered. Pinned documents stay open
+   * for the client's lifetime (a user `didClose` of the same uri is ignored, see
+   * `didClose`) and are replayed on crash restart via `_open`. Idempotent per uri.
    */
   async pinProject(uri: string, languageId: string, text: string): Promise<void> {
-    if (this._pinnedUri) return
-    this._pinnedUri = uri
+    if (this._pinnedUris.has(uri)) return
+    this._pinnedUris.add(uri)
     await this.didOpen(uri, languageId, 1, text)
   }
 
@@ -180,9 +183,9 @@ export class LspClient {
   }
 
   async didClose(uri: string): Promise<void> {
-    // Keep the prewarm pin open: closing it would unload the project (tsserver
+    // Keep the prewarm pins open: closing one would unload its project (tsserver
     // drops a project the moment its last file closes), undoing the prewarm.
-    if (uri === this._pinnedUri) return
+    if (this._pinnedUris.has(uri)) return
     this._open.delete(uri)
     const conn = await this._ready()
     this._notify(conn, 'textDocument/didClose', { textDocument: { uri } })

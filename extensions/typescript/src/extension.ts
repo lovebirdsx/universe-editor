@@ -34,10 +34,14 @@ const LANGUAGE_BY_EXT: Record<string, string> = {
   '.jsx': 'javascriptreact',
 }
 
-/** Directories never worth descending into when hunting for a seed file. */
+/** Directories never worth descending into when hunting for tsconfigs / seeds. */
 const PREWARM_SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next'])
-/** Bound the seed-file search so a huge tree can't stall prewarm. */
-const PREWARM_MAX_DIRS = 200
+/** Bound the tsconfig / seed search so a huge tree can't stall prewarm. */
+const PREWARM_MAX_DIRS = 400
+/** Seed selection skips loose config files (eslint.config.js, vite.config.ts, …):
+ *  they usually live outside any tsconfig's include, so tsserver builds an
+ *  inferred project for them whose navto can't see the real workspace symbols. */
+const SEED_SKIP_FILE = /\.config\.[cm]?[jt]sx?$/i
 
 /** tsserver completion trigger characters (mirrors the core TS provider). */
 const COMPLETION_TRIGGER_CHARACTERS = ['.', '"', "'", '`', '/', '@', '<', '#', ' ']
@@ -83,53 +87,140 @@ export function activate(context: ExtensionContext): void {
   registerProviders(context, client)
   registerDocumentSync(context, client)
 
-  // Prewarm: spawn tsserver now (every provider needs it) and pin a seed file
-  // open so the workspace project actually loads — without an open TS/JS file
-  // tsserver has no project and workspace/symbol throws "No Project". This makes
-  // symbols searchable before the user opens any editor.
+  // Prewarm: spawn tsserver now (every provider needs it) and pin one seed file
+  // per targeted tsconfig so the workspace projects actually load — without an
+  // open TS/JS file tsserver has no project and workspace/symbol throws "No
+  // Project", and navto only searches the project owning an open file. This makes
+  // symbols searchable before the user opens any editor. Which tsconfigs to warm
+  // is driven by `typescript.prewarm.projects` (see resolvePrewarmTargets).
   void prewarm(client)
 }
 
+/** A directory-reading dependency, so the prewarm search is unit-testable. */
+type ReadDir = (dir: string) => Promise<Array<[string, FileType]>>
+
 /**
- * Eager-start tsserver and, if the workspace has a TS/JS file, pin it open to
- * force the project to load. Best-effort: any failure leaves the plugin working
- * lazily (first real request still spawns the server).
+ * Eager-start tsserver and pin a seed file for each targeted tsconfig so its
+ * project loads. Best-effort: any failure leaves the plugin working lazily (the
+ * first real request still spawns the server and loads the file's project).
  */
 async function prewarm(client: LspClient): Promise<void> {
   await client.ensureReady()
   const root = workspace.rootPath
   if (!root) return
-  const seed = await findSeedFile(root)
-  if (!seed) return
-  try {
-    const bytes = await workspace.fs.readFile(seed.path)
-    const text = new TextDecoder().decode(bytes)
-    await client.pinProject(URI.file(seed.path).toString(), seed.languageId, text)
-  } catch (err) {
-    console.error(`[typescript] prewarm pin failed: ${(err as Error).message}`)
+
+  const readDir: ReadDir = async (dir) => {
+    try {
+      return await workspace.fs.readDirectory(dir)
+    } catch {
+      return []
+    }
+  }
+
+  const allTsconfigs = await enumerateTsconfigs(root, readDir)
+  const configured = await workspace
+    .getConfiguration('typescript')
+    .get<string[]>('prewarm.projects', [])
+  const targets = resolvePrewarmTargets(allTsconfigs, configured)
+
+  for (const tsconfigDir of targets) {
+    const startDir = tsconfigDir === '' ? root : `${root}/${tsconfigDir}`
+    const seed = await findSeedFile(startDir, readDir)
+    if (!seed) continue
+    try {
+      const bytes = await workspace.fs.readFile(seed.path)
+      const text = new TextDecoder().decode(bytes)
+      await client.pinProject(URI.file(seed.path).toString(), seed.languageId, text)
+    } catch (err) {
+      console.error(`[typescript] prewarm pin failed: ${(err as Error).message}`)
+    }
   }
 }
 
-/** Breadth-first hunt for the first TS/JS file under `root`, skipping heavy dirs
- *  and bounded by PREWARM_MAX_DIRS so a large tree can't stall startup. */
-async function findSeedFile(
-  root: string,
-): Promise<{ path: string; languageId: string } | undefined> {
+/**
+ * Decide which tsconfig directories to prewarm, returning the directory of each
+ * target tsconfig (a seed is hunted inside it). Rules:
+ * - single tsconfig in the workspace → always warm it (small projects are free);
+ * - multiple tsconfigs + no config → warm none (opening a seed per project is
+ *   costly, and picking one arbitrarily is worse than nothing — the user opts in);
+ * - explicit config → warm exactly the listed tsconfigs that actually exist.
+ * `configured` entries and enumerated paths are workspace-relative, POSIX-slashed.
+ */
+export function resolvePrewarmTargets(
+  allTsconfigs: readonly string[],
+  configured: readonly string[],
+): string[] {
+  const dirOf = (rel: string): string => {
+    const slash = rel.lastIndexOf('/')
+    return slash === -1 ? '' : rel.slice(0, slash)
+  }
+  const known = new Set(allTsconfigs)
+  const chosen: string[] = []
+  const seenDirs = new Set<string>()
+  const add = (rel: string): void => {
+    const dir = dirOf(rel)
+    if (seenDirs.has(dir)) return
+    seenDirs.add(dir)
+    chosen.push(dir)
+  }
+
+  if (configured.length > 0) {
+    for (const rel of configured) {
+      const norm = rel.replace(/\\/g, '/').replace(/^\.\//, '')
+      if (known.has(norm)) add(norm)
+    }
+    return chosen
+  }
+  if (allTsconfigs.length === 1) {
+    add(allTsconfigs[0] as string)
+    return chosen
+  }
+  return chosen
+}
+
+/** Breadth-first enumeration of every `tsconfig*.json` under `root`, returning
+ *  workspace-relative POSIX paths. Skips heavy dirs and is bounded so a large
+ *  tree can't stall startup. */
+export async function enumerateTsconfigs(root: string, readDir: ReadDir): Promise<string[]> {
+  const found: string[] = []
   const queue: string[] = [root]
   let visited = 0
   while (queue.length > 0 && visited < PREWARM_MAX_DIRS) {
     const dir = queue.shift() as string
     visited++
-    let entries: [string, FileType][]
-    try {
-      entries = await workspace.fs.readDirectory(dir)
-    } catch {
-      continue
-    }
-    const subdirs: string[] = []
+    const entries = await readDir(dir)
     for (const [name, type] of entries) {
       const full = `${dir}/${name}`
       if (type === FileType.File) {
+        if (/^tsconfig(\..+)?\.json$/i.test(name)) {
+          found.push(relative(root, full))
+        }
+      } else if (type === FileType.Directory && !PREWARM_SKIP_DIRS.has(name)) {
+        queue.push(full)
+      }
+    }
+  }
+  return found
+}
+
+/** Breadth-first hunt for the first real TS/JS source file under `startDir` (an
+ *  absolute path), skipping heavy dirs and loose config files, so the seed
+ *  belongs to a real tsconfig project (not an inferred one). */
+export async function findSeedFile(
+  startDir: string,
+  readDir: ReadDir,
+): Promise<{ path: string; languageId: string } | undefined> {
+  const queue: string[] = [startDir]
+  let visited = 0
+  while (queue.length > 0 && visited < PREWARM_MAX_DIRS) {
+    const cur = queue.shift() as string
+    visited++
+    const entries = await readDir(cur)
+    const subdirs: string[] = []
+    for (const [name, type] of entries) {
+      const full = `${cur}/${name}`
+      if (type === FileType.File) {
+        if (SEED_SKIP_FILE.test(name)) continue
         const languageId = LANGUAGE_BY_EXT[extname(name)]
         if (languageId) return { path: full, languageId }
       } else if (type === FileType.Directory && !PREWARM_SKIP_DIRS.has(name)) {
@@ -139,6 +230,12 @@ async function findSeedFile(
     queue.push(...subdirs)
   }
   return undefined
+}
+
+/** Workspace-relative POSIX path of `full` under `root`. */
+function relative(root: string, full: string): string {
+  const prefix = `${root}/`
+  return full.startsWith(prefix) ? full.slice(prefix.length) : full
 }
 
 /** Lowercased extension incl. the dot, or '' when none. */

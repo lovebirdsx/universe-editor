@@ -2,22 +2,41 @@
  *  Tests for LanguageServicePrewarmContribution — verifies the idle prewarm fires
  *  `onLanguage:<id>` for each configured language (default typescript + markdown),
  *  awaits the workspace, is a no-op when the setting is [], and re-runs when the
- *  extension host relaunches (onDidChangeContributions).
+ *  extension host relaunches (onDidChangeContributions). Also verifies the
+ *  `typescript.prewarm.projects` setting is registered with an enum of the
+ *  workspace's tsconfig paths (for settings.json completion).
  *--------------------------------------------------------------------------------------------*/
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  ConfigurationRegistry,
   ConfigurationService,
   ConfigurationTarget,
   Emitter,
   IConfigurationService,
+  IFileSearchService,
   IWorkspaceService,
+  URI,
+  type IFileSearchComplete,
+  type IFileSearchMatch,
+  type IWorkspace,
 } from '@universe-editor/platform'
 import { type IExtensionDescriptionDto } from '@universe-editor/extensions-common'
 import { LanguageServicePrewarmContribution } from '../LanguageServicePrewarmContribution.js'
 import { IExtensionHostClientService } from '../../services/extensions/ExtensionHostClientService.js'
 
-function setup(prewarm?: string[]) {
+function fileMatch(relativePath: string): IFileSearchMatch {
+  const basename = relativePath.split('/').pop() ?? relativePath
+  return {
+    resource: URI.file('/w/' + relativePath),
+    fsPath: '/w/' + relativePath,
+    relativePath,
+    basename,
+    score: 0,
+  }
+}
+
+function setup(prewarm?: string[], tsconfigPaths: string[] = []) {
   const config = new ConfigurationService()
   if (prewarm !== undefined) {
     config.loadLayer(ConfigurationTarget.User, { 'languageServices.prewarm': prewarm })
@@ -34,18 +53,43 @@ function setup(prewarm?: string[]) {
     },
   } as unknown as IExtensionHostClientService
 
+  const onDidChangeWorkspace = new Emitter<IWorkspace | null>()
   const workspace = {
     _serviceBrand: undefined,
     whenReady: Promise.resolve(),
+    current: { folder: URI.file('/w'), name: 'w' },
+    onDidChangeWorkspace: onDidChangeWorkspace.event,
   } as unknown as IWorkspaceService
+
+  const fileSearch = {
+    _serviceBrand: undefined,
+    search: (): Promise<IFileSearchComplete> =>
+      Promise.resolve({
+        results: tsconfigPaths.map(fileMatch),
+        limitHit: false,
+        filesWalked: 0,
+        directoriesWalked: 0,
+        durationMs: 0,
+      }),
+  } as unknown as IFileSearchService
 
   const contribution = new LanguageServicePrewarmContribution(
     config as unknown as IConfigurationService,
     workspace,
     client,
+    fileSearch,
   )
 
-  return { contribution, activations, onDidChangeContributions }
+  return { contribution, activations, onDidChangeContributions, onDidChangeWorkspace }
+}
+
+/** Read the currently-registered `typescript.prewarm.projects` item schema. */
+function tsProjectsItemSchema(): { type?: unknown; enum?: unknown[] } | undefined {
+  for (const node of ConfigurationRegistry.getConfigurationNodes()) {
+    const prop = node.properties['typescript.prewarm.projects']
+    if (prop) return prop.items as { type?: unknown; enum?: unknown[] }
+  }
+  return undefined
 }
 
 describe('LanguageServicePrewarmContribution', () => {
@@ -98,5 +142,35 @@ describe('LanguageServicePrewarmContribution', () => {
     expect(activations.filter((e) => e === 'onLanguage:typescript')).toHaveLength(2)
     expect(activations.filter((e) => e === 'onLanguage:markdown')).toHaveLength(2)
     contribution.dispose()
+  })
+
+  it('registers typescript.prewarm.projects with an enum of workspace tsconfigs', async () => {
+    const { contribution } = setup(undefined, ['tsconfig.json', 'packages/app/tsconfig.json'])
+    // The schema registration awaits workspace.whenReady + the file search; a
+    // macrotask flushes the whole microtask chain deterministically.
+    await new Promise((r) => setTimeout(r, 0))
+
+    const item = tsProjectsItemSchema()
+    expect(item?.enum).toEqual(['packages/app/tsconfig.json', 'tsconfig.json'])
+    contribution.dispose()
+  })
+
+  it('omits the enum when the workspace has no tsconfig', async () => {
+    const { contribution } = setup(undefined, [])
+    await new Promise((r) => setTimeout(r, 0))
+
+    const item = tsProjectsItemSchema()
+    expect(item?.type).toBe('string')
+    expect(item?.enum).toBeUndefined()
+    contribution.dispose()
+  })
+
+  it('unregisters the tsconfig schema on dispose', async () => {
+    const { contribution } = setup(undefined, ['tsconfig.json'])
+    await new Promise((r) => setTimeout(r, 0))
+    expect(tsProjectsItemSchema()).toBeDefined()
+
+    contribution.dispose()
+    expect(tsProjectsItemSchema()).toBeUndefined()
   })
 })

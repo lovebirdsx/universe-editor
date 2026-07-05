@@ -1,0 +1,7 @@
+// User settings — edit and save to apply immediately.
+// Available keys are declared by ConfigurationRegistry.
+{
+    "typescript.prewarm.projects": [
+        "apps/editor/tsconfig.json"
+    ]
+}

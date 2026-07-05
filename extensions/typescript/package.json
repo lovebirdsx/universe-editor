@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src",
     "lint:fix": "eslint --fix src",
+    "test": "vitest run",
     "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {
@@ -34,6 +35,7 @@
     "esbuild": "catalog:",
     "eslint": "catalog:",
     "typescript": "catalog:",
+    "vitest": "catalog:",
     "vscode-jsonrpc": "catalog:",
     "vscode-languageserver-types": "catalog:",
     "vscode-uri": "catalog:"
