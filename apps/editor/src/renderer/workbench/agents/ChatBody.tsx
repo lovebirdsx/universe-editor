@@ -75,6 +75,7 @@ import {
   type IAcpSessionOutlineController,
 } from '../../services/acp/acpSessionOutlineRegistry.js'
 import { resolveCollapsed, type CollapseState } from './timelineCollapse.js'
+import { ContentExpansionProvider, type ContentExpansionStore } from './chatContentExpansion.js'
 import { ChatFindWidget } from './ChatFindWidget.js'
 import { useChatFind } from './useChatFind.js'
 import styles from './agents.module.css'
@@ -358,6 +359,28 @@ function ChatScroll({
   const collapseRef = useRef(collapse)
   collapseRef.current = collapse
 
+  // Inner content-expansion (a long user message past its clamp, an execute
+  // tool call's terminal output). Separate from the outer per-slot `overrides`
+  // and persisted the same way so it survives an unmount → remount cycle.
+  const [contentExpandedKeys, setContentExpandedKeys] = useState<ReadonlySet<string>>(
+    () => new Set(saved?.contentExpandedKeys ?? []),
+  )
+  const contentExpandedRef = useRef(contentExpandedKeys)
+  contentExpandedRef.current = contentExpandedKeys
+  const contentExpansion: ContentExpansionStore = useMemo(
+    () => ({
+      expandedKeys: contentExpandedKeys,
+      toggle: (key: string) =>
+        setContentExpandedKeys((prev) => {
+          const next = new Set(prev)
+          if (next.has(key)) next.delete(key)
+          else next.add(key)
+          return next
+        }),
+    }),
+    [contentExpandedKeys],
+  )
+
   // When mode changes from outside (e.g. toggle button), clear per-item overrides.
   const prevModeRef = useRef(mode)
   if (prevModeRef.current !== mode) {
@@ -526,6 +549,9 @@ function ChatScroll({
     }
     if (anchor) next.anchor = anchor
     if (measurements) next.measurements = measurements
+    if (contentExpandedRef.current.size > 0) {
+      next.contentExpandedKeys = [...contentExpandedRef.current]
+    }
     AcpChatViewStateCache.save(session.id, next)
   }, [session.id])
 
@@ -533,6 +559,11 @@ function ChatScroll({
   useEffect(() => {
     persist()
   }, [overrides, persist])
+
+  // Persist whenever inner content-expansion changes (Expand/Collapse buttons).
+  useEffect(() => {
+    persist()
+  }, [contentExpandedKeys, persist])
 
   const handleScroll = () => {
     if (restoringRef.current) return
@@ -1054,62 +1085,86 @@ function ChatScroll({
   }, [handleRef, openFind, closeFind, nextFind, prevFind, readOnly])
 
   return (
-    <div
-      ref={containerRef}
-      className={styles['chatBody']}
-      tabIndex={-1}
-      onScroll={handleScroll}
-      onClick={handleClick}
-      onContextMenu={handleContextMenu}
-    >
-      {find.visible && (
-        <ChatFindWidget
-          query={find.query}
-          count={find.count}
-          currentIndex={find.currentIndex}
-          onQueryChange={find.setQuery}
-          onNext={find.next}
-          onPrev={find.prev}
-          onClose={() => handleRef.current.closeFind()}
+    <ContentExpansionProvider value={contentExpansion}>
+      <div
+        ref={containerRef}
+        className={styles['chatBody']}
+        tabIndex={-1}
+        onScroll={handleScroll}
+        onClick={handleClick}
+        onContextMenu={handleContextMenu}
+      >
+        {find.visible && (
+          <ChatFindWidget
+            query={find.query}
+            count={find.count}
+            currentIndex={find.currentIndex}
+            onQueryChange={find.setQuery}
+            onNext={find.next}
+            onPrev={find.prev}
+            onClose={() => handleRef.current.closeFind()}
+          />
+        )}
+        <StickyScrollOverlay
+          containerRef={containerRef}
+          timeline={displayTimeline}
+          collapse={collapse}
+          onToggleCollapse={handleToggleCollapse}
+          onJumpTo={handleStickyJump}
+          revision={`${virtualize}:${displayTimeline.length}:${tailSignature}`}
         />
-      )}
-      <StickyScrollOverlay
-        containerRef={containerRef}
-        timeline={displayTimeline}
-        collapse={collapse}
-        onToggleCollapse={handleToggleCollapse}
-        onJumpTo={handleStickyJump}
-        revision={`${virtualize}:${displayTimeline.length}:${tailSignature}`}
-      />
-      {!hasTimelineContent ? (
-        <EmptySessionHint />
-      ) : virtualize ? (
-        <div
-          className={styles['timelineVirtual']}
-          data-testid="acp-timeline"
-          style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
-        >
-          {virtualizer.getVirtualItems().map((vi) => {
-            const item = displayTimeline[vi.index]
-            if (item === undefined) return null
-            const key = slotKey(item)
-            const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
-            return (
-              <div
-                key={key}
-                ref={measureElement}
-                data-index={vi.index}
-                data-slot-key={key}
-                className={styles['timelineRow']}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  width: '100%',
-                  transform: `translateY(${vi.start}px)`,
-                }}
-              >
+        {!hasTimelineContent ? (
+          <EmptySessionHint />
+        ) : virtualize ? (
+          <div
+            className={styles['timelineVirtual']}
+            data-testid="acp-timeline"
+            style={{ height: virtualizer.getTotalSize(), position: 'relative' }}
+          >
+            {virtualizer.getVirtualItems().map((vi) => {
+              const item = displayTimeline[vi.index]
+              if (item === undefined) return null
+              const key = slotKey(item)
+              const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
+              return (
+                <div
+                  key={key}
+                  ref={measureElement}
+                  data-index={vi.index}
+                  data-slot-key={key}
+                  className={styles['timelineRow']}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${vi.start}px)`,
+                  }}
+                >
+                  <TimelineSlot
+                    slotKey={key}
+                    item={item}
+                    sessionRunning={slotRunning}
+                    isFocused={key === focusedKey}
+                    collapsed={resolveCollapsed(key, item, collapse)}
+                    collapse={collapse}
+                    onToggleCollapse={handleToggleCollapse}
+                  />
+                </div>
+              )
+            })}
+          </div>
+        ) : (
+          <ol className={styles['timeline']} data-testid="acp-timeline">
+            {displayTimeline.map((item) => {
+              const key = slotKey(item)
+              // Derive a per-slot running flag: only a streaming message's caret cares
+              // about it, so settled slots get a constant `false` and a session
+              // start/stop no longer invalidates every memoized slot.
+              const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
+              return (
                 <TimelineSlot
+                  key={key}
                   slotKey={key}
                   item={item}
                   sessionRunning={slotRunning}
@@ -1118,45 +1173,23 @@ function ChatScroll({
                   collapse={collapse}
                   onToggleCollapse={handleToggleCollapse}
                 />
-              </div>
-            )
-          })}
-        </div>
-      ) : (
-        <ol className={styles['timeline']} data-testid="acp-timeline">
-          {displayTimeline.map((item) => {
-            const key = slotKey(item)
-            // Derive a per-slot running flag: only a streaming message's caret cares
-            // about it, so settled slots get a constant `false` and a session
-            // start/stop no longer invalidates every memoized slot.
-            const slotRunning = isRunning && item.kind === 'message' && item.message.streaming
-            return (
-              <TimelineSlot
-                key={key}
-                slotKey={key}
-                item={item}
-                sessionRunning={slotRunning}
-                isFocused={key === focusedKey}
-                collapsed={resolveCollapsed(key, item, collapse)}
-                collapse={collapse}
-                onToggleCollapse={handleToggleCollapse}
-              />
-            )
-          })}
-        </ol>
-      )}
-      {menu && (
-        <AgentChatContextMenu
-          state={menu}
-          commandService={commandService}
-          contextKeyService={contextKeyService}
-          onClose={() => {
-            setMenu(null)
-            widgetService.setHasSelection(false)
-          }}
-        />
-      )}
-    </div>
+              )
+            })}
+          </ol>
+        )}
+        {menu && (
+          <AgentChatContextMenu
+            state={menu}
+            commandService={commandService}
+            contextKeyService={contextKeyService}
+            onClose={() => {
+              setMenu(null)
+              widgetService.setHasSelection(false)
+            }}
+          />
+        )}
+      </div>
+    </ContentExpansionProvider>
   )
 }
 
@@ -1302,7 +1335,7 @@ const TimelineSlot = memo(function TimelineSlot({
           }}
         >
           {isUser ? (
-            <UserMessageItem blocks={m.blocks} />
+            <UserMessageItem blocks={m.blocks} contentKey={`msg:${key}`} />
           ) : (
             <MessageContent blocks={m.blocks} streaming={m.streaming} />
           )}

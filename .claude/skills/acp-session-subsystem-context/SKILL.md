@@ -95,6 +95,7 @@ disable-model-invocation: true
 - **改会话生命周期/连接时序**：`acpSessionService.ts` 的 `createSession`/`_connectSession`/`resumeSession`；连接绑定/队列 flush 在 `acpSession.ts` 的 `attachConnection`/`failConnection`。**任何「连接前/后」分支都要想清双 id 与队列**。
 - **加附加于会话的能力**（如新 indicator / 新追踪）：view-model 字段加在 `acpSession.ts`（observable），UI 在 `workbench/agents/*` 用 `useObservable` 订阅。**注意键用 `sessionIdOnAgent` 还是本地 `id`**——跨会话持久/协议相关用前者，纯运行期 UI 缓存用后者（见下方坑 #2）。
 - **改双模式布局**：`acpChatLocationService.ts`（真相 + ContextKey）+ `AgentsView.tsx`（分支）+ 命令 `ToggleAgentChatLocationAction`。
+- **卡片折叠有两层，别混**：①**外层卡片折叠**（整个 message/tool_call slot 收起）走 `timelineCollapse.ts` 的 `overrides` + `session.collapseMode`，持久化进 `AcpChatViewStateCache.collapse`；②**内层内容折叠**（长用户消息过 `COLLAPSED_MAX_PX` 夹高 / execute 终端输出过高时的 "Expand/Collapse" 按钮）是叶子组件 `UserMessageItem`/`TerminalOutput` 的展开态。内层态历史上是组件本地 `useState`，切 session/切 tab/虚拟化滚屏（卸载重挂载）即丢——修法：`chatContentExpansion.tsx`（context store `{expandedKeys, toggle}`）由 `ChatBody` 提供并折进 `AcpChatViewStateCache.contentExpandedKeys` 持久化；叶子按稳定 `contentKey` 读写（用户消息 `msg:<slotKey>`、终端 `term:<stickyKey>`），无 store/key 时退回本地 state（如 `ToolCallList` 独立用法）。context 消费者随 store 变化自动重渲染，绕过 `TimelineSlot` 的 memo，无需改 memo。
 - **加配置项交互**：`acpSessionConfigOptions.ts`（推送/echo）+ `ConfigOptionsBar.tsx`（UI）+ `acpAgentDefaultsService.ts`（默认值持久化）。
 - **改恢复/重连**：`acpSessionRestoreCoordinator.ts` + `acpSessionEditorInput.ts`（tab 序列化）+ `acpSessionHistory.ts`（条目）。
 - **加 agent / 改权限 / MCP / 沙盒 / 入站方法**：直接看 CLAUDE.md 套路 ACP-A/D/F/C。

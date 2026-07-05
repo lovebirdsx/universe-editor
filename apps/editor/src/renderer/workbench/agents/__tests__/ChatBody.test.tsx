@@ -4,7 +4,7 @@
  *  remount cycle via AcpChatViewStateCache (editor-tab / session switch).
  *--------------------------------------------------------------------------------------------*/
 
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { StrictMode } from 'react'
 import { render, cleanup, act, fireEvent } from '@testing-library/react'
 import {
@@ -728,6 +728,91 @@ describe('ChatBody — collapse', () => {
     const second = renderChat(makeSession('s1', items))
     expect(ariaExpanded(second.container, 'm:b')).toBe('false')
     expect(ariaExpanded(second.container, 'm:a')).toBe('true')
+  })
+})
+
+// Regression: the INNER content collapse (a long user message clamped by
+// max-height / an execute tool call's terminal output → Expand/Collapse button)
+// used component-local useState, so expanding then switching session / tab (an
+// unmount → remount) snapped the content back to the clamp. It must persist via
+// AcpChatViewStateCache like the outer per-slot fold does.
+describe('ChatBody — inner content expansion persistence', () => {
+  const RealScrollHeight = Object.getOwnPropertyDescriptor(
+    globalThis.HTMLElement.prototype,
+    'scrollHeight',
+  )
+
+  beforeEach(() => {
+    // Force every measured inner box to overflow so the Expand/Collapse toggle
+    // renders (happy-dom reports scrollHeight 0 otherwise).
+    Object.defineProperty(globalThis.HTMLElement.prototype, 'scrollHeight', {
+      configurable: true,
+      get: () => 10000,
+    })
+  })
+
+  afterEach(() => {
+    if (RealScrollHeight) {
+      Object.defineProperty(globalThis.HTMLElement.prototype, 'scrollHeight', RealScrollHeight)
+    } else {
+      delete (globalThis.HTMLElement.prototype as unknown as { scrollHeight?: unknown })
+        .scrollHeight
+    }
+  })
+
+  function makeUserMessage(id: string, text: string): AcpMessage {
+    return { id, role: 'user', text, blocks: [{ type: 'text', text }], streaming: false }
+  }
+
+  function userToggle(container: HTMLElement, key: string): HTMLButtonElement {
+    const btn = slotEl(container, key).querySelector<HTMLButtonElement>(
+      '[data-testid="acp-user-message-toggle"]',
+    )
+    if (!btn) throw new Error(`no user-message toggle for ${key}`)
+    return btn
+  }
+
+  // The first user message is lifted into the sticky bar (displayTimeline drops
+  // it), so keep two and assert on the second, which stays in the list.
+  const items: readonly TimelineItem[] = [
+    { kind: 'message', id: 'a', message: makeUserMessage('a', 'first user message') },
+    {
+      kind: 'message',
+      id: 'b',
+      message: makeUserMessage('b', 'a very long pasted log '.repeat(50)),
+    },
+  ]
+
+  it('persists a long user message expansion across an unmount → remount cycle', () => {
+    const first = renderChat(makeSession('s1', items))
+    expect(userToggle(first.container, 'm:b').getAttribute('aria-expanded')).toBe('false')
+
+    act(() => {
+      fireEvent.click(userToggle(first.container, 'm:b'))
+    })
+    expect(userToggle(first.container, 'm:b').getAttribute('aria-expanded')).toBe('true')
+    first.unmount()
+
+    expect(AcpChatViewStateCache.load('s1')?.contentExpandedKeys ?? []).toContain('msg:m:b')
+
+    const second = renderChat(makeSession('s1', items))
+    expect(userToggle(second.container, 'm:b').getAttribute('aria-expanded')).toBe('true')
+  })
+
+  it('collapsing again removes the key so the default (clamped) is restored', () => {
+    const first = renderChat(makeSession('s1', items))
+    act(() => {
+      fireEvent.click(userToggle(first.container, 'm:b'))
+    })
+    act(() => {
+      fireEvent.click(userToggle(first.container, 'm:b'))
+    })
+    first.unmount()
+
+    expect(AcpChatViewStateCache.load('s1')?.contentExpandedKeys ?? []).not.toContain('msg:m:b')
+
+    const second = renderChat(makeSession('s1', items))
+    expect(userToggle(second.container, 'm:b').getAttribute('aria-expanded')).toBe('false')
   })
 })
 

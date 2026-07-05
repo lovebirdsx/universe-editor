@@ -10,18 +10,31 @@ import { ChevronDown, ChevronUp } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { MessageContent } from './MessageContent.js'
+import { useContentExpansion } from './chatContentExpansion.js'
 import styles from './agents.module.css'
 
 const COLLAPSED_MAX_PX = 160
 
 export const UserMessageItem = memo(function UserMessageItem({
   blocks,
+  contentKey,
 }: {
   blocks: readonly ContentBlock[]
+  contentKey?: string
 }) {
   const innerRef = useRef<HTMLDivElement | null>(null)
   const [overflows, setOverflows] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  // Persist the expanded state (via the timeline's content-expansion store) so
+  // it survives an unmount → remount cycle (session / tab switch, virtualization
+  // scroll-off). Falls back to local state when used without a store or key.
+  const store = useContentExpansion()
+  const persisted = store !== null && contentKey !== undefined
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const expanded = persisted ? store.expandedKeys.has(contentKey) : localExpanded
+  const toggle = () => {
+    if (persisted) store.toggle(contentKey)
+    else setLocalExpanded((v) => !v)
+  }
 
   useEffect(() => {
     const el = innerRef.current
@@ -57,7 +70,7 @@ export const UserMessageItem = memo(function UserMessageItem({
           className={styles['userMessageToggle']}
           aria-expanded={expanded}
           aria-label={toggleLabel}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={toggle}
           data-testid="acp-user-message-toggle"
         >
           <span aria-hidden="true">

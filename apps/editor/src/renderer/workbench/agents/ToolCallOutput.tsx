@@ -11,15 +11,25 @@ import { Check, ChevronDown, ChevronUp, CircleX, Loader2 } from 'lucide-react'
 import { localize } from '@universe-editor/platform'
 import { parseAnsi, type AnsiSegment } from '../../services/acp/ansi.js'
 import type { AcpToolCallStatus } from '../../services/acp/acpSessionService.js'
+import { useContentExpansion } from './chatContentExpansion.js'
 import styles from './agents.module.css'
 
 const COLLAPSED_MAX_PX = 240
 
-export function TerminalOutput({ text }: { text: string }) {
+export function TerminalOutput({ text, contentKey }: { text: string; contentKey?: string }) {
   const segments = useMemo(() => parseAnsi(text), [text])
   const innerRef = useRef<HTMLPreElement | null>(null)
   const [overflows, setOverflows] = useState(false)
-  const [expanded, setExpanded] = useState(false)
+  // Persist expansion across unmount → remount (session / tab switch,
+  // virtualization scroll-off); local fallback when no store/key is threaded.
+  const store = useContentExpansion()
+  const persisted = store !== null && contentKey !== undefined
+  const [localExpanded, setLocalExpanded] = useState(false)
+  const expanded = persisted ? store.expandedKeys.has(contentKey) : localExpanded
+  const toggle = () => {
+    if (persisted) store.toggle(contentKey)
+    else setLocalExpanded((v) => !v)
+  }
 
   useEffect(() => {
     const el = innerRef.current
@@ -56,7 +66,7 @@ export function TerminalOutput({ text }: { text: string }) {
           className={styles['terminalOutputToggle']}
           aria-expanded={expanded}
           aria-label={toggleLabel}
-          onClick={() => setExpanded((v) => !v)}
+          onClick={toggle}
           data-testid="acp-terminal-output-toggle"
         >
           <span aria-hidden="true">

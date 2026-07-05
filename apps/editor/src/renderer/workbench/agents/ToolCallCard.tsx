@@ -125,7 +125,10 @@ export const ToolCallCard = memo(function ToolCallCard({
       {commandDetail}
       {call.text.length > 0 && (
         <div className={styles['toolCallBody']}>
-          <TerminalOutput text={call.text} />
+          <TerminalOutput
+            text={call.text}
+            {...(dataStickyKey !== undefined ? { contentKey: `term:${dataStickyKey}` } : {})}
+          />
         </div>
       )}
     </>

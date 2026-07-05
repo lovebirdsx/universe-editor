@@ -48,6 +48,13 @@ export interface AcpChatViewState {
   collapse?: AcpChatCollapseState
   anchor?: AcpChatAnchor
   measurements?: ReadonlyArray<AcpChatMeasurement>
+  /**
+   * Keys whose *inner* content the user expanded — a long user message past its
+   * max-height clamp, an execute tool call's terminal output. Distinct from
+   * `collapse.overrides` (the outer per-slot fold); persisted so the expansion
+   * survives an unmount → remount cycle instead of snapping back to the clamp.
+   */
+  contentExpandedKeys?: readonly string[]
 }
 
 class AcpChatViewStateCacheImpl {
