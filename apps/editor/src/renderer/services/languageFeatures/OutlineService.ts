@@ -83,6 +83,18 @@ const INITIAL_PULL_RETRY_MS = 250
 const MAX_PULL_RETRY_MS = 2000
 const PULL_RETRY_BUDGET_MS = 180_000
 
+// A single symbol pull must always settle so the retry chain (which schedules the
+// next attempt only from a pull's then/catch) keeps turning. A `.catch()` handles
+// a rejected pull, but NOT one that hangs forever: the JSON symbol provider awaits
+// Monaco's JSON worker (a web-worker RPC + dynamic import), which on a cold,
+// contended Ubuntu CI runner can leave a request queued and never resolving —
+// then/catch never fire, `_maybeRetry` is never called, and the outline stays
+// stuck at the empty tree. Race every pull against a timeout so a stuck pull is
+// treated as one failed attempt and retried, instead of silently killing the
+// chain. A healthy pull is far faster than this; a timeout only costs one extra
+// retry (the worker is warm by the next attempt).
+const PULL_TIMEOUT_MS = 5000
+
 const NONE_TOKEN = {
   isCancellationRequested: false,
   onCancellationRequested: () => ({ dispose: () => {} }),
@@ -403,7 +415,7 @@ export class OutlineService extends Disposable implements IOutlineService {
       return
     }
 
-    void Promise.resolve(provider.provideDocumentSymbols(model, NONE_TOKEN))
+    void this._pullWithTimeout(provider, model)
       .then((result) => {
         // Discard if the model was swapped or disposed while we awaited.
         if (this._currentModel !== model || model.isDisposed()) return
@@ -416,11 +428,13 @@ export class OutlineService extends Disposable implements IOutlineService {
         this._maybeRetry(roots, retry)
       })
       .catch((err: unknown) => {
-        // A provider can reject during a cold start — e.g. the JSON symbol
-        // provider delegates to Monaco's JSON worker, which may not be warm yet
-        // (the workbench now mounts before Monaco finishes loading). Without this
-        // catch the retry chain would die silently here and the outline would
-        // stay stuck at the empty tree published before the provider appeared.
+        // A provider can reject — or hang past PULL_TIMEOUT_MS — during a cold
+        // start: the JSON symbol provider delegates to Monaco's JSON worker, which
+        // may not be warm yet (the workbench now mounts before Monaco finishes
+        // loading) and can either reject OR never settle. Without this catch (and
+        // the timeout that guarantees we reach it) the retry chain would die
+        // silently here and the outline would stay stuck at the empty tree
+        // published before the provider appeared.
         if (this._currentModel !== model || model.isDisposed()) return
         this._logger.debug(
           `document-symbol pull failed for ${languageId} (${model.uri.toString()}); retrying: ${
@@ -429,6 +443,40 @@ export class OutlineService extends Disposable implements IOutlineService {
         )
         this._maybeRetry([], retry)
       })
+  }
+
+  /**
+   * Pull symbols, but reject if the provider hasn't answered within
+   * PULL_TIMEOUT_MS. Guarantees the returned promise always settles so the retry
+   * chain (driven from the pull's then/catch) can't stall on a provider whose
+   * underlying worker RPC never resolves.
+   */
+  private _pullWithTimeout(
+    provider: monaco.languages.DocumentSymbolProvider,
+    model: monaco.editor.ITextModel,
+  ): Promise<monaco.languages.DocumentSymbol[] | null | undefined> {
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const timer = setTimeout(() => {
+        if (settled) return
+        settled = true
+        reject(new Error(`document-symbol pull timed out after ${PULL_TIMEOUT_MS}ms`))
+      }, PULL_TIMEOUT_MS)
+      Promise.resolve(provider.provideDocumentSymbols(model, NONE_TOKEN)).then(
+        (result) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          resolve(result)
+        },
+        (err: unknown) => {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          reject(err instanceof Error ? err : new Error(String(err)))
+        },
+      )
+    })
   }
 
   /** Schedule another pull (with exponential backoff) while the outline is still empty and the time budget remains. */

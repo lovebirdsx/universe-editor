@@ -570,6 +570,52 @@ describe('OutlineService', () => {
     }
   })
 
+  it('keeps retrying when the provider HANGS during a cold start (worker never settles)', async () => {
+    vi.useFakeTimers()
+    try {
+      const services = new ServiceCollection()
+      services.set(IFileService, makeFs())
+      const inst = new InstantiationService(services)
+      const input = inst.createInstance(FileEditorInput, URI.file('/ws/x.md'))
+
+      // The JSON symbol provider awaits Monaco's JSON worker (a web-worker RPC +
+      // dynamic import). On a cold, contended Ubuntu CI runner that request can
+      // stay queued and NEVER settle — a `.catch()` can't save that, because
+      // then/catch never fire and the retry scheduler (driven from them) stalls.
+      // The pull-timeout must convert a hung pull into a failed attempt so the
+      // chain keeps turning until the worker finally answers. Before the fix the
+      // first (forever-pending) pull left the outline stuck at the empty tree.
+      const symbols = [makeSymbol('Warm', 1, 5)]
+      let calls = 0
+      const provider = {
+        provideDocumentSymbols: () => (calls++ >= 2 ? symbols : new Promise<never>(() => {})), // first pulls hang forever
+      } as unknown as monaco.languages.DocumentSymbolProvider
+      const facade = {
+        onDidChangeDocumentSymbolProviders: new Emitter<{ languageId: string }>().event,
+        getDocumentSymbolProviders: (lang: string) => (lang === 'markdown' ? [provider] : []),
+      } as unknown as ILanguageFeaturesService
+
+      const activeEditor = observableValue<FileEditorInput | undefined>('t', undefined)
+      const editorService = { activeEditor } as unknown as IEditorService
+      const svc = new OutlineService(editorService, facade, undefined as never)
+
+      FileEditorRegistry.register(input, makeFakeEditorFor('file:///ws/x.md').editor)
+      activeEditor.set(input, undefined)
+      await vi.advanceTimersByTimeAsync(0)
+      // The first pull is still hanging, so no tree is published yet — the key
+      // point is the retry chain survives the hang rather than dying here.
+      expect(svc.outline.get()?.roots ?? []).toEqual([])
+
+      // Drive past the pull timeout(s) + backoff; once a pull finally answers the
+      // outline fills in. Two hung pulls at 5s each + backoff stay well within.
+      await vi.advanceTimersByTimeAsync(30000)
+      expect(svc.outline.get()?.roots).toEqual(symbols)
+      svc.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('previewSymbol scrolls + highlights without moving the cursor or stealing focus', async () => {
     const symbols = [makeSymbol('A', 1, 3), makeSymbol('B', 4, 10)]
     const { svc, input, activeEditor } = setup(symbols)
