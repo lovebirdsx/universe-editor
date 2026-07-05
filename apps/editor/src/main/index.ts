@@ -463,6 +463,11 @@ app.on('before-quit', (e) => {
     // last-resort backstop.
     await windowMainService.captureSessionForQuit()
     await getDefaultStorage().flush()
+    // Gracefully stop the extension hosts and AWAIT the stdin-EOF shutdown
+    // cascade (host → deactivate typescript ext → CLI reaps tsserver). will-quit
+    // is synchronous and can only hard-kill, which orphans a slow-starting
+    // tsserver; draining the cascade here reaps the whole tree cleanly.
+    await applicationServices?.extensionHost.stopAll().catch(() => undefined)
     app.quit()
   })()
 })

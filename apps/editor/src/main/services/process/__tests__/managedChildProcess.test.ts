@@ -168,37 +168,40 @@ describe('ManagedChildProcess', () => {
 
     it('kill() force-kills the PID tree in one shot instead of SIGTERM (win32)', () => {
       setPlatform('win32')
-      const killed: number[] = []
+      const killed: Array<{ pid: number; sync: boolean }> = []
       const managed = new ManagedChildProcess(child.asChild(), {
         treeKill: true,
-        killTree: (pid) => killed.push(pid),
+        killTree: (pid, sync) => killed.push({ pid, sync: sync ?? false }),
       })
       let exit: ManagedExit | undefined
       managed.onDidExit((e) => (exit = e))
 
       managed.kill()
       // No SIGTERM/SIGKILL to the wrapper — the whole tree is reaped directly.
+      // A caller-initiated kill uses the async (non-blocking) tree-kill.
       expect(child.killSignals).toEqual([])
-      expect(killed).toEqual([child.pid])
+      expect(killed).toEqual([{ pid: child.pid, sync: false }])
 
       // No escalation timer is armed; advancing time is a no-op.
       vi.advanceTimersByTime(DEFAULT_KILL_TIMEOUT_MS * 2)
-      expect(killed).toEqual([child.pid])
+      expect(killed).toEqual([{ pid: child.pid, sync: false }])
 
       child.emit('exit', null, 'SIGKILL')
       expect(exit).toEqual({ code: null, signal: 'SIGKILL', forced: true })
     })
 
-    it('dispose() force-kills the PID tree (win32)', () => {
+    it('dispose() force-kills the PID tree synchronously (win32)', () => {
       setPlatform('win32')
-      const killed: number[] = []
+      const killed: Array<{ pid: number; sync: boolean }> = []
       const managed = new ManagedChildProcess(child.asChild(), {
         treeKill: true,
-        killTree: (pid) => killed.push(pid),
+        killTree: (pid, sync) => killed.push({ pid, sync: sync ?? false }),
       })
       managed.dispose()
       expect(child.killSignals).toEqual([])
-      expect(killed).toEqual([child.pid])
+      // dispose() runs on the synchronous will-quit path, so it must block until
+      // the tree is reaped — otherwise the grandchild survives the main exit.
+      expect(killed).toEqual([{ pid: child.pid, sync: true }])
     })
 
     it('falls back to SIGTERM off Windows even when treeKill is set', () => {

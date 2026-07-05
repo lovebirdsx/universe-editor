@@ -4,6 +4,8 @@
 
 ## 功能实现进展
 
+- [agent 二进制静默下载 + e2e teardown 回归修复](agent-binary-silent-download-e2e-fix.md) — 通知噪音→connect silent 选项→codex/claude 二进制守卫按 agentId 修复→意外揭露 codex 真下载导致 e2e teardown timeout→allowDownload 网关 + prefetch e2e 门禁；**续修真根因**=预热引入的 tsserver 在 Windows 变孤儿卡 app.close()：vendored CLI 只在优雅退(stdin EOF/watchdog)跑 exit hook 回收 tsserver，treeKill /F 硬杀跳过它+甩掉 race 的 semantic server→改 lspClient/exthost 全链优雅关(stdin EOF 级联)+Playwright SIGKILL 不跑 in-app 钩子故 e2e 靠 fixture killOrphanedLanguageServers 扫死父孤儿
+
 - [ACP 输入框 Monaco 化 + 药丸引用](prompt-monaco-input-migration.md) — textarea→内嵌 Monaco，@/# 统一 by-range 药丸(对标 VSCode Copilot);M0–M4 全完成全绿;坑=programmatic vs user 变更源(非受控 Monaco 每次 setValue 都 fire onChange,须计数器区分)/ArrowUp 用 getTopForPosition 判视觉首行/e2e 无 input 改探针 getAcpPromptText+drop 宿主 testid acp-prompt-drop-host
 - [# 结构化上下文引用](prompt-hash-context-references-feature.md) — ACP 输入框重构为**内嵌 Monaco + by-range 药丸**：@/# 统一成 decoration 追踪的引用，含空格 label 安全，提交读 range 列表不分词；旧 by-name 管线全删；模型 promptRef.ts + 追踪 promptRefTracker.ts + 句柄 PromptMonacoEditor.tsx（实施坑见 [[prompt-monaco-input-migration]]）
 - [路径/URI 比较根治收敛](path-comparison-convergence.md) — 四套散乱手写机制→IUriIdentityService 单一入口(DI 绑一次 platform)+base 内核纯函数+ResourceMap；修 authority-only file URI 键碰撞；main 侧走内核+normalizePlatform；MonacoModelKey/SCM 键/acpPathPolicy 为刻意保留的独立身份域

@@ -71,4 +71,31 @@ export class ExtensionActivationService {
       console.error(`[ext-host] activate failed ${ext.id}: ${(err as Error).stack ?? String(err)}`)
     }
   }
+
+  /**
+   * Deactivate every activated extension: call its `deactivate` hook and dispose
+   * its `context.subscriptions`. Runs on host shutdown so extensions can release
+   * OS resources they own — most importantly child processes they spawned (e.g.
+   * the typescript plugin's tsserver), which otherwise orphan when the host dies.
+   * Synchronous best-effort: errors are swallowed so one bad extension can't
+   * block the rest, and a returned promise from `deactivate` is not awaited (the
+   * host is about to exit; the disposables' synchronous kill is what matters).
+   */
+  disposeAll(): void {
+    for (const [id, activated] of this._activated) {
+      try {
+        activated.deactivate?.()
+      } catch (err) {
+        console.error(`[ext-host] deactivate failed ${id}: ${(err as Error).message}`)
+      }
+      for (const sub of activated.context.subscriptions) {
+        try {
+          sub.dispose()
+        } catch (err) {
+          console.error(`[ext-host] subscription dispose failed ${id}: ${(err as Error).message}`)
+        }
+      }
+    }
+    this._activated.clear()
+  }
 }

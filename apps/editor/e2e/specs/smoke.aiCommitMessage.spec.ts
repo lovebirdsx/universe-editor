@@ -14,7 +14,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 function git(cwd: string, ...args: string[]): void {
@@ -92,7 +92,7 @@ test.describe('@p1 ai commit message', () => {
       await expect(button).toBeVisible({ timeout: 15_000 })
       await expectNoLeaks(page)
     } finally {
-      await app.close()
+      await closeApp(app)
     }
   })
 })

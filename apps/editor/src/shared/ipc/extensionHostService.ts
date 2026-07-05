@@ -79,6 +79,13 @@ export interface IExtensionHostService {
   writeStdin(handle: string, data: string): Promise<void>
   stop(handle: string): Promise<void>
   /**
+   * Gracefully stop every live host and await their exit. Main-only quit
+   * primitive (not exposed to the renderer via ProxyChannel): drives the full
+   * stdin-EOF shutdown cascade to reap each host's descendants (notably the
+   * typescript plugin's tsserver) before the synchronous `will-quit` teardown.
+   */
+  stopAll(): Promise<void>
+  /**
    * Whether the user (external) extensions directory exists and is non-empty.
    * Lets the renderer skip spawning the restricted host when there's nothing to
    * load (the common case today).

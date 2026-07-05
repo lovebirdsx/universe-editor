@@ -21,7 +21,7 @@ import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const GENERATED_MESSAGE = 'feat: add greeting'
@@ -180,7 +180,7 @@ test.describe('@p1 ai debug', () => {
 
       await expectNoLeaks(page)
     } finally {
-      await app.close()
+      await closeApp(app)
       await ollama.close()
     }
   })

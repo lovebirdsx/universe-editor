@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 function seedUserSettings(userDataDir: string): void {
@@ -124,7 +124,7 @@ test.describe('@p1 output channel restore', () => {
           .toBe('Main')
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
       try {
         rmSync(workspaceFolder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
@@ -166,7 +166,7 @@ test.describe('@p1 output channel restore', () => {
           .toBe('TestChannel')
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
       try {
         rmSync(workspaceFolder, {
@@ -220,7 +220,7 @@ test.describe('@p1 output channel restore', () => {
           .toBe('acp/claude/new-handle')
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
       try {
         rmSync(workspaceFolder, {

@@ -12,7 +12,7 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 test.describe('@p1 first-run agent onboarding', () => {
@@ -49,7 +49,7 @@ test.describe('@p1 first-run agent onboarding', () => {
         .toBe(true)
       await expectNoLeaks(page)
     } finally {
-      await app.close()
+      await closeApp(app)
     }
   })
 })

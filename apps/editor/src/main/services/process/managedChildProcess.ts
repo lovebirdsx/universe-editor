@@ -13,7 +13,7 @@
  *  helpers those call sites use.
  *--------------------------------------------------------------------------------------------*/
 
-import { execFile, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { execFile, execFileSync, type ChildProcessWithoutNullStreams } from 'node:child_process'
 import { Disposable, Emitter, type ILogger } from '@universe-editor/platform'
 
 export const DEFAULT_KILL_TIMEOUT_MS = 2000
@@ -24,11 +24,27 @@ export const DEFAULT_KILL_TIMEOUT_MS = 2000
  * reaps the wrapper, leaving the grandchild (node/npx agent, shell command)
  * orphaned with a dangling stdin pipe. `taskkill /T` recurses the parent-PID
  * tree so the real process dies too. Injectable so unit tests don't shell out.
+ *
+ * The `sync` flag selects a blocking `execFileSync`. It matters on the app-quit
+ * path (`dispose()`): Electron's `will-quit` is synchronous and does not await
+ * promises, so a fire-and-forget async `taskkill` races the main process exit —
+ * the main process can die *before* the grandchild is reaped, leaving it holding
+ * inherited pipes open (blocks Playwright teardown; leaks agent processes for
+ * real users). A synchronous kill forces will-quit to block until the tree dies.
  */
-export type TreeKiller = (pid: number) => void
+export type TreeKiller = (pid: number, sync?: boolean) => void
 
-const defaultTreeKiller: TreeKiller = (pid) => {
-  execFile('taskkill', ['/pid', String(pid), '/T', '/F'], () => {
+const defaultTreeKiller: TreeKiller = (pid, sync) => {
+  const args = ['/pid', String(pid), '/T', '/F']
+  if (sync) {
+    try {
+      execFileSync('taskkill', args, { stdio: 'ignore' })
+    } catch {
+      // Best-effort: already exited, partial tree, or taskkill unavailable.
+    }
+    return
+  }
+  execFile('taskkill', args, () => {
     // Best-effort: already exited, partial tree, or taskkill unavailable —
     // nothing actionable during teardown.
   })
@@ -130,6 +146,24 @@ export class ManagedChildProcess extends Disposable {
   }
 
   /**
+   * Close the child's stdin (EOF). For children that watch stdin for their parent
+   * going away (the extension host shuts itself down on `stdin end`), this is the
+   * graceful-stop trigger: it lets the child tear down its own descendants (e.g.
+   * tsserver) synchronously and exit cleanly, instead of us hard-killing it and
+   * orphaning those grandchildren. No-op if already exited or stdin is gone.
+   */
+  endStdin(): void {
+    if (this._exited) return
+    const stdin = this._child.stdin
+    if (stdin.destroyed) return
+    try {
+      stdin.end()
+    } catch {
+      // Already closing / destroyed — nothing to do.
+    }
+  }
+
+  /**
    * Request termination. Sends `signal` (default SIGTERM); if the process has
    * not exited within `killTimeoutMs`, escalates to SIGKILL. Idempotent.
    *
@@ -161,13 +195,13 @@ export class ManagedChildProcess extends Disposable {
     return this._treeKill && process.platform === 'win32' && this._child.pid !== undefined
   }
 
-  private _killTreeNow(): void {
+  private _killTreeNow(sync = false): void {
     if (this._treeKilled) return
     const pid = this._child.pid
     if (pid === undefined) return
     this._treeKilled = true
     try {
-      this._killTree(pid)
+      this._killTree(pid, sync)
     } catch (err) {
       this._logger?.warn(
         `ManagedChildProcess(${this._label}): tree-kill failed: ${(err as Error).message}`,
@@ -208,7 +242,11 @@ export class ManagedChildProcess extends Disposable {
       this._killTimer = undefined
     }
     if (!this._exited) {
-      if (this._shouldTreeKill()) this._killTreeNow()
+      // dispose() runs on the app-quit path (will-quit → service dispose), which
+      // is synchronous. Use a blocking tree-kill so the main process cannot exit
+      // before the grandchild agent is reaped (otherwise it survives holding the
+      // inherited pipe open). A plain SIGKILL suffices off the tree-kill path.
+      if (this._shouldTreeKill()) this._killTreeNow(true)
       else this._send('SIGKILL')
     }
     super.dispose()

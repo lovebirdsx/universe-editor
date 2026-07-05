@@ -628,4 +628,14 @@ export class ExtensionService implements IExtensionHostBridge {
   activateByEvent(event: string): Promise<void> {
     return this._activation.activateByEvent(event)
   }
+
+  /**
+   * Tear down every activated extension (deactivate + dispose subscriptions).
+   * Called on host shutdown so extensions release OS resources — notably child
+   * processes they spawned (typescript plugin's tsserver), which would otherwise
+   * orphan when the host process dies.
+   */
+  dispose(): void {
+    this._activation.disposeAll()
+  }
 }

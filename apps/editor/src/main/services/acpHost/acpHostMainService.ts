@@ -165,14 +165,21 @@ export class AcpHostMainService extends Disposable implements IAcpHostService {
 
     let proc: ManagedChildProcess
     try {
-      // A shell-wrapped spawn (Windows default, for `.cmd` shims) needs tree-kill
-      // on stop: `kill()` would only reap the `cmd.exe` wrapper and orphan the
-      // real agent grandchild, whose dangling stdin then EOFs it out-of-band.
+      // Tree-kill is required whenever the spawned child is not the process that
+      // actually owns the agent's stdio pipes:
+      //   • shell-wrapped spawn (Windows default, for `.cmd` shims): `kill()`
+      //     reaps only the `cmd.exe` wrapper and orphans the real grandchild.
+      //   • runAsNode: the bundled agent re-spawns itself via `process.execPath`
+      //     (see the ELECTRON_RUN_AS_NODE note above), so killing our direct
+      //     child leaves that re-spawned grandchild orphaned — on Windows it then
+      //     survives app quit holding the inherited pipe open (blocking teardown).
+      // Either way we must recurse the PID tree (`taskkill /T`) so the real agent
+      // dies. No-op off Windows, where a parent SIGKILL already reaps the group.
       const usesShell = options.shell ?? process.platform === 'win32'
       proc = new ManagedChildProcess(this._spawn(command, args, options), {
         logger: this._logger,
         label: handle,
-        treeKill: usesShell,
+        treeKill: usesShell || spec.runAsNode === true,
       })
     } catch (err) {
       this._logger.warn(

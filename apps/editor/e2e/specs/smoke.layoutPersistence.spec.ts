@@ -19,7 +19,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 import { URI } from '@universe-editor/platform'
-import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const SAVED_SIDEBAR_PX = 400
@@ -129,7 +129,7 @@ test.describe('@p1 layout persistence', () => {
         expect(sidebarWidth).toBeLessThan(SAVED_SIDEBAR_PX + 20)
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
     } finally {
       rmSync(userDataDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })

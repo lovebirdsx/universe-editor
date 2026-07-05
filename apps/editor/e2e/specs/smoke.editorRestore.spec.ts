@@ -14,7 +14,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 /** Convert a filesystem path to the UriComponents format used by URI.file(). */
@@ -134,7 +134,7 @@ test.describe('@p1 editor restore', () => {
           .toContain('hello.json')
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
       try {
         rmSync(workspaceFolder, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
@@ -189,7 +189,7 @@ test.describe('@p1 editor restore', () => {
           .toContain('a.json')
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
       for (const dir of [wsA, wsB]) {
         try {

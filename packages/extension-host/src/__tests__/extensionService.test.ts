@@ -177,6 +177,50 @@ describe('ExtensionService', () => {
     expect(mt.registered).toEqual(['test.cmd'])
   })
 
+  it('dispose() deactivates activated extensions and disposes their subscriptions', async () => {
+    // An extension that records both its deactivate call and a subscription's
+    // dispose into a global sink so the test can observe host shutdown teardown.
+    const source = `
+      export function activate(context) {
+        const sink = globalThis.__ueTestSink__
+        context.subscriptions.push({ dispose: () => sink.push('sub-dispose') })
+      }
+      export function deactivate() {
+        globalThis.__ueTestSink__.push('deactivate')
+      }
+    `
+    const disposingMain = join(dir, 'disposing.mjs')
+    await writeFile(disposingMain, source, 'utf8')
+    const sink: string[] = []
+    ;(globalThis as Record<string, unknown>).__ueTestSink__ = sink
+
+    const ext: IScannedExtension = {
+      id: 'test.disposing',
+      extensionPath: dir,
+      mainPath: disposingMain,
+      manifest: {
+        name: 'disposing',
+        version: '0.0.0',
+        main: 'disposing.mjs',
+        engines: { universe: '^0.1.0' },
+        activationEvents: ['*'],
+      },
+    }
+    const mt = recordingMainThread()
+    const service = new ExtensionService([ext], mt.impl, noopWindow, noopScm)
+    await service.activateByEvent('*')
+
+    service.dispose()
+    // deactivate hook runs first, then subscriptions are disposed.
+    expect(sink).toEqual(['deactivate', 'sub-dispose'])
+
+    // Idempotent: a second dispose is a no-op (activated set cleared).
+    service.dispose()
+    expect(sink).toEqual(['deactivate', 'sub-dispose'])
+
+    delete (globalThis as Record<string, unknown>).__ueTestSink__
+  })
+
   it('forwards an unknown command to the renderer', async () => {
     const mt = recordingMainThread()
     const service = new ExtensionService([scanned(['*'])], mt.impl, noopWindow, noopScm)

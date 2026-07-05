@@ -25,7 +25,7 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks, evaluateWhenRestored } from '../pages/WorkbenchPO.js'
 
 const KEY = 'ctrl+shift+d'
@@ -107,7 +107,7 @@ test.describe('@p1 vscode keybindings', () => {
         .toContain(COMMAND)
       await expectNoLeaks(page)
     } finally {
-      await app.close()
+      await closeApp(app)
     }
   })
 
@@ -198,7 +198,7 @@ test.describe('@p1 vscode keybindings', () => {
         .toContain(COMMAND)
       await expectNoLeaks(page)
     } finally {
-      await app.close()
+      await closeApp(app)
     }
   })
 })

@@ -13,7 +13,7 @@ import { test, expect, _electron as electron } from '@playwright/test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { MAIN_ENTRY, APP_ROOT } from '../fixtures/electronApp.js'
+import { MAIN_ENTRY, APP_ROOT, closeApp } from '../fixtures/electronApp.js'
 import { expectNoLeaks } from '../pages/WorkbenchPO.js'
 
 const SEARCH_VIEW = 'workbench.view.search.results'
@@ -131,7 +131,7 @@ test.describe('@p0 view move persistence', () => {
           .toBe(EXPLORER_CONTAINER)
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
     } finally {
       for (const dir of [workspaceFolder, userDataDir]) {
@@ -180,7 +180,7 @@ test.describe('@p0 view move persistence', () => {
         expect(secondaryEnd.length).toBe(secondaryBefore.length)
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
     } finally {
       for (const dir of [workspaceFolder, userDataDir]) {
@@ -248,7 +248,7 @@ test.describe('@p0 view move persistence', () => {
           .toEqual([...explorerBefore, ...searchBefore])
         await expectNoLeaks(page)
       } finally {
-        await app.close()
+        await closeApp(app)
       }
     } finally {
       for (const dir of [workspaceFolder, userDataDir]) {

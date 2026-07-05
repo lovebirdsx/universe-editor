@@ -18,7 +18,7 @@ import { mkdtempSync, writeFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { APP_ROOT, MAIN_ENTRY } from '../fixtures/electronApp.js'
+import { APP_ROOT, MAIN_ENTRY, closeApp } from '../fixtures/electronApp.js'
 
 function git(cwd: string, ...args: string[]): void {
   execFileSync('git', args, { cwd, stdio: 'ignore' })
@@ -149,7 +149,7 @@ test.describe('@p1 dirty diff peek', () => {
         .toBe(false)
       expect(await page.evaluate(() => window.__E2E__!.getDirtyDiffPeekState())).toBeUndefined()
     } finally {
-      await app.close()
+      await closeApp(app)
     }
   })
 })

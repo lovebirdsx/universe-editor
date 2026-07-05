@@ -463,11 +463,21 @@ export class LspClient {
 
   dispose(): void {
     this._disposed = true
-    if (this._proc) {
+    const proc = this._proc
+    if (proc) {
+      // The spawned CLI (`typescript-language-server`) forks tsserver as its own
+      // children (a syntax + a semantic server) and reaps them from its
+      // `process.on('exit')` hook. A hard kill (`taskkill /F` / TerminateProcess)
+      // skips that hook, orphaning the tsserver grandchildren — they survive app
+      // quit holding pipes open, blocking Playwright teardown and leaking stray
+      // electron.exe for real users. Closing the CLI's stdin lets it observe EOF
+      // and exit gracefully, running its hook so tsserver dies with it. The CLI
+      // exits on its own even after we return, so no wait is needed on the
+      // synchronous shutdown path.
       try {
-        this._proc.kill()
+        proc.stdin.end()
       } catch {
-        // ignore — shutting down
+        // Already gone — connection teardown below is still safe.
       }
     }
     this._clearConnection()

@@ -36,6 +36,9 @@ import type {
 import { resolveTsServerPaths } from './tsServerPaths.js'
 import { PerfMarks } from '../../../shared/perf/marks.js'
 
+/** Grace period after closing the host's stdin before we force-kill its tree. */
+const EXT_HOST_GRACEFUL_STOP_MS = 2000
+
 /** Spawner abstraction — injectable for tests so we don't launch real processes. */
 export type ExtHostSpawner = (
   command: string,
@@ -184,9 +187,19 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
 
     let proc: ManagedChildProcess
     try {
+      // The host forks grandchildren — the `typescript` built-in plugin spawns
+      // the typescript-language-server CLI, which itself forks tsserver. Graceful
+      // stop (`stopAll` / renderer `beforeunload` → stdin EOF) lets that CLI reap
+      // its own tsserver via its exit hook, which is the primary path. `treeKill`
+      // is the BACKSTOP for when graceful is skipped or overruns (dispose on
+      // will-quit, the stop-grace timeout): a plain SIGKILL to the host would
+      // orphan tsserver — it survives app quit holding pipes open, blocking
+      // Playwright teardown and leaking a stray electron.exe for real users — so
+      // termination recurses the PID tree instead. No-op off Windows.
       proc = new ManagedChildProcess(this._spawn(command, args, { env }), {
         logger: this._logger,
         label: handle,
+        treeKill: true,
       })
     } catch (err) {
       this._logger.warn(`spawn failed handle=${handle} entry=${entry}: ${(err as Error).message}`)
@@ -261,8 +274,58 @@ export class ExtensionHostMainService extends Disposable implements IExtensionHo
     if (!entry || entry.exited) {
       return Promise.resolve()
     }
-    entry.proc.kill()
+    // Graceful stop: close stdin so the host runs its own shutdown (deactivating
+    // extensions, which synchronously tree-kill their children — notably the
+    // typescript plugin's tsserver) and exits cleanly. A hard kill here would
+    // reap only the host and orphan tsserver. Tree-kill is the backstop if the
+    // host doesn't exit within the grace window.
+    entry.proc.endStdin()
+    const grace = setTimeout(() => {
+      if (!entry.exited) entry.proc.kill()
+    }, EXT_HOST_GRACEFUL_STOP_MS)
+    // Don't keep the event loop alive just for the backstop timer.
+    grace.unref?.()
+    entry.store.add({ dispose: () => clearTimeout(grace) })
     return Promise.resolve()
+  }
+
+  /**
+   * Gracefully stop every live host and AWAIT each one's exit. Unlike {@link stop}
+   * (fire-and-forget, used on reload where main keeps running to drive the
+   * cascade), this is the app-quit primitive: closing a host's stdin lets it run
+   * its own shutdown — deactivating extensions, which close their children's stdin
+   * so those reap their own grandchildren (the typescript plugin → tsserver). That
+   * cascade needs the event loop, so `will-quit` (synchronous) is too late. Call
+   * this from the async `before-quit` path before `app.quit()`, so the whole tree
+   * is reaped cleanly instead of hard-killed (which orphans a slow-starting
+   * tsserver out of the PID snapshot). Backstop tree-kill if a host overruns.
+   */
+  stopAll(): Promise<void> {
+    const waits: Promise<void>[] = []
+    for (const [, entry] of this._procs) {
+      if (entry.exited) continue
+      waits.push(
+        new Promise<void>((resolve) => {
+          const timers: ReturnType<typeof setTimeout>[] = []
+          const done = entry.store.add(
+            entry.proc.onDidExit(() => {
+              for (const t of timers) clearTimeout(t)
+              resolve()
+            }),
+          )
+          entry.proc.endStdin()
+          if (entry.exited) return // exited synchronously on endStdin
+          const grace = setTimeout(() => {
+            done.dispose()
+            if (!entry.exited) entry.proc.kill()
+            resolve()
+          }, EXT_HOST_GRACEFUL_STOP_MS)
+          grace.unref?.()
+          timers.push(grace)
+        }),
+      )
+    }
+    return Promise.all(waits).then(() => undefined)
   }
 
   hasUserExtensions(): Promise<boolean> {

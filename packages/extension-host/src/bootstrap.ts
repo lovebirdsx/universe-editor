@@ -101,9 +101,38 @@ const mainThreadStorage = ProxyChannel.toService<IMainThreadStorage>(
 // Register channels synchronously so a renderer call that races the async scan
 // queues on `serviceReady` instead of hitting a "channel not found" error.
 let resolveService!: (service: ExtensionService) => void
+let liveService: ExtensionService | undefined
 const serviceReady = new Promise<ExtensionService>((resolve) => {
-  resolveService = resolve
+  resolveService = (service) => {
+    liveService = service
+    resolve(service)
+  }
 })
+
+// Graceful shutdown: when the parent (main process) goes away it closes our
+// stdin pipe (`end`), and it may also SIGTERM us. Either way, tear down the
+// activated extensions so they can kill child processes they spawned — most
+// importantly the typescript plugin's tsserver, which otherwise re-parents to
+// the OS and lingers (leaking electron.exe, blocking Playwright teardown on
+// Windows where killing our PID does not cascade). Runs at most once; best-effort
+// and fast (the parent is already leaving), then exit so the pipe EOFs.
+let didShutdown = false
+function shutdown(reason: string): void {
+  if (didShutdown) return
+  didShutdown = true
+  console.error(`[ext-host] shutdown (${reason})`)
+  try {
+    // Dispose only if the service is already up; never block shutdown on an
+    // in-flight scan (the parent is leaving now).
+    liveService?.dispose()
+  } catch (err) {
+    console.error(`[ext-host] shutdown dispose failed: ${(err as Error).message}`)
+  }
+  process.exit(0)
+}
+process.stdin.on('end', () => shutdown('stdin end'))
+process.stdin.on('close', () => shutdown('stdin close'))
+process.on('SIGTERM', () => shutdown('SIGTERM'))
 
 const extHostCommands: IExtHostCommands = {
   $executeContributedCommand: async (id, args) =>
