@@ -371,6 +371,8 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
     },
     getAcpSessionCount: () => services.acpSessionService.sessions.get().length,
     getActiveAcpSessionId: () => services.acpSessionService.activeSessionId.get(),
+    getActiveAcpSessionImageSupported: () =>
+      services.acpSessionService.activeSession.get()?.imageSupported.get() === true,
     sendAcpPrompt: async (text) => {
       const s = services.acpSessionService.activeSession.get()
       if (!s) throw new Error('[E2E] no active ACP session')

@@ -284,6 +284,8 @@ export interface E2EProbe {
   getAcpSessionCount(): number
   /** Active ACP session id (the local one assigned by AcpSessionService), if any. */
   getActiveAcpSessionId(): string | undefined
+  /** Whether the active ACP session has advertised prompt image support. */
+  getActiveAcpSessionImageSupported(): boolean
   /**
    * Send a prompt on the active ACP session. Fire-and-forget — the promise
    * resolves once the prompt request resolves on the agent side (one full
