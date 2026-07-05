@@ -279,7 +279,7 @@ export interface E2EProbe {
    * `acp.defaultAgentId` to the same id. Returns once both configuration
    * updates are visible.
    */
-  installAcpEchoAgent(agentId: string, jsPath: string): void
+  installAcpEchoAgent(agentId: string, jsPath: string, env?: Record<string, string>): void
   /** Number of open ACP sessions. */
   getAcpSessionCount(): number
   /** Active ACP session id (the local one assigned by AcpSessionService), if any. */

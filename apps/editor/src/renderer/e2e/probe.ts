@@ -349,10 +349,18 @@ export function installE2EProbeIfEnabled(services: E2EProbeServices): IDisposabl
       services.contextKeyService.get('dirtyDiffPeekVisible') === true,
     resizeDirtyDiffPeekByPx: (deltaPx: number): number | undefined =>
       DirtyDiffPeekRegistry.getHost()?.resizePeekByPx(deltaPx),
-    installAcpEchoAgent: (agentId, jsPath) => {
+    installAcpEchoAgent: (agentId, jsPath, env) => {
       services.configurationService.update(
         'acp.agents',
-        [{ id: agentId, name: 'Echo Agent', command: 'node', args: [jsPath] }],
+        [
+          {
+            id: agentId,
+            name: 'Echo Agent',
+            command: 'node',
+            args: [jsPath],
+            ...(env ? { env } : {}),
+          },
+        ],
         ConfigurationTarget.Memory,
       )
       services.configurationService.update(

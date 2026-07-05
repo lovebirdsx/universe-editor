@@ -124,7 +124,6 @@ export interface PromptMonacoEditorProps {
   readonly onEnter: () => boolean
   /** ArrowUp on the first line with no popover: open history. Returns true if consumed. */
   readonly onArrowUp?: () => boolean
-  readonly onPaste?: (e: ClipboardEvent) => void
   readonly onEditorReady?: (editor: monaco.editor.IStandaloneCodeEditor, ns: typeof monaco) => void
 }
 
@@ -139,7 +138,6 @@ export function PromptMonacoEditor({
   onChange,
   onEnter,
   onArrowUp,
-  onPaste,
   onEditorReady,
 }: PromptMonacoEditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -156,8 +154,6 @@ export function PromptMonacoEditor({
   onEnterRef.current = onEnter
   const onArrowUpRef = useRef(onArrowUp)
   onArrowUpRef.current = onArrowUp
-  const onPasteRef = useRef(onPaste)
-  onPasteRef.current = onPaste
   const onEditorReadyRef = useRef(onEditorReady)
   onEditorReadyRef.current = onEditorReady
 
@@ -411,10 +407,6 @@ export function PromptMonacoEditor({
       }
       dom.addEventListener('keydown', keydownHandler, true)
       disposables.push({ dispose: () => dom.removeEventListener('keydown', keydownHandler, true) })
-
-      const pasteHandler = (e: ClipboardEvent): void => onPasteRef.current?.(e)
-      dom.addEventListener('paste', pasteHandler, true)
-      disposables.push({ dispose: () => dom.removeEventListener('paste', pasteHandler, true) })
 
       if (initialText) {
         const off = initialCaret ?? initialText.length

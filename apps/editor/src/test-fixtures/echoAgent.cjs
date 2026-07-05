@@ -141,8 +141,12 @@ function handle(msg) {
   }
   // Request.
   switch (msg.method) {
-    case 'initialize':
-      return reply(msg.id, { protocolVersion: 1, agentCapabilities: {} })
+    case 'initialize': {
+      // Opt-in image capability via env so image-paste/drop E2E can exercise the
+      // gated path; default stays capability-free for the other smoke specs.
+      const promptCapabilities = process.env.ECHO_AGENT_IMAGE === '1' ? { image: true } : {}
+      return reply(msg.id, { protocolVersion: 1, agentCapabilities: { promptCapabilities } })
+    }
     case 'session/new':
       return reply(msg.id, { sessionId: 'echo-' + nextSessionId++ })
     case 'session/prompt':

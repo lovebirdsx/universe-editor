@@ -188,6 +188,9 @@ export function PromptInput({
   }>({ symbol: [], scmChange: [], openEditor: [], docs: [], commit: [] })
   const [hashLoading, setHashLoading] = useState(false)
   const editorHandleRef = useRef<PromptEditorHandle | null>(null)
+  // The React-owned host div wrapping the Monaco editor. Paste listens here
+  // (outside Monaco's editContext DOM — see onPromptPaste).
+  const dropHostRef = useRef<HTMLDivElement>(null)
   // Saves the in-progress draft text when the user enters history navigation mode,
   // so Escape / Down-past-end restores it.
   const historyDraftRef = useRef('')
@@ -1043,37 +1046,6 @@ export function PromptInput({
     [imageSupported, images.length, imageLimits, notification],
   )
 
-  // Ctrl+V of a screenshot / copied image: pull image files out of the
-  // clipboard and attach them. Non-image pastes fall through to the editor.
-  //
-  // With Monaco's `editContext: true` the input host is a `native-edit-context`
-  // div, which Chromium treats as a non-editable context — so the synchronous
-  // ClipboardEvent carries no image File (`items`/`files` come back empty even
-  // though the paste event still fires), and `navigator.clipboard.read()` is
-  // gated behind an Electron permission the app doesn't grant. When the sync
-  // path finds nothing we ask the main process to read the OS clipboard image.
-  const onPromptPaste = (e: ClipboardEvent): void => {
-    const items = e.clipboardData?.items
-    const files: File[] = []
-    if (items) {
-      for (const item of Array.from(items)) {
-        if (item.kind === 'file' && item.type.startsWith('image/')) {
-          const file = item.getAsFile()
-          if (file) files.push(file)
-        }
-      }
-    }
-    if (files.length > 0) {
-      e.preventDefault()
-      void acceptImageFiles(files)
-      return
-    }
-    // Nothing in the sync event. If the agent takes images, ask the main
-    // process whether the OS clipboard holds one (EditContext hid it here).
-    // Don't preventDefault — a plain-text paste must still reach the editor.
-    if (imageSupported) void readClipboardImageFromHost()
-  }
-
   // EditContext fallback: read the clipboard image via the main-process
   // `clipboard` module (the reliable source — see onPromptPaste). Silent when
   // the clipboard holds no image so a plain-text paste isn't disturbed.
@@ -1085,6 +1057,54 @@ export function PromptInput({
       console.debug('[acp-prompt] host clipboard image read failed', err)
     }
   }, [hostService, acceptClipboardImage])
+
+  // Ctrl+V of a screenshot / copied image: attach it. Non-image pastes fall
+  // through to the editor.
+  //
+  // Monaco's `editContext: true` binds a Chromium `EditContext` to the inner
+  // `native-edit-context` div. That element (and its DOM ancestors *inside* the
+  // Monaco tree) never dispatch `paste` to ordinary `addEventListener` handlers —
+  // EditContext owns the input pipeline — so a listener on the editor's own DOM
+  // node never fires. The paste event does still propagate (capture phase) down
+  // to the surrounding React host div, which is outside Monaco's DOM, so we
+  // listen there (see the effect that binds this to `dropHostRef`). Even when it
+  // fires, the synchronous `ClipboardEvent` carries no image bytes in this
+  // context and `navigator.clipboard.read()` is gated behind an Electron
+  // permission the app doesn't grant, so we read the image from the main process.
+  const onPromptPaste = useCallback(
+    (e: ClipboardEvent): void => {
+      const items = e.clipboardData?.items
+      const files: File[] = []
+      if (items) {
+        for (const item of Array.from(items)) {
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const file = item.getAsFile()
+            if (file) files.push(file)
+          }
+        }
+      }
+      if (files.length > 0) {
+        e.preventDefault()
+        void acceptImageFiles(files)
+        return
+      }
+      // Nothing in the sync event. If the agent takes images, ask the main
+      // process whether the OS clipboard holds one (EditContext hid it here).
+      // Don't preventDefault — a plain-text paste must still reach the editor.
+      if (imageSupported) void readClipboardImageFromHost()
+    },
+    [imageSupported, acceptImageFiles, readClipboardImageFromHost],
+  )
+
+  // Bind the paste handler on the host div (outside Monaco's DOM) in the capture
+  // phase — the only place a `paste` reliably surfaces with editContext:true.
+  useEffect(() => {
+    const host = dropHostRef.current
+    if (!host) return
+    const handler = (e: ClipboardEvent): void => onPromptPaste(e)
+    host.addEventListener('paste', handler, true)
+    return () => host.removeEventListener('paste', handler, true)
+  }, [onPromptPaste])
 
   return (
     <form className={styles['promptForm']} onSubmit={submit}>
@@ -1133,6 +1153,7 @@ export function PromptInput({
           />
         ) : null}
         <div
+          ref={dropHostRef}
           className={[styles['promptEditorHost'], dropActive && styles['dropActive']]
             .filter(Boolean)
             .join(' ')}
@@ -1152,7 +1173,6 @@ export function PromptInput({
             onChange={onEditorChange}
             onEnter={onEditorEnter}
             onArrowUp={onEditorArrowUp}
-            onPaste={onPromptPaste}
             onEditorReady={onEditorReady}
           />
         </div>
