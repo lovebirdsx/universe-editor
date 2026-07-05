@@ -27,6 +27,7 @@ const {
   ScmChangeContextProvider,
   OpenEditorContextProvider,
   DocsContextProvider,
+  CommitContextProvider,
 } = await import('../contextSuggestions.js')
 
 function fileEditor(uri: string): FileEditorInput {
@@ -392,6 +393,37 @@ describe('DocsContextProvider', () => {
 
   it('returns [] for an unrelated query', async () => {
     const provider = makeDocsProvider('/repo/docs/user')
+    expect(await provider.query('zzz')).toEqual([])
+  })
+})
+
+function makeCommitProvider(sourceControls: readonly { rootUri: string | undefined }[]) {
+  const scm = { sourceControls: { get: () => sourceControls } }
+  return new CommitContextProvider(scm as never)
+}
+
+describe('CommitContextProvider', () => {
+  it('returns [] when there is no source control (no git repo open)', async () => {
+    const provider = makeCommitProvider([])
+    expect(await provider.query('')).toEqual([])
+  })
+
+  it('returns a single picker-entry item for an empty query', async () => {
+    const provider = makeCommitProvider([{ rootUri: '/workspace' }])
+    const items = await provider.query('')
+    expect(items).toHaveLength(1)
+    expect(items[0]).toMatchObject({ kind: 'commit', iconId: 'git-commit' })
+  })
+
+  it('matches commit/history-related keywords', async () => {
+    const provider = makeCommitProvider([{ rootUri: '/workspace' }])
+    for (const query of ['commit', 'commits', 'git log', '提交', '历史']) {
+      expect(await provider.query(query)).toHaveLength(1)
+    }
+  })
+
+  it('returns [] for an unrelated query', async () => {
+    const provider = makeCommitProvider([{ rootUri: '/workspace' }])
     expect(await provider.query('zzz')).toEqual([])
   })
 })

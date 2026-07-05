@@ -24,7 +24,14 @@ import type { ContentBlock } from '@agentclientprotocol/sdk'
 import { generateUuid, localize } from '@universe-editor/platform'
 import type { ContextSuggestionItem } from './contextSuggestions.js'
 
-export type PromptRefKind = 'file' | 'folder' | 'symbol' | 'scmChange' | 'openEditor' | 'docs'
+export type PromptRefKind =
+  | 'file'
+  | 'folder'
+  | 'symbol'
+  | 'scmChange'
+  | 'openEditor'
+  | 'docs'
+  | 'commit'
 
 export interface PromptRef {
   /** Stable id (per insertion), used to key the tracked decoration. */
@@ -32,7 +39,7 @@ export interface PromptRef {
   readonly kind: PromptRefKind
   /** Text shown inside the pill WITHOUT the leading `@`/`#`; also the `name` on the wire block. */
   readonly label: string
-  /** Target resource URI (for `docs`, the documentation root URI). */
+  /** Target resource URI (for `docs`/`commit`, the documentation/repo root URI). */
   readonly uri: string
   /** kind-specific location/display info consumed by composeRefBlock. */
   readonly meta?: {
@@ -41,6 +48,8 @@ export interface PromptRef {
     readonly symbolKind?: number
     readonly scmStatus?: string
     readonly description?: string
+    /** `commit`: the full 40-char SHA (the label only carries a truncated short hash). */
+    readonly commitHash?: string
   }
 }
 
@@ -60,6 +69,7 @@ const PREFIX_BY_KIND: Record<PromptRefKind, '@' | '#'> = {
   scmChange: '#',
   openEditor: '#',
   docs: '#',
+  commit: '#',
 }
 
 /** The trigger char (`@` for mentions, `#` for structured context) for a ref kind. */
@@ -158,6 +168,19 @@ export function composeRefBlock(ref: PromptRef): ContentBlock {
             uri: ref.uri,
           }),
       }
+    case 'commit': {
+      // Same protocol-boundary problem as `symbol`: a resource_link would drop
+      // the hash entirely, so the agent has nothing to `git show`. Encode it in
+      // the text block instead.
+      const meta = ref.meta
+      const hash = meta?.commitHash ?? ref.label
+      const subject = meta?.description
+      return {
+        type: 'text',
+        text: subject !== undefined ? `\`${hash}\` (${subject})` : `\`${hash}\``,
+        _meta: { commit: { hash, repoRoot: ref.uri } },
+      }
+    }
   }
 }
 
@@ -224,6 +247,10 @@ export function suggestionItemToRef(item: ContextSuggestionItem): PromptRef {
       return { ...base, kind: 'openEditor' }
     case 'docs':
       return { ...base, kind: 'docs', meta: { description: item.description } }
+    case 'commit':
+      // The commit entry is a picker trigger, not a directly convertible ref —
+      // acceptContextRef intercepts it before it ever reaches this function.
+      throw new Error('commit suggestions must be resolved via CommitRefPicker')
   }
 }
 

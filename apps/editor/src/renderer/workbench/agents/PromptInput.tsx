@@ -72,12 +72,14 @@ import {
 } from '../../services/acp/promptMentions.js'
 import { extractHashQuery, type ActiveHashQuery } from '../../services/acp/promptContextRef.js'
 import {
+  CommitContextProvider,
   ScmChangeContextProvider,
   WorkspaceSymbolContextProvider,
   OpenEditorContextProvider,
   DocsContextProvider,
   type ContextSuggestionItem,
 } from '../../services/acp/contextSuggestions.js'
+import { CommitRefPicker } from '../../services/acp/commitRefPicker.js'
 import { mentionEntryToRef, suggestionItemToRef } from '../../services/acp/promptRef.js'
 import {
   collectActiveSelectionContexts,
@@ -182,7 +184,8 @@ export function PromptInput({
     readonly scmChange: readonly ContextSuggestionItem[]
     readonly openEditor: readonly ContextSuggestionItem[]
     readonly docs: readonly ContextSuggestionItem[]
-  }>({ symbol: [], scmChange: [], openEditor: [], docs: [] })
+    readonly commit: readonly ContextSuggestionItem[]
+  }>({ symbol: [], scmChange: [], openEditor: [], docs: [], commit: [] })
   const [hashLoading, setHashLoading] = useState(false)
   const editorHandleRef = useRef<PromptEditorHandle | null>(null)
   // Saves the in-progress draft text when the user enters history navigation mode,
@@ -199,6 +202,7 @@ export function PromptInput({
     readonly scmChange: ScmChangeContextProvider
     readonly openEditor: OpenEditorContextProvider
     readonly docs: DocsContextProvider
+    readonly commit: CommitContextProvider
   } | null>(null)
 
   const fileSearch = useService(IFileSearchService)
@@ -236,6 +240,7 @@ export function PromptInput({
       scmChange: instantiation.createInstance(ScmChangeContextProvider),
       openEditor: instantiation.createInstance(OpenEditorContextProvider),
       docs: instantiation.createInstance(DocsContextProvider),
+      commit: instantiation.createInstance(CommitContextProvider),
     }
     return contextProvidersRef.current
   }, [instantiation])
@@ -590,9 +595,10 @@ export function PromptInput({
       providers.scmChange.query(query),
       providers.openEditor.query(query),
       providers.docs.query(query),
-    ]).then(([scmChange, openEditor, docs]) => {
+      providers.commit.query(query),
+    ]).then(([scmChange, openEditor, docs, commit]) => {
       if (seq !== hashSeqRef.current) return
-      setHashSuggestions((prev) => ({ ...prev, scmChange, openEditor, docs }))
+      setHashSuggestions((prev) => ({ ...prev, scmChange, openEditor, docs, commit }))
       setHashLoading(false)
     })
     const timer = setTimeout(() => {
@@ -629,6 +635,7 @@ export function PromptInput({
         ...hashSuggestions.openEditor.map((item) => ({ kind: 'suggestion', item }) as const),
       ],
       hashSuggestions.docs.map((item) => ({ kind: 'suggestion', item }) as const),
+      hashSuggestions.commit.map((item) => ({ kind: 'suggestion', item }) as const),
     ]
     return groups
       .filter((g) => g.length > 0)
@@ -684,6 +691,20 @@ export function PromptInput({
       setHashDismissed(true)
       setHashIndex(0)
       requestAnimationFrame(() => editorHandleRef.current?.focus())
+      return
+    }
+    if (entry.item.kind === 'commit') {
+      const before = text.slice(0, q.startIndex)
+      const after = text.slice(q.endIndex)
+      const caret = before.length
+      editorHandleRef.current?.setText(before + after, caret)
+      setHashDismissed(true)
+      setHashIndex(0)
+      const picker = instantiation.createInstance(CommitRefPicker)
+      void picker.pick().then((ref) => {
+        if (ref) editorHandleRef.current?.insertRef(ref, caret, caret)
+        requestAnimationFrame(() => editorHandleRef.current?.focus())
+      })
       return
     }
     editorHandleRef.current?.insertRef(suggestionItemToRef(entry.item), q.startIndex, q.endIndex)

@@ -235,6 +235,35 @@ describe('composeRefBlock', () => {
       text: 'Documentation available at file:///docs',
     })
   })
+
+  it('maps a commit ref to a text block carrying the full hash (agents drop resource_link _meta)', () => {
+    const ref: PromptRef = {
+      id: 'x',
+      kind: 'commit',
+      label: 'a1b2c3d fix login bug',
+      uri: 'file:///repo',
+      meta: {
+        commitHash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+        description: 'fix login bug',
+      },
+    }
+    expect(composeRefBlock(ref)).toEqual({
+      type: 'text',
+      text: '`a1b2c3d4e5f60718293a4b5c6d7e8f9012345678` (fix login bug)',
+      _meta: {
+        commit: { hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678', repoRoot: 'file:///repo' },
+      },
+    })
+  })
+
+  it('maps a commit ref with no meta to a text block falling back to the label', () => {
+    const ref: PromptRef = { id: 'x', kind: 'commit', label: 'a1b2c3d fix', uri: 'file:///repo' }
+    expect(composeRefBlock(ref)).toEqual({
+      type: 'text',
+      text: '`a1b2c3d fix`',
+      _meta: { commit: { hash: 'a1b2c3d fix', repoRoot: 'file:///repo' } },
+    })
+  })
 })
 
 describe('suggestionItemToRef / mentionEntryToRef', () => {
@@ -264,5 +293,16 @@ describe('suggestionItemToRef / mentionEntryToRef', () => {
   it('builds a folder ref when asked', () => {
     const ref = mentionEntryToRef({ uri: 'file:///src', relPath: 'src' }, 'folder')
     expect(ref.kind).toBe('folder')
+  })
+
+  it('rejects a commit suggestion — it is a picker trigger, resolved via CommitRefPicker instead', () => {
+    const item: ContextSuggestionItem = {
+      kind: 'commit',
+      label: 'Git Commit…',
+      uri: '',
+      description: 'Pick a commit from history',
+      iconId: 'git-commit',
+    }
+    expect(() => suggestionItemToRef(item)).toThrow()
   })
 })

@@ -331,3 +331,38 @@ export class DocsContextProvider {
     return [toDocsItem(root)]
   }
 }
+
+// Same progressive-prefix trick as DOCS_MATCH_KEYWORDS.
+const COMMIT_MATCH_KEYWORDS = ['commit', 'commits', 'git log', '提交', '历史', 'commit记录']
+
+function matchesCommitQuery(query: string): boolean {
+  const q = query.toLowerCase()
+  return COMMIT_MATCH_KEYWORDS.some((k) => k.toLowerCase().includes(q))
+}
+
+function toCommitPickerItem(): ContextSuggestionItem {
+  return {
+    kind: 'commit',
+    label: localize('acp.contextRef.commit.label', 'Git Commit…'),
+    uri: '',
+    description: localize('acp.contextRef.commit.description', 'Pick a commit from history'),
+    iconId: 'git-commit',
+  }
+}
+
+/**
+ * Git-history source for the `#` panel's "提交" group. Like DocsContextProvider
+ * this surfaces a single entry point rather than per-commit results — picking
+ * it opens a follow-up QuickPick (see commitRefPicker.ts) that lists the
+ * currently-selected repo's commit history.
+ */
+export class CommitContextProvider {
+  constructor(@IScmService private readonly _scm: IScmService) {}
+
+  async query(query: string): Promise<readonly ContextSuggestionItem[]> {
+    if (this._scm.sourceControls.get().length === 0) return []
+    const trimmed = query.trim()
+    if (trimmed && !matchesCommitQuery(trimmed)) return []
+    return [toCommitPickerItem()]
+  }
+}

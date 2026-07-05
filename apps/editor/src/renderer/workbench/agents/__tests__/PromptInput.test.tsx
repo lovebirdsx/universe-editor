@@ -6,8 +6,12 @@
 
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { render, screen, cleanup, fireEvent, act, waitFor } from '@testing-library/react'
+import type { GitGraphCommitDto, GitGraphLoadResult } from '@universe-editor/extensions-common'
+import { GitGraphCommands } from '@universe-editor/extensions-common'
 import {
+  Emitter,
   Event,
+  ICommandService,
   IConfigurationService,
   IContextKeyService,
   ContextKeyService,
@@ -20,6 +24,7 @@ import {
   IHostService,
   INotificationService,
   InstantiationService,
+  IQuickInputService,
   IUriIdentityService,
   IWorkspaceService,
   observableValue,
@@ -27,6 +32,7 @@ import {
   URI,
 } from '@universe-editor/platform'
 import type {
+  ICommandService as ICommandServiceType,
   IConfigurationService as IConfigurationServiceType,
   IDialogService as IDialogServiceType,
   IEditorGroupsService as IEditorGroupsServiceType,
@@ -36,6 +42,8 @@ import type {
   IFileService as IFileServiceType,
   IHostService as IHostServiceType,
   INotificationService as INotificationServiceType,
+  IQuickInputService as IQuickInputServiceType,
+  IQuickPickItem,
   ISettableObservable,
   IUriIdentityService as IUriIdentityServiceType,
   IWorkspace,
@@ -210,6 +218,18 @@ const stubEditorGroupsService: IEditorGroupsServiceType = {
   groups: [],
 } as unknown as IEditorGroupsServiceType
 
+const stubCommandService: ICommandServiceType = {
+  _serviceBrand: undefined,
+  executeCommand: async () => undefined,
+} as unknown as ICommandServiceType
+
+const stubQuickInputServiceDefault: IQuickInputServiceType = {
+  _serviceBrand: undefined,
+  createQuickPick: () => {
+    throw new Error('createQuickPick not stubbed for this test')
+  },
+} as unknown as IQuickInputServiceType
+
 function makeEditorService(): IEditorServiceType {
   return {
     _serviceBrand: undefined,
@@ -315,6 +335,8 @@ function renderWithServices(
     docs?: IDocsServiceType
     editorService?: IEditorServiceType
     contextKeyService?: IContextKeyService
+    commands?: ICommandServiceType
+    quickInput?: IQuickInputServiceType
   } = {},
 ) {
   const services = new ServiceCollection()
@@ -335,6 +357,8 @@ function renderWithServices(
   services.set(IDocsService, opts.docs ?? makeDocsService())
   services.set(IEditorService, opts.editorService ?? makeEditorService())
   services.set(IContextKeyService, opts.contextKeyService ?? new ContextKeyService())
+  services.set(ICommandService, opts.commands ?? stubCommandService)
+  services.set(IQuickInputService, opts.quickInput ?? stubQuickInputServiceDefault)
   const inst = new InstantiationService(services)
   const Wrapper = ({ children }: { children: React.ReactNode }) => (
     <ServicesContext.Provider value={inst}>{children}</ServicesContext.Provider>
@@ -862,8 +886,8 @@ describe('PromptInput — # context popover', () => {
     typeAt(ta, '#')
     await flush()
     expect(screen.getByTestId('acp-context-popover')).toBeTruthy()
-    // 2 local-change rows + 1 docs row.
-    expect(screen.getAllByRole('option')).toHaveLength(3)
+    // 2 local-change rows + 1 docs row + 1 "Git Commit…" row.
+    expect(screen.getAllByRole('option')).toHaveLength(4)
   })
 
   it('popoverSelectNext/Prev move the active row across groups', async () => {
@@ -915,8 +939,8 @@ describe('PromptInput — # context popover', () => {
   it('orders sources by item count, fewest first (docs above local changes)', async () => {
     renderWithServices(<PromptInput session={makeSession()} />, {
       workspace: makeWorkspaceService(URI.file('/repo')),
-      // 2 local-change rows vs the single docs row — the smaller "docs" group
-      // must sort ahead of the larger "local changes" group.
+      // 2 local-change rows vs the single docs/commit rows — the smaller
+      // groups must sort ahead of the larger "local changes" group.
       scm: makeScmService(['/repo/src/a.ts', '/repo/src/b.ts']),
       docs: makeDocsService('/repo/docs'),
     })
@@ -924,7 +948,7 @@ describe('PromptInput — # context popover', () => {
     typeAt(ta, '#')
     await flush()
     const options = screen.getAllByRole('option')
-    expect(options).toHaveLength(3)
+    expect(options).toHaveLength(4)
     expect(options[0]?.textContent).toContain('Editor User Guide')
   })
 
@@ -978,6 +1002,167 @@ describe('PromptInput — # context popover', () => {
     typeAt(ta, '/diff')
     expect(screen.getByTestId('acp-slash-popover')).toBeTruthy()
     expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// #commit picker flow — selecting the "Git Commit…" entry from the # popover
+// hands off to an independent QuickPick (CommitRefPicker) driven by
+// ICommandService/IQuickInputService rather than inserting synchronously.
+// Provider/picker correctness is covered by contextSuggestions.test.ts and
+// commitRefPicker.test.ts; here we only exercise the PromptInput wiring.
+// ---------------------------------------------------------------------------
+
+interface FakeQuickPick {
+  placeholder: string | undefined
+  matchOnDescription: boolean
+  matchOnDetail: boolean
+  busy: boolean
+  items: readonly IQuickPickItem[]
+  readonly onDidAccept: Event<IQuickPickItem[]>
+  readonly onDidHide: Event<void>
+  show(): void
+  hide(): void
+  dispose(): void
+  accept(item: IQuickPickItem): void
+}
+
+function makeFakeCommandService(
+  handlers: Record<string, (...args: unknown[]) => unknown>,
+): ICommandServiceType {
+  return {
+    _serviceBrand: undefined,
+    executeCommand: async (id: string, ...args: unknown[]) => handlers[id]?.(...args),
+  } as unknown as ICommandServiceType
+}
+
+function makeFakeQuickInput(): {
+  service: IQuickInputServiceType
+  getPicker: () => FakeQuickPick | undefined
+} {
+  let current: FakeQuickPick | undefined
+  const service = {
+    _serviceBrand: undefined,
+    createQuickPick: () => {
+      const onDidAccept = new Emitter<IQuickPickItem[]>()
+      const onDidHide = new Emitter<void>()
+      const qp: FakeQuickPick = {
+        placeholder: undefined,
+        matchOnDescription: false,
+        matchOnDetail: false,
+        busy: false,
+        items: [],
+        onDidAccept: onDidAccept.event,
+        onDidHide: onDidHide.event,
+        show: () => {},
+        hide: () => onDidHide.fire(),
+        dispose: () => {
+          onDidAccept.dispose()
+          onDidHide.dispose()
+        },
+        accept: (item) => onDidAccept.fire([item]),
+      }
+      current = qp
+      return qp
+    },
+  }
+  return { service: service as unknown as IQuickInputServiceType, getPicker: () => current }
+}
+
+const COMMIT: GitGraphCommitDto = {
+  hash: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
+  parents: [],
+  author: 'Alice',
+  email: 'alice@example.com',
+  date: 1700000000,
+  message: 'fix login bug',
+  heads: [],
+  tags: [],
+  remotes: [],
+  stash: null,
+  worktrees: [],
+}
+
+describe('PromptInput — # commit picker flow', () => {
+  async function flush(): Promise<void> {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+  }
+
+  function commandsWithCommit(): ICommandServiceType {
+    return makeFakeCommandService({
+      [GitGraphCommands.setRepo]: () => undefined,
+      [GitGraphCommands.getCommits]: () =>
+        ({
+          commits: [COMMIT],
+          head: null,
+          headName: null,
+          moreAvailable: false,
+          uncommittedChanges: 0,
+        }) satisfies GitGraphLoadResult,
+    })
+  }
+
+  it('selecting the Git Commit entry opens a QuickPick and inserts the picked commit as a pill', async () => {
+    const session = makeSession()
+    const { service: quickInput, getPicker } = makeFakeQuickInput()
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService([]),
+      commands: commandsWithCommit(),
+      quickInput,
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    const option = screen.getAllByRole('option').find((o) => o.textContent?.includes('Git Commit'))
+    expect(option).toBeTruthy()
+
+    fireEvent.mouseDown(option!)
+    // The "#" token is removed and the popover closes immediately — the
+    // QuickPick runs independently while the input stays clean.
+    expect(ta.value).toBe('')
+    expect(screen.queryByTestId('acp-context-popover')).toBeNull()
+
+    await waitFor(() => expect(getPicker()?.items).toHaveLength(1))
+    act(() => getPicker()!.accept(getPicker()!.items[0]!))
+    await waitFor(() => expect(ta.value).toContain('#a1b2c3d fix login bug'))
+
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledTimes(1)
+    const [, refs] = session.sendPrompt.mock.calls[0]!
+    expect(refs).toHaveLength(1)
+    expect(refs[0].ref).toMatchObject({
+      kind: 'commit',
+      label: 'a1b2c3d fix login bug',
+      uri: URI.file('/repo').toString(),
+      meta: { commitHash: COMMIT.hash, description: COMMIT.message },
+    })
+  })
+
+  it('dismissing the QuickPick leaves the input clean with no stray ref', async () => {
+    const session = makeSession()
+    const { service: quickInput, getPicker } = makeFakeQuickInput()
+    renderWithServices(<PromptInput session={session} />, {
+      workspace: makeWorkspaceService(URI.file('/repo')),
+      scm: makeScmService([]),
+      commands: commandsWithCommit(),
+      quickInput,
+    })
+    const ta = getTextarea()
+    typeAt(ta, '#')
+    await flush()
+    const option = screen.getAllByRole('option').find((o) => o.textContent?.includes('Git Commit'))
+    fireEvent.mouseDown(option!)
+    expect(ta.value).toBe('')
+
+    await waitFor(() => expect(getPicker()?.items).toHaveLength(1))
+    act(() => getPicker()!.hide())
+
+    fireEvent.change(ta, { target: { value: 'hello' } })
+    fireEvent.keyDown(ta, { key: 'Enter' })
+    expect(session.sendPrompt).toHaveBeenCalledWith('hello', [], [], [])
   })
 })
 
