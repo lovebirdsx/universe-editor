@@ -230,6 +230,14 @@ describe('MarkdownView', () => {
     expect(screen.queryByRole('link')).toBeNull()
   })
 
+  it('renders an angle-bracketed Windows file path with spaces as one full-path link', () => {
+    const winPath = String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
+    renderMarkdown(`see <${winPath}>`)
+
+    const link = screen.getByRole('link', { name: winPath })
+    expect(link.getAttribute('href')).toBe(winPath)
+  })
+
   it('renders a data:image embed as a plain <img> by default', () => {
     const dataUrl = 'data:image/png;base64,iVBORw0KGgo='
     const { container } = renderMarkdown(`![shot](${dataUrl})`)

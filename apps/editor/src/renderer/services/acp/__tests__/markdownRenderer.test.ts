@@ -436,6 +436,18 @@ describe('parseInline — inline layer', () => {
     expect(r.some((n) => n.type === 'link')).toBe(false)
   })
 
+  it('parses angle-bracketed Windows file paths with spaces as one link', () => {
+    const winPath = String.raw`C:\Users\kuro\AppData\Local\Programs\Universe Editor\resources\docs\user\zh-CN\reference\keyboard-shortcuts.md`
+    expect(parseInline(`see <${winPath}>`)).toEqual<readonly MdInline[]>([
+      text('see '),
+      {
+        type: 'link',
+        href: winPath,
+        children: [text(winPath)],
+      },
+    ])
+  })
+
   it('parses bare URLs', () => {
     expect(parseInline('visit https://example.com today')).toEqual<readonly MdInline[]>([
       text('visit '),

@@ -447,12 +447,13 @@ export function parseInline(text: string): readonly MdInline[] {
       }
     }
 
-    // Autolink: <url> where url is http(s) or file.
+    // Autolink: <url> where url is http(s) or file; also accept explicit
+    // angle-wrapped file paths so Windows install paths with spaces stay intact.
     if (ch === '<') {
       const close = text.indexOf('>', i + 1)
       if (close !== -1) {
         const candidate = text.slice(i + 1, close).trim()
-        if (isSafeHref(candidate)) {
+        if (isSafeHref(candidate) || looksLikeFilePath(candidate)) {
           flush()
           out.push({
             type: 'link',
