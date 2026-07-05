@@ -101,7 +101,7 @@ describe('SlashCommandPopover render', () => {
     expect(onSelect.mock.calls[0]?.[0]).toEqual(COMMANDS[2])
   })
 
-  it('fires onHover when the cursor enters a row', () => {
+  it('fires onHover when the pointer moves over a row', () => {
     const onHover = vi.fn()
     render(
       <SlashCommandPopover
@@ -112,7 +112,9 @@ describe('SlashCommandPopover render', () => {
       />,
     )
     const items = screen.getAllByRole('option')
-    fireEvent.mouseEnter(items[1]!)
+    // onMouseMove (not mouseenter): a popover appearing under a still cursor must
+    // not hijack the keyboard selection — see PopoverList.
+    fireEvent.mouseMove(items[1]!)
     expect(onHover).toHaveBeenCalledWith(1)
   })
 })

@@ -40,13 +40,23 @@ describe('PopoverList', () => {
     expect(options[0]!.getAttribute('data-active')).toBe('false')
   })
 
-  it('selects on mousedown (preventing focus loss) and reports hover', () => {
+  it('selects on mousedown (preventing focus loss) and reports hover on pointer move', () => {
     const { onSelect, onHover } = renderList()
     const beta = screen.getByText('Beta').closest('[role="option"]')!
     fireEvent.mouseDown(beta)
     expect(onSelect).toHaveBeenCalledWith(ROWS[1], 1)
-    fireEvent.mouseEnter(beta)
+    // Hover reports on real pointer movement (mousemove), not on mouseenter —
+    // the latter fires when the popover pops up under a stationary cursor and
+    // would hijack the keyboard selection.
+    fireEvent.mouseMove(beta)
     expect(onHover).toHaveBeenCalledWith(1)
+  })
+
+  it('does not report hover on mouseenter alone (popover appearing under a still cursor)', () => {
+    const { onHover } = renderList()
+    const beta = screen.getByText('Beta').closest('[role="option"]')!
+    fireEvent.mouseEnter(beta)
+    expect(onHover).not.toHaveBeenCalled()
   })
 
   it('shows emptyLabel when there are no items', () => {

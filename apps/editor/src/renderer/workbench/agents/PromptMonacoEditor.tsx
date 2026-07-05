@@ -108,6 +108,18 @@ export interface PromptEditorHandle {
  */
 export type PromptChangeSource = 'user' | 'program'
 
+/**
+ * Whether a change event carried a genuine text edit (`content`) or was only a
+ * caret/selection move (`cursor`). Real Monaco fires a deferred cursor-position
+ * event *after* a programmatic `setText` settles — outside the `runProgrammatic`
+ * window, so it arrives as `source: 'user'` even though the user typed nothing.
+ * The host must not run content-dependent side effects (history close, `@@`
+ * picker, popover dismissal resets) for a bare cursor move, or that stray event
+ * would close a just-opened history popover. Mirrors the old textarea, where
+ * caret moves went through a separate handler that never touched those effects.
+ */
+export type PromptChangeKind = 'content' | 'cursor'
+
 export interface PromptMonacoEditorProps {
   readonly handleRef: Ref<PromptEditorHandle>
   readonly configService: IConfigurationService
@@ -118,8 +130,13 @@ export interface PromptMonacoEditorProps {
   readonly initialText?: string
   /** Caret offset for the seed text (default: end). */
   readonly initialCaret?: number
-  /** Fired on every content/cursor change with the full text, caret offset, and origin. */
-  readonly onChange: (text: string, caret: number, source: PromptChangeSource) => void
+  /** Fired on every content/cursor change with the full text, caret offset, origin, and kind. */
+  readonly onChange: (
+    text: string,
+    caret: number,
+    source: PromptChangeSource,
+    kind: PromptChangeKind,
+  ) => void
   /** Enter with no modifier and no open popover: submit. Returns true if consumed. */
   readonly onEnter: () => boolean
   /** ArrowUp on the first line with no popover: open history. Returns true if consumed. */
@@ -178,11 +195,11 @@ export function PromptMonacoEditor({
     }
   }
 
-  const emitChange = (): void => {
+  const emitChange = (kind: PromptChangeKind): void => {
     const model = modelRef.current
     if (!model) return
     const source: PromptChangeSource = programDepthRef.current > 0 ? 'program' : 'user'
-    onChangeRef.current(model.getValue(), caretOffset(), source)
+    onChangeRef.current(model.getValue(), caretOffset(), source, kind)
   }
 
   useImperativeHandle(
@@ -331,10 +348,10 @@ export function PromptMonacoEditor({
       disposables.push(
         ed.onDidChangeModelContent(() => {
           if (programDepthRef.current === 0) tracker.reconcile()
-          emitChange()
+          emitChange('content')
         }),
       )
-      disposables.push(ed.onDidChangeCursorPosition(() => emitChange()))
+      disposables.push(ed.onDidChangeCursorPosition(() => emitChange('cursor')))
 
       // Bridge Monaco text focus → the global `editorTextFocus` contextKey, the
       // same split FileEditor maintains. With editContext: true the editor's
@@ -414,7 +431,7 @@ export function PromptMonacoEditor({
       }
       if (autoFocus) ed.focus()
       onEditorReadyRef.current?.(ed, m)
-      emitChange()
+      emitChange('content')
     }
 
     // Mount synchronously when Monaco is already loaded (reopening the panel,

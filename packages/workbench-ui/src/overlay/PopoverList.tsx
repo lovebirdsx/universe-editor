@@ -93,7 +93,14 @@ export function PopoverList<T>({
               e.preventDefault()
               onSelect(item, i)
             }}
-            onMouseEnter={() => onHover(i)}
+            // onMouseMove (not onMouseEnter): the popover often pops up directly
+            // under a stationary cursor, and the browser fires a synthetic
+            // mouseenter for whatever row lands under it — which would hijack the
+            // keyboard selection to the cursor's position the moment arrow keys
+            // are used. A genuine cursor move fires mousemove; a layout change
+            // beneath a still cursor does not. So hover only steals selection on
+            // real pointer movement.
+            onMouseMove={() => onHover(i)}
           >
             {renderItem(item, { active })}
           </div>

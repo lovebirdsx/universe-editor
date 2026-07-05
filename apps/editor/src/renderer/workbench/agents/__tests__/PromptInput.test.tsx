@@ -737,6 +737,113 @@ describe('PromptInput — history navigation', () => {
     expect(screen.queryByTestId('acp-history-popover')).toBeNull()
     expect(ta.value).toBe(text)
   })
+
+  it('keeps the history popover open when a bare cursor move fires after it opens', () => {
+    // Regression: real Monaco fires a deferred cursor-position event right after
+    // the history-nav setText settles. It arrives as source:'user' (outside the
+    // programmatic window) but carries no text edit — treating it as typing used
+    // to close the just-opened popover, so the popover flashed and vanished.
+    setPromptHistory(['previous prompt'])
+    renderWithServices(<PromptInput session={makeSession()} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+    expect(screen.getByTestId('acp-history-popover')).toBeTruthy()
+
+    // A cursor-only event (the stub bridges keyup → onDidChangeCursorPosition,
+    // i.e. emitChange('cursor')). It must NOT close the popover.
+    act(() => {
+      fireEvent.keyUp(ta, { key: 'ArrowUp' })
+    })
+    expect(screen.getByTestId('acp-history-popover')).toBeTruthy()
+  })
+
+  it('renders newest at the bottom (nearest the input) and moves the highlight up on ArrowUp', () => {
+    // The popover floats above the input, so the list grows bottom-up: oldest at
+    // the top, newest at the bottom. ArrowUp (older) must move the highlight up.
+    setPromptHistory(['third', 'second', 'first']) // newest-first
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+
+    // Display order is oldest→newest, top→bottom.
+    let options = screen.getAllByRole('option')
+    expect(options.map((o) => o.textContent)).toEqual(['first', 'second', 'third'])
+    // Opened on the newest entry → highlight is the bottom row.
+    expect(options[2]?.getAttribute('aria-selected')).toBe('true')
+
+    // ArrowUp (older) moves the highlight visually up to the middle row.
+    act(() => handleRef.current.popoverSelectPrev())
+    options = screen.getAllByRole('option')
+    expect(options[1]?.getAttribute('aria-selected')).toBe('true')
+    expect(options[2]?.getAttribute('aria-selected')).toBe('false')
+
+    // Once more up → the top (oldest) row.
+    act(() => handleRef.current.popoverSelectPrev())
+    options = screen.getAllByRole('option')
+    expect(options[0]?.getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('walks further back through history on repeated ArrowUp (via popoverSelectPrev)', () => {
+    // Newest-first, as the history service stores them.
+    setPromptHistory(['third', 'second', 'first'])
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    // First ArrowUp opens the popover on the newest entry.
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+    expect(screen.getByTestId('acp-history-popover')).toBeTruthy()
+    expect(ta.value).toBe('third')
+
+    // Subsequent ArrowUp is routed by the global keybinding (up, gated on
+    // acpPromptPopupVisible) to popoverSelectPrev — it must step to older
+    // entries, not stay stuck on the first one.
+    act(() => handleRef.current.popoverSelectPrev())
+    expect(ta.value).toBe('second')
+    act(() => handleRef.current.popoverSelectPrev())
+    expect(ta.value).toBe('first')
+    // Clamp at the oldest: another Up does not wrap back to the newest.
+    act(() => handleRef.current.popoverSelectPrev())
+    expect(ta.value).toBe('first')
+  })
+
+  it('ArrowDown walks back toward newer entries and restores the draft below the newest', () => {
+    setPromptHistory(['third', 'second', 'first'])
+    const handleRef = makeHandleRef()
+    renderWithServices(<PromptInput session={makeSession()} handleRef={handleRef} />)
+    const ta = getTextarea()
+    fireEvent.change(ta, { target: { value: 'draft' } })
+    ta.setSelectionRange(5, 5)
+
+    act(() => {
+      fireEvent.keyDown(ta, { key: 'ArrowUp' })
+    })
+    act(() => handleRef.current.popoverSelectPrev()) // → 'second'
+    expect(ta.value).toBe('second')
+
+    // Down (popoverSelectNext) steps back toward newer entries…
+    act(() => handleRef.current.popoverSelectNext())
+    expect(ta.value).toBe('third')
+    // …and stepping below the newest restores the in-progress draft + closes it.
+    act(() => handleRef.current.popoverSelectNext())
+    expect(ta.value).toBe('draft')
+    expect(screen.queryByTestId('acp-history-popover')).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------

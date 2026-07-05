@@ -98,6 +98,7 @@ import {
   PromptMonacoEditor,
   type PromptEditorHandle,
   type PromptChangeSource,
+  type PromptChangeKind,
 } from './PromptMonacoEditor.js'
 import { SlashCommandPopover, filterCommands } from './SlashCommandPopover.js'
 import { PromptHistoryPopover } from './PromptHistoryPopover.js'
@@ -265,8 +266,13 @@ export function PromptInput({
       const s = popoverStateRef.current
       if (!s) return
       if (s.historyOpen) {
-        if (s.historyIndex < s.historyEntries.length - 1) {
-          setHistoryIndex((i) => i + 1)
+        // Down = newer entry. History is newest-first (index 0 = newest), so
+        // "newer" decrements; stepping below the newest restores the draft the
+        // user was typing before they opened history (shell/terminal convention).
+        if (s.historyIndex > 0) {
+          setHistoryIndex((i) => i - 1)
+        } else {
+          s.restoreHistoryDraft()
         }
         return
       }
@@ -282,10 +288,10 @@ export function PromptInput({
       const s = popoverStateRef.current
       if (!s) return
       if (s.historyOpen) {
-        if (s.historyIndex > 0) {
-          setHistoryIndex((i) => i - 1)
-        } else {
-          s.restoreHistoryDraft()
+        // Up = older entry. Newest-first list, so "older" increments; clamp at
+        // the oldest so repeated Up doesn't wrap back around to the newest.
+        if (s.historyIndex < s.historyEntries.length - 1) {
+          setHistoryIndex((i) => i + 1)
         }
         return
       }
@@ -896,9 +902,27 @@ export function PromptInput({
   // pick, draft restore) we only mirror text/caret into state; the "user typing"
   // side effects — history close, `@@`/`@#` picker, popover dismissal resets —
   // must run only for real keystrokes, matching the old controlled textarea.
-  const onEditorChange = (v: string, c: number, source: PromptChangeSource): void => {
+  //
+  // `kind` separates a genuine text edit from a bare cursor move. Real Monaco
+  // fires a deferred cursor event after a programmatic setText settles, arriving
+  // as source:'user' (it lands outside the runProgrammatic window); treating that
+  // as typing would close a just-opened history popover (see onEditorArrowUp).
+  // So the content-dependent side effects run only on kind==='content'.
+  const onEditorChange = (
+    v: string,
+    c: number,
+    source: PromptChangeSource,
+    kind: PromptChangeKind,
+  ): void => {
     if (source === 'program') {
       setText(v)
+      setCaret(c)
+      return
+    }
+    if (kind === 'cursor') {
+      // Bare caret move (no text edit): only mirror the caret so popover
+      // gating that keys off `caret` stays accurate; never close history or
+      // re-trigger pickers/dismissals.
       setCaret(c)
       return
     }
