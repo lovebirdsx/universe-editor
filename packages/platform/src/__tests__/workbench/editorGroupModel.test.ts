@@ -52,6 +52,37 @@ describe('EditorGroupModel — open', () => {
     expect(model.activeEditor).toBe(a)
   })
 
+  it('disposes a duplicate-identity orphan instead of leaking it', () => {
+    // Reopen Closed Editor deserializes a fresh input for a tab that may still
+    // be open: the existing entry wins and the freshly-built duplicate is never
+    // adopted. It must be disposed, not left dangling (leak).
+    const model = new EditorGroupModel()
+    const a = make('a')
+    const dup = make('a') // same resource → same id, distinct instance
+    model.openEditor(a)
+    model.openEditor(dup)
+    expect(model.count).toBe(1)
+    expect(model.editors[0]).toBe(a)
+    expect(dup.isDisposed).toBe(true)
+    expect(a.isDisposed).toBe(false)
+  })
+
+  it('lets the existing input absorb newer state via updateFrom before disposing the orphan', () => {
+    const model = new EditorGroupModel()
+    let absorbed: EditorInput | undefined
+    class UpdatableInput extends TestInput {
+      override updateFrom(other: EditorInput): void {
+        absorbed = other
+      }
+    }
+    const a = new UpdatableInput(URI.file('D:/u.txt'), 'a')
+    const dup = new UpdatableInput(URI.file('D:/u.txt'), 'a')
+    model.openEditor(a)
+    model.openEditor(dup)
+    expect(absorbed).toBe(dup)
+    expect(dup.isDisposed).toBe(true)
+  })
+
   it('open with activate:false keeps the previous active', () => {
     const model = new EditorGroupModel()
     const a = make('a')

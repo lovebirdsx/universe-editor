@@ -169,6 +169,16 @@ export class EditorGroupModel extends Disposable implements IEditorGroupModel {
       if (activate && existing !== this._activeEditor) {
         this._setActiveInternal(existing)
       }
+      // The caller handed us ownership of `editor`; when it's a freshly-built
+      // duplicate of an already-open input (same identity, different instance —
+      // e.g. Reopen Closed Editor deserializing a tab that's still open) the
+      // existing entry wins and this new instance is never adopted. Let the
+      // existing input absorb any newer state, then dispose the discarded
+      // duplicate so it doesn't leak. Mirrors EditorService.openEditor's dedup.
+      if (editor !== existing) {
+        existing.updateFrom?.(editor)
+        editor.dispose()
+      }
       return
     }
 

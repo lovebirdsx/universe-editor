@@ -39,6 +39,7 @@
 - [computeLineDiff 须保持 Myers O(ND)](linediff-myers-perf.md) — dirty-diff 复用它对大文件切换做全文 diff，勿退回 O(m·n)
 - [codex session 新建慢 5 秒](codex-session-skills-scan-slow.md) — 真因:thread/start 内 codex 原生 spawn 的 git rev-parse --git-dir 在 Windows 挂起 ~4.5s(cwd 是 git 仓库才触发);kill 该 git 即恢复;adapter 修不了
 - [reload disposable 泄漏误报](reload-disposable-leak-marksingleton.md) — reload 时 React 组件订阅被 tracker 误报，用 markAsSingleton 兜底；render 期 new disposable 孤儿用 ref 守卫+级联测试
+- [EditorGroupModel.openEditor 孤儿泄漏](editor-group-open-orphan-leak.md) — 命中重复身份早退但不释放调用方交出所有权的新 input(ReopenClosed/moveEditor);修=早退前 existing.updateFrom?.()+editor.dispose();现有 @regression e2e 抓不到(它先关再开无副本),靠单元 withLeakCheck 定位
 - [realpath URI 跨 IPC 未 revive](realpath-uri-ipc-revive.md) — markdownLsp/peekNavigation @p1 真回归：IFileService.realpath 返回的 URI 经 ProxyChannel 降级成普通对象 .fsPath 空，guard 误判 empty path 拒读未打开文件；消费端须 URI.revive；诊断前必先 pnpm build
 - [editorTextFocus 残留吞裸字符键](editor-text-focus-stuck-swallows-keys.md) — Monaco blur 订阅先于编辑器 dispose 致 editorTextFocus 卡 true，全局键盘守卫把裸 f 当打字吞掉；syncEditorFocusContext 焦点离开 Monaco 时清掉；测裸字符键须真键盘别用 runCommand 绕
 - [diff 视图重开显示旧内容](diff-view-stale-on-reopen.md) — session diff 文件二次改动后重开 tab 仍旧内容；根因 openEditor 去重时 dispose 新 input 复用旧快照；加 EditorInput.updateFrom 钩子，DiffEditorInput 实现之

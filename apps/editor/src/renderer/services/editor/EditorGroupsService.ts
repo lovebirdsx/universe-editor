@@ -275,13 +275,10 @@ export class EditorGroupsService extends Disposable implements IEditorGroupsServ
     if (!src) return
     if (src === target) return
     src.detachEditor(editor)
-    const dst = target as EditorGroup
-    // The target may already hold a same-id editor (e.g. a split clone); its
-    // openEditor early-returns without adopting `editor`, which detachEditor has
-    // already cut from src's store. Dispose the orphan so it doesn't leak.
-    const existing = dst.editors.find((e) => e.id === editor.id)
-    dst.openEditor(editor)
-    if (existing && existing !== editor) editor.dispose()
+    // If the target already holds a same-id editor (e.g. a split clone),
+    // openEditor keeps the existing one and disposes this orphan for us — no
+    // extra guard needed here.
+    ;(target as EditorGroup).openEditor(editor)
     this._logger.info(`moveEditor id=${editor.id} from=${src.id} to=${target.id}`)
   }
 
