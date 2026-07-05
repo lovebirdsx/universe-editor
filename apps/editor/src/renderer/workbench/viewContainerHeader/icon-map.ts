@@ -97,6 +97,8 @@ const ICON_MAP: Record<string, LucideIcon> = {
   'timeline-top': ArrowUpToLine,
   'timeline-bottom': ArrowDownToLine,
   'compare-changes': FileDiff,
+  'diff-previous-change': ArrowUp,
+  'diff-next-change': ArrowDown,
 }
 
 export function resolveHeaderIcon(name: string | undefined): LucideIcon | undefined {

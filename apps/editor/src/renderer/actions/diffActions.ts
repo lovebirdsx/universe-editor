@@ -9,6 +9,7 @@
 import {
   Action2,
   IEditorGroupsService,
+  MenuId,
   URI,
   localize2,
   type ServicesAccessor,
@@ -80,8 +81,10 @@ export class GoToNextDifferenceAction extends Action2 {
       id: GoToNextDifferenceAction.ID,
       title: localize2('action.diffEditor.nextChange.title', 'Go to Next Difference'),
       category: localize2('command.category.diffEditor', 'Diff Editor'),
+      icon: 'diff-next-change',
       keybinding: { primary: 'alt+f5' },
       precondition: 'isInDiffEditor',
+      menu: [{ id: MenuId.EditorTitle, group: 'navigation', order: 3, when: 'isInDiffEditor' }],
       f1: true,
     })
   }
@@ -99,8 +102,10 @@ export class GoToPreviousDifferenceAction extends Action2 {
       id: GoToPreviousDifferenceAction.ID,
       title: localize2('action.diffEditor.previousChange.title', 'Go to Previous Difference'),
       category: localize2('command.category.diffEditor', 'Diff Editor'),
+      icon: 'diff-previous-change',
       keybinding: { primary: 'shift+alt+f5' },
       precondition: 'isInDiffEditor',
+      menu: [{ id: MenuId.EditorTitle, group: 'navigation', order: 2, when: 'isInDiffEditor' }],
       f1: true,
     })
   }

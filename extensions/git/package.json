@@ -172,7 +172,8 @@
         { "command": "git.unstageAll", "when": "scmResourceGroup == index", "group": "inline", "icon": "unstage-all" }
       ],
       "editor/title": [
-        { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" }
+        { "command": "git.openChange", "when": "resourceScheme == file && scmActiveResourceHasChanges && !isInDiffEditor", "group": "navigation@2", "icon": "compare-changes" },
+        { "command": "git.openFile", "when": "isInDiffEditor", "group": "navigation@1", "icon": "go-to-file" }
       ]
     },
     "keybindings": [

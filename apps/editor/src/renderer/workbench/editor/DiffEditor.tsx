@@ -29,7 +29,6 @@ import { DiffEditorRegistry } from '../../services/editor/DiffEditorRegistry.js'
 import { EditorViewStateCache } from '../../services/editor/EditorViewStateCache.js'
 import { syncEditorFocusContext } from '../../services/editor/editorFocus.js'
 import { EditorGroupContext } from './EditorGroupContext.js'
-import { DiffEditorToolbar } from './DiffEditorToolbar.js'
 import { diffModelUri } from './diffModelUri.js'
 import {
   EDITOR_FONT_FAMILY_DEFAULT,
@@ -290,7 +289,6 @@ export function DiffEditor({ input }: { input: IEditorInput }) {
   return (
     <div className={styles['diffEditor']} data-testid="diff-editor">
       <div ref={containerRef} className={styles['monacoContainer']} />
-      <DiffEditorToolbar />
     </div>
   )
 }
