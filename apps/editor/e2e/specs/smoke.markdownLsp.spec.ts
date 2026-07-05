@@ -54,8 +54,13 @@ test.describe('@p1 markdown language server', () => {
     await page.evaluate((fsPath) => window.__E2E__!.openWorkspace(fsPath), dir)
     await page.evaluate((fsPath) => window.__E2E__!.openFileUri(fsPath), aPath)
 
+    // Opening the folder first kicks off the parcel watcher + workspace-storage
+    // hydration, which contends with the file open on a cold 2-core CI box. The
+    // language-id key only flips once the FileEditorInput is active, so give it
+    // the same headroom the outline/preview specs use rather than the default
+    // 10s expect window (Windows CI cold start blows past it → received "").
     await expect
-      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'))
+      .poll(() => workbench.getContextKey<string>('activeEditorLanguageId'), { timeout: 20000 })
       .toBe('markdown')
 
     const uri = await page.evaluate(() => window.__E2E__!.getActiveEditorUri())
