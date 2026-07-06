@@ -19,6 +19,7 @@ import {
   KeybindingsRegistry,
   ServiceCollection,
   UriIdentityService,
+  GroupDirection,
   observableValue,
   registerAction2,
   type IDisposable,
@@ -57,6 +58,7 @@ import { IAcpChatLocationService } from '../../services/acp/acpChatLocationServi
 import { AcpSessionEditorInput } from '../../services/acp/acpSessionEditorInput.js'
 import { IAcpAgentRegistry } from '../../services/acp/acpAgentRegistry.js'
 import { EditorGroupsService } from '../../services/editor/EditorGroupsService.js'
+import { EditorService } from '../../services/editor/EditorService.js'
 
 describe('Agent timeline navigation actions', () => {
   const disposables: IDisposable[] = []
@@ -428,7 +430,7 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
     }
   })
 
-  it('creates a same-agent session in the current session editor slot', async () => {
+  it('opens a same-agent session as a new tab next to the current one', async () => {
     const groups = new EditorGroupsService()
     const live = new Map<string, IAcpSession>()
     live.set('old-session', fakeSession('old-session', 'codex', 'Old'))
@@ -488,10 +490,115 @@ describe('NewAgentSessionInCurrentEditorAction', () => {
 
     expect(createSession).toHaveBeenCalledWith('codex')
     expect(defaultAgentId).not.toHaveBeenCalled()
-    expect(groups.activeGroup.editors).toHaveLength(1)
+    // The old session stays open; the new one is added right after it and active.
+    const editors = groups.activeGroup.editors
+    expect(editors).toHaveLength(2)
+    expect((editors[0] as AcpSessionEditorInput).sessionId).toBe('old-session')
+    expect((editors[1] as AcpSessionEditorInput).sessionId).toBe('new-session')
     const active = groups.activeGroup.activeEditor
     expect(active).toBeInstanceOf(AcpSessionEditorInput)
     expect((active as AcpSessionEditorInput).sessionId).toBe('new-session')
+  })
+
+  // A locked session-editor group must still accept the new session directly as a
+  // new tab (the lock only guards lock-aware routing, not explicit group opens),
+  // and stay the active group. createSession's side effect (the chat location
+  // autorun) opens the new session via EditorService.openEditor, whose lock-aware
+  // routing hands a brand-new editor to a *different* unlocked group and activates
+  // it; without our cleanup + re-activation the real editor would end up split
+  // across groups with focus in the wrong one.
+  it('creates the new session directly in the locked group and keeps it active', async () => {
+    const groups = new EditorGroupsService()
+    const editorService = new EditorService(groups)
+    const live = new Map<string, IAcpSession>()
+    live.set('old-session', fakeSession('old-session', 'codex', 'Old'))
+
+    const instRef: { current?: InstantiationService } = {}
+    const createSession = vi.fn(async (agentId?: string) => {
+      const session = fakeSession('new-session', agentId ?? 'missing-agent', 'New')
+      live.set(session.id, session)
+      // Mirror AcpChatLocationService's active-session autorun: it opens the
+      // freshly created session through the shared EditorService, which routes a
+      // new editor away from the locked active group into an unlocked one.
+      editorService.openEditor(
+        instRef.current!.createInstance(AcpSessionEditorInput, session.id, session.agentId, 'New'),
+      )
+      return session
+    })
+    const defaultAgentId = vi.fn(() => 'claude-code')
+
+    const services = new ServiceCollection()
+    services.set(IAcpSessionService, {
+      _serviceBrand: undefined,
+      createSession,
+      getById: (id: string) => live.get(id),
+      activeSession: observableValue<IAcpSession | undefined>('test.activeSession', undefined),
+    } as unknown as IAcpSessionService)
+    services.set(IAcpAgentRegistry, {
+      _serviceBrand: undefined,
+      defaultAgentId,
+    } as unknown as IAcpAgentRegistry)
+    services.set(IAcpSessionHistoryService, {
+      _serviceBrand: undefined,
+      entries: observableValue<readonly AcpSessionHistoryEntry[]>('test.entries', []),
+      get: () => undefined,
+    } as unknown as IAcpSessionHistoryService)
+    services.set(IAcpChatWidgetService, {
+      _serviceBrand: undefined,
+      register: vi.fn(),
+      focusSessionInput: vi.fn(),
+    } as unknown as IAcpChatWidgetService)
+    services.set(IEditorGroupsService, groups)
+    services.set(IEditorService, editorService)
+    services.set(IDialogService, {
+      _serviceBrand: undefined,
+      confirm: vi.fn(),
+      prompt: vi.fn(),
+    } as unknown as IDialogService)
+    const inst = new InstantiationService(services)
+    instRef.current = inst
+    services.set(IInstantiationService, inst)
+
+    // A second, unlocked group exists (with its own unrelated editor, so it
+    // survives duplicate-cleanup) — lock-aware routing lands there.
+    const otherGroup = groups.addGroup(groups.activeGroup, GroupDirection.Right)
+    live.set('other-session', fakeSession('other-session', 'codex', 'Other'))
+    otherGroup.openEditor(
+      inst.createInstance(AcpSessionEditorInput, 'other-session', 'codex', 'Other'),
+    )
+    const lockedGroup = groups.groups[0]!
+    groups.activateGroup(lockedGroup)
+
+    const oldInput = inst.createInstance(AcpSessionEditorInput, 'old-session', 'codex', 'Old')
+    lockedGroup.openEditor(oldInput)
+    lockedGroup.lock(true)
+
+    await inst.invokeFunction((accessor) =>
+      new NewAgentSessionInCurrentEditorAction().run(accessor, {
+        groupId: lockedGroup.id,
+        sessionId: 'old-session',
+      }),
+    )
+
+    // The locked group keeps the old session and gains the new one as a new tab…
+    const lockedEditors = lockedGroup.editors.filter(
+      (e): e is AcpSessionEditorInput => e instanceof AcpSessionEditorInput,
+    )
+    expect(lockedEditors.map((e) => e.sessionId)).toEqual(['old-session', 'new-session'])
+    // …the new session is active…
+    const activeInLocked = lockedGroup.activeEditor
+    expect(activeInLocked).toBeInstanceOf(AcpSessionEditorInput)
+    expect((activeInLocked as AcpSessionEditorInput).sessionId).toBe('new-session')
+    // …the group is still locked (creating a session must not unlock it)…
+    expect(lockedGroup.isLocked).toBe(true)
+    // …and the locked group must still be the active one (focus didn't run away).
+    expect(groups.activeGroup).toBe(lockedGroup)
+    // No stray duplicate of the new session left in any other group.
+    const duplicates = groups.groups
+      .filter((g) => g !== lockedGroup)
+      .flatMap((g) => g.editors)
+      .filter((e) => e instanceof AcpSessionEditorInput && e.sessionId === 'new-session')
+    expect(duplicates).toHaveLength(0)
   })
 })
 

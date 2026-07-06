@@ -79,4 +79,44 @@ test.describe('@p1 agents — editor title nav icons', () => {
     )
     expect(navOnly).toEqual(NAV_COMMANDS_IN_ORDER)
   })
+
+  test('"new session in current editor" opens a new tab in the same group', async ({
+    page,
+    workbench,
+  }) => {
+    await workbench.waitForRestored()
+
+    await page.evaluate(([id, p]) => window.__E2E__!.installAcpEchoAgent(id, p), [
+      'echo',
+      ECHO_AGENT_PATH,
+    ] as const)
+
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSession')
+    })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
+      .toBe(1)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .toBe('acp.session')
+    expect(await page.evaluate(() => window.__E2E__!.getEditorGroupCount())).toBe(1)
+
+    // Run the title-bar command: it must ADD a second session tab in the same
+    // group (not replace the current one, not spawn another group).
+    await page.evaluate(() => {
+      void window.__E2E__!.runCommand('workbench.action.agent.newSessionInCurrentEditor')
+    })
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getAcpSessionCount()), { timeout: 10000 })
+      .toBe(2)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveGroupEditorCount()))
+      .toBe(2)
+    // Still a single editor group — the new session did not leak into a split.
+    expect(await page.evaluate(() => window.__E2E__!.getEditorGroupCount())).toBe(1)
+    await expect
+      .poll(() => page.evaluate(() => window.__E2E__!.getActiveEditorTypeId()))
+      .toBe('acp.session')
+  })
 })

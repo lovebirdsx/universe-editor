@@ -108,16 +108,10 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
     const registry = accessor.get(IAcpAgentRegistry)
     const groups = accessor.get(IEditorGroupsService)
     const inst = accessor.get(IInstantiationService)
-    const dialog = accessor.get(IDialogService)
 
     const group = resolveEditorGroup(arg, groups)
     const current = resolveTargetSessionEditor(arg, group) ?? group.activeEditor
     const agentId = resolveSessionEditorAgentId(current, sessions) ?? registry.defaultAgentId()
-
-    if (current instanceof AcpSessionEditorInput && current.confirmClose) {
-      const ok = await current.confirmClose(dialog)
-      if (!ok) return
-    }
 
     const session = await sessions.createSession(agentId)
     const nextInput = inst.createInstance(
@@ -127,16 +121,18 @@ export class NewAgentSessionInCurrentEditorAction extends Action2 {
       undefined,
     )
 
-    if (current instanceof AcpSessionEditorInput) {
-      const index = group.indexOf(current)
-      openSessionEditorInGroup(group, nextInput, index >= 0 ? index : undefined)
-      group.closeEditor(current)
-      closeDuplicateSessionEditors(groups, group, session.id)
-      return
-    }
-
-    openSessionEditorInGroup(group, nextInput, undefined)
+    // Open the new session as its own tab right after the current one, keeping
+    // the existing session open. `openSessionEditorInGroup` drives the group
+    // model directly, so a locked group still accepts the new tab (the lock only
+    // guards lock-aware routing, which the createSession side effect below hits).
+    const index = current instanceof AcpSessionEditorInput ? group.indexOf(current) : -1
+    openSessionEditorInGroup(group, nextInput, index >= 0 ? index + 1 : undefined)
     closeDuplicateSessionEditors(groups, group, session.id)
+    // createSession's side effect (the chat-location autorun) opens the new
+    // session through IEditorService, whose lock-aware routing hands a fresh
+    // editor to a different unlocked group and activates it. Re-assert this
+    // group as active so focus stays where the user clicked "new session".
+    groups.activateGroup(group)
   }
 }
 
