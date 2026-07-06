@@ -1,5 +1,26 @@
 [
   {
+    "version": "0.1.33",
+    "date": "2026-07-06",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "加入在当前session editor创建新session的支持（复用已有editor）",
+          "codex支持rewind和fork"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "md预览链接支持 `%20` 空格路径解码"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.32",
     "date": "2026-07-06",
     "groups": [
