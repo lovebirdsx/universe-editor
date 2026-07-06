@@ -1,5 +1,40 @@
 [
   {
+    "version": "0.1.32",
+    "date": "2026-07-06",
+    "groups": [
+      {
+        "type": "feat",
+        "title": "新功能",
+        "items": [
+          "claude支持rewind和fork",
+          "claude能够实时显示bash输出",
+          "优化图片弹窗的查看体验",
+          "#弹出菜单中可以选择git提交",
+          "将 DiffEditor 悬浮工具条迁移到标准 EditorTitle 菜单",
+          "优化session中输入#的体验",
+          "支持空闲时可以预热语言符号加载",
+          "ACP 输入框 Monaco 化 + `@`/`#` by-range 药丸引用",
+          "session加入改名支持",
+          "优化claude工具调用展示，采用更为易读的标题",
+          "大纲视图优化键盘导航"
+        ]
+      },
+      {
+        "type": "fix",
+        "title": "Bug 修复",
+        "items": [
+          "修复session 卡片内部（因内容过长出现的 Expand/Collapse 按钮）的展开态没有保存",
+          "修复markdown尖括号解析路径的bug（不能将带有空格的字符串识别为整体）",
+          "session中卡片异步内容增长时自动回到底部",
+          "修复CLI参数解析误将值当作路径打开",
+          "修复markdown预览时，外部修改无法自动同步的bug",
+          "修复更新安装前运行会话确认无效的bug"
+        ]
+      }
+    ]
+  },
+  {
     "version": "0.1.31",
     "date": "2026-07-03",
     "groups": [
