@@ -85,6 +85,7 @@ class FakeAgentRegistry implements IAcpAgentRegistry {
     return [
       { id: 'fake', name: 'Fake Agent', command: '/x', args: [] },
       { id: 'claude-code', name: 'Claude Code', command: '/claude', args: [] },
+      { id: 'codex', name: 'Codex', command: '/codex', args: [] },
     ]
   }
   allAgentIds(): readonly string[] {
@@ -1166,6 +1167,51 @@ describe('AcpSessionService — rewind / fork', () => {
 
       expect(result).toBeUndefined()
       expect(conn.agent.extMethodCalls.some((c) => c.method === REWIND_SESSION_METHOD)).toBe(false)
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('codex rewindSession rolls files back via the change tracker (not the ext-method)', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: {} })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('codex')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const conn = client.connected[0]!
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+      expect(messageId).toBeTruthy()
+
+      const result = await svc.rewindSession(s.id, messageId!)
+
+      expect(result).toEqual({ canRewind: true })
+      // codex truncates history via the ext-method WITHOUT the rewindFiles flag…
+      const rewindCall = conn.agent.extMethodCalls.find((c) => c.method === REWIND_SESSION_METHOD)
+      expect(rewindCall?.params).toMatchObject({ sessionId: 'agent-1', messageId })
+      expect(rewindCall?.params).not.toHaveProperty('rewindFiles')
+      // …and rolls files back client-side via the tracker (never clear()).
+      expect(tracker.restoredCalls.some((c) => c.sessionId === 'agent-1')).toBe(true)
+      expect(tracker.clearedSessions).not.toContain('agent-1')
+    } finally {
+      svc.dispose()
+    }
+  })
+
+  it('codex rewindSession with rewindFiles:false keeps files (no tracker restore)', async () => {
+    const tracker = new StubSessionChangeTracker()
+    const client = new FakeAcpClientService({ stubOptions: {} })
+    const svc = makeService(client, tracker)
+    try {
+      const s = await svc.createSession('codex')
+      await s.whenConnected()
+      await s.sendPrompt('first turn')
+      const messageId = s.messages.get().find((m) => m.role === 'user')?.messageId
+
+      await svc.rewindSession(s.id, messageId!, { rewindFiles: false })
+
+      expect(tracker.restoredCalls.some((c) => c.sessionId === 'agent-1')).toBe(false)
     } finally {
       svc.dispose()
     }

@@ -253,12 +253,15 @@ export class AcpSession extends Disposable implements IAcpSession {
   readonly forkSupported: ISettableObservable<boolean>
 
   /**
-   * Rewind (回退) is a claude-code-only capability for the first release — it
-   * hinges on the fork's file-checkpointing + `resumeSessionAt` truncation that
-   * only the Claude agent implements. Static; other agents hide the affordance.
+   * Rewind (回退) is supported by agents whose vendor implements the
+   * `REWIND_SESSION_METHOD` ext-method: claude-code (SDK file-checkpointing +
+   * transcript truncation) and codex (app-server `thread/rollback`). codex only
+   * truncates history — the editor's change tracker handles file rollback — so
+   * the file-rollback path in {@link rewindTo} branches on the agent. Static;
+   * other agents hide the affordance.
    */
   get rewindSupported(): boolean {
-    return this.agentId === 'claude-code'
+    return this.agentId === 'claude-code' || this.agentId === 'codex'
   }
 
   constructor(
@@ -697,10 +700,79 @@ export class AcpSession extends Disposable implements IAcpSession {
     // Keep the working-tree edits when the caller opted out of the file rollback
     // (保留修改并回退). Defaults to rolling files back.
     const keepFiles = options?.rewindFiles === false
+    // codex's `thread/rollback` only truncates history — it can't roll files back
+    // (the protocol makes that the client's job), so we revert files renderer-side
+    // via the change tracker. claude's ext-method does both itself. Branch here.
+    const filesAreClientSide = this.agentId === 'codex'
+
+    // Snapshot the tool calls issued AFTER the rewind anchor *before* any reset
+    // clears the timeline — those are the edits a codex file rollback un-applies.
+    const postAnchorToolCallIds = filesAreClientSide ? this._toolCallIdsAfterMessage(messageId) : []
+
+    if (filesAreClientSide && dryRun) {
+      // Preview: ask the agent whether it can truncate, and compute file impact
+      // from the tracker (no disk writes). Merge into the RewindFilesResult shape.
+      const raw = await conn.conn.extMethod(REWIND_SESSION_METHOD, {
+        sessionId: sid,
+        messageId,
+        dryRun: true,
+      })
+      const canRewind = (raw as { canRewind?: boolean }).canRewind !== false
+      const impact = await (this._changeTracker?.previewRestore(sid, postAnchorToolCallIds) ??
+        Promise.resolve(undefined))
+      return {
+        canRewind,
+        ...(impact
+          ? {
+              filesChanged: impact.filesChanged,
+              insertions: impact.insertions,
+              deletions: impact.deletions,
+            }
+          : {}),
+      }
+    }
+
     if (!dryRun) await this.cancelTurn()
-    // Reset + replay-gate before the ext-method: the agent streams the truncated
-    // history back as session/update notifications while it runs, so the local
-    // timeline must be empty first (otherwise the replay appends onto the tail).
+
+    if (filesAreClientSide) {
+      // Real rewind: roll files back first (unless the user kept edits), then ask
+      // the agent to truncate + replay the shortened history.
+      if (!keepFiles && this._changeTracker) {
+        try {
+          await this._changeTracker.restore(sid, postAnchorToolCallIds)
+        } catch (err) {
+          this._telemetry.publicLogError('acp.rewind_files_failed', {
+            sessionId: sid,
+            error: (err as Error).message,
+          })
+        }
+      }
+      this._resetForReplay()
+      this.beginHistoryReplay()
+      try {
+        const raw = await conn.conn.extMethod(REWIND_SESSION_METHOD, {
+          sessionId: sid,
+          messageId,
+        })
+        const canRewind = (raw as { canRewind?: boolean }).canRewind !== false
+        this._telemetry.publicLog('acp.rewind', {
+          sessionId: sid,
+          dryRun: false,
+          keepFiles,
+          canRewind,
+        })
+        return { canRewind }
+      } catch (err) {
+        this._telemetry.publicLogError('acp.rewind_failed', {
+          sessionId: sid,
+          error: (err as Error).message,
+        })
+        throw err
+      } finally {
+        this.endHistoryReplay()
+      }
+    }
+
     if (!dryRun) {
       this._resetForReplay()
       this.beginHistoryReplay()
@@ -733,6 +805,26 @@ export class AcpSession extends Disposable implements IAcpSession {
     } finally {
       if (!dryRun) this.endHistoryReplay()
     }
+  }
+
+  /**
+   * Collect the tool-call ids issued at or after the user message `messageId`,
+   * in timeline order. Used by the codex rewind path to know which file edits to
+   * un-apply (the anchor message and everything after it is being removed). When
+   * the anchor isn't found we return [] (nothing to roll back) rather than guess.
+   */
+  private _toolCallIdsAfterMessage(messageId: string): string[] {
+    const timeline = this._timeline
+    const anchorIdx = timeline.findIndex(
+      (item) => item.kind === 'message' && item.message.messageId === messageId,
+    )
+    if (anchorIdx < 0) return []
+    const ids: string[] = []
+    for (let i = anchorIdx; i < timeline.length; i++) {
+      const item = timeline[i]
+      if (item?.kind === 'toolCall') ids.push(item.call.id)
+    }
+    return ids
   }
 
   /**

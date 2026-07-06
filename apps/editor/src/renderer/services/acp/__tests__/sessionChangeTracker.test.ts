@@ -89,7 +89,9 @@ class FakeFileService implements IFileService {
   async readFile(): Promise<Uint8Array> {
     throw new Error('not implemented')
   }
-  async writeFile(): Promise<void> {}
+  async writeFile(resource: URI, content: Uint8Array | string): Promise<void> {
+    this.files.set(resource.fsPath, typeof content === 'string' ? content : content.toString())
+  }
   async exists(resource: URI): Promise<boolean> {
     return this.files.has(resource.fsPath)
   }
@@ -203,5 +205,58 @@ describe('SessionChangeTrackerService — modified', () => {
     expect(list).toHaveLength(1)
     expect(list[0]?.status).toBe('modified')
     expect(list[0]?.baseline).toBe(['a', 'b', 'OLD', 'c'].join('\n'))
+  })
+})
+
+describe('SessionChangeTrackerService — restore (codex rewind file rollback)', () => {
+  let svc: SessionChangeTrackerService
+  let files: FakeFileService
+  beforeEach(async () => {
+    const made = makeService()
+    svc = made.svc
+    files = made.files
+    await svc.initialize()
+  })
+  afterEach(() => svc.dispose())
+
+  it('un-applies only the named post-anchor batches and writes files back', async () => {
+    // Two sequential edits to the same file: tc-1 (kept, pre-anchor) then tc-2
+    // (post-anchor, to be rolled back). Current disk reflects both.
+    files.set('/work/f.ts', ['a', 'TWO', 'c'].join('\n'))
+    svc.record(SID, '/work/f.ts', 'tc-1', [
+      { oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: ['-A', '+a'] },
+    ])
+    svc.record(SID, '/work/f.ts', 'tc-2', [
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, lines: ['-ONE', '+TWO'] },
+    ])
+    await flush()
+
+    const impact = await svc.restore(SID, ['tc-2'])
+    expect(impact.filesChanged).toEqual(['/work/f.ts'])
+    expect(impact.insertions).toBe(1)
+    expect(impact.deletions).toBe(1)
+    // Only tc-2 rolled back: 'TWO' → 'ONE'; tc-1's 'a' stays.
+    expect(files.files.get(URI.file('/work/f.ts').fsPath)).toBe(['a', 'ONE', 'c'].join('\n'))
+  })
+
+  it('previewRestore computes impact without touching disk', async () => {
+    files.set('/work/f.ts', ['a', 'TWO'].join('\n'))
+    svc.record(SID, '/work/f.ts', 'tc-2', [
+      { oldStart: 2, oldLines: 1, newStart: 2, newLines: 1, lines: ['-ONE', '+TWO'] },
+    ])
+    await flush()
+
+    const impact = await svc.previewRestore(SID, ['tc-2'])
+    expect(impact.filesChanged).toEqual(['/work/f.ts'])
+    // Disk unchanged by a preview.
+    expect(files.files.get(URI.file('/work/f.ts').fsPath)).toBe(['a', 'TWO'].join('\n'))
+  })
+
+  it('returns an empty impact when no batches match', async () => {
+    files.set('/work/f.ts', 'x')
+    svc.record(SID, '/work/f.ts', 'tc-1', [createHunk(['x'])], true)
+    await flush()
+    const impact = await svc.restore(SID, ['tc-missing'])
+    expect(impact.filesChanged).toEqual([])
   })
 })

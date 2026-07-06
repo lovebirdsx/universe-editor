@@ -6,7 +6,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { observableValue, type IObservable } from '@universe-editor/platform'
-import type { ISessionChangeTrackerService, SessionFileChange } from '../sessionChangeTracker.js'
+import type {
+  ISessionChangeTrackerService,
+  RewindFileImpact,
+  SessionFileChange,
+} from '../sessionChangeTracker.js'
 import type { DiffHunk } from '../diff/reconstructBaseline.js'
 
 export interface StubSessionChangeRecord {
@@ -21,6 +25,9 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   declare readonly _serviceBrand: undefined
   readonly records: StubSessionChangeRecord[] = []
   readonly clearedSessions: string[] = []
+  readonly restoredCalls: { sessionId: string; toolCallIds: readonly string[] }[] = []
+  /** Overridable impact returned by previewRestore/restore. */
+  restoreImpact: RewindFileImpact = { filesChanged: [], insertions: 0, deletions: 0 }
   private readonly _empty: IObservable<readonly SessionFileChange[]> = observableValue(
     'test.sessionChanges.empty',
     [],
@@ -50,5 +57,13 @@ export class StubSessionChangeTracker implements ISessionChangeTrackerService {
   unmarkDeleted(): void {}
   clear(sessionId: string): void {
     this.clearedSessions.push(sessionId)
+  }
+  previewRestore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact> {
+    this.restoredCalls.push({ sessionId, toolCallIds: [...toolCallIds] })
+    return Promise.resolve(this.restoreImpact)
+  }
+  restore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact> {
+    this.restoredCalls.push({ sessionId, toolCallIds: [...toolCallIds] })
+    return Promise.resolve(this.restoreImpact)
   }
 }

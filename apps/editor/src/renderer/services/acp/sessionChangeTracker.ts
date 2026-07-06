@@ -65,6 +65,27 @@ export interface ISessionChangeTrackerService {
   changesFor(sessionId: string): IObservable<readonly SessionFileChange[]>
   /** Drop all tracked changes for a session (e.g. on user-initiated clear). */
   clear(sessionId: string): void
+  /**
+   * Preview the file impact of un-applying the batches whose tool call ids are in
+   * `toolCallIds` (a rewind's post-anchor edits). Does not touch disk. Returns
+   * the affected files and aggregate line stats, shaped for the rewind confirm
+   * dialog. Used for the codex rewind path where the agent can't roll files back.
+   */
+  previewRestore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact>
+  /**
+   * Un-apply the batches in `toolCallIds` from the current on-disk content and
+   * write the reverted files back, rolling those files to their state at the
+   * rewind anchor. Also drops those batches from tracking so session diff stays
+   * accurate. Returns the same impact shape as {@link previewRestore}.
+   */
+  restore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact>
+}
+
+/** Aggregate impact of a rewind file rollback (mirrors the agent RewindFilesResult fields). */
+export interface RewindFileImpact {
+  readonly filesChanged: readonly string[]
+  readonly insertions: number
+  readonly deletions: number
 }
 
 export const ISessionChangeTrackerService = createDecorator<ISessionChangeTrackerService>(
@@ -223,7 +244,86 @@ export class SessionChangeTrackerService
     this._observables.get(sessionId)?.set([], undefined)
   }
 
+  async previewRestore(
+    sessionId: string,
+    toolCallIds: readonly string[],
+  ): Promise<RewindFileImpact> {
+    return this._restore(sessionId, toolCallIds, false)
+  }
+
+  async restore(sessionId: string, toolCallIds: readonly string[]): Promise<RewindFileImpact> {
+    return this._restore(sessionId, toolCallIds, true)
+  }
+
   // -- internals ------------------------------------------------------
+
+  /**
+   * Shared engine for {@link previewRestore} / {@link restore}. For each tracked
+   * file, un-applies only the batches in `ids` (the rewind's post-anchor edits)
+   * from the current on-disk content — yielding the file's state at the anchor.
+   * When `write` is true the reverted content is written back and the un-applied
+   * batches are dropped from tracking (so session diff stays accurate).
+   */
+  private async _restore(
+    sessionId: string,
+    toolCallIds: readonly string[],
+    write: boolean,
+  ): Promise<RewindFileImpact> {
+    const files = this._state.get(sessionId)
+    const ids = new Set(toolCallIds)
+    if (!files || ids.size === 0) return { filesChanged: [], insertions: 0, deletions: 0 }
+
+    const filesChanged: string[] = []
+    let insertions = 0
+    let deletions = 0
+    let mutated = false
+
+    for (const [path, rec] of files.entries()) {
+      const removed = rec.batches.filter((b) => b.toolCallId !== undefined && ids.has(b.toolCallId))
+      if (removed.length === 0) continue
+
+      const uri = path.includes('://') ? URI.parse(path) : URI.file(path)
+      let current = ''
+      try {
+        current = await this._files.readFileText(uri)
+      } catch {
+        // File no longer on disk — nothing to revert.
+        continue
+      }
+      // Un-apply only the post-anchor batches to recover the anchor-state content.
+      const { baseline: reverted } = reconstructBaseline(current, removed)
+      if (reverted === current) continue
+
+      for (const batch of removed) {
+        for (const hunk of batch.hunks) {
+          for (const line of hunk.lines) {
+            if (line[0] === '+') insertions++
+            else if (line[0] === '-') deletions++
+          }
+        }
+      }
+      filesChanged.push(path)
+
+      if (write) {
+        await this._files.writeFile(uri, reverted)
+        rec.batches = rec.batches.filter(
+          (b) => b.toolCallId === undefined || !ids.has(b.toolCallId),
+        )
+        mutated = true
+      }
+    }
+
+    if (mutated) {
+      // Drop files whose batches were fully removed, then persist + refresh.
+      for (const [path, rec] of [...files.entries()]) {
+        if (rec.batches.length === 0) files.delete(path)
+      }
+      this._scheduleWrite()
+      void this._recompute(sessionId, files)
+    }
+
+    return { filesChanged, insertions, deletions }
+  }
 
   private async _recompute(
     sessionId: string,
